@@ -85,6 +85,17 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Pre-code.** Repo is an empty Cargo workspace target. Next planned step: **Phase 0 / M0.2 — RAW decode spike** (wrap libraw, decode a real RAW to TIFF via a CLI) — the biggest technical risk, proven first.
+**Phase 0 complete (M0.1–M0.3).** Cargo workspace + CI live. Crates built so far:
+- `core-image` — `ImageBuf` (interleaved f32 RGB), unit-tested.
+- `raw-decode` — `decode_raw()` → `DecodedRaw { ImageBuf, RawMetadata }`. **Decode backend shipped: libraw via the `rsraw` crate** (not the `libraw` crate). libraw does demosaic + camera WB; 16-bit output normalized to f32. NOTE: output is currently sRGB-gamma (display-referred) — M1.1 replaces this with a linear scene-referred extraction.
+- `cli` — binary `oslr`, subcommand `oslr decode <in> <out.tiff>`. **Validated end-to-end** on a Fujifilm X-T4 `.RAF` (X-Trans) → correct, well-white-balanced photo.
+
+Toolchain bumped to stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
+
+**Dev setup note (macOS):** the `rsraw-sys` build needs libraw discoverable by pkg-config. Install with `brew install libraw pkg-config` and build with:
+`export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
+(On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
+
+**Next step:** Phase 1 / M1.1 — minimal color-managed pipeline skeleton (`PipelineStage` trait, decode→linear working space→sRGB output transform via lcms2), rendering a correct JPEG with zero edits.
 
 _Update this "Current status" section as milestones land._

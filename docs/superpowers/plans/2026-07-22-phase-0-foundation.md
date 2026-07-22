@@ -10,6 +10,13 @@
 
 ---
 
+> **✅ STATUS: Phase 0 complete (2026-07-22).** All milestones (M0.1–M0.3) done and committed. Key deviations from the plan as written:
+> - **Decode binding:** shipped with the **`rsraw`** crate (modern, cross-platform, clean `RawImage::open → unpack → process::<16>()` API), *not* the older `libraw` crate referenced in Task 3. The `decode_raw()` public interface is unchanged, so this was a backend choice, not an API change.
+> - **Toolchain:** bumped to stable rustc 1.97.1 (`image 0.25` requires ≥1.88).
+> - **Validation:** `oslr decode` produced a correct, well-white-balanced image from a Fujifilm X-T4 `.RAF` (X-Trans). Full decode of a 26MP file took ~1m54s in a debug build (libraw's X-Trans Markesteijn demosaic dominates) — performance is a later-phase concern per the "correct first" philosophy.
+
+---
+
 ## File Structure
 
 ```
