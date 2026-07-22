@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 core-image = { path = "../core-image" }
+rsraw = "0.1.1"
 thiserror.workspace = true
