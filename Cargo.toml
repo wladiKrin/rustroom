@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/core-image", "crates/raw-decode", "crates/cli"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+image = { version = "0.25", default-features = false, features = ["tiff", "jpeg", "png"] }
+clap = { version = "4", features = ["derive"] }

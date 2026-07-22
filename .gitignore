@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+.DS_Store
+/tests/fixtures/*.CR2
+/tests/fixtures/*.CR3
+/tests/fixtures/*.NEF
+/tests/fixtures/*.ARW
+/tests/fixtures/*.RAF
+/tests/fixtures/*.dng
+/scratch
