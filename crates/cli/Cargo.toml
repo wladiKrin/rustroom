@@ -11,6 +11,9 @@ path = "src/main.rs"
 [dependencies]
 core-image = { path = "../core-image" }
 raw-decode = { path = "../raw-decode" }
+pipeline = { path = "../pipeline" }
+edit-model = { path = "../edit-model" }
+export = { path = "../export" }
 anyhow.workspace = true
 clap.workspace = true
 image.workspace = true
