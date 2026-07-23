@@ -81,6 +81,18 @@ impl ImageBuf {
         let data = self.data.iter().map(|&s| f(s)).collect();
         ImageBuf::from_vec(self.width, self.height, data)
     }
+
+    /// Return a new image with `f` applied to each RGB pixel, dimensions preserved.
+    pub fn map_pixels<F: Fn([f32; 3]) -> [f32; 3]>(&self, f: F) -> ImageBuf {
+        let mut data = Vec::with_capacity(self.data.len());
+        for px in self.data.chunks_exact(Self::CHANNELS) {
+            let [r, g, b] = f([px[0], px[1], px[2]]);
+            data.push(r);
+            data.push(g);
+            data.push(b);
+        }
+        ImageBuf::from_vec(self.width, self.height, data)
+    }
 }
 
 #[cfg(test)]
@@ -120,6 +132,17 @@ mod tests {
         let out = img.map_samples(|s| s * 2.0);
         assert_eq!(out.pixel(0, 0), [0.2, 0.4, 0.6]);
         assert_eq!(out.pixel(1, 0), [0.8, 1.0, 1.2]);
+        assert_eq!((out.width(), out.height()), (2, 1));
+    }
+
+    #[test]
+    fn map_pixels_transforms_per_pixel() {
+        let mut img = ImageBuf::new(2, 1);
+        img.set_pixel(0, 0, [0.2, 0.4, 0.6]);
+        img.set_pixel(1, 0, [0.1, 0.1, 0.1]);
+        let out = img.map_pixels(|[r, g, b]| [b, g * 2.0, r]);
+        assert_eq!(out.pixel(0, 0), [0.6, 0.8, 0.2]);
+        assert_eq!(out.pixel(1, 0), [0.1, 0.2, 0.1]);
         assert_eq!((out.width(), out.height()), (2, 1));
     }
 }
