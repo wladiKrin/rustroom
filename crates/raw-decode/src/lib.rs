@@ -41,10 +41,50 @@ pub struct DecodedRaw {
     pub metadata: RawMetadata,
 }
 
-/// Decode a RAW file to an [`ImageBuf`] (f32 RGB, samples in `0.0..=1.0`) and metadata.
-pub fn decode_raw(path: &Path) -> Result<DecodedRaw, DecodeError> {
+/// How libraw should render the RAW.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeOptions {
+    /// Use the camera's own white balance (falls back to auto-WB).
+    pub camera_wb: bool,
+    /// If true, output linear light (gamma 1.0). If false, libraw's default display gamma.
+    pub linear: bool,
+    /// If true, disable libraw's automatic brightness stretch (needed for scene-referred).
+    pub no_auto_bright: bool,
+}
+
+impl DecodeOptions {
+    /// Scene-referred linear working image (what the develop pipeline consumes).
+    pub fn linear_scene() -> Self {
+        Self {
+            camera_wb: true,
+            linear: true,
+            no_auto_bright: true,
+        }
+    }
+
+    /// Display-ready sRGB (quick viewable dump — used by `oslr decode`).
+    pub fn display() -> Self {
+        Self {
+            camera_wb: true,
+            linear: false,
+            no_auto_bright: false,
+        }
+    }
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        Self::linear_scene()
+    }
+}
+
+/// Decode a RAW file to an [`ImageBuf`] (f32 RGB) + metadata, per `opts`.
+///
+/// With [`DecodeOptions::linear_scene`] the samples are linear light in sRGB primaries.
+/// With [`DecodeOptions::display`] they are sRGB-encoded (display-referred).
+pub fn decode_raw(path: &Path, opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
     let bytes = std::fs::read(path)?;
-    backend_rsraw::decode(&bytes)
+    backend_rsraw::decode(&bytes, opts)
 }
 
 #[cfg(test)]
@@ -66,7 +106,8 @@ mod tests {
             eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
             return;
         };
-        let decoded = decode_raw(&path).expect("decode should succeed");
+        let decoded =
+            decode_raw(&path, &DecodeOptions::linear_scene()).expect("decode should succeed");
         assert!(decoded.metadata.width > 0 && decoded.metadata.height > 0);
         assert_eq!(
             decoded.image.data().len(),

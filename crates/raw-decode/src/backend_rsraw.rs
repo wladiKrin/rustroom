@@ -1,20 +1,30 @@
 //! libraw-backed decode via the `rsraw` crate.
 
-use crate::{DecodeError, DecodedRaw, RawMetadata};
+use crate::{DecodeError, DecodeOptions, DecodedRaw, RawMetadata};
 use core_image::ImageBuf;
 use rsraw::{RawImage, BIT_DEPTH_16};
 
 const U16_MAX_F: f32 = u16::MAX as f32;
 
-pub(crate) fn decode(bytes: &[u8]) -> Result<DecodedRaw, DecodeError> {
+pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
     let mut raw =
         RawImage::open(bytes).map_err(|e| DecodeError::Backend(format!("open: {e:?}")))?;
     raw.unpack()
         .map_err(|e| DecodeError::Backend(format!("unpack: {e:?}")))?;
-    // Prefer the camera's own white balance (falls back to auto-WB if unavailable).
-    raw.set_use_camera_wb(true);
+    raw.set_use_camera_wb(opts.camera_wb);
 
-    // 16-bit output for headroom; libraw demosaics + applies WB + sRGB gamma here.
+    {
+        // Poke libraw output params directly (rsraw's high-level API doesn't expose these).
+        let params = &mut raw.as_mut().params;
+        params.output_color = 1; // sRGB (Rec.709) primaries
+        params.no_auto_bright = i32::from(opts.no_auto_bright);
+        if opts.linear {
+            params.gamm[0] = 1.0; // linear: power = 1.0
+            params.gamm[1] = 1.0; // linear: toe slope = 1.0
+        }
+    }
+
+    // libraw demosaics + applies WB here; gamma/brightness per the params above.
     let processed = raw
         .process::<{ BIT_DEPTH_16 }>()
         .map_err(|e| DecodeError::Backend(format!("process: {e:?}")))?;
