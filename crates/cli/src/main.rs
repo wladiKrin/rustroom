@@ -24,6 +24,9 @@ enum Command {
         input: PathBuf,
         /// Output JPEG.
         output: PathBuf,
+        /// Optional edits sidecar (JSON). Omitted = no edits.
+        #[arg(long)]
+        edits: Option<PathBuf>,
         /// JPEG quality 1..=100.
         #[arg(long, default_value_t = 92)]
         quality: u8,
@@ -37,8 +40,9 @@ fn main() -> Result<()> {
         Command::Render {
             input,
             output,
+            edits,
             quality,
-        } => render(&input, &output, quality),
+        } => render(&input, &output, edits.as_deref(), quality),
     }
 }
 
@@ -69,13 +73,17 @@ fn decode(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn render(input: &Path, output: &Path, quality: u8) -> Result<()> {
+fn render(input: &Path, output: &Path, edits_path: Option<&Path>, quality: u8) -> Result<()> {
     let decoded = raw_decode::decode_raw(input, &raw_decode::DecodeOptions::linear_scene())
         .with_context(|| format!("decoding {}", input.display()))?;
     let m = &decoded.metadata;
     eprintln!("Decoded {}x{}  {} {}", m.width, m.height, m.make, m.model);
 
-    let edits = edit_model::Edits::default();
+    let edits = match edits_path {
+        Some(p) => edit_model::Edits::from_json_file(p)
+            .with_context(|| format!("loading edits {}", p.display()))?,
+        None => edit_model::Edits::default(),
+    };
     let rendered = pipeline::build_pipeline(&edits).run(decoded.image);
 
     export::save_jpeg(&rendered, output, quality)
