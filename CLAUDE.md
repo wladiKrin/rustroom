@@ -59,15 +59,15 @@ opensource_lightroom/
 ├── Cargo.toml                # [workspace]
 ├── CLAUDE.md                 # this file
 ├── crates/
-│   ├── core-image/           # ImageBuf, color spaces, float pixel types
-│   ├── raw-decode/           # libraw wrapper: RAW -> linear RGB + metadata
-│   ├── pipeline/             # PipelineStage trait + all develop stages
-│   ├── color/                # lcms2 / ICC, working-space transforms
-│   ├── edit-model/           # op-list, params, sidecar (de)serialization
-│   ├── export/               # encoders, resize, output sharpening
-│   ├── cli/                  # headless open→apply→export — permanent test harness
+│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples
+│   ├── raw-decode/           # ✅ libraw(rsraw) wrapper; DecodeOptions{linear_scene,display}
+│   ├── color/                # ✅ sRGB transfer fns (lcms2/ICC still deferred)
+│   ├── edit-model/           # ✅ serde Edits op-list (near-empty; grows in M1.2)
+│   ├── pipeline/             # ✅ PipelineStage trait + Pipeline + OutputTransformSrgb
+│   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
+│   ├── cli/                  # ✅ `oslr decode` (dump) + `oslr render` (pipeline->JPEG)
 │   ├── catalog/              # (later) SQLite DAM
-│   └── app/                  # egui + wgpu GUI; wires everything together
+│   └── app/                  # (later, own plan) egui + wgpu GUI
 ├── docs/
 └── tests/                    # integration + golden reference images
 ```
@@ -85,10 +85,17 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Phase 0 complete (M0.1–M0.3).** Cargo workspace + CI live. Crates built so far:
-- `core-image` — `ImageBuf` (interleaved f32 RGB), unit-tested.
-- `raw-decode` — `decode_raw()` → `DecodedRaw { ImageBuf, RawMetadata }`. **Decode backend shipped: libraw via the `rsraw` crate** (not the `libraw` crate). libraw does demosaic + camera WB; 16-bit output normalized to f32. NOTE: output is currently sRGB-gamma (display-referred) — M1.1 replaces this with a linear scene-referred extraction.
-- `cli` — binary `oslr`, subcommand `oslr decode <in> <out.tiff>`. **Validated end-to-end** on a Fujifilm X-T4 `.RAF` (X-Trans) → correct, well-white-balanced photo.
+**Phase 1 / M1.1 complete.** Non-destructive pipeline skeleton is live and color-validated. Full workspace `fmt`/`clippy`/`test --all` green.
+
+Phase 0 (done): workspace + CI; `core-image` `ImageBuf`; `raw-decode` via **libraw through the `rsraw` crate** (not the `libraw` crate); `oslr decode` dump validated on a Fuji X-T4 `.RAF`.
+
+M1.1 (done):
+- `raw-decode` now has `DecodeOptions` — `linear_scene()` (gamma 1.0, `no_auto_bright`, sRGB primaries, camera WB → **scene-referred linear** working image) and `display()` (libraw's baked sRGB, used by `oslr decode`). Set via libraw params through `rsraw`'s `as_mut()` (`no_auto_bright` is `i32`).
+- `color` — exact sRGB transfer fns. **lcms2/ICC still deferred**: libraw emits sRGB primaries, so only the transfer curve is needed for correct output; lcms2 enters when camera-input / display-output ICC profiles are needed.
+- `edit-model` — serde `Edits` op-list (currently just `version`; `#[serde(default)]` for forward-compat).
+- `pipeline` — `PipelineStage` trait (pure `ImageBuf->ImageBuf`, the GPU-port seam), `Pipeline` runner, `build_pipeline(&Edits)`, `OutputTransformSrgb`.
+- `export` — `to_rgb8` + `save_jpeg`.
+- `cli` — `oslr render <in> <out.jpg> [--quality]`: decode linear → pipeline → sRGB JPEG. **Validated** on the X-T4 `.RAF`: natural, correct WB/color. Correctly darker than the `decode` dump (scene-referred, no auto-bright) — exposure becomes a user control in M1.2.
 
 Toolchain bumped to stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 
@@ -96,6 +103,6 @@ Toolchain bumped to stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** Phase 1 / M1.1 — minimal color-managed pipeline skeleton (`PipelineStage` trait, decode→linear working space→sRGB output transform via lcms2), rendering a correct JPEG with zero edits.
+**Next step:** Phase 1 / M1.2 — core global adjustment stages (white balance, exposure, contrast, highlights/shadows/whites/blacks, tone curve), each operating in linear light *before* `OutputTransformSrgb`, each with a unit test **and a golden-image regression test** (the safety net established in M1.2). `Edits` gains a field per adjustment; `build_pipeline` prepends stages in canonical order. Plan: `docs/superpowers/plans/2026-07-23-phase-1-mvp-editor.md` (M1.2 roadmap section — expand to full tasks before starting).
 
 _Update this "Current status" section as milestones land._
