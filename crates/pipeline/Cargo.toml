@@ -8,3 +8,6 @@ license.workspace = true
 core-image = { path = "../core-image" }
 color = { path = "../color" }
 edit-model = { path = "../edit-model" }
+
+[dev-dependencies]
+image = { workspace = true }
