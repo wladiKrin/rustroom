@@ -75,6 +75,12 @@ impl ImageBuf {
         self.data[i + 1] = rgb[1];
         self.data[i + 2] = rgb[2];
     }
+
+    /// Return a new image with `f` applied to every sample (all channels), dimensions preserved.
+    pub fn map_samples<F: Fn(f32) -> f32>(&self, f: F) -> ImageBuf {
+        let data = self.data.iter().map(|&s| f(s)).collect();
+        ImageBuf::from_vec(self.width, self.height, data)
+    }
 }
 
 #[cfg(test)]
@@ -104,5 +110,16 @@ mod tests {
         let data = vec![0.1; 2 * 2 * 3];
         let img = ImageBuf::from_vec(2, 2, data.clone());
         assert_eq!(img.data(), data.as_slice());
+    }
+
+    #[test]
+    fn map_samples_applies_to_every_channel() {
+        let mut img = ImageBuf::new(2, 1);
+        img.set_pixel(0, 0, [0.1, 0.2, 0.3]);
+        img.set_pixel(1, 0, [0.4, 0.5, 0.6]);
+        let out = img.map_samples(|s| s * 2.0);
+        assert_eq!(out.pixel(0, 0), [0.2, 0.4, 0.6]);
+        assert_eq!(out.pixel(1, 0), [0.8, 1.0, 1.2]);
+        assert_eq!((out.width(), out.height()), (2, 1));
     }
 }
