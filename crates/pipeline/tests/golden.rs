@@ -46,19 +46,20 @@ fn golden_path(name: &str) -> PathBuf {
 
 fn check_golden(name: &str, edits: &Edits) {
     let rendered = build_pipeline(edits).run(chart());
+    let (rw, rh) = (rendered.width() as u32, rendered.height() as u32);
     let bytes = to_rgb8(&rendered);
     let path = golden_path(name);
 
     if std::env::var("UPDATE_GOLDEN").is_ok() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        image::save_buffer(&path, &bytes, W as u32, H as u32, image::ColorType::Rgb8).unwrap();
+        image::save_buffer(&path, &bytes, rw, rh, image::ColorType::Rgb8).unwrap();
         return;
     }
 
     let golden = image::open(&path)
         .unwrap_or_else(|_| panic!("missing golden {name}; run with UPDATE_GOLDEN=1"))
         .to_rgb8();
-    assert_eq!(golden.dimensions(), (W as u32, H as u32), "{name}: size");
+    assert_eq!(golden.dimensions(), (rw, rh), "{name}: size");
     let gbytes = golden.into_raw();
     let max_diff = bytes
         .iter()
@@ -150,6 +151,41 @@ fn golden_combined() {
             exposure: 0.5,
             contrast: 25.0,
             shadows: 40.0,
+            ..Edits::default()
+        },
+    )
+}
+
+#[test]
+fn golden_crop_center() {
+    use edit_model::{CropRect, Geometry};
+    check_golden(
+        "crop_center",
+        &Edits {
+            geometry: Geometry {
+                angle: 0.0,
+                crop: CropRect {
+                    left: 0.25,
+                    top: 0.0,
+                    right: 0.75,
+                    bottom: 1.0,
+                },
+            },
+            ..Edits::default()
+        },
+    )
+}
+
+#[test]
+fn golden_straighten_5deg() {
+    use edit_model::Geometry;
+    check_golden(
+        "straighten_5deg",
+        &Edits {
+            geometry: Geometry {
+                angle: 5.0,
+                ..Default::default()
+            },
             ..Edits::default()
         },
     )
