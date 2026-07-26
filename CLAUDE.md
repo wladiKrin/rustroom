@@ -61,11 +61,11 @@ opensource_lightroom/
 ├── Cargo.toml                # [workspace]
 ├── CLAUDE.md                 # this file
 ├── crates/
-│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples + map_pixels
+│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples + map_pixels + crop
 │   ├── raw-decode/           # ✅ libraw(rsraw) wrapper; DecodeOptions{linear_scene,display}
 │   ├── color/                # ✅ sRGB transfer fns (lcms2/ICC still deferred)
-│   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve)
-│   ├── pipeline/             # ✅ PipelineStage + 6 stages + build_pipeline + golden tests
+│   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/geometry)
+│   ├── pipeline/             # ✅ PipelineStage + 7 stages (incl. geometry) + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ app crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
 │   ├── catalog/              # (later) SQLite DAM
@@ -87,7 +87,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Phase 1 / M1.2 complete.** Core global adjustments + golden regression harness live and validated. Full workspace `fmt`/`clippy`/`test --all` green.
+**Phase 1 / M1.3 complete.** Global adjustments + geometry (crop & straighten) + golden regression harness live and validated. Full workspace `fmt`/`clippy`/`test --all` green.
 
 Phase 0 (done): workspace + CI; `core-image` `ImageBuf`; `raw-decode` via **libraw through the `rsraw` crate** (not the `libraw` crate); `rustroom decode` dump validated on a Fuji X-T4 `.RAF`.
 
@@ -101,13 +101,22 @@ M1.2 (done):
 - `rustroom` (app crate) — `rustroom render --edits <file.json>` applies a JSON sidecar. **Validated** on the X-T4 `.RAF` (exposure/contrast/shadows/temp): visibly & correctly brighter/warmer/more contrasty than neutral.
 - **MVP modeling caveats** (flagged in the M1.2 plan): WB is a *creative* luminance-normalized gain on top of camera WB; contrast/tone-regions are simple hue-preserving models in linear light — not Adobe-identical. Exposure and the curve LUT are exact.
 
+M1.3 (done):
+- `core-image` — added `crop(x,y,w,h)`.
+- `edit-model` — `Edits.geometry`: `Geometry { angle (straighten deg), crop: CropRect{left,top,right,bottom in [0,1]} }`; `CropRect::default` = full frame, so an absent/partial geometry is neutral.
+- `pipeline` — `GeometryStage` (bilinear rotation about center, then crop) runs **first** in `build_pipeline` so adjustments act on final pixels. Straighten keeps canvas size; out-of-frame → black; crop is expected to remove black corners.
+- **Golden harness** now uses the *rendered* image's dimensions (so crop cases work); added `crop_center` (32×16) + `straighten_5deg` cases — 9 golden tests total. The 7 pre-existing references are byte-identical.
+- **Validated** end-to-end: `rustroom render --edits geo.json` on the X-T4 `.RAF` → correctly cropped to 70% (4372×2919) and rotated 4°.
+
 Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 
 **Dev setup note (macOS):** the `rsraw-sys` build needs libraw discoverable by pkg-config. Install with `brew install libraw pkg-config` and build with:
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** Phase 1 / M1.3 — geometry: crop & straighten. A crop-rectangle + rotation stage in `pipeline`; `Edits` gains a `geometry` field; add a golden test for a cropped/straightened render. Note the ordering choice (geometry vs tone). See the M1.3 roadmap in `docs/superpowers/plans/2026-07-23-phase-1-mvp-editor.md` (expand to full tasks before starting). After M1.3, **M1.4 (egui+wgpu GUI) gets its own spec→plan** — distinct subsystem.
+**Next step:** Phase 1 / **M1.4 — minimal GUI** (the last M1 milestone → a genuinely usable single-image editor). New `app` crate: `egui` + `wgpu`. Load a RAW, show the preview on a `wgpu` canvas, sliders bound to `Edits`, crop tool, histogram, Export button. Edit a **downscaled preview** for interactivity; render full-res on export. **This is a distinct subsystem (GUI tech) and gets its own spec→plan** — brainstorm it before writing the plan. Roadmap sketch in `docs/superpowers/plans/2026-07-23-phase-1-mvp-editor.md`.
+
+Plans so far: Phase 0 `2026-07-22-phase-0-foundation.md`; M1.1 `2026-07-23-phase-1-mvp-editor.md`; M1.2 `2026-07-23-phase-1-m1.2-adjustments.md`; M1.3 `2026-07-23-phase-1-m1.3-crop-straighten.md` (all under `docs/superpowers/plans/`).
 
 Plans: Phase 0 `docs/superpowers/plans/2026-07-22-phase-0-foundation.md`; M1.1 `.../2026-07-23-phase-1-mvp-editor.md`; M1.2 `.../2026-07-23-phase-1-m1.2-adjustments.md`.
 
