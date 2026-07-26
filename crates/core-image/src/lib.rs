@@ -82,6 +82,25 @@ impl ImageBuf {
         ImageBuf::from_vec(self.width, self.height, data)
     }
 
+    /// Extract an axis-aligned sub-rectangle. Requires `x + w <= width` and `y + h <= height`.
+    ///
+    /// # Panics
+    /// Panics if the rectangle exceeds the image bounds, or if `w == 0 || h == 0`.
+    pub fn crop(&self, x: usize, y: usize, w: usize, h: usize) -> ImageBuf {
+        assert!(w > 0 && h > 0, "crop size must be non-zero");
+        assert!(
+            x + w <= self.width && y + h <= self.height,
+            "crop rectangle out of bounds"
+        );
+        let mut data = Vec::with_capacity(w * h * Self::CHANNELS);
+        for row in y..y + h {
+            let start = (row * self.width + x) * Self::CHANNELS;
+            let end = start + w * Self::CHANNELS;
+            data.extend_from_slice(&self.data[start..end]);
+        }
+        ImageBuf::from_vec(w, h, data)
+    }
+
     /// Return a new image with `f` applied to each RGB pixel, dimensions preserved.
     pub fn map_pixels<F: Fn([f32; 3]) -> [f32; 3]>(&self, f: F) -> ImageBuf {
         let mut data = Vec::with_capacity(self.data.len());
@@ -122,6 +141,20 @@ mod tests {
         let data = vec![0.1; 2 * 2 * 3];
         let img = ImageBuf::from_vec(2, 2, data.clone());
         assert_eq!(img.data(), data.as_slice());
+    }
+
+    #[test]
+    fn crop_extracts_subrect() {
+        let mut img = ImageBuf::new(3, 2);
+        for y in 0..2 {
+            for x in 0..3 {
+                img.set_pixel(x, y, [x as f32, y as f32, 0.0]);
+            }
+        }
+        let c = img.crop(1, 0, 2, 2);
+        assert_eq!((c.width(), c.height()), (2, 2));
+        assert_eq!(c.pixel(0, 0), [1.0, 0.0, 0.0]);
+        assert_eq!(c.pixel(1, 1), [2.0, 1.0, 0.0]);
     }
 
     #[test]
