@@ -21,6 +21,36 @@ pub struct ToneCurve {
     pub points: Vec<[f32; 2]>,
 }
 
+/// Normalized crop rectangle in [0, 1]; default is the full frame.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CropRect {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Default for CropRect {
+    fn default() -> Self {
+        Self {
+            left: 0.0,
+            top: 0.0,
+            right: 1.0,
+            bottom: 1.0,
+        }
+    }
+}
+
+/// Geometry: straighten angle (degrees, + = clockwise) then crop. Neutral by default.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Geometry {
+    /// Straighten angle in degrees. 0 = none.
+    pub angle: f32,
+    pub crop: CropRect,
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -41,6 +71,7 @@ pub struct Edits {
     /// Blacks endpoint, ~[-100, 100]. Positive lifts the bottom end.
     pub blacks: f32,
     pub tone_curve: ToneCurve,
+    pub geometry: Geometry,
 }
 
 impl Edits {
@@ -90,5 +121,28 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"exposure": 1.5}"#).unwrap();
         assert_eq!(e.exposure, 1.5);
         assert_eq!(e.contrast, 0.0);
+    }
+
+    #[test]
+    fn geometry_default_is_neutral() {
+        let g = Geometry::default();
+        assert_eq!(g.angle, 0.0);
+        assert_eq!(g.crop, CropRect::default());
+        assert_eq!(
+            g.crop,
+            CropRect {
+                left: 0.0,
+                top: 0.0,
+                right: 1.0,
+                bottom: 1.0
+            }
+        );
+    }
+
+    #[test]
+    fn partial_geometry_json_defaults_full_crop() {
+        let e: Edits = serde_json::from_str(r#"{"geometry": {"angle": 2.5}}"#).unwrap();
+        assert_eq!(e.geometry.angle, 2.5);
+        assert_eq!(e.geometry.crop, CropRect::default());
     }
 }
