@@ -564,6 +564,7 @@ dependencies = [
  "color",
  "core-image",
  "edit-model",
+ "image",
 ]
 
 [[package]]
