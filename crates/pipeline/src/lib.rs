@@ -7,6 +7,7 @@ use edit_model::Edits;
 mod stages;
 pub use stages::contrast::ContrastStage;
 pub use stages::exposure::ExposureStage;
+pub use stages::geometry::GeometryStage;
 pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
@@ -51,6 +52,10 @@ impl Pipeline {
 pub fn build_pipeline(edits: &Edits) -> Pipeline {
     let mut stages: Vec<Box<dyn PipelineStage>> = Vec::new();
 
+    // Geometry runs first, so all adjustments operate on the final cropped pixels.
+    if edits.geometry != edit_model::Geometry::default() {
+        stages.push(Box::new(GeometryStage::new(&edits.geometry)));
+    }
     if edits.white_balance != edit_model::WhiteBalance::default() {
         stages.push(Box::new(WhiteBalanceStage::new(&edits.white_balance)));
     }
@@ -106,6 +111,19 @@ mod tests {
         let edits = Edits {
             exposure: 1.0,
             contrast: 20.0,
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits).len(), 3);
+    }
+
+    #[test]
+    fn geometry_is_prepended_before_other_stages() {
+        let edits = Edits {
+            exposure: 1.0,
+            geometry: edit_model::Geometry {
+                angle: 1.0,
+                ..Default::default()
+            },
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits).len(), 3);

@@ -1,5 +1,6 @@
 pub mod contrast;
 pub mod exposure;
+pub mod geometry;
 pub mod output_transform;
 pub mod tone_curve;
 pub mod tone_regions;
