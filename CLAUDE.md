@@ -1,12 +1,14 @@
-# CLAUDE.md — Open-Source Lightroom Alternative
+# CLAUDE.md — Rustroom
 
 Project-specific guidance for Claude Code working in this repository.
+
+**Rustroom** — an open-source alternative to Adobe Lightroom. (Binary: `rustroom`. Repo folder is still `opensource_lightroom`; not renamed to avoid churning paths.)
 
 > **⚠️ Maintain this file.** Whenever the architecture, crate layout, stack, conventions, or current phase meaningfully changes, update the relevant section here in the same session — this file is the durable source of truth loaded every session. Keep it accurate; prune anything that becomes wrong.
 
 ## What this is
 
-An open-source alternative to Adobe Lightroom (Classic model): a non-destructive RAW photo editor. **Linux first**, then Windows/macOS from one codebase.
+**Rustroom** is an open-source alternative to Adobe Lightroom (Classic model): a non-destructive RAW photo editor. **Linux first**, then Windows/macOS from one codebase.
 
 - Ambition: a **serious, usable** tool on a focused feature set — not a toy, not a full LR clone.
 - Focus order: **Develop (editing) first, Library (catalog/DAM) later.**
@@ -65,7 +67,7 @@ opensource_lightroom/
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve)
 │   ├── pipeline/             # ✅ PipelineStage + 6 stages + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
-│   ├── cli/                  # ✅ `oslr decode` (dump) + `oslr render [--edits]` (pipeline->JPEG)
+│   ├── rustroom/             # ✅ app crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
 │   ├── catalog/              # (later) SQLite DAM
 │   └── app/                  # (later, own plan) egui + wgpu GUI
 ├── docs/
@@ -87,16 +89,16 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **Phase 1 / M1.2 complete.** Core global adjustments + golden regression harness live and validated. Full workspace `fmt`/`clippy`/`test --all` green.
 
-Phase 0 (done): workspace + CI; `core-image` `ImageBuf`; `raw-decode` via **libraw through the `rsraw` crate** (not the `libraw` crate); `oslr decode` dump validated on a Fuji X-T4 `.RAF`.
+Phase 0 (done): workspace + CI; `core-image` `ImageBuf`; `raw-decode` via **libraw through the `rsraw` crate** (not the `libraw` crate); `rustroom decode` dump validated on a Fuji X-T4 `.RAF`.
 
-M1.1 (done): `raw-decode` `DecodeOptions` (`linear_scene()` = scene-referred linear via libraw gamma 1.0 + `no_auto_bright`, sRGB primaries, camera WB, set through `rsraw`'s `as_mut()` where `no_auto_bright` is `i32`; `display()` = baked sRGB for `oslr decode`); `color` exact sRGB transfer fns; `edit-model` serde `Edits`; `pipeline` `PipelineStage` trait (pure `ImageBuf->ImageBuf`, the GPU-port seam) + `Pipeline` + `OutputTransformSrgb`; `export` `to_rgb8`/`save_jpeg`; `cli render`. **lcms2/ICC still deferred** (libraw emits sRGB primaries → only the transfer curve is needed).
+M1.1 (done): `raw-decode` `DecodeOptions` (`linear_scene()` = scene-referred linear via libraw gamma 1.0 + `no_auto_bright`, sRGB primaries, camera WB, set through `rsraw`'s `as_mut()` where `no_auto_bright` is `i32`; `display()` = baked sRGB for `rustroom decode`); `color` exact sRGB transfer fns; `edit-model` serde `Edits`; `pipeline` `PipelineStage` trait (pure `ImageBuf->ImageBuf`, the GPU-port seam) + `Pipeline` + `OutputTransformSrgb`; `export` `to_rgb8`/`save_jpeg`; `rustroom render`. **lcms2/ICC still deferred** (libraw emits sRGB primaries → only the transfer curve is needed).
 
 M1.2 (done):
 - `core-image` — added `map_pixels` (per-pixel `[f32;3]` transform) for per-channel stages.
 - `edit-model` — `Edits` grew fields: `white_balance{temp,tint}`, `exposure` (EV), `contrast`, `highlights`, `shadows`, `whites`, `blacks`, `tone_curve{points}`; all neutral-by-default (`#[serde(default)]`). `Edits::from_json_file`.
 - `pipeline` — five new stages, all in linear light before `OutputTransformSrgb`: `WhiteBalanceStage`, `ExposureStage`, `ContrastStage`, `ToneRegionsStage` (hi/sh/wh/bl), `ToneCurveStage` (point-curve LUT). `build_pipeline` adds a stage only when non-neutral; canonical order WB→exposure→contrast→tone-regions→tone-curve→output.
 - **Golden-image regression harness** (`crates/pipeline/tests/golden.rs` + committed PNGs): renders a synthetic 4-band chart through fixed `Edits`, compares RGB8 within `TOL=2`. `UPDATE_GOLDEN=1` regenerates. Fast/deterministic (no libraw at test time). **This is the safety net for all future refactors incl. the GPU port — never abandon it.**
-- `cli` — `oslr render --edits <file.json>` applies a JSON sidecar. **Validated** on the X-T4 `.RAF` (exposure/contrast/shadows/temp): visibly & correctly brighter/warmer/more contrasty than neutral.
+- `rustroom` (app crate) — `rustroom render --edits <file.json>` applies a JSON sidecar. **Validated** on the X-T4 `.RAF` (exposure/contrast/shadows/temp): visibly & correctly brighter/warmer/more contrasty than neutral.
 - **MVP modeling caveats** (flagged in the M1.2 plan): WB is a *creative* luminance-normalized gain on top of camera WB; contrast/tone-regions are simple hue-preserving models in linear light — not Adobe-identical. Exposure and the curve LUT are exact.
 
 Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).

@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "oslr", about = "Open-source Lightroom — CLI harness")]
+#[command(name = "rustroom", about = "Rustroom — open-source RAW photo editor")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
