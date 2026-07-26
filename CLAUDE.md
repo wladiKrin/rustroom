@@ -2,7 +2,7 @@
 
 Project-specific guidance for Claude Code working in this repository.
 
-**Rustroom** — an open-source alternative to Adobe Lightroom. (Binary: `rustroom`. Repo folder is still `opensource_lightroom`; not renamed to avoid churning paths.)
+**Rustroom** — an open-source alternative to Adobe Lightroom. (Binary: `rustroom`. Repo folder: `~/Projects/rustroom`. Note: the Obsidian planning-notes folder is still named `opensource_lightroom`.)
 
 > **⚠️ Maintain this file.** Whenever the architecture, crate layout, stack, conventions, or current phase meaningfully changes, update the relevant section here in the same session — this file is the durable source of truth loaded every session. Keep it accurate; prune anything that becomes wrong.
 
