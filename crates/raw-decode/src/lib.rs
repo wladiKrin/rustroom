@@ -50,6 +50,8 @@ pub struct DecodeOptions {
     pub linear: bool,
     /// If true, disable libraw's automatic brightness stretch (needed for scene-referred).
     pub no_auto_bright: bool,
+    /// Decode at libraw half-size — much faster; used for the editing preview.
+    pub half_size: bool,
 }
 
 impl DecodeOptions {
@@ -59,15 +61,27 @@ impl DecodeOptions {
             camera_wb: true,
             linear: true,
             no_auto_bright: true,
+            half_size: false,
         }
     }
 
-    /// Display-ready sRGB (quick viewable dump — used by `oslr decode`).
+    /// Display-ready sRGB (quick viewable dump — used by `rustroom decode`).
     pub fn display() -> Self {
         Self {
             camera_wb: true,
             linear: false,
             no_auto_bright: false,
+            half_size: false,
+        }
+    }
+
+    /// Fast, scene-referred linear decode for interactive editing (half resolution).
+    pub fn preview() -> Self {
+        Self {
+            camera_wb: true,
+            linear: true,
+            no_auto_bright: true,
+            half_size: true,
         }
     }
 }

@@ -9,6 +9,7 @@ const U16_MAX_F: f32 = u16::MAX as f32;
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
     let mut raw =
         RawImage::open(bytes).map_err(|e| DecodeError::Backend(format!("open: {e:?}")))?;
+    raw.set_half_size(opts.half_size); // must be set before unpack()
     raw.unpack()
         .map_err(|e| DecodeError::Backend(format!("unpack: {e:?}")))?;
     raw.set_use_camera_wb(opts.camera_wb);
