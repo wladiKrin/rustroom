@@ -2,6 +2,7 @@ use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::render_engine::RenderEngine;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const PREVIEW_MAX_DIM: usize = 1600;
@@ -25,6 +26,7 @@ struct RustroomApp {
 }
 
 struct Session {
+    path: PathBuf,
     engine: RenderEngine,
     edits: Edits,
     texture: Option<egui::TextureHandle>,
@@ -56,6 +58,7 @@ impl RustroomApp {
                 let edits = Edits::default();
                 engine.request(edits.clone(), PREVIEW_MAX_DIM);
                 self.session = Some(Session {
+                    path: path.clone(),
                     engine,
                     edits,
                     texture: None,
@@ -68,6 +71,33 @@ impl RustroomApp {
             }
             Err(e) => self.status = format!("Decode failed: {e}"),
         }
+    }
+
+    fn export_dialog(&mut self) {
+        let Some(s) = &self.session else { return };
+        let Some(out) = rfd::FileDialog::new()
+            .add_filter("JPEG", &["jpg", "jpeg"])
+            .set_file_name("export.jpg")
+            .save_file()
+        else {
+            return;
+        };
+        let src = s.path.clone();
+        let edits = s.edits.clone();
+        self.status = "Exporting (full-res decode)…".into();
+        // Full decode + render + encode is slow; run detached so the UI stays responsive.
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<()> {
+                let decoded =
+                    raw_decode::decode_raw(&src, &raw_decode::DecodeOptions::linear_scene())?;
+                let rendered = pipeline::build_pipeline(&edits).run(decoded.image);
+                export::save_jpeg(&rendered, &out, 92)?;
+                Ok(())
+            })();
+            if let Err(e) = result {
+                eprintln!("export error: {e}");
+            }
+        });
     }
 }
 
@@ -97,6 +127,9 @@ impl eframe::App for RustroomApp {
                         s.zoom = 1.0;
                         s.pan = egui::Vec2::ZERO;
                     }
+                }
+                if self.session.is_some() && ui.button("Export…").clicked() {
+                    self.export_dialog();
                 }
                 if !self.status.is_empty() {
                     ui.label(&self.status);
