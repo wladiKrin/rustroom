@@ -1,4 +1,10 @@
+use edit_model::Edits;
 use eframe::egui;
+use rustroom_app::histogram::histogram_rgba;
+use rustroom_app::render_engine::RenderEngine;
+use std::sync::Arc;
+
+const PREVIEW_MAX_DIM: usize = 1600;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -13,13 +19,189 @@ fn main() -> eframe::Result<()> {
 }
 
 #[derive(Default)]
-struct RustroomApp {}
+struct RustroomApp {
+    session: Option<Session>,
+    status: String,
+}
+
+struct Session {
+    engine: RenderEngine,
+    edits: Edits,
+    texture: Option<egui::TextureHandle>,
+    hist: [[u32; 256]; 3],
+    make_model: String,
+}
+
+impl RustroomApp {
+    fn open_dialog(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "RAW",
+                &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        self.status = format!("Decoding {}…", path.display());
+        // Half-size decode can take several seconds; inline for M1.4a (thread it later).
+        match raw_decode::decode_raw(&path, &raw_decode::DecodeOptions::preview()) {
+            Ok(decoded) => {
+                let make_model = format!("{} {}", decoded.metadata.make, decoded.metadata.model);
+                let buffer = Arc::new(decoded.image);
+                let ctx2 = ctx.clone();
+                let engine = RenderEngine::new(buffer, move || ctx2.request_repaint());
+                let edits = Edits::default();
+                engine.request(edits.clone(), PREVIEW_MAX_DIM);
+                self.session = Some(Session {
+                    engine,
+                    edits,
+                    texture: None,
+                    hist: [[0; 256]; 3],
+                    make_model,
+                });
+                self.status.clear();
+            }
+            Err(e) => self.status = format!("Decode failed: {e}"),
+        }
+    }
+}
 
 impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Rustroom");
-            ui.label("Open a RAW to begin.");
+        let ctx = ui.ctx().clone();
+
+        // Pull any finished frame into a texture.
+        if let Some(s) = &mut self.session {
+            if let Some(frame) = s.engine.poll_latest() {
+                s.hist = histogram_rgba(&frame.rgba);
+                let img = egui::ColorImage::from_rgba_unmultiplied(
+                    [frame.width, frame.height],
+                    &frame.rgba,
+                );
+                s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+            }
+        }
+
+        egui::Panel::top("top").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Open…").clicked() {
+                    self.open_dialog(&ctx);
+                }
+                if !self.status.is_empty() {
+                    ui.label(&self.status);
+                }
+            });
         });
+
+        egui::Panel::right("panel")
+            .default_size(240.0)
+            .show(ui, |ui| {
+                if let Some(s) = &mut self.session {
+                    draw_histogram(ui, &s.hist);
+                    ui.separator();
+                    let mut changed = false;
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut s.edits.white_balance.temp, -100.0..=100.0)
+                                .text("Temp"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut s.edits.white_balance.tint, -100.0..=100.0)
+                                .text("Tint"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut s.edits.exposure, -5.0..=5.0).text("Exposure"))
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut s.edits.contrast, -100.0..=100.0)
+                                .text("Contrast"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut s.edits.highlights, -100.0..=100.0)
+                                .text("Highlights"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut s.edits.shadows, -100.0..=100.0).text("Shadows"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut s.edits.whites, -100.0..=100.0).text("Whites"))
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut s.edits.blacks, -100.0..=100.0).text("Blacks"))
+                        .changed();
+                    ui.separator();
+                    if ui.button("Reset all").clicked() {
+                        s.edits = Edits::default();
+                        changed = true;
+                    }
+                    if changed {
+                        s.engine.request(s.edits.clone(), PREVIEW_MAX_DIM);
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(&s.make_model).small());
+                } else {
+                    ui.label("No image open.");
+                }
+            });
+
+        egui::CentralPanel::default().show(ui, |ui| match &self.session {
+            Some(s) => {
+                if let Some(tex) = &s.texture {
+                    ui.centered_and_justified(|ui| {
+                        ui.add(egui::Image::new(tex).shrink_to_fit());
+                    });
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.spinner();
+                    });
+                }
+            }
+            None => {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Open a RAW to begin (Open… button).");
+                });
+            }
+        });
+    }
+}
+
+fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
+    let max = hist
+        .iter()
+        .flat_map(|c| c.iter())
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .max(1) as f32;
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let colors = [
+        egui::Color32::from_rgb(220, 80, 80),
+        egui::Color32::from_rgb(80, 200, 80),
+        egui::Color32::from_rgb(90, 120, 230),
+    ];
+    for (ci, chan) in hist.iter().enumerate() {
+        for (i, &count) in chan.iter().enumerate() {
+            let x = rect.left() + rect.width() * (i as f32 / 255.0);
+            let h = rect.height() * (count as f32 / max);
+            painter.line_segment(
+                [
+                    egui::pos2(x, rect.bottom()),
+                    egui::pos2(x, rect.bottom() - h),
+                ],
+                egui::Stroke::new(1.0, colors[ci].linear_multiply(0.5)),
+            );
+        }
     }
 }
