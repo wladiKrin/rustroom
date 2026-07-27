@@ -112,6 +112,42 @@ impl ImageBuf {
         }
         ImageBuf::from_vec(self.width, self.height, data)
     }
+
+    /// Downscale so the longer edge is at most `max_dim`, preserving aspect ratio, using
+    /// area averaging in the current (linear) light. Never upscales; returns a copy if
+    /// already small enough or if `max_dim == 0`.
+    pub fn downscale_to(&self, max_dim: usize) -> ImageBuf {
+        let long = self.width.max(self.height);
+        if max_dim == 0 || long <= max_dim {
+            return self.clone();
+        }
+        let scale = max_dim as f32 / long as f32;
+        let dw = (self.width as f32 * scale).round().max(1.0) as usize;
+        let dh = (self.height as f32 * scale).round().max(1.0) as usize;
+
+        let mut out = ImageBuf::new(dw, dh);
+        for oy in 0..dh {
+            let sy0 = oy * self.height / dh;
+            let sy1 = (((oy + 1) * self.height / dh).max(sy0 + 1)).min(self.height);
+            for ox in 0..dw {
+                let sx0 = ox * self.width / dw;
+                let sx1 = (((ox + 1) * self.width / dw).max(sx0 + 1)).min(self.width);
+                let mut acc = [0.0f32; 3];
+                let mut n = 0.0f32;
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        let p = self.pixel(sx, sy);
+                        acc[0] += p[0];
+                        acc[1] += p[1];
+                        acc[2] += p[2];
+                        n += 1.0;
+                    }
+                }
+                out.set_pixel(ox, oy, [acc[0] / n, acc[1] / n, acc[2] / n]);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -155,6 +191,42 @@ mod tests {
         assert_eq!((c.width(), c.height()), (2, 2));
         assert_eq!(c.pixel(0, 0), [1.0, 0.0, 0.0]);
         assert_eq!(c.pixel(1, 1), [2.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn downscale_solid_color_is_preserved() {
+        let mut img = ImageBuf::new(4, 4);
+        for y in 0..4 {
+            for x in 0..4 {
+                img.set_pixel(x, y, [0.2, 0.4, 0.6]);
+            }
+        }
+        let out = img.downscale_to(2);
+        assert_eq!((out.width(), out.height()), (2, 2));
+        for p in out.data().chunks_exact(3) {
+            assert!(
+                (p[0] - 0.2).abs() < 1e-5 && (p[1] - 0.4).abs() < 1e-5 && (p[2] - 0.6).abs() < 1e-5
+            );
+        }
+    }
+
+    #[test]
+    fn downscale_averages_a_block() {
+        let mut img = ImageBuf::new(2, 1);
+        img.set_pixel(0, 0, [0.0, 0.0, 0.0]);
+        img.set_pixel(1, 0, [1.0, 1.0, 1.0]);
+        let out = img.downscale_to(1);
+        assert_eq!((out.width(), out.height()), (1, 1));
+        assert!((out.pixel(0, 0)[0] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn downscale_never_upscales_and_keeps_aspect() {
+        let img = ImageBuf::new(10, 4);
+        let out = img.downscale_to(100);
+        assert_eq!((out.width(), out.height()), (10, 4));
+        let out2 = ImageBuf::new(10, 4).downscale_to(5);
+        assert_eq!((out2.width(), out2.height()), (5, 2));
     }
 
     #[test]
