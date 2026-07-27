@@ -105,6 +105,16 @@ impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        // Workaround for an upstream winit/macOS teardown bug: when the window closes,
+        // AppKit's Touch Bar responder tracking (`_NSTouchBarFinderObservation`) removes a
+        // KVO observer for "nextResponder" from `WinitView` with an imbalanced count,
+        // throwing an uncaught `NSRangeException` (SIGABRT). Exiting here — before that
+        // deferred observer invalidation runs during teardown — gives a clean exit.
+        #[cfg(target_os = "macos")]
+        if ctx.input(|i| i.viewport().close_requested()) {
+            std::process::exit(0);
+        }
+
         // Pull any finished frame into a texture.
         if let Some(s) = &mut self.session {
             if let Some(frame) = s.engine.poll_latest() {
