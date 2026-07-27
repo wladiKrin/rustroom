@@ -1,0 +1,24 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rustroom_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustroom-gui"
+path = "src/main.rs"
+
+[dependencies]
+core-image = { path = "../core-image" }
+raw-decode = { path = "../raw-decode" }
+edit-model = { path = "../edit-model" }
+pipeline = { path = "../pipeline" }
+export = { path = "../export" }
+eframe = { workspace = true }
+egui = { workspace = true }
+rfd = { workspace = true }
+anyhow = { workspace = true }
