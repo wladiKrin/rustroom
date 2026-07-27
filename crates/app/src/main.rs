@@ -30,6 +30,8 @@ struct Session {
     texture: Option<egui::TextureHandle>,
     hist: [[u32; 256]; 3],
     make_model: String,
+    zoom: f32,
+    pan: egui::Vec2,
 }
 
 impl RustroomApp {
@@ -59,6 +61,8 @@ impl RustroomApp {
                     texture: None,
                     hist: [[0; 256]; 3],
                     make_model,
+                    zoom: 1.0,
+                    pan: egui::Vec2::ZERO,
                 });
                 self.status.clear();
             }
@@ -87,6 +91,12 @@ impl eframe::App for RustroomApp {
             ui.horizontal(|ui| {
                 if ui.button("Open…").clicked() {
                     self.open_dialog(&ctx);
+                }
+                if self.session.is_some() && ui.button("Fit").clicked() {
+                    if let Some(s) = &mut self.session {
+                        s.zoom = 1.0;
+                        s.pan = egui::Vec2::ZERO;
+                    }
                 }
                 if !self.status.is_empty() {
                     ui.label(&self.status);
@@ -154,12 +164,26 @@ impl eframe::App for RustroomApp {
                 }
             });
 
-        egui::CentralPanel::default().show(ui, |ui| match &self.session {
+        egui::CentralPanel::default().show(ui, |ui| match &mut self.session {
             Some(s) => {
                 if let Some(tex) = &s.texture {
-                    ui.centered_and_justified(|ui| {
-                        ui.add(egui::Image::new(tex).shrink_to_fit());
-                    });
+                    let avail = ui.available_size();
+                    let tex_size = tex.size_vec2();
+                    let fit = (avail.x / tex_size.x).min(avail.y / tex_size.y).min(1.0);
+                    let draw = tex_size * fit * s.zoom;
+                    let center = ui.max_rect().center() + s.pan;
+                    let resp = ui.allocate_rect(
+                        egui::Rect::from_center_size(center, draw),
+                        egui::Sense::drag(),
+                    );
+                    egui::Image::new(tex).paint_at(ui, resp.rect);
+                    if resp.dragged() {
+                        s.pan += resp.drag_delta();
+                    }
+                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                    if scroll != 0.0 && resp.hovered() {
+                        s.zoom = (s.zoom * (1.0 + scroll * 0.001)).clamp(1.0, 8.0);
+                    }
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.spinner();
