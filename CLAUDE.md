@@ -61,15 +61,15 @@ opensource_lightroom/
 ├── Cargo.toml                # [workspace]
 ├── CLAUDE.md                 # this file
 ├── crates/
-│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples + map_pixels + crop
-│   ├── raw-decode/           # ✅ libraw(rsraw) wrapper; DecodeOptions{linear_scene,display}
+│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples/map_pixels/crop/downscale_to
+│   ├── raw-decode/           # ✅ libraw(rsraw); DecodeOptions{linear_scene,display,preview(half_size)}
 │   ├── color/                # ✅ sRGB transfer fns (lcms2/ICC still deferred)
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/geometry)
 │   ├── pipeline/             # ✅ PipelineStage + 7 stages (incl. geometry) + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
-│   ├── rustroom/             # ✅ app crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
-│   ├── catalog/              # (later) SQLite DAM
-│   └── app/                  # (later, own plan) egui + wgpu GUI
+│   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
+│   ├── app/                  # ✅ GUI crate; binary `rustroom-gui` (eframe/egui 0.35 + wgpu). M1.4a done
+│   └── catalog/              # (later) SQLite DAM
 ├── docs/
 └── tests/                    # integration + golden reference images
 ```
@@ -87,7 +87,17 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Phase 1 / M1.3 complete.** Global adjustments + geometry (crop & straighten) + golden regression harness live and validated. Full workspace `fmt`/`clippy`/`test --all` green.
+**Phase 1 / M1.4a complete (GUI core).** The headless engine now has a graphical front-end. Full workspace `fmt`/`clippy`/`test --all` green.
+
+M1.4a (done) — `crates/app`, binary **`rustroom-gui`** (eframe/egui **0.35** on the wgpu backend; the develop pipeline stays CPU and its sRGB output is uploaded as a texture):
+- `core-image` — `downscale_to(max_dim)` (area-average, linear).
+- `raw-decode` — `DecodeOptions::preview()` = half-size linear decode (fast open); `half_size` set before `unpack()`.
+- `app` lib (unit-tested, no egui): `render_engine` (background worker thread; coalesces superseded requests; `Arc<ImageBuf>` → `build_pipeline().run()` → RGBA), `histogram` (`histogram_rgba`).
+- `app` bin (egui view, compile+clippy-verified; egui view code isn't unit-testable): Open (rfd → half-size decode), right panel with sliders bound to `Edits` + live histogram, zoom/pan (scroll + drag, Fit button), Reset all, full-res Export (rfd → full decode → pipeline → `save_jpeg`, on a thread).
+- **egui 0.35 API notes** (differ from older egui): `eframe::App::ui(&mut self, ui, frame)` replaces `update`; panels are unified `egui::Panel::{top,right,left,bottom}(id).default_size(..).show(ui, ..)` (`TopBottomPanel`/`SidePanel` gone); `CentralPanel` remains; get ctx via `ui.ctx()`.
+- **Known M1.4a limitations (by design):** open decode is inline (UI freezes a few s during decode — threading it is a later refinement); export status text isn't cleared on completion; "100%" zoom = 100% of the half-size buffer.
+
+**Phase 1 / M1.3 (done).** Global adjustments + geometry (crop & straighten) + golden regression harness live and validated.
 
 Phase 0 (done): workspace + CI; `core-image` `ImageBuf`; `raw-decode` via **libraw through the `rsraw` crate** (not the `libraw` crate); `rustroom decode` dump validated on a Fuji X-T4 `.RAF`.
 
@@ -114,10 +124,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** Phase 1 / **M1.4 — minimal GUI** (the last M1 milestone → a genuinely usable single-image editor). New `app` crate: `egui` + `wgpu`. Load a RAW, show the preview on a `wgpu` canvas, sliders bound to `Edits`, crop tool, histogram, Export button. Edit a **downscaled preview** for interactivity; render full-res on export. **This is a distinct subsystem (GUI tech) and gets its own spec→plan** — brainstorm it before writing the plan. Roadmap sketch in `docs/superpowers/plans/2026-07-23-phase-1-mvp-editor.md`.
+**Next step:** Phase 1 / **M1.4b — crop mode & history polish** (finishes M1 → 🎯 usable editor): crop mode on the canvas (draggable rect + aspect presets + rotate handle) writing `geometry`; before/after toggle; `History<Edits>` undo/redo (+ shortcuts); sidecar load-on-open / save-on-export (add `Edits::to_json_file`). Design in the M1.4 spec; write the M1.4b plan before starting.
 
-Plans so far: Phase 0 `2026-07-22-phase-0-foundation.md`; M1.1 `2026-07-23-phase-1-mvp-editor.md`; M1.2 `2026-07-23-phase-1-m1.2-adjustments.md`; M1.3 `2026-07-23-phase-1-m1.3-crop-straighten.md` (all under `docs/superpowers/plans/`).
-
-Plans: Phase 0 `docs/superpowers/plans/2026-07-22-phase-0-foundation.md`; M1.1 `.../2026-07-23-phase-1-mvp-editor.md`; M1.2 `.../2026-07-23-phase-1-m1.2-adjustments.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`.
 
 _Update this "Current status" section as milestones land._
