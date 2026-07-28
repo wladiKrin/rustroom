@@ -68,7 +68,7 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 7 stages (incl. geometry) + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
-│   ├── app/                  # ✅ GUI crate; binary `rustroom-gui` (eframe/egui 0.35 + wgpu). M1.4a done
+│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). M1.4 done: lib=history/crop_tool/histogram/render_engine
 │   └── catalog/              # (later) SQLite DAM
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -87,7 +87,14 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Phase 1 / M1.4a complete (GUI core).** The headless engine now has a graphical front-end. Full workspace `fmt`/`clippy`/`test --all` green.
+**🎯 Milestone 1 complete (Phase 1 / M1.4b done).** Rustroom is a usable single-image RAW editor: open → adjust (live) → crop/straighten → undo/redo → before/after → export. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+
+M1.4b (done) — all in `crates/app`:
+- `edit-model` — `Edits::to_json_file` (sidecar write).
+- `app` lib (unit-tested): `history::History<T>` (undo/redo stack), `crop_tool` (hit-test / drag / aspect-snap on normalized `CropRect`), `render_engine::render_once` (public synchronous render, used for the baseline).
+- `app` bin: **undo/redo** (buttons + Ctrl+Z / Ctrl+Shift+Z; one history entry per settled edit via `Response::drag_stopped`), **sidecar** load-on-open (`<file>.json`) / save-on-export, **before/after** toggle (baseline texture from `render_once`), **crop mode** (full-frame preview via `preview_edits`, dimmed overlay + draggable rect from `crop_tool`, aspect presets that snap, Straighten slider).
+- **MVP simplifications:** aspect presets *snap* the rect (no fully aspect-locked interactive drag); straighten is a slider; sidecar path is `<file>.json`.
+- More egui 0.35 API notes: `Panel::top/right(id).show(ui,..)`; `Response::drag_stopped`; `ui.add_enabled` + `egui::Button::new`; `ui.toggle_value`; painter `rect_filled/rect_stroke(…, egui::CornerRadius::ZERO, …, egui::StrokeKind::Inside)/circle_filled`; `Color32::from_black_alpha`; `InputState::key_pressed(Key::Z)` + `modifiers.command`.
 
 M1.4a (done) — `crates/app`, binary **`rustroom-gui`** (eframe/egui **0.35** on the wgpu backend; the develop pipeline stays CPU and its sRGB output is uploaded as a texture):
 - `core-image` — `downscale_to(max_dim)` (area-average, linear).
@@ -124,8 +131,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** Phase 1 / **M1.4b — crop mode & history polish** (finishes M1 → 🎯 usable editor): crop mode on the canvas (draggable rect + aspect presets + rotate handle) writing `geometry`; before/after toggle; `History<Edits>` undo/redo (+ shortcuts); sidecar load-on-open / save-on-export (add `Edits::to_json_file`). Design in the M1.4 spec; write the M1.4b plan before starting.
+**Next step:** 🎯 Milestone 1 is done. Next is **Phase 2 / M2.1 — folder browser / filmstrip** (thin catalog): browse a directory of RAWs (grid + filmstrip) with thumbnails, select-to-edit; lightweight in-memory index (no DB yet). Brainstorm + own spec→plan (a new subsystem: `catalog` + GUI browse view). Easy perf win still open: cache the downscaled preview so only the pipeline reruns per edit.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`.
 
 _Update this "Current status" section as milestones land._
