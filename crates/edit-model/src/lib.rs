@@ -155,9 +155,14 @@ mod tests {
 
     #[test]
     fn json_file_roundtrip() {
-        let mut e = Edits::default();
-        e.exposure = 1.25;
-        e.geometry.angle = 3.0;
+        let e = Edits {
+            exposure: 1.25,
+            geometry: Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let path = std::env::temp_dir().join("rustroom_edits_roundtrip.json");
         e.to_json_file(&path).unwrap();
         let back = Edits::from_json_file(&path).unwrap();
