@@ -42,7 +42,7 @@ impl RenderEngine {
                         Err(TryRecvError::Disconnected) => return,
                     }
                 }
-                let frame = render(&buffer, &req);
+                let frame = render_once(&buffer, &req.edits, req.max_dim);
                 if res_tx.send(frame).is_err() {
                     return;
                 }
@@ -71,9 +71,11 @@ impl RenderEngine {
     }
 }
 
-fn render(buffer: &ImageBuf, req: &Request) -> RenderedFrame {
-    let preview = buffer.downscale_to(req.max_dim);
-    let out = build_pipeline(&req.edits).run(preview); // sRGB, 0..=1
+/// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
+/// Pure and synchronous — used by the worker and for one-off renders (e.g. baseline).
+pub fn render_once(buffer: &ImageBuf, edits: &Edits, max_dim: usize) -> RenderedFrame {
+    let preview = buffer.downscale_to(max_dim);
+    let out = build_pipeline(edits).run(preview); // sRGB, 0..=1
     let (width, height) = (out.width(), out.height());
     let mut rgba = Vec::with_capacity(width * height * 4);
     for px in out.data().chunks_exact(3) {
@@ -137,5 +139,13 @@ mod tests {
         );
         let f = wait_for_frame(&engine);
         assert!(f.rgba[0] > 240); // much brighter
+    }
+
+    #[test]
+    fn render_once_matches_expected_gray() {
+        let img = tiny();
+        let f = render_once(&img, &Edits::default(), 4);
+        assert_eq!((f.width, f.height), (4, 4));
+        assert!(f.rgba[0] > 180 && f.rgba[0] < 195);
     }
 }
