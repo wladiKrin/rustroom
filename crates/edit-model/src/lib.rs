@@ -80,6 +80,13 @@ impl Edits {
         let text = std::fs::read_to_string(path)?;
         Ok(serde_json::from_str(&text)?)
     }
+
+    /// Write edits to a JSON sidecar file (pretty-printed).
+    pub fn to_json_file(&self, path: &Path) -> Result<(), EditLoadError> {
+        let text = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, text)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -144,5 +151,17 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"geometry": {"angle": 2.5}}"#).unwrap();
         assert_eq!(e.geometry.angle, 2.5);
         assert_eq!(e.geometry.crop, CropRect::default());
+    }
+
+    #[test]
+    fn json_file_roundtrip() {
+        let mut e = Edits::default();
+        e.exposure = 1.25;
+        e.geometry.angle = 3.0;
+        let path = std::env::temp_dir().join("rustroom_edits_roundtrip.json");
+        e.to_json_file(&path).unwrap();
+        let back = Edits::from_json_file(&path).unwrap();
+        assert_eq!(e, back);
+        let _ = std::fs::remove_file(&path);
     }
 }
