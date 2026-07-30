@@ -41,6 +41,16 @@ Example `edits.json`:
 { "exposure": 1.2, "contrast": 25, "shadows": 40, "white_balance": { "temp": 20 } }
 ```
 
+The GUI is a separate binary:
+
+```bash
+cargo run --release -p app        # opens the rustroom-gui window
+```
+
+> **Tip: use `--release` for real use.** RAW decode, the develop preview, and thumbnail
+> loading are many times faster than a debug build — e.g. embedded-thumbnail extraction is
+> ~2.4 s in debug vs ~0.09 s in release.
+
 ## Workspace layout
 
 | Crate | Responsibility |

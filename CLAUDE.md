@@ -96,6 +96,10 @@ M2.1 (done):
 - `app` bin — `AppView { Library, Develop }` split (editor moved into `develop_toolbar`/`develop_body`). **Open folder…** → `catalog::scan_folder` → grid of thumbnails that fill in progressively over gray placeholders; click selects, ←/→ move, **double-click / Enter** opens into Develop (shared `open_path`). Library/Develop toggle; **Open file…** still jumps straight to Develop.
 - **Deferred (toward "C" / later):** filmstrip in Develop, on-disk thumbnail cache, edit-accurate rendered thumbnails, ratings/sorting/subfolders. Thumbnails show the **camera** rendering, not Rustroom edits (embedded JPEG).
 
+M2.2 (done — fixes from M2.1 feedback):
+- `raw-decode::extract_thumbnail` now **downscales to ≤512 px** (`image` `thumbnail`), so a 13 MP embedded preview → ~0.7 MB instead of ~52 MB per grid cell (prevents GPU/RAM blowup on big folders). Note: debug per-thumb time is decode-bound (~2.4 s); **release ≈ 0.09 s** — always run `--release` for real use (noted in README).
+- **Lossless photo switching:** `RustroomApp::persist_current_session` auto-writes the `<file>.json` sidecar (only when `edits != default`) before opening another photo (`open_path`) and on window close. Combined with load-on-open, switching photos never loses edits — no "discard?" dialog needed (fits the non-destructive model). Minor edge: edit-then-reset-to-default before switching leaves a stale sidecar.
+
 **🎯 Milestone 1 (Phase 1 / M1.4b) complete.** Rustroom is a usable single-image RAW editor: open → adjust (live) → crop/straighten → undo/redo → before/after → export.
 
 M1.4b (done) — all in `crates/app`:
