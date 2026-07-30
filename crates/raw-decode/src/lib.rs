@@ -153,6 +153,10 @@ mod tests {
         };
         let t = extract_thumbnail(&path).expect("thumbnail should extract");
         assert!(t.width > 0 && t.height > 0);
+        assert!(
+            t.width <= 512 && t.height <= 512,
+            "thumbnail should be downscaled"
+        );
         assert_eq!(t.rgba.len(), t.width * t.height * 4);
         assert!(t.rgba.iter().any(|&b| b > 0));
     }

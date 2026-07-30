@@ -18,17 +18,11 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
         .max_by_key(|t| t.width as u64 * t.height as u64)
         .ok_or_else(|| DecodeError::Format("no embedded thumbnail".into()))?;
 
-    match t.format {
-        ThumbFormat::Jpeg => {
-            let img = image::load_from_memory(&t.data)
-                .map_err(|e| DecodeError::Backend(format!("thumb jpeg: {e}")))?
-                .to_rgba8();
-            Ok(Thumbnail {
-                width: img.width() as usize,
-                height: img.height() as usize,
-                rgba: img.into_raw(),
-            })
-        }
+    const THUMB_MAX_DIM: u32 = 512;
+
+    let dynimg = match t.format {
+        ThumbFormat::Jpeg => image::load_from_memory(&t.data)
+            .map_err(|e| DecodeError::Backend(format!("thumb jpeg: {e}")))?,
         ThumbFormat::Bitmap => {
             let (w, h, c) = (t.width as usize, t.height as usize, t.colors as usize);
             if c != 3 || t.data.len() < w * h * c {
@@ -37,20 +31,24 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
                     t.data.len()
                 )));
             }
-            let mut rgba = Vec::with_capacity(w * h * 4);
-            for px in t.data.chunks_exact(c) {
-                rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
-            }
-            Ok(Thumbnail {
-                width: w,
-                height: h,
-                rgba,
-            })
+            let rgb = image::RgbImage::from_raw(t.width, t.height, t.data[..w * h * c].to_vec())
+                .ok_or_else(|| DecodeError::Format("bitmap thumb size mismatch".into()))?;
+            image::DynamicImage::ImageRgb8(rgb)
         }
-        other => Err(DecodeError::Format(format!(
-            "unsupported thumbnail format: {other:?}"
-        ))),
-    }
+        other => {
+            return Err(DecodeError::Format(format!(
+                "unsupported thumbnail format: {other:?}"
+            )))
+        }
+    };
+
+    // Downscale to a modest size — the grid draws these at ~160 px, so full-res is wasteful.
+    let scaled = dynimg.thumbnail(THUMB_MAX_DIM, THUMB_MAX_DIM).to_rgba8();
+    Ok(Thumbnail {
+        width: scaled.width() as usize,
+        height: scaled.height() as usize,
+        rgba: scaled.into_raw(),
+    })
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
