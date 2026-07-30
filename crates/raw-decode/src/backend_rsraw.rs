@@ -1,10 +1,57 @@
 //! libraw-backed decode via the `rsraw` crate.
 
-use crate::{DecodeError, DecodeOptions, DecodedRaw, RawMetadata};
+use crate::{DecodeError, DecodeOptions, DecodedRaw, RawMetadata, Thumbnail};
 use core_image::ImageBuf;
-use rsraw::{RawImage, BIT_DEPTH_16};
+use rsraw::{RawImage, ThumbFormat, BIT_DEPTH_16};
 
 const U16_MAX_F: f32 = u16::MAX as f32;
+
+pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> {
+    let mut raw =
+        RawImage::open(bytes).map_err(|e| DecodeError::Backend(format!("open: {e:?}")))?;
+    let thumbs = raw
+        .extract_thumbs()
+        .map_err(|e| DecodeError::Backend(format!("thumbs: {e:?}")))?;
+    // Largest by pixel count (rsraw returns them sorted by height; pick the biggest).
+    let t = thumbs
+        .into_iter()
+        .max_by_key(|t| t.width as u64 * t.height as u64)
+        .ok_or_else(|| DecodeError::Format("no embedded thumbnail".into()))?;
+
+    match t.format {
+        ThumbFormat::Jpeg => {
+            let img = image::load_from_memory(&t.data)
+                .map_err(|e| DecodeError::Backend(format!("thumb jpeg: {e}")))?
+                .to_rgba8();
+            Ok(Thumbnail {
+                width: img.width() as usize,
+                height: img.height() as usize,
+                rgba: img.into_raw(),
+            })
+        }
+        ThumbFormat::Bitmap => {
+            let (w, h, c) = (t.width as usize, t.height as usize, t.colors as usize);
+            if c != 3 || t.data.len() < w * h * c {
+                return Err(DecodeError::Format(format!(
+                    "unexpected bitmap thumb: {w}x{h} colors={c} len={}",
+                    t.data.len()
+                )));
+            }
+            let mut rgba = Vec::with_capacity(w * h * 4);
+            for px in t.data.chunks_exact(c) {
+                rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            }
+            Ok(Thumbnail {
+                width: w,
+                height: h,
+                rgba,
+            })
+        }
+        other => Err(DecodeError::Format(format!(
+            "unsupported thumbnail format: {other:?}"
+        ))),
+    }
+}
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
     let mut raw =

@@ -41,6 +41,20 @@ pub struct DecodedRaw {
     pub metadata: RawMetadata,
 }
 
+/// A decoded embedded preview thumbnail (display RGBA8).
+#[derive(Debug, Clone)]
+pub struct Thumbnail {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Vec<u8>,
+}
+
+/// Extract and decode the camera's embedded preview thumbnail (fast — no demosaic).
+pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
+    let bytes = std::fs::read(path)?;
+    backend_rsraw::extract_thumbnail(&bytes)
+}
+
 /// How libraw should render the RAW.
 #[derive(Debug, Clone, Copy)]
 pub struct DecodeOptions {
@@ -129,5 +143,17 @@ mod tests {
         );
         // A real photo is not uniformly black.
         assert!(decoded.image.data().iter().any(|&v| v > 0.01));
+    }
+
+    #[test]
+    fn extracts_thumbnail_from_fixture() {
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path.raw to run");
+            return;
+        };
+        let t = extract_thumbnail(&path).expect("thumbnail should extract");
+        assert!(t.width > 0 && t.height > 0);
+        assert_eq!(t.rgba.len(), t.width * t.height * 4);
+        assert!(t.rgba.iter().any(|&b| b > 0));
     }
 }

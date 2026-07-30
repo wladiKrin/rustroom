@@ -2837,6 +2837,7 @@ name = "raw-decode"
 version = "0.1.0"
 dependencies = [
  "core-image",
+ "image",
  "rsraw",
  "thiserror 2.0.19",
 ]
