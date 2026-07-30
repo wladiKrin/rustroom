@@ -73,8 +73,19 @@ fn preview_edits(edits: &Edits, crop_mode: bool) -> Edits {
 }
 
 impl RustroomApp {
+    /// Save the current session's edits to its `<file>.json` sidecar, if it has any.
+    /// Called before switching photos / on exit so edits are never lost.
+    fn persist_current_session(&self) {
+        if let Some(s) = &self.session {
+            if s.edits != Edits::default() {
+                let _ = s.edits.to_json_file(&s.path.with_extension("json"));
+            }
+        }
+    }
+
     /// Decode `path` (half-size) and set it up as the current editing `Session`.
     fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.persist_current_session();
         self.status = format!("Decoding {}…", path.display());
         match raw_decode::decode_raw(&path, &raw_decode::DecodeOptions::preview()) {
             Ok(decoded) => {
@@ -462,6 +473,7 @@ impl eframe::App for RustroomApp {
         // deferred observer invalidation runs during teardown — gives a clean exit.
         #[cfg(target_os = "macos")]
         if ctx.input(|i| i.viewport().close_requested()) {
+            self.persist_current_session();
             std::process::exit(0);
         }
 
