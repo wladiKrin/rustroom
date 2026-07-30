@@ -68,8 +68,8 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 7 stages (incl. geometry) + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
-│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). M1.4 done: lib=history/crop_tool/histogram/render_engine
-│   └── catalog/              # (later) SQLite DAM
+│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader
+│   └── catalog/              # ✅ scan_folder → RAW entries (in-memory; SQLite DAM later)
 ├── docs/
 └── tests/                    # integration + golden reference images
 ```
@@ -87,7 +87,16 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**🎯 Milestone 1 complete (Phase 1 / M1.4b done).** Rustroom is a usable single-image RAW editor: open → adjust (live) → crop/straighten → undo/redo → before/after → export. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+**Phase 2 / M2.1 complete (folder browser).** On top of Milestone 1, Rustroom now opens a folder and browses it. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+
+M2.1 (done):
+- **New `catalog` crate** — `scan_folder(dir) -> Vec<CatalogEntry { path, file_name }>` (RAW extensions, sorted; non-recursive; in-memory, no DB). Unit-tested.
+- `raw-decode` — `extract_thumbnail(path) -> Thumbnail { width, height, rgba }`: pulls the camera's **embedded JPEG** via rsraw `extract_thumbs` (no demosaic → fast), decodes via the `image` crate. Bitmap-format thumbs handled too.
+- `app` lib — `thumb_loader::ThumbLoader` (background worker; streams `ThumbResult { index, thumb }` off the UI thread, `drain()` per frame).
+- `app` bin — `AppView { Library, Develop }` split (editor moved into `develop_toolbar`/`develop_body`). **Open folder…** → `catalog::scan_folder` → grid of thumbnails that fill in progressively over gray placeholders; click selects, ←/→ move, **double-click / Enter** opens into Develop (shared `open_path`). Library/Develop toggle; **Open file…** still jumps straight to Develop.
+- **Deferred (toward "C" / later):** filmstrip in Develop, on-disk thumbnail cache, edit-accurate rendered thumbnails, ratings/sorting/subfolders. Thumbnails show the **camera** rendering, not Rustroom edits (embedded JPEG).
+
+**🎯 Milestone 1 (Phase 1 / M1.4b) complete.** Rustroom is a usable single-image RAW editor: open → adjust (live) → crop/straighten → undo/redo → before/after → export.
 
 M1.4b (done) — all in `crates/app`:
 - `edit-model` — `Edits::to_json_file` (sidecar write).
@@ -131,8 +140,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** 🎯 Milestone 1 is done. Next is **Phase 2 / M2.1 — folder browser / filmstrip** (thin catalog): browse a directory of RAWs (grid + filmstrip) with thumbnails, select-to-edit; lightweight in-memory index (no DB yet). Brainstorm + own spec→plan (a new subsystem: `catalog` + GUI browse view). Easy perf win still open: cache the downscaled preview so only the pipeline reruns per edit.
+**Next step:** likely **M2.2 — toward "C"**: a filmstrip in Develop (flip between shots while editing) reusing the M2.1 thumbnail machinery; and/or rounded-out develop (per the plan-of-action Phase 2). New subsystem work gets a brainstorm → spec → plan. Open perf win: cache the downscaled preview so only the pipeline reruns per edit.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`.
 
 _Update this "Current status" section as milestones land._
