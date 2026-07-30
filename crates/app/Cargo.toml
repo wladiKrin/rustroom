@@ -18,6 +18,7 @@ raw-decode = { path = "../raw-decode" }
 edit-model = { path = "../edit-model" }
 pipeline = { path = "../pipeline" }
 export = { path = "../export" }
+catalog = { path = "../catalog" }
 eframe = { workspace = true }
 egui = { workspace = true }
 rfd = { workspace = true }

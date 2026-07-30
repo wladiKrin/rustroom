@@ -1,9 +1,11 @@
+use catalog::CatalogEntry;
 use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::crop_tool;
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
 use rustroom_app::render_engine::{render_once, RenderEngine};
+use rustroom_app::thumb_loader::ThumbLoader;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,8 +23,25 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[derive(Default, PartialEq)]
+enum AppView {
+    #[default]
+    Library,
+    Develop,
+}
+
+/// Browsing state for an opened folder.
+struct Library {
+    entries: Vec<CatalogEntry>,
+    thumbs: Vec<Option<egui::TextureHandle>>, // parallel to entries; None = still loading
+    selected: Option<usize>,
+    loader: ThumbLoader,
+}
+
 #[derive(Default)]
 struct RustroomApp {
+    view: AppView,
+    library: Option<Library>,
     session: Option<Session>,
     status: String,
 }
@@ -54,18 +73,9 @@ fn preview_edits(edits: &Edits, crop_mode: bool) -> Edits {
 }
 
 impl RustroomApp {
-    fn open_dialog(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(
-                "RAW",
-                &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"],
-            )
-            .pick_file()
-        else {
-            return;
-        };
+    /// Decode `path` (half-size) and set it up as the current editing `Session`.
+    fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
         self.status = format!("Decoding {}…", path.display());
-        // Half-size decode can take several seconds; inline for M1.4a (thread it later).
         match raw_decode::decode_raw(&path, &raw_decode::DecodeOptions::preview()) {
             Ok(decoded) => {
                 let make_model = format!("{} {}", decoded.metadata.make, decoded.metadata.model);
@@ -112,6 +122,57 @@ impl RustroomApp {
         }
     }
 
+    fn open_dialog(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "RAW",
+                &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        self.open_path(ctx, path);
+        self.view = AppView::Develop;
+    }
+
+    fn open_folder(&mut self, ctx: &egui::Context) {
+        let Some(dir) = rfd::FileDialog::new().pick_folder() else {
+            return;
+        };
+        match catalog::scan_folder(&dir) {
+            Ok(entries) => {
+                let n = entries.len();
+                let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
+                let ctx2 = ctx.clone();
+                let loader = ThumbLoader::new(paths, move || ctx2.request_repaint());
+                self.library = Some(Library {
+                    entries,
+                    thumbs: (0..n).map(|_| None).collect(),
+                    selected: None,
+                    loader,
+                });
+                self.view = AppView::Library;
+                self.status = if n == 0 {
+                    "No RAW files in this folder.".into()
+                } else {
+                    format!("{n} photos")
+                };
+            }
+            Err(e) => self.status = format!("Could not read folder: {e}"),
+        }
+    }
+
+    fn open_entry(&mut self, ctx: &egui::Context, index: usize) {
+        let Some(lib) = &self.library else { return };
+        let Some(entry) = lib.entries.get(index) else {
+            return;
+        };
+        let path = entry.path.clone();
+        self.open_path(ctx, path);
+        self.view = AppView::Develop;
+    }
+
     fn export_dialog(&mut self) {
         let Some(s) = &self.session else { return };
         let Some(out) = rfd::FileDialog::new()
@@ -139,79 +200,47 @@ impl RustroomApp {
             }
         });
     }
-}
 
-impl eframe::App for RustroomApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-
-        // Workaround for an upstream winit/macOS teardown bug: when the window closes,
-        // AppKit's Touch Bar responder tracking (`_NSTouchBarFinderObservation`) removes a
-        // KVO observer for "nextResponder" from `WinitView` with an imbalanced count,
-        // throwing an uncaught `NSRangeException` (SIGABRT). Exiting here — before that
-        // deferred observer invalidation runs during teardown — gives a clean exit.
-        #[cfg(target_os = "macos")]
-        if ctx.input(|i| i.viewport().close_requested()) {
-            std::process::exit(0);
+    /// Develop-mode toolbar buttons (shown in the top panel when a photo is open).
+    fn develop_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if ui.button("Export…").clicked() {
+            self.export_dialog();
         }
-
-        // Pull any finished frame into a texture.
         if let Some(s) = &mut self.session {
-            if let Some(frame) = s.engine.poll_latest() {
-                s.hist = histogram_rgba(&frame.rgba);
-                let img = egui::ColorImage::from_rgba_unmultiplied(
-                    [frame.width, frame.height],
-                    &frame.rgba,
-                );
-                s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+            if ui.button("Fit").clicked() {
+                s.zoom = 1.0;
+                s.pan = egui::Vec2::ZERO;
+            }
+            let undo_click = ui
+                .add_enabled(s.history.can_undo(), egui::Button::new("Undo"))
+                .clicked();
+            let redo_click = ui
+                .add_enabled(s.history.can_redo(), egui::Button::new("Redo"))
+                .clicked();
+            let (kundo, kredo) = ctx.input(|i| {
+                let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
+                (z && !i.modifiers.shift, z && i.modifiers.shift)
+            });
+            if (undo_click || kundo) && s.history.undo() {
+                s.edits = s.history.get().clone();
+                s.engine
+                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+            }
+            if (redo_click || kredo) && s.history.redo() {
+                s.edits = s.history.get().clone();
+                s.engine
+                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+            }
+            ui.toggle_value(&mut s.show_before, "Before/After");
+            if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
+                s.engine
+                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
             }
         }
+    }
 
-        egui::Panel::top("top").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Open…").clicked() {
-                    self.open_dialog(&ctx);
-                }
-                if self.session.is_some() && ui.button("Export…").clicked() {
-                    self.export_dialog();
-                }
-                if let Some(s) = &mut self.session {
-                    if ui.button("Fit").clicked() {
-                        s.zoom = 1.0;
-                        s.pan = egui::Vec2::ZERO;
-                    }
-                    let undo_click = ui
-                        .add_enabled(s.history.can_undo(), egui::Button::new("Undo"))
-                        .clicked();
-                    let redo_click = ui
-                        .add_enabled(s.history.can_redo(), egui::Button::new("Redo"))
-                        .clicked();
-                    let (kundo, kredo) = ctx.input(|i| {
-                        let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
-                        (z && !i.modifiers.shift, z && i.modifiers.shift)
-                    });
-                    if (undo_click || kundo) && s.history.undo() {
-                        s.edits = s.history.get().clone();
-                        s.engine
-                            .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
-                    }
-                    if (redo_click || kredo) && s.history.redo() {
-                        s.edits = s.history.get().clone();
-                        s.engine
-                            .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
-                    }
-                    ui.toggle_value(&mut s.show_before, "Before/After");
-                    if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
-                        s.engine
-                            .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
-                    }
-                }
-                if !self.status.is_empty() {
-                    ui.label(&self.status);
-                }
-            });
-        });
-
+    /// The Develop editor body: right adjustment panel + central image canvas.
+    fn develop_body(&mut self, ui: &mut egui::Ui) {
         egui::Panel::right("panel")
             .default_size(240.0)
             .show(ui, |ui| {
@@ -319,10 +348,175 @@ impl eframe::App for RustroomApp {
             }
             None => {
                 ui.centered_and_justified(|ui| {
-                    ui.label("Open a RAW to begin (Open… button).");
+                    ui.label("Open a RAW to begin (Open file… button).");
                 });
             }
         });
+    }
+
+    /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
+    fn library_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let mut open_index: Option<usize> = None;
+        egui::CentralPanel::default().show(ui, |ui| {
+            let Some(lib) = &mut self.library else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Open a folder to browse (Open folder… button).");
+                });
+                return;
+            };
+            if lib.entries.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label("No RAW files in this folder.");
+                });
+                return;
+            }
+            const CELL: f32 = 168.0;
+
+            // Keyboard: arrows move the selection, Enter opens it.
+            ui.input(|i| {
+                let n = lib.entries.len();
+                let cur = lib.selected.unwrap_or(0);
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    lib.selected = Some((cur + 1).min(n - 1));
+                }
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    lib.selected = Some(cur.saturating_sub(1));
+                }
+                if i.key_pressed(egui::Key::Enter) {
+                    open_index = lib.selected;
+                }
+            });
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let cols = (ui.available_width() / CELL).floor().max(1.0) as usize;
+                egui::Grid::new("thumb_grid").show(ui, |ui| {
+                    for i in 0..lib.entries.len() {
+                        let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
+                        let resp = ui
+                            .allocate_ui(egui::vec2(CELL, CELL), |ui| {
+                                ui.vertical_centered(|ui| {
+                                    match &lib.thumbs[i] {
+                                        Some(tex) => {
+                                            ui.add(
+                                                egui::Image::new(tex)
+                                                    .max_size(box_size)
+                                                    .maintain_aspect_ratio(true),
+                                            );
+                                        }
+                                        None => {
+                                            let (rect, _) = ui.allocate_exact_size(
+                                                box_size,
+                                                egui::Sense::hover(),
+                                            );
+                                            ui.painter().rect_filled(
+                                                rect,
+                                                egui::CornerRadius::same(3),
+                                                egui::Color32::from_gray(60),
+                                            );
+                                        }
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(&lib.entries[i].file_name).small(),
+                                    );
+                                });
+                            })
+                            .response
+                            .interact(egui::Sense::click());
+
+                        if lib.selected == Some(i) {
+                            ui.painter().rect_stroke(
+                                resp.rect,
+                                egui::CornerRadius::same(3),
+                                egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 160, 240)),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        if resp.clicked() {
+                            lib.selected = Some(i);
+                        }
+                        if resp.double_clicked() {
+                            open_index = Some(i);
+                        }
+                        if (i + 1) % cols == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            });
+        });
+
+        if let Some(i) = open_index {
+            self.open_entry(ctx, i);
+        }
+    }
+}
+
+impl eframe::App for RustroomApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
+        // Workaround for an upstream winit/macOS teardown bug: when the window closes,
+        // AppKit's Touch Bar responder tracking (`_NSTouchBarFinderObservation`) removes a
+        // KVO observer for "nextResponder" from `WinitView` with an imbalanced count,
+        // throwing an uncaught `NSRangeException` (SIGABRT). Exiting here — before that
+        // deferred observer invalidation runs during teardown — gives a clean exit.
+        #[cfg(target_os = "macos")]
+        if ctx.input(|i| i.viewport().close_requested()) {
+            std::process::exit(0);
+        }
+
+        // Pull any finished preview frame into a texture.
+        if let Some(s) = &mut self.session {
+            if let Some(frame) = s.engine.poll_latest() {
+                s.hist = histogram_rgba(&frame.rgba);
+                let img = egui::ColorImage::from_rgba_unmultiplied(
+                    [frame.width, frame.height],
+                    &frame.rgba,
+                );
+                s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+            }
+        }
+
+        // Pull finished thumbnails into textures.
+        if let Some(lib) = &mut self.library {
+            for res in lib.loader.drain() {
+                if let (Some(t), true) = (res.thumb, res.index < lib.thumbs.len()) {
+                    let img =
+                        egui::ColorImage::from_rgba_unmultiplied([t.width, t.height], &t.rgba);
+                    lib.thumbs[res.index] = Some(ctx.load_texture(
+                        format!("thumb{}", res.index),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+            }
+        }
+
+        egui::Panel::top("top").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Open file…").clicked() {
+                    self.open_dialog(&ctx);
+                }
+                if ui.button("Open folder…").clicked() {
+                    self.open_folder(&ctx);
+                }
+                ui.separator();
+                ui.selectable_value(&mut self.view, AppView::Library, "Library");
+                ui.selectable_value(&mut self.view, AppView::Develop, "Develop");
+                ui.separator();
+                if self.view == AppView::Develop && self.session.is_some() {
+                    self.develop_toolbar(ui, &ctx);
+                }
+                if !self.status.is_empty() {
+                    ui.label(&self.status);
+                }
+            });
+        });
+
+        match self.view {
+            AppView::Develop => self.develop_body(ui),
+            AppView::Library => self.library_view(ui, &ctx),
+        }
     }
 }
 

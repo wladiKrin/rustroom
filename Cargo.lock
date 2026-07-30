@@ -260,6 +260,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "catalog",
  "core-image",
  "edit-model",
  "eframe",
