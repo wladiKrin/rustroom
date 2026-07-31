@@ -41,13 +41,7 @@ pub struct DecodedRaw {
     pub metadata: RawMetadata,
 }
 
-/// A decoded embedded preview thumbnail (display RGBA8).
-#[derive(Debug, Clone)]
-pub struct Thumbnail {
-    pub width: usize,
-    pub height: usize,
-    pub rgba: Vec<u8>,
-}
+pub use core_image::Thumbnail;
 
 /// Extract and decode the camera's embedded preview thumbnail (fast — no demosaic).
 pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {

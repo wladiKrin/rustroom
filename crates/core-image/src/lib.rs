@@ -150,6 +150,14 @@ impl ImageBuf {
     }
 }
 
+/// A decoded, display-referred preview image (interleaved RGBA8).
+#[derive(Debug, Clone)]
+pub struct Thumbnail {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Vec<u8>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
