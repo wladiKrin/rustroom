@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 /// Known RAW file extensions (lowercase, without the dot).
 pub const RAW_EXTENSIONS: &[&str] = &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"];
 
+/// Non-RAW image extensions Rustroom can edit (lowercase, without the dot).
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff"];
+
 /// One browsable photo in a folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
@@ -12,11 +15,21 @@ pub struct CatalogEntry {
     pub file_name: String,
 }
 
-fn is_raw(path: &Path) -> bool {
+fn has_ext(path: &Path, exts: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| RAW_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+        .map(|e| exts.contains(&e.to_ascii_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+/// True if `path` is a camera RAW (needs the libraw decoder).
+pub fn is_raw(path: &Path) -> bool {
+    has_ext(path, RAW_EXTENSIONS)
+}
+
+/// True if Rustroom can open `path` (RAW or supported non-RAW image).
+pub fn is_supported(path: &Path) -> bool {
+    has_ext(path, RAW_EXTENSIONS) || has_ext(path, IMAGE_EXTENSIONS)
 }
 
 /// Scan a single folder (non-recursive) for RAW files, sorted by file name.
@@ -25,7 +38,7 @@ pub fn scan_folder(dir: &Path) -> std::io::Result<Vec<CatalogEntry>> {
     for dirent in std::fs::read_dir(dir)? {
         let dirent = dirent?;
         let path = dirent.path();
-        if path.is_file() && is_raw(&path) {
+        if path.is_file() && is_supported(&path) {
             let file_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -85,5 +98,30 @@ mod tests {
         let dir = temp_dir("empty");
         assert!(scan_folder(&dir).unwrap().is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scan_includes_images_and_raws() {
+        let dir = temp_dir("mixed");
+        touch(&dir, "a.raf");
+        touch(&dir, "b.JPG");
+        touch(&dir, "c.png");
+        touch(&dir, "d.tiff");
+        touch(&dir, "notes.txt");
+        let names: Vec<_> = scan_folder(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name)
+            .collect();
+        assert_eq!(names, vec!["a.raf", "b.JPG", "c.png", "d.tiff"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn classifiers() {
+        assert!(is_raw(Path::new("x.CR2")));
+        assert!(!is_raw(Path::new("x.jpg")));
+        assert!(is_supported(Path::new("x.jpg")) && is_supported(Path::new("x.NEF")));
+        assert!(!is_supported(Path::new("x.txt")));
     }
 }
