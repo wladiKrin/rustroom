@@ -1,7 +1,7 @@
 //! Background worker that extracts embedded thumbnails off the UI thread and streams
 //! them back keyed by their index in the folder listing.
 
-use raw_decode::Thumbnail;
+use core_image::Thumbnail;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread::{self, JoinHandle};
@@ -24,7 +24,11 @@ impl ThumbLoader {
         let (tx, rx) = channel::<ThumbResult>();
         let handle = thread::spawn(move || {
             for (index, path) in paths.into_iter().enumerate() {
-                let thumb = raw_decode::extract_thumbnail(&path).ok();
+                let thumb = if catalog::is_raw(&path) {
+                    raw_decode::extract_thumbnail(&path).ok()
+                } else {
+                    image_decode::thumbnail(&path).ok()
+                };
                 if tx.send(ThumbResult { index, thumb }).is_err() {
                     return;
                 }

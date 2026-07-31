@@ -72,6 +72,38 @@ fn preview_edits(edits: &Edits, crop_mode: bool) -> Edits {
     e
 }
 
+/// Decode a file for editing (half-size for RAW; full decode for images) into a linear
+/// `ImageBuf` plus a display label. Dispatches by file kind.
+fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, String), String> {
+    if catalog::is_raw(path) {
+        let d = raw_decode::decode_raw(path, &raw_decode::DecodeOptions::preview())
+            .map_err(|e| e.to_string())?;
+        let label = format!("{} {}", d.metadata.make, d.metadata.model);
+        Ok((d.image, label))
+    } else {
+        let d = image_decode::decode(path).map_err(|e| e.to_string())?;
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_uppercase();
+        Ok((d.image, format!("{ext} {}×{}", d.width, d.height)))
+    }
+}
+
+/// Full-resolution decode for export. Dispatches by file kind.
+fn decode_for_export(path: &std::path::Path) -> Result<core_image::ImageBuf, String> {
+    if catalog::is_raw(path) {
+        raw_decode::decode_raw(path, &raw_decode::DecodeOptions::linear_scene())
+            .map(|d| d.image)
+            .map_err(|e| e.to_string())
+    } else {
+        image_decode::decode(path)
+            .map(|d| d.image)
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl RustroomApp {
     /// Save the current session's edits to its `<file>.json` sidecar, if it has any.
     /// Called before switching photos / on exit so edits are never lost.
@@ -83,61 +115,66 @@ impl RustroomApp {
         }
     }
 
-    /// Decode `path` (half-size) and set it up as the current editing `Session`.
+    /// Decode `path` (RAW half-size, or a JPEG/PNG/TIFF) and set it up as the current
+    /// editing `Session`.
     fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
         self.persist_current_session();
         self.status = format!("Decoding {}…", path.display());
-        match raw_decode::decode_raw(&path, &raw_decode::DecodeOptions::preview()) {
-            Ok(decoded) => {
-                let make_model = format!("{} {}", decoded.metadata.make, decoded.metadata.model);
-                let buffer = Arc::new(decoded.image);
-
-                // Load a sidecar (`<file>.json`) if present.
-                let sidecar = path.with_extension("json");
-                let edits = if sidecar.exists() {
-                    edit_model::Edits::from_json_file(&sidecar).unwrap_or_default()
-                } else {
-                    Edits::default()
-                };
-
-                // Baseline render (neutral edits) for before/after — before `buffer` moves.
-                let bf = render_once(&buffer, &Edits::default(), PREVIEW_MAX_DIM);
-                let baseline = ctx.load_texture(
-                    "baseline",
-                    egui::ColorImage::from_rgba_unmultiplied([bf.width, bf.height], &bf.rgba),
-                    egui::TextureOptions::LINEAR,
-                );
-
-                let ctx2 = ctx.clone();
-                let engine = RenderEngine::new(buffer, move || ctx2.request_repaint());
-                engine.request(edits.clone(), PREVIEW_MAX_DIM);
-
-                self.session = Some(Session {
-                    path,
-                    engine,
-                    edits: edits.clone(),
-                    texture: None,
-                    baseline,
-                    hist: [[0; 256]; 3],
-                    make_model,
-                    zoom: 1.0,
-                    pan: egui::Vec2::ZERO,
-                    history: History::new(edits),
-                    show_before: false,
-                    crop_mode: false,
-                    active_handle: None,
-                });
-                self.status.clear();
+        let (image, make_model) = match decode_for_edit(&path) {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = format!("Decode failed: {e}");
+                return;
             }
-            Err(e) => self.status = format!("Decode failed: {e}"),
-        }
+        };
+        let buffer = Arc::new(image);
+
+        // Load a sidecar (`<file>.json`) if present.
+        let sidecar = path.with_extension("json");
+        let edits = if sidecar.exists() {
+            edit_model::Edits::from_json_file(&sidecar).unwrap_or_default()
+        } else {
+            Edits::default()
+        };
+
+        // Baseline render (neutral edits) for before/after — before `buffer` moves.
+        let bf = render_once(&buffer, &Edits::default(), PREVIEW_MAX_DIM);
+        let baseline = ctx.load_texture(
+            "baseline",
+            egui::ColorImage::from_rgba_unmultiplied([bf.width, bf.height], &bf.rgba),
+            egui::TextureOptions::LINEAR,
+        );
+
+        let ctx2 = ctx.clone();
+        let engine = RenderEngine::new(buffer, move || ctx2.request_repaint());
+        engine.request(edits.clone(), PREVIEW_MAX_DIM);
+
+        self.session = Some(Session {
+            path,
+            engine,
+            edits: edits.clone(),
+            texture: None,
+            baseline,
+            hist: [[0; 256]; 3],
+            make_model,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            history: History::new(edits),
+            show_before: false,
+            crop_mode: false,
+            active_handle: None,
+        });
+        self.status.clear();
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter(
-                "RAW",
-                &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"],
+                "Images",
+                &[
+                    "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "jpg", "jpeg", "png",
+                    "tif", "tiff",
+                ],
             )
             .pick_file()
         else {
@@ -165,7 +202,7 @@ impl RustroomApp {
                 });
                 self.view = AppView::Library;
                 self.status = if n == 0 {
-                    "No RAW files in this folder.".into()
+                    "No supported images in this folder.".into()
                 } else {
                     format!("{n} photos")
                 };
@@ -199,9 +236,8 @@ impl RustroomApp {
         // Full decode + render + encode is slow; run detached so the UI stays responsive.
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<()> {
-                let decoded =
-                    raw_decode::decode_raw(&src, &raw_decode::DecodeOptions::linear_scene())?;
-                let rendered = pipeline::build_pipeline(&edits).run(decoded.image);
+                let image = decode_for_export(&src).map_err(|e| anyhow::anyhow!(e))?;
+                let rendered = pipeline::build_pipeline(&edits).run(image);
                 export::save_jpeg(&rendered, &out, 92)?;
                 edits.to_json_file(&out.with_extension("json"))?;
                 Ok(())
@@ -359,7 +395,7 @@ impl RustroomApp {
             }
             None => {
                 ui.centered_and_justified(|ui| {
-                    ui.label("Open a RAW to begin (Open file… button).");
+                    ui.label("Open an image to begin (Open file… button).");
                 });
             }
         });
@@ -377,7 +413,7 @@ impl RustroomApp {
             };
             if lib.entries.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label("No RAW files in this folder.");
+                    ui.label("No supported images in this folder.");
                 });
                 return;
             }

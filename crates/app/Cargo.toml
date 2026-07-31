@@ -19,6 +19,7 @@ edit-model = { path = "../edit-model" }
 pipeline = { path = "../pipeline" }
 export = { path = "../export" }
 catalog = { path = "../catalog" }
+image-decode = { path = "../image-decode" }
 eframe = { workspace = true }
 egui = { workspace = true }
 rfd = { workspace = true }
