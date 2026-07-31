@@ -61,15 +61,16 @@ opensource_lightroom/
 ├── Cargo.toml                # [workspace]
 ├── CLAUDE.md                 # this file
 ├── crates/
-│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples/map_pixels/crop/downscale_to
-│   ├── raw-decode/           # ✅ libraw(rsraw); DecodeOptions{linear_scene,display,preview(half_size)}
+│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples/map_pixels/crop/downscale_to + Thumbnail
+│   ├── raw-decode/           # ✅ libraw(rsraw); DecodeOptions{linear_scene,display,preview(half_size)}; extract_thumbnail
+│   ├── image-decode/         # ✅ JPEG/PNG/TIFF → linear ImageBuf (image + srgb_to_linear) + thumbnail
 │   ├── color/                # ✅ sRGB transfer fns (lcms2/ICC still deferred)
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/geometry)
 │   ├── pipeline/             # ✅ PipelineStage + 7 stages (incl. geometry) + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
-│   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]`
+│   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
 │   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader
-│   └── catalog/              # ✅ scan_folder → RAW entries (in-memory; SQLite DAM later)
+│   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries; is_raw/is_supported (in-memory; SQLite DAM later)
 ├── docs/
 └── tests/                    # integration + golden reference images
 ```
@@ -87,7 +88,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Phase 2 / M2.1 complete (folder browser).** On top of Milestone 1, Rustroom now opens a folder and browses it. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+**Multi-format editing done (JPEG/PNG/TIFF), on top of Phase 2 / M2.1+M2.2.** Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+
+Multi-format (done): **new `image-decode` crate** decodes JPEG/PNG/TIFF to the *same linear working space* as RAW (`image::open().to_rgb32f()` → `color::srgb_to_linear`; 16-bit precision preserved). `Thumbnail` moved to `core-image` (shared by both decoders). `catalog` now lists RAW + JPEG/PNG/TIFF and exposes `is_raw`/`is_supported`. The `app` dispatches RAW vs image by extension in `decode_for_edit`/`decode_for_export`/`thumb_loader` — **everything downstream (pipeline, edits, sidecar, crop/undo/before-after, export) is unchanged**, which is the payoff of the source-agnostic linear pipeline. Caveats (documented): non-RAW input assumed **sRGB** (ICC deferred); 8-bit sources have less latitude. CLI stays RAW-only.
+
+**Phase 2 / M2.1 (folder browser) + M2.2 (thumbnail perf + lossless switching) complete.** Rustroom opens a folder and browses it.
 
 M2.1 (done):
 - **New `catalog` crate** — `scan_folder(dir) -> Vec<CatalogEntry { path, file_name }>` (RAW extensions, sorted; non-recursive; in-memory, no DB). Unit-tested.
@@ -144,8 +149,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** likely **M2.2 — toward "C"**: a filmstrip in Develop (flip between shots while editing) reusing the M2.1 thumbnail machinery; and/or rounded-out develop (per the plan-of-action Phase 2). New subsystem work gets a brainstorm → spec → plan. Open perf win: cache the downscaled preview so only the pipeline reruns per edit.
+**Next step:** the **filmstrip in Develop** (flip between shots while editing) — toward layout "C", reusing the M2.1 thumbnail machinery (was deferred when multi-format editing jumped the queue). Then rounded-out develop (**saturation** first — small `PipelineStage`, planned). New subsystem work gets brainstorm → spec → plan. Open perf win: cache the downscaled preview so only the pipeline reruns per edit.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`.
 
 _Update this "Current status" section as milestones land._

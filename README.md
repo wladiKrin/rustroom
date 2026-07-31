@@ -1,10 +1,10 @@
 # Rustroom
 
-An open-source, cross-platform alternative to Adobe Lightroom — a **non-destructive RAW photo editor**, written in Rust.
+An open-source, cross-platform alternative to Adobe Lightroom — a **non-destructive photo editor** for camera **RAW** files and standard **JPEG / PNG / TIFF** images, written in Rust.
 
-**Linux first**, with Windows and macOS from the same codebase. Develop (editing) is the focus; a Library/catalog (DAM) comes later.
+**Linux first**, with Windows and macOS from the same codebase.
 
-> Status: early development. The develop pipeline (decode → linear working space → global adjustments → sRGB export) works end-to-end from the CLI; a GUI is planned. See [`CLAUDE.md`](CLAUDE.md) for live status and architecture, and [`docs/superpowers/plans/`](docs/superpowers/plans/) for the phased plan.
+> Status: early development, but usable. A GUI (`rustroom-gui`) opens a folder, browses thumbnails, and edits single images non-destructively — white balance, exposure, tone, curve, crop/straighten, undo/redo, before/after, export (with a `.json` edit sidecar). See [`CLAUDE.md`](CLAUDE.md) for live status and architecture, and [`docs/superpowers/plans/`](docs/superpowers/plans/) for the phased plan.
 
 ## How it works
 
@@ -55,13 +55,16 @@ cargo run --release -p app        # opens the rustroom-gui window
 
 | Crate | Responsibility |
 |---|---|
-| `core-image` | `ImageBuf` — interleaved f32 RGB working image |
-| `raw-decode` | libraw (via `rsraw`) → linear RGB + metadata |
+| `core-image` | `ImageBuf` — interleaved f32 RGB working image; `Thumbnail` |
+| `raw-decode` | libraw (via `rsraw`) → linear RGB + metadata; embedded thumbnails |
+| `image-decode` | JPEG/PNG/TIFF → linear RGB (via `image` + sRGB→linear); thumbnails |
 | `color` | color transfer functions (sRGB) |
 | `edit-model` | the serializable `Edits` op-list / sidecar |
 | `pipeline` | `PipelineStage` trait, develop stages, `build_pipeline` |
 | `export` | encode a rendered image to a file |
-| `rustroom` | the `rustroom` command-line app |
+| `catalog` | scan a folder for supported images (RAW + JPEG/PNG/TIFF) |
+| `rustroom` | the `rustroom` command-line app (RAW) |
+| `app` | the `rustroom-gui` desktop app (eframe/egui) |
 
 ## License
 
