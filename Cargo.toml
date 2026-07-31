@@ -10,6 +10,7 @@ members = [
     "crates/rustroom",
     "crates/app",
     "crates/catalog",
+    "crates/image-decode",
 ]
 
 [workspace.package]
