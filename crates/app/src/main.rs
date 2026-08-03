@@ -193,6 +193,7 @@ impl RustroomApp {
             return;
         };
         self.open_path(ctx, path);
+        self.library = None;
         self.view = AppView::Develop;
     }
 
