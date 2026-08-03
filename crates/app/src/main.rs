@@ -308,6 +308,7 @@ impl RustroomApp {
 
     /// The Develop editor body: right adjustment panel + central image canvas.
     fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.handle_develop_arrows(ctx);
         egui::Panel::right("panel")
             .default_size(240.0)
             .show(ui, |ui| {
@@ -423,6 +424,33 @@ impl RustroomApp {
                 });
             }
         });
+    }
+
+    /// ←/→ move to the previous/next photo in the loaded folder — but only when no egui
+    /// widget has keyboard focus, so arrows still fine-tune a focused slider.
+    fn handle_develop_arrows(&mut self, ctx: &egui::Context) {
+        let nav = {
+            let Some(lib) = &self.library else { return };
+            let n = lib.entries.len();
+            if n == 0 || ctx.memory(|m| m.focused().is_some()) {
+                return;
+            }
+            let cur = lib.selected.unwrap_or(0);
+            ctx.input(|i| {
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    Some((cur + 1).min(n - 1))
+                } else if i.key_pressed(egui::Key::ArrowLeft) {
+                    Some(cur.saturating_sub(1))
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(i) = nav {
+            if self.library.as_ref().and_then(|l| l.selected) != Some(i) {
+                self.open_entry(ctx, i);
+            }
+        }
     }
 
     /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
