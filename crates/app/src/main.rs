@@ -307,7 +307,7 @@ impl RustroomApp {
     }
 
     /// The Develop editor body: right adjustment panel + central image canvas.
-    fn develop_body(&mut self, ui: &mut egui::Ui) {
+    fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         egui::Panel::right("panel")
             .default_size(240.0)
             .show(ui, |ui| {
@@ -383,6 +383,10 @@ impl RustroomApp {
                 }
             });
 
+        if self.show_filmstrip && self.library.is_some() {
+            self.filmstrip(ui, ctx);
+        }
+
         egui::CentralPanel::default().show(ui, |ui| match &mut self.session {
             Some(s) => {
                 if let Some(tex) = &s.texture {
@@ -419,6 +423,59 @@ impl RustroomApp {
                 });
             }
         });
+    }
+
+    /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
+    fn filmstrip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        const CELL: f32 = 96.0;
+        let mut open_index: Option<usize> = None;
+        egui::Panel::bottom("filmstrip")
+            .default_size(CELL * 0.66 + 22.0)
+            .show(ui, |ui| {
+                let Some(lib) = &self.library else { return };
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for i in 0..lib.entries.len() {
+                            let box_size = egui::vec2(CELL, CELL * 0.66);
+                            let resp = ui
+                                .allocate_ui(box_size, |ui| match &lib.thumbs[i] {
+                                    Some(tex) => {
+                                        ui.add(
+                                            egui::Image::new(tex)
+                                                .max_size(box_size)
+                                                .maintain_aspect_ratio(true),
+                                        );
+                                    }
+                                    None => {
+                                        let (rect, _) =
+                                            ui.allocate_exact_size(box_size, egui::Sense::hover());
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            egui::CornerRadius::same(3),
+                                            egui::Color32::from_gray(60),
+                                        );
+                                    }
+                                })
+                                .response
+                                .interact(egui::Sense::click());
+                            if lib.selected == Some(i) {
+                                ui.painter().rect_stroke(
+                                    resp.rect,
+                                    egui::CornerRadius::same(3),
+                                    egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 160, 240)),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            if resp.clicked() {
+                                open_index = Some(i);
+                            }
+                        }
+                    });
+                });
+            });
+        if let Some(i) = open_index {
+            self.open_entry(ctx, i);
+        }
     }
 
     /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
@@ -582,7 +639,7 @@ impl eframe::App for RustroomApp {
         });
 
         match self.view {
-            AppView::Develop => self.develop_body(ui),
+            AppView::Develop => self.develop_body(ui, &ctx),
             AppView::Library => self.library_view(ui, &ctx),
         }
     }
