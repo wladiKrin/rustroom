@@ -88,7 +88,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-**Multi-format editing done (JPEG/PNG/TIFF), on top of Phase 2 / M2.1+M2.2.** Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+**Filmstrip done (browse-layout toward "C").** On top of multi-format + M2.1/M2.2. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
+
+Filmstrip (done, `app` only): a bottom `egui::Panel` in Develop rendering the loaded folder's thumbnails (reuses `Library` state — no new loader). Click a cell or ←/→ to switch photos via `open_entry` (auto-saves the outgoing photo's sidecar). Arrow-nav gated on `ctx.memory(|m| m.focused())` so arrows still fine-tune a focused slider. `open_entry` sets `library.selected` so grid + strip stay in sync. `show_filmstrip` toggle in the Develop toolbar (shown only when a folder is loaded); single-file opens show no strip.
+
+**Multi-format editing done (JPEG/PNG/TIFF), on top of Phase 2 / M2.1+M2.2.**
 
 Multi-format (done): **new `image-decode` crate** decodes JPEG/PNG/TIFF to the *same linear working space* as RAW (`image::open().to_rgb32f()` → `color::srgb_to_linear`; 16-bit precision preserved). `Thumbnail` moved to `core-image` (shared by both decoders). `catalog` now lists RAW + JPEG/PNG/TIFF and exposes `is_raw`/`is_supported`. The `app` dispatches RAW vs image by extension in `decode_for_edit`/`decode_for_export`/`thumb_loader` — **everything downstream (pipeline, edits, sidecar, crop/undo/before-after, export) is unchanged**, which is the payoff of the source-agnostic linear pipeline. Caveats (documented): non-RAW input assumed **sRGB** (ICC deferred); 8-bit sources have less latitude. CLI stays RAW-only.
 
@@ -149,8 +153,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** the **filmstrip in Develop** (flip between shots while editing) — toward layout "C", reusing the M2.1 thumbnail machinery (was deferred when multi-format editing jumped the queue). Then rounded-out develop (**saturation** first — small `PipelineStage`, planned). New subsystem work gets brainstorm → spec → plan. Open perf win: cache the downscaled preview so only the pipeline reruns per edit.
+**Next step:** **rounded-out Develop** — **saturation** first (a small hue-preserving `PipelineStage` around per-pixel luma + `Edits.saturation` + slider + golden test; the architecture was built for this). Then vibrance / HSL / vignette, etc. Open perf win: cache the downscaled preview so only the pipeline reruns per edit (the sub-second slider lag). Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`.
 
 _Update this "Current status" section as milestones land._
