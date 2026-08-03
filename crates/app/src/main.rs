@@ -38,12 +38,24 @@ struct Library {
     loader: ThumbLoader,
 }
 
-#[derive(Default)]
 struct RustroomApp {
     view: AppView,
     library: Option<Library>,
     session: Option<Session>,
     status: String,
+    show_filmstrip: bool,
+}
+
+impl Default for RustroomApp {
+    fn default() -> Self {
+        Self {
+            view: AppView::default(),
+            library: None,
+            session: None,
+            status: String::new(),
+            show_filmstrip: true,
+        }
+    }
 }
 
 struct Session {
@@ -212,11 +224,16 @@ impl RustroomApp {
     }
 
     fn open_entry(&mut self, ctx: &egui::Context, index: usize) {
-        let Some(lib) = &self.library else { return };
-        let Some(entry) = lib.entries.get(index) else {
-            return;
+        let path = match self.library.as_mut() {
+            Some(lib) => match lib.entries.get(index) {
+                Some(e) => {
+                    lib.selected = Some(index);
+                    e.path.clone()
+                }
+                None => return,
+            },
+            None => return,
         };
-        let path = entry.path.clone();
         self.open_path(ctx, path);
         self.view = AppView::Develop;
     }
@@ -283,6 +300,9 @@ impl RustroomApp {
                 s.engine
                     .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
             }
+        }
+        if self.library.is_some() {
+            ui.toggle_value(&mut self.show_filmstrip, "Filmstrip");
         }
     }
 
