@@ -88,6 +88,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
+> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **Two candidate next tasks (user's pick):** (1) **saturation** — a small hue-preserving `PipelineStage` (per-pixel chroma around luma) + `Edits.saturation` + a right-panel slider + a golden test; mirrors the existing stages; or (2) **snappy RAW switching** — thread the `open_path` decode + show the filmstrip thumbnail as an instant placeholder to kill the ~1 s UI freeze on photo switch. Either is a new feature → brainstorm → spec → plan → executing-plans (all inline, per the workflow used all session). Design/plan docs live in `docs/superpowers/`.
+
 **Filmstrip done (browse-layout toward "C").** On top of multi-format + M2.1/M2.2. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
 
 Filmstrip (done, `app` only): a bottom `egui::Panel` in Develop rendering the loaded folder's thumbnails (reuses `Library` state — no new loader). Click a cell or ←/→ to switch photos via `open_entry` (auto-saves the outgoing photo's sidecar). Arrow-nav gated on `ctx.memory(|m| m.focused())` so arrows still fine-tune a focused slider. `open_entry` sets `library.selected` so grid + strip stay in sync. `show_filmstrip` toggle in the Develop toolbar (shown only when a folder is loaded); single-file opens show no strip. **Resizable** (drag top border; thumbnails scale with panel height).
@@ -95,8 +97,8 @@ Filmstrip (done, `app` only): a bottom `egui::Panel` in Develop rendering the lo
 Browse-polish fixes (done, from filmstrip feedback):
 - `Open file…` now clears `self.library` → true single-file mode (no stale strip/grid).
 - **Sidecar naming appends `.json`** to the full filename (`sidecar_path`: `photo.RAF` → `photo.RAF.json`), so a RAW and JPEG sharing a basename no longer clobber each other's edits. (Old `<name>.json` sidecars won't be found under the new scheme — fine for early dev.)
-- Filmstrip is drag-resizable with height-scaled thumbnails.
-- **Deferred:** #2 from the feedback — background-thread decode + instant thumbnail placeholder so RAW photo-switching isn't a ~1 s UI freeze (the half-size decode still runs inline). Next natural refinement.
+- Filmstrip is drag-resizable with height-scaled thumbnails. **egui gotcha (fixed):** a resizable `Panel` stores its *content's* rendered rect as its size each frame — if content is smaller than the panel on the resize axis it shrinks back every frame. Fix: `ui.set_min_height(ui.available_height())` (bottom panel) so content fills the panel. Applies to any future resizable panel whose content doesn't fill the resize axis.
+- **Deferred (the one open item from this feedback round):** background-thread decode + instant thumbnail placeholder so RAW photo-switching isn't a ~1 s UI freeze (the half-size decode still runs *inline* on the UI thread in `open_path`). This is the M1.4a "thread the open" refinement, still pending; it'd also make first-open snappier. See "Next step".
 
 **Multi-format editing done (JPEG/PNG/TIFF), on top of Phase 2 / M2.1+M2.2.**
 
