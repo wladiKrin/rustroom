@@ -464,17 +464,19 @@ impl RustroomApp {
     }
 
     /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
+    /// The panel is resizable (drag its top border); thumbnails scale with its height.
     fn filmstrip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        const CELL: f32 = 96.0;
         let mut open_index: Option<usize> = None;
         egui::Panel::bottom("filmstrip")
-            .default_size(CELL * 0.66 + 22.0)
+            .resizable(true)
+            .default_size(96.0)
             .show(ui, |ui| {
                 let Some(lib) = &self.library else { return };
+                let cell_h = (ui.available_height() - 8.0).clamp(48.0, 400.0);
+                let box_size = egui::vec2(cell_h * 1.5, cell_h);
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for i in 0..lib.entries.len() {
-                            let box_size = egui::vec2(CELL, CELL * 0.66);
                             let resp = ui
                                 .allocate_ui(box_size, |ui| match &lib.thumbs[i] {
                                     Some(tex) => {
