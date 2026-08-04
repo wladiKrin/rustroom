@@ -472,7 +472,11 @@ impl RustroomApp {
             .default_size(96.0)
             .show(ui, |ui| {
                 let Some(lib) = &self.library else { return };
-                let cell_h = (ui.available_height() - 8.0).clamp(48.0, 400.0);
+                // Fill the panel's height so egui stores the panel size (not the smaller
+                // content size) — otherwise a resizable bottom panel shrinks back each frame.
+                let avail_h = ui.available_height();
+                ui.set_min_height(avail_h);
+                let cell_h = (avail_h - 8.0).clamp(48.0, 400.0);
                 let box_size = egui::vec2(cell_h * 1.5, cell_h);
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
