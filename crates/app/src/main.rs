@@ -116,13 +116,22 @@ fn decode_for_export(path: &std::path::Path) -> Result<core_image::ImageBuf, Str
     }
 }
 
+/// The edit sidecar path for a source file: the full filename with `.json` appended
+/// (e.g. `photo.RAF` → `photo.RAF.json`), so a RAW and a JPEG that share a basename get
+/// distinct sidecars.
+fn sidecar_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".json");
+    std::path::PathBuf::from(s)
+}
+
 impl RustroomApp {
     /// Save the current session's edits to its `<file>.json` sidecar, if it has any.
     /// Called before switching photos / on exit so edits are never lost.
     fn persist_current_session(&self) {
         if let Some(s) = &self.session {
             if s.edits != Edits::default() {
-                let _ = s.edits.to_json_file(&s.path.with_extension("json"));
+                let _ = s.edits.to_json_file(&sidecar_path(&s.path));
             }
         }
     }
@@ -142,7 +151,7 @@ impl RustroomApp {
         let buffer = Arc::new(image);
 
         // Load a sidecar (`<file>.json`) if present.
-        let sidecar = path.with_extension("json");
+        let sidecar = sidecar_path(&path);
         let edits = if sidecar.exists() {
             edit_model::Edits::from_json_file(&sidecar).unwrap_or_default()
         } else {
@@ -257,7 +266,7 @@ impl RustroomApp {
                 let image = decode_for_export(&src).map_err(|e| anyhow::anyhow!(e))?;
                 let rendered = pipeline::build_pipeline(&edits).run(image);
                 export::save_jpeg(&rendered, &out, 92)?;
-                edits.to_json_file(&out.with_extension("json"))?;
+                edits.to_json_file(&sidecar_path(&out))?;
                 Ok(())
             })();
             if let Err(e) = result {
