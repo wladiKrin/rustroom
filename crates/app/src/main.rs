@@ -341,6 +341,8 @@ impl RustroomApp {
                     slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
                     slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
                     slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
+                    slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
+                    slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
 
                     ui.separator();
                     if ui.button("Reset all").clicked() {
