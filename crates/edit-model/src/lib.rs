@@ -71,6 +71,10 @@ pub struct Edits {
     /// Blacks endpoint, ~[-100, 100]. Positive lifts the bottom end.
     pub blacks: f32,
     pub tone_curve: ToneCurve,
+    /// Saturation, ~[-100, 100]. -100 = monochrome, 0 = no change, +100 = 2x chroma.
+    pub saturation: f32,
+    /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
+    pub vibrance: f32,
     pub geometry: Geometry,
 }
 
@@ -128,6 +132,33 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"exposure": 1.5}"#).unwrap();
         assert_eq!(e.exposure, 1.5);
         assert_eq!(e.contrast, 0.0);
+    }
+
+    #[test]
+    fn color_fields_default_to_neutral() {
+        let e = Edits::default();
+        assert_eq!(e.saturation, 0.0);
+        assert_eq!(e.vibrance, 0.0);
+    }
+
+    #[test]
+    fn old_sidecar_without_color_fields_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5, "contrast": 10.0}"#).unwrap();
+        assert_eq!(e.exposure, 0.5);
+        assert_eq!(e.saturation, 0.0);
+        assert_eq!(e.vibrance, 0.0);
+    }
+
+    #[test]
+    fn color_fields_roundtrip_json() {
+        let e = Edits {
+            saturation: 25.0,
+            vibrance: -40.0,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
     }
 
     #[test]
