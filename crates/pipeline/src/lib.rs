@@ -9,6 +9,7 @@ pub use stages::contrast::ContrastStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::output_transform::OutputTransformSrgb;
+pub use stages::saturation::SaturationStage;
 pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
 pub use stages::white_balance::WhiteBalanceStage;
@@ -78,6 +79,13 @@ pub fn build_pipeline(edits: &Edits) -> Pipeline {
         stages.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
     }
 
+    if edits.saturation != 0.0 || edits.vibrance != 0.0 {
+        stages.push(Box::new(SaturationStage::new(
+            edits.saturation,
+            edits.vibrance,
+        )));
+    }
+
     stages.push(Box::new(OutputTransformSrgb));
     Pipeline::new(stages)
 }
@@ -114,6 +122,33 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits).len(), 3);
+    }
+
+    #[test]
+    fn saturation_adds_one_stage() {
+        let edits = Edits {
+            saturation: 20.0,
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits).len(), 2);
+    }
+
+    #[test]
+    fn vibrance_alone_adds_one_stage() {
+        let edits = Edits {
+            vibrance: -30.0,
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits).len(), 2);
+    }
+
+    #[test]
+    fn neutral_color_adds_no_stage() {
+        let edits = Edits {
+            exposure: 1.0,
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits).len(), 2);
     }
 
     #[test]
