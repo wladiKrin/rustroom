@@ -90,7 +90,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **Filmstrip done (browse-layout toward "C").** On top of multi-format + M2.1/M2.2. Full workspace `fmt`/`clippy --all-targets`/`test --all` green.
 
-Filmstrip (done, `app` only): a bottom `egui::Panel` in Develop rendering the loaded folder's thumbnails (reuses `Library` state — no new loader). Click a cell or ←/→ to switch photos via `open_entry` (auto-saves the outgoing photo's sidecar). Arrow-nav gated on `ctx.memory(|m| m.focused())` so arrows still fine-tune a focused slider. `open_entry` sets `library.selected` so grid + strip stay in sync. `show_filmstrip` toggle in the Develop toolbar (shown only when a folder is loaded); single-file opens show no strip.
+Filmstrip (done, `app` only): a bottom `egui::Panel` in Develop rendering the loaded folder's thumbnails (reuses `Library` state — no new loader). Click a cell or ←/→ to switch photos via `open_entry` (auto-saves the outgoing photo's sidecar). Arrow-nav gated on `ctx.memory(|m| m.focused())` so arrows still fine-tune a focused slider. `open_entry` sets `library.selected` so grid + strip stay in sync. `show_filmstrip` toggle in the Develop toolbar (shown only when a folder is loaded); single-file opens show no strip. **Resizable** (drag top border; thumbnails scale with panel height).
+
+Browse-polish fixes (done, from filmstrip feedback):
+- `Open file…` now clears `self.library` → true single-file mode (no stale strip/grid).
+- **Sidecar naming appends `.json`** to the full filename (`sidecar_path`: `photo.RAF` → `photo.RAF.json`), so a RAW and JPEG sharing a basename no longer clobber each other's edits. (Old `<name>.json` sidecars won't be found under the new scheme — fine for early dev.)
+- Filmstrip is drag-resizable with height-scaled thumbnails.
+- **Deferred:** #2 from the feedback — background-thread decode + instant thumbnail placeholder so RAW photo-switching isn't a ~1 s UI freeze (the half-size decode still runs inline). Next natural refinement.
 
 **Multi-format editing done (JPEG/PNG/TIFF), on top of Phase 2 / M2.1+M2.2.**
 
