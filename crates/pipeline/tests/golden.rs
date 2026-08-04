@@ -31,6 +31,27 @@ fn chart() -> ImageBuf {
     img
 }
 
+/// Deterministic linear chart of *muted* colors: 4 bands, each a 0..1 ramp with a weak
+/// color cast (chroma/max = 0.2), so vibrance actually does something. The main `chart()`
+/// is all pure primaries (chroma 1) and neutral gray (chroma 0), where vibrance is a no-op.
+fn muted_chart() -> ImageBuf {
+    let mut img = ImageBuf::new(W, H);
+    for y in 0..H {
+        let band = y * 4 / H; // 0..3
+        let tint = match band {
+            0 => [1.0, 0.9, 0.8],  // warm
+            1 => [0.8, 1.0, 0.9],  // green
+            2 => [0.8, 0.9, 1.0],  // cool
+            _ => [1.0, 0.8, 0.95], // magenta
+        };
+        for x in 0..W {
+            let v = x as f32 / (W - 1) as f32;
+            img.set_pixel(x, y, [v * tint[0], v * tint[1], v * tint[2]]);
+        }
+    }
+    img
+}
+
 fn to_rgb8(img: &ImageBuf) -> Vec<u8> {
     img.data()
         .iter()
@@ -45,7 +66,11 @@ fn golden_path(name: &str) -> PathBuf {
 }
 
 fn check_golden(name: &str, edits: &Edits) {
-    let rendered = build_pipeline(edits).run(chart());
+    check_golden_with(name, edits, chart());
+}
+
+fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
+    let rendered = build_pipeline(edits).run(input);
     let (rw, rh) = (rendered.width() as u32, rendered.height() as u32);
     let bytes = to_rgb8(&rendered);
     let path = golden_path(name);
@@ -173,6 +198,29 @@ fn golden_crop_center() {
             },
             ..Edits::default()
         },
+    )
+}
+
+#[test]
+fn golden_saturation_plus50() {
+    check_golden(
+        "saturation_plus50",
+        &Edits {
+            saturation: 50.0,
+            ..Edits::default()
+        },
+    )
+}
+
+#[test]
+fn golden_vibrance_plus50() {
+    check_golden_with(
+        "vibrance_plus50",
+        &Edits {
+            vibrance: 50.0,
+            ..Edits::default()
+        },
+        muted_chart(),
     )
 }
 
