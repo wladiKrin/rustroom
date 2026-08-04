@@ -90,7 +90,10 @@ mod tests {
         let out = apply_one(-100.0, 0.0, px);
         let l = luma(px);
         for i in 0..3 {
-            assert!((out[i] - l).abs() < 1e-6, "channel {i}: {out:?} vs luma {l}");
+            assert!(
+                (out[i] - l).abs() < 1e-6,
+                "channel {i}: {out:?} vs luma {l}"
+            );
         }
     }
 
