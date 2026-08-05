@@ -51,6 +51,32 @@ pub struct Geometry {
     pub crop: CropRect,
 }
 
+/// One hue band's adjustments. All ~[-100, 100]; 0 = neutral.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct HslBand {
+    /// Hue rotation for this band; ±100 maps to ±30°.
+    pub hue: f32,
+    /// Chroma scale; ±100 maps to ×0 … ×2.
+    pub saturation: f32,
+    /// Lightness scale; ±100 maps to ×0.5 … ×1.5.
+    pub luminance: f32,
+}
+
+/// Per-hue adjustments for the 8 bands, in [`HSL_BAND_NAMES`] order.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Hsl {
+    pub bands: [HslBand; 8],
+}
+
+/// Band names in `Hsl::bands` order — the one source of truth shared by the pipeline
+/// (band centers) and the GUI (slider labels). The sidecar stores bands positionally, so
+/// this order is part of the file format.
+pub const HSL_BAND_NAMES: [&str; 8] = [
+    "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+];
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -75,6 +101,7 @@ pub struct Edits {
     pub saturation: f32,
     /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
     pub vibrance: f32,
+    pub hsl: Hsl,
     pub geometry: Geometry,
 }
 
@@ -132,6 +159,35 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"exposure": 1.5}"#).unwrap();
         assert_eq!(e.exposure, 1.5);
         assert_eq!(e.contrast, 0.0);
+    }
+
+    #[test]
+    fn hsl_defaults_to_eight_neutral_bands() {
+        let e = Edits::default();
+        assert_eq!(e.hsl.bands.len(), 8);
+        assert!(e.hsl.bands.iter().all(|b| *b == HslBand::default()));
+        assert_eq!(HSL_BAND_NAMES.len(), 8);
+    }
+
+    #[test]
+    fn old_sidecar_without_hsl_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.hsl, Hsl::default());
+    }
+
+    #[test]
+    fn hsl_roundtrips_json() {
+        let mut hsl = Hsl::default();
+        hsl.bands[0].saturation = -40.0;
+        hsl.bands[5].hue = 25.0;
+        hsl.bands[3].luminance = 60.0;
+        let e = Edits {
+            hsl,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
     }
 
     #[test]
