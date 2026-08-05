@@ -8,6 +8,7 @@ mod stages;
 pub use stages::contrast::ContrastStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
+pub use stages::hsl::HslStage;
 pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::saturation::SaturationStage;
 pub use stages::tone_curve::ToneCurveStage;
@@ -86,6 +87,10 @@ pub fn build_pipeline(edits: &Edits) -> Pipeline {
         )));
     }
 
+    if edits.hsl != edit_model::Hsl::default() {
+        stages.push(Box::new(HslStage::new(&edits.hsl)));
+    }
+
     stages.push(Box::new(OutputTransformSrgb));
     Pipeline::new(stages)
 }
@@ -122,6 +127,28 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits).len(), 3);
+    }
+
+    #[test]
+    fn hsl_adds_one_stage_when_non_neutral() {
+        let mut hsl = edit_model::Hsl::default();
+        hsl.bands[2].saturation = 30.0;
+        let edits = Edits {
+            hsl,
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits).len(), 2);
+    }
+
+    #[test]
+    fn neutral_hsl_adds_no_stage() {
+        let edits = Edits {
+            hsl: edit_model::Hsl::default(),
+            saturation: 10.0,
+            ..Edits::default()
+        };
+        // saturation stage + output transform only
+        assert_eq!(build_pipeline(&edits).len(), 2);
     }
 
     #[test]
