@@ -1,15 +1,25 @@
 use catalog::CatalogEntry;
 use edit_model::Edits;
 use eframe::egui;
+use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
+use rustroom_app::decode_worker::{DecodeWorker, Decoded};
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
-use rustroom_app::render_engine::{render_once, RenderEngine};
+use rustroom_app::render_engine::RenderEngine;
 use rustroom_app::thumb_loader::ThumbLoader;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const PREVIEW_MAX_DIM: usize = 1600;
+/// How long the selection must sit still before we commit to a decode. Holding an arrow key
+/// therefore starts zero decodes until you settle.
+const DECODE_DEBOUNCE: Duration = Duration::from_millis(180);
+/// Superseded decodes are abandoned rather than aborted, so cap how many run at once.
+const MAX_CONCURRENT_DECODES: usize = 2;
+/// Recently viewed photos kept decoded in memory (~85 MB each).
+const BUFFER_CACHE_CAP: usize = 3;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -19,7 +29,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Rustroom",
         native_options,
-        Box::new(|_cc| Ok(Box::new(RustroomApp::default()))),
+        Box::new(|cc| Ok(Box::new(RustroomApp::new(&cc.egui_ctx)))),
     )
 }
 
@@ -38,20 +48,41 @@ struct Library {
     loader: ThumbLoader,
 }
 
+/// A photo whose decode is scheduled or in flight. `Session` still means "fully decoded",
+/// so nothing downstream needs to know about this half-open state.
+struct PendingOpen {
+    path: PathBuf,
+    /// The filmstrip thumbnail shown while decoding, when the folder is loaded.
+    placeholder: Option<egui::TextureHandle>,
+    /// Debounce deadline — the decode starts once `Instant::now()` passes this.
+    start_at: Instant,
+    /// The worker sequence number, once the decode has actually been requested.
+    seq: Option<u64>,
+}
+
 struct RustroomApp {
     view: AppView,
     library: Option<Library>,
     session: Option<Session>,
+    pending: Option<PendingOpen>,
+    decoder: DecodeWorker,
+    cache: BufferCache,
     status: String,
     show_filmstrip: bool,
 }
 
-impl Default for RustroomApp {
-    fn default() -> Self {
+impl RustroomApp {
+    fn new(ctx: &egui::Context) -> Self {
+        let ctx2 = ctx.clone();
         Self {
             view: AppView::default(),
             library: None,
             session: None,
+            pending: None,
+            decoder: DecodeWorker::new(decode_for_edit, MAX_CONCURRENT_DECODES, move || {
+                ctx2.request_repaint()
+            }),
+            cache: BufferCache::new(BUFFER_CACHE_CAP),
             status: String::new(),
             show_filmstrip: true,
         }
@@ -136,21 +167,41 @@ impl RustroomApp {
         }
     }
 
-    /// Decode `path` (RAW half-size, or a JPEG/PNG/TIFF) and set it up as the current
-    /// editing `Session`.
+    /// Start opening `path`: instant from the cache, otherwise a debounced background decode
+    /// with the filmstrip thumbnail as a placeholder. Never blocks the UI thread.
     fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
         self.persist_current_session();
-        self.status = format!("Decoding {}…", path.display());
-        let (image, make_model) = match decode_for_edit(&path) {
-            Ok(v) => v,
-            Err(e) => {
-                self.status = format!("Decode failed: {e}");
-                return;
-            }
-        };
-        let buffer = Arc::new(image);
 
-        // Load a sidecar (`<file>.json`) if present.
+        if let Some(decoded) = self.cache.get(&path) {
+            self.pending = None;
+            self.finalize_session(ctx, path, decoded);
+            return;
+        }
+
+        let placeholder = self.thumbnail_for(&path);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.status = format!("Decoding {name}…");
+        self.pending = Some(PendingOpen {
+            path,
+            placeholder,
+            start_at: Instant::now() + DECODE_DEBOUNCE,
+            seq: None,
+        });
+    }
+
+    /// The library thumbnail for `path`, if the folder is loaded and that thumbnail has
+    /// already arrived. `TextureHandle` is `Arc`-backed, so cloning it is cheap.
+    fn thumbnail_for(&self, path: &std::path::Path) -> Option<egui::TextureHandle> {
+        let lib = self.library.as_ref()?;
+        let i = lib.entries.iter().position(|e| e.path == *path)?;
+        lib.thumbs.get(i).cloned().flatten()
+    }
+
+    /// Build the editing `Session` from a decoded photo (cache hit or worker result).
+    fn finalize_session(&mut self, ctx: &egui::Context, path: PathBuf, decoded: Arc<Decoded>) {
         let sidecar = sidecar_path(&path);
         let edits = if sidecar.exists() {
             edit_model::Edits::from_json_file(&sidecar).unwrap_or_default()
@@ -158,8 +209,7 @@ impl RustroomApp {
             Edits::default()
         };
 
-        // Baseline render (neutral edits) for before/after — before `buffer` moves.
-        let bf = render_once(&buffer, &Edits::default(), PREVIEW_MAX_DIM);
+        let bf = &decoded.baseline;
         let baseline = ctx.load_texture(
             "baseline",
             egui::ColorImage::from_rgba_unmultiplied([bf.width, bf.height], &bf.rgba),
@@ -167,7 +217,7 @@ impl RustroomApp {
         );
 
         let ctx2 = ctx.clone();
-        let engine = RenderEngine::new(buffer, move || ctx2.request_repaint());
+        let engine = RenderEngine::new(decoded.buffer.clone(), move || ctx2.request_repaint());
         engine.request(edits.clone(), PREVIEW_MAX_DIM);
 
         self.session = Some(Session {
@@ -177,7 +227,7 @@ impl RustroomApp {
             texture: None,
             baseline,
             hist: [[0; 256]; 3],
-            make_model,
+            make_model: decoded.label.clone(),
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             history: History::new(edits),
@@ -186,6 +236,43 @@ impl RustroomApp {
             active_handle: None,
         });
         self.status.clear();
+    }
+
+    /// Per-frame pump: fire the debounce timer, then absorb finished decodes.
+    fn pump_decodes(&mut self, ctx: &egui::Context) {
+        if let Some(p) = &mut self.pending {
+            if p.seq.is_none() {
+                let now = Instant::now();
+                if now >= p.start_at {
+                    let path = p.path.clone();
+                    // `p` borrows `self.pending`, the call borrows `self.decoder` — disjoint
+                    // fields, so the borrow checker allows both at once.
+                    p.seq = Some(self.decoder.request(path, PREVIEW_MAX_DIM));
+                } else {
+                    ctx.request_repaint_after(p.start_at - now);
+                }
+            }
+        }
+
+        for res in self.decoder.poll() {
+            let is_current = self.pending.as_ref().and_then(|p| p.seq) == Some(res.seq);
+            match res.outcome {
+                Ok(decoded) => {
+                    // Cache even superseded decodes — that work is already paid for.
+                    self.cache.insert(res.path.clone(), decoded.clone());
+                    if is_current {
+                        self.pending = None;
+                        self.finalize_session(ctx, res.path, decoded);
+                    }
+                }
+                Err(e) => {
+                    if is_current {
+                        self.pending = None;
+                        self.status = format!("Decode failed: {e}");
+                    }
+                }
+            }
+        }
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
@@ -322,6 +409,9 @@ impl RustroomApp {
         egui::Panel::right("panel")
             .default_size(240.0)
             .show(ui, |ui| {
+                if self.pending.is_some() {
+                    ui.disable();
+                }
                 if let Some(s) = &mut self.session {
                     draw_histogram(ui, &s.hist);
                     ui.separator();
@@ -400,40 +490,46 @@ impl RustroomApp {
             self.filmstrip(ui, ctx);
         }
 
-        egui::CentralPanel::default().show(ui, |ui| match &mut self.session {
-            Some(s) => {
-                if let Some(tex) = &s.texture {
-                    let shown = if s.show_before { &s.baseline } else { tex };
-                    let avail = ui.available_size();
-                    let tex_size = shown.size_vec2();
-                    let fit = (avail.x / tex_size.x).min(avail.y / tex_size.y).min(1.0);
-                    let draw = tex_size * fit * s.zoom;
-                    let img_rect =
-                        egui::Rect::from_center_size(ui.max_rect().center() + s.pan, draw);
-                    let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
-                    egui::Image::new(shown).paint_at(ui, resp.rect);
+        egui::CentralPanel::default().show(ui, |ui| {
+            if let Some(p) = &self.pending {
+                draw_pending_canvas(ui, p, self.session.as_ref());
+                return;
+            }
+            match &mut self.session {
+                Some(s) => {
+                    if let Some(tex) = &s.texture {
+                        let shown = if s.show_before { &s.baseline } else { tex };
+                        let avail = ui.available_size();
+                        let tex_size = shown.size_vec2();
+                        let fit = (avail.x / tex_size.x).min(avail.y / tex_size.y).min(1.0);
+                        let draw = tex_size * fit * s.zoom;
+                        let img_rect =
+                            egui::Rect::from_center_size(ui.max_rect().center() + s.pan, draw);
+                        let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
+                        egui::Image::new(shown).paint_at(ui, resp.rect);
 
-                    if s.crop_mode {
-                        draw_crop_overlay(ui, s, &resp, img_rect);
+                        if s.crop_mode {
+                            draw_crop_overlay(ui, s, &resp, img_rect);
+                        } else {
+                            if resp.dragged() {
+                                s.pan += resp.drag_delta();
+                            }
+                            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                            if scroll != 0.0 && resp.hovered() {
+                                s.zoom = (s.zoom * (1.0 + scroll * 0.001)).clamp(1.0, 8.0);
+                            }
+                        }
                     } else {
-                        if resp.dragged() {
-                            s.pan += resp.drag_delta();
-                        }
-                        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                        if scroll != 0.0 && resp.hovered() {
-                            s.zoom = (s.zoom * (1.0 + scroll * 0.001)).clamp(1.0, 8.0);
-                        }
+                        ui.centered_and_justified(|ui| {
+                            ui.spinner();
+                        });
                     }
-                } else {
+                }
+                None => {
                     ui.centered_and_justified(|ui| {
-                        ui.spinner();
+                        ui.label("Open an image to begin (Open file… button).");
                     });
                 }
-            }
-            None => {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Open an image to begin (Open file… button).");
-                });
             }
         });
     }
@@ -636,6 +732,8 @@ impl eframe::App for RustroomApp {
             std::process::exit(0);
         }
 
+        self.pump_decodes(&ctx);
+
         // Pull any finished preview frame into a texture.
         if let Some(s) = &mut self.session {
             if let Some(frame) = s.engine.poll_latest() {
@@ -676,7 +774,8 @@ impl eframe::App for RustroomApp {
                 ui.selectable_value(&mut self.view, AppView::Develop, "Develop");
                 ui.separator();
                 if self.view == AppView::Develop && self.session.is_some() {
-                    self.develop_toolbar(ui, &ctx);
+                    let decoding = self.pending.is_some();
+                    ui.add_enabled_ui(!decoding, |ui| self.develop_toolbar(ui, &ctx));
                 }
                 if !self.status.is_empty() {
                     ui.label(&self.status);
@@ -688,6 +787,35 @@ impl eframe::App for RustroomApp {
             AppView::Develop => self.develop_body(ui, &ctx),
             AppView::Library => self.library_view(ui, &ctx),
         }
+    }
+}
+
+/// Canvas while a decode is in flight: the target photo's thumbnail if we have one (scaled
+/// up to fill, since thumbnails are ≤512 px), else the previous photo dimmed, else a spinner.
+fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option<&Session>) {
+    let showing_placeholder = pending.placeholder.is_some();
+    let fallback = session.and_then(|s| s.texture.as_ref());
+    let Some(tex) = pending.placeholder.as_ref().or(fallback) else {
+        ui.centered_and_justified(|ui| {
+            ui.spinner();
+        });
+        return;
+    };
+
+    let avail = ui.available_size();
+    let tex_size = tex.size_vec2();
+    // No `.min(1.0)` here: a 512 px thumbnail must scale *up* to fill the canvas.
+    let fit = (avail.x / tex_size.x).min(avail.y / tex_size.y);
+    let rect = egui::Rect::from_center_size(ui.max_rect().center(), tex_size * fit);
+    egui::Image::new(tex).paint_at(ui, rect);
+
+    if !showing_placeholder {
+        // This is the *previous* photo — dim it so it reads as stale.
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::ZERO,
+            egui::Color32::from_black_alpha(140),
+        );
     }
 }
 
