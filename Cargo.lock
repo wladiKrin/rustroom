@@ -2697,6 +2697,7 @@ dependencies = [
  "core-image",
  "edit-model",
  "image",
+ "rayon",
 ]
 
 [[package]]

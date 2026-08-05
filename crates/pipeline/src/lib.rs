@@ -4,7 +4,9 @@
 use core_image::ImageBuf;
 use edit_model::Edits;
 
+pub mod spatial;
 mod stages;
+
 pub use stages::contrast::ContrastStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
