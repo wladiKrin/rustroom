@@ -38,6 +38,16 @@ fn main() {
         ("NR luminance 50 only", nr(50.0, 0.0)),
         ("NR both 50", nr(50.0, 50.0)),
         (
+            "vignette -60",
+            Edits {
+                vignette: edit_model::Vignette {
+                    amount: -60.0,
+                    ..Default::default()
+                },
+                ..Edits::default()
+            },
+        ),
+        (
             "HSL only (for comparison)",
             Edits {
                 hsl,
