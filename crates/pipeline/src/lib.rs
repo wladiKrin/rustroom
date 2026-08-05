@@ -139,6 +139,13 @@ pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
         stages.push(Box::new(HslStage::new(&edits.hsl)));
     }
 
+    // A creative effect over the finished grade, so it runs last. It is post-crop for free:
+    // `GeometryStage` ran first, so the frame it sees is already cropped. It takes no
+    // `RenderScale` — normalized coordinates make it resolution-independent.
+    if edits.vignette.is_active() {
+        stages.push(Box::new(VignetteStage::new(&edits.vignette)));
+    }
+
     stages.push(Box::new(OutputTransformSrgb));
     Pipeline::new(stages)
 }
@@ -317,6 +324,43 @@ mod tests {
                 color: 0.0,
                 detail: 100.0,
                 smoothness: 0.0,
+            },
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+    }
+
+    #[test]
+    fn vignette_runs_last_before_the_output_transform() {
+        // A creative effect laid over the finished grade.
+        let edits = Edits {
+            exposure: 1.0,
+            saturation: 20.0,
+            vignette: edit_model::Vignette {
+                amount: -40.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            vec![
+                "exposure",
+                "saturation",
+                "vignette",
+                "output_transform_srgb"
+            ]
+        );
+    }
+
+    #[test]
+    fn vignette_modifiers_alone_add_no_stage() {
+        let edits = Edits {
+            vignette: edit_model::Vignette {
+                amount: 0.0,
+                midpoint: 10.0,
+                roundness: -100.0,
+                feather: 0.0,
             },
             ..Edits::default()
         };
