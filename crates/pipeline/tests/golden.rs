@@ -5,7 +5,7 @@
 
 use core_image::ImageBuf;
 use edit_model::{Edits, ToneCurve, WhiteBalance};
-use pipeline::build_pipeline;
+use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
 
 const W: usize = 64;
@@ -109,7 +109,7 @@ fn check_golden(name: &str, edits: &Edits) {
 }
 
 fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
-    let rendered = build_pipeline(edits).run(input);
+    let rendered = build_pipeline(edits, RenderScale::FULL).run(input);
     let (rw, rh) = (rendered.width() as u32, rendered.height() as u32);
     let bytes = to_rgb8(&rendered);
     let path = golden_path(name);

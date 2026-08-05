@@ -351,7 +351,8 @@ impl RustroomApp {
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<()> {
                 let image = decode_for_export(&src).map_err(|e| anyhow::anyhow!(e))?;
-                let rendered = pipeline::build_pipeline(&edits).run(image);
+                let rendered =
+                    pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(image);
                 export::save_jpeg(&rendered, &out, 92)?;
                 edits.to_json_file(&sidecar_path(&out))?;
                 Ok(())

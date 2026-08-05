@@ -17,6 +17,33 @@ pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
 pub use stages::white_balance::WhiteBalanceStage;
 
+/// Ratio of the image being rendered to the full-resolution original: `1.0` at full res,
+/// ≈0.27 for the 1600 px preview of a 6000 px file.
+///
+/// Spatial stages multiply their pixel radii by this, so a preview approximates the
+/// export instead of contradicting it. Per-pixel stages ignore it entirely.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderScale(f32);
+
+impl RenderScale {
+    /// Rendering at the original resolution.
+    pub const FULL: RenderScale = RenderScale(1.0);
+
+    /// Clamped to `(0, 1]`. Anything outside that (or non-finite) is a caller bug, but a
+    /// clamped radius beats panicking on the render worker thread.
+    pub fn new(scale: f32) -> Self {
+        if scale.is_finite() {
+            RenderScale(scale.clamp(1e-3, 1.0))
+        } else {
+            RenderScale::FULL
+        }
+    }
+
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
 /// One stage of the develop pipeline. Pure: no shared state, independently testable.
 /// (A future GPU stage implements the same trait — the seam for the Phase 5 port.)
 pub trait PipelineStage: Send + Sync {
@@ -42,6 +69,12 @@ impl Pipeline {
         self.stages.is_empty()
     }
 
+    /// Stage names in run order. Useful when debugging a render, and it lets tests assert
+    /// pipeline *order* rather than just its length.
+    pub fn stage_names(&self) -> Vec<&'static str> {
+        self.stages.iter().map(|s| s.name()).collect()
+    }
+
     /// Run all stages in order.
     pub fn run(&self, mut image: ImageBuf) -> ImageBuf {
         for stage in &self.stages {
@@ -51,10 +84,12 @@ impl Pipeline {
     }
 }
 
-/// Build the ordered stage list for a set of edits. A stage is added only when its
-/// params are non-neutral; the output transform is always last.
-pub fn build_pipeline(edits: &Edits) -> Pipeline {
+/// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
+/// full-resolution original. A stage is added only when its params are non-neutral; the
+/// output transform is always last.
+pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
     let mut stages: Vec<Box<dyn PipelineStage>> = Vec::new();
+    let _ = scale; // consumed by the spatial stage added in the noise-reduction task
 
     // Geometry runs first, so all adjustments operate on the final cropped pixels.
     if edits.geometry != edit_model::Geometry::default() {
@@ -104,10 +139,60 @@ mod tests {
     use edit_model::Edits;
 
     #[test]
+    fn render_scale_full_is_one() {
+        assert_eq!(RenderScale::FULL.get(), 1.0);
+    }
+
+    #[test]
+    fn render_scale_clamps_nonsense_input() {
+        // A scale above 1 or at/below 0 is a caller bug, but the render worker must not
+        // panic over it — a clamped radius is a recoverable wrong answer.
+        assert_eq!(RenderScale::new(4.0).get(), 1.0);
+        assert_eq!(RenderScale::new(0.0).get(), RenderScale::new(-1.0).get());
+        assert!(RenderScale::new(0.0).get() > 0.0);
+        assert_eq!(RenderScale::new(f32::NAN).get(), 1.0);
+        assert_eq!(RenderScale::new(0.25).get(), 0.25);
+    }
+
+    #[test]
+    fn per_pixel_stages_ignore_the_render_scale() {
+        // Everything that existed before noise reduction is per-pixel, so scale must be
+        // a no-op for it — bit for bit, not just visually.
+        let edits = Edits {
+            exposure: 0.7,
+            contrast: 25.0,
+            saturation: 30.0,
+            ..Edits::default()
+        };
+        let mut img = ImageBuf::new(4, 4);
+        for y in 0..4 {
+            for x in 0..4 {
+                img.set_pixel(x, y, [0.1 * x as f32, 0.2, 0.05 * y as f32]);
+            }
+        }
+        let full = build_pipeline(&edits, RenderScale::FULL).run(img.clone());
+        let quarter = build_pipeline(&edits, RenderScale::new(0.25)).run(img);
+        assert_eq!(full.data(), quarter.data());
+    }
+
+    #[test]
+    fn stage_names_are_reported_in_order() {
+        let edits = Edits {
+            exposure: 1.0,
+            saturation: 20.0,
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            vec!["exposure", "saturation", "output_transform_srgb"]
+        );
+    }
+
+    #[test]
     fn output_transform_encodes_linear_to_srgb() {
         let mut img = ImageBuf::new(1, 1);
         img.set_pixel(0, 0, [0.5, 0.5, 0.5]);
-        let out = build_pipeline(&Edits::default()).run(img);
+        let out = build_pipeline(&Edits::default(), RenderScale::FULL).run(img);
         let [r, g, b] = out.pixel(0, 0);
         let expected = color::linear_to_srgb(0.5);
         assert!((r - expected).abs() < 1e-4);
@@ -117,7 +202,7 @@ mod tests {
 
     #[test]
     fn default_pipeline_has_output_transform_last() {
-        let p = build_pipeline(&Edits::default());
+        let p = build_pipeline(&Edits::default(), RenderScale::FULL);
         assert_eq!(p.len(), 1);
     }
 
@@ -128,7 +213,7 @@ mod tests {
             contrast: 20.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits).len(), 3);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 3);
     }
 
     #[test]
@@ -139,7 +224,7 @@ mod tests {
             hsl,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits).len(), 2);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
     }
 
     #[test]
@@ -150,7 +235,7 @@ mod tests {
             ..Edits::default()
         };
         // saturation stage + output transform only
-        assert_eq!(build_pipeline(&edits).len(), 2);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
     }
 
     #[test]
@@ -159,7 +244,7 @@ mod tests {
             saturation: 20.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits).len(), 2);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
     }
 
     #[test]
@@ -168,7 +253,7 @@ mod tests {
             vibrance: -30.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits).len(), 2);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
     }
 
     #[test]
@@ -177,7 +262,7 @@ mod tests {
             exposure: 1.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits).len(), 2);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
     }
 
     #[test]
@@ -190,6 +275,6 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits).len(), 3);
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 3);
     }
 }

@@ -3,7 +3,7 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::build_pipeline;
+use pipeline::{build_pipeline, RenderScale};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -75,7 +75,7 @@ impl RenderEngine {
 /// Pure and synchronous — used by the worker and for one-off renders (e.g. baseline).
 pub fn render_once(buffer: &ImageBuf, edits: &Edits, max_dim: usize) -> RenderedFrame {
     let preview = buffer.downscale_to(max_dim);
-    let out = build_pipeline(edits).run(preview); // sRGB, 0..=1
+    let out = build_pipeline(edits, RenderScale::FULL).run(preview); // sRGB, 0..=1
     let (width, height) = (out.width(), out.height());
     let mut rgba = Vec::with_capacity(width * height * 4);
     for px in out.data().chunks_exact(3) {

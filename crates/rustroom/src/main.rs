@@ -84,7 +84,7 @@ fn render(input: &Path, output: &Path, edits_path: Option<&Path>, quality: u8) -
             .with_context(|| format!("loading edits {}", p.display()))?,
         None => edit_model::Edits::default(),
     };
-    let rendered = pipeline::build_pipeline(&edits).run(decoded.image);
+    let rendered = pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(decoded.image);
 
     export::save_jpeg(&rendered, output, quality)
         .with_context(|| format!("writing {}", output.display()))?;
