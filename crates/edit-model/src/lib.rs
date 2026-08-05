@@ -116,6 +116,43 @@ impl NoiseReduction {
     }
 }
 
+/// Post-crop vignette: darken or brighten the frame's edges. `amount` 0 = off; the other
+/// three only shape the falloff.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Vignette {
+    /// -100 darkens the edges by 2 EV, +100 brightens by 2 EV. 0 = off.
+    pub amount: f32,
+    /// Where the falloff sits, 0..100. Higher pushes it outward.
+    pub midpoint: f32,
+    /// Shape: -100 rounded rectangle … 0 ellipse following the frame … +100 true circle.
+    pub roundness: f32,
+    /// Transition width, 0..100. 0 is a hard edge.
+    pub feather: f32,
+}
+
+impl Default for Vignette {
+    fn default() -> Self {
+        Self {
+            amount: 0.0,
+            midpoint: 50.0,
+            roundness: 0.0,
+            feather: 50.0,
+        }
+    }
+}
+
+impl Vignette {
+    /// True when this actually changes pixels.
+    ///
+    /// Amount-only on purpose, the same rule [`NoiseReduction::is_active`] follows: midpoint,
+    /// roundness and feather shape an effect that is off until `amount` is non-zero, so
+    /// dragging one alone must not insert a stage.
+    pub fn is_active(&self) -> bool {
+        self.amount != 0.0
+    }
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -142,6 +179,7 @@ pub struct Edits {
     pub vibrance: f32,
     pub hsl: Hsl,
     pub noise_reduction: NoiseReduction,
+    pub vignette: Vignette,
     pub geometry: Geometry,
 }
 
@@ -315,6 +353,72 @@ mod tests {
                 detail: 70.0,
                 color: 55.0,
                 smoothness: 20.0,
+            },
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn vignette_defaults_to_off() {
+        let v = Vignette::default();
+        assert_eq!(v.amount, 0.0);
+        // Midpoint and feather sit at the middle of their 0..100 range; roundness's
+        // neutral is 0, which is also the middle of its -100..100 range.
+        assert_eq!(v.midpoint, 50.0);
+        assert_eq!(v.feather, 50.0);
+        assert_eq!(v.roundness, 0.0);
+        assert_eq!(Edits::default().vignette, v);
+    }
+
+    #[test]
+    fn vignette_is_active_only_on_amount() {
+        assert!(!Vignette::default().is_active());
+        // The other three only shape an effect that is off until amount is non-zero.
+        assert!(!Vignette {
+            midpoint: 10.0,
+            roundness: -100.0,
+            feather: 0.0,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(Vignette {
+            amount: -1.0,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(Vignette {
+            amount: 1.0,
+            ..Default::default()
+        }
+        .is_active());
+    }
+
+    #[test]
+    fn old_sidecar_without_vignette_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.vignette, Vignette::default());
+    }
+
+    #[test]
+    fn partial_vignette_json_keeps_modifier_defaults() {
+        let e: Edits = serde_json::from_str(r#"{"vignette": {"amount": -40.0}}"#).unwrap();
+        assert_eq!(e.vignette.amount, -40.0);
+        assert_eq!(e.vignette.midpoint, 50.0);
+        assert_eq!(e.vignette.feather, 50.0);
+        assert_eq!(e.vignette.roundness, 0.0);
+    }
+
+    #[test]
+    fn vignette_roundtrips_json() {
+        let e = Edits {
+            vignette: Vignette {
+                amount: -55.0,
+                midpoint: 30.0,
+                roundness: 80.0,
+                feather: 20.0,
             },
             ..Default::default()
         };
