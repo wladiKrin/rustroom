@@ -158,14 +158,14 @@ mod tests {
     fn band_centers_match_canonical_colors() {
         // The table must stay in sync with our own conversion, not an external source.
         let canonical: [[f32; 3]; 8] = [
-            [1.0, 0.0, 0.0], // Red      #FF0000
+            [1.0, 0.0, 0.0],                                  // Red      #FF0000
             [1.0, color::srgb_to_linear(128.0 / 255.0), 0.0], // Orange #FF8000
-            [1.0, 1.0, 0.0], // Yellow   #FFFF00
-            [0.0, 1.0, 0.0], // Green    #00FF00
-            [0.0, 1.0, 1.0], // Aqua     #00FFFF
-            [0.0, 0.0, 1.0], // Blue     #0000FF
+            [1.0, 1.0, 0.0],                                  // Yellow   #FFFF00
+            [0.0, 1.0, 0.0],                                  // Green    #00FF00
+            [0.0, 1.0, 1.0],                                  // Aqua     #00FFFF
+            [0.0, 0.0, 1.0],                                  // Blue     #0000FF
             [color::srgb_to_linear(128.0 / 255.0), 0.0, 1.0], // Purple #8000FF
-            [1.0, 0.0, 1.0], // Magenta  #FF00FF
+            [1.0, 0.0, 1.0],                                  // Magenta  #FF00FF
         ];
         for (i, rgb) in canonical.iter().enumerate() {
             let expected = hue_of(*rgb);

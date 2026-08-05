@@ -412,78 +412,107 @@ impl RustroomApp {
                 if self.pending.is_some() {
                     ui.disable();
                 }
-                if let Some(s) = &mut self.session {
-                    draw_histogram(ui, &s.hist);
-                    ui.separator();
-
-                    let mut changed = false;
-                    let mut settled = false;
-                    let mut slider = |ui: &mut egui::Ui, value: &mut f32, range, label| {
-                        let r = ui.add(egui::Slider::new(value, range).text(label));
-                        changed |= r.changed();
-                        settled |= r.drag_stopped();
-                    };
-                    slider(ui, &mut s.edits.white_balance.temp, -100.0..=100.0, "Temp");
-                    slider(ui, &mut s.edits.white_balance.tint, -100.0..=100.0, "Tint");
-                    slider(ui, &mut s.edits.exposure, -5.0..=5.0, "Exposure");
-                    slider(ui, &mut s.edits.contrast, -100.0..=100.0, "Contrast");
-                    slider(ui, &mut s.edits.highlights, -100.0..=100.0, "Highlights");
-                    slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
-                    slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
-                    slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
-                    slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
-                    slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
-
-                    ui.separator();
-                    if ui.button("Reset all").clicked() {
-                        s.edits = Edits::default();
-                        changed = true;
-                        settled = true;
-                    }
-
-                    if s.crop_mode {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if let Some(s) = &mut self.session {
+                        draw_histogram(ui, &s.hist);
                         ui.separator();
-                        ui.label("Crop");
-                        let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
-                        let presets: [(&str, Option<f32>); 5] = [
-                            ("Free", None),
-                            ("1:1", Some(1.0)),
-                            ("3:2", Some(1.5)),
-                            ("4:3", Some(4.0 / 3.0)),
-                            ("16:9", Some(16.0 / 9.0)),
-                        ];
-                        ui.horizontal(|ui| {
-                            for (label, pa) in presets {
-                                if ui.button(label).clicked() {
-                                    s.edits.geometry.crop = match pa {
-                                        Some(a) => crop_tool::snap_to_aspect(a / img_aspect),
-                                        None => edit_model::CropRect::default(),
-                                    };
-                                    settled = true;
-                                }
+
+                        let mut changed = false;
+                        let mut settled = false;
+                        let mut slider = |ui: &mut egui::Ui, value: &mut f32, range, label| {
+                            let r = ui.add(egui::Slider::new(value, range).text(label));
+                            changed |= r.changed();
+                            settled |= r.drag_stopped();
+                        };
+                        slider(ui, &mut s.edits.white_balance.temp, -100.0..=100.0, "Temp");
+                        slider(ui, &mut s.edits.white_balance.tint, -100.0..=100.0, "Tint");
+                        slider(ui, &mut s.edits.exposure, -5.0..=5.0, "Exposure");
+                        slider(ui, &mut s.edits.contrast, -100.0..=100.0, "Contrast");
+                        slider(ui, &mut s.edits.highlights, -100.0..=100.0, "Highlights");
+                        slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
+                        slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
+                        slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
+                        slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
+                        slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
+
+                        ui.separator();
+                        egui::CollapsingHeader::new("Hue").show(ui, |ui| {
+                            for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
+                                slider(ui, &mut s.edits.hsl.bands[i].hue, -100.0..=100.0, *name);
                             }
                         });
-                        let ar = ui.add(
-                            egui::Slider::new(&mut s.edits.geometry.angle, -45.0..=45.0)
-                                .text("Straighten"),
-                        );
-                        changed |= ar.changed();
-                        settled |= ar.drag_stopped();
-                    }
+                        egui::CollapsingHeader::new("Saturation").show(ui, |ui| {
+                            for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
+                                slider(
+                                    ui,
+                                    &mut s.edits.hsl.bands[i].saturation,
+                                    -100.0..=100.0,
+                                    *name,
+                                );
+                            }
+                        });
+                        egui::CollapsingHeader::new("Luminance").show(ui, |ui| {
+                            for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
+                                slider(
+                                    ui,
+                                    &mut s.edits.hsl.bands[i].luminance,
+                                    -100.0..=100.0,
+                                    *name,
+                                );
+                            }
+                        });
 
-                    if changed {
-                        s.engine
-                            .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
-                    }
-                    if settled {
-                        s.history.push(s.edits.clone());
-                    }
+                        ui.separator();
+                        if ui.button("Reset all").clicked() {
+                            s.edits = Edits::default();
+                            changed = true;
+                            settled = true;
+                        }
 
-                    ui.separator();
-                    ui.label(egui::RichText::new(&s.make_model).small());
-                } else {
-                    ui.label("No image open.");
-                }
+                        if s.crop_mode {
+                            ui.separator();
+                            ui.label("Crop");
+                            let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
+                            let presets: [(&str, Option<f32>); 5] = [
+                                ("Free", None),
+                                ("1:1", Some(1.0)),
+                                ("3:2", Some(1.5)),
+                                ("4:3", Some(4.0 / 3.0)),
+                                ("16:9", Some(16.0 / 9.0)),
+                            ];
+                            ui.horizontal(|ui| {
+                                for (label, pa) in presets {
+                                    if ui.button(label).clicked() {
+                                        s.edits.geometry.crop = match pa {
+                                            Some(a) => crop_tool::snap_to_aspect(a / img_aspect),
+                                            None => edit_model::CropRect::default(),
+                                        };
+                                        settled = true;
+                                    }
+                                }
+                            });
+                            let ar = ui.add(
+                                egui::Slider::new(&mut s.edits.geometry.angle, -45.0..=45.0)
+                                    .text("Straighten"),
+                            );
+                            changed |= ar.changed();
+                            settled |= ar.drag_stopped();
+                        }
+
+                        if changed {
+                            s.engine
+                                .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+                        }
+                        if settled {
+                            s.history.push(s.edits.clone());
+                        }
+
+                        ui.separator();
+                        ui.label(egui::RichText::new(&s.make_model).small());
+                    } else {
+                        ui.label("No image open.");
+                    }
+                });
             });
 
         if self.show_filmstrip && self.library.is_some() {

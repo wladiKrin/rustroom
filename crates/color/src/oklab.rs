@@ -3,6 +3,11 @@
 //! Used by the HSL stage: hue angles are perceptually even here, so band weighting is
 //! stable and a lightness change does not drag hue with it. Values may exceed 1.0
 //! (scene-referred); Oklab extends fine, and `cbrt` keeps negatives finite.
+//!
+//! The matrix coefficients are transcribed verbatim from Ottosson's reference values, which
+//! carry more digits than `f32` can hold. Keeping them intact makes them checkable against
+//! the source; truncating them by hand would only invite transcription errors.
+#![allow(clippy::excessive_precision)]
 
 /// Linear sRGB (Rec.709 primaries) → Oklab `[L, a, b]`.
 pub fn linear_srgb_to_oklab(rgb: [f32; 3]) -> [f32; 3] {
