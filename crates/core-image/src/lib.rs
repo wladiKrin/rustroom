@@ -123,6 +123,37 @@ impl ImageBuf {
         ImageBuf::from_vec(self.width, self.height, data)
     }
 
+    /// Return a new image with `f` applied to each RGB pixel *together with its `(x, y)`*,
+    /// dimensions preserved. For effects whose result depends on position — vignette today;
+    /// graduated and radial filters, and lens corrections, later.
+    ///
+    /// Parallel across rows: pixels are independent, so the result is identical to the
+    /// sequential one, bit for bit. `f` must therefore be `Sync + Send`.
+    pub fn map_pixels_xy<F: Fn(usize, usize, [f32; 3]) -> [f32; 3] + Sync + Send>(
+        &self,
+        f: F,
+    ) -> ImageBuf {
+        let row = self.width * Self::CHANNELS;
+        let mut data = vec![0.0f32; self.data.len()];
+        if row == 0 {
+            // `par_chunks_exact_mut(0)` panics.
+            return ImageBuf::from_vec(self.width, self.height, data);
+        }
+        data.par_chunks_exact_mut(row)
+            .zip(self.data.par_chunks_exact(row))
+            .enumerate()
+            .for_each(|(y, (orow, srow))| {
+                for (x, (out, px)) in orow
+                    .chunks_exact_mut(Self::CHANNELS)
+                    .zip(srow.chunks_exact(Self::CHANNELS))
+                    .enumerate()
+                {
+                    out.copy_from_slice(&f(x, y, [px[0], px[1], px[2]]));
+                }
+            });
+        ImageBuf::from_vec(self.width, self.height, data)
+    }
+
     /// Downscale so the longer edge is at most `max_dim`, preserving aspect ratio, using
     /// area averaging in the current (linear) light. Never upscales; returns a copy if
     /// already small enough or if `max_dim == 0`.
@@ -256,6 +287,38 @@ mod tests {
         assert_eq!(out.pixel(0, 0), [0.2, 0.4, 0.6]);
         assert_eq!(out.pixel(1, 0), [0.8, 1.0, 1.2]);
         assert_eq!((out.width(), out.height()), (2, 1));
+    }
+
+    #[test]
+    fn map_pixels_xy_supplies_coordinates() {
+        // Writing the coordinates into the output is the most direct possible assertion
+        // that each closure call got the right (x, y).
+        let img = ImageBuf::new(3, 2);
+        let out = img.map_pixels_xy(|x, y, _| [x as f32, y as f32, 0.0]);
+        assert_eq!((out.width(), out.height()), (3, 2));
+        for y in 0..2 {
+            for x in 0..3 {
+                assert_eq!(out.pixel(x, y), [x as f32, y as f32, 0.0], "at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn map_pixels_xy_can_read_the_source_pixel() {
+        let mut img = ImageBuf::new(2, 1);
+        img.set_pixel(0, 0, [0.1, 0.2, 0.3]);
+        img.set_pixel(1, 0, [0.4, 0.5, 0.6]);
+        let out = img.map_pixels_xy(|x, _, rgb| [rgb[0] + x as f32, rgb[1], rgb[2]]);
+        assert_eq!(out.pixel(0, 0), [0.1, 0.2, 0.3]);
+        assert_eq!(out.pixel(1, 0), [1.4, 0.5, 0.6]);
+    }
+
+    #[test]
+    fn map_pixels_xy_handles_a_zero_width_image() {
+        // `par_chunks_exact_mut(0)` panics, so the empty case needs its own path.
+        let out = ImageBuf::new(0, 0).map_pixels_xy(|_, _, rgb| rgb);
+        assert_eq!((out.width(), out.height()), (0, 0));
+        assert!(out.data().is_empty());
     }
 
     #[test]
