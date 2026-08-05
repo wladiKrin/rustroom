@@ -4,7 +4,7 @@
 //! output must match the committed PNG within `TOL` per channel.
 
 use core_image::ImageBuf;
-use edit_model::{Edits, ToneCurve, WhiteBalance};
+use edit_model::{Edits, NoiseReduction, ToneCurve, WhiteBalance};
 use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
 
@@ -84,6 +84,52 @@ fn hue_sweep_chart() -> ImageBuf {
                     color::srgb_to_linear(srgb[0]),
                     color::srgb_to_linear(srgb[1]),
                     color::srgb_to_linear(srgb[2]),
+                ],
+            );
+        }
+    }
+    img
+}
+
+/// Deterministic noisy chart for the noise-reduction cases: three stacked regions — flat
+/// gray, flat color, and a hard black/white vertical edge — all under per-channel
+/// xorshift noise. One reference image therefore covers smoothing, chroma handling and
+/// edge preservation at once.
+///
+/// Much larger than the other charts, and deliberately so. Each region is 64 px tall
+/// because the chroma blur's window reaches 41 px across at Smoothness 50 (65 px at 100):
+/// on shorter bands the reference would mostly record chroma bleeding between regions
+/// rather than noise being removed inside one. Bleed across a strong color edge is real
+/// and documented, but it is not what these three cases exist to pin down.
+fn noise_chart() -> ImageBuf {
+    const NW: usize = 128;
+    const NH: usize = 192;
+    let mut state: u32 = 0x9E37_79B9;
+    let mut noise = move || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        ((state as f32 / u32::MAX as f32) * 2.0 - 1.0) * 0.03
+    };
+    let mut img = ImageBuf::new(NW, NH);
+    for y in 0..NH {
+        for x in 0..NW {
+            let base = if y < NH / 3 {
+                [0.35, 0.35, 0.35]
+            } else if y < 2 * NH / 3 {
+                [0.35, 0.18, 0.12]
+            } else if x < NW / 2 {
+                [0.05, 0.05, 0.05]
+            } else {
+                [0.75, 0.75, 0.75]
+            };
+            img.set_pixel(
+                x,
+                y,
+                [
+                    (base[0] + noise()).max(0.0),
+                    (base[1] + noise()).max(0.0),
+                    (base[2] + noise()).max(0.0),
                 ],
             );
         }
@@ -318,4 +364,53 @@ fn golden_hsl_green_luminance() {
         },
         hue_sweep_chart(),
     )
+}
+
+#[test]
+fn golden_nr_luminance() {
+    check_golden_with(
+        "nr_luminance",
+        &Edits {
+            noise_reduction: NoiseReduction {
+                luminance: 80.0,
+                detail: 50.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+        noise_chart(),
+    );
+}
+
+#[test]
+fn golden_nr_color() {
+    check_golden_with(
+        "nr_color",
+        &Edits {
+            noise_reduction: NoiseReduction {
+                color: 80.0,
+                smoothness: 50.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+        noise_chart(),
+    );
+}
+
+#[test]
+fn golden_nr_both() {
+    check_golden_with(
+        "nr_both",
+        &Edits {
+            noise_reduction: NoiseReduction {
+                luminance: 60.0,
+                detail: 40.0,
+                color: 80.0,
+                smoothness: 60.0,
+            },
+            ..Edits::default()
+        },
+        noise_chart(),
+    );
 }
