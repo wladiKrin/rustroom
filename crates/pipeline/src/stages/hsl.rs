@@ -11,6 +11,14 @@ const BAND_HUES: [f32; 8] = [29.23, 52.98, 109.77, 142.50, 194.77, 264.05, 293.9
 
 /// Below this chroma a pixel is neutral: it has no meaningful hue to band-match.
 const EPS: f32 = 1e-6;
+/// Adjustments fade in over this chroma range. A near-neutral pixel's hue is dominated by
+/// sensor noise (measured chroma ~0.003 for ±0.6% noise), so neighbouring pixels would land
+/// in different bands and get different treatment — visible speckle, worst on bright
+/// low-saturation detail. Real colors sit far above this (a warm hair pixel is ~0.06), so
+/// they keep full strength. The cost is that genuinely pastel colors respond less, which is
+/// the honest behavior: you cannot meaningfully "select the orange" in something barely
+/// orange.
+const CHROMA_FADE: f32 = 0.02;
 /// Hue slider at ±100 rotates by this many degrees.
 const MAX_HUE_SHIFT_DEG: f32 = 30.0;
 
@@ -79,6 +87,13 @@ impl PipelineStage for HslStage {
                 sat += w[i] * bands[i].saturation;
                 lum += w[i] * bands[i].luminance;
             }
+
+            // Fade the whole adjustment out as chroma approaches zero, where hue is noise.
+            let t = (chroma / CHROMA_FADE).min(1.0);
+            let strength = t * t * (3.0 - 2.0 * t); // smoothstep
+            dh *= strength;
+            sat *= strength;
+            lum *= strength;
 
             let hue2 = (hue + dh * MAX_HUE_SHIFT_DEG / 100.0).to_radians();
             let chroma2 = (chroma * (1.0 + sat / 100.0)).max(0.0);
@@ -242,6 +257,83 @@ mod tests {
         let l = |rgb: [f32; 3]| linear_srgb_to_oklab(rgb)[0];
         assert!(l(apply_one(&up, BLUE_ISH)) > l(BLUE_ISH) * 1.2);
         assert!(l(apply_one(&down, BLUE_ISH)) < l(BLUE_ISH) * 0.8);
+    }
+
+    /// xorshift32, so the noise below is decorrelated across channels.
+    struct Rng(u32);
+    impl Rng {
+        fn next_signed(&mut self) -> f32 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            self.0 = x;
+            (x as f32 / u32::MAX as f32) * 2.0 - 1.0
+        }
+    }
+
+    /// A 64x64 patch of `base` plus per-channel noise, and its sample standard deviation.
+    fn noisy_patch(base: [f32; 3], amp: f32) -> ImageBuf {
+        let mut rng = Rng(0x1234_5678);
+        let mut img = ImageBuf::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                img.set_pixel(
+                    x,
+                    y,
+                    [
+                        base[0] + amp * rng.next_signed(),
+                        base[1] + amp * rng.next_signed(),
+                        base[2] + amp * rng.next_signed(),
+                    ],
+                );
+            }
+        }
+        img
+    }
+
+    fn sd(img: &ImageBuf) -> f32 {
+        let d = img.data();
+        let mean = d.iter().sum::<f32>() / d.len() as f32;
+        (d.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / d.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn near_neutral_noise_is_not_amplified() {
+        // A near-neutral pixel's hue is pure sensor noise (chroma ~0.003 in Oklab), so
+        // applying a band adjustment at full strength makes neighbouring pixels land in
+        // different bands — visible speckle. The chroma taper must suppress that.
+        let mut hsl = Hsl::default();
+        hsl.bands[1].luminance = 60.0; // Orange
+        let src = noisy_patch([0.55, 0.55, 0.55], 0.006);
+        let before = sd(&src);
+        let after = sd(&HslStage::new(&hsl).apply(src));
+        assert!(
+            after < before * 1.5,
+            "noise sd {before} -> {after} ({}x amplification)",
+            after / before
+        );
+    }
+
+    #[test]
+    fn saturated_colors_keep_full_strength() {
+        // The chroma taper must not weaken adjustments on genuinely colored pixels.
+        // Chroma rather than lightness: a x1.5 lightness boost at fixed chroma leaves sRGB
+        // gamut and gets clamped, which would measure a shortfall that has nothing to do
+        // with the taper.
+        let mut hsl = Hsl::default();
+        hsl.bands[5].saturation = 50.0; // Blue
+        let out = apply_one(&hsl, BLUE_ISH);
+        // BLUE_ISH sits between the Blue and Aqua centers, so only Blue's share of the
+        // weight applies. Folding that in makes this a precise assertion that the chroma
+        // taper leaves strength at 1 for a genuinely colored pixel.
+        let share = band_weights(hue_of(BLUE_ISH))[5];
+        let expected = chroma_of(BLUE_ISH) * (1.0 + share * 50.0 / 100.0);
+        assert!(
+            (chroma_of(out) - expected).abs() < expected * 0.02,
+            "chroma {} vs expected {expected}",
+            chroma_of(out)
+        );
     }
 
     #[test]
