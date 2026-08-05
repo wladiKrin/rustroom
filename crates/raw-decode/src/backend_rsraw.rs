@@ -9,6 +9,9 @@ const U16_MAX_F: f32 = u16::MAX as f32;
 pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> {
     let mut raw =
         RawImage::open(bytes).map_err(|e| DecodeError::Backend(format!("open: {e:?}")))?;
+    // The camera orientation libraw would apply during a full decode; embedded thumbnails
+    // are stored unrotated, so we have to apply it ourselves to match.
+    let flip = raw.as_ref().sizes.flip;
     let thumbs = raw
         .extract_thumbs()
         .map_err(|e| DecodeError::Backend(format!("thumbs: {e:?}")))?;
@@ -43,7 +46,8 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
     };
 
     // Downscale to a modest size — the grid draws these at ~160 px, so full-res is wasteful.
-    let scaled = dynimg.thumbnail(THUMB_MAX_DIM, THUMB_MAX_DIM).to_rgba8();
+    // Rotate after downscaling: same result, a fraction of the pixels to move.
+    let scaled = apply_flip(dynimg.thumbnail(THUMB_MAX_DIM, THUMB_MAX_DIM), flip).to_rgba8();
     Ok(Thumbnail {
         width: scaled.width() as usize,
         height: scaled.height() as usize,
@@ -107,4 +111,69 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     };
 
     Ok(DecodedRaw { image, metadata })
+}
+
+/// Apply libraw's camera orientation code to an embedded thumbnail.
+///
+/// `decode` gets this for free — libraw rotates during `dcraw_process` — but embedded
+/// thumbnails come out of the file unrotated, so a portrait shot would show up sideways in
+/// the grid, the filmstrip and the decode placeholder. Using libraw's own `sizes.flip` keeps
+/// thumbnail and decode on one source of truth instead of parsing the thumbnail's EXIF.
+///
+/// Codes follow the dcraw convention: 0 = none, 3 = 180°, 5 = 90° CCW, 6 = 90° CW.
+fn apply_flip(img: image::DynamicImage, flip: i32) -> image::DynamicImage {
+    match flip {
+        3 => img.rotate180(),
+        5 => img.rotate270(),
+        6 => img.rotate90(),
+        _ => img,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, Rgb, RgbImage};
+
+    /// 2x1 image: left pixel red, right pixel blue.
+    fn wide() -> DynamicImage {
+        let mut img = RgbImage::new(2, 1);
+        img.put_pixel(0, 0, Rgb([255, 0, 0]));
+        img.put_pixel(1, 0, Rgb([0, 0, 255]));
+        DynamicImage::ImageRgb8(img)
+    }
+
+    #[test]
+    fn flip_zero_and_unknown_codes_are_identity() {
+        for code in [0, 1, 2, 4, 7, -1] {
+            let out = apply_flip(wide(), code);
+            assert_eq!((out.width(), out.height()), (2, 1), "code {code}");
+        }
+    }
+
+    #[test]
+    fn flip_180_keeps_dimensions_and_swaps_ends() {
+        let out = apply_flip(wide(), 3).to_rgb8();
+        assert_eq!(out.dimensions(), (2, 1));
+        assert_eq!(out.get_pixel(0, 0), &Rgb([0, 0, 255]));
+        assert_eq!(out.get_pixel(1, 0), &Rgb([255, 0, 0]));
+    }
+
+    #[test]
+    fn flip_5_rotates_90_ccw() {
+        let out = apply_flip(wide(), 5).to_rgb8();
+        assert_eq!(out.dimensions(), (1, 2), "portrait after rotation");
+        // Rotating counter-clockwise sends the right-hand (blue) pixel to the top.
+        assert_eq!(out.get_pixel(0, 0), &Rgb([0, 0, 255]));
+        assert_eq!(out.get_pixel(0, 1), &Rgb([255, 0, 0]));
+    }
+
+    #[test]
+    fn flip_6_rotates_90_cw() {
+        let out = apply_flip(wide(), 6).to_rgb8();
+        assert_eq!(out.dimensions(), (1, 2), "portrait after rotation");
+        // Clockwise sends the left-hand (red) pixel to the top.
+        assert_eq!(out.get_pixel(0, 0), &Rgb([255, 0, 0]));
+        assert_eq!(out.get_pixel(0, 1), &Rgb([0, 0, 255]));
+    }
 }

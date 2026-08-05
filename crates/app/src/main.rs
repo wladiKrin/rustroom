@@ -802,11 +802,17 @@ fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option
         return;
     };
 
-    let avail = ui.available_size();
+    // Lay the placeholder out where the decoded preview will land, so the swap happens in
+    // place instead of snapping: the preview's long side is exactly PREVIEW_MAX_DIM, so
+    // predict that size from this texture's aspect and then apply the session's fit rule.
     let tex_size = tex.size_vec2();
-    // No `.min(1.0)` here: a 512 px thumbnail must scale *up* to fill the canvas.
-    let fit = (avail.x / tex_size.x).min(avail.y / tex_size.y);
-    let rect = egui::Rect::from_center_size(ui.max_rect().center(), tex_size * fit);
+    let long = tex_size.x.max(tex_size.y).max(1.0);
+    let preview_size = tex_size * (PREVIEW_MAX_DIM as f32 / long);
+    let avail = ui.available_size();
+    let fit = (avail.x / preview_size.x)
+        .min(avail.y / preview_size.y)
+        .min(1.0);
+    let rect = egui::Rect::from_center_size(ui.max_rect().center(), preview_size * fit);
     egui::Image::new(tex).paint_at(ui, rect);
 
     if !showing_placeholder {
