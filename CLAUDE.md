@@ -61,12 +61,12 @@ opensource_lightroom/
 ├── Cargo.toml                # [workspace]
 ├── CLAUDE.md                 # this file
 ├── crates/
-│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples/map_pixels/crop/downscale_to + Thumbnail
+│   ├── core-image/           # ✅ ImageBuf (f32 RGB) + map_samples/map_pixels (rayon-parallel) /crop/downscale_to + Thumbnail
 │   ├── raw-decode/           # ✅ libraw(rsraw); DecodeOptions{linear_scene,display,preview(half_size)}; extract_thumbnail
 │   ├── image-decode/         # ✅ JPEG/PNG/TIFF → linear ImageBuf (image + srgb_to_linear) + thumbnail
-│   ├── color/                # ✅ sRGB transfer fns (lcms2/ICC still deferred)
+│   ├── color/                # ✅ sRGB transfer fns + Oklab (lcms2/ICC still deferred)
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/geometry)
-│   ├── pipeline/             # ✅ PipelineStage + 8 stages (incl. geometry, saturation) + build_pipeline + golden tests
+│   ├── pipeline/             # ✅ PipelineStage + 9 stages (incl. geometry, saturation, hsl) + build_pipeline + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
 │   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache
@@ -88,7 +88,24 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Commit messages carry no `Co-Authored-By` trailer** (user's explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **Two candidate next tasks (user's pick):** (1) **more color adjustments** — HSL (per-hue hue/sat/lum) or vignette, following `stages/saturation.rs` as the template; or (2) **preview-cache perf** — cache the downscaled preview so a slider edit reruns only the pipeline (~28 ms) instead of the downscale too (~42 ms total today). Either is a new feature → brainstorm → spec → plan → executing-plans (all inline, per the workflow used all session). Design/plan docs live in `docs/superpowers/`.
+> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Commit messages carry no `Co-Authored-By` trailer** (user's explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **Two candidate next tasks (user's pick):** (1) **noise reduction** — the missing `detail` stage; it's what keeps HSL/luminance edits clean on high-ISO files (Lightroom defaults Color NR to 25 on every RAW; we have none), and it's the biggest remaining quality gap; or (2) **vignette** — another small color/effect stage on the `stages/hsl.rs` template. Either is a new feature → brainstorm → spec → plan → executing-plans (all inline, per the workflow used all session). Design/plan docs live in `docs/superpowers/`.
+
+**HSL done (per-hue color), plus rayon-parallel pixel maps.**
+- **`color::oklab`** — `linear_srgb_to_oklab` / `oklab_to_linear_srgb` (Ottosson matrices; `#![allow(clippy::excessive_precision)]` keeps the reference digits verbatim). Round-trips to ~5e-7, including scene-referred values above 1.0.
+- **`HslStage`** (`stages/hsl.rs`) — 8 bands × Hue/Saturation/Luminance in Oklab. Per pixel: hue = `atan2(b, a)`, the **two bracketing band centers get a smoothstep blend** (weights always sum to 1 → setting all 8 bands equally equals the global adjustment, asserted by a test). Ranges: hue ±100 → ±30°, saturation ±100 → chroma ×0…×2, luminance ±100 → L ×0.5…×1.5.
+- **`BAND_HUES`** = Oklab hue angles of the canonical sRGB colors — Red 29.23, Orange 52.98, Yellow 109.77, Green 142.50, Aqua 194.77, Blue 264.05, Purple 293.94, Magenta 328.36. `band_centers_match_canonical_colors` recomputes them from `#FF0000`…`#FF00FF` and fails if the table drifts: **fix the table, never the tolerance.**
+- **Chroma taper (`CHROMA_FADE = 0.02`)** — adjustments fade out via smoothstep as chroma → 0. Without it, a near-neutral pixel's hue is pure sensor noise (chroma ~0.003 at ±0.6% noise vs ~0.06 for a real color), so neighbours landed in different bands and got different treatment: **measured 37.8× noise amplification** on a near-neutral patch, visible as speckle in bright hair/sky. With the taper: **1.03×**, while a genuinely colored patch keeps its full 1.58× effect and all goldens stay byte-identical. Trade-off: pastel colors respond less. Residual grain amplification on noisy files is expected until an NR stage exists — Lightroom behaves the same without NR.
+- `Edits.hsl` = `Hsl { bands: [HslBand; 8] }` + `HSL_BAND_NAMES` (shared by stage and UI). Sidecar stores bands **positionally**, so that order is part of the file format. Three `CollapsingHeader` groups (Hue/Saturation/Luminance) in the right panel, which gained an `egui::ScrollArea` to fit them.
+- Goldens now **14**: `hsl_red_desaturated` / `hsl_blue_hue_shift` / `hsl_green_luminance` on a new `hue_sweep_chart()` (the primaries-and-gray charts can't exercise bands).
+- **`ImageBuf::map_samples` / `map_pixels` are now rayon-parallel** (`F: Fn(..) + Sync + Send`). Pixels are independent, so output is bit-identical — proven by the 14 goldens passing unchanged. Measured on the 1600×1068 preview, 8 cores (cold / warm):
+
+  | pipeline | before rayon | after |
+  |---|---|---|
+  | neutral (output transform only) | 33.7 ms | 14.0 / 7.8 ms |
+  | with HSL stage | 209.7 ms | 47.7 / 40.7 ms |
+  | 5 stages + HSL | — | 51.6 / 55.4 ms |
+
+  HSL is still the most expensive stage by far (Oklab round trip + `atan2`/`cos`/`sin` per pixel); a hue LUT is the obvious next optimization if it ever matters. `downscale_to` (~14 ms) is still sequential.
 
 **Snappy RAW switching done (photo switching never blocks the UI).** Two new `app` lib modules:
 - `decode_worker::DecodeWorker` — **thread per request**, capped at `MAX_CONCURRENT_DECODES = 2`, with a one-slot queue that keeps only the newest request. Each result carries a monotonic `seq`; the app ignores stale ones. The decode fn is **injected** (`DecodeWorker::new(decode_for_edit, …)`) so its 4 unit tests run without libraw. The worker also renders the neutral **baseline frame** while it holds the buffer, keeping that off the UI thread.
@@ -173,8 +190,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** **rounded-out Develop** — saturation/vibrance landed; HSL (per-hue) and vignette are the natural follow-ups, using `stages/saturation.rs` as the template. Photo switching is threaded + cached; the remaining perf win is caching the downscaled preview so a slider edit reruns only the pipeline. A nicer placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) is a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
+**Next step:** **rounded-out Develop** — saturation/vibrance and HSL landed; vignette is the natural remaining small stage. The biggest quality gap is now **noise reduction** (the `detail` stage in the pipeline order above is still unbuilt), which is what makes per-hue luminance edits clean on high-ISO files. Photo switching is threaded + cached; the remaining perf win is caching the downscaled preview so a slider edit reruns only the pipeline. A nicer placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) is a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`, `2026-08-05-hsl-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`, `2026-08-05-hsl.md`.
 
 _Update this "Current status" section as milestones land._
