@@ -473,6 +473,13 @@ impl RustroomApp {
                             slider(ui, &mut nr.color, 0.0..=100.0, "Color");
                             slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
                         });
+                        egui::CollapsingHeader::new("Vignette").show(ui, |ui| {
+                            let v = &mut s.edits.vignette;
+                            slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
+                            slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
+                            slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
+                            slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
+                        });
 
                         ui.separator();
                         if ui.button("Reset all").clicked() {
