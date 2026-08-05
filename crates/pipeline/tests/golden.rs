@@ -52,6 +52,45 @@ fn muted_chart() -> ImageBuf {
     img
 }
 
+/// Minimal HSV → sRGB (all components 0..1), used to build the hue-sweep chart.
+fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let c = v * s;
+    let hp = (h % 360.0) / 60.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
+
+/// Deterministic linear chart sweeping the full hue circle across x at fixed saturation and
+/// value — every band gets exercised, which the primaries-and-gray charts cannot do.
+fn hue_sweep_chart() -> ImageBuf {
+    let mut img = ImageBuf::new(W, H);
+    for y in 0..H {
+        for x in 0..W {
+            let hue = x as f32 / W as f32 * 360.0;
+            let srgb = hsv_to_srgb(hue, 0.9, 0.8);
+            img.set_pixel(
+                x,
+                y,
+                [
+                    color::srgb_to_linear(srgb[0]),
+                    color::srgb_to_linear(srgb[1]),
+                    color::srgb_to_linear(srgb[2]),
+                ],
+            );
+        }
+    }
+    img
+}
+
 fn to_rgb8(img: &ImageBuf) -> Vec<u8> {
     img.data()
         .iter()
@@ -236,5 +275,47 @@ fn golden_straighten_5deg() {
             },
             ..Edits::default()
         },
+    )
+}
+
+#[test]
+fn golden_hsl_red_desaturated() {
+    let mut hsl = edit_model::Hsl::default();
+    hsl.bands[0].saturation = -100.0; // Red
+    check_golden_with(
+        "hsl_red_desaturated",
+        &Edits {
+            hsl,
+            ..Edits::default()
+        },
+        hue_sweep_chart(),
+    )
+}
+
+#[test]
+fn golden_hsl_blue_hue_shift() {
+    let mut hsl = edit_model::Hsl::default();
+    hsl.bands[5].hue = 100.0; // Blue, +30°
+    check_golden_with(
+        "hsl_blue_hue_shift",
+        &Edits {
+            hsl,
+            ..Edits::default()
+        },
+        hue_sweep_chart(),
+    )
+}
+
+#[test]
+fn golden_hsl_green_luminance() {
+    let mut hsl = edit_model::Hsl::default();
+    hsl.bands[3].luminance = 60.0; // Green
+    check_golden_with(
+        "hsl_green_luminance",
+        &Edits {
+            hsl,
+            ..Edits::default()
+        },
+        hue_sweep_chart(),
     )
 }
