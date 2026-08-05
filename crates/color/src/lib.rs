@@ -4,6 +4,9 @@
 //! (ICC / lcms2-based profile conversions are deferred until camera input profiles or
 //! display output profiles are needed; see the Phase 1 plan's Scope note.)
 
+pub mod oklab;
+pub use oklab::{linear_srgb_to_oklab, oklab_to_linear_srgb};
+
 /// Encode a linear-light sample to sRGB (the sRGB OETF). Input is clamped to `[0, 1]`.
 pub fn linear_to_srgb(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
