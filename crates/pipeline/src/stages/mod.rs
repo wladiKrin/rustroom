@@ -2,6 +2,7 @@ pub mod contrast;
 pub mod exposure;
 pub mod geometry;
 pub mod hsl;
+pub mod noise_reduction;
 pub mod output_transform;
 pub mod saturation;
 pub mod tone_curve;

@@ -11,6 +11,7 @@ pub use stages::contrast::ContrastStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
+pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::saturation::SaturationStage;
 pub use stages::tone_curve::ToneCurveStage;
