@@ -77,6 +77,45 @@ pub const HSL_BAND_NAMES: [&str; 8] = [
     "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
 ];
 
+/// Noise reduction. The two strengths are 0..100 and default to 0 (off); `detail` and
+/// `smoothness` are quality modifiers that default to 50 and do nothing on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NoiseReduction {
+    /// Luminance NR strength, 0..100. 0 = off.
+    pub luminance: f32,
+    /// How hard luminance detail is protected, 0..100. Higher keeps more texture — and
+    /// more noise with it. Inert while `luminance` is 0.
+    pub detail: f32,
+    /// Color (chroma) NR strength, 0..100. 0 = off.
+    pub color: f32,
+    /// Chroma blur radius, 0..100. Higher removes larger color blotches. Inert while
+    /// `color` is 0.
+    pub smoothness: f32,
+}
+
+impl Default for NoiseReduction {
+    fn default() -> Self {
+        Self {
+            luminance: 0.0,
+            detail: 50.0,
+            color: 0.0,
+            smoothness: 50.0,
+        }
+    }
+}
+
+impl NoiseReduction {
+    /// True when these settings actually change pixels.
+    ///
+    /// Deliberately *not* `self != &Self::default()`: `detail` and `smoothness` only
+    /// modify how the two strengths behave, so moving one on its own must not insert a
+    /// stage into the pipeline.
+    pub fn is_active(&self) -> bool {
+        self.luminance > 0.0 || self.color > 0.0
+    }
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -102,6 +141,7 @@ pub struct Edits {
     /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
     pub vibrance: f32,
     pub hsl: Hsl,
+    pub noise_reduction: NoiseReduction,
     pub geometry: Geometry,
 }
 
@@ -210,6 +250,72 @@ mod tests {
         let e = Edits {
             saturation: 25.0,
             vibrance: -40.0,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn noise_reduction_defaults_to_off_with_midpoint_modifiers() {
+        let nr = NoiseReduction::default();
+        assert_eq!(nr.luminance, 0.0);
+        assert_eq!(nr.color, 0.0);
+        // The two modifiers sit at their midpoint, not zero: they describe *how* to
+        // denoise, and zero would mean "smooth everything" / "smallest radius".
+        assert_eq!(nr.detail, 50.0);
+        assert_eq!(nr.smoothness, 50.0);
+        assert_eq!(Edits::default().noise_reduction, nr);
+    }
+
+    #[test]
+    fn noise_reduction_is_active_only_when_a_strength_is_up() {
+        assert!(!NoiseReduction::default().is_active());
+        // Modifiers alone must NOT activate the stage — otherwise dragging Detail would
+        // insert a stage that costs an Oklab round trip and changes nothing.
+        assert!(!NoiseReduction {
+            detail: 100.0,
+            smoothness: 0.0,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(NoiseReduction {
+            luminance: 1.0,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(NoiseReduction {
+            color: 1.0,
+            ..Default::default()
+        }
+        .is_active());
+    }
+
+    #[test]
+    fn old_sidecar_without_noise_reduction_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.noise_reduction, NoiseReduction::default());
+    }
+
+    #[test]
+    fn partial_noise_reduction_json_keeps_modifier_defaults() {
+        let e: Edits = serde_json::from_str(r#"{"noise_reduction": {"color": 40.0}}"#).unwrap();
+        assert_eq!(e.noise_reduction.color, 40.0);
+        assert_eq!(e.noise_reduction.luminance, 0.0);
+        assert_eq!(e.noise_reduction.detail, 50.0);
+        assert_eq!(e.noise_reduction.smoothness, 50.0);
+    }
+
+    #[test]
+    fn noise_reduction_roundtrips_json() {
+        let e = Edits {
+            noise_reduction: NoiseReduction {
+                luminance: 30.0,
+                detail: 70.0,
+                color: 55.0,
+                smoothness: 20.0,
+            },
             ..Default::default()
         };
         let json = serde_json::to_string(&e).unwrap();
