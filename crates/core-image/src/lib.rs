@@ -1,5 +1,7 @@
 //! Core image container: interleaved f32 RGB, scene-referred linear working space.
 
+use rayon::prelude::*;
+
 /// An interleaved RGB image with `f32` samples in linear light (typically `0.0..=1.0`,
 /// but values may exceed 1.0 for scene-referred highlights).
 #[derive(Debug, Clone, PartialEq)]
@@ -77,8 +79,14 @@ impl ImageBuf {
     }
 
     /// Return a new image with `f` applied to every sample (all channels), dimensions preserved.
-    pub fn map_samples<F: Fn(f32) -> f32>(&self, f: F) -> ImageBuf {
-        let data = self.data.iter().map(|&s| f(s)).collect();
+    ///
+    /// Parallel across cores: every sample is independent, so the result is identical to the
+    /// sequential one, bit for bit. `f` must therefore be `Sync + Send`.
+    pub fn map_samples<F: Fn(f32) -> f32 + Sync + Send>(&self, f: F) -> ImageBuf {
+        let mut data = vec![0.0f32; self.data.len()];
+        data.par_iter_mut()
+            .zip(self.data.par_iter())
+            .for_each(|(out, &s)| *out = f(s));
         ImageBuf::from_vec(self.width, self.height, data)
     }
 
@@ -102,14 +110,16 @@ impl ImageBuf {
     }
 
     /// Return a new image with `f` applied to each RGB pixel, dimensions preserved.
-    pub fn map_pixels<F: Fn([f32; 3]) -> [f32; 3]>(&self, f: F) -> ImageBuf {
-        let mut data = Vec::with_capacity(self.data.len());
-        for px in self.data.chunks_exact(Self::CHANNELS) {
-            let [r, g, b] = f([px[0], px[1], px[2]]);
-            data.push(r);
-            data.push(g);
-            data.push(b);
-        }
+    ///
+    /// Parallel across cores: pixels are independent, so the result is identical to the
+    /// sequential one, bit for bit. `f` must therefore be `Sync + Send`.
+    pub fn map_pixels<F: Fn([f32; 3]) -> [f32; 3] + Sync + Send>(&self, f: F) -> ImageBuf {
+        let mut data = vec![0.0f32; self.data.len()];
+        data.par_chunks_exact_mut(Self::CHANNELS)
+            .zip(self.data.par_chunks_exact(Self::CHANNELS))
+            .for_each(|(out, px)| {
+                out.copy_from_slice(&f([px[0], px[1], px[2]]));
+            });
         ImageBuf::from_vec(self.width, self.height, data)
     }
 
