@@ -16,6 +16,7 @@ pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::saturation::SaturationStage;
 pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
+pub use stages::vignette::VignetteStage;
 pub use stages::white_balance::WhiteBalanceStage;
 
 /// Ratio of the image being rendered to the full-resolution original: `1.0` at full res,

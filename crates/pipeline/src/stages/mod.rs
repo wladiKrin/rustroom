@@ -7,4 +7,5 @@ pub mod output_transform;
 pub mod saturation;
 pub mod tone_curve;
 pub mod tone_regions;
+pub mod vignette;
 pub mod white_balance;
