@@ -4,7 +4,7 @@
 //! output must match the committed PNG within `TOL` per channel.
 
 use core_image::ImageBuf;
-use edit_model::{Edits, NoiseReduction, ToneCurve, WhiteBalance};
+use edit_model::{Edits, NoiseReduction, ToneCurve, Vignette, WhiteBalance};
 use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
 
@@ -413,4 +413,32 @@ fn golden_nr_both() {
         },
         noise_chart(),
     );
+}
+
+/// Amount is the same in all three cases so the references differ only by shape — which is
+/// the thing worth regression-testing here.
+fn vignette(roundness: f32) -> Edits {
+    Edits {
+        vignette: Vignette {
+            amount: -60.0,
+            roundness,
+            ..Default::default()
+        },
+        ..Edits::default()
+    }
+}
+
+#[test]
+fn golden_vignette_darken() {
+    check_golden("vignette_darken", &vignette(0.0));
+}
+
+#[test]
+fn golden_vignette_circle() {
+    check_golden("vignette_circle", &vignette(100.0));
+}
+
+#[test]
+fn golden_vignette_square() {
+    check_golden("vignette_square", &vignette(-100.0));
 }
