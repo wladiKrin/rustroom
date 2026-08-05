@@ -21,6 +21,9 @@ pub struct Decoded {
     pub label: String,
     /// Neutral-edits render, used for the before/after baseline texture.
     pub baseline: RenderedFrame,
+    /// Size of `buffer` relative to a full-resolution decode — 0.5 for a half-size RAW
+    /// decode. The render engine needs it to scale the spatial stages' radii.
+    pub source_scale: f32,
 }
 
 /// The outcome of one decode request.
@@ -31,7 +34,9 @@ pub struct DecodeResult {
     pub outcome: Result<Arc<Decoded>, String>,
 }
 
-type DecodeFn = Arc<dyn Fn(&Path) -> Result<(ImageBuf, String), String> + Send + Sync>;
+/// Decodes a file into a linear editing buffer, a display label, and the buffer's size
+/// relative to a full-resolution decode of the same file (0.5 for half-size RAW).
+type DecodeFn = Arc<dyn Fn(&Path) -> Result<(ImageBuf, String, f32), String> + Send + Sync>;
 
 struct Request {
     seq: u64,
@@ -56,7 +61,7 @@ impl DecodeWorker {
     /// `decode` is injected so tests can drive the worker without libraw. `on_done` runs on
     /// the worker thread after each result (e.g. `ctx.request_repaint`).
     pub fn new(
-        decode: impl Fn(&Path) -> Result<(ImageBuf, String), String> + Send + Sync + 'static,
+        decode: impl Fn(&Path) -> Result<(ImageBuf, String, f32), String> + Send + Sync + 'static,
         max_concurrent: usize,
         on_done: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -114,13 +119,14 @@ impl DecodeWorker {
         let tx = self.res_tx.clone();
         self.in_flight += 1;
         std::thread::spawn(move || {
-            let outcome = decode(&req.path).map(|(image, label)| {
+            let outcome = decode(&req.path).map(|(image, label, source_scale)| {
                 let buffer = Arc::new(image);
-                let baseline = render_once(&buffer, &Edits::default(), req.max_dim);
+                let baseline = render_once(&buffer, &Edits::default(), req.max_dim, source_scale);
                 Arc::new(Decoded {
                     buffer,
                     label,
                     baseline,
+                    source_scale,
                 })
             });
             let _ = tx.send(DecodeResult {
@@ -139,14 +145,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    fn tiny_decode(_path: &Path) -> Result<(ImageBuf, String), String> {
+    fn tiny_decode(_path: &Path) -> Result<(ImageBuf, String, f32), String> {
         let mut img = ImageBuf::new(8, 8);
         for y in 0..8 {
             for x in 0..8 {
                 img.set_pixel(x, y, [0.5, 0.5, 0.5]);
             }
         }
-        Ok((img, "FAKE".to_string()))
+        Ok((img, "FAKE".to_string(), 1.0))
     }
 
     /// Poll until `n` results have arrived (or 5 s elapse).
@@ -169,6 +175,7 @@ mod tests {
         assert_eq!(got[0].seq, seq);
         let d = got[0].outcome.as_ref().expect("decode should succeed");
         assert_eq!(d.label, "FAKE");
+        assert_eq!(d.source_scale, 1.0);
         assert_eq!(d.buffer.width(), 8);
         // The baseline is rendered at max_dim, i.e. the 8x8 buffer downscaled to 4x4.
         assert_eq!((d.baseline.width, d.baseline.height), (4, 4));

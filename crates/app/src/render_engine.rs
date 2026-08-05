@@ -28,8 +28,14 @@ pub struct RenderEngine {
 }
 
 impl RenderEngine {
+    /// `source_scale` is the size of `buffer` relative to a full-resolution decode of the
+    /// same file (0.5 for a half-size RAW decode, 1.0 for JPEG/PNG/TIFF).
     /// `on_done` is called after each render completes (e.g. `ctx.request_repaint`).
-    pub fn new(buffer: Arc<ImageBuf>, on_done: impl Fn() + Send + 'static) -> Self {
+    pub fn new(
+        buffer: Arc<ImageBuf>,
+        source_scale: f32,
+        on_done: impl Fn() + Send + 'static,
+    ) -> Self {
         let (req_tx, req_rx) = channel::<Request>();
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let handle = thread::spawn(move || {
@@ -42,7 +48,7 @@ impl RenderEngine {
                         Err(TryRecvError::Disconnected) => return,
                     }
                 }
-                let frame = render_once(&buffer, &req.edits, req.max_dim);
+                let frame = render_once(&buffer, &req.edits, req.max_dim, source_scale);
                 if res_tx.send(frame).is_err() {
                     return;
                 }
@@ -71,11 +77,35 @@ impl RenderEngine {
     }
 }
 
+/// How far a render is from the full-resolution original: the source buffer may already
+/// be a half-size decode (`source_scale`), and `downscale_to` shrinks it further. The
+/// long edge is the reference because that is what `downscale_to` caps.
+fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> RenderScale {
+    if buffer_long == 0 {
+        return RenderScale::FULL;
+    }
+    RenderScale::new(source_scale * rendered_long as f32 / buffer_long as f32)
+}
+
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
 /// Pure and synchronous — used by the worker and for one-off renders (e.g. baseline).
-pub fn render_once(buffer: &ImageBuf, edits: &Edits, max_dim: usize) -> RenderedFrame {
+///
+/// `source_scale` is the size of `buffer` relative to a full-resolution decode of the
+/// same file; it and the downscale below together tell the pipeline's spatial stages how
+/// to scale their pixel radii.
+pub fn render_once(
+    buffer: &ImageBuf,
+    edits: &Edits,
+    max_dim: usize,
+    source_scale: f32,
+) -> RenderedFrame {
     let preview = buffer.downscale_to(max_dim);
-    let out = build_pipeline(edits, RenderScale::FULL).run(preview); // sRGB, 0..=1
+    let scale = render_scale(
+        buffer.width().max(buffer.height()),
+        preview.width().max(preview.height()),
+        source_scale,
+    );
+    let out = build_pipeline(edits, scale).run(preview); // sRGB, 0..=1
     let (width, height) = (out.width(), out.height());
     let mut rgba = Vec::with_capacity(width * height * 4);
     for px in out.data().chunks_exact(3) {
@@ -116,8 +146,19 @@ mod tests {
     }
 
     #[test]
+    fn render_scale_combines_the_decode_and_the_downscale() {
+        // A half-size RAW decode downscaled again by 2 is a quarter of full resolution;
+        // the spatial stages must be told that, or a preview lies about the export.
+        assert_eq!(render_scale(8, 4, 0.5).get(), 0.25);
+        // A full-size source rendered at full size is exactly 1.0.
+        assert_eq!(render_scale(8, 8, 1.0).get(), 1.0);
+        // Non-square: the long edge is the reference, matching downscale_to.
+        assert_eq!(render_scale(10, 5, 1.0).get(), 0.5);
+    }
+
+    #[test]
     fn produces_rgba_frame_of_expected_size() {
-        let engine = RenderEngine::new(tiny(), || {});
+        let engine = RenderEngine::new(tiny(), 1.0, || {});
         engine.request(Edits::default(), 4); // downscale 8 -> 4
         let f = wait_for_frame(&engine);
         assert_eq!((f.width, f.height), (4, 4));
@@ -129,7 +170,7 @@ mod tests {
 
     #[test]
     fn exposure_brightens() {
-        let engine = RenderEngine::new(tiny(), || {});
+        let engine = RenderEngine::new(tiny(), 1.0, || {});
         engine.request(
             Edits {
                 exposure: 2.0,
@@ -144,7 +185,7 @@ mod tests {
     #[test]
     fn render_once_matches_expected_gray() {
         let img = tiny();
-        let f = render_once(&img, &Edits::default(), 4);
+        let f = render_once(&img, &Edits::default(), 4, 1.0);
         assert_eq!((f.width, f.height), (4, 4));
         assert!(f.rgba[0] > 180 && f.rgba[0] < 195);
     }

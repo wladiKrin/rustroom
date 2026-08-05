@@ -116,13 +116,14 @@ fn preview_edits(edits: &Edits, crop_mode: bool) -> Edits {
 }
 
 /// Decode a file for editing (half-size for RAW; full decode for images) into a linear
-/// `ImageBuf` plus a display label. Dispatches by file kind.
-fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, String), String> {
+/// `ImageBuf`, a display label, and the buffer's size relative to a full-resolution
+/// decode. Dispatches by file kind.
+fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, String, f32), String> {
     if catalog::is_raw(path) {
-        let d = raw_decode::decode_raw(path, &raw_decode::DecodeOptions::preview())
-            .map_err(|e| e.to_string())?;
+        let opts = raw_decode::DecodeOptions::preview();
+        let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
         let label = format!("{} {}", d.metadata.make, d.metadata.model);
-        Ok((d.image, label))
+        Ok((d.image, label, opts.source_scale()))
     } else {
         let d = image_decode::decode(path).map_err(|e| e.to_string())?;
         let ext = path
@@ -130,7 +131,8 @@ fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, Stri
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_uppercase();
-        Ok((d.image, format!("{ext} {}×{}", d.width, d.height)))
+        // Non-RAW formats are decoded at full size.
+        Ok((d.image, format!("{ext} {}×{}", d.width, d.height), 1.0))
     }
 }
 
@@ -217,7 +219,9 @@ impl RustroomApp {
         );
 
         let ctx2 = ctx.clone();
-        let engine = RenderEngine::new(decoded.buffer.clone(), move || ctx2.request_repaint());
+        let engine = RenderEngine::new(decoded.buffer.clone(), decoded.source_scale, move || {
+            ctx2.request_repaint()
+        });
         engine.request(edits.clone(), PREVIEW_MAX_DIM);
 
         self.session = Some(Session {
