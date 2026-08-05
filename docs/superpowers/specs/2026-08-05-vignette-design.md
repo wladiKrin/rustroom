@@ -85,9 +85,11 @@ cannot move into `new`.
 
 ```
 r_mid = lerp(R_MID_MIN, R_MID_MAX, midpoint/100)          // 0.2 … 1.4
-width = lerp(FEATHER_MIN, FEATHER_MAX, feather/100)       // 0.05 … 1.0
-        .max(WIDTH_EPS)                                   // 1e-4: feather 0 is a hard edge,
-                                                          //  not a division by zero
+width = lerp(FEATHER_MIN, FEATHER_MAX, feather/100)       // 0.0 … 1.0
+        .max(WIDTH_EPS)                                   // 1e-4: feather 0 is a genuinely
+                                                          //  hard edge, and this is the only
+                                                          //  thing standing between it and a
+                                                          //  division by zero
 t     = smoothstep(r_mid - width/2, r_mid + width/2, d)   // 0 inside, 1 outside
 gain  = exp2(amount/100 * MAX_EV * t)                     // MAX_EV = 2.0
 rgb  *= gain
