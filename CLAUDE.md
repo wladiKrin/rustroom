@@ -50,9 +50,13 @@ Pipeline order:
 ```
 decode → linearize/black-white → white balance → demosaic →
 input color profile → working space (linear f32) →
-exposure → tone (highlights/shadows/curve) → color (HSL/grading) →
-detail (sharpen/NR) → geometry (crop/lens) → output transform → encode
+noise reduction → exposure → tone (highlights/shadows/curve) →
+color (HSL/grading) → sharpen → geometry (crop/lens) → output transform → encode
 ```
+
+**NR early, sharpening late** — the two halves of "detail" belong at opposite ends. Denoising
+the source is far easier than denoising after Exposure/Shadows/the tone curve have amplified
+the grain, and it prevents HSL chroma speckle instead of smoothing it after the fact.
 
 ## Planned crate layout (Cargo workspace)
 
@@ -66,7 +70,7 @@ opensource_lightroom/
 │   ├── image-decode/         # ✅ JPEG/PNG/TIFF → linear ImageBuf (image + srgb_to_linear) + thumbnail
 │   ├── color/                # ✅ sRGB transfer fns + Oklab (lcms2/ICC still deferred)
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/geometry)
-│   ├── pipeline/             # ✅ PipelineStage + 9 stages (incl. geometry, saturation, hsl) + build_pipeline + golden tests
+│   ├── pipeline/             # ✅ PipelineStage + 10 stages (incl. geometry, saturation, hsl, noise_reduction) + spatial::box_blur + build_pipeline(edits, RenderScale) + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
 │   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache
@@ -88,7 +92,31 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Commit messages carry no `Co-Authored-By` trailer** (user's explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **Two candidate next tasks (user's pick):** (1) **noise reduction** — the missing `detail` stage; it's what keeps HSL/luminance edits clean on high-ISO files (Lightroom defaults Color NR to 25 on every RAW; we have none), and it's the biggest remaining quality gap; or (2) **vignette** — another small color/effect stage on the `stages/hsl.rs` template. Either is a new feature → brainstorm → spec → plan → executing-plans (all inline, per the workflow used all session). Design/plan docs live in `docs/superpowers/`.
+> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Commit messages carry no `Co-Authored-By` trailer** (user's explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **Next task (user's pick):** noise reduction just landed, so the remaining small Develop stage is **vignette** (built on the `stages/hsl.rs` template). Bigger candidates: **sharpening** (now cheap — it reuses `spatial::box_blur` and the `RenderScale` seam NR established, and belongs *late*, after geometry), or **caching the downscaled preview** so a slider edit reruns only the pipeline (which matters more now that NR is in the chain). Any of these is a new feature → brainstorm → spec → plan → executing-plans (all inline, per the workflow used all session). Design/plan docs live in `docs/superpowers/`.
+
+**Noise reduction done — and the pipeline is now scale-aware.** The `detail` stage finally exists.
+
+- **`RenderScale`** (`pipeline/src/lib.rs`) — `build_pipeline(edits, scale)`. A spatial filter's result depends on the resolution it runs at, so a radius-8 filter on the 1600 px preview is *not* the same edit as radius-8 on a 6000 px file. Spatial stages multiply their pixel radii by this; per-pixel stages ignore it (asserted bit-for-bit by `per_pixel_stages_ignore_the_render_scale`). `RenderScale::new` clamps to `(0,1]` rather than panicking on the render worker.
+- **Computing it needs no libraw:** `RawMetadata.width/height` reports the **processed** size, so on a `preview()` decode it already reads half-size and cannot serve as the full-res reference. But `half_size` is our own flag → `DecodeOptions::source_scale()` (0.5 / 1.0), and `render_engine::render_scale()` multiplies that by `downscale_to`'s own ratio. Both factors exact. `Decoded` carries `source_scale`; the injected decode fn now returns `(ImageBuf, String, f32)`.
+- **`NoiseReductionStage`** (`stages/noise_reduction.rs`) — one Oklab round trip serves both halves. **Luminance:** self-guided filter (He et al.) on `L` — 4 box blurs, `slope = var/(var+eps)`, so `slope→1` on an edge (pass through) and `slope→0` on noise (local mean). **Color:** 2-pass box blur on `a`/`b`. The filter's coefficients are named **`slope`/`offset`**, not the paper's `a`/`b`, which would collide with the Oklab chroma channels in the same file.
+- **Why guided and not bilateral:** with a scale-aware radius, an O(r²) kernel needs ~3600 taps/pixel on a 24 Mpx export (~90 G ops). The guided filter is **O(1) per pixel regardless of radius**. Measured: NR adds only ~1.1 s to a full 26 Mpx export (12.2 s → 13.3 s) at radii of 6 and 20 full-res px.
+- **`spatial::box_blur`** — separable running sums. Borders clamp the *window*, not the samples (window shrinks, divided by its actual count), so a constant plane stays exactly constant. Horizontal pass is rayon-parallel over rows; the **vertical pass is deliberately sequential**, advancing all columns together over contiguous row slices — a transpose-blur-transpose would scatter-write the whole buffer 4× per blur (16× per NR render). Don't "fix" it without a profile.
+- **Parameter mapping** (base radii in **full-res px**, then `max(1, round(base × scale))` — never 0, which would silently disable the filter): luminance radius fixed at **6**; `chroma_radius_full` = **8..32** from Smoothness; `eps = 1e-3 · (1e-2)^(detail/100)` from Detail — **geometric**, because it is a variance spanning two decades (50 → 1e-4, i.e. σ_L ≈ 0.01).
+- **`NoiseReduction::is_active()` is `luminance > 0 || color > 0`, NOT `!= default()`** — Detail/Smoothness are modifiers (default **50**, not 0), so dragging one alone must not insert a stage that only costs an Oklab round trip. Defaults stay at 0 even though Lightroom ships RAW at Color 25; a non-zero default would break `Edits::default() == neutral`, the `neutral` golden, and the whole "add a stage only when non-neutral" rule.
+- Goldens now **17**, on a new 128×**192** `noise_chart()`; the 14 existing references are byte-identical. The chart's regions are 64 px tall **on purpose**: at Smoothness 50 the chroma window reaches 41 px, so on shorter bands the reference recorded chroma *bleeding between regions* instead of noise being removed inside one (caught by actually looking at the first generated PNGs — a golden nobody has looked at is just a hash).
+- **Measured** (X-T4 `.RAF`, 3123×2085 half-size buffer → 1600 px preview, release, best of 5). Reproduce with `cargo run --release -p app --example bench_preview <raw>`:
+
+  | preview pipeline | ms |
+  |---|---|
+  | neutral (output transform only) | 22.4 |
+  | NR color 50 only | 37.7 |
+  | NR luminance 50 only | 40.2 |
+  | NR both 50 | 46.6 |
+  | HSL only (for comparison) | 57.7 |
+
+  NR is **cheaper than HSL** — the Oklab round trip dominates both, and 8 box blurs cost less than per-pixel `atan2`/`cos`/`sin`.
+- **Validated on a real photo** (`rustroom render --edits`, X-T4 fur at 1:1): Color-only 80 leaves individual hairs fully crisp while killing chroma speckle — the payoff of splitting the two halves. Luminance 30/Detail 70 is a natural everyday setting; Luminance 70/Detail 40 visibly smears fur, which is correct-but-aggressive on texture at the same scale as the noise.
+- **Accepted caveats:** (1) the preview over-smooths relative to the export, because `downscale_to` has already averaged noise away — **judge NR at export**, since our "100%" zoom is 100% of the *half-size* buffer; (2) chroma bleeds across strong color edges at high Color/Smoothness (fix would be guiding the chroma blur with `L`); (3) single-scale, so luminance blotches larger than the radius survive — wavelets are the real fix, deferred; (4) NR runs **first** and there is no per-stage caching, so with NR on *every* slider gets slower; (5) very dark, very noisy regions read as structure (var ≫ eps) and are left alone — raise Luminance or drop Detail.
 
 **HSL done (per-hue color), plus rayon-parallel pixel maps.**
 - **`color::oklab`** — `linear_srgb_to_oklab` / `oklab_to_linear_srgb` (Ottosson matrices; `#![allow(clippy::excessive_precision)]` keeps the reference digits verbatim). Round-trips to ~5e-7, including scene-referred values above 1.0.
@@ -190,8 +218,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** **rounded-out Develop** — saturation/vibrance and HSL landed; vignette is the natural remaining small stage. The biggest quality gap is now **noise reduction** (the `detail` stage in the pipeline order above is still unbuilt), which is what makes per-hue luminance edits clean on high-ISO files. Photo switching is threaded + cached; the remaining perf win is caching the downscaled preview so a slider edit reruns only the pipeline. A nicer placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) is a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
+**Next step:** **rounded-out Develop** — saturation/vibrance, HSL and noise reduction landed; vignette is the natural remaining small stage, and **sharpening** is now much cheaper to build (it reuses `spatial::box_blur` and the `RenderScale` seam, and belongs late, after geometry). Photo switching is threaded + cached; the remaining perf win is caching the downscaled preview so a slider edit reruns only the pipeline — more valuable now, since NR runs first and re-runs on every slider move. A nicer placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) is a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`, `2026-08-05-hsl-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`, `2026-08-05-hsl.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`, `2026-08-05-hsl-design.md`, `2026-08-05-noise-reduction-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`, `2026-08-05-hsl.md`, `2026-08-05-noise-reduction.md`.
 
 _Update this "Current status" section as milestones land._
