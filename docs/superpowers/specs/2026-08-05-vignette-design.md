@@ -91,23 +91,45 @@ width = lerp(FEATHER_MIN, FEATHER_MAX, feather/100)       // 0.0 … 1.0
                                                           //  thing standing between it and a
                                                           //  division by zero
 t     = smoothstep(r_mid - width/2, r_mid + width/2, d)   // 0 inside, 1 outside
-gain  = exp2(amount/100 * MAX_EV * t)                     // MAX_EV = 2.0
-rgb  *= gain
+f     = clamp(amount/100, -1, 1) * t                      // -1 … 1
+
+f <= 0:  rgb *= (1 + f)                    // ×1 at f=0, exactly ×0 (black) at f=-1
+f >  0:  rgb += (1 - rgb).max(0) * f       // exactly 1.0 (white) at f=+1
 ```
 
-Amount −100 at full falloff gives `exp2(-2) = ×0.25`; +100 gives `×4`. Symmetric in log space,
-so −50 and +50 are exactly equal and opposite — the property the exposure-style mapping was
-chosen for.
+**Revised 2026-08-05** (was `gain = exp2(amount/100 · 2·t)`, i.e. ±2 EV). The endpoints were
+too weak in use: a multiplicative gain is strictly positive, so it can never reach black no
+matter how large `MAX_EV` grows. Interpolating toward the endpoint is the only model that
+hits pure black and pure white exactly.
+
+**The mid-range is unchanged by the switch**, which is why it was safe to make: `f = −0.5`
+scales by 0.5 — one stop down — exactly as `exp2(−1)` did. Only the top of the slider got
+stronger:
+
+| Amount | old (`exp2`, ±2 EV) | new |
+|---|---|---|
+| −25 | ×0.707 | ×0.75 |
+| −50 | ×0.5 (−1 EV) | ×0.5 (−1 EV) |
+| −75 | ×0.354 | ×0.25 (−2 EV) |
+| −100 | ×0.25 | **×0 — black** |
+
+The cost is that the response is no longer symmetric in log space: past −50 each further step
+is worth progressively more. That is inherent to reaching true black at all, and is the
+trade accepted here.
+
+The `max(0.0)` on the brightening branch leaves scene-referred samples already above 1.0
+alone rather than dragging them back down toward white.
 
 `smoothstep(e0, e1, x)` clamps `(x - e0) / (e1 - e0)` to `[0, 1]` then applies `t·t·(3 - 2t)`,
 matching the inline form already used in `stages/hsl.rs`.
 
 ### Two properties worth naming
 
-- **`gain` is always strictly positive**, so this stage cannot emit negative samples. It needs
-  no `max(0.0)` clamp, unlike `HslStage` and `NoiseReductionStage`.
-- **It is a scalar multiply**, so `r:g:b` ratios are untouched — hue and saturation survive
-  exactly. Both are asserted by tests rather than left as comments.
+- **Neither branch can produce a negative sample** (`1 + f ≥ 0`, and the lift only ever raises
+  a value), so this stage needs no clamp, unlike `HslStage` and `NoiseReductionStage`.
+- **Darkening is a scalar multiply**, so `r:g:b` ratios are untouched and hue and saturation
+  survive exactly. Brightening lerps toward white and therefore desaturates — that is what
+  "toward white" means, not a defect. Both are asserted by tests rather than left as comments.
 
 ## 3. Pipeline position
 
@@ -191,8 +213,12 @@ the existing `slider` closure — so undo/redo, sidecar persistence and export n
 1. `amount = 0` is an exact identity whatever the other three say.
 2. The centre pixel is untouched at the default midpoint/feather (`d = 0` ⇒ `t = 0` ⇒ gain 1).
 3. A corner is darker than the centre at negative amount, brighter at positive.
-4. `amount = -100` gives exactly `×0.25` where `t == 1` (midpoint and feather set low so the
-   corner is unambiguously past the falloff). This pins `MAX_EV`.
+4. `amount = -100` gives **exactly black** and `+100` **exactly white** where `t == 1`
+   (midpoint and feather set low so the corner is unambiguously past the falloff). This is the
+   whole point of the endpoint-interpolation model.
+4b. `amount = -50` still scales by exactly 0.5 — the mid-range the exposure-style model
+   established, pinned so a future retune cannot silently shift the range people have built a
+   feel for.
 5. Four-fold mirror symmetry: gain at `(x, y)` equals gain at the horizontally, vertically and
    doubly mirrored positions.
 6. **Roundness +100 on a 128×64 frame gives equal gain at equal *pixel* distance** — `+32 px`
@@ -233,8 +259,8 @@ worse, say so rather than bury it.
    for every other stage.
 3. **No highlight protection.** A strong negative Amount pulls bright corners down with
    everything else; Lightroom's Highlight Priority exists precisely to avoid that. Deferred.
-4. Positive Amount pushes highlights above 1.0. Fine scene-referred — the output transform
-   clamps at the end.
+4. Positive Amount lifts toward white and stops there; it does not push already-clipped
+   highlights further. Samples already above 1.0 are left alone.
 5. An extreme Midpoint/Feather combination can put `r_mid - width/2` below zero, which
    darkens the centre too. That is a legitimate look, not a bug, so it is not clamped — but it
    means "the centre is always untouched" holds only for sane settings, and test 2 asserts it

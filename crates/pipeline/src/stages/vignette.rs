@@ -12,9 +12,6 @@ const FEATHER: (f32, f32) = (0.0, 1.0);
 /// ...which makes this the only thing standing between Feather 0 and a division by zero in
 /// `smoothstep`. Load-bearing, not belt-and-braces.
 const WIDTH_EPS: f32 = 1e-4;
-/// Amount ±100 is this many stops at full falloff. Symmetric in log space, so −50 and +50
-/// are exactly equal and opposite.
-const MAX_EV: f32 = 2.0;
 /// Superellipse exponent at Roundness −100. Higher is more rectangular.
 const P_MAX: f32 = 6.0;
 
@@ -84,9 +81,21 @@ impl Shape {
 /// export agree exactly. And "post-crop" is structural rather than a mode: `GeometryStage`
 /// runs first, so the image handed here is already cropped and its aspect is the crop's.
 ///
-/// The gain is `exp2(..)`, hence strictly positive: this stage cannot emit negative samples
-/// and needs no clamp, unlike `HslStage` and `NoiseReductionStage`. Being a scalar multiply,
-/// it also leaves `r:g:b` ratios — and so hue and saturation — exactly alone.
+/// Amount interpolates toward an endpoint rather than applying an exposure-style gain,
+/// because a multiplicative gain is strictly positive and so can *never* reach black:
+/// darkening scales by `1 + f` (reaching exactly 0 at −100), brightening lifts toward white
+/// by `(1 − v)·f` (reaching exactly 1.0 at +100).
+///
+/// The mid-range is deliberately unchanged by that switch: `f = −0.5` scales by 0.5, i.e.
+/// one stop down, exactly as the previous `exp2(±2 EV)` model did. Only the top of the
+/// slider got stronger. The cost is that the response is no longer symmetric in log space —
+/// past −50 each further step is worth progressively more, which is inherent to reaching
+/// true black at all.
+///
+/// Neither branch can produce a negative sample (`1 + f ≥ 0`, and the lift only ever raises
+/// a value), so no clamp is needed, unlike `HslStage` and `NoiseReductionStage`. Darkening
+/// remains a scalar multiply and so preserves `r:g:b` ratios exactly; brightening
+/// desaturates as it approaches white, which is what "toward white" means.
 pub struct VignetteStage {
     params: Vignette,
 }
@@ -113,14 +122,22 @@ impl PipelineStage for VignetteStage {
         let r_mid = lerp(R_MID.0, R_MID.1, (p.midpoint / 100.0).clamp(0.0, 1.0));
         let width = lerp(FEATHER.0, FEATHER.1, (p.feather / 100.0).clamp(0.0, 1.0)).max(WIDTH_EPS);
         let (e0, e1) = (r_mid - width * 0.5, r_mid + width * 0.5);
-        let k = p.amount / 100.0 * MAX_EV;
+        let k = (p.amount / 100.0).clamp(-1.0, 1.0);
         let (hw, hh) = (w as f32 * 0.5, h as f32 * 0.5);
 
         image.map_pixels_xy(|x, y, rgb| {
             let u = (x as f32 + 0.5) / hw - 1.0;
             let v = (y as f32 + 0.5) / hh - 1.0;
-            let gain = (k * smoothstep(e0, e1, shape.distance(u, v))).exp2();
-            [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
+            let f = k * smoothstep(e0, e1, shape.distance(u, v)); // -1 … 1
+            if f <= 0.0 {
+                let gain = 1.0 + f; // 1 at f = 0, exactly 0 at f = -1
+                [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
+            } else {
+                // Toward white. `max(0.0)` leaves scene-referred samples already above 1.0
+                // alone rather than dragging them back down.
+                let lift = |v: f32| v + (1.0 - v).max(0.0) * f;
+                [lift(rgb[0]), lift(rgb[1]), lift(rgb[2])]
+            }
         })
     }
 }
@@ -179,24 +196,54 @@ mod tests {
     }
 
     #[test]
-    fn amount_minus_100_is_exactly_two_stops_at_full_falloff() {
+    fn the_extremes_reach_pure_black_and_pure_white() {
         // Midpoint and feather low, so a corner is unambiguously past the transition and
-        // t == 1. This pins MAX_EV.
+        // t == 1. This is the whole reason the model is a lerp toward the endpoints rather
+        // than a multiplicative gain: exp2 is strictly positive and can never reach black.
         let params = Vignette {
             amount: -100.0,
             midpoint: 0.0,
             feather: 0.0,
             roundness: 0.0,
         };
-        let g = gain_at(&params, 64, 64, 0, 0);
-        assert!((g - 0.25).abs() < 1e-4, "corner gain {g}, want 0.25");
+        let out = VignetteStage::new(&params).apply(flat(64, 64));
+        assert_eq!(
+            out.pixel(0, 0),
+            [0.0, 0.0, 0.0],
+            "corner should be pure black"
+        );
 
         let up = Vignette {
             amount: 100.0,
             ..params
         };
-        let g = gain_at(&up, 64, 64, 0, 0);
-        assert!((g - 4.0).abs() < 1e-3, "corner gain {g}, want 4.0");
+        let out = VignetteStage::new(&up).apply(flat(64, 64));
+        let px = out.pixel(0, 0);
+        for c in px {
+            assert!(
+                (c - 1.0).abs() < 1e-6,
+                "corner should be pure white: {px:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_middle_of_the_slider_still_halves_the_light() {
+        // The rescale to true black/white deliberately left the mid-range alone: amount -50
+        // is one stop down, exactly as it was under the old exp2(±2 EV) model. Only the top
+        // end got stronger. Asserted so a future retune cannot silently shift the range
+        // people have already built a feel for.
+        let params = Vignette {
+            amount: -50.0,
+            midpoint: 0.0,
+            feather: 0.0,
+            roundness: 0.0,
+        };
+        let g = gain_at(&params, 64, 64, 0, 0);
+        assert!(
+            (g - 0.5).abs() < 1e-5,
+            "corner gain {g}, want 0.5 (= -1 EV)"
+        );
     }
 
     #[test]
@@ -243,8 +290,10 @@ mod tests {
     }
 
     #[test]
-    fn hue_is_preserved() {
-        // A scalar gain leaves r:g:b ratios alone — no Oklab round trip needed to be safe.
+    fn hue_is_preserved_when_darkening() {
+        // Darkening is still a scalar multiply, so r:g:b ratios survive exactly. (The
+        // brightening half lerps toward white and therefore desaturates by construction —
+        // that is what "toward white" means, not a defect.)
         let mut img = ImageBuf::new(8, 8);
         for y in 0..8 {
             for x in 0..8 {
@@ -292,7 +341,7 @@ mod tests {
         assert!(out.data().iter().all(|v| v.is_finite()));
         // Centre untouched, corner fully affected — no intermediate band worth speaking of.
         assert!((out.pixel(32, 32)[0] / 0.5 - 1.0).abs() < 1e-5);
-        assert!((out.pixel(0, 0)[0] / 0.5 - 0.25).abs() < 1e-4);
+        assert_eq!(out.pixel(0, 0)[0], 0.0);
     }
 
     #[test]
@@ -305,13 +354,13 @@ mod tests {
         let p = darken(-60.0);
 
         // Exact: the corner is past the falloff at both sizes, so t == 1 and the gain is
-        // exp2(k) regardless of resolution. No quantization to muddy it.
+        // 1 + s regardless of resolution. No quantization to muddy it.
         let small = gain_at(&p, 64, 64, 0, 0);
         let large = gain_at(&p, 256, 256, 0, 0);
         assert!((small - large).abs() < 1e-6, "corner: {small} vs {large}");
         assert!(
-            (small - (-1.2f32).exp2()).abs() < 1e-5,
-            "corner gain {small}"
+            (small - 0.4).abs() < 1e-5,
+            "corner gain {small}, want 1 - 0.6"
         );
 
         // Mid-falloff: agrees to within the half-pixel offset between the two sample grids,
