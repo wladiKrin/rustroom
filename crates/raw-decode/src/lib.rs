@@ -92,6 +92,20 @@ impl DecodeOptions {
             half_size: true,
         }
     }
+
+    /// Size of the decoded image relative to a full-resolution decode of the same file.
+    ///
+    /// The develop pipeline's spatial stages scale their pixel radii by how far the
+    /// render is from full resolution, and this is the first of the two factors.
+    /// `RawMetadata` cannot supply it — it reports the *processed* dimensions, which are
+    /// already halved here — but `half_size` is our own flag, so the ratio is exact.
+    pub fn source_scale(&self) -> f32 {
+        if self.half_size {
+            0.5
+        } else {
+            1.0
+        }
+    }
 }
 
 impl Default for DecodeOptions {
@@ -112,6 +126,16 @@ pub fn decode_raw(path: &Path, opts: &DecodeOptions) -> Result<DecodedRaw, Decod
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_scale_reflects_half_size_decoding() {
+        // The pipeline's spatial stages need to know how far a decode is from full res.
+        // Metadata cannot answer that (it reports the *processed* size), but the
+        // half_size flag can, exactly.
+        assert_eq!(DecodeOptions::preview().source_scale(), 0.5);
+        assert_eq!(DecodeOptions::linear_scene().source_scale(), 1.0);
+        assert_eq!(DecodeOptions::display().source_scale(), 1.0);
+    }
     use std::path::PathBuf;
 
     /// Set `RAW_FIXTURE=/abs/path/to.raw` to exercise a real decode locally / in CI.
