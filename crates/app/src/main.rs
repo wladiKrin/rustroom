@@ -466,6 +466,13 @@ impl RustroomApp {
                                 );
                             }
                         });
+                        egui::CollapsingHeader::new("Noise Reduction").show(ui, |ui| {
+                            let nr = &mut s.edits.noise_reduction;
+                            slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
+                            slider(ui, &mut nr.detail, 0.0..=100.0, "Detail");
+                            slider(ui, &mut nr.color, 0.0..=100.0, "Color");
+                            slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
+                        });
 
                         ui.separator();
                         if ui.button("Reset all").clicked() {
