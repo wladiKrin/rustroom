@@ -90,11 +90,20 @@ impl Pipeline {
 /// output transform is always last.
 pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
     let mut stages: Vec<Box<dyn PipelineStage>> = Vec::new();
-    let _ = scale; // consumed by the spatial stage added in the noise-reduction task
 
     // Geometry runs first, so all adjustments operate on the final cropped pixels.
     if edits.geometry != edit_model::Geometry::default() {
         stages.push(Box::new(GeometryStage::new(&edits.geometry)));
+    }
+    // Noise reduction comes before every adjustment: denoising the source is far easier
+    // than denoising after Exposure, Shadows and the tone curve have amplified the grain.
+    // `is_active` rather than a `!= default()` check — Detail and Smoothness are
+    // modifiers and must not insert a stage on their own.
+    if edits.noise_reduction.is_active() {
+        stages.push(Box::new(NoiseReductionStage::new(
+            &edits.noise_reduction,
+            scale,
+        )));
     }
     if edits.white_balance != edit_model::WhiteBalance::default() {
         stages.push(Box::new(WhiteBalanceStage::new(&edits.white_balance)));
@@ -264,6 +273,53 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+    }
+
+    #[test]
+    fn noise_reduction_runs_before_every_adjustment() {
+        // Early placement is the whole point: denoise the source rather than fight noise
+        // that a Shadows lift has already multiplied up. Geometry stays first so NR runs
+        // on the cropped pixels.
+        let edits = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                color: 40.0,
+                ..Default::default()
+            },
+            white_balance: edit_model::WhiteBalance {
+                temp: 20.0,
+                ..Default::default()
+            },
+            exposure: 1.0,
+            geometry: edit_model::Geometry {
+                angle: 1.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            vec![
+                "geometry",
+                "noise_reduction",
+                "white_balance",
+                "exposure",
+                "output_transform_srgb"
+            ]
+        );
+    }
+
+    #[test]
+    fn noise_reduction_modifiers_alone_add_no_stage() {
+        let edits = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 0.0,
+                color: 0.0,
+                detail: 100.0,
+                smoothness: 0.0,
+            },
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
     }
 
     #[test]
