@@ -77,6 +77,12 @@ impl Pipeline {
         self.stages.iter().map(|s| s.name()).collect()
     }
 
+    /// Consume the pipeline, yielding its stages — lets `build_pipeline` concatenate the two
+    /// halves of [`build_pipeline_split`].
+    pub fn into_stages(self) -> Vec<Box<dyn PipelineStage>> {
+        self.stages
+    }
+
     /// Run all stages in order.
     pub fn run(&self, mut image: ImageBuf) -> ImageBuf {
         for stage in &self.stages {
@@ -86,38 +92,48 @@ impl Pipeline {
     }
 }
 
-/// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
-/// full-resolution original. A stage is added only when its params are non-neutral; the
-/// output transform is always last.
-pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
-    let mut stages: Vec<Box<dyn PipelineStage>> = Vec::new();
+/// The develop pipeline in two halves, split where the preview cache checkpoints.
+///
+/// The **prefix** — geometry, then noise reduction — depends only on `edits.geometry` and
+/// `edits.noise_reduction`, which is exactly what [`PrefixKey`] captures. Its output can
+/// therefore be reused across every adjustment downstream, which is what makes editing with
+/// noise reduction enabled affordable.
+///
+/// The **tail** is everything else and always ends in the output transform.
+///
+/// [`build_pipeline`] is defined as `prefix ++ tail`, so the two constructions cannot drift
+/// apart. Add a stage here, not there.
+pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pipeline) {
+    let mut prefix: Vec<Box<dyn PipelineStage>> = Vec::new();
 
     // Geometry runs first, so all adjustments operate on the final cropped pixels.
     if edits.geometry != edit_model::Geometry::default() {
-        stages.push(Box::new(GeometryStage::new(&edits.geometry)));
+        prefix.push(Box::new(GeometryStage::new(&edits.geometry)));
     }
     // Noise reduction comes before every adjustment: denoising the source is far easier
     // than denoising after Exposure, Shadows and the tone curve have amplified the grain.
     // `is_active` rather than a `!= default()` check — Detail and Smoothness are
     // modifiers and must not insert a stage on their own.
     if edits.noise_reduction.is_active() {
-        stages.push(Box::new(NoiseReductionStage::new(
+        prefix.push(Box::new(NoiseReductionStage::new(
             &edits.noise_reduction,
             scale,
         )));
     }
+
+    let mut tail: Vec<Box<dyn PipelineStage>> = Vec::new();
     if edits.white_balance != edit_model::WhiteBalance::default() {
-        stages.push(Box::new(WhiteBalanceStage::new(&edits.white_balance)));
+        tail.push(Box::new(WhiteBalanceStage::new(&edits.white_balance)));
     }
     if edits.exposure != 0.0 {
-        stages.push(Box::new(ExposureStage::new(edits.exposure)));
+        tail.push(Box::new(ExposureStage::new(edits.exposure)));
     }
     if edits.contrast != 0.0 {
-        stages.push(Box::new(ContrastStage::new(edits.contrast)));
+        tail.push(Box::new(ContrastStage::new(edits.contrast)));
     }
     if edits.highlights != 0.0 || edits.shadows != 0.0 || edits.whites != 0.0 || edits.blacks != 0.0
     {
-        stages.push(Box::new(ToneRegionsStage::new(
+        tail.push(Box::new(ToneRegionsStage::new(
             edits.highlights,
             edits.shadows,
             edits.whites,
@@ -125,28 +141,39 @@ pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
         )));
     }
     if !edits.tone_curve.points.is_empty() {
-        stages.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
+        tail.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
     }
 
     if edits.saturation != 0.0 || edits.vibrance != 0.0 {
-        stages.push(Box::new(SaturationStage::new(
+        tail.push(Box::new(SaturationStage::new(
             edits.saturation,
             edits.vibrance,
         )));
     }
 
     if edits.hsl != edit_model::Hsl::default() {
-        stages.push(Box::new(HslStage::new(&edits.hsl)));
+        tail.push(Box::new(HslStage::new(&edits.hsl)));
     }
 
     // A creative effect over the finished grade, so it runs last. It is post-crop for free:
     // `GeometryStage` ran first, so the frame it sees is already cropped. It takes no
     // `RenderScale` — normalized coordinates make it resolution-independent.
     if edits.vignette.is_active() {
-        stages.push(Box::new(VignetteStage::new(&edits.vignette)));
+        tail.push(Box::new(VignetteStage::new(&edits.vignette)));
     }
 
-    stages.push(Box::new(OutputTransformSrgb));
+    tail.push(Box::new(OutputTransformSrgb));
+
+    (Pipeline::new(prefix), Pipeline::new(tail))
+}
+
+/// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
+/// full-resolution original. A stage is added only when its params are non-neutral; the
+/// output transform is always last.
+pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
+    let (prefix, tail) = build_pipeline_split(edits, scale);
+    let mut stages = prefix.into_stages();
+    stages.extend(tail.into_stages());
     Pipeline::new(stages)
 }
 
@@ -155,6 +182,93 @@ mod tests {
     use super::*;
     use core_image::ImageBuf;
     use edit_model::Edits;
+
+    /// An `Edits` with every field non-neutral — so a stage that has drifted into the wrong
+    /// half of the split shows up.
+    ///
+    /// Every field is listed explicitly rather than using `..Default::default()`, on purpose:
+    /// adding a field to `Edits` then breaks this function's compilation, forcing whoever
+    /// adds it to decide which half of the split it belongs to.
+    fn all_edits() -> Edits {
+        let mut hsl = edit_model::Hsl::default();
+        hsl.bands[0].saturation = 20.0;
+        Edits {
+            white_balance: edit_model::WhiteBalance {
+                temp: 10.0,
+                tint: 5.0,
+            },
+            exposure: 0.5,
+            contrast: 10.0,
+            highlights: -10.0,
+            shadows: 10.0,
+            whites: 5.0,
+            blacks: -5.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            saturation: 10.0,
+            vibrance: 10.0,
+            hsl,
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 30.0,
+                color: 30.0,
+                ..Default::default()
+            },
+            vignette: edit_model::Vignette {
+                amount: -30.0,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 2.0,
+                ..Default::default()
+            },
+            version: 0,
+        }
+    }
+
+    #[test]
+    fn build_pipeline_is_exactly_prefix_then_tail() {
+        for edits in [Edits::default(), all_edits()] {
+            let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+            let mut expected = prefix.stage_names();
+            expected.extend(tail.stage_names());
+            assert_eq!(
+                build_pipeline(&edits, RenderScale::FULL).stage_names(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn the_prefix_holds_only_geometry_and_noise_reduction() {
+        // The tripwire: if a stage is later inserted into the prefix region, this fails and
+        // forces PrefixKey to be updated with its parameters.
+        let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
+        assert_eq!(prefix.stage_names(), vec!["geometry", "noise_reduction"]);
+        for name in tail.stage_names() {
+            assert!(
+                name != "geometry" && name != "noise_reduction",
+                "prefix stage {name} leaked into the tail"
+            );
+        }
+        assert_eq!(tail.stage_names().last(), Some(&"output_transform_srgb"));
+    }
+
+    #[test]
+    fn running_prefix_then_tail_matches_the_whole_pipeline() {
+        // The numerical counterpart to the name-based test above: bit-identical, not close.
+        let edits = all_edits();
+        let mut img = ImageBuf::new(16, 12);
+        for y in 0..12 {
+            for x in 0..16 {
+                img.set_pixel(x, y, [x as f32 / 16.0, y as f32 / 12.0, 0.4]);
+            }
+        }
+        let whole = build_pipeline(&edits, RenderScale::FULL).run(img.clone());
+        let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+        let split = tail.run(prefix.run(img));
+        assert_eq!(whole.data(), split.data());
+    }
 
     #[test]
     fn render_scale_full_is_one() {
