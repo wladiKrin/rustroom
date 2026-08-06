@@ -212,6 +212,14 @@ pub fn build_pipeline_split_in_region(
         )));
     }
 
+    // The last spatial stage, and the only one in the tail. It therefore sets the margin a
+    // region render must keep outside the visible rect — see `max_kernel_radius`. Placed
+    // after the vignette so a darkened corner sharpens proportionally less in absolute
+    // terms, which is what a ratio-based model should do.
+    if edits.sharpening.is_active() {
+        tail.push(Box::new(SharpenStage::new(&edits.sharpening, scale)));
+    }
+
     tail.push(Box::new(OutputTransformSrgb));
 
     (Pipeline::new(prefix), Pipeline::new(tail))
@@ -349,6 +357,13 @@ mod tests {
             Edits {
                 vignette: edit_model::Vignette {
                     amount: -70.0,
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+            Edits {
+                sharpening: edit_model::Sharpening {
+                    amount: 80.0,
                     ..Default::default()
                 },
                 ..base.clone()
@@ -649,6 +664,47 @@ mod tests {
                 midpoint: 10.0,
                 roundness: -100.0,
                 feather: 0.0,
+            },
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+    }
+
+    #[test]
+    fn sharpening_runs_after_the_vignette_and_before_the_output_transform() {
+        // Sharpening a vignetted frame is correct for a ratio-based model: darkened
+        // corners sharpen proportionally less in absolute terms.
+        let edits = Edits {
+            exposure: 1.0,
+            vignette: edit_model::Vignette {
+                amount: -40.0,
+                ..Default::default()
+            },
+            sharpening: edit_model::Sharpening {
+                amount: 50.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            vec![
+                "exposure",
+                "vignette",
+                "sharpening",
+                "output_transform_srgb"
+            ]
+        );
+    }
+
+    #[test]
+    fn sharpening_modifiers_alone_add_no_stage() {
+        let edits = Edits {
+            sharpening: edit_model::Sharpening {
+                amount: 0.0,
+                radius: 3.0,
+                detail: 0.0,
+                masking: 90.0,
             },
             ..Edits::default()
         };
