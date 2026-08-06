@@ -39,8 +39,10 @@ struct Shape {
 }
 
 impl Shape {
-    /// `w`/`h` are the *cropped* frame's dimensions, so this cannot be built in
-    /// `VignetteStage::new` — it depends on the image the stage is handed.
+    /// `w`/`h` are the **full frame's** dimensions — the region's when rendering a crop, the
+    /// image's own otherwise. They set the aspect, so passing a crop's dimensions here would
+    /// silently reshape the vignette. Known only at `apply` time, hence not built in
+    /// `VignetteStage::new`.
     fn new(roundness: f32, w: usize, h: usize) -> Self {
         let (mut wu, mut wv, mut expo, mut elliptical) = (1.0, 1.0, 2.0, true);
         if roundness > 0.0 {

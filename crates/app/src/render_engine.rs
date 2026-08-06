@@ -3,7 +3,7 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::{build_pipeline, build_pipeline_split, PrefixKey, RenderScale};
+use pipeline::{build_pipeline, build_pipeline_split_in_region, PrefixKey, Region, RenderScale};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -13,11 +13,38 @@ pub struct RenderedFrame {
     pub width: usize,
     pub height: usize,
     pub rgba: Vec<u8>,
+    /// Where this frame sits in the post-geometry image; `None` = the whole image. The canvas
+    /// needs it to place the texture.
+    pub region: Option<Region>,
+}
+
+/// A requested crop of the rendered image, in post-geometry pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionRect {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+impl RegionRect {
+    /// Clamp to an image of `w` x `h`, returning `None` if nothing is left.
+    fn clamped(self, w: usize, h: usize) -> Option<Self> {
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let x = self.x.min(w - 1);
+        let y = self.y.min(h - 1);
+        let cw = self.w.min(w - x);
+        let ch = self.h.min(h - y);
+        (cw > 0 && ch > 0).then_some(Self { x, y, w: cw, h: ch })
+    }
 }
 
 struct Request {
     edits: Edits,
     max_dim: usize,
+    region: Option<RegionRect>,
 }
 
 /// Owns a worker thread that renders against a fixed editing buffer.
@@ -39,7 +66,7 @@ impl RenderEngine {
         let (req_tx, req_rx) = channel::<Request>();
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let handle = thread::spawn(move || {
-            let mut cache: Option<(CacheKey, Arc<ImageBuf>)> = None;
+            let mut cache = PrefixCache::default();
             while let Ok(mut req) = req_rx.recv() {
                 // Coalesce: skip to the most recent pending request.
                 loop {
@@ -49,8 +76,14 @@ impl RenderEngine {
                         Err(TryRecvError::Disconnected) => return,
                     }
                 }
-                let frame =
-                    render_cached(&buffer, &req.edits, req.max_dim, source_scale, &mut cache);
+                let frame = render_cached(
+                    &buffer,
+                    &req.edits,
+                    req.max_dim,
+                    source_scale,
+                    req.region,
+                    &mut cache,
+                );
                 if res_tx.send(frame).is_err() {
                     return;
                 }
@@ -64,9 +97,13 @@ impl RenderEngine {
         }
     }
 
-    /// Queue a render at the given working resolution.
-    pub fn request(&self, edits: Edits, max_dim: usize) {
-        let _ = self.req_tx.send(Request { edits, max_dim });
+    /// Queue a render at the given working resolution, optionally cropped to `region`.
+    pub fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
+        let _ = self.req_tx.send(Request {
+            edits,
+            max_dim,
+            region,
+        });
     }
 
     /// Return the newest finished frame, if any (drops older ones).
@@ -103,7 +140,7 @@ fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> 
 }
 
 /// Pack a rendered sRGB image into an RGBA8 frame.
-fn pack(out: ImageBuf) -> RenderedFrame {
+fn pack(out: ImageBuf, region: Option<Region>) -> RenderedFrame {
     let (width, height) = (out.width(), out.height());
     let mut rgba = Vec::with_capacity(width * height * 4);
     for px in out.data().chunks_exact(3) {
@@ -116,12 +153,32 @@ fn pack(out: ImageBuf) -> RenderedFrame {
         width,
         height,
         rgba,
+        region,
     }
 }
 
 /// The cached prefix output is valid for one set of prefix parameters at one working
 /// resolution.
 type CacheKey = (PrefixKey, usize);
+
+/// Cached prefix outputs, keyed by prefix parameters and working resolution.
+#[derive(Default)]
+struct PrefixCache {
+    entries: Vec<(CacheKey, Arc<ImageBuf>)>,
+}
+
+impl PrefixCache {
+    fn get(&mut self, key: &CacheKey) -> Option<Arc<ImageBuf>> {
+        let i = self.entries.iter().position(|(k, _)| k == key)?;
+        Some(self.entries[i].1.clone())
+    }
+
+    fn insert(&mut self, key: CacheKey, img: Arc<ImageBuf>) {
+        self.entries.retain(|(k, _)| *k != key);
+        self.entries.insert(0, (key, img));
+        self.entries.truncate(1);
+    }
+}
 
 /// Render one request, reusing the cached prefix output when the prefix parameters are
 /// unchanged.
@@ -134,7 +191,8 @@ fn render_cached(
     edits: &Edits,
     max_dim: usize,
     source_scale: f32,
-    cache: &mut Option<(CacheKey, Arc<ImageBuf>)>,
+    region: Option<RegionRect>,
+    cache: &mut PrefixCache,
 ) -> RenderedFrame {
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
@@ -143,21 +201,41 @@ fn render_cached(
         source_scale,
     );
     let key = (PrefixKey::new(edits, scale), max_dim);
-    let (prefix, tail) = build_pipeline_split(edits, scale);
 
-    let mid = match cache {
-        Some((k, img)) if *k == key => img.clone(), // Arc clone: free
-        _ => {
+    // The prefix never depends on the region, so it is built and cached without one — which
+    // is why panning re-runs only the tail and never invalidates the cache.
+    let mid = match cache.get(&key) {
+        Some(img) => img, // Arc clone: free
+        None => {
+            let (prefix, _) = build_pipeline_split_in_region(edits, scale, None);
             let img = Arc::new(prefix.run(buffer.downscale_to(max_dim)));
-            *cache = Some((key, img.clone()));
+            cache.insert(key, img.clone());
             img
         }
     };
 
-    // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU
-    // seam clean — so a cached image must be copied before the tail can run. Measured at
-    // 0.6 ms against the 9 ms downscale it avoids.
-    pack(tail.run((*mid).clone()))
+    // The region can only be resolved once the prefix output's dimensions are known, which is
+    // why the split is built a second time here. Building is a few Box allocations.
+    let (pw, ph) = (mid.width(), mid.height());
+    let rect = region.and_then(|r| r.clamped(pw, ph));
+    let (input, region) = match rect {
+        Some(r) => (
+            mid.crop(r.x, r.y, r.w, r.h),
+            Some(Region {
+                full_w: pw,
+                full_h: ph,
+                x0: r.x,
+                y0: r.y,
+            }),
+        ),
+        // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU
+        // seam clean — so a cached image must be copied before the tail can run. Measured at
+        // 0.6 ms against the 9 ms downscale it avoids.
+        None => ((*mid).clone(), None),
+    };
+
+    let (_, tail) = build_pipeline_split_in_region(edits, scale, region);
+    pack(tail.run(input), region)
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -179,7 +257,7 @@ pub fn render_once(
         preview.width().max(preview.height()),
         source_scale,
     );
-    pack(build_pipeline(edits, scale).run(preview)) // sRGB, 0..=1
+    pack(build_pipeline(edits, scale).run(preview), None) // sRGB, 0..=1
 }
 
 #[cfg(test)]
@@ -220,6 +298,90 @@ mod tests {
             }
         }
         Arc::new(img)
+    }
+
+    /// The RGBA sub-rect of a frame, for comparing a region render against a whole one.
+    fn crop_rgba(f: &RenderedFrame, x: usize, y: usize, w: usize, h: usize) -> Vec<u8> {
+        let mut out = Vec::with_capacity(w * h * 4);
+        for row in y..y + h {
+            let start = (row * f.width + x) * 4;
+            out.extend_from_slice(&f.rgba[start..start + w * 4]);
+        }
+        out
+    }
+
+    #[test]
+    fn a_region_render_matches_the_whole_render_cropped() {
+        // The master invariant. It validates the region maths, the vignette correction and
+        // the cache at once — if any of the three is wrong, this fails.
+        let buf = varied();
+        let edits = Edits {
+            exposure: 0.4,
+            vignette: edit_model::Vignette {
+                amount: -80.0,
+                roundness: 50.0,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 40.0,
+                color: 40.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+
+        // max_dim = 16 is native for this 16x16 buffer, i.e. no downscale.
+        let whole = render_cached(&buf, &edits, 16, 1.0, None, &mut PrefixCache::default());
+        let (x, y, w, h) = (3, 2, 7, 6);
+        assert!(
+            x + w <= whole.width && y + h <= whole.height,
+            "region must fit"
+        );
+
+        let got = render_cached(
+            &buf,
+            &edits,
+            16,
+            1.0,
+            Some(RegionRect { x, y, w, h }),
+            &mut PrefixCache::default(),
+        );
+
+        assert_eq!((got.width, got.height), (w, h));
+        assert_eq!(got.rgba, crop_rgba(&whole, x, y, w, h));
+        assert_eq!(
+            got.region,
+            Some(pipeline::Region {
+                full_w: whole.width,
+                full_h: whole.height,
+                x0: x,
+                y0: y
+            })
+        );
+    }
+
+    #[test]
+    fn a_region_bigger_than_the_image_is_clamped() {
+        let buf = varied();
+        let e = Edits::default();
+        let got = render_cached(
+            &buf,
+            &e,
+            16,
+            1.0,
+            Some(RegionRect {
+                x: 10,
+                y: 10,
+                w: 999,
+                h: 999,
+            }),
+            &mut PrefixCache::default(),
+        );
+        assert_eq!((got.width, got.height), (6, 6));
     }
 
     #[test]
@@ -265,7 +427,7 @@ mod tests {
 
         let engine = RenderEngine::new(buf.clone(), 1.0, || {});
         for (i, e) in [&a, &a, &b, &c, &a, &d].iter().enumerate() {
-            engine.request((*e).clone(), 8);
+            engine.request((*e).clone(), 8, None);
             let got = wait_for_frame(&engine);
             let cold = render_once(&buf, e, 8, 1.0);
             assert_eq!(got.rgba, cold.rgba, "frame {i} differs from a cold render");
@@ -303,7 +465,7 @@ mod tests {
     #[test]
     fn produces_rgba_frame_of_expected_size() {
         let engine = RenderEngine::new(tiny(), 1.0, || {});
-        engine.request(Edits::default(), 4); // downscale 8 -> 4
+        engine.request(Edits::default(), 4, None); // downscale 8 -> 4
         let f = wait_for_frame(&engine);
         assert_eq!((f.width, f.height), (4, 4));
         assert_eq!(f.rgba.len(), 4 * 4 * 4);
@@ -321,6 +483,7 @@ mod tests {
                 ..Edits::default()
             },
             4,
+            None,
         );
         let f = wait_for_frame(&engine);
         assert!(f.rgba[0] > 240); // much brighter

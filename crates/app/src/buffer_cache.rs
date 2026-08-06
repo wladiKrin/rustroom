@@ -66,6 +66,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                region: None,
             },
             source_scale: 1.0,
         })

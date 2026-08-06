@@ -222,7 +222,7 @@ impl RustroomApp {
         let engine = RenderEngine::new(decoded.buffer.clone(), decoded.source_scale, move || {
             ctx2.request_repaint()
         });
-        engine.request(edits.clone(), PREVIEW_MAX_DIM);
+        engine.request(edits.clone(), PREVIEW_MAX_DIM, None);
 
         self.session = Some(Session {
             path,
@@ -390,17 +390,17 @@ impl RustroomApp {
             if (undo_click || kundo) && s.history.undo() {
                 s.edits = s.history.get().clone();
                 s.engine
-                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
             }
             if (redo_click || kredo) && s.history.redo() {
                 s.edits = s.history.get().clone();
                 s.engine
-                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
             }
             ui.toggle_value(&mut s.show_before, "Before/After");
             if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
                 s.engine
-                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
             }
         }
         if self.library.is_some() {
@@ -519,8 +519,11 @@ impl RustroomApp {
                         }
 
                         if changed {
-                            s.engine
-                                .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM);
+                            s.engine.request(
+                                preview_edits(&s.edits, s.crop_mode),
+                                PREVIEW_MAX_DIM,
+                                None,
+                            );
                         }
                         if settled {
                             s.history.push(s.edits.clone());
