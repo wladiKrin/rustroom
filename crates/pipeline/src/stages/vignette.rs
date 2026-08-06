@@ -83,14 +83,17 @@ impl Shape {
 ///
 /// Amount interpolates toward an endpoint rather than applying an exposure-style gain,
 /// because a multiplicative gain is strictly positive and so can *never* reach black:
-/// darkening scales by `1 + f` (reaching exactly 0 at −100), brightening lifts toward white
-/// by `(1 − v)·f` (reaching exactly 1.0 at +100).
+/// darkening scales by `(1 + f)²` (reaching exactly 0 at −100), brightening lifts toward
+/// white by `(1 − v)·f` (reaching exactly 1.0 at +100).
 ///
-/// The mid-range is deliberately unchanged by that switch: `f = −0.5` scales by 0.5, i.e.
-/// one stop down, exactly as the previous `exp2(±2 EV)` model did. Only the top of the
-/// slider got stronger. The cost is that the response is no longer symmetric in log space —
-/// past −50 each further step is worth progressively more, which is inherent to reaching
-/// true black at all.
+/// The darkening curve is **squared** so the mid-range carries real weight: `f = −0.5` is
+/// two stops down, roughly double what the linear form gave at every point. The two halves
+/// are therefore *not* mirror images — brightening stays linear in `f`, so a given |amount|
+/// darkens harder than it brightens. That is deliberate: vignettes are overwhelmingly used
+/// to darken, and the extra punch was asked for on that side.
+///
+/// The response is not symmetric in log space either — past −50 each further step is worth
+/// progressively more, which is inherent to reaching true black at all.
 ///
 /// Neither branch can produce a negative sample (`1 + f ≥ 0`, and the lift only ever raises
 /// a value), so no clamp is needed, unlike `HslStage` and `NoiseReductionStage`. Darkening
@@ -130,7 +133,9 @@ impl PipelineStage for VignetteStage {
             let v = (y as f32 + 0.5) / hh - 1.0;
             let f = k * smoothstep(e0, e1, shape.distance(u, v)); // -1 … 1
             if f <= 0.0 {
-                let gain = 1.0 + f; // 1 at f = 0, exactly 0 at f = -1
+                // Squared: 1 at f = 0, still exactly 0 at f = -1, but about twice the stops
+                // at every point in between (f = -0.5 is -2 EV, not -1).
+                let gain = (1.0 + f) * (1.0 + f);
                 [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
             } else {
                 // Toward white. `max(0.0)` leaves scene-referred samples already above 1.0
@@ -228,11 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn the_middle_of_the_slider_still_halves_the_light() {
-        // The rescale to true black/white deliberately left the mid-range alone: amount -50
-        // is one stop down, exactly as it was under the old exp2(±2 EV) model. Only the top
-        // end got stronger. Asserted so a future retune cannot silently shift the range
-        // people have already built a feel for.
+    fn the_middle_of_the_slider_is_two_stops_down() {
+        // The darkening curve is squared, so amount -50 is (1 - 0.5)^2 = 0.25, i.e. two
+        // stops — roughly double the punch of the linear curve it replaced, at every point.
+        // Asserted so a future retune cannot silently shift the range people build a feel
+        // for.
         let params = Vignette {
             amount: -50.0,
             midpoint: 0.0,
@@ -241,8 +246,8 @@ mod tests {
         };
         let g = gain_at(&params, 64, 64, 0, 0);
         assert!(
-            (g - 0.5).abs() < 1e-5,
-            "corner gain {g}, want 0.5 (= -1 EV)"
+            (g - 0.25).abs() < 1e-5,
+            "corner gain {g}, want 0.25 (= -2 EV)"
         );
     }
 
@@ -359,8 +364,8 @@ mod tests {
         let large = gain_at(&p, 256, 256, 0, 0);
         assert!((small - large).abs() < 1e-6, "corner: {small} vs {large}");
         assert!(
-            (small - 0.4).abs() < 1e-5,
-            "corner gain {small}, want 1 - 0.6"
+            (small - 0.16).abs() < 1e-5,
+            "corner gain {small}, want (1 - 0.6)^2"
         );
 
         // Mid-falloff: agrees to within the half-pixel offset between the two sample grids,

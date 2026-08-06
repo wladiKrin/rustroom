@@ -97,25 +97,30 @@ f <= 0:  rgb *= (1 + f)                    // ×1 at f=0, exactly ×0 (black) at
 f >  0:  rgb += (1 - rgb).max(0) * f       // exactly 1.0 (white) at f=+1
 ```
 
-**Revised 2026-08-05** (was `gain = exp2(amount/100 · 2·t)`, i.e. ±2 EV). The endpoints were
-too weak in use: a multiplicative gain is strictly positive, so it can never reach black no
-matter how large `MAX_EV` grows. Interpolating toward the endpoint is the only model that
-hits pure black and pure white exactly.
+**Revised twice on 2026-08-05, both times from use.** Originally `gain = exp2(amount/100 ·
+2·t)`, i.e. ±2 EV.
 
-**The mid-range is unchanged by the switch**, which is why it was safe to make: `f = −0.5`
-scales by 0.5 — one stop down — exactly as `exp2(−1)` did. Only the top of the slider got
-stronger:
+1. **Endpoints too weak.** A multiplicative gain is strictly positive, so it can never reach
+   black however large `MAX_EV` grows. Interpolating toward the endpoint is the only model
+   that hits pure black and pure white exactly. The linear form `(1 + f)` was chosen first
+   because it left the mid-range identical to the old model.
+2. **Mid-range then too weak** relative to the new extremes. The darkening curve is now
+   **squared**, roughly doubling the stops at every point.
 
-| Amount | old (`exp2`, ±2 EV) | new |
-|---|---|---|
-| −25 | ×0.707 | ×0.75 |
-| −50 | ×0.5 (−1 EV) | ×0.5 (−1 EV) |
-| −75 | ×0.354 | ×0.25 (−2 EV) |
-| −100 | ×0.25 | **×0 — black** |
+| Amount | original (`exp2`, ±2 EV) | linear `(1+f)` | **current `(1+f)²`** |
+|---|---|---|---|
+| −25 | ×0.707 | ×0.75 | ×0.563 (−0.83 EV) |
+| −50 | ×0.5 (−1 EV) | ×0.5 (−1 EV) | ×0.25 (−2 EV) |
+| −75 | ×0.354 | ×0.25 (−2 EV) | ×0.063 (−4 EV) |
+| −100 | ×0.25 | ×0 | **×0 — black** |
 
-The cost is that the response is no longer symmetric in log space: past −50 each further step
-is worth progressively more. That is inherent to reaching true black at all, and is the
-trade accepted here.
+**The two halves are deliberately not mirror images.** Brightening stays linear in `f`, so a
+given |amount| darkens harder than it brightens. Vignettes are overwhelmingly used to darken
+and the extra punch was wanted on that side; mirroring it (`1 − (1 − f)²` on the lift) is a
+one-line change if that ever becomes the preference.
+
+The response is not symmetric in log space either: past −50 each further step is worth
+progressively more. That is inherent to reaching true black at all, and is accepted.
 
 The `max(0.0)` on the brightening branch leaves scene-referred samples already above 1.0
 alone rather than dragging them back down toward white.
@@ -216,9 +221,8 @@ the existing `slider` closure — so undo/redo, sidecar persistence and export n
 4. `amount = -100` gives **exactly black** and `+100` **exactly white** where `t == 1`
    (midpoint and feather set low so the corner is unambiguously past the falloff). This is the
    whole point of the endpoint-interpolation model.
-4b. `amount = -50` still scales by exactly 0.5 — the mid-range the exposure-style model
-   established, pinned so a future retune cannot silently shift the range people have built a
-   feel for.
+4b. `amount = -50` scales by exactly 0.25 (two stops), pinning the squared darkening curve so
+   a future retune cannot silently shift the range people build a feel for.
 5. Four-fold mirror symmetry: gain at `(x, y)` equals gain at the horizontally, vertically and
    doubly mirrored positions.
 6. **Roundness +100 on a 128×64 frame gives equal gain at equal *pixel* distance** — `+32 px`
