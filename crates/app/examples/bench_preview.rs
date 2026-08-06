@@ -104,4 +104,47 @@ fn main() {
         }
         println!("{best:8.1} ms   NR both 50 + exposure, CACHE HIT");
     }
+
+    // A region tail render: what a slider move costs while zoomed in, once the native
+    // prefix is warm.
+    {
+        use pipeline::{build_pipeline_split_in_region, Region, RenderScale};
+        let buffer_long = buf.width().max(buf.height());
+        let sc = RenderScale::new(scale);
+        let heavy = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 50.0,
+                color: 50.0,
+                ..Default::default()
+            },
+            exposure: 0.5,
+            ..Edits::default()
+        };
+        let t0 = Instant::now();
+        let (prefix, _) = build_pipeline_split_in_region(&heavy, sc, None);
+        let mid = prefix.run(buf.downscale_to(buffer_long));
+        println!(
+            "{:8.1} ms   native prefix, ONE-OFF ({}x{})",
+            t0.elapsed().as_secs_f64() * 1000.0,
+            mid.width(),
+            mid.height()
+        );
+
+        let (rw, rh) = (1400.min(mid.width()), 900.min(mid.height()));
+        let region = Region {
+            full_w: mid.width(),
+            full_h: mid.height(),
+            x0: 0,
+            y0: 0,
+        };
+        let sub = mid.crop(0, 0, rw, rh);
+        let (_, tail) = build_pipeline_split_in_region(&heavy, sc, Some(region));
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t = Instant::now();
+            std::hint::black_box(tail.run(sub.clone()));
+            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("{best:8.1} ms   region tail {rw}x{rh}, CACHE HIT");
+    }
 }
