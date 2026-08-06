@@ -153,6 +153,42 @@ impl Vignette {
     }
 }
 
+/// Unsharp-mask sharpening. `amount` 0 = off; the other three only shape the effect.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sharpening {
+    /// Strength, 0..100. 0 = off.
+    pub amount: f32,
+    /// Blur radius (sigma) in **full-resolution pixels**, ~0.5..3.0. Scaled to whatever
+    /// resolution is actually being rendered, so a preview approximates the export.
+    pub radius: f32,
+    /// Halo suppression, 0..100. 100 is a pure unsharp mask; lower values hold back
+    /// sharpening where the local contrast is already high. Inert while `amount` is 0.
+    pub detail: f32,
+    /// Edge gate, 0..100. Higher confines sharpening to edges, sparing flat noisy areas.
+    /// 0 = no gate. Inert while `amount` is 0.
+    pub masking: f32,
+}
+
+impl Default for Sharpening {
+    fn default() -> Self {
+        Self {
+            amount: 0.0,
+            radius: 1.0,
+            detail: 50.0,
+            masking: 0.0,
+        }
+    }
+}
+
+impl Sharpening {
+    /// True when these settings actually change pixels. Amount-only, the same rule
+    /// [`NoiseReduction::is_active`] and [`Vignette::is_active`] follow.
+    pub fn is_active(&self) -> bool {
+        self.amount > 0.0
+    }
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -180,6 +216,7 @@ pub struct Edits {
     pub hsl: Hsl,
     pub noise_reduction: NoiseReduction,
     pub vignette: Vignette,
+    pub sharpening: Sharpening,
     pub geometry: Geometry,
 }
 
@@ -419,6 +456,68 @@ mod tests {
                 midpoint: 30.0,
                 roundness: 80.0,
                 feather: 20.0,
+            },
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn sharpening_defaults_to_off() {
+        let s = Sharpening::default();
+        assert_eq!(s.amount, 0.0);
+        assert_eq!(s.masking, 0.0);
+        // Radius is a physical pixel quantity, not a 0..100 slider; 1.0 px is the usual
+        // starting point. Detail sits at its midpoint like every other modifier.
+        assert_eq!(s.radius, 1.0);
+        assert_eq!(s.detail, 50.0);
+        assert_eq!(Edits::default().sharpening, s);
+    }
+
+    #[test]
+    fn sharpening_is_active_only_on_amount() {
+        assert!(!Sharpening::default().is_active());
+        // Same rule as NoiseReduction and Vignette: the modifiers shape an effect that is
+        // off until amount is non-zero, so dragging one alone must not insert a stage.
+        assert!(!Sharpening {
+            radius: 3.0,
+            detail: 0.0,
+            masking: 90.0,
+            ..Default::default()
+        }
+        .is_active());
+        assert!(Sharpening {
+            amount: 1.0,
+            ..Default::default()
+        }
+        .is_active());
+    }
+
+    #[test]
+    fn old_sidecar_without_sharpening_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.sharpening, Sharpening::default());
+    }
+
+    #[test]
+    fn partial_sharpening_json_keeps_modifier_defaults() {
+        let e: Edits = serde_json::from_str(r#"{"sharpening": {"amount": 60.0}}"#).unwrap();
+        assert_eq!(e.sharpening.amount, 60.0);
+        assert_eq!(e.sharpening.radius, 1.0);
+        assert_eq!(e.sharpening.detail, 50.0);
+        assert_eq!(e.sharpening.masking, 0.0);
+    }
+
+    #[test]
+    fn sharpening_roundtrips_json() {
+        let e = Edits {
+            sharpening: Sharpening {
+                amount: 70.0,
+                radius: 2.5,
+                detail: 30.0,
+                masking: 80.0,
             },
             ..Default::default()
         };
