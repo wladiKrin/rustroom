@@ -6,8 +6,9 @@ use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
-use rustroom_app::render_engine::RenderEngine;
+use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::thumb_loader::ThumbLoader;
+use rustroom_app::view_region;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,6 +21,8 @@ const DECODE_DEBOUNCE: Duration = Duration::from_millis(180);
 const MAX_CONCURRENT_DECODES: usize = 2;
 /// Recently viewed photos kept decoded in memory (~85 MB each).
 const BUFFER_CACHE_CAP: usize = 3;
+/// Rendered beyond the visible rect so small pans reuse the existing texture.
+const REGION_MARGIN: usize = 128;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -103,6 +106,28 @@ struct Session {
     show_before: bool,
     crop_mode: bool,
     active_handle: Option<crop_tool::Handle>,
+    /// The region the current texture covers, as a rect, so the canvas can both place it and
+    /// test containment without consulting texture dimensions — which would be wrong while
+    /// `show_before` swaps in the whole-image baseline. `None` = whole image.
+    rendered_region: Option<RegionRect>,
+    /// The region last requested, so the same one is not re-requested every frame.
+    requested_region: Option<RegionRect>,
+    /// Post-geometry image size at fit resolution, for the fit/zoom maths.
+    fit_image_size: egui::Vec2,
+    /// The editing buffer's long edge — `max_dim` for native mode.
+    buffer_long: usize,
+}
+
+impl Session {
+    /// The working resolution to re-render at: native while a region is being shown, the
+    /// preview cap otherwise. Keeps an edit made while zoomed in from snapping back to fit.
+    fn render_max_dim(&self) -> usize {
+        if self.requested_region.is_some() {
+            self.buffer_long
+        } else {
+            PREVIEW_MAX_DIM
+        }
+    }
 }
 
 /// Edits to render for the preview. In crop mode the crop is reset to the full frame so
@@ -238,6 +263,12 @@ impl RustroomApp {
             show_before: false,
             crop_mode: false,
             active_handle: None,
+            rendered_region: None,
+            requested_region: None,
+            // Corrected by the first frame that arrives; the placeholder only has to be
+            // non-zero so the first fit calculation cannot divide by zero.
+            fit_image_size: egui::vec2(1.0, 1.0),
+            buffer_long: decoded.buffer.width().max(decoded.buffer.height()),
         });
         self.status.clear();
     }
@@ -389,18 +420,27 @@ impl RustroomApp {
             });
             if (undo_click || kundo) && s.history.undo() {
                 s.edits = s.history.get().clone();
-                s.engine
-                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
+                s.engine.request(
+                    preview_edits(&s.edits, s.crop_mode),
+                    s.render_max_dim(),
+                    s.requested_region,
+                );
             }
             if (redo_click || kredo) && s.history.redo() {
                 s.edits = s.history.get().clone();
-                s.engine
-                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
+                s.engine.request(
+                    preview_edits(&s.edits, s.crop_mode),
+                    s.render_max_dim(),
+                    s.requested_region,
+                );
             }
             ui.toggle_value(&mut s.show_before, "Before/After");
             if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
-                s.engine
-                    .request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
+                s.engine.request(
+                    preview_edits(&s.edits, s.crop_mode),
+                    s.render_max_dim(),
+                    s.requested_region,
+                );
             }
         }
         if self.library.is_some() {
@@ -521,8 +561,8 @@ impl RustroomApp {
                         if changed {
                             s.engine.request(
                                 preview_edits(&s.edits, s.crop_mode),
-                                PREVIEW_MAX_DIM,
-                                None,
+                                s.render_max_dim(),
+                                s.requested_region,
                             );
                         }
                         if settled {
@@ -551,11 +591,69 @@ impl RustroomApp {
                     if let Some(tex) = &s.texture {
                         let shown = if s.show_before { &s.baseline } else { tex };
                         let avail = ui.available_size();
-                        let tex_size = shown.size_vec2();
-                        let fit = (avail.x / tex_size.x).min(avail.y / tex_size.y).min(1.0);
-                        let draw = tex_size * fit * s.zoom;
-                        let img_rect =
-                            egui::Rect::from_center_size(ui.max_rect().center() + s.pan, draw);
+
+                        // fit/zoom are expressed against the post-geometry image at *fit*
+                        // resolution, which stays constant as the render mode changes.
+                        let full = s.fit_image_size;
+                        let fit = (avail.x / full.x).min(avail.y / full.y).min(1.0);
+                        let native = view_region::needs_native(fit, s.zoom);
+
+                        // Dimensions of the image at the resolution we render it, and the
+                        // screen pixels per rendered pixel.
+                        let full_long = full.x.max(full.y);
+                        let render_long = if native {
+                            s.buffer_long as f32
+                        } else {
+                            full_long
+                        };
+                        let k = render_long / full_long;
+                        let (iw, ih) =
+                            ((full.x * k).round() as usize, (full.y * k).round() as usize);
+                        let scale = fit * s.zoom / k;
+
+                        // Which part of the image the view needs, and whether what is already
+                        // rendered still covers it. Crop mode keeps the whole frame, so the
+                        // overlay always has the full image under it.
+                        let want = if native && !s.crop_mode {
+                            let vis = view_region::visible_rect(
+                                iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
+                            );
+                            Some(view_region::with_margin(vis, iw, ih, REGION_MARGIN))
+                        } else {
+                            None
+                        };
+                        let covered = match (want, s.rendered_region) {
+                            (None, None) => true,
+                            (Some(w), Some(r)) => view_region::contains(r, w),
+                            _ => false,
+                        };
+                        if !covered && s.requested_region != want {
+                            s.requested_region = want;
+                            let max_dim = if native {
+                                s.buffer_long
+                            } else {
+                                PREVIEW_MAX_DIM
+                            };
+                            s.engine
+                                .request(preview_edits(&s.edits, s.crop_mode), max_dim, want);
+                        }
+
+                        // Place the texture: a region sits at its own offset inside the image,
+                        // the whole image stays centred as before.
+                        let img_rect = match s.rendered_region {
+                            Some(r) => {
+                                let origin = ui.max_rect().center() + s.pan
+                                    - egui::vec2(iw as f32, ih as f32) * scale * 0.5;
+                                egui::Rect::from_min_size(
+                                    origin + egui::vec2(r.x as f32, r.y as f32) * scale,
+                                    shown.size_vec2() * scale,
+                                )
+                            }
+                            None => egui::Rect::from_center_size(
+                                ui.max_rect().center() + s.pan,
+                                shown.size_vec2() * fit * s.zoom,
+                            ),
+                        };
                         let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                         egui::Image::new(shown).paint_at(ui, resp.rect);
 
@@ -794,6 +892,18 @@ impl eframe::App for RustroomApp {
                     &frame.rgba,
                 );
                 s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+                s.rendered_region = frame.region.map(|r| RegionRect {
+                    x: r.x0,
+                    y: r.y0,
+                    w: frame.width,
+                    h: frame.height,
+                });
+                // A whole-image frame is by definition a fit-resolution render, and is the
+                // only thing that can tell us the post-geometry size — which changes with
+                // the crop and the straighten angle.
+                if frame.region.is_none() {
+                    s.fit_image_size = egui::vec2(frame.width as f32, frame.height as f32);
+                }
             }
         }
 
