@@ -510,6 +510,16 @@ impl RustroomApp {
                                 );
                             }
                         });
+                        egui::CollapsingHeader::new("Sharpening").show(ui, |ui| {
+                            let sh = &mut s.edits.sharpening;
+                            slider(ui, &mut sh.amount, 0.0..=100.0, "Amount");
+                            // The one slider not on a 0..100 scale: it is a physical pixel
+                            // quantity, in full-resolution pixels, and naming it in pixels
+                            // is what makes "scaled for the render" comprehensible.
+                            slider(ui, &mut sh.radius, 0.5..=3.0, "Radius (px)");
+                            slider(ui, &mut sh.detail, 0.0..=100.0, "Detail");
+                            slider(ui, &mut sh.masking, 0.0..=100.0, "Masking");
+                        });
                         egui::CollapsingHeader::new("Noise Reduction").show(ui, |ui| {
                             let nr = &mut s.edits.noise_reduction;
                             slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
