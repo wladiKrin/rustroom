@@ -21,8 +21,6 @@ const DECODE_DEBOUNCE: Duration = Duration::from_millis(180);
 const MAX_CONCURRENT_DECODES: usize = 2;
 /// Recently viewed photos kept decoded in memory (~85 MB each).
 const BUFFER_CACHE_CAP: usize = 3;
-/// Rendered beyond the visible rect so small pans reuse the existing texture.
-const REGION_MARGIN: usize = 128;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -627,7 +625,12 @@ impl RustroomApp {
                             let vis = view_region::visible_rect(
                                 iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
                             );
-                            Some(view_region::with_margin(vis, iw, ih, REGION_MARGIN))
+                            Some(view_region::with_margin(
+                                vis,
+                                iw,
+                                ih,
+                                view_region::REGION_MARGIN,
+                            ))
                         } else {
                             None
                         };
