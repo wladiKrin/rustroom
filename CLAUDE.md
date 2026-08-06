@@ -50,13 +50,19 @@ Pipeline order:
 ```
 decode → linearize/black-white → white balance → demosaic →
 input color profile → working space (linear f32) →
-noise reduction → exposure → tone (highlights/shadows/curve) →
-color (HSL/grading) → vignette → sharpen → geometry (crop/lens) → output transform → encode
+geometry (crop/straighten) → noise reduction → exposure →
+tone (highlights/shadows/curve) → color (HSL/grading) →
+vignette → sharpen → output transform → encode
 ```
+
+**Geometry runs first**, not last, so every adjustment acts on the final cropped pixels —
+which is also what makes the vignette post-crop for free, with no separate mode. (Lens
+corrections will join it there when `lensfun` lands.)
 
 **NR early, sharpening late** — the two halves of "detail" belong at opposite ends. Denoising
 the source is far easier than denoising after Exposure/Shadows/the tone curve have amplified
 the grain, and it prevents HSL chroma speckle instead of smoothing it after the fact.
+Sharpening is last because it must not amplify anything a later stage would then stretch.
 
 ## Planned crate layout (Cargo workspace)
 
@@ -70,7 +76,7 @@ opensource_lightroom/
 │   ├── image-decode/         # ✅ JPEG/PNG/TIFF → linear ImageBuf (image + srgb_to_linear) + thumbnail
 │   ├── color/                # ✅ sRGB transfer fns + Oklab (lcms2/ICC still deferred)
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/geometry)
-│   ├── pipeline/             # ✅ PipelineStage + 11 stages (incl. geometry, saturation, hsl, noise_reduction, vignette) + spatial::box_blur + build_pipeline / build_pipeline_split(_in_region) + PrefixKey + Region + golden tests
+│   ├── pipeline/             # ✅ PipelineStage + 12 stages (incl. geometry, saturation, hsl, noise_reduction, vignette, sharpening) + spatial::box_blur + spatial::gaussian_blur + build_pipeline / build_pipeline_split(_in_region) + PrefixKey + Region + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
 │   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region
@@ -92,14 +98,14 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ## Current status
 
-> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Commit messages carry no `Co-Authored-By` trailer** (user's explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **▶ NEXT ACTION: write the sharpening implementation plan, then execute it.** The **spec is already written and committed** — `docs/superpowers/specs/2026-08-06-sharpening-design.md` (`d536bd6`). It was brainstormed and approved; **do not re-brainstorm or re-derive it.** Invoke `superpowers:writing-plans` against that spec, then `superpowers:executing-plans` inline, exactly as every feature this session was done.
+> **▶ RESUME HERE (fresh session).** Everything below is committed to `main` (local; user pushes to `github.com/wladiKrin/rustroom` themselves — never push without asking). Working tree clean, all checks green. **Commit messages carry no `Co-Authored-By` trailer** (user's explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` (always `--release`). **▶ NEXT ACTION: pick the next Phase 2 feature (see below) and run it through brainstorm → spec → plan → executing-plans, all inline.** Sharpening landed, so the **Develop set is now rounded out** — every stage the "serious on a focused feature set" goal asked for exists.
 
-Three things in that spec are easy to miss and must survive into the plan:
-1. **`gaussian_blur` is a *new* primitive alongside `box_blur`**, not a replacement — sharpening radii are 0.5–3 px, where integer box radii cannot express sub-pixel blur at all.
-2. **The margin invariant** — sharpening is the first *spatial* stage in the region-cropped **tail**, so `REGION_MARGIN` (128) must exceed its kernel radius (≤9 px). Needs an assertion.
-3. **The master invariant must be extended, not left alone.** `a_region_render_matches_the_whole_render_cropped` would keep passing while silently no longer covering its case, because its edit set has no sharpening. Add sharpening to it and inset the comparison by `ceil(3σ)`.
+**The remaining Phase 2 gaps, in rough order of value:**
+1. **Presets + copy/paste + sync** — all three are *one* feature: moving an `Edits` around. `Edits` is already serde, so this is **app-layer only, no pipeline work**. The cheapest large win left.
+2. **Batch export** — the other half of "usable on a shoot, not just on one photo".
+3. **Texture / clarity / dehaze** — local-contrast siblings of sharpening. `gaussian_blur` and the `RenderScale` seam now exist, so texture and clarity are largely a different radius and a different curve on machinery that is already built and tested.
 
-**After sharpening**, the Phase 2 gaps are: **presets + copy/paste + sync** (all three are one feature — moving an `Edits` around; `Edits` is already serde, so app-layer only, no pipeline work), **batch export**, and **texture/clarity/dehaze**. Also open: parallelizing the RGBA8 pack in `render_engine::pack` (a sequential `Vec::push` loop, now ~35% of a cached frame); a second cache checkpoint so Straighten stops costing full price; a background full-res decode for true 1:1 (far more tractable given the demosaic finding below); and setting libraw's `user_qual` deliberately. Any new feature → brainstorm → spec → plan → executing-plans, all inline. Docs live in `docs/superpowers/`.
+**Standing perf items** (none blocking): parallelizing the RGBA8 pack in `render_engine::pack` (still a sequential `Vec::push` loop, ~35% of a cached frame — the obvious next target); a second cache checkpoint so Straighten stops costing full price; a background full-res decode for true 1:1 (far more tractable given the demosaic finding below); and setting libraw's `user_qual` deliberately. Docs live in `docs/superpowers/`.
 
 **Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — updated 2026-08-06 with per-milestone markers, an "Emergent work" section, and a **correction to M5.2** (demosaic is inside libraw, so the planned `wgpu` port will not speed up decoding). We are **mid Phase 2**.
 
@@ -132,6 +138,30 @@ Three things in that spec are easy to miss and must survive into the plan:
 - **Measured** (X-T4, 1600 px preview, release, best of 5): NR both 50 cold **46.0 ms** → **13.1 ms** on a hit. Reproduce with `cargo run --release -p app --example bench_preview <raw>`.
 - **`every_cached_frame_matches_a_cold_render`** is the test that matters: it pushes a sequence (hit / downstream change / NR change / return / geometry change) through one engine and asserts every frame equals a cold `render_once`. Three `assert_ne!` guards up front stop it passing trivially. All **20 goldens stayed byte-identical** through the whole feature, which is the proof `build_pipeline`'s behaviour never changed.
 - **Caveats:** cold on open (this speeds up *editing*, not opening); **Straighten is still full cost** since geometry is upstream, but **dragging the crop rectangle hits the cache** because `preview_edits` resets the crop in crop mode, so the pipeline never sees it change; one entry, so alternating between two heavy NR settings misses every time; and the RGBA8 pack (4.4 ms, still a sequential `Vec::push` loop) is now ~35% of a cached frame — the obvious next target.
+
+**Sharpening done — the "detail" pair is complete.** Twelve stages. NR without sharpening was half the story: denoising softens, and nothing put the edge definition back.
+
+- **`spatial::gaussian_blur` is a *new* primitive alongside `box_blur`, not a replacement.** They serve opposite regimes: `box_blur` is O(1) in its radius, which is what makes NR's 6–32 px windows affordable; sharpening works at σ 0.5–3 px, where a direct kernel is cheaper (7 taps at σ=1) **and** where an integer box radius cannot express a sub-pixel blur at all. Kernel radius `ceil(3σ)`, weights normalized, **edges replicate** (so a constant plane stays exactly constant), and — unlike `box_blur`, whose vertical pass carries a running sum — *both* passes are rayon-parallel over rows, because a Gaussian carries no state between pixels.
+- **`SharpenStage`** (`stages/sharpening.rs`) — `d = luma − gaussian_blur(luma, σ)` on **Rec.709 luma in linear light**, applied back as a scalar RGB gain. That one choice buys three things at once: no colour fringing on a chromatic edge, hue/saturation ratios preserved exactly, and **no Oklab round trip** — the cost that dominates HSL and NR.
+- **Detail is our own model**, not Adobe's: `supp = s + (1−s)/(1 + (|d|/HALO_KNEE)²)`. At 100 it is a pure unsharp mask; at 0 it suppresses halos where local contrast is already high while leaving fine texture at nearly full strength. Genuinely distinct from **Masking**, which gates on *where* (a blurred `|d|` through a smoothstep) rather than *how strong*. Masking 0 **skips the branch entirely** — both the cheap path and what avoids `smoothstep(0, 0, ..)` being degenerate. Measured on the goldens' hard edge: Detail 0 cuts the halo from 69→0 down to 69→61 (8-bit) while the flat-band grain is essentially untouched.
+- **⚠ The near-black guard is load-bearing.** `gain = 1 + Δ/max(luma, LUMA_EPS)` with `LUMA_EPS = 1e-3`; without it a dark pixel beside a bright edge divides by ~0 and the ratio explodes. `GAIN_MAX = 4.0` then bounds a halo in near-black regions to +2 stops. Both are pinned by `the_near_black_guard_bounds_the_gain`.
+- **Radius is the one slider not on a 0–100 scale**, deliberately: it is σ in **full-resolution pixels**, multiplied by `RenderScale` — the same seam NR uses, and naming it in pixels is what makes "full-res radius, scaled for the render" comprehensible. `Sharpening::is_active()` is **amount-only**, the rule `NoiseReduction` and `Vignette` already follow. Defaults: amount 0, **radius 1.0**, detail 50, masking 0.
+- **⚠ The margin invariant is now real, and asserted.** NR can never seam because it lives in the *prefix*, which always runs whole-buffer. Sharpening lives in the **tail**, which runs on the *cropped* region — so at the region's edge it reads neighbours that do not exist. That band is `max_kernel_radius` wide: **15 px** at Radius 3 full-res, because the two Gaussians **compose** — `ceil(3σ)` = 9 for `d`, plus the mask's `ceil(3·2)` = 6 for the blur of `|d|`. (The spec said 9; it counted only the first.) `REGION_MARGIN` is 128, so the band never reaches the screen. `view_region::the_region_margin_exceeds_every_tail_kernel_radius` fails loudly if the Radius range grows or another spatial stage joins the tail. **`REGION_MARGIN` moved from `main.rs` into `view_region`** precisely so a test could reach it — a `const` in a binary crate is unreachable.
+- **⚠ The master invariant was *weakened*, and the test now says so.** `a_region_render_matches_the_whole_render_cropped` can no longer be bit-identical at the region's edge — and never can be, because the region genuinely lacks those neighbours. It would have kept passing **silently**, since its edit set had no sharpening. So sharpening was **added** to that edit set and the comparison **inset by `max_kernel_radius`**, derived rather than hard-coded so it tracks any future change; an `assert_ne!` up front stops it passing trivially. The interior is still compared bit for bit. Verified by temporarily setting `inset = 0` and watching it fail.
+- **Goldens now 23** — `sharpen_basic` / `sharpen_masked` (80) / `sharpen_detail_low` on the existing `noise_chart()`, whose hard edge *and* noise are exactly what sharpening interacts with. The 20 existing references stayed **byte-identical**, which is the proof the new stage is inert at its default.
+- **Measured** (X-T4 `.RAF`, 3123×2085 half-size buffer → 1600 px preview, release, best of 5):
+
+  | preview pipeline | ms |
+  |---|---|
+  | neutral (output transform only) | 21.5 |
+  | vignette −60 | 23.7 |
+  | **sharpening 70** | **26.6** |
+  | **sharpening 70 + masking 60** | **28.8** |
+  | NR both 50 | 45.3 |
+  | HSL only | 56.8 |
+
+  **+5.1 ms**, and +2.2 ms more for the second Gaussian that Masking adds — the second-cheapest stage after the vignette. It lands in the cache's **tail**, so it re-runs on every slider move; that is right (its parameters change often) and affordable.
+- **Accepted caveats:** (1) **judge sharpening at 1:1, not at fit** — at fit scale (0.256) a full-res σ of 1.0 becomes σ=0.256, a kernel of `[0.0005, 0.999, 0.0005]`, i.e. the identity. That is *correct*, not a bug: neither the preview nor a fit-view of the export contains that detail. This is exactly why 1:1 region rendering was built first, and why there is deliberately **no `SIGMA_MIN` clamp**. (2) Even at 1:1 the editing buffer is a **half-size** decode, so what you see corresponds to ~2× the radius the export applies, and the half-size path skips demosaic entirely while export runs AHD — bounded judgement, not exactness. (3) No output/print sharpening for resized exports; separate feature. (4) Detail is our own model, not Adobe's. (5) Sharpening after the vignette means darkened corners sharpen less in absolute terms — correct for a ratio-based model.
 
 **Vignette done — the "rounded-out Develop" set is complete.** Post-crop, creative (lens-profile vignetting correction stays a `lensfun`-era feature).
 
@@ -274,8 +304,8 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** **rounded-out Develop** — saturation/vibrance, HSL and noise reduction landed; vignette is the natural remaining small stage, and **sharpening** is now much cheaper to build (it reuses `spatial::box_blur` and the `RenderScale` seam, and belongs late, after geometry). Photo switching is threaded + cached; the remaining perf win is caching the downscaled preview so a slider edit reruns only the pipeline — more valuable now, since NR runs first and re-runs on every slider move. A nicer placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) is a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
+**Next step:** the **Develop set is rounded out** — saturation/vibrance, HSL, noise reduction, vignette and sharpening have all landed, and the preview prefix cache plus 1:1 region rendering make editing them interactive. See the RESUME HERE block at the top for the ranked Phase 2 gaps (presets/copy-paste/sync, batch export, texture/clarity/dehaze) and the standing perf items. A nicer decode placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) remains a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
 
-Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`, `2026-08-05-hsl-design.md`, `2026-08-05-noise-reduction-design.md`, `2026-08-05-vignette-design.md`, `2026-08-06-preview-prefix-cache-design.md`, `2026-08-06-one-to-one-region-rendering-design.md`, `2026-08-06-sharpening-design.md` (**spec written, plan not yet**). plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`, `2026-08-05-hsl.md`, `2026-08-05-noise-reduction.md`, `2026-08-05-vignette.md`, `2026-08-06-preview-prefix-cache.md`, `2026-08-06-one-to-one-region-rendering.md`.
+Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`, `2026-08-05-hsl-design.md`, `2026-08-05-noise-reduction-design.md`, `2026-08-05-vignette-design.md`, `2026-08-06-preview-prefix-cache-design.md`, `2026-08-06-one-to-one-region-rendering-design.md`, `2026-08-06-sharpening-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`, `2026-08-05-hsl.md`, `2026-08-05-noise-reduction.md`, `2026-08-05-vignette.md`, `2026-08-06-preview-prefix-cache.md`, `2026-08-06-one-to-one-region-rendering.md`, `2026-08-06-sharpening.md`.
 
 _Update this "Current status" section as milestones land._
