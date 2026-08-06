@@ -67,4 +67,41 @@ fn main() {
         }
         println!("{best:8.1} ms   {label}");
     }
+
+    // The cached path: what a slider move actually costs once the prefix is warm. Timed
+    // through the public split rather than through RenderEngine, so the number is the work
+    // itself and not thread hand-off noise.
+    {
+        use pipeline::{build_pipeline_split, RenderScale};
+        let buffer_long = buf.width().max(buf.height());
+        let sc = RenderScale::new(scale * PREVIEW_MAX_DIM as f32 / buffer_long as f32);
+        let heavy = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 50.0,
+                color: 50.0,
+                ..Default::default()
+            },
+            exposure: 0.5,
+            ..Edits::default()
+        };
+        let (prefix, tail) = build_pipeline_split(&heavy, sc);
+        let mid = prefix.run(buf.downscale_to(PREVIEW_MAX_DIM));
+
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t = Instant::now();
+            let out = tail.run(mid.clone());
+            let mut rgba = Vec::with_capacity(out.width() * out.height() * 4);
+            for px in out.data().chunks_exact(3) {
+                rgba.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
+                rgba.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
+                rgba.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);
+                rgba.push(255);
+            }
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            std::hint::black_box(&rgba);
+            best = best.min(ms);
+        }
+        println!("{best:8.1} ms   NR both 50 + exposure, CACHE HIT");
+    }
 }
