@@ -48,6 +48,27 @@ fn main() {
             },
         ),
         (
+            "sharpening 70 (amount/radius/detail)",
+            Edits {
+                sharpening: edit_model::Sharpening {
+                    amount: 70.0,
+                    ..Default::default()
+                },
+                ..Edits::default()
+            },
+        ),
+        (
+            "sharpening 70 + masking 60 (second gaussian)",
+            Edits {
+                sharpening: edit_model::Sharpening {
+                    amount: 70.0,
+                    masking: 60.0,
+                    ..Default::default()
+                },
+                ..Edits::default()
+            },
+        ),
+        (
             "HSL only (for comparison)",
             Edits {
                 hsl,
