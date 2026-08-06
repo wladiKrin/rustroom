@@ -7,3 +7,4 @@ pub mod histogram;
 pub mod history;
 pub mod render_engine;
 pub mod thumb_loader;
+pub mod view_region;
