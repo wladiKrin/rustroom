@@ -14,6 +14,7 @@ pub use stages::hsl::HslStage;
 pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::saturation::SaturationStage;
+pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
 pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
 pub use stages::vignette::VignetteStage;
@@ -270,6 +271,11 @@ mod tests {
             },
             vignette: edit_model::Vignette {
                 amount: -30.0,
+                ..Default::default()
+            },
+            sharpening: edit_model::Sharpening {
+                amount: 60.0,
+                masking: 40.0,
                 ..Default::default()
             },
             geometry: edit_model::Geometry {

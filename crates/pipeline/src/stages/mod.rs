@@ -5,6 +5,7 @@ pub mod hsl;
 pub mod noise_reduction;
 pub mod output_transform;
 pub mod saturation;
+pub mod sharpening;
 pub mod tone_curve;
 pub mod tone_regions;
 pub mod vignette;
