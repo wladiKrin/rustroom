@@ -92,6 +92,34 @@ impl Pipeline {
     }
 }
 
+/// Everything [`build_pipeline_split`]'s prefix depends on, for caching its output.
+///
+/// **If you add a stage to the prefix, add its parameters here.** The tests in this module
+/// assert that every other edit field leaves this key unchanged, so they will fail until you
+/// do — which is the point, because a prefix stage missing from the key means the preview
+/// cache silently serves stale pixels.
+///
+/// Compared with `==` rather than hashed, so there is no collision risk. The `f32` is safe in
+/// a `PartialEq`: the only pathological value is `NaN`, which compares unequal to itself and
+/// so fails toward a cache *miss*.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrefixKey {
+    geometry: edit_model::Geometry,
+    noise_reduction: edit_model::NoiseReduction,
+    /// Included because it sets the noise-reduction radii.
+    scale: f32,
+}
+
+impl PrefixKey {
+    pub fn new(edits: &Edits, scale: RenderScale) -> Self {
+        Self {
+            geometry: edits.geometry,
+            noise_reduction: edits.noise_reduction,
+            scale: scale.get(),
+        }
+    }
+}
+
 /// The develop pipeline in two halves, split where the preview cache checkpoints.
 ///
 /// The **prefix** — geometry, then noise reduction — depends only on `edits.geometry` and
@@ -224,6 +252,110 @@ mod tests {
             },
             version: 0,
         }
+    }
+
+    #[test]
+    fn prefix_key_ignores_every_downstream_field() {
+        // Proves every edit field is either in the key or downstream of the checkpoint.
+        // If a field is added to the prefix without being added to PrefixKey, the cache
+        // would silently serve stale pixels; this is what stands in the way.
+        let base = Edits::default();
+        let k = PrefixKey::new(&base, RenderScale::FULL);
+
+        let mut hsl = edit_model::Hsl::default();
+        hsl.bands[3].hue = 40.0;
+        let downstream = [
+            Edits {
+                white_balance: edit_model::WhiteBalance {
+                    temp: 50.0,
+                    tint: -20.0,
+                },
+                ..base.clone()
+            },
+            Edits {
+                exposure: 2.0,
+                ..base.clone()
+            },
+            Edits {
+                contrast: 50.0,
+                ..base.clone()
+            },
+            Edits {
+                highlights: -50.0,
+                ..base.clone()
+            },
+            Edits {
+                shadows: 50.0,
+                ..base.clone()
+            },
+            Edits {
+                whites: 30.0,
+                ..base.clone()
+            },
+            Edits {
+                blacks: -30.0,
+                ..base.clone()
+            },
+            Edits {
+                tone_curve: edit_model::ToneCurve {
+                    points: vec![[0.0, 0.0], [0.4, 0.6], [1.0, 1.0]],
+                },
+                ..base.clone()
+            },
+            Edits {
+                saturation: 40.0,
+                ..base.clone()
+            },
+            Edits {
+                vibrance: 40.0,
+                ..base.clone()
+            },
+            Edits {
+                hsl,
+                ..base.clone()
+            },
+            Edits {
+                vignette: edit_model::Vignette {
+                    amount: -70.0,
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        ];
+        for e in downstream {
+            assert_eq!(
+                PrefixKey::new(&e, RenderScale::FULL),
+                k,
+                "a downstream field changed the prefix key"
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_key_changes_with_prefix_fields_and_scale() {
+        let base = Edits::default();
+        let k = PrefixKey::new(&base, RenderScale::FULL);
+
+        let geo = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            ..base.clone()
+        };
+        assert_ne!(PrefixKey::new(&geo, RenderScale::FULL), k);
+
+        let nr = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 40.0,
+                ..Default::default()
+            },
+            ..base.clone()
+        };
+        assert_ne!(PrefixKey::new(&nr, RenderScale::FULL), k);
+
+        // Scale changes the noise-reduction radii, so it belongs in the key.
+        assert_ne!(PrefixKey::new(&base, RenderScale::new(0.25)), k);
     }
 
     #[test]
