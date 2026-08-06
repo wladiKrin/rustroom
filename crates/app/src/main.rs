@@ -114,6 +114,11 @@ struct Session {
     requested_region: Option<RegionRect>,
     /// Post-geometry image size at fit resolution, for the fit/zoom maths.
     fit_image_size: egui::Vec2,
+    /// Long edge of the *full* post-geometry image at the resolution the current texture was
+    /// rendered at. Placement must use this rather than the current mode's: while a frame
+    /// from the other mode is still in flight the two differ, and using the current one drew
+    /// the old texture far off-screen — a white flash when zooming out quickly.
+    rendered_long: f32,
     /// The editing buffer's long edge — `max_dim` for native mode.
     buffer_long: usize,
 }
@@ -268,6 +273,7 @@ impl RustroomApp {
             // Corrected by the first frame that arrives; the placeholder only has to be
             // non-zero so the first fit calculation cannot divide by zero.
             fit_image_size: egui::vec2(1.0, 1.0),
+            rendered_long: 1.0,
             buffer_long: decoded.buffer.width().max(decoded.buffer.height()),
         });
         self.status.clear();
@@ -596,7 +602,11 @@ impl RustroomApp {
                         // resolution, which stays constant as the render mode changes.
                         let full = s.fit_image_size;
                         let fit = (avail.x / full.x).min(avail.y / full.y).min(1.0);
-                        let native = view_region::needs_native(fit, s.zoom);
+                        // Crop mode stays at fit resolution whatever the zoom: it is a framing
+                        // operation, the overlay is drawn against the whole image, and a
+                        // whole-image *native* render would be both expensive and placed by
+                        // the fit-mode maths the overlay assumes.
+                        let native = view_region::needs_native(fit, s.zoom) && !s.crop_mode;
 
                         // Dimensions of the image at the resolution we render it, and the
                         // screen pixels per rendered pixel.
@@ -612,9 +622,8 @@ impl RustroomApp {
                         let scale = fit * s.zoom / k;
 
                         // Which part of the image the view needs, and whether what is already
-                        // rendered still covers it. Crop mode keeps the whole frame, so the
-                        // overlay always has the full image under it.
-                        let want = if native && !s.crop_mode {
+                        // rendered still covers it.
+                        let want = if native {
                             let vis = view_region::visible_rect(
                                 iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
                             );
@@ -638,20 +647,33 @@ impl RustroomApp {
                                 .request(preview_edits(&s.edits, s.crop_mode), max_dim, want);
                         }
 
-                        // Place the texture: a region sits at its own offset inside the image,
-                        // the whole image stays centred as before.
-                        let img_rect = match s.rendered_region {
+                        // Place using the *texture's* own render resolution, not the current
+                        // mode's: a frame from the other mode may still be on screen while a
+                        // new one is in flight.
+                        let (place_region, place_long) = if s.show_before {
+                            // The baseline is always the whole image at fit resolution.
+                            (None, full_long)
+                        } else {
+                            (s.rendered_region, s.rendered_long.max(1.0))
+                        };
+                        let pk = place_long / full_long;
+                        let pscale = fit * s.zoom / pk;
+
+                        let img_rect = match place_region {
                             Some(r) => {
                                 let origin = ui.max_rect().center() + s.pan
-                                    - egui::vec2(iw as f32, ih as f32) * scale * 0.5;
+                                    - egui::vec2(full.x * pk, full.y * pk) * pscale * 0.5;
                                 egui::Rect::from_min_size(
-                                    origin + egui::vec2(r.x as f32, r.y as f32) * scale,
-                                    shown.size_vec2() * scale,
+                                    origin + egui::vec2(r.x as f32, r.y as f32) * pscale,
+                                    shown.size_vec2() * pscale,
                                 )
                             }
+                            // `pscale` rather than `fit * zoom`: the texture's own size
+                            // already carries its render resolution, so this stays right
+                            // even for a whole-image frame from the other mode.
                             None => egui::Rect::from_center_size(
                                 ui.max_rect().center() + s.pan,
-                                shown.size_vec2() * fit * s.zoom,
+                                shown.size_vec2() * pscale,
                             ),
                         };
                         let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
@@ -665,7 +687,21 @@ impl RustroomApp {
                             }
                             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                             if scroll != 0.0 && resp.hovered() {
+                                let old = s.zoom;
                                 s.zoom = (s.zoom * (1.0 + scroll * 0.001)).clamp(1.0, 8.0);
+                                // Zoom about the cursor, not the centre: keep whatever the
+                                // pointer is over fixed on screen. `anchor` is the image's
+                                // centre, so `d` is the cursor's offset from it; magnifying
+                                // by `r` moves that point to `d*r`, which `d*(1-r)` undoes.
+                                if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                                    let anchor = ui.max_rect().center() + s.pan;
+                                    s.pan += (p - anchor) * (1.0 - s.zoom / old);
+                                }
+                                // Back at fit the whole image is on screen, so leftover pan
+                                // from cursor-anchored zooming would just push it off-centre.
+                                if s.zoom <= 1.0 {
+                                    s.pan = egui::Vec2::ZERO;
+                                }
                             }
                         }
                     } else {
@@ -904,6 +940,13 @@ impl eframe::App for RustroomApp {
                 if frame.region.is_none() {
                     s.fit_image_size = egui::vec2(frame.width as f32, frame.height as f32);
                 }
+                // A region frame carries the full post-geometry dimensions it was cut from,
+                // so this is exact either way.
+                s.rendered_long = frame
+                    .region
+                    .map(|r| r.full_w.max(r.full_h))
+                    .unwrap_or(frame.width.max(frame.height))
+                    as f32;
             }
         }
 
