@@ -92,6 +92,20 @@ impl Pipeline {
     }
 }
 
+/// Where a cropped render sits inside the full frame.
+///
+/// `None` at a call site means "this buffer *is* the full frame" — what every existing caller
+/// implicitly passes, and what position-dependent stages already assume. Only stages whose
+/// output depends on absolute position need it; today that is the vignette alone, but any
+/// future graduated or radial filter will want the same.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    pub full_w: usize,
+    pub full_h: usize,
+    pub x0: usize,
+    pub y0: usize,
+}
+
 /// Everything [`build_pipeline_split`]'s prefix depends on, for caching its output.
 ///
 /// **If you add a stage to the prefix, add its parameters here.** The tests in this module
@@ -131,7 +145,11 @@ impl PrefixKey {
 ///
 /// [`build_pipeline`] is defined as `prefix ++ tail`, so the two constructions cannot drift
 /// apart. Add a stage here, not there.
-pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pipeline) {
+pub fn build_pipeline_split_in_region(
+    edits: &Edits,
+    scale: RenderScale,
+    region: Option<Region>,
+) -> (Pipeline, Pipeline) {
     let mut prefix: Vec<Box<dyn PipelineStage>> = Vec::new();
 
     // Geometry runs first, so all adjustments operate on the final cropped pixels.
@@ -187,12 +205,20 @@ pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pip
     // `GeometryStage` ran first, so the frame it sees is already cropped. It takes no
     // `RenderScale` — normalized coordinates make it resolution-independent.
     if edits.vignette.is_active() {
-        tail.push(Box::new(VignetteStage::new(&edits.vignette)));
+        tail.push(Box::new(VignetteStage::new_in_region(
+            &edits.vignette,
+            region,
+        )));
     }
 
     tail.push(Box::new(OutputTransformSrgb));
 
     (Pipeline::new(prefix), Pipeline::new(tail))
+}
+
+/// The develop pipeline in two halves, for a render covering the whole frame.
+pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pipeline) {
+    build_pipeline_split_in_region(edits, scale, None)
 }
 
 /// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
@@ -356,6 +382,16 @@ mod tests {
 
         // Scale changes the noise-reduction radii, so it belongs in the key.
         assert_ne!(PrefixKey::new(&base, RenderScale::new(0.25)), k);
+    }
+
+    #[test]
+    fn a_none_region_split_is_identical_to_the_plain_split() {
+        for edits in [Edits::default(), all_edits()] {
+            let (p1, t1) = build_pipeline_split(&edits, RenderScale::FULL);
+            let (p2, t2) = build_pipeline_split_in_region(&edits, RenderScale::FULL, None);
+            assert_eq!(p1.stage_names(), p2.stage_names());
+            assert_eq!(t1.stage_names(), t2.stage_names());
+        }
     }
 
     #[test]

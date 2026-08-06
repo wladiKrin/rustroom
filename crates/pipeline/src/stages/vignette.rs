@@ -1,4 +1,4 @@
-use crate::PipelineStage;
+use crate::{PipelineStage, Region};
 use core_image::ImageBuf;
 use edit_model::Vignette;
 
@@ -99,11 +99,23 @@ impl Shape {
 /// desaturates as it approaches white, which is what "toward white" means.
 pub struct VignetteStage {
     params: Vignette,
+    region: Option<Region>,
 }
 
 impl VignetteStage {
+    /// For a render covering the whole frame.
     pub fn new(params: &Vignette) -> Self {
-        Self { params: *params }
+        Self::new_in_region(params, None)
+    }
+
+    /// For a render covering only part of the frame — the falloff is still measured against
+    /// the full frame, so a cropped region is shaded exactly as that part of the whole would
+    /// have been.
+    pub fn new_in_region(params: &Vignette, region: Option<Region>) -> Self {
+        Self {
+            params: *params,
+            region,
+        }
     }
 }
 
@@ -119,16 +131,23 @@ impl PipelineStage for VignetteStage {
         }
         let p = self.params;
 
-        let shape = Shape::new(p.roundness, w, h);
+        // The frame the falloff is measured against, and where this buffer sits in it.
+        // Without a region the buffer *is* the frame — the existing behaviour, exactly.
+        let (fw, fh, x0, y0) = match self.region {
+            Some(r) => (r.full_w, r.full_h, r.x0, r.y0),
+            None => (w, h, 0, 0),
+        };
+
+        let shape = Shape::new(p.roundness, fw, fh);
         let r_mid = lerp(R_MID.0, R_MID.1, (p.midpoint / 100.0).clamp(0.0, 1.0));
         let width = lerp(FEATHER.0, FEATHER.1, (p.feather / 100.0).clamp(0.0, 1.0)).max(WIDTH_EPS);
         let (e0, e1) = (r_mid - width * 0.5, r_mid + width * 0.5);
         let k = (p.amount / 100.0).clamp(-1.0, 1.0);
-        let (hw, hh) = (w as f32 * 0.5, h as f32 * 0.5);
+        let (hw, hh) = (fw as f32 * 0.5, fh as f32 * 0.5);
 
         image.map_pixels_xy(|x, y, rgb| {
-            let u = (x as f32 + 0.5) / hw - 1.0;
-            let v = (y as f32 + 0.5) / hh - 1.0;
+            let u = ((x + x0) as f32 + 0.5) / hw - 1.0;
+            let v = ((y + y0) as f32 + 0.5) / hh - 1.0;
             let f = k * smoothstep(e0, e1, shape.distance(u, v)); // -1 … 1
             if f <= 0.0 {
                 // Squared: 1 at f = 0, still exactly 0 at f = -1, but about twice the stops
@@ -174,6 +193,100 @@ mod tests {
             amount,
             ..Default::default()
         }
+    }
+
+    /// A frame with varied content, so a mis-placed vignette shows up as different bytes.
+    fn varied(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(
+                    x,
+                    y,
+                    [
+                        0.2 + x as f32 / (w as f32 * 2.0),
+                        0.5,
+                        0.8 - y as f32 / (h as f32 * 2.0),
+                    ],
+                );
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn a_region_render_matches_the_whole_frame_cropped() {
+        // The whole point of Region: given a crop, the falloff must still be measured
+        // against the full frame. Without it the vignette would re-centre on the crop.
+        let full = varied(40, 24);
+        let params = Vignette {
+            amount: -70.0,
+            midpoint: 30.0,
+            roundness: 60.0,
+            feather: 40.0,
+        };
+        let expect = VignetteStage::new(&params)
+            .apply(full.clone())
+            .crop(11, 7, 13, 9);
+
+        let region = Region {
+            full_w: 40,
+            full_h: 24,
+            x0: 11,
+            y0: 7,
+        };
+        let got =
+            VignetteStage::new_in_region(&params, Some(region)).apply(full.crop(11, 7, 13, 9));
+
+        assert_eq!(got.data(), expect.data());
+    }
+
+    #[test]
+    fn a_region_covering_the_whole_frame_is_the_same_as_no_region() {
+        let full = varied(20, 12);
+        let params = Vignette {
+            amount: -50.0,
+            roundness: -40.0,
+            ..Default::default()
+        };
+        let none = VignetteStage::new(&params).apply(full.clone());
+        let whole = VignetteStage::new_in_region(
+            &params,
+            Some(Region {
+                full_w: 20,
+                full_h: 12,
+                x0: 0,
+                y0: 0,
+            }),
+        )
+        .apply(full);
+        assert_eq!(none.data(), whole.data());
+    }
+
+    #[test]
+    fn the_region_sets_the_aspect_not_the_crop() {
+        // A tall crop out of a wide frame must still use the *frame's* aspect for
+        // roundness — this is the part that silently looks fine but is wrong.
+        let full = varied(64, 16);
+        let params = Vignette {
+            amount: -80.0,
+            roundness: 100.0,
+            ..Default::default()
+        };
+        let expect = VignetteStage::new(&params)
+            .apply(full.clone())
+            .crop(20, 2, 8, 12);
+        let got = VignetteStage::new_in_region(
+            &params,
+            Some(Region {
+                full_w: 64,
+                full_h: 16,
+                x0: 20,
+                y0: 2,
+            }),
+        )
+        .apply(full.crop(20, 2, 8, 12));
+        assert_eq!(got.data(), expect.data());
     }
 
     #[test]
