@@ -4,7 +4,7 @@
 //! output must match the committed PNG within `TOL` per channel.
 
 use core_image::ImageBuf;
-use edit_model::{Edits, NoiseReduction, ToneCurve, Vignette, WhiteBalance};
+use edit_model::{Edits, NoiseReduction, Sharpening, ToneCurve, Vignette, WhiteBalance};
 use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
 
@@ -441,4 +441,36 @@ fn golden_vignette_circle() {
 #[test]
 fn golden_vignette_square() {
     check_golden("vignette_square", &vignette(-100.0));
+}
+
+/// Sharpening cases run on `noise_chart()`, whose hard edge *and* noise are exactly what
+/// sharpening interacts with — one chart covers halos, texture and the masking gate.
+/// Amount and Radius are identical in all three, so the references differ only by the
+/// control under test.
+fn sharpen(detail: f32, masking: f32) -> Edits {
+    Edits {
+        sharpening: Sharpening {
+            amount: 70.0,
+            radius: 1.0,
+            detail,
+            masking,
+        },
+        ..Edits::default()
+    }
+}
+
+#[test]
+fn golden_sharpen_basic() {
+    check_golden_with("sharpen_basic", &sharpen(50.0, 0.0), noise_chart());
+}
+
+#[test]
+fn golden_sharpen_masked() {
+    // Masking 80 should visibly spare the flat noisy bands while the edge still sharpens.
+    check_golden_with("sharpen_masked", &sharpen(50.0, 80.0), noise_chart());
+}
+
+#[test]
+fn golden_sharpen_detail_low() {
+    check_golden_with("sharpen_detail_low", &sharpen(0.0, 0.0), noise_chart());
 }
