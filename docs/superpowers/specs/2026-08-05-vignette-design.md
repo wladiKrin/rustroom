@@ -93,19 +93,19 @@ width = lerp(FEATHER_MIN, FEATHER_MAX, feather/100)       // 0.0 … 1.0
 t     = smoothstep(r_mid - width/2, r_mid + width/2, d)   // 0 inside, 1 outside
 f     = clamp(amount/100, -1, 1) * t                      // -1 … 1
 
-f <= 0:  rgb *= (1 + f)                    // ×1 at f=0, exactly ×0 (black) at f=-1
-f >  0:  rgb += (1 - rgb).max(0) * f       // exactly 1.0 (white) at f=+1
+f <= 0:  rgb *= (1 + f)^2                            // exactly ×0 (black) at f=-1
+f >  0:  rgb += (1 - rgb).max(0) * (1 - (1 - f)^2)   // exactly 1.0 (white) at f=+1
 ```
 
-**Revised twice on 2026-08-05, both times from use.** Originally `gain = exp2(amount/100 ·
-2·t)`, i.e. ±2 EV.
+**Revised three times, every time from actually using it.** Originally `gain =
+exp2(amount/100 · 2·t)`, i.e. ±2 EV.
 
 1. **Endpoints too weak.** A multiplicative gain is strictly positive, so it can never reach
    black however large `MAX_EV` grows. Interpolating toward the endpoint is the only model
    that hits pure black and pure white exactly. The linear form `(1 + f)` was chosen first
    because it left the mid-range identical to the old model.
-2. **Mid-range then too weak** relative to the new extremes. The darkening curve is now
-   **squared**, roughly doubling the stops at every point.
+2. **Mid-range then too weak** relative to the new extremes. Both curves are now **squared
+   about their own endpoint**, roughly doubling the effect at every point.
 
 | Amount | original (`exp2`, ±2 EV) | linear `(1+f)` | **current `(1+f)²`** |
 |---|---|---|---|
@@ -114,10 +114,12 @@ f >  0:  rgb += (1 - rgb).max(0) * f       // exactly 1.0 (white) at f=+1
 | −75 | ×0.354 | ×0.25 (−2 EV) | ×0.063 (−4 EV) |
 | −100 | ×0.25 | ×0 | **×0 — black** |
 
-**The two halves are deliberately not mirror images.** Brightening stays linear in `f`, so a
-given |amount| darkens harder than it brightens. Vignettes are overwhelmingly used to darken
-and the extra punch was wanted on that side; mirroring it (`1 − (1 − f)²` on the lift) is a
-one-line change if that ever becomes the preference.
+3. **The halves were then mirrored.** Squaring only the darkening side left equal |amount|
+   moving a pixel much further toward black than toward white (at ±25: 44% vs 25%).
+   Brightening now uses `1 − (1 − f)²`, so the two are mirror images —
+   `darkening_and_brightening_are_mirror_images` asserts it across ±25/50/75. This changed
+   no golden, since all three use a negative amount, which is what confirmed the edit stayed
+   inside the brightening branch.
 
 The response is not symmetric in log space either: past −50 each further step is worth
 progressively more. That is inherent to reaching true black at all, and is accepted.

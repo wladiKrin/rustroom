@@ -84,15 +84,13 @@ impl Shape {
 /// Amount interpolates toward an endpoint rather than applying an exposure-style gain,
 /// because a multiplicative gain is strictly positive and so can *never* reach black:
 /// darkening scales by `(1 + f)²` (reaching exactly 0 at −100), brightening lifts toward
-/// white by `(1 − v)·f` (reaching exactly 1.0 at +100).
+/// white by `(1 − v)·(1 − (1 − f)²)` (reaching exactly 1.0 at +100).
 ///
-/// The darkening curve is **squared** so the mid-range carries real weight: `f = −0.5` is
-/// two stops down, roughly double what the linear form gave at every point. The two halves
-/// are therefore *not* mirror images — brightening stays linear in `f`, so a given |amount|
-/// darkens harder than it brightens. That is deliberate: vignettes are overwhelmingly used
-/// to darken, and the extra punch was asked for on that side.
+/// Both curves are **squared about their own endpoint**, so the mid-range carries real
+/// weight — `f = −0.5` is two stops down — and the two halves are mirror images: equal
+/// |amount| moves a pixel equally far toward black and toward white.
 ///
-/// The response is not symmetric in log space either — past −50 each further step is worth
+/// The response is not symmetric in log space, though: past −50 each further step is worth
 /// progressively more, which is inherent to reaching true black at all.
 ///
 /// Neither branch can produce a negative sample (`1 + f ≥ 0`, and the lift only ever raises
@@ -138,9 +136,12 @@ impl PipelineStage for VignetteStage {
                 let gain = (1.0 + f) * (1.0 + f);
                 [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
             } else {
-                // Toward white. `max(0.0)` leaves scene-referred samples already above 1.0
-                // alone rather than dragging them back down.
-                let lift = |v: f32| v + (1.0 - v).max(0.0) * f;
+                // Toward white, squared about *its* endpoint so the two halves are mirror
+                // images: equal |amount| moves a pixel equally far toward black and toward
+                // white. `max(0.0)` leaves scene-referred samples already above 1.0 alone
+                // rather than dragging them back down.
+                let s = 1.0 - (1.0 - f) * (1.0 - f);
+                let lift = |v: f32| v + (1.0 - v).max(0.0) * s;
                 [lift(rgb[0]), lift(rgb[1]), lift(rgb[2])]
             }
         })
@@ -228,6 +229,30 @@ mod tests {
             assert!(
                 (c - 1.0).abs() < 1e-6,
                 "corner should be pure white: {px:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn darkening_and_brightening_are_mirror_images() {
+        // Both curves are squared about their own endpoint, so equal |amount| moves a pixel
+        // equally far toward black and toward white. From a flat 0.5: -50 lands at 0.125,
+        // which is 75% of the way to black; +50 must land at 0.875, 75% of the way to white.
+        let at = |amount: f32| {
+            let p = Vignette {
+                amount,
+                midpoint: 0.0,
+                feather: 0.0,
+                roundness: 0.0,
+            };
+            VignetteStage::new(&p).apply(flat(64, 64)).pixel(0, 0)[0]
+        };
+        for a in [25.0, 50.0, 75.0] {
+            let toward_black = 1.0 - at(-a) / 0.5;
+            let toward_white = (at(a) - 0.5) / 0.5;
+            assert!(
+                (toward_black - toward_white).abs() < 1e-5,
+                "amount ±{a}: {toward_black} toward black vs {toward_white} toward white"
             );
         }
     }
