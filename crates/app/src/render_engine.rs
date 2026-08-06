@@ -301,18 +301,26 @@ mod tests {
 
     /// A buffer with varied content, so a stale cache actually shows up as different bytes.
     /// (The flat gray `tiny()` would hide almost any staleness.)
-    fn varied() -> Arc<ImageBuf> {
-        let mut img = ImageBuf::new(16, 16);
-        for y in 0..16 {
-            for x in 0..16 {
+    fn varied_sized(n: usize) -> Arc<ImageBuf> {
+        let mut img = ImageBuf::new(n, n);
+        for y in 0..n {
+            for x in 0..n {
                 img.set_pixel(
                     x,
                     y,
-                    [x as f32 / 16.0, y as f32 / 16.0, ((x + y) % 5) as f32 / 5.0],
+                    [
+                        x as f32 / n as f32,
+                        y as f32 / n as f32,
+                        ((x + y) % 5) as f32 / 5.0,
+                    ],
                 );
             }
         }
         Arc::new(img)
+    }
+
+    fn varied() -> Arc<ImageBuf> {
+        varied_sized(16)
     }
 
     /// The RGBA sub-rect of a frame, for comparing a region render against a whole one.
@@ -329,7 +337,15 @@ mod tests {
     fn a_region_render_matches_the_whole_render_cropped() {
         // The master invariant. It validates the region maths, the vignette correction and
         // the cache at once — if any of the three is wrong, this fails.
-        let buf = varied();
+        //
+        // ⚠ Sharpening *weakens* it, and that has to be said out loud rather than left to
+        // an edit set that happens to omit sharpening. A spatial stage in the tail reads
+        // neighbours the cropped region genuinely does not have, so equality can only hold
+        // in the interior. The excluded band is `max_kernel_radius` wide — precisely what
+        // `view_region::REGION_MARGIN` keeps off screen — and the inset is derived from the
+        // radius rather than hard-coded, so it tracks any future change.
+        const N: usize = 64;
+        let buf = varied_sized(N);
         let edits = Edits {
             exposure: 0.4,
             vignette: edit_model::Vignette {
@@ -346,28 +362,61 @@ mod tests {
                 color: 40.0,
                 ..Default::default()
             },
+            sharpening: edit_model::Sharpening {
+                amount: 90.0,
+                radius: 1.0,
+                detail: 50.0,
+                masking: 60.0,
+            },
             ..Edits::default()
         };
 
-        // max_dim = 16 is native for this 16x16 buffer, i.e. no downscale.
-        let whole = render_cached(&buf, &edits, 16, 1.0, None, &mut PrefixCache::default());
-        let (x, y, w, h) = (3, 2, 7, 6);
+        // max_dim = N is native for this NxN buffer, i.e. no downscale, so the render scale
+        // is exactly 1.0 and the inset below is the full-resolution kernel.
+        let whole = render_cached(&buf, &edits, N, 1.0, None, &mut PrefixCache::default());
+
+        // Guard against the test passing trivially: sharpening must actually move pixels
+        // here, or the "weakened invariant" it exists to cover is not being exercised.
+        let unsharpened = render_cached(
+            &buf,
+            &Edits {
+                sharpening: edit_model::Sharpening::default(),
+                ..edits.clone()
+            },
+            N,
+            1.0,
+            None,
+            &mut PrefixCache::default(),
+        );
+        assert_ne!(whole.rgba, unsharpened.rgba, "sharpening changed nothing");
+
+        let inset = pipeline::max_kernel_radius(edits.sharpening.radius, RenderScale::FULL);
+        let (x, y, w, h) = (12, 10, 40, 36);
         assert!(
             x + w <= whole.width && y + h <= whole.height,
             "region must fit"
+        );
+        assert!(
+            w > 2 * inset && h > 2 * inset,
+            "region must be wider than twice the kernel ({inset})"
         );
 
         let got = render_cached(
             &buf,
             &edits,
-            16,
+            N,
             1.0,
             Some(RegionRect { x, y, w, h }),
             &mut PrefixCache::default(),
         );
 
         assert_eq!((got.width, got.height), (w, h));
-        assert_eq!(got.rgba, crop_rgba(&whole, x, y, w, h));
+        let (iw, ih) = (w - 2 * inset, h - 2 * inset);
+        assert_eq!(
+            crop_rgba(&got, inset, inset, iw, ih),
+            crop_rgba(&whole, x + inset, y + inset, iw, ih),
+            "the region's interior must match the whole render bit for bit"
+        );
         assert_eq!(
             got.region,
             Some(pipeline::Region {
