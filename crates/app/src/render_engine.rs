@@ -162,21 +162,36 @@ fn pack(out: ImageBuf, region: Option<Region>) -> RenderedFrame {
 type CacheKey = (PrefixKey, usize);
 
 /// Cached prefix outputs, keyed by prefix parameters and working resolution.
+///
+/// Two entries, so the fit and native render modes can both stay warm — otherwise every zoom
+/// in or out would recompute the prefix. Most-recently-used first.
 #[derive(Default)]
 struct PrefixCache {
     entries: Vec<(CacheKey, Arc<ImageBuf>)>,
 }
 
 impl PrefixCache {
+    /// One entry per render mode.
+    const CAP: usize = 2;
+
+    /// Only the tests need this — production code never asks how full the cache is.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     fn get(&mut self, key: &CacheKey) -> Option<Arc<ImageBuf>> {
         let i = self.entries.iter().position(|(k, _)| k == key)?;
-        Some(self.entries[i].1.clone())
+        let hit = self.entries.remove(i);
+        let img = hit.1.clone();
+        self.entries.insert(0, hit);
+        Some(img)
     }
 
     fn insert(&mut self, key: CacheKey, img: Arc<ImageBuf>) {
         self.entries.retain(|(k, _)| *k != key);
         self.entries.insert(0, (key, img));
-        self.entries.truncate(1);
+        self.entries.truncate(Self::CAP);
     }
 }
 
@@ -362,6 +377,41 @@ mod tests {
                 y0: y
             })
         );
+    }
+
+    #[test]
+    fn the_cache_keeps_one_entry_per_render_mode() {
+        // Fit and native are different max_dims. With a single entry, every zoom in or out
+        // would recompute the prefix (~123 ms with NR on).
+        let buf = varied();
+        let e = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 30.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let mut cache = PrefixCache::default();
+
+        render_cached(&buf, &e, 8, 1.0, None, &mut cache); // "fit"
+        render_cached(&buf, &e, 16, 1.0, None, &mut cache); // "native"
+        assert_eq!(cache.len(), 2, "both modes should stay cached");
+
+        let scale8 = render_scale(16, rendered_long_edge(16, 8), 1.0);
+        let scale16 = render_scale(16, rendered_long_edge(16, 16), 1.0);
+        assert!(cache.get(&(PrefixKey::new(&e, scale8), 8)).is_some());
+        assert!(cache.get(&(PrefixKey::new(&e, scale16), 16)).is_some());
+
+        // A third distinct key evicts the least recently used.
+        let e2 = Edits {
+            geometry: edit_model::Geometry {
+                angle: 2.0,
+                ..Default::default()
+            },
+            ..e.clone()
+        };
+        render_cached(&buf, &e2, 16, 1.0, None, &mut cache);
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]
