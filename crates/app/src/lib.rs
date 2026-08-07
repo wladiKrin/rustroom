@@ -12,5 +12,6 @@ pub mod render_engine;
 pub mod selection;
 pub mod settings;
 pub mod sidecar;
+pub mod sync;
 pub mod thumb_loader;
 pub mod view_region;
