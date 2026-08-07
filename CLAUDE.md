@@ -104,6 +104,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 1. **Multi-selection + sync** — apply one photo's `Edits` to a selection. `EditGroups` and `Edits::merge_from` already exist and are tested, so sync itself is thin; the work is the selection model (ctrl-click, shift-click, select-all in both the grid and the filmstrip).
 2. **Batch export** — reuses that same selection.
 3. **Texture / clarity / dehaze** — local-contrast siblings of sharpening. `gaussian_blur` and the `RenderScale` seam now exist, so texture and clarity are largely a different radius and a different curve on machinery that is already built and tested.
+4. **Photo edit history surviving a photo switch** (deferred add-on, user's call 2026-08-07). `History<Edits>` lives on `Session` and dies with it, so Ctrl+Z cannot reach across a switch — visible now that `action_log::forget_photo_edits` drops those entries explicitly. The fix is a per-path history kept beside `BufferCache`, plus a policy for how far back it persists; not hard, but its own feature.
 
 **Standing perf items** (none blocking): parallelizing the RGBA8 pack in `render_engine::pack` (still a sequential `Vec::push` loop, ~35% of a cached frame — the obvious next target); a second cache checkpoint so Straighten stops costing full price; a background full-res decode for true 1:1 (far more tractable given the demosaic finding below); and setting libraw's `user_qual` deliberately. Docs live in `docs/superpowers/`.
 
