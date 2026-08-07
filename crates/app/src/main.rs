@@ -2,7 +2,7 @@ use catalog::CatalogEntry;
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
-use rustroom_app::action_log::{ActionKind, ActionLog};
+use rustroom_app::action_log::{ActionKind, ActionLog, SyncAction};
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
@@ -82,6 +82,8 @@ enum Modal {
     },
     /// Choosing which groups a paste applies.
     PasteSettings,
+    /// Choosing which groups a sync applies to the rest of the selection.
+    SyncSettings,
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -108,6 +110,9 @@ struct RustroomApp {
     clipboard: Option<Edits>,
     /// Group selection last used for a paste, so Ctrl+V can skip the dialog.
     paste_groups: EditGroups,
+    /// Group selection last used for a sync, kept separate from `paste_groups` so the two
+    /// dialogs do not silently reconfigure each other.
+    sync_groups: EditGroups,
     preset_store: PresetStore,
     /// Cached `preset_store.list()`, refreshed on save and delete rather than every frame.
     preset_list: Vec<Preset>,
@@ -142,6 +147,7 @@ impl RustroomApp {
             show_presets: false,
             clipboard: None,
             paste_groups: EditGroups::default(),
+            sync_groups: EditGroups::default(),
             preset_store,
             preset_list,
             settings_store,
@@ -267,6 +273,46 @@ impl RustroomApp {
         if pushed {
             self.actions.push(ActionKind::PhotoEdit);
         }
+    }
+
+    /// Paths of the selected photos other than the active one — a sync's targets.
+    fn sync_targets(&self) -> Vec<PathBuf> {
+        let Some(lib) = &self.library else {
+            return Vec::new();
+        };
+        lib.selection
+            .others()
+            .filter_map(|i| lib.entries.get(i).map(|e| e.path.clone()))
+            .collect()
+    }
+
+    /// Apply the open photo's edits to the rest of the selection, as one undo step.
+    fn run_sync(&mut self, groups: EditGroups) {
+        let targets = self.sync_targets();
+        let Some(source) = self.session.as_ref().map(|s| s.edits.clone()) else {
+            return;
+        };
+        if targets.is_empty() {
+            self.status = "Nothing to sync".to_string();
+            return;
+        }
+        // The source is the session's *in-memory* edits, not its sidecar: you sync what you
+        // are looking at, not what was last written.
+        let report = sync::apply(&targets, &source, groups);
+        self.status = if report.failed.is_empty() {
+            format!("Synced {} photos", report.prior.len())
+        } else {
+            format!(
+                "Synced {}, {} failed",
+                report.prior.len(),
+                report.failed.len()
+            )
+        };
+        self.actions.push(ActionKind::Sync(Box::new(SyncAction {
+            source,
+            groups,
+            prior: report.prior,
+        })));
     }
 
     /// Reload the open photo's edits if its sidecar was just rewritten underneath it.
@@ -701,6 +747,16 @@ impl RustroomApp {
             {
                 self.modal = Modal::PasteSettings;
             }
+            let selected = self.library.as_ref().map_or(0, |l| l.selection.len());
+            if ui
+                .add_enabled(
+                    selected > 1,
+                    egui::Button::new(format!("Sync {}…", selected.saturating_sub(1))),
+                )
+                .clicked()
+            {
+                self.modal = Modal::SyncSettings;
+            }
             // Unlike the filmstrip, this does not need a Library: presets are just as
             // useful on a single-file open.
             ui.toggle_value(&mut self.show_presets, "Presets");
@@ -874,6 +930,7 @@ impl RustroomApp {
             None,
             Save,
             Paste,
+            Sync,
             ConfirmDelete,
             Settings,
         }
@@ -881,6 +938,7 @@ impl RustroomApp {
             Modal::None => Which::None,
             Modal::SavePreset { .. } => Which::Save,
             Modal::PasteSettings => Which::Paste,
+            Modal::SyncSettings => Which::Sync,
             Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
             Modal::Settings => Which::Settings,
         };
@@ -888,6 +946,7 @@ impl RustroomApp {
             Which::None => {}
             Which::Save => self.save_preset_modal(ctx),
             Which::Paste => self.paste_modal(ctx),
+            Which::Sync => self.sync_modal(ctx),
             Which::ConfirmDelete => self.confirm_delete_modal(ctx),
             Which::Settings => self.settings_modal(ctx),
         }
@@ -925,6 +984,40 @@ impl RustroomApp {
                 self.apply_edits_from(&src, groups);
                 self.status = "Settings pasted".to_string();
             }
+            close = true;
+        }
+        if close {
+            self.modal = Modal::None;
+        }
+    }
+
+    /// The "Sync…" dialog: which groups this sync applies to the rest of the selection.
+    fn sync_modal(&mut self, ctx: &egui::Context) {
+        let mut groups = self.sync_groups;
+        let count = self.sync_targets().len();
+        let mut close = false;
+        let mut run = false;
+
+        egui::Window::new("Sync settings")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Apply to {count} other selected photos:"));
+                edit_group_checkboxes(ui, &mut groups);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Sync").clicked() {
+                        run = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        self.sync_groups = groups;
+        if run {
+            self.run_sync(groups);
             close = true;
         }
         if close {
