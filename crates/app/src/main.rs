@@ -256,11 +256,16 @@ impl RustroomApp {
         }
     }
 
-    /// Apply `src`'s selected groups to the current photo: one undo step, one re-render.
+    /// Apply `src`'s selected groups to the open photo and re-render.
     ///
-    /// The single point of application for both paste and presets, so the two cannot drift.
-    fn apply_edits_from(&mut self, src: &Edits, groups: EditGroups) {
-        let Some(s) = &mut self.session else { return };
+    /// Returns whether a history step was actually recorded — `History::push` is a no-op
+    /// when nothing changed, and logging a step that did not happen would desynchronize the
+    /// action log from the session history. The caller decides how to log it, which is what
+    /// lets a paste bundle this together with a sync into one undo step.
+    fn apply_edits_to_session(&mut self, src: &Edits, groups: EditGroups) -> bool {
+        let Some(s) = &mut self.session else {
+            return false;
+        };
         s.edits.merge_from(src, groups);
         let pushed = s.history.push(s.edits.clone());
         s.engine.request(
@@ -268,22 +273,92 @@ impl RustroomApp {
             s.render_max_dim(),
             s.requested_region,
         );
-        // `push` returns false when the value is unchanged; recording a step that did not
-        // happen would desynchronize the log from the session history.
-        if pushed {
+        pushed
+    }
+
+    /// Apply to the open photo as its own undo step — what a preset does.
+    fn apply_edits_from(&mut self, src: &Edits, groups: EditGroups) {
+        if self.apply_edits_to_session(src, groups) {
             self.actions.push(ActionKind::PhotoEdit);
         }
     }
 
-    /// Paths of the selected photos other than the active one — a sync's targets.
+    /// Selected photos **other than the one currently open** — the ones a batch has to
+    /// reach through their sidecars rather than through the live session.
+    ///
+    /// Keyed on the open *path*, not the active index: in Develop those are the same photo,
+    /// but a paste triggered from the Library grid may have a selection that does not
+    /// include whatever is open, and then every selected photo needs a sidecar write.
     fn sync_targets(&self) -> Vec<PathBuf> {
+        let open = self.session.as_ref().map(|s| s.path.clone());
         let Some(lib) = &self.library else {
             return Vec::new();
         };
         lib.selection
-            .others()
+            .iter()
             .filter_map(|i| lib.entries.get(i).map(|e| e.path.clone()))
+            .filter(|p| Some(p) != open.as_ref())
             .collect()
+    }
+
+    /// Whether the open photo is part of the current selection, and so should receive a
+    /// paste through its session. True in single-file mode, where there is no selection at
+    /// all and the open photo is the only thing a paste could mean.
+    fn open_photo_is_selected(&self) -> bool {
+        let Some(s) = &self.session else { return false };
+        let Some(lib) = &self.library else {
+            return true;
+        };
+        lib.selection
+            .iter()
+            .filter_map(|i| lib.entries.get(i))
+            .any(|e| e.path == s.path)
+    }
+
+    /// Paste `src` into the whole selection — the open photo through its session, the rest
+    /// through their sidecars — as **one** undo step.
+    ///
+    /// Two mechanisms, one gesture, so the two resulting actions are wrapped in a
+    /// `Batch`: one Ctrl+V must stay one Ctrl+Z.
+    fn paste_into_selection(&mut self, src: &Edits, groups: EditGroups) {
+        let targets = self.sync_targets();
+        let into_session = self.open_photo_is_selected();
+        let mut parts: Vec<ActionKind> = Vec::new();
+        let mut touched = 0usize;
+        let mut failed = 0usize;
+
+        if into_session {
+            touched += 1;
+            if self.apply_edits_to_session(src, groups) {
+                parts.push(ActionKind::PhotoEdit);
+            }
+        }
+        if !targets.is_empty() {
+            let report = sync::apply(&targets, src, groups);
+            touched += report.prior.len();
+            failed = report.failed.len();
+            if !report.prior.is_empty() {
+                parts.push(ActionKind::Sync(Box::new(SyncAction {
+                    source: src.clone(),
+                    groups,
+                    prior: report.prior,
+                })));
+            }
+        }
+
+        self.status = match (touched, failed) {
+            (0, _) => "Nothing selected to paste into".to_string(),
+            (1, 0) => "Settings pasted".to_string(),
+            (n, 0) => format!("Pasted to {n} photos"),
+            (n, f) => format!("Pasted to {n} photos, {f} failed"),
+        };
+
+        // A lone action does not need a wrapper — keep the log readable.
+        match parts.len() {
+            0 => {}
+            1 => self.actions.push(parts.remove(0)),
+            _ => self.actions.push(ActionKind::Batch(parts)),
+        }
     }
 
     /// Apply the open photo's edits to the rest of the selection, as one undo step.
@@ -356,15 +431,26 @@ impl RustroomApp {
 
     /// Undo the most recent action, whichever kind it was.
     fn undo_action(&mut self) {
-        match self.actions.undo() {
-            None => {}
-            Some(ActionKind::PhotoEdit) => {
+        if let Some(kind) = self.actions.undo() {
+            self.undo_one(kind);
+        }
+    }
+
+    fn undo_one(&mut self, kind: ActionKind) {
+        match kind {
+            ActionKind::Batch(parts) => {
+                // Reverse order: the last effect a gesture had is the first one undone.
+                for part in parts.into_iter().rev() {
+                    self.undo_one(part);
+                }
+            }
+            ActionKind::PhotoEdit => {
                 if let Some(s) = &mut self.session {
                     s.history.undo();
                 }
                 self.rerender_current();
             }
-            Some(ActionKind::PresetDelete { name }) => {
+            ActionKind::PresetDelete { name } => {
                 match self.preset_store.restore(&name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
                     // Evicted past the trash cap, or removed by hand.
@@ -373,7 +459,7 @@ impl RustroomApp {
                 }
                 self.reload_presets();
             }
-            Some(ActionKind::Sync(action)) => {
+            ActionKind::Sync(action) => {
                 let failed = sync::revert(&action.prior);
                 let total = action.prior.len();
                 self.status = if failed.is_empty() {
@@ -389,22 +475,32 @@ impl RustroomApp {
 
     /// Redo the most recently undone action.
     fn redo_action(&mut self) {
-        match self.actions.redo() {
-            None => {}
-            Some(ActionKind::PhotoEdit) => {
+        if let Some(kind) = self.actions.redo() {
+            self.redo_one(kind);
+        }
+    }
+
+    fn redo_one(&mut self, kind: ActionKind) {
+        match kind {
+            ActionKind::Batch(parts) => {
+                for part in parts {
+                    self.redo_one(part);
+                }
+            }
+            ActionKind::PhotoEdit => {
                 if let Some(s) = &mut self.session {
                     s.history.redo();
                 }
                 self.rerender_current();
             }
-            Some(ActionKind::PresetDelete { name }) => {
+            ActionKind::PresetDelete { name } => {
                 match self.preset_store.delete(&name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),
                     Err(e) => self.status = format!("Could not delete preset: {e}"),
                 }
                 self.reload_presets();
             }
-            Some(ActionKind::Sync(action)) => {
+            ActionKind::Sync(action) => {
                 let targets: Vec<PathBuf> = action.prior.iter().map(|(p, _)| p.clone()).collect();
                 let report = sync::apply(&targets, &action.source, action.groups);
                 self.status = format!("Re-synced {} photos", report.prior.len());
@@ -439,7 +535,9 @@ impl RustroomApp {
     /// Gated on nothing having keyboard focus, the way `handle_develop_arrows` already is,
     /// so Ctrl+C inside the preset-name field still copies text.
     fn handle_clipboard_keys(&mut self, ctx: &egui::Context) {
-        if self.session.is_none() || self.modal != Modal::None {
+        // Deliberately not gated on a session: a copy needs one, but a paste only needs a
+        // clipboard and a selection, and Ctrl+V has to work from the Library grid too.
+        if self.modal != Modal::None {
             return;
         }
         if ctx.memory(|m| m.focused()).is_some() {
@@ -458,7 +556,7 @@ impl RustroomApp {
             (copy, pasted)
         });
 
-        if copy {
+        if copy && self.session.is_some() {
             // `self.session.as_ref().map(..)` rather than `if let Some(s) = &self.session`:
             // the latter holds an immutable borrow of `self` across the assignment to
             // `self.clipboard` and does not compile.
@@ -476,9 +574,8 @@ impl RustroomApp {
             let src = edit_clipboard::decode(&text).or_else(|| self.clipboard.clone());
             if let Some(src) = src {
                 // Ctrl+V uses the last-used group selection with no dialog; the "Paste…"
-                // button opens the chooser.
-                self.apply_edits_from(&src, self.paste_groups);
-                self.status = "Settings pasted".to_string();
+                // button opens the chooser. Either way it targets the whole selection.
+                self.paste_into_selection(&src, self.paste_groups);
             }
         }
     }
@@ -977,8 +1074,7 @@ impl RustroomApp {
         self.paste_groups = groups;
         if paste {
             if let Some(src) = self.clipboard.clone() {
-                self.apply_edits_from(&src, groups);
-                self.status = "Settings pasted".to_string();
+                self.paste_into_selection(&src, groups);
             }
             close = true;
         }
@@ -1105,7 +1201,6 @@ impl RustroomApp {
     /// The Develop editor body: right adjustment panel + central image canvas.
     fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.handle_develop_arrows(ctx);
-        self.handle_clipboard_keys(ctx);
         // Set by whichever panel commits a photo edit, and recorded in the action log after
         // the panels close. Collected in a local rather than assigned inline because both
         // sites sit inside closures that already hold `&mut self` through `self.session`,
@@ -1607,6 +1702,9 @@ impl eframe::App for RustroomApp {
         }
 
         self.pump_decodes(&ctx);
+        // Outside the view match: Ctrl+V must reach a selection made in the Library grid,
+        // not only one made in the filmstrip.
+        self.handle_clipboard_keys(&ctx);
 
         // Pull any finished preview frame into a texture.
         if let Some(s) = &mut self.session {

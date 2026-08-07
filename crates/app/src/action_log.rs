@@ -27,6 +27,12 @@ pub enum ActionKind {
     /// would make every entry in the undo and redo stacks that large — including the
     /// zero-sized `PhotoEdit`, which is by far the most common.
     Sync(Box<SyncAction>),
+    /// Several actions performed by one gesture, undone and redone as a unit.
+    ///
+    /// Pasting into a multi-selection is the motivating case: it changes the open photo
+    /// through its session *and* the rest through their sidecars, which are two different
+    /// mechanisms — but one Ctrl+V must stay one Ctrl+Z.
+    Batch(Vec<ActionKind>),
 }
 
 /// What a [`ActionKind::Sync`] needs to be reversed *and* replayed.
@@ -89,8 +95,26 @@ impl ActionLog {
     /// photo's history — silently reverting an edit the user never made here. Preset
     /// deletions are global and survive.
     pub fn forget_photo_edits(&mut self) {
-        self.undo.retain(|k| !matches!(k, ActionKind::PhotoEdit));
-        self.redo.retain(|k| !matches!(k, ActionKind::PhotoEdit));
+        Self::sweep(&mut self.undo);
+        Self::sweep(&mut self.redo);
+    }
+
+    /// Drop photo edits from one stack, **including those nested in a batch**.
+    ///
+    /// A batch keeps its other members: stranding the sidecar half of a paste with no way
+    /// to undo it would be worse than losing the session half, which is unreachable anyway.
+    /// A batch left with nothing is not an undo step and goes.
+    fn sweep(stack: &mut Vec<ActionKind>) {
+        for kind in stack.iter_mut() {
+            if let ActionKind::Batch(parts) = kind {
+                parts.retain(|p| !matches!(p, ActionKind::PhotoEdit));
+            }
+        }
+        stack.retain(|kind| match kind {
+            ActionKind::PhotoEdit => false,
+            ActionKind::Batch(parts) => !parts.is_empty(),
+            _ => true,
+        });
     }
 }
 
@@ -198,6 +222,44 @@ mod tests {
         log.forget_photo_edits();
         assert_eq!(log.undo(), Some(sync_entry()));
         assert!(!log.can_undo());
+    }
+
+    #[test]
+    fn a_batch_is_one_step() {
+        // The log must hand back the whole group at once; splitting it would make one
+        // Ctrl+V take two Ctrl+Z.
+        let mut log = ActionLog::default();
+        let batch = ActionKind::Batch(vec![ActionKind::PhotoEdit, sync_entry()]);
+        log.push(batch.clone());
+        log.push(ActionKind::PhotoEdit);
+
+        assert_eq!(log.undo(), Some(ActionKind::PhotoEdit));
+        assert_eq!(log.undo(), Some(batch.clone()));
+        assert!(!log.can_undo());
+        assert_eq!(log.redo(), Some(batch));
+    }
+
+    #[test]
+    fn forgetting_photo_edits_reaches_inside_a_batch() {
+        // ⚠ A batch's `PhotoEdit` member belongs to a session that is now gone, so undoing
+        // it would pop a *different* photo's history — the very bug this method exists to
+        // prevent. But dropping the whole batch would strand the sidecar half of a paste
+        // with no way to undo it, so the member goes and the rest stays.
+        let mut log = ActionLog::default();
+        log.push(ActionKind::Batch(vec![ActionKind::PhotoEdit, sync_entry()]));
+        log.forget_photo_edits();
+        assert_eq!(log.undo(), Some(ActionKind::Batch(vec![sync_entry()])));
+    }
+
+    #[test]
+    fn a_batch_of_only_photo_edits_is_dropped_entirely() {
+        let mut log = ActionLog::default();
+        log.push(ActionKind::Batch(vec![
+            ActionKind::PhotoEdit,
+            ActionKind::PhotoEdit,
+        ]));
+        log.forget_photo_edits();
+        assert!(!log.can_undo(), "an empty batch is not an undo step");
     }
 
     #[test]
