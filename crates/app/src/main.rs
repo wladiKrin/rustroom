@@ -1,4 +1,5 @@
 use catalog::CatalogEntry;
+use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::buffer_cache::BufferCache;
@@ -6,7 +7,9 @@ use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
+use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
+use rustroom_app::settings::{ConfirmOutcome, Settings, SettingsStore};
 use rustroom_app::thumb_loader::ThumbLoader;
 use rustroom_app::view_region;
 use std::path::PathBuf;
@@ -61,6 +64,28 @@ struct PendingOpen {
     seq: Option<u64>,
 }
 
+/// Which modal dialog is open. At most one at a time, so this is an enum rather than a
+/// pile of booleans that could contradict each other.
+#[derive(Default, PartialEq)]
+enum Modal {
+    #[default]
+    None,
+    /// Naming a new preset and choosing the groups it will carry.
+    SavePreset {
+        name: String,
+        groups: EditGroups,
+    },
+    /// Choosing which groups a paste applies.
+    PasteSettings,
+    /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
+    /// `Settings` only on the Delete path, never on Cancel.
+    ConfirmDeletePreset {
+        name: String,
+        dont_ask_again: bool,
+    },
+    Settings,
+}
+
 struct RustroomApp {
     view: AppView,
     library: Option<Library>,
@@ -70,11 +95,27 @@ struct RustroomApp {
     cache: BufferCache,
     status: String,
     show_filmstrip: bool,
+    show_presets: bool,
+    /// In-memory and per-session: the clipboard does not survive a restart and does not
+    /// touch the OS clipboard.
+    clipboard: Option<Edits>,
+    /// Group selection last used for a paste, so Ctrl+V can skip the dialog.
+    paste_groups: EditGroups,
+    preset_store: PresetStore,
+    /// Cached `preset_store.list()`, refreshed on save and delete rather than every frame.
+    preset_list: Vec<Preset>,
+    settings_store: SettingsStore,
+    settings: Settings,
+    modal: Modal,
 }
 
 impl RustroomApp {
     fn new(ctx: &egui::Context) -> Self {
         let ctx2 = ctx.clone();
+        let preset_store = PresetStore::user_default();
+        let preset_list = preset_store.list();
+        let settings_store = SettingsStore::user_default();
+        let settings = settings_store.load();
         Self {
             view: AppView::default(),
             library: None,
@@ -86,6 +127,14 @@ impl RustroomApp {
             cache: BufferCache::new(BUFFER_CACHE_CAP),
             status: String::new(),
             show_filmstrip: true,
+            show_presets: false,
+            clipboard: None,
+            paste_groups: EditGroups::default(),
+            preset_store,
+            preset_list,
+            settings_store,
+            settings,
+            modal: Modal::None,
         }
     }
 }
@@ -193,6 +242,66 @@ impl RustroomApp {
         if let Some(s) = &self.session {
             if s.edits != Edits::default() {
                 let _ = s.edits.to_json_file(&sidecar_path(&s.path));
+            }
+        }
+    }
+
+    /// Apply `src`'s selected groups to the current photo: one undo step, one re-render.
+    ///
+    /// The single point of application for both paste and presets, so the two cannot drift.
+    fn apply_edits_from(&mut self, src: &Edits, groups: EditGroups) {
+        let Some(s) = &mut self.session else { return };
+        s.edits.merge_from(src, groups);
+        s.history.push(s.edits.clone());
+        s.engine.request(
+            preview_edits(&s.edits, s.crop_mode),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+    }
+
+    /// Re-read the presets directory. Called after a save or a delete, not every frame.
+    fn reload_presets(&mut self) {
+        self.preset_list = self.preset_store.list();
+    }
+
+    /// Persist the settings, surfacing a failure in the status line rather than silently.
+    fn save_settings(&mut self) {
+        if let Err(e) = self.settings_store.save(&self.settings) {
+            self.status = format!("Could not save settings: {e}");
+        }
+    }
+
+    /// Ctrl+C / Ctrl+V for the edit clipboard.
+    ///
+    /// Gated on nothing having keyboard focus, the way `handle_develop_arrows` already is,
+    /// so Ctrl+C inside the preset-name field is not hijacked.
+    fn handle_clipboard_keys(&mut self, ctx: &egui::Context) {
+        if self.session.is_none() || self.modal != Modal::None {
+            return;
+        }
+        if ctx.memory(|m| m.focused()).is_some() {
+            return;
+        }
+        let (copy, paste) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::C) && i.modifiers.command,
+                i.key_pressed(egui::Key::V) && i.modifiers.command,
+            )
+        });
+        if copy {
+            // `self.session.as_ref().map(..)` rather than `if let Some(s) = &self.session`:
+            // the latter holds an immutable borrow of `self` across the assignment to
+            // `self.clipboard` and does not compile.
+            self.clipboard = self.session.as_ref().map(|s| s.edits.clone());
+            self.status = "Settings copied".to_string();
+        }
+        if paste {
+            // Ctrl+V uses the last-used group selection with no dialog; the "Paste…"
+            // button opens the chooser.
+            if let Some(src) = self.clipboard.clone() {
+                self.apply_edits_from(&src, self.paste_groups);
+                self.status = "Settings pasted".to_string();
             }
         }
     }
@@ -447,6 +556,26 @@ impl RustroomApp {
                 );
             }
         }
+        if self.session.is_some() {
+            ui.separator();
+            if ui.button("Copy").clicked() {
+                // Same borrow reason as in `handle_clipboard_keys`.
+                self.clipboard = self.session.as_ref().map(|s| s.edits.clone());
+                self.status = "Settings copied".to_string();
+            }
+            if ui
+                .add_enabled(self.clipboard.is_some(), egui::Button::new("Paste…"))
+                .clicked()
+            {
+                self.modal = Modal::PasteSettings;
+            }
+            // Unlike the filmstrip, this does not need a Library: presets are just as
+            // useful on a single-file open.
+            ui.toggle_value(&mut self.show_presets, "Presets");
+            if ui.button("Settings…").clicked() {
+                self.modal = Modal::Settings;
+            }
+        }
         if self.library.is_some() {
             ui.toggle_value(&mut self.show_filmstrip, "Filmstrip");
         }
@@ -455,6 +584,7 @@ impl RustroomApp {
     /// The Develop editor body: right adjustment panel + central image canvas.
     fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.handle_develop_arrows(ctx);
+        self.handle_clipboard_keys(ctx);
         egui::Panel::right("panel")
             .default_size(240.0)
             .show(ui, |ui| {
