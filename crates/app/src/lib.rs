@@ -9,6 +9,7 @@ pub mod histogram;
 pub mod history;
 pub mod presets;
 pub mod render_engine;
+pub mod selection;
 pub mod settings;
 pub mod thumb_loader;
 pub mod view_region;

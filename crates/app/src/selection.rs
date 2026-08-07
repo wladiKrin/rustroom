@@ -1,0 +1,296 @@
+//! Which photos are selected, and which one a sync copies *from*.
+//!
+//! Pure and `egui`-free so the range arithmetic and clamping are testable rather than only
+//! visible as a wrong highlight — the same reasoning behind `crop_tool` and `view_region`.
+
+use std::collections::BTreeSet;
+
+/// A multi-selection with a distinguished **active** photo: the one open in Develop, and
+/// the source for a sync.
+///
+/// ⚠ Invariant, asserted after every operation in the tests: `active == Some(i)` implies
+/// `i` is selected, and `active == None` implies nothing is selected.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Selection {
+    active: Option<usize>,
+    set: BTreeSet<usize>,
+    /// Where a shift-click measures its range from. Moved by plain clicks and Cmd-clicks,
+    /// *not* by shift-clicks, so repeated shift-clicks re-measure from the same origin.
+    anchor: Option<usize>,
+}
+
+impl Selection {
+    pub fn active(&self) -> Option<usize> {
+        self.active
+    }
+
+    pub fn contains(&self, i: usize) -> bool {
+        self.set.contains(&i)
+    }
+
+    /// Selected indices, ascending.
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.set.iter().copied()
+    }
+
+    /// Everything selected except the active photo — a sync's targets.
+    pub fn others(&self) -> impl Iterator<Item = usize> + '_ {
+        let active = self.active;
+        self.set.iter().copied().filter(move |&i| Some(i) != active)
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    /// Plain click: this becomes the active photo and the entire selection.
+    pub fn click(&mut self, i: usize) {
+        self.active = Some(i);
+        self.set.clear();
+        self.set.insert(i);
+        self.anchor = Some(i);
+    }
+
+    /// Cmd/Ctrl-click: add or remove.
+    ///
+    /// ⚠ Never touches the active photo. Deselecting the source would break the invariant,
+    /// and moving the active photo here would kick off a RAW decode mid-selection.
+    pub fn toggle(&mut self, i: usize) {
+        if self.active == Some(i) {
+            return;
+        }
+        if !self.set.remove(&i) {
+            self.set.insert(i);
+        }
+        self.anchor = Some(i);
+    }
+
+    /// Shift-click: the inclusive range from the anchor to `i`.
+    ///
+    /// The active photo is re-inserted afterwards because a preceding Cmd-click can have
+    /// moved the anchor away from it, and the range alone would then drop the source.
+    pub fn extend_to(&mut self, i: usize) {
+        let from = self.anchor.or(self.active).unwrap_or(i);
+        let (lo, hi) = (from.min(i), from.max(i));
+        self.set.clear();
+        self.set.extend(lo..=hi);
+        match self.active {
+            Some(a) => {
+                self.set.insert(a);
+            }
+            None => self.active = Some(i),
+        }
+    }
+
+    /// Select `0..n`. With no active photo yet, index 0 becomes active — otherwise this
+    /// would produce a non-empty set with no source and break the invariant.
+    pub fn select_all(&mut self, n: usize) {
+        self.set = (0..n).collect();
+        if n == 0 {
+            self.active = None;
+            self.anchor = None;
+        } else if self.active.is_none_or(|a| a >= n) {
+            self.active = Some(0);
+            self.anchor = Some(0);
+        }
+    }
+
+    /// Back to just the active photo; empty if there is none.
+    pub fn clear(&mut self) {
+        self.set.clear();
+        if let Some(a) = self.active {
+            self.set.insert(a);
+        }
+        self.anchor = self.active;
+    }
+
+    /// Drop indices past `n`, after the folder's contents changed.
+    pub fn clamp(&mut self, n: usize) {
+        self.set.retain(|&i| i < n);
+        if self.active.is_some_and(|a| a >= n) {
+            self.active = None;
+        }
+        if self.active.is_none() {
+            // Targets with no source are not a usable state.
+            self.set.clear();
+        }
+        self.anchor = self.anchor.filter(|&a| a < n);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⚠ The invariant every method must preserve: an active photo is always selected, and
+    /// no active photo means nothing is selected. Sync would otherwise have a source that
+    /// is not part of what it is syncing, or a selection with no source at all.
+    fn check(s: &Selection) {
+        match s.active() {
+            Some(a) => assert!(s.contains(a), "active {a} is not in the selection"),
+            None => assert!(
+                s.is_empty(),
+                "no active photo but the selection is non-empty"
+            ),
+        }
+    }
+
+    fn items(s: &Selection) -> Vec<usize> {
+        s.iter().collect()
+    }
+
+    #[test]
+    fn a_plain_click_replaces_everything() {
+        let mut s = Selection::default();
+        s.click(3);
+        check(&s);
+        assert_eq!(s.active(), Some(3));
+        assert_eq!(items(&s), vec![3]);
+        s.toggle(5);
+        s.click(1);
+        check(&s);
+        assert_eq!(
+            items(&s),
+            vec![1],
+            "a plain click must not keep the old selection"
+        );
+    }
+
+    #[test]
+    fn toggle_adds_and_removes_but_never_the_active_photo() {
+        let mut s = Selection::default();
+        s.click(2);
+        s.toggle(4);
+        check(&s);
+        assert_eq!(items(&s), vec![2, 4]);
+        s.toggle(4);
+        check(&s);
+        assert_eq!(items(&s), vec![2]);
+        // The source cannot be deselected — the price of "modifiers never move the active".
+        s.toggle(2);
+        check(&s);
+        assert_eq!(items(&s), vec![2]);
+        assert_eq!(s.active(), Some(2));
+    }
+
+    #[test]
+    fn extend_works_in_both_directions_and_keeps_the_active_photo() {
+        let mut s = Selection::default();
+        s.click(5);
+        s.extend_to(8);
+        check(&s);
+        assert_eq!(items(&s), vec![5, 6, 7, 8]);
+        assert_eq!(
+            s.active(),
+            Some(5),
+            "shift-click must not move the active photo"
+        );
+
+        let mut back = Selection::default();
+        back.click(5);
+        back.extend_to(2);
+        check(&back);
+        assert_eq!(items(&back), vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn repeated_shift_clicks_extend_from_the_same_anchor() {
+        // Standard behaviour: the second shift-click replaces the range rather than
+        // growing from wherever the last one landed.
+        let mut s = Selection::default();
+        s.click(4);
+        s.extend_to(8);
+        s.extend_to(6);
+        check(&s);
+        assert_eq!(items(&s), vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn extend_keeps_the_active_photo_when_the_anchor_moved_away() {
+        // A Cmd-click moves the anchor without moving the active photo, so the range alone
+        // would drop the source.
+        let mut s = Selection::default();
+        s.click(0);
+        s.toggle(7); // anchor -> 7, active still 0
+        s.extend_to(9);
+        check(&s);
+        assert_eq!(items(&s), vec![0, 7, 8, 9]);
+        assert_eq!(s.active(), Some(0));
+    }
+
+    #[test]
+    fn select_all_adopts_index_zero_only_when_there_is_no_active_photo() {
+        let mut fresh = Selection::default();
+        fresh.select_all(4);
+        check(&fresh);
+        assert_eq!(fresh.active(), Some(0));
+        assert_eq!(items(&fresh), vec![0, 1, 2, 3]);
+
+        let mut existing = Selection::default();
+        existing.click(2);
+        existing.select_all(4);
+        check(&existing);
+        assert_eq!(
+            existing.active(),
+            Some(2),
+            "an existing source must be kept"
+        );
+
+        let mut none = Selection::default();
+        none.select_all(0);
+        check(&none);
+        assert_eq!(none.active(), None);
+    }
+
+    #[test]
+    fn clear_leaves_exactly_the_active_photo() {
+        let mut s = Selection::default();
+        s.click(1);
+        s.extend_to(5);
+        s.clear();
+        check(&s);
+        assert_eq!(items(&s), vec![1]);
+
+        let mut empty = Selection::default();
+        empty.clear();
+        check(&empty);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn clamp_drops_out_of_range_indices() {
+        let mut s = Selection::default();
+        s.click(1);
+        s.extend_to(6);
+        s.clamp(4);
+        check(&s);
+        assert_eq!(items(&s), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn clamp_empties_the_selection_when_the_active_photo_is_gone() {
+        // A folder that shrank out from under the selection: keeping targets with no
+        // source would leave a sync with nothing to sync *from*.
+        let mut s = Selection::default();
+        s.click(9);
+        s.toggle(2);
+        s.clamp(4);
+        check(&s);
+        assert!(s.is_empty());
+        assert_eq!(s.active(), None);
+    }
+
+    #[test]
+    fn others_excludes_the_active_photo() {
+        // Exactly a sync's target list.
+        let mut s = Selection::default();
+        s.click(2);
+        s.extend_to(5);
+        assert_eq!(s.others().collect::<Vec<_>>(), vec![3, 4, 5]);
+        assert_eq!(s.len(), 4);
+    }
+}
