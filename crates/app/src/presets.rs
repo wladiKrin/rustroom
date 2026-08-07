@@ -67,9 +67,15 @@ impl PresetStore {
         Self { dir }
     }
 
-    /// The user's presets directory: `~/.config/rustroom/presets` (platform equivalent
-    /// elsewhere). Falls back to a relative path if the OS reports no config dir, which
-    /// keeps this infallible.
+    /// The user's presets directory: `<platform config dir>/rustroom/presets`.
+    ///
+    /// ⚠ That is **not** `~/.config` everywhere — `dirs::config_dir()` follows each
+    /// platform's own convention: `~/Library/Application Support` on macOS,
+    /// `$XDG_CONFIG_HOME` (usually `~/.config`) on Linux, `%APPDATA%` on Windows. Use
+    /// `PresetStore::dir()` when you need to tell a user where their presets actually live.
+    ///
+    /// Falls back to a relative path if the OS reports no config dir, which keeps this
+    /// infallible.
     pub fn user_default() -> Self {
         let dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))

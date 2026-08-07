@@ -71,8 +71,9 @@ impl SettingsStore {
         Self { path }
     }
 
-    /// `~/.config/rustroom/settings.json` (platform equivalent elsewhere), beside the
-    /// presets directory.
+    /// `<platform config dir>/rustroom/settings.json`, beside the presets directory.
+    ///
+    /// ⚠ Not `~/.config` everywhere — see [`crate::presets::PresetStore::user_default`].
     pub fn user_default() -> Self {
         let path = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
