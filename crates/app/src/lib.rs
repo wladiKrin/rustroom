@@ -5,6 +5,7 @@ pub mod crop_tool;
 pub mod decode_worker;
 pub mod histogram;
 pub mod history;
+pub mod presets;
 pub mod render_engine;
 pub mod thumb_loader;
 pub mod view_region;
