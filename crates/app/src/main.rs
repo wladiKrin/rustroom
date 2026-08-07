@@ -11,6 +11,7 @@ use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
 use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
+use rustroom_app::selection::Selection;
 use rustroom_app::settings::{ConfirmOutcome, Settings, SettingsStore};
 use rustroom_app::sidecar;
 use rustroom_app::sync;
@@ -52,7 +53,7 @@ enum AppView {
 struct Library {
     entries: Vec<CatalogEntry>,
     thumbs: Vec<Option<egui::TextureHandle>>, // parallel to entries; None = still loading
-    selected: Option<usize>,
+    selection: Selection,
     loader: ThumbLoader,
 }
 
@@ -584,7 +585,7 @@ impl RustroomApp {
                 self.library = Some(Library {
                     entries,
                     thumbs: (0..n).map(|_| None).collect(),
-                    selected: None,
+                    selection: Selection::default(),
                     loader,
                 });
                 self.view = AppView::Library;
@@ -602,7 +603,7 @@ impl RustroomApp {
         let path = match self.library.as_mut() {
             Some(lib) => match lib.entries.get(index) {
                 Some(e) => {
-                    lib.selected = Some(index);
+                    lib.selection.click(index);
                     e.path.clone()
                 }
                 None => return,
@@ -1318,7 +1319,7 @@ impl RustroomApp {
             if n == 0 || ctx.memory(|m| m.focused().is_some()) {
                 return;
             }
-            let cur = lib.selected.unwrap_or(0);
+            let cur = lib.selection.active().unwrap_or(0);
             ctx.input(|i| {
                 if i.key_pressed(egui::Key::ArrowRight) {
                     Some((cur + 1).min(n - 1))
@@ -1330,7 +1331,7 @@ impl RustroomApp {
             })
         };
         if let Some(i) = nav {
-            if self.library.as_ref().and_then(|l| l.selected) != Some(i) {
+            if self.library.as_ref().and_then(|l| l.selection.active()) != Some(i) {
                 self.open_entry(ctx, i);
             }
         }
@@ -1375,7 +1376,7 @@ impl RustroomApp {
                                 })
                                 .response
                                 .interact(egui::Sense::click());
-                            if lib.selected == Some(i) {
+                            if lib.selection.active() == Some(i) {
                                 ui.painter().rect_stroke(
                                     resp.rect,
                                     egui::CornerRadius::same(3),
@@ -1405,6 +1406,8 @@ impl RustroomApp {
                 });
                 return;
             };
+            // A folder can be reloaded with fewer photos than the selection remembers.
+            lib.selection.clamp(lib.entries.len());
             if lib.entries.is_empty() {
                 ui.centered_and_justified(|ui| {
                     ui.label("No supported images in this folder.");
@@ -1416,15 +1419,15 @@ impl RustroomApp {
             // Keyboard: arrows move the selection, Enter opens it.
             ui.input(|i| {
                 let n = lib.entries.len();
-                let cur = lib.selected.unwrap_or(0);
+                let cur = lib.selection.active().unwrap_or(0);
                 if i.key_pressed(egui::Key::ArrowRight) {
-                    lib.selected = Some((cur + 1).min(n - 1));
+                    lib.selection.click((cur + 1).min(n - 1));
                 }
                 if i.key_pressed(egui::Key::ArrowLeft) {
-                    lib.selected = Some(cur.saturating_sub(1));
+                    lib.selection.click(cur.saturating_sub(1));
                 }
                 if i.key_pressed(egui::Key::Enter) {
-                    open_index = lib.selected;
+                    open_index = lib.selection.active();
                 }
             });
 
@@ -1464,7 +1467,7 @@ impl RustroomApp {
                             .response
                             .interact(egui::Sense::click());
 
-                        if lib.selected == Some(i) {
+                        if lib.selection.active() == Some(i) {
                             ui.painter().rect_stroke(
                                 resp.rect,
                                 egui::CornerRadius::same(3),
@@ -1473,7 +1476,7 @@ impl RustroomApp {
                             );
                         }
                         if resp.clicked() {
-                            lib.selected = Some(i);
+                            lib.selection.click(i);
                         }
                         if resp.double_clicked() {
                             open_index = Some(i);
