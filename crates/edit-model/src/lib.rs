@@ -189,6 +189,112 @@ impl Sharpening {
     }
 }
 
+/// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
+/// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
+pub const EDIT_GROUP_NAMES: [&str; 6] = [
+    "White Balance",
+    "Tone",
+    "Color",
+    "Detail",
+    "Effects",
+    "Geometry",
+];
+
+/// Which groups of settings a paste or a preset carries.
+///
+/// [`Default`] is everything **except** geometry: a crop framed for one composition reframes
+/// another, so carrying it across photos is usually wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditGroups {
+    pub white_balance: bool,
+    /// Exposure, contrast, highlights, shadows, whites, blacks, tone curve.
+    pub tone: bool,
+    /// Saturation, vibrance, HSL.
+    pub color: bool,
+    /// Noise reduction and sharpening.
+    pub detail: bool,
+    /// Vignette.
+    pub effects: bool,
+    /// Crop and straighten.
+    pub geometry: bool,
+}
+
+impl Default for EditGroups {
+    fn default() -> Self {
+        Self {
+            white_balance: true,
+            tone: true,
+            color: true,
+            detail: true,
+            effects: true,
+            geometry: false,
+        }
+    }
+}
+
+impl EditGroups {
+    pub const ALL: Self = Self {
+        white_balance: true,
+        tone: true,
+        color: true,
+        detail: true,
+        effects: true,
+        geometry: true,
+    };
+
+    pub const NONE: Self = Self {
+        white_balance: false,
+        tone: false,
+        color: false,
+        detail: false,
+        effects: false,
+        geometry: false,
+    };
+
+    /// Only group `i`, indexed as in [`EDIT_GROUP_NAMES`].
+    ///
+    /// # Panics
+    /// Panics if `i >= EDIT_GROUP_NAMES.len()`.
+    pub fn only(i: usize) -> Self {
+        let mut g = Self::NONE;
+        *g.get_mut(i) = true;
+        g
+    }
+
+    /// Whether group `i` is selected, indexed as in [`EDIT_GROUP_NAMES`].
+    ///
+    /// # Panics
+    /// Panics if `i >= EDIT_GROUP_NAMES.len()`.
+    pub fn get(&self, i: usize) -> bool {
+        match i {
+            0 => self.white_balance,
+            1 => self.tone,
+            2 => self.color,
+            3 => self.detail,
+            4 => self.effects,
+            5 => self.geometry,
+            _ => panic!("edit group index {i} out of range"),
+        }
+    }
+
+    /// Mutable access to group `i`, for the checkbox UI. Indexed as in [`EDIT_GROUP_NAMES`].
+    ///
+    /// # Panics
+    /// Panics if `i >= EDIT_GROUP_NAMES.len()`.
+    pub fn get_mut(&mut self, i: usize) -> &mut bool {
+        match i {
+            0 => &mut self.white_balance,
+            1 => &mut self.tone,
+            2 => &mut self.color,
+            3 => &mut self.detail,
+            4 => &mut self.effects,
+            5 => &mut self.geometry,
+            _ => panic!("edit group index {i} out of range"),
+        }
+    }
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -232,6 +338,64 @@ impl Edits {
         let text = serde_json::to_string_pretty(self)?;
         std::fs::write(path, text)?;
         Ok(())
+    }
+
+    /// Overwrite this photo's settings with `src`'s, for the selected groups only.
+    ///
+    /// `version` is a schema marker rather than an edit, so it never transfers — the target
+    /// keeps its own.
+    ///
+    /// ⚠ The destructuring below is **exhaustive on purpose**. Adding a field to `Edits`
+    /// breaks this function until whoever adds it decides which group owns it. Without that,
+    /// a new field would silently never transfer through a paste or a preset, and nothing
+    /// would fail — the same class of bug `PrefixKey` guards against in the pipeline.
+    pub fn merge_from(&mut self, src: &Edits, groups: EditGroups) {
+        let Edits {
+            version: _,
+            white_balance,
+            exposure,
+            contrast,
+            highlights,
+            shadows,
+            whites,
+            blacks,
+            tone_curve,
+            saturation,
+            vibrance,
+            hsl,
+            noise_reduction,
+            sharpening,
+            vignette,
+            geometry,
+        } = src;
+
+        if groups.white_balance {
+            self.white_balance = *white_balance;
+        }
+        if groups.tone {
+            self.exposure = *exposure;
+            self.contrast = *contrast;
+            self.highlights = *highlights;
+            self.shadows = *shadows;
+            self.whites = *whites;
+            self.blacks = *blacks;
+            self.tone_curve = tone_curve.clone();
+        }
+        if groups.color {
+            self.saturation = *saturation;
+            self.vibrance = *vibrance;
+            self.hsl = *hsl;
+        }
+        if groups.detail {
+            self.noise_reduction = *noise_reduction;
+            self.sharpening = *sharpening;
+        }
+        if groups.effects {
+            self.vignette = *vignette;
+        }
+        if groups.geometry {
+            self.geometry = *geometry;
+        }
     }
 }
 
@@ -547,6 +711,186 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"geometry": {"angle": 2.5}}"#).unwrap();
         assert_eq!(e.geometry.angle, 2.5);
         assert_eq!(e.geometry.crop, CropRect::default());
+    }
+
+    /// An `Edits` with every field non-neutral, so a field that fails to transfer shows up.
+    ///
+    /// Deliberately does NOT use `..Default::default()`: adding a field to `Edits` should
+    /// break this function, forcing whoever adds it to give it a group.
+    fn all_nonneutral() -> Edits {
+        let mut hsl = Hsl::default();
+        hsl.bands[0].saturation = 20.0;
+        Edits {
+            version: 7,
+            white_balance: WhiteBalance {
+                temp: 10.0,
+                tint: 5.0,
+            },
+            exposure: 0.5,
+            contrast: 10.0,
+            highlights: -10.0,
+            shadows: 10.0,
+            whites: 5.0,
+            blacks: -5.0,
+            tone_curve: ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            saturation: 10.0,
+            vibrance: 10.0,
+            hsl,
+            noise_reduction: NoiseReduction {
+                luminance: 30.0,
+                color: 30.0,
+                ..Default::default()
+            },
+            sharpening: Sharpening {
+                amount: 60.0,
+                ..Default::default()
+            },
+            vignette: Vignette {
+                amount: -30.0,
+                ..Default::default()
+            },
+            geometry: Geometry {
+                angle: 2.0,
+                crop: CropRect {
+                    left: 0.1,
+                    top: 0.1,
+                    right: 0.9,
+                    bottom: 0.9,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn merging_all_groups_reproduces_the_source() {
+        // ⚠ The coverage half of the partition proof. A field belonging to NO group would
+        // silently never transfer — and this is what catches it, because the result would
+        // keep the target's default for that field.
+        let src = all_nonneutral();
+        let mut got = Edits::default();
+        got.merge_from(&src, EditGroups::ALL);
+        assert_eq!(got, Edits { version: 0, ..src });
+    }
+
+    #[test]
+    fn version_never_transfers() {
+        // `version` is a schema marker, not an edit. The target keeps its own.
+        let src = all_nonneutral();
+        assert_ne!(src.version, 0);
+        let mut got = Edits {
+            version: 3,
+            ..Edits::default()
+        };
+        got.merge_from(&src, EditGroups::ALL);
+        assert_eq!(got.version, 3);
+    }
+
+    #[test]
+    fn merging_no_groups_changes_nothing() {
+        let src = all_nonneutral();
+        let mut got = Edits::default();
+        got.merge_from(&src, EditGroups::NONE);
+        assert_eq!(got, Edits::default());
+    }
+
+    #[test]
+    fn every_group_transfers_something() {
+        // A group that moves no fields is dead weight, and would make the disjointness
+        // test below pass vacuously for that group.
+        let src = all_nonneutral();
+        for i in 0..EDIT_GROUP_NAMES.len() {
+            let mut got = Edits::default();
+            got.merge_from(&src, EditGroups::only(i));
+            assert_ne!(
+                got,
+                Edits::default(),
+                "group {} transferred nothing",
+                EDIT_GROUP_NAMES[i]
+            );
+        }
+    }
+
+    #[test]
+    fn the_groups_are_disjoint() {
+        // ⚠ The other half of the partition proof, and it needs no field list of its own.
+        //
+        // Clear group `g` from a fully non-neutral source. If some field belonged to both
+        // `g` and `h`, clearing `g` would change what `h` transfers — so comparing group
+        // `h`'s transfer before and after catches any overlap generically.
+        let src = all_nonneutral();
+        let n = EDIT_GROUP_NAMES.len();
+        for g in 0..n {
+            let mut cleared = src.clone();
+            cleared.merge_from(&Edits::default(), EditGroups::only(g));
+            for h in 0..n {
+                if h == g {
+                    continue;
+                }
+                let mut from_src = Edits::default();
+                from_src.merge_from(&src, EditGroups::only(h));
+                let mut from_cleared = Edits::default();
+                from_cleared.merge_from(&cleared, EditGroups::only(h));
+                assert_eq!(
+                    from_src, from_cleared,
+                    "clearing {} changed what {} transfers — the groups overlap",
+                    EDIT_GROUP_NAMES[g], EDIT_GROUP_NAMES[h]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_then_restoring_a_group_is_a_round_trip() {
+        // Proves group `g` covers *exactly* the fields that `cleared` lost — not fewer.
+        let src = all_nonneutral();
+        for g in 0..EDIT_GROUP_NAMES.len() {
+            let mut round = src.clone();
+            round.merge_from(&Edits::default(), EditGroups::only(g));
+            assert_ne!(round, src, "group {} did nothing", EDIT_GROUP_NAMES[g]);
+            round.merge_from(&src, EditGroups::only(g));
+            assert_eq!(
+                round, src,
+                "group {} did not restore everything it cleared",
+                EDIT_GROUP_NAMES[g]
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_selection_excludes_geometry() {
+        // A crop framed for one composition reframes another, and a preset built on a 3:2
+        // crop would reshape every photo it touches.
+        let g = EditGroups::default();
+        assert!(!g.geometry);
+        assert!(g.white_balance && g.tone && g.color && g.detail && g.effects);
+    }
+
+    #[test]
+    fn edit_groups_roundtrip_json_and_default_when_absent() {
+        let g = EditGroups {
+            geometry: true,
+            tone: false,
+            ..EditGroups::default()
+        };
+        let back: EditGroups = serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+        assert_eq!(g, back);
+        // An older file missing the field entirely still loads.
+        let partial: EditGroups = serde_json::from_str(r#"{"geometry": true}"#).unwrap();
+        assert!(partial.geometry);
+        assert_eq!(partial.tone, EditGroups::default().tone);
+    }
+
+    #[test]
+    fn group_accessors_match_the_name_table() {
+        let mut g = EditGroups::NONE;
+        for i in 0..EDIT_GROUP_NAMES.len() {
+            assert!(!g.get(i));
+            *g.get_mut(i) = true;
+            assert!(g.get(i));
+        }
+        assert_eq!(g, EditGroups::ALL);
     }
 
     #[test]
