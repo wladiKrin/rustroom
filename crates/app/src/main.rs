@@ -13,6 +13,7 @@ use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::settings::{ConfirmOutcome, Settings, SettingsStore};
 use rustroom_app::sidecar;
+use rustroom_app::sync;
 use rustroom_app::thumb_loader::ThumbLoader;
 use rustroom_app::view_region;
 use std::path::PathBuf;
@@ -267,6 +268,34 @@ impl RustroomApp {
         }
     }
 
+    /// Reload the open photo's edits if its sidecar was just rewritten underneath it.
+    ///
+    /// ⚠ The active photo is never a sync *target*, so a sync cannot make the open session
+    /// stale. But a user can sync, switch to a synced photo, and *then* undo — which
+    /// rewrites that photo's sidecar while it is open with its own in-memory edits. Without
+    /// this the canvas silently disagrees with the disk until you switch away and back.
+    fn reload_if_affected(&mut self, affected: &[PathBuf]) {
+        let Some(open) = self.session.as_ref().map(|s| s.path.clone()) else {
+            return;
+        };
+        if !affected.contains(&open) {
+            return;
+        }
+        let edits = sidecar::load(&open).unwrap_or_default();
+        if let Some(s) = &mut self.session {
+            s.edits = edits;
+            // The old history described a state that is no longer on disk.
+            s.history = History::new(s.edits.clone());
+            s.engine.request(
+                preview_edits(&s.edits, s.crop_mode),
+                s.render_max_dim(),
+                s.requested_region,
+            );
+        }
+        // Those history entries just became unreachable.
+        self.actions.forget_photo_edits();
+    }
+
     /// Re-render after the session's edits were changed by an undo or a redo.
     fn rerender_current(&mut self) {
         let Some(s) = &mut self.session else { return };
@@ -297,6 +326,17 @@ impl RustroomApp {
                 }
                 self.reload_presets();
             }
+            Some(ActionKind::Sync(action)) => {
+                let failed = sync::revert(&action.prior);
+                let total = action.prior.len();
+                self.status = if failed.is_empty() {
+                    format!("Reverted sync of {total} photos")
+                } else {
+                    format!("Reverted {}, {} failed", total - failed.len(), failed.len())
+                };
+                let affected: Vec<PathBuf> = action.prior.iter().map(|(p, _)| p.clone()).collect();
+                self.reload_if_affected(&affected);
+            }
         }
     }
 
@@ -316,6 +356,12 @@ impl RustroomApp {
                     Err(e) => self.status = format!("Could not delete preset: {e}"),
                 }
                 self.reload_presets();
+            }
+            Some(ActionKind::Sync(action)) => {
+                let targets: Vec<PathBuf> = action.prior.iter().map(|(p, _)| p.clone()).collect();
+                let report = sync::apply(&targets, &action.source, action.groups);
+                self.status = format!("Re-synced {} photos", report.prior.len());
+                self.reload_if_affected(&targets);
             }
         }
     }

@@ -8,14 +8,37 @@
 //! That is what makes "delete a preset, change a setting, press Ctrl+Z twice" bring the
 //! preset back — the two actions sit in one order rather than in two competing stacks.
 
+use edit_model::{EditGroups, Edits};
+use std::path::PathBuf;
+
 /// A single undoable action, in the order it happened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// ⚠ Not `Eq`: `Edits` holds `f32`s, so it is `PartialEq` only. That is all the tests need.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ActionKind {
     /// A step was recorded in the current session's `History<Edits>`.
     PhotoEdit,
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
     PresetDelete { name: String },
+    /// One photo's settings were applied to several others' sidecars.
+    ///
+    /// **Boxed on purpose:** the payload is a few hundred bytes, and an unboxed variant
+    /// would make every entry in the undo and redo stacks that large — including the
+    /// zero-sized `PhotoEdit`, which is by far the most common.
+    Sync(Box<SyncAction>),
+}
+
+/// What a [`ActionKind::Sync`] needs to be reversed *and* replayed.
+///
+/// `prior` restores each target — `None` means the photo had no sidecar, so undoing must
+/// delete the file the sync created — while `source` and `groups` re-apply it. Global, like
+/// `PresetDelete`: it never touches the live session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncAction {
+    pub source: Edits,
+    pub groups: EditGroups,
+    pub prior: Vec<(PathBuf, Option<Edits>)>,
 }
 
 /// Undo/redo ordering over [`ActionKind`]. Mirrors `History`'s shape deliberately.
@@ -152,6 +175,38 @@ mod tests {
         assert_eq!(log.peek_undo(), Some(&del("A")));
         assert_eq!(log.peek_undo(), Some(&del("A")));
         assert!(log.can_undo());
+    }
+
+    fn sync_entry() -> ActionKind {
+        ActionKind::Sync(Box::new(SyncAction {
+            source: Edits {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            groups: EditGroups::default(),
+            prior: vec![(PathBuf::from("/a/b.RAF"), None)],
+        }))
+    }
+
+    #[test]
+    fn a_sync_survives_a_photo_switch() {
+        // A sync touches other photos' sidecars, never the live session, so it is global
+        // in exactly the way a preset deletion is.
+        let mut log = ActionLog::default();
+        log.push(sync_entry());
+        log.push(ActionKind::PhotoEdit);
+        log.forget_photo_edits();
+        assert_eq!(log.undo(), Some(sync_entry()));
+        assert!(!log.can_undo());
+    }
+
+    #[test]
+    fn a_sync_orders_with_everything_else() {
+        let mut log = ActionLog::default();
+        log.push(sync_entry());
+        log.push(ActionKind::PhotoEdit);
+        assert_eq!(log.undo(), Some(ActionKind::PhotoEdit));
+        assert_eq!(log.undo(), Some(sync_entry()));
     }
 
     #[test]
