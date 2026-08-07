@@ -800,15 +800,10 @@ mod tests {
         // A group that moves no fields is dead weight, and would make the disjointness
         // test below pass vacuously for that group.
         let src = all_nonneutral();
-        for i in 0..EDIT_GROUP_NAMES.len() {
+        for (i, name) in EDIT_GROUP_NAMES.iter().enumerate() {
             let mut got = Edits::default();
             got.merge_from(&src, EditGroups::only(i));
-            assert_ne!(
-                got,
-                Edits::default(),
-                "group {} transferred nothing",
-                EDIT_GROUP_NAMES[i]
-            );
+            assert_ne!(got, Edits::default(), "group {name} transferred nothing");
         }
     }
 
@@ -820,11 +815,10 @@ mod tests {
         // `g` and `h`, clearing `g` would change what `h` transfers — so comparing group
         // `h`'s transfer before and after catches any overlap generically.
         let src = all_nonneutral();
-        let n = EDIT_GROUP_NAMES.len();
-        for g in 0..n {
+        for (g, g_name) in EDIT_GROUP_NAMES.iter().enumerate() {
             let mut cleared = src.clone();
             cleared.merge_from(&Edits::default(), EditGroups::only(g));
-            for h in 0..n {
+            for (h, h_name) in EDIT_GROUP_NAMES.iter().enumerate() {
                 if h == g {
                     continue;
                 }
@@ -834,8 +828,7 @@ mod tests {
                 from_cleared.merge_from(&cleared, EditGroups::only(h));
                 assert_eq!(
                     from_src, from_cleared,
-                    "clearing {} changed what {} transfers — the groups overlap",
-                    EDIT_GROUP_NAMES[g], EDIT_GROUP_NAMES[h]
+                    "clearing {g_name} changed what {h_name} transfers — the groups overlap"
                 );
             }
         }
@@ -845,15 +838,14 @@ mod tests {
     fn clearing_then_restoring_a_group_is_a_round_trip() {
         // Proves group `g` covers *exactly* the fields that `cleared` lost — not fewer.
         let src = all_nonneutral();
-        for g in 0..EDIT_GROUP_NAMES.len() {
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
             let mut round = src.clone();
             round.merge_from(&Edits::default(), EditGroups::only(g));
-            assert_ne!(round, src, "group {} did nothing", EDIT_GROUP_NAMES[g]);
+            assert_ne!(round, src, "group {name} did nothing");
             round.merge_from(&src, EditGroups::only(g));
             assert_eq!(
                 round, src,
-                "group {} did not restore everything it cleared",
-                EDIT_GROUP_NAMES[g]
+                "group {name} did not restore everything it cleared"
             );
         }
     }
