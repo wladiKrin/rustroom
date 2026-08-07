@@ -12,6 +12,7 @@ use rustroom_app::history::History;
 use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::settings::{ConfirmOutcome, Settings, SettingsStore};
+use rustroom_app::sidecar;
 use rustroom_app::thumb_loader::ThumbLoader;
 use rustroom_app::view_region;
 use std::path::PathBuf;
@@ -236,22 +237,13 @@ fn decode_for_export(path: &std::path::Path) -> Result<core_image::ImageBuf, Str
     }
 }
 
-/// The edit sidecar path for a source file: the full filename with `.json` appended
-/// (e.g. `photo.RAF` → `photo.RAF.json`), so a RAW and a JPEG that share a basename get
-/// distinct sidecars.
-fn sidecar_path(path: &std::path::Path) -> std::path::PathBuf {
-    let mut s = path.as_os_str().to_os_string();
-    s.push(".json");
-    std::path::PathBuf::from(s)
-}
-
 impl RustroomApp {
     /// Save the current session's edits to its `<file>.json` sidecar, if it has any.
     /// Called before switching photos / on exit so edits are never lost.
     fn persist_current_session(&self) {
         if let Some(s) = &self.session {
             if s.edits != Edits::default() {
-                let _ = s.edits.to_json_file(&sidecar_path(&s.path));
+                let _ = sidecar::save(&s.path, &s.edits);
             }
         }
     }
@@ -433,12 +425,7 @@ impl RustroomApp {
 
     /// Build the editing `Session` from a decoded photo (cache hit or worker result).
     fn finalize_session(&mut self, ctx: &egui::Context, path: PathBuf, decoded: Arc<Decoded>) {
-        let sidecar = sidecar_path(&path);
-        let edits = if sidecar.exists() {
-            edit_model::Edits::from_json_file(&sidecar).unwrap_or_default()
-        } else {
-            Edits::default()
-        };
+        let edits = sidecar::load(&path).unwrap_or_default();
 
         let bf = &decoded.baseline;
         let baseline = ctx.load_texture(
@@ -599,7 +586,7 @@ impl RustroomApp {
                 let rendered =
                     pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(image);
                 export::save_jpeg(&rendered, &out, 92)?;
-                edits.to_json_file(&sidecar_path(&out))?;
+                sidecar::save(&out, &edits)?;
                 Ok(())
             })();
             if let Err(e) = result {
