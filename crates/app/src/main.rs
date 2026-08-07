@@ -742,9 +742,127 @@ impl RustroomApp {
         }
     }
 
-    fn paste_modal(&mut self, _ctx: &egui::Context) {}
-    fn confirm_delete_modal(&mut self, _ctx: &egui::Context) {}
-    fn settings_modal(&mut self, _ctx: &egui::Context) {}
+    /// The "Paste…" dialog: which groups this paste applies.
+    ///
+    /// The chosen selection is remembered in `paste_groups`, which is also what a bare
+    /// Ctrl+V uses.
+    fn paste_modal(&mut self, ctx: &egui::Context) {
+        let mut groups = self.paste_groups;
+        let mut close = false;
+        let mut paste = false;
+
+        egui::Window::new("Paste settings")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Apply:");
+                edit_group_checkboxes(ui, &mut groups);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Paste").clicked() {
+                        paste = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        self.paste_groups = groups;
+        if paste {
+            if let Some(src) = self.clipboard.clone() {
+                self.apply_edits_from(&src, groups);
+                self.status = "Settings pasted".to_string();
+            }
+            close = true;
+        }
+        if close {
+            self.modal = Modal::None;
+        }
+    }
+
+    /// The preset-delete confirmation.
+    ///
+    /// ⚠ "Don't ask again" is scratch state until Delete is clicked. Ticking it and then
+    /// cancelling must leave the confirmation armed — see
+    /// `settings::cancelling_never_suppresses_the_confirmation`, which is where that rule
+    /// is actually tested.
+    fn confirm_delete_modal(&mut self, ctx: &egui::Context) {
+        let Modal::ConfirmDeletePreset {
+            name,
+            dont_ask_again,
+        } = &mut self.modal
+        else {
+            return;
+        };
+        let name = std::mem::take(name);
+        let mut dont_ask = *dont_ask_again;
+        let mut outcome: Option<ConfirmOutcome> = None;
+
+        egui::Window::new("Delete preset")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Delete the preset “{name}”?"));
+                ui.checkbox(&mut dont_ask, "Don't ask again");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        outcome = Some(ConfirmOutcome::Confirmed {
+                            suppress_future: dont_ask,
+                        });
+                    }
+                    if ui.button("Cancel").clicked() {
+                        outcome = Some(ConfirmOutcome::Cancelled);
+                    }
+                });
+            });
+
+        match outcome {
+            None => {
+                // Still open — carry the scratch state to the next frame.
+                self.modal = Modal::ConfirmDeletePreset {
+                    name,
+                    dont_ask_again: dont_ask,
+                };
+            }
+            Some(o) => {
+                let confirm_before = self.settings.confirm_preset_delete;
+                if self.settings.apply_delete_confirm(o) {
+                    self.delete_preset(&name);
+                }
+                if self.settings.confirm_preset_delete != confirm_before {
+                    self.save_settings();
+                }
+                self.modal = Modal::None;
+            }
+        }
+    }
+
+    /// The Settings window. One setting today; a modal is the right weight for that.
+    fn settings_modal(&mut self, ctx: &egui::Context) {
+        let mut confirm = self.settings.confirm_preset_delete;
+        let mut close = false;
+
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+
+        if confirm != self.settings.confirm_preset_delete {
+            self.settings.confirm_preset_delete = confirm;
+            self.save_settings();
+        }
+        if close {
+            self.modal = Modal::None;
+        }
+    }
 
     /// The Develop editor body: right adjustment panel + central image canvas.
     fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
