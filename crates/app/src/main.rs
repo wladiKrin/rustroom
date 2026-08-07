@@ -871,30 +871,28 @@ impl RustroomApp {
         let mut close = false;
         let mut save = false;
 
-        egui::Window::new("Save preset")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut name);
-                });
-                ui.separator();
-                ui.label("Include:");
-                edit_group_checkboxes(ui, &mut groups);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(!name.trim().is_empty(), egui::Button::new("Save"))
-                        .clicked()
-                    {
-                        save = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
+        let dismissed = modal_dialog(ctx, "save_preset", "Save preset", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut name);
             });
+            ui.separator();
+            ui.label("Include:");
+            edit_group_checkboxes(ui, &mut groups);
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!name.trim().is_empty(), egui::Button::new("Save"))
+                    .clicked()
+                {
+                    save = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+        close |= dismissed;
 
         if save {
             // Clone the edits *out* first: holding `&self.session` across the assignments
@@ -961,22 +959,20 @@ impl RustroomApp {
         let mut close = false;
         let mut paste = false;
 
-        egui::Window::new("Paste settings")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("Apply:");
-                edit_group_checkboxes(ui, &mut groups);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Paste").clicked() {
-                        paste = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
+        let dismissed = modal_dialog(ctx, "paste_settings", "Paste settings", |ui| {
+            ui.label("Apply:");
+            edit_group_checkboxes(ui, &mut groups);
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Paste").clicked() {
+                    paste = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
             });
+        });
+        close |= dismissed;
 
         self.paste_groups = groups;
         if paste {
@@ -998,22 +994,20 @@ impl RustroomApp {
         let mut close = false;
         let mut run = false;
 
-        egui::Window::new("Sync settings")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(format!("Apply to {count} other selected photos:"));
-                edit_group_checkboxes(ui, &mut groups);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Sync").clicked() {
-                        run = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
+        let dismissed = modal_dialog(ctx, "sync_settings", "Sync settings", |ui| {
+            ui.label(format!("Apply to {count} other selected photos:"));
+            edit_group_checkboxes(ui, &mut groups);
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Sync").clicked() {
+                    run = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
             });
+        });
+        close |= dismissed;
 
         self.sync_groups = groups;
         if run {
@@ -1043,24 +1037,26 @@ impl RustroomApp {
         let mut dont_ask = *dont_ask_again;
         let mut outcome: Option<ConfirmOutcome> = None;
 
-        egui::Window::new("Delete preset")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(format!("Delete the preset “{name}”?"));
-                ui.checkbox(&mut dont_ask, "Don't ask again");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Delete").clicked() {
-                        outcome = Some(ConfirmOutcome::Confirmed {
-                            suppress_future: dont_ask,
-                        });
-                    }
-                    if ui.button("Cancel").clicked() {
-                        outcome = Some(ConfirmOutcome::Cancelled);
-                    }
-                });
+        let dismissed = modal_dialog(ctx, "confirm_delete", "Delete preset", |ui| {
+            ui.label(format!("Delete the preset “{name}”?"));
+            ui.checkbox(&mut dont_ask, "Don't ask again");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    outcome = Some(ConfirmOutcome::Confirmed {
+                        suppress_future: dont_ask,
+                    });
+                }
+                if ui.button("Cancel").clicked() {
+                    outcome = Some(ConfirmOutcome::Cancelled);
+                }
             });
+        });
+        // Clicking outside is a cancel — and therefore also discards the "don't ask again"
+        // tick, exactly like the Cancel button.
+        if dismissed {
+            outcome = Some(ConfirmOutcome::Cancelled);
+        }
 
         match outcome {
             None => {
@@ -1088,16 +1084,14 @@ impl RustroomApp {
         let mut confirm = self.settings.confirm_preset_delete;
         let mut close = false;
 
-        egui::Window::new("Settings")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.checkbox(&mut confirm, "Confirm before deleting a preset");
-                ui.separator();
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
-            });
+        let dismissed = modal_dialog(ctx, "settings", "Settings", |ui| {
+            ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+            ui.separator();
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        });
+        close |= dismissed;
 
         if confirm != self.settings.confirm_preset_delete {
             self.settings.confirm_preset_delete = confirm;
@@ -1806,6 +1800,28 @@ fn rects_around(outer: egui::Rect, inner: egui::Rect) -> [egui::Rect; 4] {
             egui::pos2(outer.right(), inner.bottom()),
         ),
     ]
+}
+
+/// A centred dialog with a dimmed backdrop. Returns whether the user clicked *outside* it,
+/// which every dialog here treats as a cancel.
+///
+/// `egui::Modal` rather than `egui::Window`: a Window opens at the top-left and is easy to
+/// miss entirely, whereas a Modal centres itself on the viewport, dims what is behind it and
+/// blocks clicks reaching the app underneath.
+fn modal_dialog<R>(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> bool {
+    egui::Modal::new(egui::Id::new(id))
+        .show(ctx, |ui| {
+            ui.heading(title);
+            ui.separator();
+            content(ui);
+        })
+        .backdrop_response
+        .clicked()
 }
 
 /// Apply a click to the selection according to its modifiers. Returns whether this was a
