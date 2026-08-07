@@ -581,10 +581,178 @@ impl RustroomApp {
         }
     }
 
+    /// The left preset panel: save the current edits as a preset, apply one, or delete one.
+    fn preset_panel(&mut self, ui: &mut egui::Ui) {
+        // egui borrows `self` through the closure, so the click is recorded here and acted
+        // on after the panel closes.
+        enum Action {
+            None,
+            Apply(usize),
+            Delete(String),
+            Save,
+        }
+        let mut action = Action::None;
+
+        egui::Panel::left("presets")
+            .default_size(180.0)
+            .show(ui, |ui| {
+                ui.heading("Presets");
+                if ui.button("Save current as preset…").clicked() {
+                    action = Action::Save;
+                }
+                ui.separator();
+                if self.preset_list.is_empty() {
+                    ui.label("No presets yet.");
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, p) in self.preset_list.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.button("×").on_hover_text("Delete").clicked() {
+                                action = Action::Delete(p.name.clone());
+                            }
+                            if ui.button(&p.name).clicked() {
+                                action = Action::Apply(i);
+                            }
+                        });
+                    }
+                });
+            });
+
+        match action {
+            Action::None => {}
+            Action::Save => {
+                self.modal = Modal::SavePreset {
+                    name: String::new(),
+                    groups: EditGroups::default(),
+                };
+            }
+            Action::Apply(i) => {
+                if let Some(p) = self.preset_list.get(i).cloned() {
+                    self.apply_edits_from(&p.edits, p.groups);
+                    self.status = format!("Applied preset “{}”", p.name);
+                }
+            }
+            Action::Delete(name) => {
+                if self.settings.confirm_preset_delete {
+                    self.modal = Modal::ConfirmDeletePreset {
+                        name,
+                        dont_ask_again: false,
+                    };
+                } else {
+                    self.delete_preset(&name);
+                }
+            }
+        }
+    }
+
+    /// Delete a preset and refresh the cached list.
+    fn delete_preset(&mut self, name: &str) {
+        match self.preset_store.delete(name) {
+            Ok(()) => self.status = format!("Deleted preset “{name}”"),
+            Err(e) => self.status = format!("Could not delete preset: {e}"),
+        }
+        self.reload_presets();
+    }
+
+    /// The "Save current as preset…" dialog.
+    fn save_preset_modal(&mut self, ctx: &egui::Context) {
+        let Modal::SavePreset { name, groups } = &mut self.modal else {
+            return;
+        };
+        let mut name = std::mem::take(name);
+        let mut groups = *groups;
+        let mut close = false;
+        let mut save = false;
+
+        egui::Window::new("Save preset")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut name);
+                });
+                ui.separator();
+                ui.label("Include:");
+                edit_group_checkboxes(ui, &mut groups);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!name.trim().is_empty(), egui::Button::new("Save"))
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        if save {
+            // Clone the edits *out* first: holding `&self.session` across the assignments
+            // to `self.status` below would be an immutable borrow crossing a mutable one.
+            if let Some(edits) = self.session.as_ref().map(|s| s.edits.clone()) {
+                let preset = Preset {
+                    name: name.trim().to_string(),
+                    groups,
+                    edits,
+                };
+                match self.preset_store.save(&preset) {
+                    Ok(()) => self.status = format!("Saved preset “{}”", preset.name),
+                    Err(e) => self.status = format!("Could not save preset: {e}"),
+                }
+                self.reload_presets();
+            }
+            close = true;
+        }
+
+        if close {
+            self.modal = Modal::None;
+        } else {
+            self.modal = Modal::SavePreset { name, groups };
+        }
+    }
+
+    /// Draw whichever modal is open. Called once per frame from `ui`.
+    fn draw_modals(&mut self, ctx: &egui::Context) {
+        // Decide *which* modal first, then dispatch. Matching on `self.modal` directly and
+        // calling a `&mut self` method from an arm keeps the scrutinee's borrow alive across
+        // the call, which does not compile.
+        enum Which {
+            None,
+            Save,
+            Paste,
+            ConfirmDelete,
+            Settings,
+        }
+        let which = match &self.modal {
+            Modal::None => Which::None,
+            Modal::SavePreset { .. } => Which::Save,
+            Modal::PasteSettings => Which::Paste,
+            Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
+            Modal::Settings => Which::Settings,
+        };
+        match which {
+            Which::None => {}
+            Which::Save => self.save_preset_modal(ctx),
+            Which::Paste => self.paste_modal(ctx),
+            Which::ConfirmDelete => self.confirm_delete_modal(ctx),
+            Which::Settings => self.settings_modal(ctx),
+        }
+    }
+
+    fn paste_modal(&mut self, _ctx: &egui::Context) {}
+    fn confirm_delete_modal(&mut self, _ctx: &egui::Context) {}
+    fn settings_modal(&mut self, _ctx: &egui::Context) {}
+
     /// The Develop editor body: right adjustment panel + central image canvas.
     fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.handle_develop_arrows(ctx);
         self.handle_clipboard_keys(ctx);
+        if self.show_presets && self.session.is_some() {
+            self.preset_panel(ui);
+        }
         egui::Panel::right("panel")
             .default_size(240.0)
             .show(ui, |ui| {
@@ -1134,6 +1302,8 @@ impl eframe::App for RustroomApp {
             AppView::Develop => self.develop_body(ui, &ctx),
             AppView::Library => self.library_view(ui, &ctx),
         }
+
+        self.draw_modals(&ctx);
     }
 }
 
@@ -1242,6 +1412,21 @@ fn rects_around(outer: egui::Rect, inner: egui::Rect) -> [egui::Rect; 4] {
             egui::pos2(outer.right(), inner.bottom()),
         ),
     ]
+}
+
+/// The six group checkboxes, shared by the Save-preset and Paste-settings dialogs.
+fn edit_group_checkboxes(ui: &mut egui::Ui, groups: &mut EditGroups) {
+    ui.horizontal(|ui| {
+        if ui.button("All").clicked() {
+            *groups = EditGroups::ALL;
+        }
+        if ui.button("None").clicked() {
+            *groups = EditGroups::NONE;
+        }
+    });
+    for (i, name) in edit_model::EDIT_GROUP_NAMES.iter().enumerate() {
+        ui.checkbox(groups.get_mut(i), *name);
+    }
 }
 
 fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
