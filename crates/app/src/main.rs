@@ -97,8 +97,10 @@ struct RustroomApp {
     status: String,
     show_filmstrip: bool,
     show_presets: bool,
-    /// In-memory and per-session: the clipboard does not survive a restart and does not
-    /// touch the OS clipboard.
+    /// This session's copied edits. A copy *also* writes a tagged payload to the system
+    /// clipboard (see [`edit_clipboard`]), so pasting works between two running instances;
+    /// this field is what the "Paste…" button uses, because egui can only hand us the
+    /// system clipboard's contents in response to a paste shortcut, never on demand.
     clipboard: Option<Edits>,
     /// Group selection last used for a paste, so Ctrl+V can skip the dialog.
     paste_groups: EditGroups,
