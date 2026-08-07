@@ -22,12 +22,18 @@ impl<T: Clone + PartialEq> History<T> {
 
     /// Record `value` as a new distinct step. No-op if equal to the current value.
     /// Clears the redo stack.
-    pub fn push(&mut self, value: T) {
-        if value != self.current {
-            self.undo.push(self.current.clone());
-            self.current = value;
-            self.redo.clear();
+    ///
+    /// **Returns whether a step was actually recorded.** Callers that mirror this history
+    /// in an ordering elsewhere — see `action_log` — must not record a step that this
+    /// silently dropped, or the two desynchronize and an undo pops the wrong stack.
+    pub fn push(&mut self, value: T) -> bool {
+        if value == self.current {
+            return false;
         }
+        self.undo.push(self.current.clone());
+        self.current = value;
+        self.redo.clear();
+        true
     }
 
     pub fn can_undo(&self) -> bool {
@@ -81,8 +87,9 @@ mod tests {
     #[test]
     fn push_equal_is_noop() {
         let mut h = History::new(5i32);
-        h.push(5);
+        assert!(!h.push(5), "an unchanged value must report no step");
         assert!(!h.can_undo());
+        assert!(h.push(6), "a changed value must report a step");
     }
 
     #[test]

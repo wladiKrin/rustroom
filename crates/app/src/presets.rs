@@ -206,28 +206,34 @@ impl PresetStore {
         }
     }
 
-    /// The newest readable trash entry, with its path. Malformed entries are skipped, the
-    /// same way [`Self::list`] skips them.
-    fn latest_trashed(&self) -> Option<(PathBuf, Preset)> {
+    /// The newest readable trash entry matching `want`, with its path. `None` for `want`
+    /// means "any". Malformed entries are skipped, the same way [`Self::list`] skips them.
+    fn latest_trashed(&self, want: Option<&str>) -> Option<(PathBuf, Preset)> {
         self.trash_files().into_iter().rev().find_map(|path| {
             let preset = std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|t| serde_json::from_str::<Preset>(&t).ok())?;
-            Some((path, preset))
+            match want {
+                Some(name) if preset.name != name => None,
+                _ => Some((path, preset)),
+            }
         })
     }
 
-    /// The name of the newest trashed preset, for the undo affordance's label.
+    /// The name of the newest trashed preset.
     pub fn latest_trashed_name(&self) -> Option<String> {
-        self.latest_trashed().map(|(_, p)| p.name)
+        self.latest_trashed(None).map(|(_, p)| p.name)
     }
 
-    /// Restore the newest trashed preset. `Ok(None)` when the trash is empty.
+    /// Restore the newest trashed preset **named `name`**. `Ok(None)` if there is none.
+    ///
+    /// By name rather than "whatever is newest" so that undoing a specific deletion stays
+    /// correct however the trash was reordered by other deletions in between.
     ///
     /// Restoring over a live preset of the same name **overwrites** it, consistent with
     /// [`Self::save`]. Returns what was restored, for the status line.
-    pub fn undo_delete(&self) -> Result<Option<Preset>, PresetError> {
-        let Some((path, preset)) = self.latest_trashed() else {
+    pub fn restore(&self, name: &str) -> Result<Option<Preset>, PresetError> {
+        let Some((path, preset)) = self.latest_trashed(Some(name)) else {
             return Ok(None);
         };
         self.save(&preset)?;
@@ -428,13 +434,16 @@ mod tests {
     }
 
     #[test]
-    fn undo_delete_brings_it_back_and_empties_that_slot() {
+    fn restore_brings_it_back_and_empties_that_slot() {
         let dir = TempDir::new("undo");
         let store = dir.store();
         store.save(&preset("Punchy", 1.5)).unwrap();
         store.delete("Punchy").unwrap();
 
-        let restored = store.undo_delete().unwrap().expect("something to restore");
+        let restored = store
+            .restore("Punchy")
+            .unwrap()
+            .expect("something to restore");
         assert_eq!(restored.name, "Punchy");
         assert_eq!(store.list().len(), 1);
         assert_eq!(store.list()[0].edits.exposure, 1.5);
@@ -443,9 +452,9 @@ mod tests {
     }
 
     #[test]
-    fn undo_delete_on_an_empty_trash_is_ok_none() {
+    fn restoring_from_an_empty_trash_is_ok_none() {
         let dir = TempDir::new("undo_empty");
-        assert!(dir.store().undo_delete().unwrap().is_none());
+        assert!(dir.store().restore("Nothing").unwrap().is_none());
     }
 
     #[test]
@@ -461,8 +470,8 @@ mod tests {
 
         assert_eq!(dir.trash_count(), 2);
         // Newest first: the second version comes back before the first.
-        assert_eq!(store.undo_delete().unwrap().unwrap().edits.exposure, 2.0);
-        assert_eq!(store.undo_delete().unwrap().unwrap().edits.exposure, 1.0);
+        assert_eq!(store.restore("Look").unwrap().unwrap().edits.exposure, 2.0);
+        assert_eq!(store.restore("Look").unwrap().unwrap().edits.exposure, 1.0);
     }
 
     #[test]
@@ -496,7 +505,8 @@ mod tests {
         // ...and it is the oldest five that were evicted: restoring everything left should
         // never yield P000..P004.
         let mut names = Vec::new();
-        while let Some(p) = store.undo_delete().unwrap() {
+        while let Some(next) = store.latest_trashed_name() {
+            let p = store.restore(&next).unwrap().expect("just saw it");
             names.push(p.name);
         }
         assert_eq!(names.len(), TRASH_CAP);
@@ -516,7 +526,7 @@ mod tests {
         store.delete("Look").unwrap();
         store.save(&preset("Look", 9.0)).unwrap();
 
-        store.undo_delete().unwrap().unwrap();
+        store.restore("Look").unwrap().unwrap();
         let got = store.list();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].edits.exposure, 1.0, "the trashed version should win");
@@ -532,7 +542,39 @@ mod tests {
         std::fs::write(dir.0.join("trash").join("9999999999999-x.json"), "{ nope").unwrap();
 
         assert_eq!(store.latest_trashed_name().as_deref(), Some("Good"));
-        assert_eq!(store.undo_delete().unwrap().unwrap().name, "Good");
+        assert_eq!(store.restore("Good").unwrap().unwrap().name, "Good");
+    }
+
+    #[test]
+    fn restoring_targets_the_named_preset_not_merely_the_newest() {
+        // What restore-by-name buys: the action log may ask for a deletion that other
+        // deletions have since buried, and it must still get the right one back.
+        let dir = TempDir::new("by_name");
+        let store = dir.store();
+        for n in ["A", "B", "C"] {
+            store.save(&preset(n, 1.0)).unwrap();
+            store.delete(n).unwrap();
+        }
+        let got = store
+            .restore("A")
+            .unwrap()
+            .expect("A should be recoverable");
+        assert_eq!(got.name, "A");
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].name, "A");
+        // B and C are untouched and still recoverable.
+        assert_eq!(dir.trash_count(), 2);
+        assert_eq!(store.restore("C").unwrap().unwrap().name, "C");
+    }
+
+    #[test]
+    fn restoring_a_name_that_is_not_in_the_trash_is_ok_none() {
+        let dir = TempDir::new("absent_name");
+        let store = dir.store();
+        store.save(&preset("A", 1.0)).unwrap();
+        store.delete("A").unwrap();
+        assert!(store.restore("B").unwrap().is_none());
+        assert_eq!(dir.trash_count(), 1, "the wrong lookup must not consume A");
     }
 
     #[test]

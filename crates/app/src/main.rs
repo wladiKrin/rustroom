@@ -2,6 +2,7 @@ use catalog::CatalogEntry;
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
+use rustroom_app::action_log::{ActionKind, ActionLog};
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
@@ -110,13 +111,11 @@ struct RustroomApp {
     settings_store: SettingsStore,
     settings: Settings,
     modal: Modal,
-    /// Whether deleting a preset is the most recent thing that happened, and so whether
-    /// Ctrl+Z should restore it rather than undo a photo edit.
-    ///
-    /// Deliberately **one-deep**: repeated Ctrl+Z does not walk back through older
-    /// deletions, which would keep the key hijacked from photo undo indefinitely. Older
-    /// entries stay recoverable by hand from the trash directory.
-    delete_undo_armed: bool,
+    /// One chronological order over photo edits *and* preset deletions, so Ctrl+Z walks
+    /// back through both. The payloads stay where they are — photo snapshots in
+    /// `Session::history`, deleted presets in the trash — and this only records which of
+    /// the two the next undo should pop.
+    actions: ActionLog,
 }
 
 impl RustroomApp {
@@ -145,7 +144,7 @@ impl RustroomApp {
             settings_store,
             settings,
             modal: Modal::None,
-            delete_undo_armed: false,
+            actions: ActionLog::default(),
         }
     }
 }
@@ -263,26 +262,70 @@ impl RustroomApp {
     fn apply_edits_from(&mut self, src: &Edits, groups: EditGroups) {
         let Some(s) = &mut self.session else { return };
         s.edits.merge_from(src, groups);
-        s.history.push(s.edits.clone());
+        let pushed = s.history.push(s.edits.clone());
         s.engine.request(
             preview_edits(&s.edits, s.crop_mode),
             s.render_max_dim(),
             s.requested_region,
         );
-        // A photo edit, so Ctrl+Z goes back to meaning photo undo. (The `s` borrow ends
-        // above, which is why this can touch another field of `self`.)
-        self.delete_undo_armed = false;
+        // `push` returns false when the value is unchanged; recording a step that did not
+        // happen would desynchronize the log from the session history.
+        if pushed {
+            self.actions.push(ActionKind::PhotoEdit);
+        }
     }
 
-    /// Restore the most recently deleted preset. Safe to call when nothing is armed.
-    fn undo_preset_delete(&mut self) {
-        match self.preset_store.undo_delete() {
-            Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
-            Ok(None) => self.status = "Nothing to restore".to_string(),
-            Err(e) => self.status = format!("Could not restore preset: {e}"),
+    /// Re-render after the session's edits were changed by an undo or a redo.
+    fn rerender_current(&mut self) {
+        let Some(s) = &mut self.session else { return };
+        s.edits = s.history.get().clone();
+        s.engine.request(
+            preview_edits(&s.edits, s.crop_mode),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+    }
+
+    /// Undo the most recent action, whichever kind it was.
+    fn undo_action(&mut self) {
+        match self.actions.undo() {
+            None => {}
+            Some(ActionKind::PhotoEdit) => {
+                if let Some(s) = &mut self.session {
+                    s.history.undo();
+                }
+                self.rerender_current();
+            }
+            Some(ActionKind::PresetDelete { name }) => {
+                match self.preset_store.restore(&name) {
+                    Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
+                    // Evicted past the trash cap, or removed by hand.
+                    Ok(None) => self.status = format!("“{name}” is no longer in the trash"),
+                    Err(e) => self.status = format!("Could not restore preset: {e}"),
+                }
+                self.reload_presets();
+            }
         }
-        self.delete_undo_armed = false;
-        self.reload_presets();
+    }
+
+    /// Redo the most recently undone action.
+    fn redo_action(&mut self) {
+        match self.actions.redo() {
+            None => {}
+            Some(ActionKind::PhotoEdit) => {
+                if let Some(s) = &mut self.session {
+                    s.history.redo();
+                }
+                self.rerender_current();
+            }
+            Some(ActionKind::PresetDelete { name }) => {
+                match self.preset_store.delete(&name) {
+                    Ok(()) => self.status = format!("Deleted preset “{name}”"),
+                    Err(e) => self.status = format!("Could not delete preset: {e}"),
+                }
+                self.reload_presets();
+            }
+        }
     }
 
     /// Re-read the presets directory. Called after a save or a delete, not every frame.
@@ -432,6 +475,11 @@ impl RustroomApp {
             rendered_long: 1.0,
             buffer_long: decoded.buffer.width().max(decoded.buffer.height()),
         });
+        // ⚠ The previous session's `History<Edits>` just went away with it, so any
+        // `PhotoEdit` still in the log would make an undo pop *this* photo's history and
+        // silently revert an edit the user never made here. Preset deletions are global
+        // and stay.
+        self.actions.forget_photo_edits();
         self.status.clear();
     }
 
@@ -565,47 +613,33 @@ impl RustroomApp {
         if ui.button("Export…").clicked() {
             self.export_dialog();
         }
-        // ⚠ Checked *before* the photo-undo block below: while a preset deletion is the most
-        // recent action, Ctrl+Z means "put that preset back". Any photo edit clears the flag,
-        // so the key reverts to photo undo without the two ever competing.
-        if self.delete_undo_armed {
-            let zkey = ctx.input(|i| {
-                i.key_pressed(egui::Key::Z) && i.modifiers.command && !i.modifiers.shift
-            });
-            if zkey {
-                self.undo_preset_delete();
-            }
+        // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo
+        // edits and preset deletions in the order they actually happened. The label says
+        // which, so "Undo" never silently does the surprising one.
+        let undo_label = match self.actions.peek_undo() {
+            Some(ActionKind::PresetDelete { name }) => format!("Undo delete “{name}”"),
+            _ => "Undo".to_string(),
+        };
+        let undo_click = ui
+            .add_enabled(self.actions.can_undo(), egui::Button::new(undo_label))
+            .clicked();
+        let redo_click = ui
+            .add_enabled(self.actions.can_redo(), egui::Button::new("Redo"))
+            .clicked();
+        let (kundo, kredo) = ctx.input(|i| {
+            let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
+            (z && !i.modifiers.shift, z && i.modifiers.shift)
+        });
+        if undo_click || kundo {
+            self.undo_action();
+        }
+        if redo_click || kredo {
+            self.redo_action();
         }
         if let Some(s) = &mut self.session {
             if ui.button("Fit").clicked() {
                 s.zoom = 1.0;
                 s.pan = egui::Vec2::ZERO;
-            }
-            let undo_click = ui
-                .add_enabled(s.history.can_undo(), egui::Button::new("Undo"))
-                .clicked();
-            let redo_click = ui
-                .add_enabled(s.history.can_redo(), egui::Button::new("Redo"))
-                .clicked();
-            let (kundo, kredo) = ctx.input(|i| {
-                let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
-                (z && !i.modifiers.shift, z && i.modifiers.shift)
-            });
-            if (undo_click || kundo) && s.history.undo() {
-                s.edits = s.history.get().clone();
-                s.engine.request(
-                    preview_edits(&s.edits, s.crop_mode),
-                    s.render_max_dim(),
-                    s.requested_region,
-                );
-            }
-            if (redo_click || kredo) && s.history.redo() {
-                s.edits = s.history.get().clone();
-                s.engine.request(
-                    preview_edits(&s.edits, s.crop_mode),
-                    s.render_max_dim(),
-                    s.requested_region,
-                );
             }
             ui.toggle_value(&mut s.show_before, "Before/After");
             if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
@@ -657,11 +691,13 @@ impl RustroomApp {
             UndoDelete,
         }
         let mut action = Action::None;
-        // Only looked up while armed — it reads the trash directory.
-        let undo_name = self
-            .delete_undo_armed
-            .then(|| self.preset_store.latest_trashed_name())
-            .flatten();
+        // Shown whenever the next undo would restore a preset, so the restore is
+        // discoverable rather than only a keystroke. It is the same action the toolbar's
+        // Undo performs — not a second, competing one.
+        let undo_name = match self.actions.peek_undo() {
+            Some(ActionKind::PresetDelete { name }) => Some(name.clone()),
+            _ => None,
+        };
 
         egui::Panel::left("presets")
             .default_size(180.0)
@@ -670,7 +706,6 @@ impl RustroomApp {
                 if ui.button("Save current as preset…").clicked() {
                     action = Action::Save;
                 }
-                // So the restore is discoverable rather than a hidden keystroke.
                 if let Some(name) = &undo_name {
                     if ui.button(format!("↩ Undo delete “{name}”")).clicked() {
                         action = Action::UndoDelete;
@@ -708,7 +743,7 @@ impl RustroomApp {
                     self.status = format!("Applied preset “{}”", p.name);
                 }
             }
-            Action::UndoDelete => self.undo_preset_delete(),
+            Action::UndoDelete => self.undo_action(),
             Action::Delete(name) => {
                 if self.settings.confirm_preset_delete {
                     self.modal = Modal::ConfirmDeletePreset {
@@ -727,7 +762,9 @@ impl RustroomApp {
         match self.preset_store.delete(name) {
             Ok(()) => {
                 self.status = format!("Deleted preset “{name}” — Ctrl+Z to restore");
-                self.delete_undo_armed = true;
+                self.actions.push(ActionKind::PresetDelete {
+                    name: name.to_string(),
+                });
             }
             Err(e) => self.status = format!("Could not delete preset: {e}"),
         }
@@ -948,9 +985,10 @@ impl RustroomApp {
     fn develop_body(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.handle_develop_arrows(ctx);
         self.handle_clipboard_keys(ctx);
-        // Set by whichever panel commits a photo edit. Collected here rather than assigned
-        // inline because both sites sit inside closures that already hold `&mut self`
-        // through `self.session`, so they cannot touch another field of `self`.
+        // Set by whichever panel commits a photo edit, and recorded in the action log after
+        // the panels close. Collected in a local rather than assigned inline because both
+        // sites sit inside closures that already hold `&mut self` through `self.session`,
+        // so they cannot touch another field of `self`.
         let mut photo_edited = false;
         if self.show_presets && self.session.is_some() {
             self.preset_panel(ui);
@@ -1080,8 +1118,7 @@ impl RustroomApp {
                             );
                         }
                         if settled {
-                            s.history.push(s.edits.clone());
-                            photo_edited = true;
+                            photo_edited |= s.history.push(s.edits.clone());
                         }
 
                         ui.separator();
@@ -1232,10 +1269,10 @@ impl RustroomApp {
             }
         });
 
-        // A photo edit hands Ctrl+Z back to the photo history, so "delete, move a slider,
-        // Ctrl+Z" undoes the slider rather than resurrecting the preset.
+        // Recorded in the same order as everything else, so "delete a preset, move a
+        // slider, Ctrl+Z twice" undoes the slider and then restores the preset.
         if photo_edited {
-            self.delete_undo_armed = false;
+            self.actions.push(ActionKind::PhotoEdit);
         }
     }
 
