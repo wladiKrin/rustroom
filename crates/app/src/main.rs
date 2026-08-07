@@ -5,6 +5,7 @@ use eframe::egui;
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
+use rustroom_app::edit_clipboard;
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
 use rustroom_app::presets::{Preset, PresetStore};
@@ -272,10 +273,19 @@ impl RustroomApp {
         }
     }
 
-    /// Ctrl+C / Ctrl+V for the edit clipboard.
+    /// Cmd/Ctrl+C and Cmd/Ctrl+V for the edit clipboard.
+    ///
+    /// ⚠ These must be read as **`egui::Event::Copy` / `Event::Paste`, not key presses.**
+    /// `egui-winit` matches the clipboard chords first, pushes the semantic event and
+    /// *returns without emitting a `Key` event at all* — so `key_pressed(Key::C)` can never
+    /// fire, which is exactly how the first version of this silently did nothing.
+    ///
+    /// The copy also writes to the **system** clipboard, and not only as a nicety: egui
+    /// pushes `Event::Paste` only when the system clipboard holds non-empty text, so
+    /// without that write Ctrl+V would produce no event on a freshly booted machine.
     ///
     /// Gated on nothing having keyboard focus, the way `handle_develop_arrows` already is,
-    /// so Ctrl+C inside the preset-name field is not hijacked.
+    /// so Ctrl+C inside the preset-name field still copies text.
     fn handle_clipboard_keys(&mut self, ctx: &egui::Context) {
         if self.session.is_none() || self.modal != Modal::None {
             return;
@@ -283,23 +293,38 @@ impl RustroomApp {
         if ctx.memory(|m| m.focused()).is_some() {
             return;
         }
-        let (copy, paste) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::C) && i.modifiers.command,
-                i.key_pressed(egui::Key::V) && i.modifiers.command,
-            )
+        let (copy, pasted) = ctx.input(|i| {
+            let mut copy = false;
+            let mut pasted: Option<String> = None;
+            for e in &i.events {
+                match e {
+                    egui::Event::Copy => copy = true,
+                    egui::Event::Paste(text) => pasted = Some(text.clone()),
+                    _ => {}
+                }
+            }
+            (copy, pasted)
         });
+
         if copy {
             // `self.session.as_ref().map(..)` rather than `if let Some(s) = &self.session`:
             // the latter holds an immutable borrow of `self` across the assignment to
             // `self.clipboard` and does not compile.
             self.clipboard = self.session.as_ref().map(|s| s.edits.clone());
+            if let Some(edits) = &self.clipboard {
+                ctx.copy_text(edit_clipboard::encode(edits));
+            }
             self.status = "Settings copied".to_string();
         }
-        if paste {
-            // Ctrl+V uses the last-used group selection with no dialog; the "Paste…"
-            // button opens the chooser.
-            if let Some(src) = self.clipboard.clone() {
+
+        if let Some(text) = pasted {
+            // Prefer the clipboard's own payload — that is what makes copy/paste work
+            // between two running instances — and fall back to this session's in-memory
+            // copy when the system clipboard holds something else entirely.
+            let src = edit_clipboard::decode(&text).or_else(|| self.clipboard.clone());
+            if let Some(src) = src {
+                // Ctrl+V uses the last-used group selection with no dialog; the "Paste…"
+                // button opens the chooser.
                 self.apply_edits_from(&src, self.paste_groups);
                 self.status = "Settings pasted".to_string();
             }
@@ -559,8 +584,12 @@ impl RustroomApp {
         if self.session.is_some() {
             ui.separator();
             if ui.button("Copy").clicked() {
-                // Same borrow reason as in `handle_clipboard_keys`.
+                // Same borrow reason as in `handle_clipboard_keys`, and the same system
+                // clipboard write, so the button and the shortcut cannot disagree.
                 self.clipboard = self.session.as_ref().map(|s| s.edits.clone());
+                if let Some(edits) = &self.clipboard {
+                    ui.ctx().copy_text(edit_clipboard::encode(edits));
+                }
                 self.status = "Settings copied".to_string();
             }
             if ui
