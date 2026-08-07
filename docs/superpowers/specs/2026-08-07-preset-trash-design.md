@@ -5,20 +5,20 @@ Status: approved
 
 ## Goal
 
-Make an accidental preset deletion recoverable. Deleting moves the preset to a bounded
-trash directory instead of unlinking it, and Ctrl+Z restores the most recent one.
+Make preset deletions recoverable. Deleting moves the preset to a bounded trash directory
+instead of unlinking it, and **Ctrl+Z walks back through deletions and photo edits in one
+chronological order** — so several deletions can be undone in a row, and a deletion survives
+an intervening slider change.
 
-## Why not the photo history
+## Why not `History<Edits>` itself
 
-`History<Edits>` cannot hold this, for three independent reasons:
+The photo history cannot *hold* this, for two reasons: it lives on `Session` and is discarded
+when you switch photos, and it stores `Edits` values, so it has no way to express "recreate
+this file".
 
-1. It lives on `Session` and is **discarded when you switch photos** — delete a preset, arrow
-   to the next shot, and the record is gone.
-2. It stores `Edits` *values*. It has no way to express "recreate this file".
-3. Interleaving a global, filesystem-level action into a per-photo stack makes Ctrl+Z
-   ambiguous.
-
-So this gets its own mechanism, sharing only the keystroke.
+But that argues only against putting preset deletions *inside* it — not against ordering the
+two together. `ActionLog` (§4) keeps one order over both while each payload stays where it
+belongs.
 
 ## 1. Bounded trash — the sizing argument
 
@@ -70,34 +70,59 @@ and `user_default()` supplies the sibling pair.
 /// Move `name` to the trash, then evict anything beyond `TRASH_CAP`.
 pub fn delete(&self, name: &str) -> Result<(), PresetError>;
 
-/// The name of the newest trashed preset, for the undo affordance's label.
+/// The name of the newest trashed preset.
 pub fn latest_trashed_name(&self) -> Option<String>;
 
-/// Restore the newest trashed preset to the live directory. `Ok(None)` if the trash is
-/// empty. Returns what was restored, for the status line.
-pub fn undo_delete(&self) -> Result<Option<Preset>, PresetError>;
+/// Restore the newest trashed preset **named `name`**. `Ok(None)` if there is none —
+/// it may have been evicted past the cap. Returns what was restored, for the status line.
+pub fn restore(&self, name: &str) -> Result<Option<Preset>, PresetError>;
 ```
 
-Both readers rescan the trash directory; at ≤20 files of ~2 KB that is not worth caching.
+By name rather than "whatever is newest" so an undo targets its own deletion however the
+trash was reordered in between. Both readers rescan the trash directory; at ≤20 files of
+~2 KB that is not worth caching.
 
-## 4. Undo semantics
+## 4. Undo semantics — one chronological stack
 
-`RustroomApp` tracks whether a deletion is the most recent thing that happened:
+> **Revised after the first implementation.** The first version made this one-deep, on the
+> reasoning that a deeper undo would keep Ctrl+Z hijacked from photo undo. That was wrong on
+> both counts: it made the trash nearly pointless (19 of 20 entries unreachable), and the
+> ordering problem it feared is solved by *interleaving* the two rather than by choosing
+> between them.
 
-- Deleting a preset arms it.
-- **Any photo edit (`history.push`) disarms it**, so Ctrl+Z goes back to meaning photo undo.
-- A successful restore disarms it.
+`app::action_log::ActionLog` holds a **single chronological order** over both kinds of
+undoable action:
 
-While armed, **Ctrl+Z restores the newest trashed preset instead of undoing a photo edit**, and
-the preset panel shows an **"Undo delete '<name>'"** button so it is not a hidden keystroke.
+```rust
+enum ActionKind { PhotoEdit, PresetDelete { name: String } }
+```
 
-**Deliberately one-deep.** Repeated Ctrl+Z does *not* walk back through older deletions: that
-would keep the key hijacked from photo undo indefinitely. Older entries stay recoverable by
-hand from the trash directory — the same "plain JSON in a known place" property presets
-already have.
+It records only **which stack the next undo should pop** — payloads stay in
+`Session::history` and the trash, so nothing is duplicated and both existing mechanisms work
+unchanged. Ctrl+Z, Ctrl+Shift+Z and the toolbar's Undo/Redo buttons all drive it.
 
-The trash itself has **no UI**: no browser, no "Empty trash" button. Its job is durability
-across restarts, which an in-memory stash could not provide.
+So *delete a preset → change a setting → Ctrl+Z → Ctrl+Z* reverses the setting and then
+restores the preset, and several deletions restore in a row.
+
+The Undo button's label becomes **"Undo delete '<name>'"** when that is what it would do, so
+one control never silently performs the surprising one. The preset panel shows the same
+action as a button when it is next in line.
+
+### ⚠ Two synchronization hazards
+
+1. **`History::push` is a no-op when the value is unchanged**, so it now returns `bool` and
+   the log records a step only when one was really taken. Otherwise the two desynchronize and
+   an undo pops the wrong stack.
+2. **`Session::history` dies with its session.** A `PhotoEdit` entry outliving a photo switch
+   would make an undo pop *this* photo's history and revert an edit the user never made here.
+   `forget_photo_edits()` runs on every session change and sweeps **both** the undo and redo
+   stacks; preset deletions are global and survive.
+
+Restoring is **by name**, not "whatever is newest", so an undo targets its own deletion
+however the trash was reordered in between. A preset already evicted past the cap yields
+`Ok(None)` and a status line, not a failure.
+
+The trash still has **no UI**: no browser, no "Empty trash" button.
 
 ## 5. Restoring over a live preset overwrites it
 
@@ -109,20 +134,29 @@ the worse outcome for an undo.
 ## 6. Testing
 
 - Deleting moves the file to the trash and removes it from `list()`.
-- `undo_delete` restores it and empties that trash slot; on an empty trash, `Ok(None)`.
+- `restore(name)` brings it back and empties that trash slot; an absent name yields
+  `Ok(None)` without consuming anything else.
+- **Restoring targets the named preset**, not merely the newest, when other deletions have
+  buried it since.
 - **Deleting the same name twice keeps both trashed copies** — the collision fix.
 - **Two deletions in the same millisecond both survive** — the sub-millisecond fix.
 - The trash never exceeds `TRASH_CAP`, and it is the **oldest** entries that go.
 - Restoring over a live preset of the same name overwrites it.
 - `latest_trashed_name` reports the newest, not an arbitrary one.
 - A malformed file in the trash is skipped rather than fatal, matching `list()`.
-- The armed/disarmed rule is a pure function on app state, tested without egui.
+- `ActionLog` orders the two kinds correctly: a deletion survives an intervening photo
+  edit, several deletions undo newest-first, redo replays in the original order, a new action
+  clears the redo stack, and `forget_photo_edits` keeps deletions in order while sweeping
+  both stacks. All egui-free.
+- `History::push` reports whether it recorded a step.
 
 **No pipeline stage is touched — the 23 goldens must stay byte-identical.**
 
 ## 7. Accepted caveats
 
-1. **One-deep undo.** Older deletions need a file manager.
+1. **Photo-edit undo history still does not survive a photo switch** — unchanged from
+   before, but now visible in the log, which drops those entries on every session change.
+   Preset deletions do survive.
 2. **No trash UI at all** — no browser, no manual empty. A preset stays in the trash until 20
    further deletions push it out.
 3. **Clock skew.** A system clock that jumps forward writes a far-future filename that sorts
