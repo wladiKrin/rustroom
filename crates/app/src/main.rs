@@ -1345,7 +1345,7 @@ impl RustroomApp {
             .resizable(true)
             .default_size(96.0)
             .show(ui, |ui| {
-                let Some(lib) = &self.library else { return };
+                let Some(lib) = &mut self.library else { return };
                 // Fill the panel's height so egui stores the panel size (not the smaller
                 // content size) — otherwise a resizable bottom panel shrinks back each frame.
                 let avail_h = ui.available_height();
@@ -1376,16 +1376,20 @@ impl RustroomApp {
                                 })
                                 .response
                                 .interact(egui::Sense::click());
-                            if lib.selection.active() == Some(i) {
-                                ui.painter().rect_stroke(
-                                    resp.rect,
-                                    egui::CornerRadius::same(3),
-                                    egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 160, 240)),
-                                    egui::StrokeKind::Inside,
-                                );
-                            }
+                            paint_selection_border(
+                                ui,
+                                resp.rect,
+                                lib.selection.active() == Some(i),
+                                lib.selection.contains(i),
+                            );
                             if resp.clicked() {
-                                open_index = Some(i);
+                                let mods = ui.input(|inp| inp.modifiers);
+                                // Only a plain click moves the active photo, so only a
+                                // plain click opens — a Cmd- or Shift-click builds the
+                                // target set without triggering a decode.
+                                if apply_click(&mut lib.selection, i, mods) {
+                                    open_index = Some(i);
+                                }
                             }
                         }
                     });
@@ -1429,6 +1433,12 @@ impl RustroomApp {
                 if i.key_pressed(egui::Key::Enter) {
                     open_index = lib.selection.active();
                 }
+                if i.key_pressed(egui::Key::A) && i.modifiers.command {
+                    lib.selection.select_all(n);
+                }
+                if i.key_pressed(egui::Key::Escape) {
+                    lib.selection.clear();
+                }
             });
 
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1467,16 +1477,15 @@ impl RustroomApp {
                             .response
                             .interact(egui::Sense::click());
 
-                        if lib.selection.active() == Some(i) {
-                            ui.painter().rect_stroke(
-                                resp.rect,
-                                egui::CornerRadius::same(3),
-                                egui::Stroke::new(2.0, egui::Color32::from_rgb(120, 160, 240)),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
+                        paint_selection_border(
+                            ui,
+                            resp.rect,
+                            lib.selection.active() == Some(i),
+                            lib.selection.contains(i),
+                        );
                         if resp.clicked() {
-                            lib.selection.click(i);
+                            let mods = ui.input(|inp| inp.modifiers);
+                            apply_click(&mut lib.selection, i, mods);
                         }
                         if resp.double_clicked() {
                             open_index = Some(i);
@@ -1704,6 +1713,41 @@ fn rects_around(outer: egui::Rect, inner: egui::Rect) -> [egui::Rect; 4] {
             egui::pos2(outer.right(), inner.bottom()),
         ),
     ]
+}
+
+/// Apply a click to the selection according to its modifiers. Returns whether this was a
+/// plain click, which is the only gesture that moves the active photo — and therefore the
+/// only one the filmstrip turns into an open.
+fn apply_click(sel: &mut Selection, i: usize, mods: egui::Modifiers) -> bool {
+    if mods.command {
+        sel.toggle(i);
+        false
+    } else if mods.shift {
+        sel.extend_to(i);
+        false
+    } else {
+        sel.click(i);
+        true
+    }
+}
+
+/// Outline a selected cell: bright for the active photo, dim for the rest of the selection.
+/// Being able to tell the source from the targets is what makes a sync predictable.
+fn paint_selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected: bool) {
+    if !selected {
+        return;
+    }
+    let color = if active {
+        egui::Color32::from_rgb(120, 160, 240)
+    } else {
+        egui::Color32::from_rgb(90, 100, 120)
+    };
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(3),
+        egui::Stroke::new(2.0, color),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// The six group checkboxes, shared by the Save-preset and Paste-settings dialogs.
