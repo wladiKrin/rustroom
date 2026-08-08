@@ -748,6 +748,13 @@ impl RustroomApp {
         self.view = AppView::Develop;
     }
 
+    /// Export the open photo to a JPEG of the user's choosing.
+    ///
+    /// ⚠ Deliberately writes **no** sidecar next to the output. `sidecar::path` appends
+    /// `.json`, so that would produce `export.jpg.json` — and JPEG is a supported *input*
+    /// format, so reopening the exported file would load those edits and apply them a second
+    /// time to pixels that already have them baked in. The source's sidecar is written by
+    /// `persist_current_session` regardless.
     fn export_dialog(&mut self) {
         let Some(s) = &self.session else { return };
         let Some(out) = rfd::FileDialog::new()
@@ -767,7 +774,6 @@ impl RustroomApp {
                 let rendered =
                     pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(image);
                 export::save_jpeg(&rendered, &out, 92)?;
-                sidecar::save(&out, &edits)?;
                 Ok(())
             })();
             if let Err(e) = result {
