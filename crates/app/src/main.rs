@@ -276,13 +276,6 @@ impl RustroomApp {
         pushed
     }
 
-    /// Apply to the open photo as its own undo step — what a preset does.
-    fn apply_edits_from(&mut self, src: &Edits, groups: EditGroups) {
-        if self.apply_edits_to_session(src, groups) {
-            self.actions.push(ActionKind::PhotoEdit);
-        }
-    }
-
     /// Selected photos **other than the one currently open** — the ones a batch has to
     /// reach through their sidecars rather than through the live session.
     ///
@@ -301,9 +294,9 @@ impl RustroomApp {
             .collect()
     }
 
-    /// Whether the open photo is part of the current selection, and so should receive a
-    /// paste through its session. True in single-file mode, where there is no selection at
-    /// all and the open photo is the only thing a paste could mean.
+    /// Whether the open photo is part of the current selection, and so should be changed
+    /// through its session. True in single-file mode, where there is no selection at all
+    /// and the open photo is the only thing an apply could mean.
     fn open_photo_is_selected(&self) -> bool {
         let Some(s) = &self.session else { return false };
         let Some(lib) = &self.library else {
@@ -315,12 +308,15 @@ impl RustroomApp {
             .any(|e| e.path == s.path)
     }
 
-    /// Paste `src` into the whole selection — the open photo through its session, the rest
+    /// Apply `src` to the whole selection — the open photo through its session, the rest
     /// through their sidecars — as **one** undo step.
     ///
-    /// Two mechanisms, one gesture, so the two resulting actions are wrapped in a
-    /// `Batch`: one Ctrl+V must stay one Ctrl+Z.
-    fn paste_into_selection(&mut self, src: &Edits, groups: EditGroups) {
+    /// Two mechanisms, one gesture, so the resulting actions are wrapped in a `Batch`: one
+    /// Ctrl+V, or one preset click, must stay one Ctrl+Z.
+    ///
+    /// Returns `(photos changed, photos that failed)`. The caller words the status line,
+    /// because "pasted" and "applied preset" want different phrasing for the same work.
+    fn apply_to_selection(&mut self, src: &Edits, groups: EditGroups) -> (usize, usize) {
         let targets = self.sync_targets();
         let into_session = self.open_photo_is_selected();
         let mut parts: Vec<ActionKind> = Vec::new();
@@ -346,19 +342,13 @@ impl RustroomApp {
             }
         }
 
-        self.status = match (touched, failed) {
-            (0, _) => "Nothing selected to paste into".to_string(),
-            (1, 0) => "Settings pasted".to_string(),
-            (n, 0) => format!("Pasted to {n} photos"),
-            (n, f) => format!("Pasted to {n} photos, {f} failed"),
-        };
-
         // A lone action does not need a wrapper — keep the log readable.
         match parts.len() {
             0 => {}
             1 => self.actions.push(parts.remove(0)),
             _ => self.actions.push(ActionKind::Batch(parts)),
         }
+        (touched, failed)
     }
 
     /// Apply the open photo's edits to the rest of the selection, as one undo step.
@@ -575,7 +565,8 @@ impl RustroomApp {
             if let Some(src) = src {
                 // Ctrl+V uses the last-used group selection with no dialog; the "Paste…"
                 // button opens the chooser. Either way it targets the whole selection.
-                self.paste_into_selection(&src, self.paste_groups);
+                let (n, failed) = self.apply_to_selection(&src, self.paste_groups);
+                self.status = paste_status(n, failed);
             }
         }
     }
@@ -926,8 +917,14 @@ impl RustroomApp {
             }
             Action::Apply(i) => {
                 if let Some(p) = self.preset_list.get(i).cloned() {
-                    self.apply_edits_from(&p.edits, p.groups);
-                    self.status = format!("Applied preset “{}”", p.name);
+                    // Applying a preset targets the selection, exactly as a paste does.
+                    let (n, failed) = self.apply_to_selection(&p.edits, p.groups);
+                    self.status = match (n, failed) {
+                        (0, _) => "Nothing selected".to_string(),
+                        (1, 0) => format!("Applied preset “{}”", p.name),
+                        (n, 0) => format!("Applied “{}” to {n} photos", p.name),
+                        (n, f) => format!("Applied “{}” to {n} photos, {f} failed", p.name),
+                    };
                 }
             }
             Action::UndoDelete => self.undo_action(),
@@ -1074,7 +1071,8 @@ impl RustroomApp {
         self.paste_groups = groups;
         if paste {
             if let Some(src) = self.clipboard.clone() {
-                self.paste_into_selection(&src, groups);
+                let (n, failed) = self.apply_to_selection(&src, groups);
+                self.status = paste_status(n, failed);
             }
             close = true;
         }
@@ -1898,6 +1896,17 @@ fn rects_around(outer: egui::Rect, inner: egui::Rect) -> [egui::Rect; 4] {
             egui::pos2(outer.right(), inner.bottom()),
         ),
     ]
+}
+
+/// How a paste reports what it did. Shared by the Ctrl+V path and the "Paste…" dialog so
+/// the two cannot describe the same work differently.
+fn paste_status(touched: usize, failed: usize) -> String {
+    match (touched, failed) {
+        (0, _) => "Nothing selected to paste into".to_string(),
+        (1, 0) => "Settings pasted".to_string(),
+        (n, 0) => format!("Pasted to {n} photos"),
+        (n, f) => format!("Pasted to {n} photos, {f} failed"),
+    }
 }
 
 /// A centred dialog with a dimmed backdrop. Returns whether the user clicked *outside* it,
