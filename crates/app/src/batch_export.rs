@@ -11,7 +11,11 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 
 /// What to export, and how.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +129,159 @@ pub fn export_one(
     let scale = scale_for(source_long, opts.max_edge);
     let rendered = pipeline::build_pipeline(edits, scale).run(scaled);
     export::save_jpeg(&rendered, dest, opts.quality).map_err(|e| e.to_string())
+}
+
+/// A running batch export.
+///
+/// Owns a thread that works through the jobs one at a time. The thread **blocks** on
+/// `decision_rx` whenever it needs a collision answered, which is why the UI must drain
+/// `events()` every frame and reply with [`Self::decide`].
+pub struct ExportWorker {
+    events: Receiver<ExportEvent>,
+    decisions: Sender<Decision>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl ExportWorker {
+    /// Start exporting `jobs` — `(source path, that photo's edits)` — into `opts.dest_dir`.
+    pub fn spawn(
+        jobs: Vec<(PathBuf, Edits)>,
+        opts: ExportOptions,
+        decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
+    ) -> Self {
+        let (event_tx, events) = channel();
+        let (decisions, decision_rx) = channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            run(jobs, opts, decode, event_tx, decision_rx, flag);
+        });
+        Self {
+            events,
+            decisions,
+            cancel,
+        }
+    }
+
+    pub fn events(&self) -> &Receiver<ExportEvent> {
+        &self.events
+    }
+
+    /// Answer the outstanding [`ExportEvent::Collision`], unblocking the worker.
+    pub fn decide(&self, decision: Decision) {
+        let _ = self.decisions.send(decision);
+    }
+
+    /// Ask the worker to stop. Takes effect **between photos**: libraw's `unpack` is not
+    /// interruptible, so the photo in flight finishes first — up to ~11 s.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+fn run(
+    jobs: Vec<(PathBuf, Edits)>,
+    opts: ExportOptions,
+    decode: impl Fn(&Path) -> Result<ImageBuf, String>,
+    events: Sender<ExportEvent>,
+    decisions: Receiver<Decision>,
+    cancel: Arc<AtomicBool>,
+) {
+    let total = jobs.len();
+    let mut report = ExportReport::default();
+    // Names produced during this run. ⚠ Without this, two sources sharing a stem
+    // (`a.RAF`, `a.jpg`) would silently overwrite each other in an empty folder.
+    let mut claimed: HashSet<PathBuf> = HashSet::new();
+    let mut remembered: Option<Collision> = None;
+
+    if events.send(ExportEvent::Started { total }).is_err() {
+        return;
+    }
+
+    for (done, (source, edits)) in jobs.into_iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            break;
+        }
+
+        let mut dest = dest_for(&opts.dest_dir, &source, 0);
+        if claimed.contains(&dest) || dest.exists() {
+            let collision = match remembered {
+                Some(c) => c,
+                None => {
+                    if events
+                        .send(ExportEvent::Collision { dest: dest.clone() })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    // Blocks until the UI answers. A disconnected channel means the app is
+                    // going away, so stop rather than spin.
+                    match decisions.recv() {
+                        Ok(Decision::Resolve {
+                            collision,
+                            apply_to_all,
+                        }) => {
+                            if apply_to_all {
+                                remembered = Some(collision);
+                            }
+                            collision
+                        }
+                        Ok(Decision::Cancel) | Err(_) => {
+                            report.cancelled = true;
+                            break;
+                        }
+                    }
+                }
+            };
+            match collision {
+                Collision::Skip => {
+                    report.skipped += 1;
+                    let _ = events.send(ExportEvent::Item {
+                        done: done + 1,
+                        total,
+                        name: file_label(&source),
+                    });
+                    continue;
+                }
+                Collision::Overwrite => {}
+                Collision::KeepBoth => {
+                    let mut i = 1;
+                    loop {
+                        let candidate = dest_for(&opts.dest_dir, &source, i);
+                        if !claimed.contains(&candidate) && !candidate.exists() {
+                            dest = candidate;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+        }
+
+        let _ = events.send(ExportEvent::Item {
+            done: done + 1,
+            total,
+            name: file_label(&source),
+        });
+
+        match decode(&source).and_then(|img| export_one(img, &edits, &dest, &opts)) {
+            Ok(()) => {
+                report.exported += 1;
+                claimed.insert(dest);
+            }
+            Err(e) => report.failed.push((source, e)),
+        }
+    }
+
+    let _ = events.send(ExportEvent::Finished(report));
+}
+
+/// A short display name for the progress line.
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -242,6 +399,223 @@ mod tests {
         assert_eq!(scale_for(40, Some(10)).get(), 0.25);
         // No upscaling, so a cap above the source is still 1.0.
         assert_eq!(scale_for(40, Some(999)).get(), 1.0);
+    }
+
+    /// Drive a whole export to completion, answering every collision prompt with `answer`.
+    ///
+    /// Returns the report plus every event, so a test can assert on progress as well as the
+    /// outcome. `decode` receives the source path so a test can fail one specific photo.
+    fn run_export(
+        jobs: Vec<(PathBuf, Edits)>,
+        opts: ExportOptions,
+        answer: Vec<Decision>,
+        decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
+    ) -> (ExportReport, Vec<ExportEvent>) {
+        let worker = ExportWorker::spawn(jobs, opts, decode);
+        let mut answers = answer.into_iter();
+        let mut events = Vec::new();
+        let mut report = ExportReport::default();
+        while let Ok(ev) = worker.events().recv() {
+            match &ev {
+                ExportEvent::Collision { .. } => {
+                    let d = answers.next().unwrap_or(Decision::Cancel);
+                    worker.decide(d);
+                }
+                ExportEvent::Finished(r) => report = r.clone(),
+                _ => {}
+            }
+            let finished = matches!(ev, ExportEvent::Finished(_));
+            events.push(ev);
+            if finished {
+                break;
+            }
+        }
+        (report, events)
+    }
+
+    fn jobs(dir: &TempDir, names: &[&str]) -> Vec<(PathBuf, Edits)> {
+        names
+            .iter()
+            .map(|n| (dir.0.join(n), Edits::default()))
+            .collect()
+    }
+
+    fn ok_decode() -> impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static {
+        |_: &Path| Ok(flat(8, 4))
+    }
+
+    #[test]
+    fn every_photo_produces_a_jpeg() {
+        let d = TempDir::new("all");
+        let (report, events) = run_export(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            vec![],
+            ok_decode(),
+        );
+
+        assert_eq!(report.exported, 2);
+        assert_eq!(report.skipped, 0);
+        assert!(report.failed.is_empty() && !report.cancelled);
+        assert!(d.0.join("a.jpg").exists() && d.0.join("b.jpg").exists());
+        assert_eq!(events.first(), Some(&ExportEvent::Started { total: 2 }));
+        let items = events
+            .iter()
+            .filter(|e| matches!(e, ExportEvent::Item { .. }))
+            .count();
+        assert_eq!(items, 2, "each photo reports progress exactly once");
+    }
+
+    #[test]
+    fn two_sources_with_the_same_stem_collide_in_an_empty_folder() {
+        // ⚠ `a.RAF` and `a.jpg` both map to `a.jpg`, so the check has to consider names
+        // claimed *in this run*, not only files already on disk.
+        let d = TempDir::new("same_stem");
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF", "a.jpg"]),
+            opts(&d, None),
+            vec![Decision::Resolve {
+                collision: Collision::KeepBoth,
+                apply_to_all: false,
+            }],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("a.jpg").exists() && d.0.join("a-1.jpg").exists());
+    }
+
+    #[test]
+    fn skip_leaves_the_existing_file_untouched() {
+        let d = TempDir::new("skip");
+        std::fs::write(d.0.join("a.jpg"), b"original").unwrap();
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            vec![Decision::Resolve {
+                collision: Collision::Skip,
+                apply_to_all: false,
+            }],
+            ok_decode(),
+        );
+        assert_eq!((report.exported, report.skipped), (0, 1));
+        assert_eq!(std::fs::read(d.0.join("a.jpg")).unwrap(), b"original");
+    }
+
+    #[test]
+    fn overwrite_replaces_it() {
+        let d = TempDir::new("overwrite");
+        std::fs::write(d.0.join("a.jpg"), b"original").unwrap();
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            vec![Decision::Resolve {
+                collision: Collision::Overwrite,
+                apply_to_all: false,
+            }],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 1);
+        assert_ne!(std::fs::read(d.0.join("a.jpg")).unwrap(), b"original");
+    }
+
+    #[test]
+    fn keep_both_finds_the_first_free_suffix() {
+        let d = TempDir::new("keep_both");
+        std::fs::write(d.0.join("a.jpg"), b"x").unwrap();
+        std::fs::write(d.0.join("a-1.jpg"), b"x").unwrap();
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            vec![Decision::Resolve {
+                collision: Collision::KeepBoth,
+                apply_to_all: false,
+            }],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 1);
+        assert!(d.0.join("a-2.jpg").exists());
+    }
+
+    #[test]
+    fn apply_to_all_stops_further_prompts_and_reuses_the_choice() {
+        let d = TempDir::new("apply_all");
+        for n in ["a.jpg", "b.jpg"] {
+            std::fs::write(d.0.join(n), b"original").unwrap();
+        }
+        // Exactly one answer supplied: a second prompt would make `run_export` cancel, and
+        // the assertions below would fail.
+        let (report, events) = run_export(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            vec![Decision::Resolve {
+                collision: Collision::Skip,
+                apply_to_all: true,
+            }],
+            ok_decode(),
+        );
+        assert_eq!((report.exported, report.skipped), (0, 2));
+        let prompts = events
+            .iter()
+            .filter(|e| matches!(e, ExportEvent::Collision { .. }))
+            .count();
+        assert_eq!(prompts, 1, "the second collision must not prompt again");
+        assert_eq!(std::fs::read(d.0.join("b.jpg")).unwrap(), b"original");
+    }
+
+    #[test]
+    fn cancelling_at_a_prompt_ends_the_run() {
+        let d = TempDir::new("cancel_prompt");
+        std::fs::write(d.0.join("a.jpg"), b"original").unwrap();
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            vec![Decision::Cancel],
+            ok_decode(),
+        );
+        assert!(report.cancelled);
+        assert_eq!(report.exported, 0);
+        assert!(!d.0.join("b.jpg").exists(), "the rest must be untouched");
+    }
+
+    #[test]
+    fn a_decode_failure_is_collected_and_the_batch_continues() {
+        // One unreadable file must not cost the other photos their export.
+        let d = TempDir::new("fail_one");
+        let (report, _) = run_export(
+            jobs(&d, &["bad.RAF", "good.RAF"]),
+            opts(&d, None),
+            vec![],
+            |p: &Path| {
+                if p.to_string_lossy().contains("bad") {
+                    Err("no".to_string())
+                } else {
+                    Ok(flat(8, 4))
+                }
+            },
+        );
+        assert_eq!(report.exported, 1);
+        assert_eq!(report.failed.len(), 1);
+        assert!(report.failed[0].0.ends_with("bad.RAF"));
+        assert!(d.0.join("good.jpg").exists());
+    }
+
+    #[test]
+    fn the_cancel_flag_stops_the_run_between_photos() {
+        // libraw's `unpack` is not interruptible, so cancellation is checked between items;
+        // setting the flag before the run starts must produce an immediate, clean stop.
+        let d = TempDir::new("cancel_flag");
+        let worker =
+            ExportWorker::spawn(jobs(&d, &["a.RAF", "b.RAF"]), opts(&d, None), ok_decode());
+        worker.cancel();
+        let mut report = ExportReport::default();
+        while let Ok(ev) = worker.events().recv() {
+            if let ExportEvent::Finished(r) = ev {
+                report = r;
+                break;
+            }
+        }
+        assert!(report.cancelled);
+        assert_eq!(report.exported, 0);
     }
 
     #[test]
