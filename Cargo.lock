@@ -267,6 +267,7 @@ dependencies = [
  "eframe",
  "egui",
  "export",
+ "image",
  "image-decode",
  "pipeline",
  "raw-decode",
