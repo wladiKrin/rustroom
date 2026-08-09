@@ -437,9 +437,32 @@ impl RustroomApp {
         let opts = self.export_opts.clone();
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
-        self.exporter = Some(ExportWorker::spawn(jobs, opts, |p: &std::path::Path| {
-            decode_for_export(p)
-        }));
+        self.exporter = Some(ExportWorker::spawn(
+            jobs,
+            opts,
+            |p: &std::path::Path| decode_for_export(p),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ));
+    }
+
+    /// Stop the running export, immediately.
+    ///
+    /// ⚠ "Abandon, don't abort", the same trade `DecodeWorker` makes for superseded previews.
+    /// libraw's `unpack` cannot be interrupted, so the decode in flight runs to completion on
+    /// its thread — but the flag makes the worker discard that result instead of writing it,
+    /// and dropping the `ExportWorker` here means the UI does not wait for any of that. From
+    /// the user's side the cancel is instant and the photo in flight is *not* exported.
+    ///
+    /// Dropping the worker also drops the decision channel, so a worker blocked on a
+    /// collision prompt sees `Err` and exits rather than hanging.
+    fn cancel_export(&mut self) {
+        if let Some(w) = &self.exporter {
+            w.cancel();
+        }
+        self.exporter = None;
+        self.export_progress.clear();
+        self.export_collision = None;
+        self.status = "Export cancelled".to_string();
     }
 
     /// Drain the exporter's events once per frame.
@@ -851,45 +874,8 @@ impl RustroomApp {
         self.view = AppView::Develop;
     }
 
-    /// Export the open photo to a JPEG of the user's choosing.
-    ///
-    /// ⚠ Deliberately writes **no** sidecar next to the output. `sidecar::path` appends
-    /// `.json`, so that would produce `export.jpg.json` — and JPEG is a supported *input*
-    /// format, so reopening the exported file would load those edits and apply them a second
-    /// time to pixels that already have them baked in. The source's sidecar is written by
-    /// `persist_current_session` regardless.
-    fn export_dialog(&mut self) {
-        let Some(s) = &self.session else { return };
-        let Some(out) = rfd::FileDialog::new()
-            .add_filter("JPEG", &["jpg", "jpeg"])
-            .set_file_name("export.jpg")
-            .save_file()
-        else {
-            return;
-        };
-        let src = s.path.clone();
-        let edits = s.edits.clone();
-        self.status = "Exporting (full-res decode)…".into();
-        // Full decode + render + encode is slow; run detached so the UI stays responsive.
-        std::thread::spawn(move || {
-            let result = (|| -> anyhow::Result<()> {
-                let image = decode_for_export(&src).map_err(|e| anyhow::anyhow!(e))?;
-                let rendered =
-                    pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(image);
-                export::save_jpeg(&rendered, &out, 92)?;
-                Ok(())
-            })();
-            if let Err(e) = result {
-                eprintln!("export error: {e}");
-            }
-        });
-    }
-
     /// Develop-mode toolbar buttons (shown in the top panel when a photo is open).
     fn develop_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if ui.button("Export…").clicked() {
-            self.export_dialog();
-        }
         // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo
         // edits and preset deletions in the order they actually happened. The label says
         // which, so "Undo" never silently does the surprising one.
@@ -954,11 +940,17 @@ impl RustroomApp {
             {
                 self.modal = Modal::SyncSettings;
             }
+            // One button for both: the count decides whether it exports the open photo or
+            // the whole selection. There is no second code path — a single export is a
+            // batch of one, through the same worker.
+            let to_export = self.export_jobs().len();
+            let label = if to_export > 1 {
+                format!("Export {to_export}…")
+            } else {
+                "Export…".to_string()
+            };
             if ui
-                .add_enabled(
-                    selected > 1,
-                    egui::Button::new(format!("Export {selected}…")),
-                )
+                .add_enabled(to_export > 0, egui::Button::new(label))
                 .clicked()
             {
                 self.modal = Modal::ExportSettings;
@@ -1350,6 +1342,11 @@ impl RustroomApp {
                 w.decide(d);
             }
             self.export_collision = None;
+            // Cancelling from the prompt ends the run just as the toolbar's Cancel does,
+            // rather than leaving a progress line up until the worker's Finished arrives.
+            if d == Decision::Cancel {
+                self.cancel_export();
+            }
         }
     }
 
@@ -2011,12 +2008,7 @@ impl eframe::App for RustroomApp {
                     ui.separator();
                     ui.label(&self.export_progress);
                     if ui.button("Cancel").clicked() {
-                        if let Some(w) = &self.exporter {
-                            w.cancel();
-                        }
-                        // libraw's unpack is not interruptible, so say why nothing has
-                        // stopped yet rather than looking frozen.
-                        self.export_progress = "Cancelling after this photo…".to_string();
+                        self.cancel_export();
                     }
                 } else if !self.status.is_empty() {
                     ui.label(&self.status);

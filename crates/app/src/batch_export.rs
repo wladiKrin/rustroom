@@ -144,14 +144,18 @@ pub struct ExportWorker {
 
 impl ExportWorker {
     /// Start exporting `jobs` — `(source path, that photo's edits)` — into `opts.dest_dir`.
+    ///
+    /// `cancel` is an input rather than something built here so that a test can flip it from
+    /// *inside* the injected decode fn, which is the only way to exercise the mid-photo
+    /// cancel check deterministically.
     pub fn spawn(
         jobs: Vec<(PathBuf, Edits)>,
         opts: ExportOptions,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
+        cancel: Arc<AtomicBool>,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
-        let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         std::thread::spawn(move || {
             run(jobs, opts, decode, event_tx, decision_rx, flag);
@@ -172,8 +176,13 @@ impl ExportWorker {
         let _ = self.decisions.send(decision);
     }
 
-    /// Ask the worker to stop. Takes effect **between photos**: libraw's `unpack` is not
-    /// interruptible, so the photo in flight finishes first — up to ~11 s.
+    /// Ask the worker to stop.
+    ///
+    /// **The photo in flight is not exported.** libraw's `unpack` cannot be interrupted, so
+    /// its decode runs to completion on the worker thread — but the result is discarded
+    /// rather than written, and the caller can drop this `ExportWorker` immediately instead
+    /// of waiting. That is the same "abandon, don't abort" trade `DecodeWorker` makes for
+    /// superseded previews: identical outcome to a true abort, no unsafe FFI.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
@@ -265,7 +274,18 @@ fn run(
             name: file_label(&source),
         });
 
-        match decode(&source).and_then(|img| export_one(img, &edits, &dest, &opts)) {
+        let decoded = decode(&source);
+
+        // ⚠ Checked *again* after the decode, which is the slow part. Cancelling during a
+        // ~11 s decode must not still write that photo out: libraw cannot be interrupted, so
+        // the decode finishes, but its result is discarded here. Without this the file the
+        // user cancelled would appear anyway.
+        if cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            break;
+        }
+
+        match decoded.and_then(|img| export_one(img, &edits, &dest, &opts)) {
             Ok(()) => {
                 report.exported += 1;
                 claimed.insert(dest);
@@ -411,7 +431,7 @@ mod tests {
         answer: Vec<Decision>,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
     ) -> (ExportReport, Vec<ExportEvent>) {
-        let worker = ExportWorker::spawn(jobs, opts, decode);
+        let worker = ExportWorker::spawn(jobs, opts, decode, Arc::new(AtomicBool::new(false)));
         let mut answers = answer.into_iter();
         let mut events = Vec::new();
         let mut report = ExportReport::default();
@@ -604,8 +624,12 @@ mod tests {
         // libraw's `unpack` is not interruptible, so cancellation is checked between items;
         // setting the flag before the run starts must produce an immediate, clean stop.
         let d = TempDir::new("cancel_flag");
-        let worker =
-            ExportWorker::spawn(jobs(&d, &["a.RAF", "b.RAF"]), opts(&d, None), ok_decode());
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+        );
         worker.cancel();
         let mut report = ExportReport::default();
         while let Ok(ev) = worker.events().recv() {
@@ -616,6 +640,41 @@ mod tests {
         }
         assert!(report.cancelled);
         assert_eq!(report.exported, 0);
+    }
+
+    #[test]
+    fn cancelling_during_a_decode_does_not_write_that_photo() {
+        // ⚠ The whole point of the post-decode check. libraw cannot be interrupted, so the
+        // decode of the photo in flight completes — but the file the user cancelled must not
+        // appear anyway. The decode fn flips the flag mid-photo, which is exactly what a
+        // click on Cancel does while a decode is running.
+        let d = TempDir::new("cancel_mid");
+        let flag = Arc::new(AtomicBool::new(false));
+        let in_decode = flag.clone();
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            move |_: &Path| {
+                in_decode.store(true, Ordering::Relaxed);
+                Ok(flat(8, 4))
+            },
+            flag,
+        );
+
+        let mut report = ExportReport::default();
+        while let Ok(ev) = worker.events().recv() {
+            if let ExportEvent::Finished(r) = ev {
+                report = r;
+                break;
+            }
+        }
+        assert!(report.cancelled);
+        assert_eq!(
+            report.exported, 0,
+            "the cancelled photo must not be written"
+        );
+        assert!(!d.0.join("a.jpg").exists());
+        assert!(!d.0.join("b.jpg").exists());
     }
 
     #[test]
