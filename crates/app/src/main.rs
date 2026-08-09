@@ -128,6 +128,11 @@ struct RustroomApp {
     export_collision: Option<PathBuf>,
     /// Scratch state for the collision dialog's "apply to all" tick.
     export_apply_all: bool,
+    /// The photo the filmstrip has already scrolled to.
+    ///
+    /// ⚠ Scrolling only when this *changes* is the whole point: calling `scroll_to_me` every
+    /// frame would fight the user's own scrolling and pin the strip in place.
+    filmstrip_scrolled_to: Option<usize>,
     preset_store: PresetStore,
     /// Cached `preset_store.list()`, refreshed on save and delete rather than every frame.
     preset_list: Vec<Preset>,
@@ -172,6 +177,7 @@ impl RustroomApp {
             export_progress: String::new(),
             export_collision: None,
             export_apply_all: false,
+            filmstrip_scrolled_to: None,
             preset_store,
             preset_list,
             settings_store,
@@ -1573,6 +1579,11 @@ impl RustroomApp {
                         }
 
                         ui.separator();
+                        // The filename first: which photo this is matters more than what
+                        // shot it, and the panel scrolls, so it belongs above the metadata.
+                        if let Some(name) = s.path.file_name() {
+                            ui.label(egui::RichText::new(name.to_string_lossy()).strong());
+                        }
                         ui.label(egui::RichText::new(&s.make_model).small());
                     } else {
                         ui.label("No image open.");
@@ -1758,6 +1769,10 @@ impl RustroomApp {
     /// The panel is resizable (drag its top border); thumbnails scale with its height.
     fn filmstrip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mut open_index: Option<usize> = None;
+        // Decided before the panel borrows `self.library`, so the closure only needs two
+        // `Copy` locals. Opening from the Library grid and arrow-navigating both land here.
+        let active = self.library.as_ref().and_then(|l| l.selection.active());
+        let want_scroll = active.is_some() && self.filmstrip_scrolled_to != active;
         egui::Panel::bottom("filmstrip")
             .resizable(true)
             .default_size(96.0)
@@ -1799,6 +1814,9 @@ impl RustroomApp {
                                 lib.selection.active() == Some(i),
                                 lib.selection.contains(i),
                             );
+                            if want_scroll && Some(i) == active {
+                                resp.scroll_to_me(Some(egui::Align::Center));
+                            }
                             if resp.clicked() {
                                 let mods = ui.input(|inp| inp.modifiers);
                                 // Only a plain click moves the active photo, so only a
@@ -1812,6 +1830,9 @@ impl RustroomApp {
                     });
                 });
             });
+        if want_scroll {
+            self.filmstrip_scrolled_to = active;
+        }
         if let Some(i) = open_index {
             self.open_entry(ctx, i);
         }
