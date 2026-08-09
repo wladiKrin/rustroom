@@ -3,6 +3,9 @@ use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::action_log::{ActionKind, ActionLog, SyncAction};
+use rustroom_app::batch_export::{
+    Collision, Decision, ExportEvent, ExportOptions, ExportReport, ExportWorker,
+};
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
@@ -84,6 +87,8 @@ enum Modal {
     PasteSettings,
     /// Choosing which groups a sync applies to the rest of the selection.
     SyncSettings,
+    /// Choosing where and how to export the selection.
+    ExportSettings,
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -113,6 +118,16 @@ struct RustroomApp {
     /// Group selection last used for a sync, kept separate from `paste_groups` so the two
     /// dialogs do not silently reconfigure each other.
     sync_groups: EditGroups,
+    /// Last-used export options, so a second export does not re-ask for everything.
+    export_opts: ExportOptions,
+    /// The running batch export, if any.
+    exporter: Option<ExportWorker>,
+    /// Progress line for the running export.
+    export_progress: String,
+    /// The destination awaiting a collision answer; `Some` means the worker is blocked.
+    export_collision: Option<PathBuf>,
+    /// Scratch state for the collision dialog's "apply to all" tick.
+    export_apply_all: bool,
     preset_store: PresetStore,
     /// Cached `preset_store.list()`, refreshed on save and delete rather than every frame.
     preset_list: Vec<Preset>,
@@ -148,6 +163,15 @@ impl RustroomApp {
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),
+            export_opts: ExportOptions {
+                dest_dir: PathBuf::new(),
+                quality: 92,
+                max_edge: None,
+            },
+            exporter: None,
+            export_progress: String::new(),
+            export_collision: None,
+            export_apply_all: false,
             preset_store,
             preset_list,
             settings_store,
@@ -378,6 +402,85 @@ impl RustroomApp {
             groups,
             prior: report.prior,
         })));
+    }
+
+    /// Sources and edits for a batch export: every selected photo, using the open photo's
+    /// **in-memory** edits so unsaved changes are exported, and each other photo's sidecar.
+    fn export_jobs(&self) -> Vec<(PathBuf, Edits)> {
+        let open = self
+            .session
+            .as_ref()
+            .map(|s| (s.path.clone(), s.edits.clone()));
+        let Some(lib) = &self.library else {
+            return open.into_iter().collect();
+        };
+        lib.selection
+            .iter()
+            .filter_map(|i| lib.entries.get(i).map(|e| e.path.clone()))
+            .map(|p| match &open {
+                Some((op, edits)) if *op == p => (p.clone(), edits.clone()),
+                _ => {
+                    let edits = sidecar::load(&p).unwrap_or_default();
+                    (p, edits)
+                }
+            })
+            .collect()
+    }
+
+    /// Start exporting the selection.
+    fn start_export(&mut self) {
+        let jobs = self.export_jobs();
+        if jobs.is_empty() {
+            self.status = "Nothing selected to export".to_string();
+            return;
+        }
+        let opts = self.export_opts.clone();
+        self.export_progress = format!("Exporting 0 of {}…", jobs.len());
+        self.export_collision = None;
+        self.exporter = Some(ExportWorker::spawn(jobs, opts, |p: &std::path::Path| {
+            decode_for_export(p)
+        }));
+    }
+
+    /// Drain the exporter's events once per frame.
+    fn pump_export(&mut self, ctx: &egui::Context) {
+        let Some(worker) = &self.exporter else { return };
+        let mut finished: Option<ExportReport> = None;
+        while let Ok(event) = worker.events().try_recv() {
+            match event {
+                ExportEvent::Started { total } => {
+                    self.export_progress = format!("Exporting 0 of {total}…");
+                }
+                ExportEvent::Item { done, total, name } => {
+                    self.export_progress = format!("Exporting {done} of {total} — {name}");
+                }
+                ExportEvent::Collision { dest } => {
+                    self.export_collision = Some(dest);
+                    self.export_apply_all = false;
+                }
+                ExportEvent::Finished(report) => finished = Some(report),
+            }
+        }
+        if let Some(r) = finished {
+            self.exporter = None;
+            self.export_progress.clear();
+            self.export_collision = None;
+            let mut parts = vec![format!("Exported {}", r.exported)];
+            if r.skipped > 0 {
+                parts.push(format!("{} skipped", r.skipped));
+            }
+            if !r.failed.is_empty() {
+                parts.push(format!("{} failed", r.failed.len()));
+            }
+            if r.cancelled {
+                parts.push("cancelled".to_string());
+            }
+            self.status = parts.join(", ");
+        }
+        // The worker runs off the UI thread, so nothing else would wake the app up.
+        if self.exporter.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
     }
 
     /// Reload the open photo's edits if its sidecar was just rewritten underneath it.
@@ -851,6 +954,15 @@ impl RustroomApp {
             {
                 self.modal = Modal::SyncSettings;
             }
+            if ui
+                .add_enabled(
+                    selected > 1,
+                    egui::Button::new(format!("Export {selected}…")),
+                )
+                .clicked()
+            {
+                self.modal = Modal::ExportSettings;
+            }
             // Unlike the filmstrip, this does not need a Library: presets are just as
             // useful on a single-file open.
             ui.toggle_value(&mut self.show_presets, "Presets");
@@ -1029,6 +1141,7 @@ impl RustroomApp {
             Save,
             Paste,
             Sync,
+            Export,
             ConfirmDelete,
             Settings,
         }
@@ -1037,14 +1150,20 @@ impl RustroomApp {
             Modal::SavePreset { .. } => Which::Save,
             Modal::PasteSettings => Which::Paste,
             Modal::SyncSettings => Which::Sync,
+            Modal::ExportSettings => Which::Export,
             Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
             Modal::Settings => Which::Settings,
         };
+        // Independent of `self.modal`: a collision arrives while no dialog is open.
+        if self.export_collision.is_some() {
+            self.collision_modal(ctx);
+        }
         match which {
             Which::None => {}
             Which::Save => self.save_preset_modal(ctx),
             Which::Paste => self.paste_modal(ctx),
             Which::Sync => self.sync_modal(ctx),
+            Which::Export => self.export_modal(ctx),
             Which::ConfirmDelete => self.confirm_delete_modal(ctx),
             Which::Settings => self.settings_modal(ctx),
         }
@@ -1116,6 +1235,121 @@ impl RustroomApp {
         }
         if close {
             self.modal = Modal::None;
+        }
+    }
+
+    /// Where and how to export the selection.
+    fn export_modal(&mut self, ctx: &egui::Context) {
+        let mut opts = self.export_opts.clone();
+        let count = self.export_jobs().len();
+        let mut close = false;
+        let mut start = false;
+        // egui has no folder field, so the picker writes into a local and the label shows it.
+        let mut pick_dir = false;
+
+        let dismissed = modal_dialog(ctx, "export_settings", "Export", |ui| {
+            ui.label(format!("Export {count} photos as JPEG."));
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Destination…").clicked() {
+                    pick_dir = true;
+                }
+                let shown = if opts.dest_dir.as_os_str().is_empty() {
+                    "(none chosen)".to_string()
+                } else {
+                    opts.dest_dir.display().to_string()
+                };
+                ui.label(shown);
+            });
+            ui.add(egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"));
+
+            let mut resize = opts.max_edge.is_some();
+            ui.checkbox(&mut resize, "Fit within a long edge");
+            if resize {
+                let mut edge = opts.max_edge.unwrap_or(2048);
+                ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
+                opts.max_edge = Some(edge);
+            } else {
+                opts.max_edge = None;
+            }
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                let ready = !opts.dest_dir.as_os_str().is_empty();
+                if ui.add_enabled(ready, egui::Button::new("Export")).clicked() {
+                    start = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+
+        if pick_dir {
+            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                opts.dest_dir = dir;
+            }
+        }
+        self.export_opts = opts;
+        if start {
+            self.start_export();
+            close = true;
+        }
+        if close || dismissed {
+            self.modal = Modal::None;
+        }
+    }
+
+    /// One destination already exists: what should happen to it?
+    ///
+    /// Drawn whenever `export_collision` is set, which means the worker is **blocked**
+    /// waiting. Not a `Modal` variant, because an export can be started and then collide
+    /// long after the export dialog closed.
+    fn collision_modal(&mut self, ctx: &egui::Context) {
+        let Some(dest) = self.export_collision.clone() else {
+            return;
+        };
+        let name = dest
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut apply_all = self.export_apply_all;
+        let mut decision: Option<Decision> = None;
+
+        let dismissed = modal_dialog(ctx, "export_collision", "File already exists", |ui| {
+            ui.label(format!("“{name}” is already in the destination folder."));
+            ui.checkbox(&mut apply_all, "Apply to all remaining");
+            ui.separator();
+            ui.horizontal(|ui| {
+                for (label, collision) in [
+                    ("Skip", Collision::Skip),
+                    ("Overwrite", Collision::Overwrite),
+                    ("Keep both", Collision::KeepBoth),
+                ] {
+                    if ui.button(label).clicked() {
+                        decision = Some(Decision::Resolve {
+                            collision,
+                            apply_to_all: apply_all,
+                        });
+                    }
+                }
+                if ui.button("Cancel export").clicked() {
+                    decision = Some(Decision::Cancel);
+                }
+            });
+        });
+
+        self.export_apply_all = apply_all;
+        // ⚠ Dismissing by clicking outside cancels the run — and `Decision::Cancel` carries
+        // no `apply_to_all`, so the tick cannot leak out of a cancel by construction.
+        if dismissed {
+            decision = Some(Decision::Cancel);
+        }
+        if let Some(d) = decision {
+            if let Some(w) = &self.exporter {
+                w.decide(d);
+            }
+            self.export_collision = None;
         }
     }
 
@@ -1709,6 +1943,7 @@ impl eframe::App for RustroomApp {
         // Outside the view match: Ctrl+V must reach a selection made in the Library grid,
         // not only one made in the filmstrip.
         self.handle_clipboard_keys(&ctx);
+        self.pump_export(&ctx);
 
         // Pull any finished preview frame into a texture.
         if let Some(s) = &mut self.session {
@@ -1772,7 +2007,18 @@ impl eframe::App for RustroomApp {
                     let decoding = self.pending.is_some();
                     ui.add_enabled_ui(!decoding, |ui| self.develop_toolbar(ui, &ctx));
                 }
-                if !self.status.is_empty() {
+                if !self.export_progress.is_empty() {
+                    ui.separator();
+                    ui.label(&self.export_progress);
+                    if ui.button("Cancel").clicked() {
+                        if let Some(w) = &self.exporter {
+                            w.cancel();
+                        }
+                        // libraw's unpack is not interruptible, so say why nothing has
+                        // stopped yet rather than looking frozen.
+                        self.export_progress = "Cancelling after this photo…".to_string();
+                    }
+                } else if !self.status.is_empty() {
                     ui.label(&self.status);
                 }
             });
