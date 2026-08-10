@@ -189,6 +189,70 @@ fn gauss_cols(src: &[f32], w: usize, h: usize, k: &[f32]) -> Vec<f32> {
     out
 }
 
+/// Number of box-blur passes [`wide_blur`] uses. Three is where the iterated box response
+/// gets within a few percent of a true Gaussian; the cost is linear in this and the accuracy
+/// gain past three is not worth a fourth pass over the data.
+const WIDE_PASSES: usize = 3;
+
+/// Box radius whose [`WIDE_PASSES`]-fold iteration has variance `sigma^2`.
+///
+/// Each pass of radius `r` has variance `((2r+1)^2 - 1)/12`, so three of them give
+/// `((2r+1)^2 - 1)/4 = sigma^2`, i.e. `r = (sqrt(1 + 4*sigma^2) - 1)/2`.
+///
+/// Returns 0 — meaning "identity", exactly as [`kernel_radius`] does — for a non-positive,
+/// non-finite, or **too small** sigma. There is deliberately no `.max(1)`: a box radius of 1
+/// is an effective sigma of 0.82, so clamping up would render `sigma = 0.1` eight times too
+/// wide. Below sigma ~= 0.87 an integer box radius cannot represent the blur at all, which
+/// is precisely why [`gaussian_blur`] exists for the small-sigma regime.
+pub fn wide_blur_radius(sigma: f32) -> usize {
+    if !sigma.is_finite() || sigma <= 0.0 {
+        return 0;
+    }
+    let r = ((1.0 + 4.0 * sigma * sigma).sqrt() - 1.0) / 2.0;
+    r.round().max(0.0) as usize
+}
+
+/// The furthest an output sample of [`wide_blur`] can reach into its input.
+///
+/// Public because callers must reason about it: a stage using this in the pipeline *tail*
+/// runs on a cropped region, so the renderer has to keep at least this much margin outside
+/// what it displays. See `crate::tail_kernel_radius`.
+pub fn wide_blur_reach(sigma: f32) -> usize {
+    WIDE_PASSES * wide_blur_radius(sigma)
+}
+
+/// Gaussian-like blur for **large** sigma, built from iterated [`box_blur`] passes.
+///
+/// The third primitive in this module, and the three cover three regimes:
+///
+/// | primitive | regime | why |
+/// |---|---|---|
+/// | [`gaussian_blur`] | sub-pixel to a few px | a direct kernel is cheap there (7 taps at σ=1), and an integer box radius cannot express a sub-pixel blur at all |
+/// | [`wide_blur`] | tens of px | O(1) in sigma, and at that scale the box-iteration error is invisible |
+/// | [`box_blur`] | any, when a genuine box is wanted | the guided filter in noise reduction needs box means, not Gaussian ones |
+///
+/// A Gaussian at sigma = 40 would need 241 taps per pass — about 13 G operations on a
+/// 26 Mpx export. This is three passes of running sums regardless of sigma.
+///
+/// Inherits `box_blur`'s border behaviour (the *window* clamps, not the samples), so a
+/// constant plane stays exactly constant. Returns a copy when the sigma is too small to
+/// represent — see [`wide_blur_radius`].
+///
+/// # Panics
+/// Panics if `plane.len() != w * h`.
+pub fn wide_blur(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+    assert_eq!(plane.len(), w * h, "plane size mismatch");
+    let r = wide_blur_radius(sigma);
+    if r == 0 || w == 0 || h == 0 {
+        return plane.to_vec();
+    }
+    let mut out = box_blur(plane, w, h, r);
+    for _ in 1..WIDE_PASSES {
+        out = box_blur(&out, w, h, r);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +415,148 @@ mod tests {
             "sigma 0.5 var {small}, sigma 2.0 var {large}"
         );
         assert!(small < var(&p));
+    }
+
+    #[test]
+    fn wide_blur_radius_solves_the_three_pass_variance() {
+        // Three box passes of radius r have variance 3*((2r+1)^2 - 1)/12 = ((2r+1)^2 - 1)/4,
+        // so matching a target sigma means (2r+1)^2 = 1 + 4*sigma^2.
+        assert_eq!(wide_blur_radius(40.0), 40); // (sqrt(6401) - 1)/2 = 39.5 -> 40
+        assert_eq!(wide_blur_reach(40.0), 120);
+        // Below sigma ~= 0.87 an integer box radius cannot represent the blur at all, so
+        // there is deliberately no `.max(1)`: clamping up would render sigma 0.1 as an
+        // effective sigma of 0.82, eight times too wide.
+        assert_eq!(wide_blur_radius(0.1), 0);
+        assert_eq!(wide_blur_radius(0.0), 0);
+        assert_eq!(wide_blur_radius(-3.0), 0);
+        assert_eq!(wide_blur_radius(f32::NAN), 0);
+    }
+
+    #[test]
+    fn wide_blur_below_the_representable_sigma_is_identity() {
+        let p = vec![1.0, 2.0, 3.0, 4.0];
+        assert_eq!(wide_blur(&p, 2, 2, 0.1), p);
+        assert_eq!(wide_blur(&p, 2, 2, 0.0), p);
+    }
+
+    #[test]
+    fn wide_blur_constant_plane_stays_constant() {
+        // Inherited from box_blur: the *window* clamps at the border, not the samples.
+        let p = vec![0.375f32; 41 * 33];
+        let out = wide_blur(&p, 41, 33, 4.0);
+        for (i, v) in out.iter().enumerate() {
+            assert!((v - 0.375).abs() < 1e-6, "sample {i} = {v}");
+        }
+    }
+
+    #[test]
+    fn wide_blur_matches_the_requested_sigma() {
+        // A separable filter's centre row is proportional to its 1D kernel, so normalizing
+        // it and taking the second moment recovers the realised sigma directly. This is what
+        // makes "approximates a Gaussian" a measured claim rather than a comment.
+        const N: usize = 121;
+        const SIGMA: f32 = 8.0;
+        let mut p = vec![0.0f32; N * N];
+        p[(N / 2) * N + N / 2] = 1.0;
+        let out = wide_blur(&p, N, N, SIGMA);
+
+        let row = &out[(N / 2) * N..(N / 2 + 1) * N];
+        let sum: f32 = row.iter().sum();
+        let var: f32 = row
+            .iter()
+            .enumerate()
+            .map(|(x, &w)| {
+                let d = x as f32 - (N / 2) as f32;
+                w / sum * d * d
+            })
+            .sum();
+        let realised = var.sqrt();
+
+        // Compare against the sigma the *rounded* radius actually encodes, not the requested
+        // one — sqrt(((2r+1)^2 - 1)/4). At sigma 8 the radius rounds 7.52 up to 8, which is
+        // a realised sigma of 8.49; asserting 8.0 to within a few percent would fail for a
+        // correct implementation.
+        let r = wide_blur_radius(SIGMA);
+        let modelled = (((2 * r + 1).pow(2) - 1) as f32 / 4.0).sqrt();
+        assert!(
+            (realised - modelled).abs() / modelled < 0.03,
+            "realised sigma {realised} vs modelled {modelled}"
+        );
+        // Rounding the radius to an integer is the only source of error, and it is bounded.
+        assert!(
+            (realised - SIGMA).abs() / SIGMA < 0.10,
+            "realised sigma {realised} is too far from the requested {SIGMA}"
+        );
+    }
+
+    #[test]
+    fn wide_blur_impulse_response_is_a_symmetric_bell() {
+        // Rules out an off-by-one in the iteration, which a variance check alone would miss.
+        const N: usize = 81;
+        let mut p = vec![0.0f32; N * N];
+        p[(N / 2) * N + N / 2] = 1.0;
+        let out = wide_blur(&p, N, N, 6.0);
+        let c = N / 2;
+        let peak = out[c * N + c];
+        for y in 0..N {
+            for x in 0..N {
+                if (x, y) != (c, c) {
+                    assert!(out[y * N + x] < peak, "({x},{y}) exceeds the centre");
+                }
+                assert!((out[y * N + x] - out[y * N + (N - 1 - x)]).abs() < 1e-6);
+                assert!((out[y * N + x] - out[(N - 1 - y) * N + x]).abs() < 1e-6);
+            }
+        }
+        // Monotone away from the centre along the centre row.
+        for x in c..N - 1 {
+            assert!(
+                out[c * N + x] >= out[c * N + x + 1] - 1e-7,
+                "not monotone at {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn three_box_passes_are_much_closer_to_a_gaussian_than_one() {
+        // Pins the *number* of iterations, not just the radius. One box pass is a
+        // flat-topped kernel with hard shoulders; three passes are a quadratic B-spline,
+        // within a few percent of a Gaussian everywhere.
+        //
+        // A direct peak-height comparison against a Gaussian at the *requested* sigma would
+        // be wrong — the rounded radius makes wide_blur's realised sigma 6% wider, which is
+        // a 12% lower peak in 2D. Comparing normalized profiles against the same reference
+        // sidesteps that entirely.
+        const N: usize = 121;
+        const SIGMA: f32 = 8.0;
+        let mut p = vec![0.0f32; N * N];
+        p[(N / 2) * N + N / 2] = 1.0;
+
+        let gauss = gaussian_blur(&p, N, N, SIGMA);
+        let wide = wide_blur(&p, N, N, SIGMA);
+        let once = box_blur(&p, N, N, wide_blur_radius(SIGMA));
+
+        // A separable filter's centre row is proportional to its 1D kernel.
+        let profile = |v: &[f32]| {
+            let row = &v[(N / 2) * N..(N / 2 + 1) * N];
+            let s: f32 = row.iter().sum();
+            row.iter().map(|w| w / s).collect::<Vec<f32>>()
+        };
+        let g = profile(&gauss);
+        let dev = |a: &[f32]| {
+            a.iter()
+                .zip(&g)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f32, f32::max)
+        };
+        let d1 = dev(&profile(&once));
+        let d3 = dev(&profile(&wide));
+        assert!(d3 * 2.0 < d1, "three passes {d3} vs one pass {d1}");
+
+        let peak = g.iter().fold(0.0f32, |a, &b| a.max(b));
+        assert!(
+            d3 < 0.15 * peak,
+            "three passes deviate {d3} from a Gaussian whose peak is {peak}"
+        );
     }
 
     #[test]
