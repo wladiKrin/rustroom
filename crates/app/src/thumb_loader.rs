@@ -153,26 +153,48 @@ mod tests {
         assert_eq!(indices, (0..50).collect::<Vec<_>>());
     }
 
+    /// Workers in this test, and paths — one each, so every worker must participate.
+    const PAR: usize = 4;
+
     #[test]
     fn the_folder_is_loaded_in_parallel() {
-        // ⚠ The point of the whole change. Measured by how many loads are in flight at once,
-        // not by wall-clock time, so it does not go flaky on a loaded machine.
+        // ⚠ The point of the whole change.
+        //
+        // Each load waits for its peers rather than sleeping a fixed time, so the peak is
+        // determined by the loader's structure and not by how the OS happened to schedule
+        // four threads. An earlier version slept 20 ms and asserted `PEAK == 4` — which is
+        // an assertion about *scheduling*, exactly the kind that passes on one machine and
+        // fails on another. `batch_export`'s cancel test failed on Linux CI for the same
+        // reason and is worth remembering.
+        //
+        // The wait is bounded, so a sequential loader makes this **fail** with a clear peak
+        // of 1 rather than hanging the suite.
+        // ⚠ `ARRIVED` only ever counts up, and that is what makes this a barrier. Releasing
+        // on `LIVE` instead does not work: the last worker to arrive satisfies the condition,
+        // leaves, and decrements it below the threshold again — so its peers wait out the
+        // full deadline. The test still passed that way, just two seconds slower, which is
+        // exactly how a broken barrier hides.
+        static ARRIVED: AtomicUsize = AtomicUsize::new(0);
         static LIVE: AtomicUsize = AtomicUsize::new(0);
         static PEAK: AtomicUsize = AtomicUsize::new(0);
-        fn slow(_p: &Path) -> Option<Thumbnail> {
+        fn gated(_p: &Path) -> Option<Thumbnail> {
+            ARRIVED.fetch_add(1, Ordering::SeqCst);
             let live = LIVE.fetch_add(1, Ordering::SeqCst) + 1;
             PEAK.fetch_max(live, Ordering::SeqCst);
-            thread::sleep(std::time::Duration::from_millis(20));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while ARRIVED.load(Ordering::SeqCst) < PAR && std::time::Instant::now() < deadline {
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
             LIVE.fetch_sub(1, Ordering::SeqCst);
             None
         }
         // The thread count is injected rather than taken from `worker_count()`, so this is
         // deterministic on any machine, including a single-core CI box.
-        let loader = ThumbLoader::with_loader(paths(16), slow, 4, || {});
-        assert_eq!(collect(&loader, 16).len(), 16);
+        let loader = ThumbLoader::with_loader(paths(PAR), gated, PAR, || {});
+        assert_eq!(collect(&loader, PAR).len(), PAR);
         assert_eq!(
             PEAK.load(Ordering::SeqCst),
-            4,
+            PAR,
             "loads never overlapped — the folder is still being read one file at a time"
         );
     }

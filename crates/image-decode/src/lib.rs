@@ -82,13 +82,20 @@ pub fn thumbnail(path: &Path) -> Result<Thumbnail, ImageDecodeError> {
 mod tests {
     use super::*;
 
+    /// A path no other test will pick.
+    ///
+    /// ⚠ Uniqueness is **structural** — process id plus a monotonic counter — not taken from
+    /// the clock. `SystemTime::now()` was not enough: `cargo test` runs these in parallel and
+    /// four of them build fixtures through `tagged_jpeg`, one of them eight times in a loop,
+    /// so two calls landing in the same clock tick collided and one test deleted the file
+    /// another was still reading. That failed roughly one run in five.
     fn temp_path(name: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "rustroom_imgdec_{}_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
+            "rustroom_imgdec_{}_{}_{}",
+            std::process::id(),
+            n,
             name
         ))
     }

@@ -619,27 +619,79 @@ mod tests {
         assert!(d.0.join("good.jpg").exists());
     }
 
+    /// Drain events until the run reports itself finished.
+    fn finished(worker: &ExportWorker) -> ExportReport {
+        while let Ok(ev) = worker.events().recv() {
+            if let ExportEvent::Finished(r) = ev {
+                return r;
+            }
+        }
+        panic!("the worker ended without a Finished event");
+    }
+
     #[test]
-    fn the_cancel_flag_stops_the_run_between_photos() {
-        // libraw's `unpack` is not interruptible, so cancellation is checked between items;
-        // setting the flag before the run starts must produce an immediate, clean stop.
+    fn a_flag_already_set_stops_the_run_before_the_first_photo() {
+        // libraw's `unpack` is not interruptible, so cancellation is checked between items.
+        //
+        // ⚠ The flag is passed in **already set**, not stored after spawning. An earlier
+        // version called `worker.cancel()` after `spawn`, which races: `spawn` starts the
+        // thread immediately, so whether the first photo was exported depended on who won.
+        // It won on macOS every time and lost on Linux CI — `left: 1, right: 0`. If a test
+        // needs the worker cancelled before it runs, the only way to say so without a race
+        // is to hand it a flag that is already true.
         let d = TempDir::new("cancel_flag");
         let worker = ExportWorker::spawn(
             jobs(&d, &["a.RAF", "b.RAF"]),
             opts(&d, None),
             ok_decode(),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
         );
-        worker.cancel();
-        let mut report = ExportReport::default();
-        while let Ok(ev) = worker.events().recv() {
-            if let ExportEvent::Finished(r) = ev {
-                report = r;
-                break;
-            }
-        }
+        let report = finished(&worker);
         assert!(report.cancelled);
         assert_eq!(report.exported, 0);
+        assert!(!d.0.join("a.jpg").exists(), "nothing should be written");
+    }
+
+    #[test]
+    fn cancel_reaches_the_worker_and_stops_the_next_photo() {
+        // Covers the public `cancel()` — and with it that `spawn` hands the worker the *same*
+        // flag the handle keeps, which a one-line store can still get wrong.
+        //
+        // A handshake, not a sleep: the decode announces that it has entered the first photo
+        // and blocks until the test has cancelled, so the worker cannot race ahead. Two
+        // resume permits are sent so that a *regression* — the worker wrongly starting the
+        // second photo — fails an assertion instead of deadlocking the suite.
+        let d = TempDir::new("cancel_api");
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            move |_: &Path| {
+                let _ = started_tx.send(());
+                let _ = resume_rx.recv();
+                Ok(flat(8, 4))
+            },
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        started_rx.recv().expect("worker never reached a decode");
+        worker.cancel();
+        let _ = resume_tx.send(());
+        let _ = resume_tx.send(());
+
+        let report = finished(&worker);
+        assert!(report.cancelled);
+        // "Abandon, don't abort": the photo in flight finishes decoding but is discarded.
+        assert_eq!(report.exported, 0);
+        assert!(
+            !d.0.join("a.jpg").exists(),
+            "the cancelled photo was written"
+        );
+        assert!(
+            !d.0.join("b.jpg").exists(),
+            "the second photo must never start"
+        );
     }
 
     #[test]
