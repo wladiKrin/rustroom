@@ -69,6 +69,36 @@ fn main() {
             },
         ),
         (
+            "texture 70 (small gaussian)",
+            Edits {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 70.0,
+                    clarity: 0.0,
+                },
+                ..Edits::default()
+            },
+        ),
+        (
+            "clarity 70 (wide_blur, 3 box passes)",
+            Edits {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 0.0,
+                    clarity: 70.0,
+                },
+                ..Edits::default()
+            },
+        ),
+        (
+            "texture 70 + clarity 70 (both bands)",
+            Edits {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 70.0,
+                    clarity: 70.0,
+                },
+                ..Edits::default()
+            },
+        ),
+        (
             "HSL only (for comparison)",
             Edits {
                 hsl,
