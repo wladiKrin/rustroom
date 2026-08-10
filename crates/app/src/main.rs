@@ -1802,7 +1802,9 @@ impl RustroomApp {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for i in 0..lib.entries.len() {
-                            let resp = thumb_cell(ui, box_size, lib.thumbs[i].as_ref());
+                            // The filmstrip's cell *is* its click target, so it opts in here.
+                            let resp = thumb_cell(ui, box_size, lib.thumbs[i].as_ref())
+                                .interact(egui::Sense::click());
                             paint_selection_border(
                                 ui,
                                 resp.rect,
@@ -2223,12 +2225,18 @@ fn paint_selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selecte
 /// under the scroll target (that target is an absolute offset egui computes **once** and
 /// never recomputes). Allocating first and painting into the allocated rect makes a cell's
 /// geometry independent of whether its thumbnail has arrived.
+/// ⚠ Allocates with `Sense::hover()`, **not** `Sense::click()` — this reserves space and
+/// paints, and interaction is the caller's to add. In the Library grid the click target is
+/// the whole cell (thumbnail *and* filename), so a click-sensing thumbnail sitting inside it
+/// would swallow the click: both rects are distance 0 from the pointer and egui breaks that
+/// tie by registration order. The grid then responded only on the grey margin around the
+/// image. `clicking_a_library_grid_thumbnail_opens_it` pins it.
 fn thumb_cell(
     ui: &mut egui::Ui,
     box_size: egui::Vec2,
     thumb: Option<&egui::TextureHandle>,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
         Some(tex) => {
             // Fit inside the cell without upscaling, then centre — the same result
@@ -2421,6 +2429,134 @@ mod tests {
         assert_eq!(grid_cell_size(Some(PORTRAIT)), empty);
         assert_eq!(grid_cell_size(Some(LANDSCAPE)), empty);
         assert_eq!(empty.x, 140.0, "the cell should fill its column");
+    }
+
+    /// Click at `pos` and report whether the Library grid's *cell* response saw it.
+    ///
+    /// Three passes: one to lay out with the pointer in place, one to press, one to release
+    /// — egui resolves a click against the widgets registered on the previous pass.
+    fn grid_cell_click_lands(offset: egui::Vec2) -> bool {
+        const CELL: f32 = 140.0;
+        let ctx = egui::Context::default();
+        let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
+        let tex = ctx.load_texture(
+            "t",
+            egui::ColorImage::new(LANDSCAPE, vec![egui::Color32::WHITE; 512 * 341]),
+            Default::default(),
+        );
+        let mut clicked = false;
+        let mut origin = egui::Pos2::ZERO;
+        for pass in 0..3 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            let pos = origin + offset;
+            input.events.push(egui::Event::PointerMoved(pos));
+            if pass == 1 || pass == 2 {
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: pass == 1,
+                    modifiers: Default::default(),
+                });
+            }
+            let _ = ctx.run_ui(input, |ui| {
+                let resp = ui
+                    .allocate_ui(egui::vec2(CELL, CELL), |ui| {
+                        ui.set_min_size(egui::vec2(CELL, CELL));
+                        ui.vertical_centered(|ui| {
+                            thumb_cell(ui, box_size, Some(&tex));
+                            ui.label(egui::RichText::new("DSCF6509.RAF").small());
+                        });
+                    })
+                    .response
+                    .interact(egui::Sense::click());
+                origin = resp.rect.min;
+                if pass == 2 && resp.clicked() {
+                    clicked = true;
+                }
+            });
+        }
+        clicked
+    }
+
+    #[test]
+    fn clicking_a_library_grid_thumbnail_opens_it() {
+        // ⚠ Regression: the whole cell is the click target in the grid, but `thumb_cell`
+        // allocated its box with `Sense::click()`. Two overlapping click widgets both sit at
+        // distance 0 from the pointer, and egui breaks that tie by registration order — so
+        // the thumbnail swallowed the click and only the grey margin around it responded.
+        assert!(
+            grid_cell_click_lands(egui::vec2(70.0, 40.0)),
+            "a click on the thumbnail itself did not reach the cell"
+        );
+        // The margin below the image (over the filename) must keep working too.
+        assert!(
+            grid_cell_click_lands(egui::vec2(70.0, 125.0)),
+            "a click on the cell margin did not reach the cell"
+        );
+    }
+
+    /// Click at `offset` from the first filmstrip cell and report whether that cell saw it.
+    fn filmstrip_click_lands(offset: egui::Vec2) -> bool {
+        let ctx = egui::Context::default();
+        let box_size = egui::vec2(132.0, 88.0);
+        let tex = ctx.load_texture(
+            "t",
+            egui::ColorImage::new(LANDSCAPE, vec![egui::Color32::WHITE; 512 * 341]),
+            Default::default(),
+        );
+        let mut clicked = false;
+        let mut origin = egui::Pos2::ZERO;
+        for pass in 0..3 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 200.0),
+                )),
+                ..Default::default()
+            };
+            let pos = origin + offset;
+            input.events.push(egui::Event::PointerMoved(pos));
+            if pass == 1 || pass == 2 {
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: pass == 1,
+                    modifiers: Default::default(),
+                });
+            }
+            let _ = ctx.run_ui(input, |ui| {
+                ui.horizontal(|ui| {
+                    for i in 0..3 {
+                        let resp =
+                            thumb_cell(ui, box_size, Some(&tex)).interact(egui::Sense::click());
+                        if i == 0 {
+                            origin = resp.rect.min;
+                            if pass == 2 && resp.clicked() {
+                                clicked = true;
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        clicked
+    }
+
+    #[test]
+    fn clicking_a_filmstrip_thumbnail_opens_it() {
+        // The symmetric guard to the grid's. `thumb_cell` allocates with `Sense::hover()`,
+        // so the filmstrip — where the cell *is* the click target — has to opt in. Dropping
+        // that `.interact()` would make the strip silently unclickable.
+        assert!(
+            filmstrip_click_lands(egui::vec2(66.0, 44.0)),
+            "a click on a filmstrip thumbnail did not register"
+        );
     }
 
     #[test]
