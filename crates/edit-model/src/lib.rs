@@ -189,6 +189,34 @@ impl Sharpening {
     }
 }
 
+/// Texture and Clarity: local contrast in two frequency bands. Both 0 = off.
+///
+/// Same operation as [`Sharpening`] at a different radius, which is why they share a stage
+/// shape but not a struct: these are *look* controls that belong with tone, while sharpening
+/// is capture- and output-specific.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LocalContrast {
+    /// Fine-band local contrast, ~[-100, 100]. Positive brings out surface detail, negative
+    /// smooths it. 0 = off.
+    pub texture: f32,
+    /// Coarse-band local contrast, ~[-100, 100]. Positive is punchy midtone contrast,
+    /// negative is a glow. 0 = off.
+    pub clarity: f32,
+}
+
+impl LocalContrast {
+    /// True when these settings actually change pixels.
+    ///
+    /// There are no modifier fields here, so this could have been `!= default()`. Written
+    /// the same way [`NoiseReduction::is_active`], [`Vignette::is_active`] and
+    /// [`Sharpening::is_active`] are, so the four read alike and so adding a modifier later
+    /// does not change the rule.
+    pub fn is_active(&self) -> bool {
+        self.texture != 0.0 || self.clarity != 0.0
+    }
+}
+
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
 pub const EDIT_GROUP_NAMES: [&str; 6] = [
@@ -208,7 +236,7 @@ pub const EDIT_GROUP_NAMES: [&str; 6] = [
 #[serde(default)]
 pub struct EditGroups {
     pub white_balance: bool,
-    /// Exposure, contrast, highlights, shadows, whites, blacks, tone curve.
+    /// Exposure, contrast, highlights, shadows, whites, blacks, tone curve, texture, clarity.
     pub tone: bool,
     /// Saturation, vibrance, HSL.
     pub color: bool,
@@ -320,6 +348,7 @@ pub struct Edits {
     /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
     pub vibrance: f32,
     pub hsl: Hsl,
+    pub local_contrast: LocalContrast,
     pub noise_reduction: NoiseReduction,
     pub vignette: Vignette,
     pub sharpening: Sharpening,
@@ -363,6 +392,7 @@ impl Edits {
             saturation,
             vibrance,
             hsl,
+            local_contrast,
             noise_reduction,
             sharpening,
             vignette,
@@ -380,6 +410,7 @@ impl Edits {
             self.whites = *whites;
             self.blacks = *blacks;
             self.tone_curve = tone_curve.clone();
+            self.local_contrast = *local_contrast;
         }
         if groups.color {
             self.saturation = *saturation;
@@ -691,6 +722,63 @@ mod tests {
     }
 
     #[test]
+    fn local_contrast_defaults_to_off() {
+        let lc = LocalContrast::default();
+        assert_eq!(lc.texture, 0.0);
+        assert_eq!(lc.clarity, 0.0);
+        assert_eq!(Edits::default().local_contrast, lc);
+    }
+
+    #[test]
+    fn local_contrast_is_active_when_either_slider_moves() {
+        assert!(!LocalContrast::default().is_active());
+        assert!(LocalContrast {
+            texture: 1.0,
+            clarity: 0.0
+        }
+        .is_active());
+        assert!(LocalContrast {
+            texture: 0.0,
+            clarity: -1.0
+        }
+        .is_active());
+    }
+
+    #[test]
+    fn old_sidecar_without_local_contrast_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.local_contrast, LocalContrast::default());
+    }
+
+    #[test]
+    fn local_contrast_roundtrips_json() {
+        let e = Edits {
+            local_contrast: LocalContrast {
+                texture: 35.0,
+                clarity: -60.0,
+            },
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn local_contrast_travels_with_the_tone_group() {
+        // Texture and Clarity are *look*, which is what a preset carries; Detail is
+        // capture-specific (noise, lens, output size). The generic partition tests above
+        // prove disjointness and coverage — this pins which group it landed in.
+        let src = all_nonneutral();
+        let mut got = Edits::default();
+        got.merge_from(&src, EditGroups::only(1)); // 1 == "Tone"
+        assert_eq!(got.local_contrast, src.local_contrast);
+        let mut not_detail = Edits::default();
+        not_detail.merge_from(&src, EditGroups::only(3)); // 3 == "Detail"
+        assert_eq!(not_detail.local_contrast, LocalContrast::default());
+    }
+
+    #[test]
     fn geometry_default_is_neutral() {
         let g = Geometry::default();
         assert_eq!(g.angle, 0.0);
@@ -738,6 +826,10 @@ mod tests {
             saturation: 10.0,
             vibrance: 10.0,
             hsl,
+            local_contrast: LocalContrast {
+                texture: 40.0,
+                clarity: -25.0,
+            },
             noise_reduction: NoiseReduction {
                 luminance: 30.0,
                 color: 30.0,
