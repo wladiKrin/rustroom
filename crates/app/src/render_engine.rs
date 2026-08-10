@@ -338,14 +338,13 @@ mod tests {
         // The master invariant. It validates the region maths, the vignette correction and
         // the cache at once — if any of the three is wrong, this fails.
         //
-        // ⚠ Sharpening *weakens* it, and that has to be said out loud rather than left to
-        // an edit set that happens to omit sharpening. A spatial stage in the tail reads
-        // neighbours the cropped region genuinely does not have, so equality can only hold
-        // in the interior. The excluded band is `max_kernel_radius` wide — precisely what
-        // `view_region::REGION_MARGIN` keeps off screen — and the inset is derived from the
-        // radius rather than hard-coded, so it tracks any future change.
-        const N: usize = 64;
-        let buf = varied_sized(N);
+        // ⚠ Sharpening and local contrast *weaken* it, and that has to be said out loud
+        // rather than left to an edit set that happens to omit them. A spatial stage in the
+        // tail reads neighbours the cropped region genuinely does not have, so equality can
+        // only hold in the interior. The excluded band is `tail_kernel_radius` wide —
+        // precisely what `view_region::REGION_MARGIN` keeps off screen — and both the inset
+        // and the buffer size are derived from it, so they track any future change to a
+        // radius or a sigma.
         let edits = Edits {
             exposure: 0.4,
             vignette: edit_model::Vignette {
@@ -362,6 +361,10 @@ mod tests {
                 color: 40.0,
                 ..Default::default()
             },
+            local_contrast: edit_model::LocalContrast {
+                texture: 60.0,
+                clarity: 70.0,
+            },
             sharpening: edit_model::Sharpening {
                 amount: 90.0,
                 radius: 1.0,
@@ -371,27 +374,34 @@ mod tests {
             ..Edits::default()
         };
 
-        // max_dim = N is native for this NxN buffer, i.e. no downscale, so the render scale
-        // is exactly 1.0 and the inset below is the full-resolution kernel.
-        let whole = render_cached(&buf, &edits, N, 1.0, None, &mut PrefixCache::default());
+        let inset = pipeline::tail_kernel_radius(&edits, RenderScale::FULL);
+        let (x, y, w, h) = (12, 10, 2 * inset + 40, 2 * inset + 36);
+        let n = 2 * inset + 80;
+        let buf = varied_sized(n);
 
-        // Guard against the test passing trivially: sharpening must actually move pixels
-        // here, or the "weakened invariant" it exists to cover is not being exercised.
+        // max_dim = n is native for this n x n buffer, i.e. no downscale, so the render
+        // scale is exactly 1.0 and the inset above is the full-resolution kernel.
+        let whole = render_cached(&buf, &edits, n, 1.0, None, &mut PrefixCache::default());
+
+        // Guard against the test passing trivially: the spatial tail stages must actually
+        // move pixels here, or the "weakened invariant" it exists to cover is not exercised.
         let unsharpened = render_cached(
             &buf,
             &Edits {
                 sharpening: edit_model::Sharpening::default(),
+                local_contrast: edit_model::LocalContrast::default(),
                 ..edits.clone()
             },
-            N,
+            n,
             1.0,
             None,
             &mut PrefixCache::default(),
         );
-        assert_ne!(whole.rgba, unsharpened.rgba, "sharpening changed nothing");
+        assert_ne!(
+            whole.rgba, unsharpened.rgba,
+            "the spatial tail stages changed nothing"
+        );
 
-        let inset = pipeline::max_kernel_radius(edits.sharpening.radius, RenderScale::FULL);
-        let (x, y, w, h) = (12, 10, 40, 36);
         assert!(
             x + w <= whole.width && y + h <= whole.height,
             "region must fit"
@@ -404,7 +414,7 @@ mod tests {
         let got = render_cached(
             &buf,
             &edits,
-            N,
+            n,
             1.0,
             Some(RegionRect { x, y, w, h }),
             &mut PrefixCache::default(),

@@ -7,9 +7,12 @@
 pub use crate::render_engine::RegionRect;
 
 /// Rendered beyond the visible rect so small pans reuse the existing texture — and, since
-/// sharpening runs on the cropped region, so its edge band falls outside what is displayed.
-/// See `the_region_margin_exceeds_every_tail_kernel_radius`.
-pub const REGION_MARGIN: usize = 128;
+/// the spatial tail stages run on the cropped region, so their edge band falls outside what
+/// is displayed. See `the_region_margin_exceeds_every_tail_kernel_radius`.
+///
+/// 192 rather than a tighter fit over Clarity's 120 px reach: 72 px of headroom costs about
+/// 20% more pixels in the region tail (~1.5 ms) and buys room for the next spatial stage.
+pub const REGION_MARGIN: usize = 192;
 
 /// Whether the view is magnifying the fit-resolution texture past its own pixels, in which
 /// case the render should switch to the buffer's native resolution.
@@ -87,14 +90,14 @@ mod tests {
         // ⚠ The invariant that keeps 1:1 panning seam-free.
         //
         // Noise reduction cannot produce a seam because it lives in the *prefix*, which
-        // always runs whole-buffer. Sharpening lives in the *tail*, which runs on the
-        // cropped region — so at the region's edge it reads neighbours that do not exist,
-        // producing a band of wrong output `max_kernel_radius` px wide. `with_margin`
-        // renders that much extra on every side, so the band is never displayed.
+        // always runs whole-buffer. Sharpening and local contrast live in the **tail**,
+        // which runs on the cropped region — so at the region's edge they read neighbours
+        // that do not exist, producing a band of wrong output. `with_margin` renders that
+        // much extra on every side, so the band is never displayed.
         //
-        // Raising the Radius range, or adding another spatial stage to the tail, must fail
+        // Widening a slider range, or adding another spatial stage to the tail, must fail
         // here rather than produce seams that only show up while panning at 1:1.
-        let worst = pipeline::max_kernel_radius(pipeline::RADIUS_RANGE.1, RenderScale::FULL);
+        let worst = pipeline::max_tail_kernel_radius(RenderScale::FULL);
         assert!(
             REGION_MARGIN > worst,
             "REGION_MARGIN {REGION_MARGIN} must exceed the tail's kernel radius {worst}"

@@ -109,6 +109,10 @@ mod tests {
             saturation: 12.0,
             vibrance: 8.0,
             hsl,
+            local_contrast: edit_model::LocalContrast {
+                texture: 30.0,
+                clarity: -15.0,
+            },
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 20.0,
                 ..Default::default()
