@@ -4,7 +4,9 @@
 //! output must match the committed PNG within `TOL` per channel.
 
 use core_image::ImageBuf;
-use edit_model::{Edits, NoiseReduction, Sharpening, ToneCurve, Vignette, WhiteBalance};
+use edit_model::{
+    Edits, LocalContrast, NoiseReduction, Sharpening, ToneCurve, Vignette, WhiteBalance,
+};
 use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
 
@@ -132,6 +134,30 @@ fn noise_chart() -> ImageBuf {
                     (base[2] + noise()).max(0.0),
                 ],
             );
+        }
+    }
+    img
+}
+
+/// Deterministic chart for the local-contrast cases: a coarse horizontal ramp (what
+/// Clarity's 40 px radius sees), a fine 6 px-period sine on top of it (what Texture's 2 px
+/// radius sees), and a hard horizontal edge three quarters of the way down (where a halo
+/// would appear). Tinted rather than neutral, so the "hue ratios are preserved" property is
+/// visible in the reference rather than only in a unit test.
+///
+/// 256x256, far larger than the other charts and deliberately so: Clarity's kernel reaches
+/// 120 px, so on a 64- or 128-px chart the reference would record the global mean rather
+/// than local contrast.
+fn local_contrast_chart() -> ImageBuf {
+    const S: usize = 256;
+    let mut img = ImageBuf::new(S, S);
+    for y in 0..S {
+        for x in 0..S {
+            let coarse = 0.15 + 0.5 * (x as f32 / S as f32);
+            let fine = 0.03 * (x as f32 / 6.0 * std::f32::consts::TAU).sin();
+            let step = if y >= 3 * S / 4 { 0.25 } else { 0.0 };
+            let v = (coarse + fine + step).clamp(0.0, 1.0);
+            img.set_pixel(x, y, [v, v * 0.85, v * 0.7]);
         }
     }
     img
@@ -473,4 +499,64 @@ fn golden_sharpen_masked() {
 #[test]
 fn golden_sharpen_detail_low() {
     check_golden_with("sharpen_detail_low", &sharpen(0.0, 0.0), noise_chart());
+}
+
+#[test]
+fn golden_texture_plus() {
+    check_golden_with(
+        "texture_plus",
+        &Edits {
+            local_contrast: LocalContrast {
+                texture: 80.0,
+                clarity: 0.0,
+            },
+            ..Edits::default()
+        },
+        local_contrast_chart(),
+    )
+}
+
+#[test]
+fn golden_texture_minus() {
+    check_golden_with(
+        "texture_minus",
+        &Edits {
+            local_contrast: LocalContrast {
+                texture: -80.0,
+                clarity: 0.0,
+            },
+            ..Edits::default()
+        },
+        local_contrast_chart(),
+    )
+}
+
+#[test]
+fn golden_clarity_plus() {
+    check_golden_with(
+        "clarity_plus",
+        &Edits {
+            local_contrast: LocalContrast {
+                texture: 0.0,
+                clarity: 60.0,
+            },
+            ..Edits::default()
+        },
+        local_contrast_chart(),
+    )
+}
+
+#[test]
+fn golden_clarity_minus() {
+    check_golden_with(
+        "clarity_minus",
+        &Edits {
+            local_contrast: LocalContrast {
+                texture: 0.0,
+                clarity: -60.0,
+            },
+            ..Edits::default()
+        },
+        local_contrast_chart(),
+    )
 }
