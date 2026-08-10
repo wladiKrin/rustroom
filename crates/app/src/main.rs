@@ -1802,7 +1802,7 @@ impl RustroomApp {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for i in 0..lib.entries.len() {
-                            let resp = filmstrip_cell(ui, box_size, lib.thumbs[i].as_ref());
+                            let resp = thumb_cell(ui, box_size, lib.thumbs[i].as_ref());
                             paint_selection_border(
                                 ui,
                                 resp.rect,
@@ -1881,27 +1881,13 @@ impl RustroomApp {
                         let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
                         let resp = ui
                             .allocate_ui(egui::vec2(CELL, CELL), |ui| {
+                                // Pin the cell to its full size. Without this `allocate_ui`
+                                // reports only the space the content used, so cells varied
+                                // with their thumbnail — the filmstrip's reflow bug in its
+                                // grid form, where `egui::Grid`'s column alignment hid it.
+                                ui.set_min_size(egui::vec2(CELL, CELL));
                                 ui.vertical_centered(|ui| {
-                                    match &lib.thumbs[i] {
-                                        Some(tex) => {
-                                            ui.add(
-                                                egui::Image::new(tex)
-                                                    .max_size(box_size)
-                                                    .maintain_aspect_ratio(true),
-                                            );
-                                        }
-                                        None => {
-                                            let (rect, _) = ui.allocate_exact_size(
-                                                box_size,
-                                                egui::Sense::hover(),
-                                            );
-                                            ui.painter().rect_filled(
-                                                rect,
-                                                egui::CornerRadius::same(3),
-                                                egui::Color32::from_gray(60),
-                                            );
-                                        }
-                                    }
+                                    thumb_cell(ui, box_size, lib.thumbs[i].as_ref());
                                     ui.label(
                                         egui::RichText::new(&lib.entries[i].file_name).small(),
                                     );
@@ -2226,8 +2212,8 @@ fn paint_selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selecte
     );
 }
 
-/// One filmstrip cell: a fixed-size box holding either the thumbnail, centred and
-/// aspect-preserved, or a grey placeholder while it loads.
+/// One thumbnail cell — filmstrip *and* Library grid — a fixed-size box holding either the
+/// thumbnail, centred and aspect-preserved, or a grey placeholder while it loads.
 ///
 /// ⚠ **The fixed size is the entire point, and it is load-bearing.** `Ui::allocate_ui`
 /// allocates the space its content *actually used*, not the space requested — so drawing a
@@ -2237,7 +2223,7 @@ fn paint_selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selecte
 /// under the scroll target (that target is an absolute offset egui computes **once** and
 /// never recomputes). Allocating first and painting into the allocated rect makes a cell's
 /// geometry independent of whether its thumbnail has arrived.
-fn filmstrip_cell(
+fn thumb_cell(
     ui: &mut egui::Ui,
     box_size: egui::Vec2,
     thumb: Option<&egui::TextureHandle>,
@@ -2357,7 +2343,7 @@ mod tests {
                         .rect
                         .width()
                     } else {
-                        filmstrip_cell(ui, box_size, tex.as_ref()).rect.width()
+                        thumb_cell(ui, box_size, tex.as_ref()).rect.width()
                     };
                     widths.push(w);
                 }
@@ -2386,7 +2372,7 @@ mod tests {
     }
 
     #[test]
-    fn a_filmstrip_cell_keeps_its_width_however_its_thumbnail_loads() {
+    fn a_thumb_cell_keeps_its_width_however_its_thumbnail_loads() {
         // The fix: geometry no longer depends on load state, so nothing reflows and the
         // scroll target stays valid.
         let empty = cell_widths(None, false);
@@ -2395,6 +2381,46 @@ mod tests {
         assert_eq!(empty, vec![132.0; 3]);
         assert_eq!(portrait, empty, "a portrait thumbnail changed the layout");
         assert_eq!(landscape, empty, "a landscape thumbnail changed the layout");
+    }
+
+    /// The Library grid's shape: a `CELL`-square cell holding a thumbnail box and a filename.
+    fn grid_cell_size(thumb_size: Option<[usize; 2]>) -> egui::Vec2 {
+        const CELL: f32 = 140.0;
+        let ctx = egui::Context::default();
+        let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
+        let tex = thumb_size.map(|s| {
+            ctx.load_texture(
+                "t",
+                egui::ColorImage::new(s, vec![egui::Color32::WHITE; s[0] * s[1]]),
+                Default::default(),
+            )
+        });
+        let mut size = egui::Vec2::ZERO;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            size = ui
+                .allocate_ui(egui::vec2(CELL, CELL), |ui| {
+                    ui.set_min_size(egui::vec2(CELL, CELL));
+                    ui.vertical_centered(|ui| {
+                        thumb_cell(ui, box_size, tex.as_ref());
+                        ui.label(egui::RichText::new("DSCF6509.RAF").small());
+                    });
+                })
+                .response
+                .rect
+                .size();
+        });
+        size
+    }
+
+    #[test]
+    fn a_library_grid_cell_keeps_its_size_however_its_thumbnail_loads() {
+        // The same defect as the filmstrip's, in the grid's shape. `egui::Grid` aligns
+        // columns to the widest cell, which masked it — but a cell that changes size on load
+        // is still a cell that moves its neighbours.
+        let empty = grid_cell_size(None);
+        assert_eq!(grid_cell_size(Some(PORTRAIT)), empty);
+        assert_eq!(grid_cell_size(Some(LANDSCAPE)), empty);
+        assert_eq!(empty.x, 140.0, "the cell should fill its column");
     }
 
     #[test]
