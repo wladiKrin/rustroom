@@ -1476,6 +1476,21 @@ impl RustroomApp {
                         slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
                         slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
                         slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
+                        // Lightroom's "Presence" grouping, and it reflects that these are
+                        // tonal rather than detail controls — which is also why they are in
+                        // the Tone edit group rather than Detail.
+                        slider(
+                            ui,
+                            &mut s.edits.local_contrast.texture,
+                            -100.0..=100.0,
+                            "Texture",
+                        );
+                        slider(
+                            ui,
+                            &mut s.edits.local_contrast.clarity,
+                            -100.0..=100.0,
+                            "Clarity",
+                        );
                         slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
                         slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
 
