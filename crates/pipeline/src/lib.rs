@@ -11,6 +11,7 @@ pub use stages::contrast::ContrastStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
+pub use stages::local_contrast::LocalContrastStage;
 pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::saturation::SaturationStage;
@@ -191,6 +192,17 @@ pub fn build_pipeline_split_in_region(
         tail.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
     }
 
+    // Local contrast, in two bands. After the tone curve is mandatory: a local contrast
+    // measured before it would then be re-mapped by it. Before the colour stages so they
+    // see final tonality — numerically near-irrelevant, since the gain is scalar and
+    // preserves r:g:b ratios, but the order should say what we mean.
+    if edits.local_contrast.is_active() {
+        tail.push(Box::new(LocalContrastStage::new(
+            &edits.local_contrast,
+            scale,
+        )));
+    }
+
     if edits.saturation != 0.0 || edits.vibrance != 0.0 {
         tail.push(Box::new(SaturationStage::new(
             edits.saturation,
@@ -238,6 +250,46 @@ pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
+}
+
+/// The widest neighbourhood any **tail** stage reads, in rendered pixels, for these edits.
+///
+/// The tail is the half that runs on a cropped region during a 1:1 render, so at the
+/// region's edge a spatial tail stage reads neighbours that do not exist. This is the width
+/// of that wrong band, and therefore the margin such a render must keep outside what it
+/// displays. Prefix stages are exempt: the prefix always runs whole-buffer, which is why
+/// noise reduction can never produce a seam however you pan.
+///
+/// An inactive stage contributes 0.
+pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
+    let sharp = if edits.sharpening.is_active() {
+        stages::sharpening::max_kernel_radius(edits.sharpening.radius, scale)
+    } else {
+        0
+    };
+    let local = stages::local_contrast::kernel_reach(&edits.local_contrast, scale);
+    sharp.max(local)
+}
+
+/// [`tail_kernel_radius`] maximised over every representable setting — what a fixed render
+/// margin has to exceed.
+///
+/// Defined *through* `tail_kernel_radius` rather than duplicating the maxima, so the two
+/// cannot drift apart when a stage is added.
+pub fn max_tail_kernel_radius(scale: RenderScale) -> usize {
+    let worst = Edits {
+        sharpening: edit_model::Sharpening {
+            amount: 100.0,
+            radius: RADIUS_RANGE.1,
+            ..Default::default()
+        },
+        local_contrast: edit_model::LocalContrast {
+            texture: 100.0,
+            clarity: 100.0,
+        },
+        ..Edits::default()
+    };
+    tail_kernel_radius(&worst, scale)
 }
 
 #[cfg(test)]
@@ -356,6 +408,13 @@ mod tests {
             },
             Edits {
                 hsl,
+                ..base.clone()
+            },
+            Edits {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 60.0,
+                    clarity: -40.0,
+                },
                 ..base.clone()
             },
             Edits {
@@ -713,6 +772,101 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+    }
+
+    #[test]
+    fn local_contrast_runs_after_the_tone_curve_and_before_saturation() {
+        // After the tone curve is mandatory: a local contrast computed before it would then
+        // be re-mapped by it — the same argument that kept the vignette out of the prefix.
+        // Before the colour stages so they see final tonality.
+        let edits = Edits {
+            exposure: 1.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            local_contrast: edit_model::LocalContrast {
+                texture: 40.0,
+                clarity: 20.0,
+            },
+            saturation: 20.0,
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            vec![
+                "exposure",
+                "tone_curve",
+                "local_contrast",
+                "saturation",
+                "output_transform_srgb"
+            ]
+        );
+    }
+
+    #[test]
+    fn neutral_local_contrast_adds_no_stage() {
+        let edits = Edits {
+            exposure: 1.0,
+            local_contrast: edit_model::LocalContrast::default(),
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+    }
+
+    #[test]
+    fn local_contrast_is_in_the_tail() {
+        // It must not join the prefix: it has to be downstream of the tone curve, and
+        // putting it upstream would also make every Texture drag invalidate the noise
+        // reduction cache.
+        let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
+        assert!(!prefix.stage_names().contains(&"local_contrast"));
+        assert!(tail.stage_names().contains(&"local_contrast"));
+    }
+
+    #[test]
+    fn tail_kernel_radius_covers_every_spatial_tail_stage() {
+        let neutral = Edits::default();
+        assert_eq!(tail_kernel_radius(&neutral, RenderScale::FULL), 0);
+
+        // Sharpening alone at its default radius: ceil(3*1.0) + ceil(3*2.0) = 9.
+        let sharp = Edits {
+            sharpening: edit_model::Sharpening {
+                amount: 50.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(tail_kernel_radius(&sharp, RenderScale::FULL), 9);
+
+        // Clarity alone: wide_blur_reach(40.0) = 120, far wider than sharpening ever gets.
+        let clarity = Edits {
+            local_contrast: edit_model::LocalContrast {
+                texture: 0.0,
+                clarity: 50.0,
+            },
+            ..Edits::default()
+        };
+        assert_eq!(tail_kernel_radius(&clarity, RenderScale::FULL), 120);
+
+        // Both: the max, because the two stages are sequential in the pipeline but each
+        // reads its own neighbourhood of that stage's input.
+        let both = Edits {
+            sharpening: sharp.sharpening,
+            local_contrast: clarity.local_contrast,
+            ..Edits::default()
+        };
+        assert_eq!(tail_kernel_radius(&both, RenderScale::FULL), 120);
+
+        // The worst case must bound every representable setting.
+        let worst = max_tail_kernel_radius(RenderScale::FULL);
+        for e in [&neutral, &sharp, &clarity, &both, &all_edits()] {
+            assert!(
+                tail_kernel_radius(e, RenderScale::FULL) <= worst,
+                "an edit set exceeded max_tail_kernel_radius {worst}"
+            );
+        }
+        // And it must be tighter at a smaller render scale, or a preview would over-reserve.
+        assert!(max_tail_kernel_radius(RenderScale::new(0.25)) < worst);
     }
 
     #[test]
