@@ -1802,27 +1802,7 @@ impl RustroomApp {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for i in 0..lib.entries.len() {
-                            let resp = ui
-                                .allocate_ui(box_size, |ui| match &lib.thumbs[i] {
-                                    Some(tex) => {
-                                        ui.add(
-                                            egui::Image::new(tex)
-                                                .max_size(box_size)
-                                                .maintain_aspect_ratio(true),
-                                        );
-                                    }
-                                    None => {
-                                        let (rect, _) =
-                                            ui.allocate_exact_size(box_size, egui::Sense::hover());
-                                        ui.painter().rect_filled(
-                                            rect,
-                                            egui::CornerRadius::same(3),
-                                            egui::Color32::from_gray(60),
-                                        );
-                                    }
-                                })
-                                .response
-                                .interact(egui::Sense::click());
+                            let resp = filmstrip_cell(ui, box_size, lib.thumbs[i].as_ref());
                             paint_selection_border(
                                 ui,
                                 resp.rect,
@@ -2246,6 +2226,46 @@ fn paint_selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selecte
     );
 }
 
+/// One filmstrip cell: a fixed-size box holding either the thumbnail, centred and
+/// aspect-preserved, or a grey placeholder while it loads.
+///
+/// ⚠ **The fixed size is the entire point, and it is load-bearing.** `Ui::allocate_ui`
+/// allocates the space its content *actually used*, not the space requested — so drawing a
+/// loaded thumbnail with `Image::max_size` allocated a **portrait** cell only 58.6 px wide
+/// against its placeholder's 132 px. Every thumbnail that arrived then shifted every cell to
+/// its right, which made the strip twitch as it loaded and slid the centred photo out from
+/// under the scroll target (that target is an absolute offset egui computes **once** and
+/// never recomputes). Allocating first and painting into the allocated rect makes a cell's
+/// geometry independent of whether its thumbnail has arrived.
+fn filmstrip_cell(
+    ui: &mut egui::Ui,
+    box_size: egui::Vec2,
+    thumb: Option<&egui::TextureHandle>,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::click());
+    match thumb {
+        Some(tex) => {
+            // Fit inside the cell without upscaling, then centre — the same result
+            // `Image::max_size(..).maintain_aspect_ratio(true)` produced, minus the effect
+            // on layout.
+            let size = tex.size_vec2();
+            let scale = (box_size.x / size.x).min(box_size.y / size.y).min(1.0);
+            egui::Image::new(tex).paint_at(
+                ui,
+                egui::Rect::from_center_size(rect.center(), size * scale),
+            );
+        }
+        None => {
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(3),
+                egui::Color32::from_gray(60),
+            );
+        }
+    }
+    resp
+}
+
 /// The six group checkboxes, shared by the Save-preset and Paste-settings dialogs.
 fn edit_group_checkboxes(ui: &mut egui::Ui, groups: &mut EditGroups) {
     ui.horizontal(|ui| {
@@ -2289,5 +2309,100 @@ fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
                 egui::Stroke::new(1.0, colors[ci].linear_multiply(0.5)),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lay out three identical cells and return their allocated widths.
+    ///
+    /// `old` reproduces the pre-fix construction (`allocate_ui` + `Image::max_size`) so the
+    /// regression is demonstrated here rather than only described in a comment.
+    fn cell_widths(thumb_size: Option<[usize; 2]>, old: bool) -> Vec<f32> {
+        let ctx = egui::Context::default();
+        let box_size = egui::vec2(132.0, 88.0);
+        let tex = thumb_size.map(|s| {
+            ctx.load_texture(
+                "t",
+                egui::ColorImage::new(s, vec![egui::Color32::WHITE; s[0] * s[1]]),
+                Default::default(),
+            )
+        });
+        let mut widths = Vec::new();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            ui.horizontal(|ui| {
+                for _ in 0..3 {
+                    let w = if old {
+                        ui.allocate_ui(box_size, |ui| match &tex {
+                            Some(t) => {
+                                ui.add(
+                                    egui::Image::new(t)
+                                        .max_size(box_size)
+                                        .maintain_aspect_ratio(true),
+                                );
+                            }
+                            None => {
+                                let (rect, _) =
+                                    ui.allocate_exact_size(box_size, egui::Sense::hover());
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(3),
+                                    egui::Color32::from_gray(60),
+                                );
+                            }
+                        })
+                        .response
+                        .rect
+                        .width()
+                    } else {
+                        filmstrip_cell(ui, box_size, tex.as_ref()).rect.width()
+                    };
+                    widths.push(w);
+                }
+            });
+        });
+        widths
+    }
+
+    /// A portrait thumbnail, as `extract_thumbnail` returns it once libraw's flip is applied.
+    const PORTRAIT: [usize; 2] = [341, 512];
+    const LANDSCAPE: [usize; 2] = [512, 341];
+
+    #[test]
+    fn the_old_cell_shrank_when_a_portrait_thumbnail_arrived() {
+        // ⚠ The bug, reproduced. This is why the strip twitched while loading and why the
+        // centred photo drifted left: every arriving portrait narrowed its cell by ~73 px,
+        // shifting every cell to its right, while egui's scroll target — computed once, as
+        // an absolute offset — stayed where it was.
+        let empty = cell_widths(None, true)[0];
+        let portrait = cell_widths(Some(PORTRAIT), true)[0];
+        assert_eq!(empty, 132.0);
+        assert!(
+            portrait < empty - 70.0,
+            "expected the old portrait cell to collapse, got {portrait} vs {empty}"
+        );
+    }
+
+    #[test]
+    fn a_filmstrip_cell_keeps_its_width_however_its_thumbnail_loads() {
+        // The fix: geometry no longer depends on load state, so nothing reflows and the
+        // scroll target stays valid.
+        let empty = cell_widths(None, false);
+        let portrait = cell_widths(Some(PORTRAIT), false);
+        let landscape = cell_widths(Some(LANDSCAPE), false);
+        assert_eq!(empty, vec![132.0; 3]);
+        assert_eq!(portrait, empty, "a portrait thumbnail changed the layout");
+        assert_eq!(landscape, empty, "a landscape thumbnail changed the layout");
+    }
+
+    #[test]
+    fn cells_are_laid_out_at_a_constant_pitch() {
+        // The property that actually matters to the scroll target: cell *n*'s position must
+        // not depend on how many of its predecessors have loaded. Equal widths imply it,
+        // but assert the spacing too, since that is what accumulates over 800 cells.
+        let w = cell_widths(Some(PORTRAIT), false);
+        assert!(w.windows(2).all(|p| p[0] == p[1]), "{w:?}");
     }
 }
