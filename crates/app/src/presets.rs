@@ -4,6 +4,7 @@
 //! shareable artifact, makes add and delete plain file operations with no read-modify-write
 //! race, and means one corrupt preset cannot take the rest down with it.
 
+use crate::safe_name::sanitize;
 use edit_model::{EditGroups, Edits};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -35,26 +36,6 @@ pub enum PresetError {
 /// Filename-safe form of a preset name: anything outside `[A-Za-z0-9 _-]` becomes `_`.
 ///
 /// ⚠ Load-bearing, not cosmetic. The name is free text from the UI and becomes a path, so
-/// `../../evil` must not escape the presets directory.
-///
-/// This is a many-to-one map, so `a/b` and `a_b` do share a file and the later save wins —
-/// see `distinct_names_can_still_collide_on_one_file`. Accepted: hashing the name would fix
-/// it at the cost of a directory nobody can read by hand, which is most of the point of
-/// one file per preset. Only a name that sanitizes to *empty* is rejected outright.
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
 /// How many deleted presets stay recoverable.
 ///
 /// A cap on *entries*, not bytes, and deliberately so: a worst-case preset measures ~2.8 KB,
@@ -387,14 +368,6 @@ mod tests {
         store.save(&preset("///", 1.0)).unwrap();
         assert!(dir.0.join("presets").join("___.json").exists());
         assert_eq!(store.list()[0].name, "///");
-    }
-
-    #[test]
-    fn sanitize_keeps_readable_names_readable() {
-        assert_eq!(sanitize("Warm Punchy 2"), "Warm Punchy 2");
-        assert_eq!(sanitize("high-key_v2"), "high-key_v2");
-        assert_eq!(sanitize("../../evil"), "______evil");
-        assert_eq!(sanitize("a/b\\c"), "a_b_c");
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod histogram;
 pub mod history;
 pub mod presets;
 pub mod render_engine;
+pub mod safe_name;
 pub mod selection;
 pub mod settings;
 pub mod sidecar;
