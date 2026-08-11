@@ -10,6 +10,7 @@ use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
 use rustroom_app::edit_clipboard;
+use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
 use rustroom_app::presets::{Preset, PresetStore};
@@ -89,6 +90,11 @@ enum Modal {
     SyncSettings,
     /// Choosing where and how to export the selection.
     ExportSettings,
+    /// Naming a new export preset. Returns to `ExportSettings` when closed, so the export
+    /// dialog does not vanish underneath the user.
+    SaveExportPreset {
+        name: String,
+    },
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -133,6 +139,16 @@ struct RustroomApp {
     /// ⚠ Scrolling only when this *changes* is the whole point: calling `scroll_to_me` every
     /// frame would fight the user's own scrolling and pin the strip in place.
     filmstrip_scrolled_to: Option<usize>,
+    export_preset_store: ExportPresetStore,
+    /// Cached `export_preset_store.list()`, refreshed on save and delete rather than every
+    /// frame — the same reason `preset_list` is cached.
+    export_preset_list: Vec<ExportPreset>,
+    /// Which preset the dialog currently shows, so Delete knows what to delete.
+    ///
+    /// ⚠ Tracked explicitly rather than inferred by matching the dialog's options against
+    /// the list: two presets can hold identical options, and a Delete that guesses would
+    /// remove the wrong one.
+    selected_export_preset: Option<String>,
     preset_store: PresetStore,
     /// Cached `preset_store.list()`, refreshed on save and delete rather than every frame.
     preset_list: Vec<Preset>,
@@ -151,6 +167,8 @@ impl RustroomApp {
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
+        let export_preset_store = ExportPresetStore::user_default();
+        let export_preset_list = export_preset_store.list();
         let settings_store = SettingsStore::user_default();
         let settings = settings_store.load();
         Self {
@@ -174,6 +192,9 @@ impl RustroomApp {
             export_collision: None,
             export_apply_all: false,
             filmstrip_scrolled_to: None,
+            export_preset_store,
+            export_preset_list,
+            selected_export_preset: None,
             preset_store,
             preset_list,
             settings_store,
@@ -1146,6 +1167,7 @@ impl RustroomApp {
             Paste,
             Sync,
             Export,
+            SaveExport,
             ConfirmDelete,
             Settings,
         }
@@ -1155,6 +1177,7 @@ impl RustroomApp {
             Modal::PasteSettings => Which::Paste,
             Modal::SyncSettings => Which::Sync,
             Modal::ExportSettings => Which::Export,
+            Modal::SaveExportPreset { .. } => Which::SaveExport,
             Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
             Modal::Settings => Which::Settings,
         };
@@ -1168,6 +1191,7 @@ impl RustroomApp {
             Which::Paste => self.paste_modal(ctx),
             Which::Sync => self.sync_modal(ctx),
             Which::Export => self.export_modal(ctx),
+            Which::SaveExport => self.save_export_preset_modal(ctx),
             Which::ConfirmDelete => self.confirm_delete_modal(ctx),
             Which::Settings => self.settings_modal(ctx),
         }
@@ -1242,6 +1266,47 @@ impl RustroomApp {
         }
     }
 
+    /// Naming a new export preset.
+    fn save_export_preset_modal(&mut self, ctx: &egui::Context) {
+        let Modal::SaveExportPreset { name } = &self.modal else {
+            return;
+        };
+        let mut name = name.clone();
+        let mut save = false;
+        let mut close = false;
+        let dismissed = modal_dialog(ctx, "save_export_preset", "Save export preset", |ui| {
+            ui.text_edit_singleline(&mut name);
+            ui.horizontal(|ui| {
+                let ok = !name.trim().is_empty();
+                if ui.add_enabled(ok, egui::Button::new("Save")).clicked() {
+                    save = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if save {
+            let preset = ExportPreset {
+                name: name.clone(),
+                options: self.export_opts.clone(),
+            };
+            match self.export_preset_store.save(&preset) {
+                Ok(()) => self.selected_export_preset = Some(preset.name),
+                Err(e) => self.status = format!("Could not save preset: {e}"),
+            }
+            self.export_preset_list = self.export_preset_store.list();
+            close = true;
+        }
+        self.modal = if close || dismissed {
+            // Back to the export dialog rather than to nothing, so it does not vanish
+            // underneath the user.
+            Modal::ExportSettings
+        } else {
+            Modal::SaveExportPreset { name }
+        };
+    }
+
     /// Where and how to export the selection.
     fn export_modal(&mut self, ctx: &egui::Context) {
         let mut opts = self.export_opts.clone();
@@ -1250,9 +1315,41 @@ impl RustroomApp {
         let mut start = false;
         // egui has no folder field, so the picker writes into a local and the label shows it.
         let mut pick_dir = false;
+        let mut picked: Option<(String, ExportOptions)> = None;
+        let mut save_as = false;
+        let mut delete_selected = false;
+        // ⚠ Snapshots taken *before* the closure. `self.export_preset_list` cannot be read
+        // inside it while `opts` also borrows `self` — the same borrow shape that has
+        // already cost a compile error in this file twice.
+        let presets = self.export_preset_list.clone();
+        let selected = self.selected_export_preset.clone();
 
         let dismissed = modal_dialog(ctx, "export_settings", "Export", |ui| {
             ui.label(format!("Export {count} photos as JPEG."));
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("export_preset_pick")
+                    .selected_text(selected.clone().unwrap_or_else(|| "Preset…".into()))
+                    .show_ui(ui, |ui| {
+                        for p in &presets {
+                            let is_sel = selected.as_deref() == Some(p.name.as_str());
+                            if ui.selectable_label(is_sel, &p.name).clicked() {
+                                // Fills every field below, which is what keeps a preset's
+                                // destination change visible rather than hidden.
+                                picked = Some((p.name.clone(), p.options.clone()));
+                            }
+                        }
+                    });
+                if ui.button("Save as…").clicked() {
+                    save_as = true;
+                }
+                let can_delete = selected.is_some();
+                if ui
+                    .add_enabled(can_delete, egui::Button::new("Delete"))
+                    .clicked()
+                {
+                    delete_selected = true;
+                }
+            });
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.button("Destination…").clicked() {
@@ -1296,6 +1393,25 @@ impl RustroomApp {
         if pick_dir {
             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                 opts.dest_dir = dir;
+            }
+        }
+        if let Some((name, o)) = picked {
+            opts = o;
+            self.selected_export_preset = Some(name);
+        }
+        if save_as {
+            self.modal = Modal::SaveExportPreset {
+                name: String::new(),
+            };
+        }
+        if delete_selected {
+            // No confirmation and no trash — see `export_presets`' module doc for why this
+            // deliberately differs from develop presets.
+            if let Some(name) = self.selected_export_preset.take() {
+                if let Err(e) = self.export_preset_store.delete(&name) {
+                    self.status = format!("Could not delete preset: {e}");
+                }
+                self.export_preset_list = self.export_preset_store.list();
             }
         }
         self.export_opts = opts;
