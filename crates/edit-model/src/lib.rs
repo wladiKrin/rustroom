@@ -217,6 +217,26 @@ impl LocalContrast {
     }
 }
 
+/// Haze removal, via the dark-channel prior. 0 = off.
+///
+/// Runs in the pipeline **prefix**, beside noise reduction, because it is a correction of the
+/// capture rather than a grade — and because a frame-global airlight can only be estimated
+/// where the whole frame is present.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Dehaze {
+    /// ~[-100, 100]. Positive removes the estimated haze, negative lays it back on —
+    /// depth-aware in both directions, since both use the same transmission map. 0 = off.
+    pub amount: f32,
+}
+
+impl Dehaze {
+    /// True when these settings actually change pixels. Same rule as every other stage.
+    pub fn is_active(&self) -> bool {
+        self.amount != 0.0
+    }
+}
+
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
 pub const EDIT_GROUP_NAMES: [&str; 6] = [
@@ -236,7 +256,8 @@ pub const EDIT_GROUP_NAMES: [&str; 6] = [
 #[serde(default)]
 pub struct EditGroups {
     pub white_balance: bool,
-    /// Exposure, contrast, highlights, shadows, whites, blacks, tone curve, texture, clarity.
+    /// Exposure, contrast, highlights, shadows, whites, blacks, tone curve, texture,
+    /// clarity, dehaze.
     pub tone: bool,
     /// Saturation, vibrance, HSL.
     pub color: bool,
@@ -349,6 +370,7 @@ pub struct Edits {
     pub vibrance: f32,
     pub hsl: Hsl,
     pub local_contrast: LocalContrast,
+    pub dehaze: Dehaze,
     pub noise_reduction: NoiseReduction,
     pub vignette: Vignette,
     pub sharpening: Sharpening,
@@ -393,6 +415,7 @@ impl Edits {
             vibrance,
             hsl,
             local_contrast,
+            dehaze,
             noise_reduction,
             sharpening,
             vignette,
@@ -411,6 +434,7 @@ impl Edits {
             self.blacks = *blacks;
             self.tone_curve = tone_curve.clone();
             self.local_contrast = *local_contrast;
+            self.dehaze = *dehaze;
         }
         if groups.color {
             self.saturation = *saturation;
@@ -779,6 +803,49 @@ mod tests {
     }
 
     #[test]
+    fn dehaze_defaults_to_off() {
+        assert_eq!(Dehaze::default().amount, 0.0);
+        assert_eq!(Edits::default().dehaze, Dehaze::default());
+    }
+
+    #[test]
+    fn dehaze_is_active_in_both_directions() {
+        assert!(!Dehaze::default().is_active());
+        assert!(Dehaze { amount: 1.0 }.is_active());
+        assert!(Dehaze { amount: -1.0 }.is_active());
+    }
+
+    #[test]
+    fn old_sidecar_without_dehaze_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.dehaze, Dehaze::default());
+    }
+
+    #[test]
+    fn dehaze_roundtrips_json() {
+        let e = Edits {
+            dehaze: Dehaze { amount: -45.0 },
+            ..Default::default()
+        };
+        let back: Edits = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(e, back);
+    }
+
+    #[test]
+    fn dehaze_travels_with_the_tone_group() {
+        // ⚠ Tone, not Detail — even though dehaze sits beside noise reduction in the
+        // *pipeline*. Pipeline order is about mathematical correctness; groups are about what
+        // a person wants to copy between photos, and dehaze travels with a look.
+        let src = all_nonneutral();
+        let mut got = Edits::default();
+        got.merge_from(&src, EditGroups::only(1)); // 1 == "Tone"
+        assert_eq!(got.dehaze, src.dehaze);
+        let mut not_detail = Edits::default();
+        not_detail.merge_from(&src, EditGroups::only(3)); // 3 == "Detail"
+        assert_eq!(not_detail.dehaze, Dehaze::default());
+    }
+
+    #[test]
     fn geometry_default_is_neutral() {
         let g = Geometry::default();
         assert_eq!(g.angle, 0.0);
@@ -830,6 +897,7 @@ mod tests {
                 texture: 40.0,
                 clarity: -25.0,
             },
+            dehaze: Dehaze { amount: -30.0 },
             noise_reduction: NoiseReduction {
                 luminance: 30.0,
                 color: 30.0,
