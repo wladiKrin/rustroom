@@ -4,7 +4,7 @@ use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::action_log::{ActionKind, ActionLog, SyncAction};
 use rustroom_app::batch_export::{
-    Collision, Decision, ExportEvent, ExportOptions, ExportReport, ExportWorker,
+    destination_ready, Collision, Decision, ExportEvent, ExportOptions, ExportReport, ExportWorker,
 };
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
@@ -1260,8 +1260,12 @@ impl RustroomApp {
                 }
                 let shown = if opts.dest_dir.as_os_str().is_empty() {
                     "(none chosen)".to_string()
-                } else {
+                } else if opts.dest_dir.is_dir() {
                     opts.dest_dir.display().to_string()
+                } else {
+                    // A preset can carry a folder that has since gone — an unplugged drive,
+                    // or a preset from another machine. Say so rather than failing per photo.
+                    format!("{} (missing)", opts.dest_dir.display())
                 };
                 ui.label(shown);
             });
@@ -1279,7 +1283,7 @@ impl RustroomApp {
 
             ui.separator();
             ui.horizontal(|ui| {
-                let ready = !opts.dest_dir.as_os_str().is_empty();
+                let ready = destination_ready(&opts.dest_dir);
                 if ui.add_enabled(ready, egui::Button::new("Export")).clicked() {
                     start = true;
                 }

@@ -112,6 +112,18 @@ pub fn dest_for(dir: &Path, source: &Path, index: usize) -> PathBuf {
     dir.join(name)
 }
 
+/// Whether a destination directory can be exported into.
+///
+/// Empty means never chosen; anything else means chosen once and possibly gone since — an
+/// unplugged drive, a deleted folder, or a preset carried from another machine.
+///
+/// Checked **before** a run rather than per photo. `run` already survives an unwritable
+/// destination without panicking, but failing two hundred photos one at a time and reporting
+/// afterwards is a poor trade when the answer is knowable up front.
+pub fn destination_ready(dir: &Path) -> bool {
+    !dir.as_os_str().is_empty() && dir.is_dir()
+}
+
 /// The render scale a `max_edge` cap implies for a source whose long edge is `source_long`.
 ///
 /// Mirrors `render_engine::render_scale`, with `source_scale` fixed at 1.0 because an export
@@ -646,6 +658,28 @@ mod tests {
             }
         }
         panic!("the worker ended without a Finished event");
+    }
+
+    #[test]
+    fn destination_readiness_distinguishes_unset_missing_and_usable() {
+        // ⚠ A pure function of the path rather than logic inside the egui closure, which is
+        // what makes "Export is disabled when the folder is gone" testable at all rather
+        // than only verifiable by clicking. Same extraction as
+        // `Settings::apply_delete_confirm` and `view_region`'s maths.
+        assert!(
+            !destination_ready(Path::new("")),
+            "an unset destination is not ready"
+        );
+        let d = TempDir::new("dest_ready");
+        assert!(destination_ready(&d.0), "a real directory is ready");
+        assert!(
+            !destination_ready(&d.0.join("gone")),
+            "a path that does not exist is not ready — the unplugged-drive case"
+        );
+        // A *file* is not a destination, and this is the case a plain `exists()` gets wrong.
+        let file = d.0.join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(!destination_ready(&file), "a file is not a directory");
     }
 
     #[test]
