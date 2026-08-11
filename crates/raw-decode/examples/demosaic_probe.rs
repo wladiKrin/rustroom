@@ -61,14 +61,7 @@ fn main() {
             }
         }
         let file = format!("{out}/qual{qual}_{}.png", name.replace('/', "-"));
-        image::save_buffer(
-            &file,
-            &rgb,
-            cw as u32,
-            ch as u32,
-            image::ColorType::Rgb8,
-        )
-        .unwrap();
+        image::save_buffer(&file, &rgb, cw as u32, ch as u32, image::ColorType::Rgb8).unwrap();
         println!("user_qual={qual:2} {name:16} process {ms:8.0} ms  (open+unpack {unpacked:6.0} ms)  {w}x{h}  -> {file}");
     }
 }
