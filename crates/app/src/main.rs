@@ -168,11 +168,7 @@ impl RustroomApp {
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),
-            export_opts: ExportOptions {
-                dest_dir: PathBuf::new(),
-                quality: 92,
-                max_edge: None,
-            },
+            export_opts: settings.export.clone(),
             exporter: None,
             export_progress: String::new(),
             export_collision: None,
@@ -439,6 +435,16 @@ impl RustroomApp {
         if jobs.is_empty() {
             self.status = "Nothing selected to export".to_string();
             return;
+        }
+        // ⚠ Persisted here rather than as the sliders move: these are the *last-used*
+        // options, so tweaking the dialog and then cancelling must leave the remembered
+        // settings alone. That rule is structural — this is the only write to
+        // `settings.export`, so Cancel cannot persist anything because no path would. Same
+        // shape `Settings::apply_delete_confirm` uses for the "don't ask again" tick, and it
+        // keeps the write count to one per export rather than one per slider frame.
+        if self.settings.export != self.export_opts {
+            self.settings.export = self.export_opts.clone();
+            self.save_settings();
         }
         let opts = self.export_opts.clone();
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());

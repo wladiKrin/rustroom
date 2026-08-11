@@ -11,6 +11,7 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,13 +19,31 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 /// What to export, and how.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExportOptions {
     pub dest_dir: PathBuf,
     /// JPEG quality, 1..=100.
     pub quality: u8,
     /// Fit within this many pixels on the long edge. `None` = full resolution.
     pub max_edge: Option<usize>,
+}
+
+impl Default for ExportOptions {
+    /// ⚠ Needed for `#[serde(default)]` on `Settings` to fill this field when loading a
+    /// config written before it existed. Without it every existing user's settings file
+    /// would fail to parse — and `SettingsStore::load()` being infallible would turn that
+    /// into *all* settings silently reverting, which is worse than an error.
+    ///
+    /// An empty destination means "never chosen", which `destination_ready` reports as not
+    /// ready, so a fresh install still has to pick a folder.
+    fn default() -> Self {
+        Self {
+            dest_dir: PathBuf::new(),
+            quality: 92,
+            max_edge: None,
+        }
+    }
 }
 
 /// What to do about one destination that already exists.

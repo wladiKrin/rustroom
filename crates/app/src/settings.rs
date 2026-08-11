@@ -4,6 +4,7 @@
 //! defaults) move in when they are actually wanted, not speculatively — egui panel sizes in
 //! particular are fiddly to save and restore, and that belongs in whatever spec needs them.
 
+use crate::batch_export::ExportOptions;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -14,12 +15,16 @@ pub struct Settings {
     /// Ask before deleting a preset. Cleared by "Don't ask again" in that dialog; restored
     /// from the Settings window.
     pub confirm_preset_delete: bool,
+    /// The options the last export actually *used* — not what was last typed. See
+    /// `RustroomApp::start_export`.
+    pub export: ExportOptions,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             confirm_preset_delete: true,
+            export: ExportOptions::default(),
         }
     }
 }
@@ -112,6 +117,44 @@ impl SettingsStore {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_export_options_default_to_unset() {
+        let s = Settings::default();
+        assert!(s.export.dest_dir.as_os_str().is_empty());
+        assert_eq!(s.export.quality, 92);
+        assert_eq!(s.export.max_edge, None);
+    }
+
+    #[test]
+    fn settings_round_trip_carries_the_export_options() {
+        let f = TempFile::new("export_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let s = Settings {
+            confirm_preset_delete: false,
+            export: ExportOptions {
+                dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
+                quality: 71,
+                max_edge: Some(2048),
+            },
+        };
+        store.save(&s).unwrap();
+        assert_eq!(store.load(), s);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_export_options_still_loads() {
+        // ⚠ The forgiving-load property, and the test most likely to be waved through as
+        // obviously fine. Without `Default` on `ExportOptions` the `#[serde(default)]` on
+        // `Settings` cannot fill the missing field, so every existing config would fail to
+        // parse — and `load()` being infallible would turn that into *all* settings
+        // silently reverting.
+        let f = TempFile::new("export_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert_eq!(loaded.export, ExportOptions::default());
+    }
+
     /// A unique temp file path for one test, removed on drop.
     struct TempFile(PathBuf);
 
@@ -155,6 +198,7 @@ mod tests {
         let store = SettingsStore::new(f.0.clone());
         let s = Settings {
             confirm_preset_delete: false,
+            ..Settings::default()
         };
         store.save(&s).unwrap();
         assert_eq!(store.load(), s);
