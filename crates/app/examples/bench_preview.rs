@@ -99,6 +99,25 @@ fn main() {
             },
         ),
         (
+            "dehaze 60 (prefix: min filter + guided filter)",
+            Edits {
+                dehaze: edit_model::Dehaze { amount: 60.0 },
+                ..Edits::default()
+            },
+        ),
+        (
+            "dehaze 60 + NR both 50 (both prefix stages)",
+            Edits {
+                dehaze: edit_model::Dehaze { amount: 60.0 },
+                noise_reduction: NoiseReduction {
+                    luminance: 50.0,
+                    color: 50.0,
+                    ..Default::default()
+                },
+                ..Edits::default()
+            },
+        ),
+        (
             "HSL only (for comparison)",
             Edits {
                 hsl,
