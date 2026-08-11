@@ -1,4 +1,5 @@
 pub mod contrast;
+pub mod dehaze;
 pub mod exposure;
 pub mod geometry;
 pub mod hsl;

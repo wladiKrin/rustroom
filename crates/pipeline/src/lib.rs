@@ -8,6 +8,7 @@ pub mod spatial;
 mod stages;
 
 pub use stages::contrast::ContrastStage;
+pub use stages::dehaze::DehazeStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
@@ -122,7 +123,8 @@ pub struct Region {
 pub struct PrefixKey {
     geometry: edit_model::Geometry,
     noise_reduction: edit_model::NoiseReduction,
-    /// Included because it sets the noise-reduction radii.
+    dehaze: edit_model::Dehaze,
+    /// Included because it sets the noise-reduction and dehaze radii.
     scale: f32,
 }
 
@@ -131,6 +133,7 @@ impl PrefixKey {
         Self {
             geometry: edits.geometry,
             noise_reduction: edits.noise_reduction,
+            dehaze: edits.dehaze,
             scale: scale.get(),
         }
     }
@@ -167,6 +170,15 @@ pub fn build_pipeline_split_in_region(
             &edits.noise_reduction,
             scale,
         )));
+    }
+
+    // Dehaze is a correction of the capture, not a grade, so it belongs upstream with noise
+    // reduction — and after it, because dehaze is a contrast stretch that amplifies noise.
+    //
+    // ⚠ Being in the prefix is what makes a *frame-global* airlight possible at all: the
+    // prefix always runs whole-buffer, so no region plumbing and no margin growth is needed.
+    if edits.dehaze.is_active() {
+        prefix.push(Box::new(DehazeStage::new(&edits.dehaze, scale)));
     }
 
     let mut tail: Vec<Box<dyn PipelineStage>> = Vec::new();
@@ -328,6 +340,7 @@ mod tests {
                 texture: 40.0,
                 clarity: -25.0,
             },
+            dehaze: edit_model::Dehaze { amount: -30.0 },
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 30.0,
                 color: 30.0,
@@ -464,6 +477,12 @@ mod tests {
         };
         assert_ne!(PrefixKey::new(&nr, RenderScale::FULL), k);
 
+        let dh = Edits {
+            dehaze: edit_model::Dehaze { amount: 40.0 },
+            ..base.clone()
+        };
+        assert_ne!(PrefixKey::new(&dh, RenderScale::FULL), k);
+
         // Scale changes the noise-reduction radii, so it belongs in the key.
         assert_ne!(PrefixKey::new(&base, RenderScale::new(0.25)), k);
     }
@@ -492,11 +511,14 @@ mod tests {
     }
 
     #[test]
-    fn the_prefix_holds_only_geometry_and_noise_reduction() {
+    fn the_prefix_holds_geometry_noise_reduction_and_dehaze() {
         // The tripwire: if a stage is later inserted into the prefix region, this fails and
         // forces PrefixKey to be updated with its parameters.
         let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
-        assert_eq!(prefix.stage_names(), vec!["geometry", "noise_reduction"]);
+        assert_eq!(
+            prefix.stage_names(),
+            vec!["geometry", "noise_reduction", "dehaze"]
+        );
         for name in tail.stage_names() {
             assert!(
                 name != "geometry" && name != "noise_reduction",
