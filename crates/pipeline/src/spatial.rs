@@ -253,6 +253,89 @@ pub fn wide_blur(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     out
 }
 
+/// Sliding-window minimum over one contiguous line, window `[i-r, i+r]` clamped to the ends.
+///
+/// Monotonic deque: indices are held with strictly increasing values, so the front is always
+/// the minimum of the current window. Each index is pushed and popped at most once, which
+/// makes this **O(1) amortised per sample regardless of `r`** — the same reason `box_blur`
+/// keeps running sums.
+///
+/// A deque rather than the van Herk / Gil-Werman block decomposition specifically because the
+/// window **clamps** at the borders instead of reading outside, which a deque expresses
+/// directly and block decomposition does not.
+pub fn min_1d(line: &[f32], r: usize) -> Vec<f32> {
+    let n = line.len();
+    let mut out = vec![0.0f32; n];
+    if n == 0 {
+        return out;
+    }
+    let mut deque: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let mut next = 0usize;
+    for (o, dst) in out.iter_mut().enumerate() {
+        // Admit everything the window's right edge has reached.
+        let hi = (o + r).min(n - 1);
+        while next <= hi {
+            while let Some(&b) = deque.back() {
+                if line[b] >= line[next] {
+                    deque.pop_back();
+                } else {
+                    break;
+                }
+            }
+            deque.push_back(next);
+            next += 1;
+        }
+        // Retire everything the left edge has passed.
+        let lo = o.saturating_sub(r);
+        while let Some(&f) = deque.front() {
+            if f < lo {
+                deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        *dst = line[*deque.front().expect("window is never empty")];
+    }
+    out
+}
+
+/// Minimum over a `(2r+1)²` window — the dark channel's patch operator.
+///
+/// Separable, because a rectangular window's minimum is the minimum of per-row minima.
+///
+/// # Panics
+/// Panics if `plane.len() != w * h`.
+pub fn min_filter(plane: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    assert_eq!(plane.len(), w * h, "plane size mismatch");
+    if r == 0 || w == 0 || h == 0 {
+        return plane.to_vec();
+    }
+
+    // Horizontal: rows are contiguous and independent.
+    let mut rows = vec![0.0f32; w * h];
+    rows.par_chunks_exact_mut(w)
+        .zip(plane.par_chunks_exact(w))
+        .for_each(|(orow, srow)| orow.copy_from_slice(&min_1d(srow, r)));
+
+    // Vertical: gather each column into scratch, reduce, scatter back. Unlike `box_blur`'s
+    // vertical pass there is no running state to carry, so columns are independent and rayon
+    // splits them directly; the gather is the price of reusing the same 1-D routine.
+    let mut out = vec![0.0f32; w * h];
+    let cols: Vec<Vec<f32>> = (0..w)
+        .into_par_iter()
+        .map(|x| {
+            let column: Vec<f32> = (0..h).map(|y| rows[y * w + x]).collect();
+            min_1d(&column, r)
+        })
+        .collect();
+    for (x, column) in cols.iter().enumerate() {
+        for (y, &v) in column.iter().enumerate() {
+            out[y * w + x] = v;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +640,85 @@ mod tests {
             d3 < 0.15 * peak,
             "three passes deviate {d3} from a Gaussian whose peak is {peak}"
         );
+    }
+
+    /// Straightforward O(n·r) sliding minimum, for the deque implementation to be checked
+    /// against. Deliberately dumb: its only job is to be obviously correct.
+    fn naive_min(plane: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let mut m = f32::INFINITY;
+                for yy in y.saturating_sub(r)..=(y + r).min(h - 1) {
+                    for xx in x.saturating_sub(r)..=(x + r).min(w - 1) {
+                        m = m.min(plane[yy * w + xx]);
+                    }
+                }
+                out[y * w + x] = m;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn min_filter_radius_zero_is_identity() {
+        let p = vec![3.0, 1.0, 4.0, 1.0];
+        assert_eq!(min_filter(&p, 2, 2, 0), p);
+    }
+
+    #[test]
+    fn min_filter_constant_plane_stays_constant() {
+        // The window clamps at the border rather than reading outside, so no edge darkens.
+        let p = vec![0.375f32; 9 * 7];
+        let out = min_filter(&p, 9, 7, 2);
+        for (i, v) in out.iter().enumerate() {
+            assert!((v - 0.375).abs() < 1e-6, "sample {i} = {v}");
+        }
+    }
+
+    #[test]
+    fn min_1d_known_case() {
+        // r = 1, so each output is the min of itself and its immediate neighbours, with the
+        // window clamped at both ends.
+        let line = [5.0, 3.0, 8.0, 1.0, 9.0];
+        assert_eq!(min_1d(&line, 1), vec![3.0, 3.0, 1.0, 1.0, 1.0]);
+        // A radius wider than the line gives the global minimum everywhere.
+        assert_eq!(min_1d(&line, 99), vec![1.0; 5]);
+    }
+
+    #[test]
+    fn min_filter_known_two_dimensional_case() {
+        // A single low value in the middle of a 3x3 spreads to the whole plane at r = 1.
+        let mut p = vec![1.0f32; 9];
+        p[4] = 0.25;
+        assert_eq!(min_filter(&p, 3, 3, 1), vec![0.25; 9]);
+        // At a corner it reaches only the cells within the clamped window.
+        let mut q = vec![1.0f32; 9];
+        q[0] = 0.5;
+        let out = min_filter(&q, 3, 3, 1);
+        assert_eq!(out[8], 1.0, "the far corner must be out of reach");
+        assert_eq!(out[4], 0.5, "the centre is within r=1 of the corner");
+    }
+
+    #[test]
+    fn min_filter_matches_a_naive_reference() {
+        // ⚠ The decisive test. A monotonic deque is easy to get subtly wrong — an off-by-one
+        // in when the window opens or closes — in ways every other test here still passes.
+        let (w, h) = (37usize, 23usize);
+        let mut state: u32 = 0x1234_5678;
+        let p: Vec<f32> = (0..w * h)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as f32 / u32::MAX as f32
+            })
+            .collect();
+        for r in [1usize, 2, 3, 7, 20, 50] {
+            let got = min_filter(&p, w, h, r);
+            let want = naive_min(&p, w, h, r);
+            assert_eq!(got, want, "radius {r}");
+        }
     }
 
     #[test]
