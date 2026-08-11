@@ -5,7 +5,7 @@
 
 use core_image::ImageBuf;
 use edit_model::{
-    Edits, LocalContrast, NoiseReduction, Sharpening, ToneCurve, Vignette, WhiteBalance,
+    Dehaze, Edits, LocalContrast, NoiseReduction, Sharpening, ToneCurve, Vignette, WhiteBalance,
 };
 use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
@@ -158,6 +158,47 @@ fn local_contrast_chart() -> ImageBuf {
             let step = if y >= 3 * S / 4 { 0.25 } else { 0.0 };
             let v = (coarse + fine + step).clamp(0.0, 1.0);
             img.set_pixel(x, y, [v, v * 0.85, v * 0.7]);
+        }
+    }
+    img
+}
+
+/// A hazy chart, built by **applying** the haze model to a synthetic scene rather than by
+/// hand-painting something that merely looks foggy — so the reference encodes a known correct
+/// answer. Depth increases to the right, so transmission falls from 0.95 to 0.05: the far
+/// edge is essentially pure airlight, as a real horizon is.
+///
+/// Periodic dark cells on a 40 px pitch, because the dark-channel prior assumes every patch
+/// contains a near-black sample. 256x192 is large enough for the 20 px patch and the 60 px
+/// refinement radius to behave as they will on a real image.
+fn hazy_chart() -> ImageBuf {
+    const S: usize = 256;
+    const T: usize = 192;
+    let a = [0.80f32, 0.82, 0.88];
+    let mut img = ImageBuf::new(S, T);
+    for y in 0..T {
+        for x in 0..S {
+            let u = x as f32 / S as f32;
+            let v = y as f32 / T as f32;
+            let clear = if x % 40 < 6 && y % 40 < 6 {
+                [0.01, 0.01, 0.01]
+            } else {
+                [
+                    0.05 + 0.70 * u * v,
+                    0.05 + 0.60 * v,
+                    0.05 + 0.50 * (1.0 - u),
+                ]
+            };
+            let t = 0.95 - 0.9 * u;
+            img.set_pixel(
+                x,
+                y,
+                [
+                    clear[0] * t + a[0] * (1.0 - t),
+                    clear[1] * t + a[1] * (1.0 - t),
+                    clear[2] * t + a[2] * (1.0 - t),
+                ],
+            );
         }
     }
     img
@@ -558,5 +599,29 @@ fn golden_clarity_minus() {
             ..Edits::default()
         },
         local_contrast_chart(),
+    )
+}
+
+#[test]
+fn golden_dehaze_plus() {
+    check_golden_with(
+        "dehaze_plus",
+        &Edits {
+            dehaze: Dehaze { amount: 80.0 },
+            ..Edits::default()
+        },
+        hazy_chart(),
+    )
+}
+
+#[test]
+fn golden_dehaze_minus() {
+    check_golden_with(
+        "dehaze_minus",
+        &Edits {
+            dehaze: Dehaze { amount: -80.0 },
+            ..Edits::default()
+        },
+        hazy_chart(),
     )
 }

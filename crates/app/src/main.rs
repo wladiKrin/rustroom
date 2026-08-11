@@ -1491,6 +1491,7 @@ impl RustroomApp {
                             -100.0..=100.0,
                             "Clarity",
                         );
+                        slider(ui, &mut s.edits.dehaze.amount, -100.0..=100.0, "Dehaze");
                         slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
                         slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
 

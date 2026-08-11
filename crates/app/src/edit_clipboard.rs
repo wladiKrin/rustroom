@@ -113,6 +113,7 @@ mod tests {
                 texture: 30.0,
                 clarity: -15.0,
             },
+            dehaze: edit_model::Dehaze { amount: -20.0 },
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 20.0,
                 ..Default::default()
