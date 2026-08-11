@@ -253,6 +253,62 @@ pub fn wide_blur(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     out
 }
 
+/// Guided filter (He et al.): edge-preserving smoothing of `p`, with edges taken from
+/// `guide`. O(1) per pixel in `r`, because every window statistic is a [`box_blur`].
+///
+/// `slope` and `offset` are the paper's `a` and `b`, renamed because `a` and `b` are the
+/// Oklab chroma channels in the noise-reduction stage that calls this.
+///
+/// The behaviour lives entirely in `slope`. Where the guide's local variance greatly exceeds
+/// `eps` — an edge — `slope → 1` and the pixel follows the guide. Where it is far below
+/// `eps` — flat, or noise — `slope → 0` and the pixel becomes its local mean.
+///
+/// **`p == guide` is the self-guided special case** noise reduction uses. Dehaze uses the
+/// general form: it filters the transmission map, guided by image luma, which is what pulls
+/// the blocky patch-minimum transmission back onto the real depth edges.
+///
+/// # Panics
+/// Panics if `p.len() != w * h` or `guide.len() != w * h`.
+pub fn guided_filter(p: &[f32], guide: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    assert_eq!(p.len(), w * h, "p size mismatch");
+    assert_eq!(guide.len(), w * h, "guide size mismatch");
+
+    let guide_sq: Vec<f32> = guide.iter().map(|v| v * v).collect();
+    let cross: Vec<f32> = guide.iter().zip(p).map(|(g, v)| g * v).collect();
+
+    let mean_guide = box_blur(guide, w, h, r);
+    let mean_p = box_blur(p, w, h, r);
+    let mean_guide_sq = box_blur(&guide_sq, w, h, r);
+    let mean_cross = box_blur(&cross, w, h, r);
+
+    let mut slope = Vec::with_capacity(p.len());
+    let mut offset = Vec::with_capacity(p.len());
+    for (((&mg, &mp), &mgsq), &mc) in mean_guide
+        .iter()
+        .zip(mean_p.iter())
+        .zip(mean_guide_sq.iter())
+        .zip(mean_cross.iter())
+    {
+        // Cancellation between two nearly equal sums can push the variance slightly negative
+        // on perfectly flat areas. The covariance is *not* clamped: unlike a variance it can
+        // legitimately be negative when `p` and `guide` are anti-correlated.
+        let var = (mgsq - mg * mg).max(0.0);
+        let cov = mc - mg * mp;
+        let s = cov / (var + eps);
+        slope.push(s);
+        offset.push(mp - s * mg);
+    }
+
+    let mean_slope = box_blur(&slope, w, h, r);
+    let mean_offset = box_blur(&offset, w, h, r);
+    mean_slope
+        .iter()
+        .zip(mean_offset.iter())
+        .zip(guide.iter())
+        .map(|((&ms, &mo), &g)| ms * g + mo)
+        .collect()
+}
+
 /// Sliding-window minimum over one contiguous line, window `[i-r, i+r]` clamped to the ends.
 ///
 /// Monotonic deque: indices are held with strictly increasing values, so the front is always
@@ -719,6 +775,99 @@ mod tests {
             let want = naive_min(&p, w, h, r);
             assert_eq!(got, want, "radius {r}");
         }
+    }
+
+    /// The self-guided filter exactly as `noise_reduction` computed it before this was
+    /// generalised — kept here as the reference the shared version must reproduce.
+    fn legacy_self_filter(p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+        let squared: Vec<f32> = p.iter().map(|v| v * v).collect();
+        let mean = box_blur(p, w, h, r);
+        let mean_sq = box_blur(&squared, w, h, r);
+        let mut slope = Vec::with_capacity(p.len());
+        let mut offset = Vec::with_capacity(p.len());
+        for (&m, &msq) in mean.iter().zip(mean_sq.iter()) {
+            let var = (msq - m * m).max(0.0);
+            let s = var / (var + eps);
+            slope.push(s);
+            offset.push((1.0 - s) * m);
+        }
+        let mean_slope = box_blur(&slope, w, h, r);
+        let mean_offset = box_blur(&offset, w, h, r);
+        mean_slope
+            .iter()
+            .zip(mean_offset.iter())
+            .zip(p.iter())
+            .map(|((&ms, &mo), &v)| ms * v + mo)
+            .collect()
+    }
+
+    fn noisy_plane(w: usize, h: usize) -> Vec<f32> {
+        let mut state: u32 = 0x9E37_79B9;
+        (0..w * h)
+            .map(|i| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                // Structure plus noise, so `slope` actually varies across the plane.
+                let base = if (i % w) < w / 2 { 0.2 } else { 0.7 };
+                base + (state as f32 / u32::MAX as f32 - 0.5) * 0.05
+            })
+            .collect()
+    }
+
+    #[test]
+    fn guided_filter_reproduces_the_self_guided_form() {
+        // ⚠ The acceptance test for the refactor. With `p == guide` the general form reduces
+        // algebraically to the old one — but `offset` is now `mean_p - slope*mean_I` where it
+        // used to be `(1 - slope)*mean`, which can differ in the last f32 ulp. A tight
+        // tolerance rather than equality says exactly that, instead of pretending.
+        let (w, h) = (48usize, 32usize);
+        let p = noisy_plane(w, h);
+        for (r, eps) in [(3usize, 1e-3f32), (6, 1e-4), (12, 1e-5)] {
+            let want = legacy_self_filter(&p, w, h, r, eps);
+            let got = guided_filter(&p, &p, w, h, r, eps);
+            for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-6,
+                    "r={r} eps={eps} sample {i}: {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guided_filter_sharpens_a_blurry_edge_onto_the_guides() {
+        // The property that makes it *cross*-guided, and precisely what dehaze needs: a
+        // blocky, smeared transmission map snapped back onto the image's real depth edges.
+        //
+        // ⚠ Note what is *not* asserted. An earlier version of this test fed in a nearly flat
+        // `p` and expected it to acquire the guide's step. It does not, and should not: with
+        // `p` flat the covariance is ~0, so `slope` is ~0 and the output is just `p`'s local
+        // mean either side. The filter transfers *structure `p` already has*, sharpened to
+        // the guide's edges — it does not paint the guide onto an unrelated signal.
+        let (w, h) = (32usize, 16usize);
+        let step = w / 2;
+        let guide: Vec<f32> = (0..w * h)
+            .map(|i| if (i % w) < step { 0.1 } else { 0.9 })
+            .collect();
+        // The same edge, smeared over ±6 px — a blurry version of the guide's step.
+        let blurry: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let x = (i % w) as f32 - step as f32;
+                0.5 + 0.3 * (x / 6.0).clamp(-1.0, 1.0)
+            })
+            .collect();
+        let out = guided_filter(&blurry, &guide, w, h, 4, 1e-6);
+
+        let row = 8 * w;
+        let got_jump = out[row + step] - out[row + step - 1];
+        let src_jump = blurry[row + step] - blurry[row + step - 1];
+        assert!(
+            got_jump > src_jump * 3.0,
+            "the edge was not sharpened: {src_jump} -> {got_jump}"
+        );
+        // And it stays monotone — a sharpened edge, not an overshoot ringing either side.
+        assert!(out[row + 2] < out[row + w - 3]);
     }
 
     #[test]

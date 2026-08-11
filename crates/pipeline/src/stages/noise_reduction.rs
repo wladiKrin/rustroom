@@ -1,4 +1,4 @@
-use crate::spatial::box_blur;
+use crate::spatial::{box_blur, guided_filter};
 use crate::{PipelineStage, RenderScale};
 use color::{linear_srgb_to_oklab, oklab_to_linear_srgb};
 use core_image::ImageBuf;
@@ -90,7 +90,7 @@ impl PipelineStage for NoiseReductionStage {
         if self.params.luminance > 0.0 {
             let r = scaled_radius(LUM_RADIUS_FULL, self.scale);
             let eps = eps_for_detail(self.params.detail);
-            let filtered = guided_self_filter(&lum, w, h, r, eps);
+            let filtered = guided_filter(&lum, &lum, w, h, r, eps);
             let s = (self.params.luminance / 100.0).clamp(0.0, 1.0);
             for (dst, q) in lum.iter_mut().zip(filtered) {
                 *dst += (q - *dst) * s;
@@ -124,40 +124,6 @@ impl PipelineStage for NoiseReductionStage {
             });
         ImageBuf::from_vec(w, h, data)
     }
-}
-
-/// Self-guided filter (He et al.): edge-preserving smoothing at O(1) per pixel in `r`.
-///
-/// `slope` and `offset` are the paper's `a` and `b`, renamed because `a` and `b` are
-/// already the Oklab chroma channels in this file.
-///
-/// The behaviour lives entirely in `slope`. Where the local variance greatly exceeds
-/// `eps` — an edge — `slope → 1` and the pixel passes through untouched. Where it is far
-/// below `eps` — noise — `slope → 0` and the pixel becomes its local mean.
-fn guided_self_filter(p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
-    let squared: Vec<f32> = p.iter().map(|v| v * v).collect();
-    let mean = box_blur(p, w, h, r);
-    let mean_sq = box_blur(&squared, w, h, r);
-
-    let mut slope = Vec::with_capacity(p.len());
-    let mut offset = Vec::with_capacity(p.len());
-    for (&m, &msq) in mean.iter().zip(mean_sq.iter()) {
-        // Cancellation between two nearly equal sums can push this slightly negative on
-        // perfectly flat areas.
-        let var = (msq - m * m).max(0.0);
-        let s = var / (var + eps);
-        slope.push(s);
-        offset.push((1.0 - s) * m);
-    }
-
-    let mean_slope = box_blur(&slope, w, h, r);
-    let mean_offset = box_blur(&offset, w, h, r);
-    mean_slope
-        .iter()
-        .zip(mean_offset.iter())
-        .zip(p.iter())
-        .map(|((&ms, &mo), &v)| ms * v + mo)
-        .collect()
 }
 
 #[cfg(test)]
