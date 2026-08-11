@@ -95,6 +95,12 @@ enum Modal {
     SaveExportPreset {
         name: String,
     },
+    /// Confirming an export-preset deletion. `dont_ask_again` is scratch state, committed to
+    /// `Settings` only on the Delete path. Returns to `ExportSettings` when closed.
+    ConfirmDeleteExportPreset {
+        name: String,
+        dont_ask_again: bool,
+    },
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -125,7 +131,14 @@ struct RustroomApp {
     /// dialogs do not silently reconfigure each other.
     sync_groups: EditGroups,
     /// Last-used export options, so a second export does not re-ask for everything.
-    export_opts: ExportOptions,
+    /// The export dialog's **working copy**, reset from `settings.export` each time the
+    /// dialog opens.
+    ///
+    /// ⚠ Scratch state, exactly like `ConfirmDeletePreset`'s `dont_ask_again`. The committed
+    /// value lives in `settings.export` and is written only by `start_export`, so cancelling
+    /// the dialog discards whatever was typed rather than half-applying it. An earlier
+    /// version edited the committed value directly and Cancel left the changes behind.
+    export_draft: ExportOptions,
     /// The running batch export, if any.
     exporter: Option<ExportWorker>,
     /// Progress line for the running export.
@@ -186,7 +199,7 @@ impl RustroomApp {
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),
-            export_opts: settings.export.clone(),
+            export_draft: settings.export.clone(),
             exporter: None,
             export_progress: String::new(),
             export_collision: None,
@@ -463,11 +476,11 @@ impl RustroomApp {
         // `settings.export`, so Cancel cannot persist anything because no path would. Same
         // shape `Settings::apply_delete_confirm` uses for the "don't ask again" tick, and it
         // keeps the write count to one per export rather than one per slider frame.
-        if self.settings.export != self.export_opts {
-            self.settings.export = self.export_opts.clone();
+        if self.settings.export != self.export_draft {
+            self.settings.export = self.export_draft.clone();
             self.save_settings();
         }
-        let opts = self.export_opts.clone();
+        let opts = self.export_draft.clone();
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
         self.exporter = Some(ExportWorker::spawn(
@@ -986,6 +999,9 @@ impl RustroomApp {
                 .add_enabled(to_export > 0, egui::Button::new(label))
                 .clicked()
             {
+                // Reset the working copy from the committed value, so a previously
+                // cancelled edit does not linger.
+                self.export_draft = self.settings.export.clone();
                 self.modal = Modal::ExportSettings;
             }
             // Unlike the filmstrip, this does not need a Library: presets are just as
@@ -1168,6 +1184,7 @@ impl RustroomApp {
             Sync,
             Export,
             SaveExport,
+            ConfirmDeleteExport,
             ConfirmDelete,
             Settings,
         }
@@ -1178,6 +1195,7 @@ impl RustroomApp {
             Modal::SyncSettings => Which::Sync,
             Modal::ExportSettings => Which::Export,
             Modal::SaveExportPreset { .. } => Which::SaveExport,
+            Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
             Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
             Modal::Settings => Which::Settings,
         };
@@ -1192,6 +1210,7 @@ impl RustroomApp {
             Which::Sync => self.sync_modal(ctx),
             Which::Export => self.export_modal(ctx),
             Which::SaveExport => self.save_export_preset_modal(ctx),
+            Which::ConfirmDeleteExport => self.confirm_delete_export_modal(ctx),
             Which::ConfirmDelete => self.confirm_delete_modal(ctx),
             Which::Settings => self.settings_modal(ctx),
         }
@@ -1266,6 +1285,75 @@ impl RustroomApp {
         }
     }
 
+    /// Delete whatever preset the export dialog has selected, and clear the selection.
+    fn delete_selected_export_preset(&mut self) {
+        if let Some(name) = self.selected_export_preset.take() {
+            if let Err(e) = self.export_preset_store.delete(&name) {
+                self.status = format!("Could not delete preset: {e}");
+            }
+            self.export_preset_list = self.export_preset_store.list();
+        }
+    }
+
+    /// Confirming an export-preset deletion.
+    ///
+    /// Mirrors `confirm_delete_modal`, but folds into its **own** settings flag: an export
+    /// preset has no trash, so disarming the guard on the recoverable develop-preset deletion
+    /// must not disarm it here.
+    fn confirm_delete_export_modal(&mut self, ctx: &egui::Context) {
+        let Modal::ConfirmDeleteExportPreset {
+            name,
+            dont_ask_again,
+        } = &mut self.modal
+        else {
+            return;
+        };
+        let name = std::mem::take(name);
+        let mut dont_ask = *dont_ask_again;
+        let mut outcome: Option<ConfirmOutcome> = None;
+
+        let dismissed = modal_dialog(ctx, "confirm_delete_export", "Delete export preset", |ui| {
+            ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
+            ui.label(
+                egui::RichText::new("This cannot be undone — export presets have no trash.")
+                    .small(),
+            );
+            ui.checkbox(&mut dont_ask, "Don't ask again");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    outcome = Some(ConfirmOutcome::Confirmed {
+                        suppress_future: dont_ask,
+                    });
+                }
+                if ui.button("Cancel").clicked() {
+                    outcome = Some(ConfirmOutcome::Cancelled);
+                }
+            });
+        });
+        // Clicking outside is a cancel — and therefore discards the tick too.
+        if dismissed {
+            outcome = Some(ConfirmOutcome::Cancelled);
+        }
+
+        match outcome {
+            None => {
+                self.modal = Modal::ConfirmDeleteExportPreset {
+                    name,
+                    dont_ask_again: dont_ask,
+                };
+            }
+            Some(o) => {
+                if self.settings.apply_export_delete_confirm(o) {
+                    self.delete_selected_export_preset();
+                }
+                self.save_settings();
+                // Back to the export dialog rather than to nothing.
+                self.modal = Modal::ExportSettings;
+            }
+        }
+    }
+
     /// Naming a new export preset.
     fn save_export_preset_modal(&mut self, ctx: &egui::Context) {
         let Modal::SaveExportPreset { name } = &self.modal else {
@@ -1289,7 +1377,7 @@ impl RustroomApp {
         if save {
             let preset = ExportPreset {
                 name: name.clone(),
-                options: self.export_opts.clone(),
+                options: self.export_draft.clone(),
             };
             match self.export_preset_store.save(&preset) {
                 Ok(()) => self.selected_export_preset = Some(preset.name),
@@ -1309,7 +1397,7 @@ impl RustroomApp {
 
     /// Where and how to export the selection.
     fn export_modal(&mut self, ctx: &egui::Context) {
-        let mut opts = self.export_opts.clone();
+        let mut opts = self.export_draft.clone();
         let count = self.export_jobs().len();
         let mut close = false;
         let mut start = false;
@@ -1405,16 +1493,20 @@ impl RustroomApp {
             };
         }
         if delete_selected {
-            // No confirmation and no trash — see `export_presets`' module doc for why this
-            // deliberately differs from develop presets.
-            if let Some(name) = self.selected_export_preset.take() {
-                if let Err(e) = self.export_preset_store.delete(&name) {
-                    self.status = format!("Could not delete preset: {e}");
+            // No trash — see `export_presets`' module doc. But deletion *is* permanent here,
+            // which is precisely why it is guarded by its own confirmation.
+            if let Some(name) = self.selected_export_preset.clone() {
+                if self.settings.confirm_export_preset_delete {
+                    self.modal = Modal::ConfirmDeleteExportPreset {
+                        name,
+                        dont_ask_again: false,
+                    };
+                } else {
+                    self.delete_selected_export_preset();
                 }
-                self.export_preset_list = self.export_preset_store.list();
             }
         }
-        self.export_opts = opts;
+        self.export_draft = opts;
         if start {
             self.start_export();
             close = true;

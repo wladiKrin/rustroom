@@ -18,6 +18,13 @@ pub struct Settings {
     /// The options the last export actually *used* — not what was last typed. See
     /// `RustroomApp::start_export`.
     pub export: ExportOptions,
+    /// Ask before deleting an **export** preset.
+    ///
+    /// ⚠ A separate flag from `confirm_preset_delete`, not a shared one. A develop preset
+    /// goes to a trash and can be restored with Ctrl+Z; an export preset is deleted outright.
+    /// Suppressing the guard on the *recoverable* deletion must not disarm it on the
+    /// irrecoverable one.
+    pub confirm_export_preset_delete: bool,
 }
 
 impl Default for Settings {
@@ -25,6 +32,7 @@ impl Default for Settings {
         Self {
             confirm_preset_delete: true,
             export: ExportOptions::default(),
+            confirm_export_preset_delete: true,
         }
     }
 }
@@ -46,14 +54,26 @@ impl Settings {
     /// they just declined to use. Pure and separated from the egui code precisely so that
     /// rule is testable.
     pub fn apply_delete_confirm(&mut self, outcome: ConfirmOutcome) -> bool {
-        match outcome {
-            ConfirmOutcome::Cancelled => false,
-            ConfirmOutcome::Confirmed { suppress_future } => {
-                if suppress_future {
-                    self.confirm_preset_delete = false;
-                }
-                true
+        apply_confirm(&mut self.confirm_preset_delete, outcome)
+    }
+
+    /// The same fold, for **export** presets and their own flag.
+    pub fn apply_export_delete_confirm(&mut self, outcome: ConfirmOutcome) -> bool {
+        apply_confirm(&mut self.confirm_export_preset_delete, outcome)
+    }
+}
+
+/// The shared rule behind both confirm folds: `suppress_future` is honoured **only** on
+/// `Confirmed`. One implementation because that rule is the load-bearing part, and two copies
+/// of it would be two chances to get it wrong.
+fn apply_confirm(flag: &mut bool, outcome: ConfirmOutcome) -> bool {
+    match outcome {
+        ConfirmOutcome::Cancelled => false,
+        ConfirmOutcome::Confirmed { suppress_future } => {
+            if suppress_future {
+                *flag = false;
             }
+            true
         }
     }
 }
@@ -118,6 +138,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_export_delete_confirmation_defaults_to_on() {
+        assert!(Settings::default().confirm_export_preset_delete);
+    }
+
+    #[test]
+    fn the_two_delete_guards_are_independent() {
+        // ⚠ The reason they are separate flags. A develop preset goes to a trash and can be
+        // restored; an export preset is deleted outright. Disarming the guard on the
+        // recoverable deletion must not disarm it on the irrecoverable one.
+        let mut s = Settings::default();
+        s.apply_delete_confirm(ConfirmOutcome::Confirmed {
+            suppress_future: true,
+        });
+        assert!(!s.confirm_preset_delete);
+        assert!(
+            s.confirm_export_preset_delete,
+            "suppressing the develop-preset guard disarmed the export one"
+        );
+    }
+
+    #[test]
+    fn cancelling_never_suppresses_the_export_confirmation() {
+        let mut s = Settings::default();
+        assert!(!s.apply_export_delete_confirm(ConfirmOutcome::Cancelled));
+        assert!(s.confirm_export_preset_delete);
+        // Ticking the box and then cancelling must leave the guard armed.
+        assert!(!s.apply_export_delete_confirm(ConfirmOutcome::Cancelled));
+        assert!(s.confirm_export_preset_delete);
+    }
+
+    #[test]
+    fn confirming_with_the_box_ticked_suppresses_the_export_confirmation() {
+        let mut s = Settings::default();
+        assert!(s.apply_export_delete_confirm(ConfirmOutcome::Confirmed {
+            suppress_future: true
+        }));
+        assert!(!s.confirm_export_preset_delete);
+    }
+
+    #[test]
     fn the_export_options_default_to_unset() {
         let s = Settings::default();
         assert!(s.export.dest_dir.as_os_str().is_empty());
@@ -131,6 +191,7 @@ mod tests {
         let store = SettingsStore::new(f.0.clone());
         let s = Settings {
             confirm_preset_delete: false,
+            confirm_export_preset_delete: false,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
