@@ -217,4 +217,78 @@ fn main() {
         }
         println!("{best:8.1} ms   region tail {rw}x{rh}, CACHE HIT");
     }
+
+    // What each prefix checkpoint actually saves. Timed through the public `build_prefix_steps`
+    // rather than through `RenderEngine`, so the number is the work itself and not thread
+    // hand-off noise — the same choice the cache-hit section above makes.
+    //
+    // Measured on the X-T4 `.RAF` (3123x2085 half-size buffer -> 1600 px preview, release,
+    // best of 5) with geometry, noise reduction and dehaze all active:
+    //
+    //   101.2 ms  geometry change  (resume at the downscale)
+    //    87.5 ms  NR change        (resume after geometry)  -- sheds the 13.7 ms rotation
+    //    49.7 ms  dehaze change    (resume after NR)        -- was 95.4 ms whole, 1.9x
+    //    14.4 ms  tail slider      (resume at the final)
+    //
+    // The dehaze line is the feature: it is what a Dehaze drag costs per frame with noise
+    // reduction on, against the "dehaze 60 + NR both 50" whole-render line above.
+    {
+        use pipeline::{build_pipeline_split_in_region, build_prefix_steps, RenderScale};
+        let buffer_long = buf.width().max(buf.height());
+        let sc = RenderScale::new(scale * PREVIEW_MAX_DIM as f32 / buffer_long as f32);
+        let heavy = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            noise_reduction: NoiseReduction {
+                luminance: 50.0,
+                color: 50.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            exposure: 0.5,
+            ..Edits::default()
+        };
+        let steps = build_prefix_steps(&heavy, sc);
+        let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
+        println!("\n  prefix steps: {}", steps.len());
+
+        // Build every checkpoint once.
+        let mut checkpoints = vec![buf.downscale_to(PREVIEW_MAX_DIM)];
+        for step in &steps {
+            let next = step.stage.apply(checkpoints.last().unwrap().clone());
+            checkpoints.push(next);
+        }
+
+        // Resuming at checkpoint `start` means running steps[start..] plus the tail and pack.
+        for start in 0..=steps.len() {
+            let label = match start {
+                0 => "geometry change  (resume at the downscale)",
+                1 => "NR change        (resume after geometry)",
+                2 => "dehaze change    (resume after NR)",
+                _ => "tail slider      (resume at the final)",
+            };
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let t = Instant::now();
+                let mut img = checkpoints[start].clone();
+                for step in &steps[start..] {
+                    img = step.stage.apply(img);
+                }
+                let out = tail.run(img);
+                let mut rgba = Vec::with_capacity(out.width() * out.height() * 4);
+                for px in out.data().chunks_exact(3) {
+                    rgba.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
+                    rgba.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
+                    rgba.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);
+                    rgba.push(255);
+                }
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                std::hint::black_box(&rgba);
+                best = best.min(ms);
+            }
+            println!("{best:8.1} ms   {label}");
+        }
+    }
 }
