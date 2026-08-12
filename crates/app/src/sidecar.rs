@@ -24,6 +24,18 @@ pub fn save(photo: &Path, edits: &Edits) -> Result<(), EditLoadError> {
     edits.to_json_file(&path(photo))
 }
 
+/// Persist a photo's edits, **removing** the sidecar when they are neutral.
+///
+/// ⚠ Writing nothing and writing nothing *new* are not the same thing. A photo reset to
+/// neutral must have its sidecar deleted, or the old edits are loaded straight back the next
+/// time it is opened — which is exactly what "Reset all, switch away, switch back" did.
+pub fn persist(photo: &Path, edits: &Edits) -> Result<(), EditLoadError> {
+    if *edits == Edits::default() {
+        return remove(photo).map_err(EditLoadError::from);
+    }
+    save(photo, edits)
+}
+
 /// Delete a photo's sidecar. Absent is not an error.
 pub fn remove(photo: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(path(photo)) {
@@ -82,6 +94,37 @@ mod tests {
         };
         save(&photo, &e).unwrap();
         assert_eq!(load(&photo), Some(e));
+    }
+
+    #[test]
+    fn persisting_neutral_edits_deletes_the_sidecar() {
+        // ⚠ The "Reset all" bug: `save` was skipped for neutral edits but the old file was
+        // left behind, so switching away and back loaded the edits straight back in.
+        let d = TempDir::new("persist_neutral");
+        let photo = d.photo("x.RAF");
+        persist(
+            &photo,
+            &Edits {
+                exposure: 1.5,
+                ..Edits::default()
+            },
+        )
+        .unwrap();
+        assert!(path(&photo).exists(), "a non-neutral edit should be stored");
+
+        persist(&photo, &Edits::default()).unwrap();
+        assert!(
+            !path(&photo).exists(),
+            "resetting to neutral must delete the sidecar, not leave a stale one"
+        );
+        assert_eq!(load(&photo), None);
+    }
+
+    #[test]
+    fn persisting_neutral_edits_with_no_sidecar_is_not_an_error() {
+        // The common case: open a photo, change nothing, switch away.
+        let d = TempDir::new("persist_none");
+        persist(&d.photo("x.RAF"), &Edits::default()).unwrap();
     }
 
     #[test]

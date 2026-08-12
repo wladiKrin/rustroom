@@ -44,6 +44,21 @@ pub fn is_native(max_dim: usize, fit_long: usize) -> bool {
     max_dim > fit_long
 }
 
+/// Whether a whole-image frame may be taken as the fit-resolution size.
+///
+/// ⚠ The canvas caches the post-geometry size from whole-image frames, on the reasoning that
+/// "a whole-image frame is by definition a fit render". That holds only while a request's
+/// `max_dim` and its region cannot disagree. When they briefly could, a whole-image render at
+/// a *native* rung set the cached size to the native dimensions — which shrank `fit` by 2–4×,
+/// and because the ladder starts from that cached size, kept producing native whole-image
+/// frames. Self-perpetuating, and unrecoverable by zooming since zoom is clamped at 1.0.
+///
+/// A fit render's long edge can never exceed the preview cap, so this rejects the bad frame
+/// even if the pairing is broken again.
+pub fn is_fit_sized(long_edge: usize, fit_max: usize) -> bool {
+    long_edge <= fit_max
+}
+
 /// The sub-rect of an `image_w` x `image_h` image visible in a viewport of `avail_w` x
 /// `avail_h` screen pixels, drawn at `scale` screen pixels per image pixel and panned by
 /// `pan_x`/`pan_y` screen pixels.
@@ -195,6 +210,17 @@ mod tests {
         // Degenerate inputs must neither divide by zero nor loop forever.
         assert!(tier_max_dim(0, 0, 1.0, 2.0) >= 1);
         assert!(tier_max_dim(1600, 0, 1.0, 4.0) >= 1);
+    }
+
+    #[test]
+    fn a_native_sized_frame_is_not_accepted_as_the_fit_size() {
+        // ⚠ The guard behind the "image opens zoomed absurdly far out" bug. A whole-image
+        // frame at a native rung must never be mistaken for a fit render, because the cached
+        // fit size feeds the ladder and the mistake then sustains itself.
+        assert!(is_fit_sized(1600, 1600));
+        assert!(is_fit_sized(1068, 1600));
+        assert!(!is_fit_sized(3123, 1600));
+        assert!(!is_fit_sized(6246, 1600));
     }
 
     #[test]

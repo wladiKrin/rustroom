@@ -269,11 +269,28 @@ struct Session {
     /// When this session was created — the dwell the upgrade trigger waits on.
     opened_at: Instant,
     /// The rung the canvas last chose, so an edit made from a panel re-renders at the tier
-    /// currently on screen rather than snapping back to fit.
-    render_max_dim: usize,
+    /// currently on screen rather than snapping back to fit. Read through
+    /// [`Session::render_max_dim`], never directly.
+    render_rung: usize,
 }
 
 impl Session {
+    /// The working resolution for a re-render driven from a panel rather than the canvas.
+    ///
+    /// ⚠ **Derived from `requested_region`, not stored beside it.** A stored rung and a stored
+    /// region are two facts that can disagree, and when they did — `pump_full_res` clears the
+    /// region but the canvas had left a native rung — a panel edit issued a *whole-image
+    /// render at a native rung*. That poisoned the cached fit size and made the photo open
+    /// zoomed absurdly far out, unrecoverably. Deriving one from the other makes the
+    /// disagreement unrepresentable.
+    fn render_max_dim(&self) -> usize {
+        if self.requested_region.is_some() {
+            self.render_rung
+        } else {
+            PREVIEW_MAX_DIM
+        }
+    }
+
     /// Send a render request. A one-line delegate: it no longer routes anywhere, but "every
     /// render request goes through one place" is worth keeping.
     fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
@@ -352,9 +369,10 @@ impl RustroomApp {
     /// Called before switching photos / on exit so edits are never lost.
     fn persist_current_session(&self) {
         if let Some(s) = &self.session {
-            if s.edits != Edits::default() {
-                let _ = sidecar::save(&s.path, &s.edits);
-            }
+            // `persist`, not `save`: neutral edits *delete* the sidecar. Skipping the write
+            // would leave a stale one behind, so "Reset all" survived only until the next
+            // switch away and back.
+            let _ = sidecar::persist(&s.path, &s.edits);
         }
     }
 
@@ -372,7 +390,7 @@ impl RustroomApp {
         let pushed = s.history.push(s.edits.clone());
         s.request(
             preview_edits(&s.edits, s.crop_mode),
-            s.render_max_dim,
+            s.render_max_dim(),
             s.requested_region,
         );
         pushed
@@ -617,7 +635,7 @@ impl RustroomApp {
             s.history = History::new(s.edits.clone());
             s.request(
                 preview_edits(&s.edits, s.crop_mode),
-                s.render_max_dim,
+                s.render_max_dim(),
                 s.requested_region,
             );
         }
@@ -631,7 +649,7 @@ impl RustroomApp {
         s.edits = s.history.get().clone();
         s.request(
             preview_edits(&s.edits, s.crop_mode),
-            s.render_max_dim,
+            s.render_max_dim(),
             s.requested_region,
         );
     }
@@ -861,7 +879,7 @@ impl RustroomApp {
             buffer_long: decoded.buffer.width().max(decoded.buffer.height()),
             upgraded: false,
             opened_at: Instant::now(),
-            render_max_dim: PREVIEW_MAX_DIM,
+            render_rung: PREVIEW_MAX_DIM,
         });
         // ⚠ The previous session's `History<Edits>` just went away with it, so any
         // `PhotoEdit` still in the log would make an undo pop *this* photo's history and
@@ -934,6 +952,12 @@ impl RustroomApp {
                     // re-request against the new resolution.
                     s.rendered_region = None;
                     s.requested_region = None;
+                    s.render_rung = PREVIEW_MAX_DIM;
+                    // ⚠ Ask for a frame explicitly. At the fit rung the canvas would otherwise
+                    // see an unchanged rung and a covered region and request nothing at all —
+                    // leaving the old buffer's texture on screen, so the upgrade would be
+                    // invisible until something else happened to trigger a render.
+                    s.request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
                     self.status = "Full resolution ready".to_string();
                 }
                 Err(e) => {
@@ -1076,7 +1100,7 @@ impl RustroomApp {
             if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
                 s.request(
                     preview_edits(&s.edits, s.crop_mode),
-                    s.render_max_dim,
+                    s.render_max_dim(),
                     s.requested_region,
                 );
             }
@@ -1962,7 +1986,7 @@ impl RustroomApp {
                         if changed {
                             s.request(
                                 preview_edits(&s.edits, s.crop_mode),
-                                s.render_max_dim,
+                                s.render_max_dim(),
                                 s.requested_region,
                             );
                         }
@@ -2048,9 +2072,9 @@ impl RustroomApp {
                         // ⚠ A change of *rung* must re-request even when the region is
                         // unchanged — otherwise moving between rungs, or an upgraded buffer
                         // arriving, would leave the old texture on screen.
-                        if (!covered && s.requested_region != want) || max_dim != s.render_max_dim {
+                        if (!covered && s.requested_region != want) || max_dim != s.render_rung {
                             s.requested_region = want;
-                            s.render_max_dim = max_dim;
+                            s.render_rung = max_dim;
                             s.request(preview_edits(&s.edits, s.crop_mode), max_dim, want);
                         }
 
@@ -2345,7 +2369,13 @@ impl eframe::App for RustroomApp {
                 // A whole-image frame is by definition a fit-resolution render, and is the
                 // only thing that can tell us the post-geometry size — which changes with
                 // the crop and the straighten angle.
-                if frame.region.is_none() {
+                // A whole-image frame is the only thing that can tell us the post-geometry
+                // size, which changes with the crop and the straighten angle. ⚠ The size check
+                // is not belt-and-braces: a whole-image frame rendered at a *native* rung
+                // would poison this permanently — see `view_region::is_fit_sized`.
+                if frame.region.is_none()
+                    && view_region::is_fit_sized(frame.width.max(frame.height), PREVIEW_MAX_DIM)
+                {
                     s.fit_image_size = egui::vec2(frame.width as f32, frame.height as f32);
                 }
                 // A region frame carries the full post-geometry dimensions it was cut from,
