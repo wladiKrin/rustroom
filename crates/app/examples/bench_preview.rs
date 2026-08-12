@@ -295,6 +295,18 @@ fn main() {
     // The RGBA8 pack, at both render resolutions. It runs on every frame, including the ones
     // the prefix checkpoints made cheap, so it is measured on its own rather than buried in a
     // whole-frame number.
+    //
+    // Measured on the X-T4 `.RAF` (release, best of 9). Two independent multipliers, kept
+    // separate so the credit goes where it is due:
+    //
+    //                                       fit 1600x1068   native 3123x2085
+    //   `Vec::push` loop (the original)          4.59 ms          17.81 ms
+    //   preallocate + sequential fill            1.16 ms           4.42 ms
+    //   + parallel in 8192-px blocks             0.46 ms           2.21 ms
+    //
+    // ⚠ Most of the win is the first step, not the threading — `Vec::push` costs a capacity
+    // check per byte and does not vectorise. And ⚠ per-*pixel* rayon granularity measured
+    // 1.64 ms, i.e. slower than not threading at all; see `PACK_BLOCK_PX` in `core-image`.
     {
         let long = buf.width().max(buf.height());
         for (label, max_dim) in [("fit", PREVIEW_MAX_DIM), ("native", long)] {
