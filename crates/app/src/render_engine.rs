@@ -19,6 +19,13 @@ pub struct RenderedFrame {
     /// Where this frame sits in the post-geometry image; `None` = the whole image. The canvas
     /// needs it to place the texture.
     pub region: Option<Region>,
+    /// The `max_dim` this frame was rendered at.
+    ///
+    /// ⚠ Carried rather than inferred. The canvas caches the post-geometry size from
+    /// whole-image frames, and twice now a bug has come from inferring "whole image, therefore
+    /// a fit render" — an inference that a cropped photo can make false, since a native rung
+    /// times a small crop factor lands below the preview cap. This makes it a fact.
+    pub max_dim: usize,
 }
 
 /// A requested crop of the rendered image, in post-geometry pixels.
@@ -147,12 +154,13 @@ fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> 
 ///
 /// The quantization lives on `ImageBuf`, where the buffer and rayon already are — which is also
 /// why `app` needs no `rayon` dependency of its own.
-fn pack(out: ImageBuf, region: Option<Region>) -> RenderedFrame {
+fn pack(out: ImageBuf, region: Option<Region>, max_dim: usize) -> RenderedFrame {
     RenderedFrame {
         width: out.width(),
         height: out.height(),
         rgba: out.to_rgba8(),
         region,
+        max_dim,
     }
 }
 
@@ -416,7 +424,7 @@ fn render_cached(
     };
 
     let (_, tail) = build_pipeline_split_in_region(edits, scale, region);
-    (pack(tail.run(input), region), ran)
+    (pack(tail.run(input), region, max_dim), ran)
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -438,7 +446,7 @@ pub fn render_once(
         preview.width().max(preview.height()),
         source_scale,
     );
-    pack(build_pipeline(edits, scale).run(preview), None) // sRGB, 0..=1
+    pack(build_pipeline(edits, scale).run(preview), None, max_dim) // sRGB, 0..=1
 }
 
 #[cfg(test)]

@@ -44,19 +44,19 @@ pub fn is_native(max_dim: usize, fit_long: usize) -> bool {
     max_dim > fit_long
 }
 
-/// Whether a whole-image frame may be taken as the fit-resolution size.
+/// The long edge a fit render is *capped* to — the ladder's bottom rung.
 ///
-/// ⚠ The canvas caches the post-geometry size from whole-image frames, on the reasoning that
-/// "a whole-image frame is by definition a fit render". That holds only while a request's
-/// `max_dim` and its region cannot disagree. When they briefly could, a whole-image render at
-/// a *native* rung set the cached size to the native dimensions — which shrank `fit` by 2–4×,
-/// and because the ladder starts from that cached size, kept producing native whole-image
-/// frames. Self-perpetuating, and unrecoverable by zooming since zoom is clamped at 1.0.
+/// ⚠ **This is not the same as the size a fit render comes out at, and confusing the two is a
+/// feedback loop.** `downscale_to` caps the pre-geometry image at this value; geometry then
+/// crops, so the resulting post-geometry frame is `fit_cap × crop_factor`, which is smaller.
+/// Feeding *that* back in as the next render's cap shrinks it again every frame — with a 0.59
+/// crop, 1600 → 941 → 553 → 325 → a few pixels within a second. Uncropped photos have a crop
+/// factor of 1 and sit at a fixed point, so the bug hides until someone crops something.
 ///
-/// A fit render's long edge can never exceed the preview cap, so this rejects the bad frame
-/// even if the pairing is broken again.
-pub fn is_fit_sized(long_edge: usize, fit_max: usize) -> bool {
-    long_edge <= fit_max
+/// Depends only on the buffer, so it is stable across crops, straightens and the
+/// full-resolution upgrade alike.
+pub fn fit_cap(buffer_long: usize, preview_max: usize) -> usize {
+    buffer_long.min(preview_max)
 }
 
 /// The sub-rect of an `image_w` x `image_h` image visible in a viewport of `avail_w` x
@@ -213,14 +213,37 @@ mod tests {
     }
 
     #[test]
-    fn a_native_sized_frame_is_not_accepted_as_the_fit_size() {
-        // ⚠ The guard behind the "image opens zoomed absurdly far out" bug. A whole-image
-        // frame at a native rung must never be mistaken for a fit render, because the cached
-        // fit size feeds the ladder and the mistake then sustains itself.
-        assert!(is_fit_sized(1600, 1600));
-        assert!(is_fit_sized(1068, 1600));
-        assert!(!is_fit_sized(3123, 1600));
-        assert!(!is_fit_sized(6246, 1600));
+    fn the_fit_cap_is_stable_while_a_cropped_render_shrinks() {
+        // ⚠ The bug this exists to prevent, as a property. The cap must depend only on the
+        // buffer — feeding a *rendered* (post-geometry) size back in compounds the crop every
+        // frame. Simulated here: one photo cropped to 59% of its long edge.
+        const P: usize = 1600;
+        assert_eq!(fit_cap(3123, P), P);
+        assert_eq!(
+            fit_cap(6246, P),
+            P,
+            "the upgrade must not move the base rung"
+        );
+        assert_eq!(
+            fit_cap(800, P),
+            800,
+            "an image smaller than the cap fits whole"
+        );
+
+        // What the broken version did, for contrast: the rendered size as the next cap. 0.588
+        // is DSCF6237's actual crop of the long edge — the one photo in the test folder with
+        // a crop, which is exactly why it alone broke while uncropped ones sat at a fixed
+        // point.
+        let mut rendered = P;
+        for _ in 0..10 {
+            rendered = (rendered as f32 * 0.588) as usize;
+        }
+        assert!(
+            rendered < 20,
+            "the feedback loop should collapse within a few frames, got {rendered}"
+        );
+        // ...against the fixed cap, which does not move at all.
+        assert_eq!(fit_cap(3123, P), P);
     }
 
     #[test]

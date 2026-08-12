@@ -287,8 +287,18 @@ impl Session {
         if self.requested_region.is_some() {
             self.render_rung
         } else {
-            PREVIEW_MAX_DIM
+            self.fit_cap()
         }
+    }
+
+    /// The ladder's base rung for this session's buffer.
+    ///
+    /// ⚠ Every whole-image request must use this, not `PREVIEW_MAX_DIM`. They differ for an
+    /// image smaller than the cap, and the canvas identifies a fit frame by comparing the
+    /// frame's own `max_dim` against this — so a request at the wrong value produces a frame
+    /// that is silently never accepted as the fit size.
+    fn fit_cap(&self) -> usize {
+        view_region::fit_cap(self.buffer_long, PREVIEW_MAX_DIM)
     }
 
     /// Send a render request. A one-line delegate: it no longer routes anywhere, but "every
@@ -854,7 +864,11 @@ impl RustroomApp {
         let engine = RenderEngine::new(decoded.buffer.clone(), decoded.source_scale, move || {
             ctx2.request_repaint()
         });
-        engine.request(edits.clone(), PREVIEW_MAX_DIM, None);
+        let buffer_long = decoded.buffer.width().max(decoded.buffer.height());
+        // `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the cap, and
+        // the canvas only accepts a frame as the fit size when its `max_dim` matches.
+        let fit_cap = view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM);
+        engine.request(edits.clone(), fit_cap, None);
 
         self.session = Some(Session {
             path,
@@ -876,7 +890,7 @@ impl RustroomApp {
             // non-zero so the first fit calculation cannot divide by zero.
             fit_image_size: egui::vec2(1.0, 1.0),
             rendered_long: 1.0,
-            buffer_long: decoded.buffer.width().max(decoded.buffer.height()),
+            buffer_long,
             upgraded: false,
             opened_at: Instant::now(),
             render_rung: PREVIEW_MAX_DIM,
@@ -957,7 +971,7 @@ impl RustroomApp {
                     // see an unchanged rung and a covered region and request nothing at all —
                     // leaving the old buffer's texture on screen, so the upgrade would be
                     // invisible until something else happened to trigger a render.
-                    s.request(preview_edits(&s.edits, s.crop_mode), PREVIEW_MAX_DIM, None);
+                    s.request(preview_edits(&s.edits, s.crop_mode), s.fit_cap(), None);
                     self.status = "Full resolution ready".to_string();
                 }
                 Err(e) => {
@@ -2030,21 +2044,24 @@ impl RustroomApp {
                         // operation, the overlay is drawn against the whole image, and a
                         // whole-image *native* render would be both expensive and placed by
                         // the fit-mode maths the overlay assumes.
-                        let full_long = full.x.max(full.y);
-                        let fit_long = full_long.round().max(1.0) as usize;
+                        // ⚠ The ladder's base is the *cap* a fit render is downscaled to, not
+                        // the size it comes out at. Geometry crops after the downscale, so the
+                        // two differ on any cropped photo — and feeding the rendered size back
+                        // in compounds the crop every frame. See `view_region::fit_cap`.
+                        let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
                         // Crop mode pins the fit rung: the overlay is drawn against the whole
                         // image and placed by the fit-mode maths.
                         let max_dim = if s.crop_mode {
-                            fit_long
+                            fit_cap
                         } else {
-                            view_region::tier_max_dim(fit_long, s.buffer_long, fit, s.zoom)
+                            view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom)
                         };
-                        let native = view_region::is_native(max_dim, fit_long);
+                        let native = view_region::is_native(max_dim, fit_cap);
 
-                        // Dimensions of the image at the resolution we render it, and the
-                        // screen pixels per rendered pixel.
-                        let render_long = max_dim as f32;
-                        let k = render_long / full_long;
+                        // Screen pixels per rendered pixel. `k` compares the two *caps*, so
+                        // the crop factor cancels — it applies equally to both.
+                        let full_long = full.x.max(full.y);
+                        let k = max_dim as f32 / fit_cap as f32;
                         let (iw, ih) =
                             ((full.x * k).round() as usize, (full.y * k).round() as usize);
                         let scale = fit * s.zoom / k;
@@ -2370,12 +2387,12 @@ impl eframe::App for RustroomApp {
                 // only thing that can tell us the post-geometry size — which changes with
                 // the crop and the straighten angle.
                 // A whole-image frame is the only thing that can tell us the post-geometry
-                // size, which changes with the crop and the straighten angle. ⚠ The size check
-                // is not belt-and-braces: a whole-image frame rendered at a *native* rung
-                // would poison this permanently — see `view_region::is_fit_sized`.
-                if frame.region.is_none()
-                    && view_region::is_fit_sized(frame.width.max(frame.height), PREVIEW_MAX_DIM)
-                {
+                // size, which changes with the crop and the straighten angle. ⚠ It must also
+                // have been rendered at the *fit rung* — checked against the frame's own
+                // `max_dim` rather than inferred from its size, because a native rung times a
+                // small crop factor lands below the preview cap and would sneak through.
+                let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
+                if frame.region.is_none() && frame.max_dim == fit_cap {
                     s.fit_image_size = egui::vec2(frame.width as f32, frame.height as f32);
                 }
                 // A region frame carries the full post-geometry dimensions it was cut from,
