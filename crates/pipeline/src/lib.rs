@@ -109,6 +109,69 @@ pub struct Region {
     pub y0: usize,
 }
 
+/// One prefix stage's parameters, identifying the image that stage produces.
+///
+/// ⚠ **Adding a prefix stage means adding a variant here.** [`build_prefix_steps`] returns
+/// `(key, stage)` pairs, so a prefix stage with no key does not compile. That is deliberate:
+/// a prefix stage missing from a cache key means the preview cache serves stale pixels with
+/// nothing failing, and this is the guard that makes forgetting impossible rather than merely
+/// caught by a test.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PrefixStepKey {
+    Geometry(edit_model::Geometry),
+    NoiseReduction(edit_model::NoiseReduction),
+    Dehaze(edit_model::Dehaze),
+}
+
+/// One prefix stage together with the key identifying its output, so the renderer can cache
+/// each stage's result independently.
+pub struct PrefixStep {
+    pub key: PrefixStepKey,
+    pub stage: Box<dyn PipelineStage>,
+}
+
+/// The prefix as an ordered list of `(key, stage)` pairs.
+///
+/// An inactive stage produces no step — exactly as it produces no stage in the pipeline today.
+/// That is what makes the checkpoint after an inactive stage *be* the checkpoint before it:
+/// the cumulative keys are equal, so nothing extra is stored.
+pub fn build_prefix_steps(edits: &Edits, scale: RenderScale) -> Vec<PrefixStep> {
+    let mut steps: Vec<PrefixStep> = Vec::new();
+
+    // Geometry runs first, so all adjustments operate on the final cropped pixels.
+    if edits.geometry != edit_model::Geometry::default() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::Geometry(edits.geometry),
+            stage: Box::new(GeometryStage::new(&edits.geometry)),
+        });
+    }
+
+    // Noise reduction comes before every adjustment: denoising the source is far easier than
+    // denoising after Exposure, Shadows and the tone curve have amplified the grain.
+    // `is_active` rather than a `!= default()` check — Detail and Smoothness are modifiers and
+    // must not insert a stage on their own.
+    if edits.noise_reduction.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::NoiseReduction(edits.noise_reduction),
+            stage: Box::new(NoiseReductionStage::new(&edits.noise_reduction, scale)),
+        });
+    }
+
+    // Dehaze is a correction of the capture, not a grade, so it belongs upstream with noise
+    // reduction — and after it, because dehaze is a contrast stretch that amplifies noise.
+    //
+    // ⚠ Being in the prefix is what makes a *frame-global* airlight possible at all: the
+    // prefix always runs whole-buffer, so no region plumbing and no margin growth is needed.
+    if edits.dehaze.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::Dehaze(edits.dehaze),
+            stage: Box::new(DehazeStage::new(&edits.dehaze, scale)),
+        });
+    }
+
+    steps
+}
+
 /// Everything [`build_pipeline_split`]'s prefix depends on, for caching its output.
 ///
 /// **If you add a stage to the prefix, add its parameters here.** The tests in this module
@@ -155,31 +218,12 @@ pub fn build_pipeline_split_in_region(
     scale: RenderScale,
     region: Option<Region>,
 ) -> (Pipeline, Pipeline) {
-    let mut prefix: Vec<Box<dyn PipelineStage>> = Vec::new();
-
-    // Geometry runs first, so all adjustments operate on the final cropped pixels.
-    if edits.geometry != edit_model::Geometry::default() {
-        prefix.push(Box::new(GeometryStage::new(&edits.geometry)));
-    }
-    // Noise reduction comes before every adjustment: denoising the source is far easier
-    // than denoising after Exposure, Shadows and the tone curve have amplified the grain.
-    // `is_active` rather than a `!= default()` check — Detail and Smoothness are
-    // modifiers and must not insert a stage on their own.
-    if edits.noise_reduction.is_active() {
-        prefix.push(Box::new(NoiseReductionStage::new(
-            &edits.noise_reduction,
-            scale,
-        )));
-    }
-
-    // Dehaze is a correction of the capture, not a grade, so it belongs upstream with noise
-    // reduction — and after it, because dehaze is a contrast stretch that amplifies noise.
-    //
-    // ⚠ Being in the prefix is what makes a *frame-global* airlight possible at all: the
-    // prefix always runs whole-buffer, so no region plumbing and no margin growth is needed.
-    if edits.dehaze.is_active() {
-        prefix.push(Box::new(DehazeStage::new(&edits.dehaze, scale)));
-    }
+    // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
+    // one list, two consumers.
+    let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale)
+        .into_iter()
+        .map(|s| s.stage)
+        .collect();
 
     let mut tail: Vec<Box<dyn PipelineStage>> = Vec::new();
     if edits.white_balance != edit_model::WhiteBalance::default() {
@@ -526,6 +570,78 @@ mod tests {
             );
         }
         assert_eq!(tail.stage_names().last(), Some(&"output_transform_srgb"));
+    }
+
+    #[test]
+    fn the_prefix_steps_are_the_prefix_pipeline() {
+        // build_pipeline_split_in_region is defined through build_prefix_steps, so the two
+        // cannot drift: a stage added to one appears in the other.
+        for edits in [Edits::default(), all_edits()] {
+            let steps = build_prefix_steps(&edits, RenderScale::FULL);
+            let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
+            let from_steps: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
+            assert_eq!(from_steps, prefix.stage_names());
+        }
+    }
+
+    #[test]
+    fn every_prefix_step_has_its_own_key() {
+        // Each step's key must move with that step's parameters and with nothing else. If two
+        // stages shared a key, a checkpoint would be reused across a change that altered it.
+        let base = all_edits();
+        let keys = |e: &Edits| -> Vec<PrefixStepKey> {
+            build_prefix_steps(e, RenderScale::FULL)
+                .iter()
+                .map(|s| s.key)
+                .collect()
+        };
+        let base_keys = keys(&base);
+        assert_eq!(
+            base_keys.len(),
+            3,
+            "all three prefix stages should be active"
+        );
+
+        let variants = [
+            (
+                0,
+                Edits {
+                    geometry: edit_model::Geometry {
+                        angle: 7.0,
+                        ..Default::default()
+                    },
+                    ..base.clone()
+                },
+            ),
+            (
+                1,
+                Edits {
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 80.0,
+                        color: 80.0,
+                        ..Default::default()
+                    },
+                    ..base.clone()
+                },
+            ),
+            (
+                2,
+                Edits {
+                    dehaze: edit_model::Dehaze { amount: 90.0 },
+                    ..base.clone()
+                },
+            ),
+        ];
+        for (moved, e) in variants {
+            let ks = keys(&e);
+            for i in 0..3 {
+                if i == moved {
+                    assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
+                } else {
+                    assert_eq!(ks[i], base_keys[i], "step {i} should not have changed");
+                }
+            }
+        }
     }
 
     #[test]
