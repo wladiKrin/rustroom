@@ -11,6 +11,7 @@
 //! scene-referred extraction feeding the develop pipeline.
 
 use core_image::ImageBuf;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 mod backend_rsraw;
@@ -49,6 +50,66 @@ pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
     backend_rsraw::extract_thumbnail(&bytes)
 }
 
+/// Which demosaic algorithm libraw should use, as a **speed/quality tier**.
+///
+/// ⚠ Labelled by tier rather than by algorithm on purpose. libraw's `user_qual` names
+/// (bilinear/VNG/PPG/AHD) describe *Bayer* algorithms, and on **X-Trans** libraw routes every
+/// setting through Markesteijn variants instead — measured: `user_qual` 3 and 4 produce
+/// **byte-identical** output at identical cost on an X-T4. A label that is false on the
+/// user's own camera is worse than no label; the tier is true on every sensor.
+///
+/// Measured full-resolution on an X-T4 `.RAF` (`unpack` a flat ~845 ms on top of each):
+/// `Fastest` 400 ms, `Fast` 2,049 ms, `Better` 6,888 ms, `Best` 10,575 ms. Reproduce with
+/// `cargo run --release -p raw-decode --example demosaic_probe <raw> <out-dir>`.
+///
+/// ⚠ **Inert for a `half_size` decode**, which is what the editing preview uses: libraw skips
+/// demosaic entirely there (2×2 binning). This is an export-time decision and cannot be
+/// previewed — see `a_half_size_decode_ignores_the_demosaic_setting`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Demosaic {
+    /// libraw `user_qual` 0 — bilinear on Bayer.
+    Fastest,
+    /// libraw `user_qual` 1 — VNG on Bayer. The default: 3.9x faster end-to-end than `Best`,
+    /// and visibly better than `Fastest`.
+    #[default]
+    Fast,
+    /// libraw `user_qual` 2 — PPG on Bayer.
+    Better,
+    /// libraw `user_qual` 3 — AHD on Bayer. ⚠ On X-Trans this is where the scale tops out:
+    /// `user_qual` 4 and above are identical to it.
+    Best,
+}
+
+impl Demosaic {
+    /// Every tier, in order, for populating a dropdown.
+    pub const ALL: [Demosaic; 4] = [
+        Demosaic::Fastest,
+        Demosaic::Fast,
+        Demosaic::Better,
+        Demosaic::Best,
+    ];
+
+    /// The libraw `user_qual` value. The single place this mapping exists.
+    pub fn user_qual(self) -> i32 {
+        match self {
+            Demosaic::Fastest => 0,
+            Demosaic::Fast => 1,
+            Demosaic::Better => 2,
+            Demosaic::Best => 3,
+        }
+    }
+
+    /// The label shown in the UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Demosaic::Fastest => "Fastest",
+            Demosaic::Fast => "Fast",
+            Demosaic::Better => "Better",
+            Demosaic::Best => "Best",
+        }
+    }
+}
+
 /// How libraw should render the RAW.
 #[derive(Debug, Clone, Copy)]
 pub struct DecodeOptions {
@@ -60,6 +121,9 @@ pub struct DecodeOptions {
     pub no_auto_bright: bool,
     /// Decode at libraw half-size — much faster; used for the editing preview.
     pub half_size: bool,
+    /// Demosaic quality. ⚠ Inert when `half_size` is true — libraw skips demosaic entirely
+    /// for a half-size decode, so the editing preview cannot show this setting.
+    pub demosaic: Demosaic,
 }
 
 impl DecodeOptions {
@@ -70,6 +134,7 @@ impl DecodeOptions {
             linear: true,
             no_auto_bright: true,
             half_size: false,
+            demosaic: Demosaic::Fast,
         }
     }
 
@@ -80,6 +145,7 @@ impl DecodeOptions {
             linear: false,
             no_auto_bright: false,
             half_size: false,
+            demosaic: Demosaic::Fast,
         }
     }
 
@@ -90,6 +156,7 @@ impl DecodeOptions {
             linear: true,
             no_auto_bright: true,
             half_size: true,
+            demosaic: Demosaic::Fast,
         }
     }
 
@@ -144,6 +211,94 @@ mod tests {
             .ok()
             .map(PathBuf::from)
             .filter(|p| p.exists())
+    }
+
+    #[test]
+    fn demosaic_maps_to_libraw_user_qual() {
+        // ⚠ Hard numbers, because this mapping is the entire contract with libraw and a
+        // silent off-by-one would change every export's quality with nothing failing.
+        assert_eq!(Demosaic::Fastest.user_qual(), 0);
+        assert_eq!(Demosaic::Fast.user_qual(), 1);
+        assert_eq!(Demosaic::Better.user_qual(), 2);
+        assert_eq!(Demosaic::Best.user_qual(), 3);
+    }
+
+    #[test]
+    fn the_default_is_fast_not_libraws_own_default() {
+        // libraw's own default is 3 (AHD), which is what we inherited by never setting it —
+        // ~10.6 s of a ~11.4 s decode. `Fast` is 2.0 s and visibly better than bilinear.
+        assert_eq!(Demosaic::default(), Demosaic::Fast);
+        assert_eq!(DecodeOptions::linear_scene().demosaic, Demosaic::Fast);
+        assert_eq!(DecodeOptions::preview().demosaic, Demosaic::Fast);
+    }
+
+    #[test]
+    fn demosaic_round_trips_json() {
+        for d in Demosaic::ALL {
+            let back: Demosaic = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+            assert_eq!(d, back);
+        }
+    }
+
+    #[test]
+    fn demosaic_names_are_stable_in_json() {
+        // The name is part of the on-disk format for export presets and settings. Renaming a
+        // variant would silently reset a saved preset to the default.
+        assert_eq!(serde_json::to_string(&Demosaic::Fast).unwrap(), "\"Fast\"");
+        assert_eq!(serde_json::to_string(&Demosaic::Best).unwrap(), "\"Best\"");
+    }
+
+    #[test]
+    fn a_half_size_decode_ignores_the_demosaic_setting() {
+        // ⚠ The claim the whole UI rests on: this is an *export-time* setting because a
+        // half-size decode skips demosaic entirely (2x2 binning), so the editing preview
+        // cannot show it. Asserted rather than commented.
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let half = |d: Demosaic| {
+            decode_raw(
+                &path,
+                &DecodeOptions {
+                    demosaic: d,
+                    ..DecodeOptions::preview()
+                },
+            )
+            .expect("decode")
+            .image
+        };
+        assert_eq!(
+            half(Demosaic::Fastest).data(),
+            half(Demosaic::Best).data(),
+            "a half-size decode must be unaffected by the demosaic setting"
+        );
+    }
+
+    #[test]
+    fn a_full_size_decode_honours_the_demosaic_setting() {
+        // The other half: if this failed, `user_qual` was never reaching libraw and the whole
+        // feature would be an inert dropdown.
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let full = |d: Demosaic| {
+            decode_raw(
+                &path,
+                &DecodeOptions {
+                    demosaic: d,
+                    ..DecodeOptions::linear_scene()
+                },
+            )
+            .expect("decode")
+            .image
+        };
+        assert_ne!(
+            full(Demosaic::Fastest).data(),
+            full(Demosaic::Best).data(),
+            "the demosaic setting never reached libraw"
+        );
     }
 
     #[test]

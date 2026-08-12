@@ -68,6 +68,9 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
         let params = &mut raw.as_mut().params;
         params.output_color = 1; // sRGB (Rec.709) primaries
         params.no_auto_bright = i32::from(opts.no_auto_bright);
+        // ⚠ Without this libraw uses its own default of 3 (AHD), its slowest — which is what
+        // every decode silently inherited before this existed.
+        params.user_qual = opts.demosaic.user_qual();
         if opts.linear {
             params.gamm[0] = 1.0; // linear: power = 1.0
             params.gamm[1] = 1.0; // linear: toe slope = 1.0
