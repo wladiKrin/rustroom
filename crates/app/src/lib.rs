@@ -7,6 +7,7 @@ pub mod crop_tool;
 pub mod decode_worker;
 pub mod edit_clipboard;
 pub mod export_presets;
+pub mod full_res;
 pub mod histogram;
 pub mod history;
 pub mod presets;
