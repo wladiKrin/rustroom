@@ -27,6 +27,12 @@ pub struct ExportOptions {
     pub quality: u8,
     /// Fit within this many pixels on the long edge. `None` = full resolution.
     pub max_edge: Option<usize>,
+    /// Demosaic quality for RAW sources.
+    ///
+    /// ⚠ An **export** setting rather than a develop edit, and by structure rather than by
+    /// preference: the editing preview decodes `half_size`, which skips demosaic entirely, so
+    /// this can only ever affect a full-resolution decode.
+    pub demosaic: raw_decode::Demosaic,
 }
 
 impl Default for ExportOptions {
@@ -42,6 +48,7 @@ impl Default for ExportOptions {
             dest_dir: PathBuf::new(),
             quality: 92,
             max_edge: None,
+            demosaic: raw_decode::Demosaic::default(),
         }
     }
 }
@@ -400,6 +407,7 @@ mod tests {
             dest_dir: dir.0.clone(),
             quality: 90,
             max_edge,
+            ..ExportOptions::default()
         }
     }
 

@@ -138,6 +138,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn settings_round_trip_carries_the_demosaic_choice() {
+        let f = TempFile::new("demosaic_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let s = Settings {
+            export: ExportOptions {
+                demosaic: raw_decode::Demosaic::Best,
+                ..ExportOptions::default()
+            },
+            ..Settings::default()
+        };
+        store.save(&s).unwrap();
+        assert_eq!(store.load().export.demosaic, raw_decode::Demosaic::Best);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_demosaic_choice_still_loads() {
+        // The same forgiving-load property that `ExportOptions::default()` exists for.
+        let f = TempFile::new("demosaic_old");
+        std::fs::write(
+            &f.0,
+            r#"{"export":{"dest_dir":"/tmp/x","quality":80,"max_edge":null}}"#,
+        )
+        .unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(loaded.export.quality, 80, "the old fields must survive");
+        assert_eq!(loaded.export.demosaic, raw_decode::Demosaic::default());
+    }
+
+    #[test]
     fn the_export_delete_confirmation_defaults_to_on() {
         assert!(Settings::default().confirm_export_preset_delete);
     }
@@ -196,6 +225,7 @@ mod tests {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
                 max_edge: Some(2048),
+                ..ExportOptions::default()
             },
         };
         store.save(&s).unwrap();

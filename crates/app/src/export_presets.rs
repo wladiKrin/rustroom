@@ -144,8 +144,24 @@ mod tests {
                 dest_dir: PathBuf::from("/tmp/rustroom_web"),
                 quality,
                 max_edge: Some(2048),
+                ..ExportOptions::default()
             },
         }
+    }
+
+    #[test]
+    fn a_preset_carries_the_demosaic_choice() {
+        let d = TempDir::new("demosaic");
+        let store = d.store();
+        let p = ExportPreset {
+            name: "Archive".into(),
+            options: ExportOptions {
+                demosaic: raw_decode::Demosaic::Best,
+                ..ExportOptions::default()
+            },
+        };
+        store.save(&p).unwrap();
+        assert_eq!(store.list()[0].options.demosaic, raw_decode::Demosaic::Best);
     }
 
     #[test]
