@@ -293,11 +293,20 @@ fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, Stri
 }
 
 /// Full-resolution decode for export. Dispatches by file kind.
-fn decode_for_export(path: &std::path::Path) -> Result<core_image::ImageBuf, String> {
+fn decode_for_export(
+    path: &std::path::Path,
+    demosaic: raw_decode::Demosaic,
+) -> Result<core_image::ImageBuf, String> {
     if catalog::is_raw(path) {
-        raw_decode::decode_raw(path, &raw_decode::DecodeOptions::linear_scene())
-            .map(|d| d.image)
-            .map_err(|e| e.to_string())
+        raw_decode::decode_raw(
+            path,
+            &raw_decode::DecodeOptions {
+                demosaic,
+                ..raw_decode::DecodeOptions::linear_scene()
+            },
+        )
+        .map(|d| d.image)
+        .map_err(|e| e.to_string())
     } else {
         image_decode::decode(path)
             .map(|d| d.image)
@@ -481,12 +490,15 @@ impl RustroomApp {
             self.save_settings();
         }
         let opts = self.export_draft.clone();
+        let demosaic = opts.demosaic;
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
         self.exporter = Some(ExportWorker::spawn(
             jobs,
             opts,
-            |p: &std::path::Path| decode_for_export(p),
+            // ⚠ Captured from `opts` — the committed options — not from `export_draft`, so a
+            // cancelled edit cannot leak into a running export.
+            move |p: &std::path::Path| decode_for_export(p, demosaic),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ));
     }
@@ -1465,6 +1477,26 @@ impl RustroomApp {
             } else {
                 opts.max_edge = None;
             }
+
+            ui.horizontal(|ui| {
+                ui.label("Demosaic");
+                egui::ComboBox::from_id_salt("demosaic_pick")
+                    .selected_text(opts.demosaic.label())
+                    .show_ui(ui, |ui| {
+                        for d in raw_decode::Demosaic::ALL {
+                            ui.selectable_value(&mut opts.demosaic, d, d.label());
+                        }
+                    });
+            });
+            // ⚠ Not decoration. This is the one export control whose effect cannot be
+            // previewed, and the dialog is the only place a user would find that out.
+            ui.label(
+                egui::RichText::new(
+                    "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
+                     Not shown in the preview, which skips demosaic entirely.",
+                )
+                .small(),
+            );
 
             ui.separator();
             ui.horizontal(|ui| {
