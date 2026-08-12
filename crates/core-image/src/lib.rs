@@ -154,6 +154,43 @@ impl ImageBuf {
         ImageBuf::from_vec(self.width, self.height, data)
     }
 
+    /// Quantize one display-referred sample to 8 bits: clamp to `0..=1`, scale, round.
+    ///
+    /// Private and shared, so [`ImageBuf::to_rgb8`] and [`ImageBuf::to_rgba8`] cannot come to
+    /// disagree about rounding.
+    ///
+    /// ⚠ A `NaN` sample ends up as 0, but **not** because of the clamp: `f32::clamp` returns
+    /// `NaN` for a `NaN` input. It is the `as u8` cast that saturates it, Rust's float-to-int
+    /// casts being saturating. 0 is the right answer for a sample that means nothing; the
+    /// note is here because "clamp handles NaN" is the obvious wrong reading of this line.
+    fn quantize(v: f32) -> u8 {
+        (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+
+    /// Quantize to 8-bit RGB — what an encoder wants.
+    pub fn to_rgb8(&self) -> Vec<u8> {
+        let mut out = vec![0u8; self.data.len()];
+        for (dst, &src) in out.iter_mut().zip(self.data.iter()) {
+            *dst = Self::quantize(src);
+        }
+        out
+    }
+
+    /// Quantize to 8-bit RGBA with an opaque alpha — the layout a GPU texture wants.
+    pub fn to_rgba8(&self) -> Vec<u8> {
+        let mut out = vec![0u8; self.width * self.height * 4];
+        for (dst, src) in out
+            .chunks_exact_mut(4)
+            .zip(self.data.chunks_exact(Self::CHANNELS))
+        {
+            dst[0] = Self::quantize(src[0]);
+            dst[1] = Self::quantize(src[1]);
+            dst[2] = Self::quantize(src[2]);
+            dst[3] = 255;
+        }
+        out
+    }
+
     /// Downscale so the longer edge is at most `max_dim`, preserving aspect ratio, using
     /// area averaging in the current (linear) light. Never upscales; returns a copy if
     /// already small enough or if `max_dim == 0`.
@@ -202,6 +239,87 @@ pub struct Thumbnail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An image with awkward samples: below 0, above 1, and the exact rounding boundaries.
+    /// A quantizer that clamped wrongly, rounded wrongly or transposed channels would differ
+    /// on at least one of these.
+    fn awkward() -> ImageBuf {
+        let mut img = ImageBuf::new(3, 2);
+        img.set_pixel(0, 0, [0.0, 0.5, 1.0]);
+        img.set_pixel(1, 0, [-0.3, 1.4, 0.25]);
+        img.set_pixel(2, 0, [1.0 / 512.0, 0.999, 0.001]);
+        img.set_pixel(0, 1, [f32::NAN, -0.0, 2.0]);
+        img.set_pixel(1, 1, [0.4980392, 0.5019608, 0.75]);
+        img.set_pixel(2, 1, [0.125, 0.875, 0.33333334]);
+        img
+    }
+
+    /// The reference: a plain sequential loop, written out here rather than shared with
+    /// production so it can hold the old behaviour still while production changes.
+    fn rgb8_reference(img: &ImageBuf) -> Vec<u8> {
+        img.data()
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect()
+    }
+
+    fn rgba8_reference(img: &ImageBuf) -> Vec<u8> {
+        let mut out = Vec::with_capacity(img.width() * img.height() * 4);
+        for px in img.data().chunks_exact(ImageBuf::CHANNELS) {
+            out.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
+            out.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
+            out.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);
+            out.push(255);
+        }
+        out
+    }
+
+    #[test]
+    fn to_rgb8_matches_a_sequential_reference() {
+        let img = awkward();
+        assert_eq!(img.to_rgb8(), rgb8_reference(&img));
+        assert_eq!(img.to_rgb8().len(), 3 * 2 * ImageBuf::CHANNELS);
+    }
+
+    #[test]
+    fn to_rgba8_matches_a_sequential_reference() {
+        let img = awkward();
+        assert_eq!(img.to_rgba8(), rgba8_reference(&img));
+        assert_eq!(img.to_rgba8().len(), 3 * 2 * 4);
+    }
+
+    #[test]
+    fn to_rgba8_is_to_rgb8_with_an_opaque_alpha() {
+        // Proves the two really do share one quantizer rather than having two that agree
+        // today and drift tomorrow.
+        let img = awkward();
+        let rgb = img.to_rgb8();
+        let rgba = img.to_rgba8();
+        for (i, px) in rgba.chunks_exact(4).enumerate() {
+            assert_eq!(&px[..3], &rgb[i * 3..i * 3 + 3], "pixel {i} colour differs");
+            assert_eq!(px[3], 255, "pixel {i} is not opaque");
+        }
+    }
+
+    #[test]
+    fn the_conversions_quantize_the_known_values() {
+        // A spot check with the answers written out, so a reference loop that was wrong in
+        // the same way as production could not hide it.
+        let mut img = ImageBuf::new(2, 1);
+        img.set_pixel(0, 0, [0.0, 0.5, 1.0]);
+        img.set_pixel(1, 0, [-0.3, 1.4, 0.25]);
+        assert_eq!(img.to_rgb8(), vec![0, 128, 255, 0, 255, 64]);
+        assert_eq!(img.to_rgba8(), vec![0, 128, 255, 255, 0, 255, 64, 255]);
+    }
+
+    #[test]
+    fn the_conversions_handle_an_empty_image() {
+        // Unlike `map_pixels_xy`, the chunk sizes here are non-zero constants, so there is no
+        // `par_chunks_exact_mut(0)` panic to guard against. Pinned rather than trusted.
+        let img = ImageBuf::new(0, 0);
+        assert!(img.to_rgb8().is_empty());
+        assert!(img.to_rgba8().is_empty());
+    }
 
     #[test]
     fn new_image_is_zeroed_and_sized() {
