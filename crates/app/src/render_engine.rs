@@ -208,10 +208,28 @@ impl PrefixCache {
     /// One complete prefix output per render mode (fit and native).
     const FINALS_CAP: usize = 2;
 
-    /// Ceiling on the intermediates. 256 MB holds the full chain in both render modes on a
-    /// 26 Mpx sensor (219 MB worst case); on larger files it bounds the growth instead, and
-    /// native degrades to keeping only the deepest checkpoints that fit.
-    const MID_BUDGET_BYTES: usize = 256 << 20;
+    /// Ceiling on the bytes held as intermediates.
+    ///
+    /// 512 MiB clears one full-resolution checkpoint (~313 MB on a 26 Mpx X-T4) but not two,
+    /// which is the intent: the post-NR checkpoint makes a Dehaze drag at 1:1 reuse noise
+    /// reduction, and a second checkpoint would double the footprint to save ~200 ms on a
+    /// rarer interaction. ⚠ 512 rather than 320 MiB because 320 covers only 28.0 Mpx, and
+    /// Fujifilm's current 40.2 Mpx bodies would get *zero* native checkpoints; 512 covers
+    /// 44.7 Mpx. On a larger sensor than that, no intermediate survives and behaviour degrades
+    /// to re-running the whole prefix — the ceiling working, not failing.
+    ///
+    /// At preview resolution it is never the binding constraint: entries are ~21 MB and
+    /// [`PrefixCache::MIDS_CAP`] bites first.
+    const MID_BUDGET_BYTES: usize = 512 << 20;
+
+    /// Ceiling on the *number* of intermediates, independent of their size.
+    ///
+    /// ⚠ This is what makes a large byte budget safe. Dragging Straighten mints a new
+    /// post-geometry key every frame, so without a count cap the tier fills with stale
+    /// checkpoints bounded only by bytes — and a bigger budget would simply retain more
+    /// garbage. A render's useful chain is at most 3 mids, so 6 keeps the current chain plus
+    /// one previous state and discards the rest.
+    const MIDS_CAP: usize = 6;
 
     fn with_mid_budget(mid_budget: usize) -> Self {
         Self {
@@ -262,6 +280,9 @@ impl PrefixCache {
             }
             Tier::Mid => {
                 self.mids.insert(0, (key, img));
+                // Count first: it is O(1) and usually the binding constraint at preview
+                // resolution, where entries are ~21 MB and the byte budget is nowhere near.
+                self.mids.truncate(Self::MIDS_CAP);
                 let mut total: usize = self.mids.iter().map(|(_, i)| Self::bytes(i)).sum();
                 while total > self.mid_budget {
                     match self.mids.pop() {
@@ -642,6 +663,48 @@ mod tests {
         assert!(cache.get(&fake_key(3)).is_some());
         assert!(cache.get(&fake_key(2)).is_some());
         assert!(cache.get(&fake_key(0)).is_none());
+    }
+
+    #[test]
+    fn the_mids_cap_bounds_stale_checkpoints() {
+        // ⚠ Dragging Straighten mints a *new* post-geometry key every frame, so the mids tier
+        // fills with checkpoints nobody will ever return to — bounded only by the byte budget,
+        // which means a bigger budget retains more garbage. A render's useful chain is at most
+        // 3 mids, so 6 keeps the current chain plus one previous state.
+        let mut cache = PrefixCache::default();
+        for tag in 0..20 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
+        }
+        assert_eq!(cache.mid_len(), PrefixCache::MIDS_CAP);
+        assert!(
+            cache.get(&fake_key(19)).is_some(),
+            "the newest must survive"
+        );
+        assert!(cache.get(&fake_key(0)).is_none(), "the oldest must not");
+    }
+
+    #[test]
+    fn the_budget_still_evicts_before_the_cap() {
+        // Bytes bind first when the entries are large — which is the full-resolution case,
+        // where one checkpoint is 313 MB and the cap is nowhere near reached.
+        let mut cache = PrefixCache::with_mid_budget(400); // holds two 192-byte dummies
+        for tag in 0..5 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
+        }
+        assert_eq!(cache.mid_len(), 2);
+        assert!(cache.mid_len() < PrefixCache::MIDS_CAP);
+    }
+
+    #[test]
+    fn the_budget_holds_one_full_resolution_checkpoint() {
+        // The sizing decision, asserted rather than left in a comment. A 26 Mpx checkpoint is
+        // ~313 MB; the budget must clear it, and must *not* clear two (which would double the
+        // footprint for a rarely-used second checkpoint).
+        const CHECKPOINT: usize = 6246 * 4170 * 3 * 4;
+        assert!(PrefixCache::MID_BUDGET_BYTES > CHECKPOINT);
+        assert!(PrefixCache::MID_BUDGET_BYTES < 2 * CHECKPOINT);
+        // And it must clear a 40 Mpx body's, which is why it is 512 MiB and not 320.
+        assert!(PrefixCache::MID_BUDGET_BYTES > 7728 * 5152 * 3 * 4);
     }
 
     #[test]
