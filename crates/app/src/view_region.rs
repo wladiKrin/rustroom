@@ -14,6 +14,59 @@ pub use crate::render_engine::RegionRect;
 /// 20% more pixels in the region tail (~1.5 ms) and buys room for the next spatial stage.
 pub const REGION_MARGIN: usize = 192;
 
+/// Which resolution the canvas renders at.
+///
+/// Quantized to three tiers on purpose: a `max_dim` varying continuously with zoom would
+/// rebuild the prefix cache on every scroll tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderTier {
+    /// The whole image at preview resolution.
+    Fit,
+    /// The half-size editing buffer's own resolution.
+    NativeHalf,
+    /// A full-resolution decode — the only tier that shows real demosaiced detail.
+    NativeFull,
+}
+
+impl RenderTier {
+    /// Whether this tier renders a *region* rather than the whole image.
+    pub fn is_native(self) -> bool {
+        self != RenderTier::Fit
+    }
+
+    /// Fall back to [`RenderTier::NativeHalf`] when no full-resolution buffer exists yet, so
+    /// the view keeps working at the previous fidelity while the decode runs — or for good, if
+    /// it fails.
+    ///
+    /// Kept separate from [`tier_for`] deliberately: the upgrade decision needs to know which
+    /// tier the zoom *wants*, and folding availability into `tier_for` would make that
+    /// circular — the tier could never ask for a buffer that does not exist yet.
+    pub fn clamped(self, full_available: bool) -> RenderTier {
+        match self {
+            RenderTier::NativeFull if !full_available => RenderTier::NativeHalf,
+            other => other,
+        }
+    }
+}
+
+/// The tier the current zoom calls for, ignoring what has actually been decoded.
+///
+/// `fit` is the scale that makes the whole image fit the viewport and `zoom` the user's factor
+/// on top, so `fit * zoom` is screen pixels per *fit-render* pixel. `half_ratio` is the
+/// half-size buffer's long edge divided by the fit render's (~1.95 on an X-T4): the zoom at
+/// which the NativeHalf texture is itself magnified past its own pixels — exactly the reasoning
+/// that puts the Fit boundary at 1.0.
+pub fn tier_for(fit: f32, zoom: f32, half_ratio: f32) -> RenderTier {
+    let s = fit * zoom;
+    if s <= 1.0 {
+        RenderTier::Fit
+    } else if s <= half_ratio {
+        RenderTier::NativeHalf
+    } else {
+        RenderTier::NativeFull
+    }
+}
+
 /// Whether the view is magnifying the fit-resolution texture past its own pixels, in which
 /// case the render should switch to the buffer's native resolution.
 ///
@@ -102,6 +155,87 @@ mod tests {
             REGION_MARGIN > worst,
             "REGION_MARGIN {REGION_MARGIN} must exceed the tail's kernel radius {worst}"
         );
+    }
+
+    #[test]
+    fn the_tier_boundaries_follow_the_buffer_ratio() {
+        // `r` is the half-size buffer's long edge over the fit render's — ~1.95 on an X-T4.
+        let r = 1.952;
+        // At and below 1.0 the fit texture still has the pixels.
+        assert_eq!(tier_for(0.5, 1.0, r), RenderTier::Fit);
+        assert_eq!(tier_for(1.0, 1.0, r), RenderTier::Fit);
+        // Just past it, only the half-size buffer does.
+        assert_eq!(tier_for(1.0, 1.001, r), RenderTier::NativeHalf);
+        assert_eq!(tier_for(1.0, r, r), RenderTier::NativeHalf);
+        // Past the half buffer's own resolution, only a full decode does.
+        assert_eq!(tier_for(1.0, r + 0.01, r), RenderTier::NativeFull);
+        assert_eq!(tier_for(1.0, 8.0, r), RenderTier::NativeFull);
+    }
+
+    #[test]
+    fn without_a_full_buffer_the_top_tier_falls_back() {
+        // The view must keep working at today's fidelity while the decode runs, and if it
+        // fails. `tier_for` says what the zoom *wants*; `clamped` says what is available.
+        assert_eq!(
+            tier_for(1.0, 8.0, 1.952).clamped(false),
+            RenderTier::NativeHalf
+        );
+        assert_eq!(
+            tier_for(1.0, 8.0, 1.952).clamped(true),
+            RenderTier::NativeFull
+        );
+        // Clamping never promotes, and never touches the lower tiers.
+        assert_eq!(tier_for(0.5, 1.0, 1.952).clamped(false), RenderTier::Fit);
+        assert_eq!(
+            tier_for(1.0, 1.5, 1.952).clamped(false),
+            RenderTier::NativeHalf
+        );
+    }
+
+    #[test]
+    fn a_native_tier_never_magnifies_its_own_texture() {
+        // ⚠ The invariant the three tiers exist for, and the reason a third tier was needed
+        // rather than swapping the second one's buffer. `k` is rendered pixels per fit pixel,
+        // so on-screen scale is fit*zoom/k. Inside a native tier it must never exceed 1.0
+        // (magnifying a texture that has more pixels available) nor fall to 0.5 (rendering
+        // more than about twice what is displayed — which is what made the two-tier version
+        // with a full-res buffer cost ~180 ms a frame instead of 13).
+        let r = 1.952_f32; // half buffer / fit
+        let full_r = 2.0 * r; // full buffer / fit
+        let mut z = 1.001_f32;
+        while z <= full_r {
+            let tier = tier_for(1.0, z, r);
+            let k = match tier {
+                RenderTier::Fit => 1.0,
+                RenderTier::NativeHalf => r,
+                RenderTier::NativeFull => full_r,
+            };
+            let scale = z / k;
+            assert!(
+                scale <= 1.0 + 1e-6,
+                "zoom {z} magnifies its own texture (scale {scale})"
+            );
+            assert!(
+                scale > 0.5 - 1e-6,
+                "zoom {z} renders {:.1}x the displayed pixels",
+                1.0 / scale
+            );
+            z += 0.01;
+        }
+    }
+
+    #[test]
+    fn is_native_matches_the_old_two_way_split() {
+        // `needs_native` is kept and still means "render a region rather than the whole
+        // image"; the tiers must agree with it or the canvas and the cache disagree.
+        let r = 1.952;
+        for z in [0.4_f32, 0.99, 1.0, 1.01, 1.9, 2.5, 9.0] {
+            assert_eq!(
+                tier_for(1.0, z, r).is_native(),
+                needs_native(1.0, z),
+                "zoom {z}"
+            );
+        }
     }
 
     #[test]
