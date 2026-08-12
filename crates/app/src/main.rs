@@ -1466,7 +1466,23 @@ impl RustroomApp {
                 };
                 ui.label(shown);
             });
-            ui.add(egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"));
+            ui.horizontal(|ui| {
+                ui.label("Format");
+                egui::ComboBox::from_id_salt("format_pick")
+                    .selected_text(opts.format.label())
+                    .show_ui(ui, |ui| {
+                        for f in export::ExportFormat::ALL {
+                            ui.selectable_value(&mut opts.format, f, f.label());
+                        }
+                    });
+            });
+            // Greyed out rather than hidden for the non-lossy formats: the value is still
+            // there and returns when JPEG is reselected — the same treatment NR's Detail and
+            // Sharpening's Masking get for being inert.
+            ui.add_enabled(
+                opts.format.is_lossy(),
+                egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
+            );
 
             let mut resize = opts.max_edge.is_some();
             ui.checkbox(&mut resize, "Fit within a long edge");

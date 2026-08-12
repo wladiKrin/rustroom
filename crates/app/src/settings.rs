@@ -138,6 +138,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn settings_round_trip_carries_the_export_format() {
+        let f = TempFile::new("format_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let s = Settings {
+            export: ExportOptions {
+                format: export::ExportFormat::Tiff16,
+                ..ExportOptions::default()
+            },
+            ..Settings::default()
+        };
+        store.save(&s).unwrap();
+        assert_eq!(store.load().export.format, export::ExportFormat::Tiff16);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_export_format_still_loads() {
+        // The forgiving-load property `ExportOptions::default()` exists for.
+        let f = TempFile::new("format_old");
+        std::fs::write(&f.0, r#"{"export":{"quality":80}}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(loaded.export.quality, 80, "the old field must survive");
+        assert_eq!(loaded.export.format, export::ExportFormat::default());
+    }
+
+    #[test]
     fn settings_round_trip_carries_the_demosaic_choice() {
         let f = TempFile::new("demosaic_rt");
         let store = SettingsStore::new(f.0.clone());

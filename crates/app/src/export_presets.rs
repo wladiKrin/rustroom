@@ -150,6 +150,22 @@ mod tests {
     }
 
     #[test]
+    fn a_preset_carries_the_export_format() {
+        let d = TempDir::new("format");
+        let store = d.store();
+        store
+            .save(&ExportPreset {
+                name: "Archive".into(),
+                options: ExportOptions {
+                    format: export::ExportFormat::Tiff16,
+                    ..ExportOptions::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(store.list()[0].options.format, export::ExportFormat::Tiff16);
+    }
+
+    #[test]
     fn a_preset_carries_the_demosaic_choice() {
         let d = TempDir::new("demosaic");
         let store = d.store();
