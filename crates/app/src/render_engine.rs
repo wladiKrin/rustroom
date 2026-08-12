@@ -189,7 +189,7 @@ impl PrefixCache {
     }
 
     fn insert(&mut self, key: CacheKey, img: Arc<ImageBuf>) {
-        self.entries.retain(|(k, _)| *k != key);
+        self.entries.retain(|(k, _)| k != &key);
         self.entries.insert(0, (key, img));
         self.entries.truncate(Self::CAP);
     }

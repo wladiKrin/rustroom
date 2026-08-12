@@ -172,31 +172,38 @@ pub fn build_prefix_steps(edits: &Edits, scale: RenderScale) -> Vec<PrefixStep> 
     steps
 }
 
-/// Everything [`build_pipeline_split`]'s prefix depends on, for caching its output.
+/// Everything a cached prefix checkpoint depends on: the parameters of the prefix stages that
+/// have run so far, plus the render scale.
 ///
-/// **If you add a stage to the prefix, add its parameters here.** The tests in this module
-/// assert that every other edit field leaves this key unchanged, so they will fail until you
-/// do — which is the point, because a prefix stage missing from the key means the preview
-/// cache silently serves stale pixels.
+/// The key is **derived from** [`build_prefix_steps`] rather than written alongside it, so a
+/// prefix stage cannot be missing from it — see [`PrefixStepKey`]. The tests in this module
+/// additionally assert that every *downstream* edit field leaves this key unchanged.
 ///
 /// Compared with `==` rather than hashed, so there is no collision risk. The `f32` is safe in
 /// a `PartialEq`: the only pathological value is `NaN`, which compares unequal to itself and
 /// so fails toward a cache *miss*.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PrefixKey {
-    geometry: edit_model::Geometry,
-    noise_reduction: edit_model::NoiseReduction,
-    dehaze: edit_model::Dehaze,
+    /// The keys of the prefix stages that have run, in order.
+    steps: Vec<PrefixStepKey>,
     /// Included because it sets the noise-reduction and dehaze radii.
     scale: f32,
 }
 
 impl PrefixKey {
+    /// The key for the output of the *whole* prefix.
     pub fn new(edits: &Edits, scale: RenderScale) -> Self {
+        let steps = build_prefix_steps(edits, scale);
+        Self::upto(&steps, steps.len(), scale)
+    }
+
+    /// The key for the checkpoint after the first `n` prefix stages have run.
+    ///
+    /// `n == 0` is the checkpoint straight after the downscale, before any stage. `n` beyond
+    /// the end saturates, so a caller cannot key a checkpoint that does not exist.
+    pub fn upto(steps: &[PrefixStep], n: usize, scale: RenderScale) -> Self {
         Self {
-            geometry: edits.geometry,
-            noise_reduction: edits.noise_reduction,
-            dehaze: edits.dehaze,
+            steps: steps[..n.min(steps.len())].iter().map(|s| s.key).collect(),
             scale: scale.get(),
         }
     }
@@ -529,6 +536,47 @@ mod tests {
 
         // Scale changes the noise-reduction radii, so it belongs in the key.
         assert_ne!(PrefixKey::new(&base, RenderScale::new(0.25)), k);
+    }
+
+    #[test]
+    fn a_truncated_prefix_key_ignores_the_stages_below_it() {
+        // The whole feature rests on this: two edit sets that agree on the first n prefix
+        // stages must share the checkpoint after stage n, however much they differ deeper.
+        let a = all_edits();
+        let b = Edits {
+            dehaze: edit_model::Dehaze { amount: 95.0 },
+            ..a.clone()
+        };
+        let steps_a = build_prefix_steps(&a, RenderScale::FULL);
+        let steps_b = build_prefix_steps(&b, RenderScale::FULL);
+        assert_eq!(steps_a.len(), 3);
+
+        // Same up to and including noise reduction...
+        for n in 0..=2 {
+            assert_eq!(
+                PrefixKey::upto(&steps_a, n, RenderScale::FULL),
+                PrefixKey::upto(&steps_b, n, RenderScale::FULL),
+                "checkpoint {n} should be shared"
+            );
+        }
+        // ...and different once dehaze has run.
+        assert_ne!(
+            PrefixKey::upto(&steps_a, 3, RenderScale::FULL),
+            PrefixKey::upto(&steps_b, 3, RenderScale::FULL)
+        );
+
+        // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
+        assert_eq!(
+            PrefixKey::new(&a, RenderScale::FULL),
+            PrefixKey::upto(&steps_a, steps_a.len(), RenderScale::FULL)
+        );
+
+        // Scale is part of every checkpoint, including the bare seed: it sets the radii of the
+        // stages that follow.
+        assert_ne!(
+            PrefixKey::upto(&steps_a, 0, RenderScale::FULL),
+            PrefixKey::upto(&steps_a, 0, RenderScale::new(0.25))
+        );
     }
 
     #[test]
