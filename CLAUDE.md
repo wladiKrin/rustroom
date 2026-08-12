@@ -100,14 +100,41 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 > **▶ RESUME HERE (fresh session).** Working tree clean, all checks green, everything committed to `main` **locally** — the user pushes to `github.com/wladiKrin/rustroom` themselves, so **never push without asking**. **Commit messages carry no `Co-Authored-By` trailer** (explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` — always `--release`, and **launch it after every big update without being asked**, saying what to look at (skip it for small tweaks in a tuning loop).
 
-**▶ NEXT ACTION: your call — the ranked list below is the honest state.** Both export requests from 2026-08-11 have landed (demosaic backends, PNG/TIFF with sRGB profiles), and Phase 2 is complete. There is no single obvious next thing, so pick by what you want: a perf item, a deferred correctness item, or starting Phase 3.
+**▶ NEXT ACTION: a second prefix cache checkpoint.** The clearest measured win left in editing. Phase 2 is complete and both 2026-08-11 export requests have landed, so this is chosen on numbers rather than obligation.
 
-Run whatever is chosen through **brainstorm → spec → plan → executing-plans, all inline** (the user picks inline every time; offer it but expect that answer).
+**The problem.** The prefix is `geometry → noise_reduction → dehaze`, cached as **one** unit keyed by `PrefixKey { geometry, noise_reduction, dehaze, scale }`. Change *any* of those three and **all three re-run**. Measured on the X-T4 preview (1600 px, release, best of 5, re-measured 2026-08-11):
+
+| what you drag | cost | why |
+|---|---|---|
+| any tail slider (exposure, clarity, …) | **13.7 ms** | prefix cached, tail only |
+| Dehaze, with NR on | **86.8 ms** | geometry + NR + dehaze all re-run |
+| Dehaze, NR off | 55.3 ms | dehaze ≈ 33 ms on its own |
+| NR both 50 | 52.4 ms | |
+| native prefix, one-off | 172 ms | the 1:1 path |
+
+**The fix.** Split the prefix at its stage boundaries and cache each intermediate, so a change only re-runs what is downstream of it:
+
+- **after `downscale_to`, before geometry** — saves the ~9 ms downscale on *any* prefix-invalidating change.
+- **after geometry** — NR and dehaze changes stop re-running geometry.
+- **after noise reduction** — a Dehaze drag reuses NR, the 86.8 ms case: expect **~47 ms** (dehaze ~33 + tail ~14).
+
+⚠ **Correcting a claim this file used to make.** Earlier notes said a second checkpoint would stop **Straighten** costing full price. That is wrong: geometry is *first*, so changing it invalidates everything downstream by definition — no checkpoint can help. Straighten's only win is the ~9 ms downscale from the first bullet. The real beneficiary is **Dehaze**, then NR.
+
+Four things to carry in:
+
+1. **⚠ Memory is the binding constraint, not CPU.** Each checkpoint holds a whole-buffer `ImageBuf`: at native resolution 3123×2085×3×`f32` ≈ **78 MB**. `PrefixCache::CAP = 2` today (one entry per render mode, fit and native). Three checkpoints × 2 modes is ~470 MB if done naively. **Design the eviction policy before the caching** — the current cache is a `Vec` with `truncate(CAP)`, which will not carry this.
+2. **⚠ The tripwire test is the thing that keeps this honest.** `the_prefix_holds_geometry_noise_reduction_and_dehaze` exists so that adding a prefix stage forces `PrefixKey` to be updated — a prefix stage missing from the key means the cache serves **stale pixels with nothing failing**. Splitting the key into per-checkpoint keys must preserve that property, not delete it.
+3. **`every_cached_frame_matches_a_cold_render` is the master test.** It pushes a sequence (hit / downstream change / NR change / return / geometry change) through one engine and asserts every frame equals a cold `render_once`. Extend the sequence to the new checkpoints rather than trusting the structure — and keep the `assert_ne!` guards that stop it passing trivially.
+4. **A 0.6 ms deep clone is already paid per frame** because `PipelineStage::apply` consumes its input (the ownership that keeps the GPU-port seam clean). More checkpoints means more clones; measure whether that eats the win at the margins.
+
+Everything lives in `crates/app/src/render_engine.rs` (`render_cached`, `PrefixCache`, `CacheKey`) and `crates/pipeline/src/lib.rs` (`build_pipeline_split_in_region`, `PrefixKey`). Reproduce the table with `cargo run --release -p app --example bench_preview <raw>`.
+
+Run it through **brainstorm → spec → plan → executing-plans, all inline** (the user picks inline every time; offer it but expect that answer).
 
 **What is left, in rough order of value:**
-1. **A second prefix cache checkpoint** — the clearest measured win left in editing. Dragging Dehaze re-runs noise reduction: **87.6 ms against 13.7 ms** for any other slider, and Straighten pays full price for the same reason. The prefix is `geometry → noise_reduction → dehaze`; a checkpoint after NR would make dehaze and geometry cheap without touching either stage.
-2. **Parallelising the RGBA8 pack** in `render_engine::pack` — still a sequential `Vec::push` loop, ~35% of a cached preview frame (4.4 ms of 13.7). Contained and low-risk.
-3. **A background full-res decode for true 1:1** — far more tractable since the demosaic work: a full decode is now **~2.9 s** at the `Fast` default rather than ~11.4. Would also remove the standing caveat that 1:1 is really 1:1 of a half-size buffer that skips demosaic.
+1. **A second prefix cache checkpoint** — the next action above.
+2. **Parallelising the RGBA8 pack** in `render_engine::pack` — still a sequential `Vec::push` loop, ~35% of a cached preview frame (4.4 ms of 13.7). Contained and low-risk, and it compounds with the item above since it is in *every* frame.
+3. **A background full-res decode for true 1:1** — far more tractable since the demosaic work: a full decode is now **~2.9 s** at the `Fast` default rather than ~11.4. Would also retire the standing caveat that 1:1 is really 1:1 of a half-size buffer that skips demosaic.
 4. **Photo edit history surviving a photo switch** (deferred add-on, user's call 2026-08-07). `History<Edits>` lives on `Session` and dies with it, so Ctrl+Z cannot reach across a switch. Needs a per-path history beside `BufferCache` plus a persistence policy.
 5. **`--format` on the CLI's `render`** — small parity gap; the app writes five formats, the CLI one.
 6. **Phase 3** — the roadmap's next phase.
@@ -495,7 +522,7 @@ Toolchain: stable rustc 1.97.1 (`image 0.25` needs ≥1.88).
 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"`
 (On Linux/CI: `apt-get install libraw-dev liblcms2-dev pkg-config` — no PKG_CONFIG_PATH needed.) The `raw-decode` smoke test is gated on `RAW_FIXTURE=/abs/path.raw`; unset, it skips so `cargo test --all` stays fast/green.
 
-**Next step:** **Phase 2 is complete**, and two export features have landed on top of it — demosaic backend selection (exports default to `Fast`, ~2.9 s per photo rather than ~11.4) and PNG/TIFF output with an embedded sRGB profile in every format. There is no forced next move; see the ranked list in the RESUME HERE block. A nicer decode placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) remains a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
+**Next step:** **Phase 2 is complete**, and two export features have landed on top of it — demosaic backend selection and PNG/TIFF output with embedded sRGB profiles. The next action is **a second prefix cache checkpoint**; see the RESUME HERE block, which carries the measured table and the memory constraint that shapes it. A nicer decode placeholder (run the pipeline over the thumbnail for an instant low-res preview, instead of showing the camera JPEG) remains a possible follow-up. Filmstrip toward "C" is done; further "C" polish (vertical strip, ratings) deferred.
 
 Docs (`docs/superpowers/`): specs/`2026-07-26-m1.4-gui-design.md`, `2026-07-26-m2.1-library-browser-design.md`, `2026-07-26-multi-format-editing-design.md`, `2026-07-26-filmstrip-design.md`, `2026-08-04-saturation-vibrance-design.md`, `2026-08-04-snappy-raw-switching-design.md`, `2026-08-05-hsl-design.md`, `2026-08-05-noise-reduction-design.md`, `2026-08-05-vignette-design.md`, `2026-08-06-preview-prefix-cache-design.md`, `2026-08-06-one-to-one-region-rendering-design.md`, `2026-08-06-sharpening-design.md`, `2026-08-07-presets-copy-paste-design.md`, `2026-08-07-preset-trash-design.md`, `2026-08-07-multi-select-sync-design.md`, `2026-08-08-batch-export-design.md`, `2026-08-10-texture-clarity-design.md`, `2026-08-11-dehaze-design.md`, `2026-08-11-export-presets-design.md`, `2026-08-11-demosaic-backend-design.md`, `2026-08-11-png-tiff-export-design.md`. plans/`2026-07-22-phase-0-foundation.md`, `2026-07-23-phase-1-mvp-editor.md` (M1.1), `2026-07-23-phase-1-m1.2-adjustments.md`, `2026-07-23-phase-1-m1.3-crop-straighten.md`, `2026-07-26-m1.4a-core-editor.md`, `2026-07-26-m1.4b-crop-history.md`, `2026-07-26-m2.1-library-browser.md`, `2026-07-26-m2.2-thumbnail-perf-sidecar.md`, `2026-07-26-multi-format-editing.md`, `2026-07-26-filmstrip.md`, `2026-08-04-saturation-vibrance.md`, `2026-08-05-snappy-raw-switching.md`, `2026-08-05-hsl.md`, `2026-08-05-noise-reduction.md`, `2026-08-05-vignette.md`, `2026-08-06-preview-prefix-cache.md`, `2026-08-06-one-to-one-region-rendering.md`, `2026-08-06-sharpening.md`, `2026-08-07-presets-copy-paste.md`, `2026-08-07-multi-select-sync.md`, `2026-08-08-batch-export.md`, `2026-08-10-texture-clarity.md`, `2026-08-11-dehaze.md`, `2026-08-11-export-presets.md`, `2026-08-11-demosaic-backend.md`, `2026-08-11-png-tiff-export.md`.
 
