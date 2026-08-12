@@ -11,6 +11,7 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
+use export::ExportFormat;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,8 @@ pub struct ExportOptions {
     /// preference: the editing preview decodes `half_size`, which skips demosaic entirely, so
     /// this can only ever affect a full-resolution decode.
     pub demosaic: raw_decode::Demosaic,
+    /// The output format and bit depth.
+    pub format: ExportFormat,
 }
 
 impl Default for ExportOptions {
@@ -49,6 +52,7 @@ impl Default for ExportOptions {
             quality: 92,
             max_edge: None,
             demosaic: raw_decode::Demosaic::default(),
+            format: ExportFormat::default(),
         }
     }
 }
@@ -106,15 +110,16 @@ pub struct ExportReport {
 ///
 /// A source with no file stem falls back to `export`, so a pathological path still yields a
 /// writable name rather than panicking.
-pub fn dest_for(dir: &Path, source: &Path, index: usize) -> PathBuf {
+pub fn dest_for(dir: &Path, source: &Path, index: usize, format: ExportFormat) -> PathBuf {
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
+    let ext = format.extension();
     let name = if index == 0 {
-        format!("{stem}.jpg")
+        format!("{stem}.{ext}")
     } else {
-        format!("{stem}-{index}.jpg")
+        format!("{stem}-{index}.{ext}")
     };
     dir.join(name)
 }
@@ -166,7 +171,7 @@ pub fn export_one(
     };
     let scale = scale_for(source_long, opts.max_edge);
     let rendered = pipeline::build_pipeline(edits, scale).run(scaled);
-    export::save_jpeg(&rendered, dest, opts.quality).map_err(|e| e.to_string())
+    export::save(&rendered, dest, opts.format, opts.quality).map_err(|e| e.to_string())
 }
 
 /// A running batch export.
@@ -251,7 +256,7 @@ fn run(
             break;
         }
 
-        let mut dest = dest_for(&opts.dest_dir, &source, 0);
+        let mut dest = dest_for(&opts.dest_dir, &source, 0, opts.format);
         if claimed.contains(&dest) || dest.exists() {
             let collision = match remembered {
                 Some(c) => c,
@@ -295,7 +300,7 @@ fn run(
                 Collision::KeepBoth => {
                     let mut i = 1;
                     loop {
-                        let candidate = dest_for(&opts.dest_dir, &source, i);
+                        let candidate = dest_for(&opts.dest_dir, &source, i, opts.format);
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -350,11 +355,11 @@ mod tests {
     fn the_destination_is_the_stem_plus_jpg() {
         let dir = PathBuf::from("/out");
         assert_eq!(
-            dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0),
+            dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, ExportFormat::Jpeg),
             PathBuf::from("/out/DSCF6509.jpg")
         );
         assert_eq!(
-            dest_for(&dir, Path::new("/in/holiday.jpeg"), 0),
+            dest_for(&dir, Path::new("/in/holiday.jpeg"), 0, ExportFormat::Jpeg),
             PathBuf::from("/out/holiday.jpg")
         );
     }
@@ -364,11 +369,11 @@ mod tests {
         // What "Keep both" uses: the first free name-1, name-2, ...
         let dir = PathBuf::from("/out");
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 1),
+            dest_for(&dir, Path::new("/in/a.RAF"), 1, ExportFormat::Jpeg),
             PathBuf::from("/out/a-1.jpg")
         );
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 7),
+            dest_for(&dir, Path::new("/in/a.RAF"), 7, ExportFormat::Jpeg),
             PathBuf::from("/out/a-7.jpg")
         );
     }
@@ -529,18 +534,52 @@ mod tests {
     fn two_sources_with_the_same_stem_collide_in_an_empty_folder() {
         // ⚠ `a.RAF` and `a.jpg` both map to `a.jpg`, so the check has to consider names
         // claimed *in this run*, not only files already on disk.
-        let d = TempDir::new("same_stem");
-        let (report, _) = run_export(
-            jobs(&d, &["a.RAF", "a.jpg"]),
-            opts(&d, None),
-            vec![Decision::Resolve {
-                collision: Collision::KeepBoth,
-                apply_to_all: false,
-            }],
-            ok_decode(),
-        );
-        assert_eq!(report.exported, 2);
-        assert!(d.0.join("a.jpg").exists() && d.0.join("a-1.jpg").exists());
+        //
+        // Parameterised by format because the extension decides **which** pair collides:
+        // exporting PNG, `a.RAF` and `a.jpg` no longer do — but `a.RAF` and `a.png` now do.
+        // The property is format-independent; only the triggering pair moves.
+        for (format, other) in [
+            (ExportFormat::Jpeg, "a.jpg"),
+            (ExportFormat::Png8, "a.png"),
+            (ExportFormat::Tiff16, "a.tif"),
+        ] {
+            let d = TempDir::new(&format!("same_stem_{}", format.extension()));
+            let (report, _) = run_export(
+                jobs(&d, &["a.RAF", other]),
+                ExportOptions {
+                    format,
+                    ..opts(&d, None)
+                },
+                vec![Decision::Resolve {
+                    collision: Collision::KeepBoth,
+                    apply_to_all: false,
+                }],
+                ok_decode(),
+            );
+            let ext = format.extension();
+            assert_eq!(report.exported, 2, "{format:?}");
+            assert!(
+                d.0.join(format!("a.{ext}")).exists() && d.0.join(format!("a-1.{ext}")).exists(),
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_destination_extension_follows_the_format() {
+        let dir = PathBuf::from("/out");
+        for f in ExportFormat::ALL {
+            assert_eq!(
+                dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, f),
+                dir.join(format!("DSCF6509.{}", f.extension())),
+                "{f:?}"
+            );
+            assert_eq!(
+                dest_for(&dir, Path::new("/in/a.RAF"), 3, f),
+                dir.join(format!("a-3.{}", f.extension())),
+                "{f:?}"
+            );
+        }
     }
 
     #[test]
@@ -794,7 +833,7 @@ mod tests {
     fn a_source_with_no_stem_still_produces_a_name() {
         // Defensive: `file_stem` is an Option, and a path ending in `..` has none.
         let dir = PathBuf::from("/out");
-        let got = dest_for(&dir, Path::new("/in/.."), 0);
+        let got = dest_for(&dir, Path::new("/in/.."), 0, ExportFormat::Jpeg);
         assert!(got.starts_with("/out"));
         assert_eq!(got.extension().and_then(|e| e.to_str()), Some("jpg"));
     }

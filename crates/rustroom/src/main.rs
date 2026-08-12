@@ -113,7 +113,7 @@ fn render(
     };
     let rendered = pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(decoded.image);
 
-    export::save_jpeg(&rendered, output, quality)
+    export::save(&rendered, output, export::ExportFormat::Jpeg, quality)
         .with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Wrote {}", output.display());
     Ok(())
