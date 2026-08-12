@@ -33,8 +33,9 @@ So the fix is two independent multipliers, and the cheaper one comes first:
 
 1. **Drop `Vec::push`** — preallocate and fill. Expected ~4.6 → ~1.2 ms at fit, from the
    `to_rgb8` rate scaled by 4/3. This is most of the win and it is not what the task was named
-   after.
-2. **Parallelise the fill** — expected ~1.2 → ~0.3 ms on 8 threads.
+   after. *(Measured: 1.16 ms. Prediction held.)*
+2. **Parallelise the fill** — expected ~1.2 → ~0.3 ms on 8 threads. *(Measured: 0.46 ms, and
+   only with the block granularity of §2 — the first shape tried was slower than sequential.)*
 
 Both are worth having; the point of separating them is that the attribution gets **measured**
 rather than assumed. The plan benches the intermediate state so the record says which multiplier
@@ -89,25 +90,47 @@ of `presets` and `guided_filter` out of `noise_reduction`.
 
 ## 2. Implementation shape
 
+> **⚠ Corrected during implementation.** This section originally proposed
+> `par_chunks_exact_mut(4)` — one pixel per rayon task. Measured, that is **slower than not
+> threading at all**: 1.64 ms against 1.13 ms sequential on a 1600×1068 frame, because the
+> per-item dispatch stops the inner work vectorising. The shape below is what was built.
+
+Parallelise in **coarse blocks with a sequential inner loop**, so the work vectorises *and*
+spreads across cores:
+
 ```rust
+const PACK_BLOCK_PX: usize = 8192;
+
 pub fn to_rgba8(&self) -> Vec<u8> {
     let mut out = vec![0u8; self.width * self.height * 4];
-    out.par_chunks_exact_mut(4)
-        .zip(self.data.par_chunks_exact(Self::CHANNELS))
-        .for_each(|(dst, src)| {
-            dst[0] = quantize(src[0]);
-            dst[1] = quantize(src[1]);
-            dst[2] = quantize(src[2]);
-            dst[3] = 255;
+    out.par_chunks_mut(PACK_BLOCK_PX * 4)
+        .zip(self.data.par_chunks(PACK_BLOCK_PX * Self::CHANNELS))
+        .for_each(|(ob, sb)| {
+            for (dst, src) in ob.chunks_exact_mut(4).zip(sb.chunks_exact(Self::CHANNELS)) {
+                dst[0] = Self::quantize(src[0]);
+                dst[1] = Self::quantize(src[1]);
+                dst[2] = Self::quantize(src[2]);
+                dst[3] = 255;
+            }
         });
     out
 }
 ```
 
-Chunk sizes are non-zero constants, so unlike `map_pixels_xy` — where a zero-width image makes
-`par_chunks_exact_mut(0)` panic — there is **no zero-size special case**. An empty image yields
-an empty `Vec` and the parallel iterator does nothing. Tested anyway, because that reasoning is
-worth pinning rather than trusting.
+Measured at 1600×1068 (27 MB touched, 8 threads): sequential 1.13 ms / 24.2 GB/s, per-pixel
+parallel 1.64 ms / 16.7 GB/s, block parallel **0.46 ms / 58.9 GB/s**. Block size is flat from
+~1024 up (52.8 / 58.9 / 61.3 GB/s at 1024 / 8192 / 65536), so 8192 sits in the middle of a
+plateau rather than on a tuned peak. Note this also disproves the tempting explanation that the
+operation is memory-bandwidth-bound and cannot be threaded — 61 GB/s against 24 says otherwise.
+
+`par_chunks_mut` rather than `par_chunks_exact_mut`, so a pixel count that is not a multiple of
+the block still gets its remainder; the two zipped iterators split into the same number of
+chunks because both block widths derive from the same pixel count.
+
+Block widths are non-zero constants, so unlike `map_pixels_xy` — where a zero-width image makes
+`par_chunks_exact_mut(0)` panic — there is **no zero-size special case**. Chunking by a fixed
+block rather than by row is what buys that. An empty image yields an empty `Vec`. Tested anyway,
+because that reasoning is worth pinning rather than trusting.
 
 `quantize` is one shared private function, so the two public conversions cannot disagree about
 rounding.
