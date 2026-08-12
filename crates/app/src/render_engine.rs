@@ -144,19 +144,14 @@ fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> 
 }
 
 /// Pack a rendered sRGB image into an RGBA8 frame.
+///
+/// The quantization lives on `ImageBuf`, where the buffer and rayon already are — which is also
+/// why `app` needs no `rayon` dependency of its own.
 fn pack(out: ImageBuf, region: Option<Region>) -> RenderedFrame {
-    let (width, height) = (out.width(), out.height());
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for px in out.data().chunks_exact(3) {
-        rgba.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
-        rgba.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
-        rgba.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);
-        rgba.push(255);
-    }
     RenderedFrame {
-        width,
-        height,
-        rgba,
+        width: out.width(),
+        height: out.height(),
+        rgba: out.to_rgba8(),
         region,
     }
 }

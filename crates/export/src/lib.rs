@@ -12,12 +12,13 @@ pub enum ExportError {
 }
 
 /// Quantize a display-encoded image to interleaved 8-bit RGB, clamping to `[0, 1]`.
+///
+/// Kept as a free function with this name so no call site changes, but the quantization itself
+/// now lives on `ImageBuf` — one implementation for the encoder and for the preview canvas,
+/// which therefore cannot drift. `to_rgb8_quantizes_and_clamps` below is the guard that this
+/// delegation preserved the behaviour exactly.
 pub fn to_rgb8(image: &ImageBuf) -> Vec<u8> {
-    image
-        .data()
-        .iter()
-        .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect()
+    image.to_rgb8()
 }
 
 /// What to encode, and at what depth.
