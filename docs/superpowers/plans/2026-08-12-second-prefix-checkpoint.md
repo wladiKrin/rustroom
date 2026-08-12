@@ -913,14 +913,16 @@ fn render_cached(
 
 - [ ] **Step 4: Update the import and the worker call site**
 
-In `crates/app/src/render_engine.rs`, line 6, add `build_prefix_steps` **and `PipelineStage`** to the `pipeline` import. The trait is not optional: `step.stage.apply(..)` is a trait method on a `Box<dyn PipelineStage>` and will not resolve without the trait in scope — the module has only ever called `Pipeline::run` before now.
+In `crates/app/src/render_engine.rs`, line 6, add `build_prefix_steps` to the `pipeline` import:
 
 ```rust
 use pipeline::{
-    build_pipeline, build_pipeline_split_in_region, build_prefix_steps, PipelineStage, PrefixKey,
-    Region, RenderScale,
+    build_pipeline, build_pipeline_split_in_region, build_prefix_steps, PrefixKey, Region,
+    RenderScale,
 };
 ```
+
+⚠ **Correction, found during execution:** an earlier draft of this step also imported `PipelineStage`, on the reasoning that `step.stage.apply(..)` is a trait method. It is not needed — trait-object methods resolve without the trait in scope, and clippy flags the import as unused. The same applies to the bench in Task 5.
 
 And in `RenderEngine::new`, replace:
 
