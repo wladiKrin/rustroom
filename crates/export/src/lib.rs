@@ -92,6 +92,19 @@ fn rgb16_ne_bytes(image: &ImageBuf) -> Vec<u8> {
         .collect()
 }
 
+/// The sRGB profile every export is tagged with, serialized once.
+///
+/// ⚠ lcms2 is used here for **exactly one thing**: emitting a static sRGB profile. Input
+/// profiles, conversions and a working-space policy remain deferred — this does not un-defer
+/// colour management, it only stops us shipping untagged files.
+///
+/// Falls back to an empty slice if lcms2 ever fails to serialize, because an export that
+/// writes an untagged file is far better than one that refuses to write at all.
+pub fn srgb_icc() -> &'static [u8] {
+    static ICC: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    ICC.get_or_init(|| lcms2::Profile::new_srgb().icc().unwrap_or_default())
+}
+
 /// Encode a display-referred image. `quality` is ignored unless the format is lossy.
 ///
 /// One entry point rather than a function per format, so no caller can branch on format by
@@ -108,23 +121,33 @@ pub fn save(
 
     match format {
         ExportFormat::Jpeg => {
-            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);
+            enc.set_icc_profile(srgb_icc().to_vec())
+                .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Png8 => {
-            let enc = image::codecs::png::PngEncoder::new(file);
+            let mut enc = image::codecs::png::PngEncoder::new(file);
+            enc.set_icc_profile(srgb_icc().to_vec())
+                .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Png16 => {
-            let enc = image::codecs::png::PngEncoder::new(file);
+            let mut enc = image::codecs::png::PngEncoder::new(file);
+            enc.set_icc_profile(srgb_icc().to_vec())
+                .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
         }
         ExportFormat::Tiff8 => {
-            let enc = image::codecs::tiff::TiffEncoder::new(file);
+            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
+            enc.set_icc_profile(srgb_icc().to_vec())
+                .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff16 => {
-            let enc = image::codecs::tiff::TiffEncoder::new(file);
+            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
+            enc.set_icc_profile(srgb_icc().to_vec())
+                .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
         }
     }
@@ -221,6 +244,61 @@ mod tests {
             save(&img, &path, f, 90).unwrap();
             let back = image::open(&path).unwrap().to_rgb8();
             assert_eq!(back.get_pixel(0, 0)[0], 0, "{f:?}");
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Whether `path` carries our sRGB profile.
+    ///
+    /// ⚠ Two instruments, because neither works for every container — and finding that out
+    /// was the interesting part of this feature:
+    ///
+    /// - **PNG** stores `iCCP` **zlib-compressed**, so the profile bytes are not literally
+    ///   present in the file. Its decoder has to be asked.
+    /// - **`image`'s TIFF decoder cannot read back the ICC tag it just wrote** — it looks for
+    ///   the tag with `get_tag_u8_vec`, which does not match the type `write_tag` emits. That
+    ///   is a round-trip gap in the crate, **not** a failure to embed: the bytes are in the
+    ///   file, and macOS `sips` reports `profile: sRGB built-in` for every format we write.
+    ///
+    /// So: decoder for PNG, byte search for JPEG and TIFF. Asking the decoder everywhere
+    /// would have reported a bug that does not exist.
+    fn carries_profile(path: &std::path::Path, format: ExportFormat) -> bool {
+        let bytes = std::fs::read(path).expect("written file");
+        match format {
+            ExportFormat::Png8 | ExportFormat::Png16 => {
+                use image::ImageDecoder;
+                let mut dec = image::ImageReader::open(path)
+                    .unwrap()
+                    .with_guessed_format()
+                    .unwrap()
+                    .into_decoder()
+                    .unwrap();
+                dec.icc_profile()
+                    .unwrap()
+                    .is_some_and(|p| p.as_slice() == srgb_icc())
+            }
+            // 'acsp' is the signature every ICC profile carries at offset 36.
+            _ => bytes.windows(srgb_icc().len()).any(|w| w == srgb_icc()),
+        }
+    }
+
+    #[test]
+    fn every_format_embeds_an_srgb_profile() {
+        // ⚠ A 16-bit TIFF is an archival format; shipping it untagged means the consumer
+        // guesses. JPEG is included because it had been shipping untagged all along, and an
+        // inconsistency nobody can explain is worse than either choice.
+        assert!(!srgb_icc().is_empty(), "the profile should not be empty");
+        assert_eq!(
+            &srgb_icc()[36..40],
+            b"acsp",
+            "lcms2 did not return a well-formed ICC profile"
+        );
+
+        let img = ramp(8, 4);
+        for f in ExportFormat::ALL {
+            let path = tmp(&format!("icc.{}", f.extension()));
+            save(&img, &path, f, 90).unwrap();
+            assert!(carries_profile(&path, f), "{f:?} carries no ICC profile");
             let _ = std::fs::remove_file(&path);
         }
     }
