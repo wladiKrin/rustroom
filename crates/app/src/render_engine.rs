@@ -196,6 +196,24 @@ struct PrefixCache {
 /// watching this fail.
 const _: () = assert!(PrefixCache::MID_BUDGET_BYTES > 0);
 
+/// The sizing decision behind [`PrefixCache::MID_BUDGET_BYTES`], asserted rather than left in a
+/// comment where it could quietly stop being true.
+///
+/// A 26 Mpx (X-T4) full-resolution checkpoint is ~313 MB: the budget must clear one and must
+/// *not* clear two, since a second would double the footprint to save ~200 ms on a rare
+/// interaction. It must also clear a 40 Mpx body's (X-T5, X-H2) — which is the whole reason
+/// this is 512 MiB rather than 320.
+///
+/// Compile-time for the same reason as the guard above: an ordinary `assert!` on constants is
+/// both a clippy warning and a check that only runs if someone runs the tests.
+const _: () = {
+    const X_T4: usize = 6246 * 4170 * 3 * 4;
+    const X_T5: usize = 7728 * 5152 * 3 * 4;
+    assert!(PrefixCache::MID_BUDGET_BYTES > X_T4);
+    assert!(PrefixCache::MID_BUDGET_BYTES < 2 * X_T4);
+    assert!(PrefixCache::MID_BUDGET_BYTES > X_T5);
+};
+
 impl Default for PrefixCache {
     /// ⚠ Hand-written rather than derived: a derived `Default` would give a budget of **0**,
     /// silently disabling every intermediate while leaving every correctness test passing.
@@ -693,18 +711,6 @@ mod tests {
         }
         assert_eq!(cache.mid_len(), 2);
         assert!(cache.mid_len() < PrefixCache::MIDS_CAP);
-    }
-
-    #[test]
-    fn the_budget_holds_one_full_resolution_checkpoint() {
-        // The sizing decision, asserted rather than left in a comment. A 26 Mpx checkpoint is
-        // ~313 MB; the budget must clear it, and must *not* clear two (which would double the
-        // footprint for a rarely-used second checkpoint).
-        const CHECKPOINT: usize = 6246 * 4170 * 3 * 4;
-        assert!(PrefixCache::MID_BUDGET_BYTES > CHECKPOINT);
-        assert!(PrefixCache::MID_BUDGET_BYTES < 2 * CHECKPOINT);
-        // And it must clear a 40 Mpx body's, which is why it is 512 MiB and not 320.
-        assert!(PrefixCache::MID_BUDGET_BYTES > 7728 * 5152 * 3 * 4);
     }
 
     #[test]
