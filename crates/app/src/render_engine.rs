@@ -157,41 +157,112 @@ fn pack(out: ImageBuf, region: Option<Region>) -> RenderedFrame {
     }
 }
 
-/// The cached prefix output is valid for one set of prefix parameters at one working
+/// A cached checkpoint is valid for one cumulative set of prefix parameters at one working
 /// resolution.
 type CacheKey = (PrefixKey, usize);
 
-/// Cached prefix outputs, keyed by prefix parameters and working resolution.
+/// Which tier a checkpoint belongs to. The complete prefix output is a `Final`; every
+/// intermediate is a `Mid`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Tier {
+    Final,
+    Mid,
+}
+
+/// Cached prefix checkpoints, in two tiers that cannot evict each other.
 ///
-/// Two entries, so the fit and native render modes can both stay warm — otherwise every zoom
-/// in or out would recompute the prefix. Most-recently-used first.
-#[derive(Default)]
+/// `finals` holds complete prefix outputs, capped at two entries — one per render mode, so
+/// zooming in and out never recomputes a prefix. That is byte for byte the policy this cache
+/// had before intermediates existed, and it is preserved unconditionally: a native render must
+/// never be able to evict the fit final to make room for its own intermediates.
+///
+/// `mids` holds the intermediates under a byte budget. Retention is effectively deepest-first,
+/// and falls out of plain LRU rather than needing its own rule: within one render checkpoints
+/// are inserted shallow to deep, so the deepest is the most recently used and the shallowest is
+/// evicted first. That is the right order — the deeper checkpoint saves more upstream work.
+///
+/// Both tiers are most-recently-used first.
 struct PrefixCache {
-    entries: Vec<(CacheKey, Arc<ImageBuf>)>,
+    finals: Vec<(CacheKey, Arc<ImageBuf>)>,
+    mids: Vec<(CacheKey, Arc<ImageBuf>)>,
+    mid_budget: usize,
+}
+
+impl Default for PrefixCache {
+    /// ⚠ Hand-written rather than derived: a derived `Default` would give a budget of **0**,
+    /// silently disabling every intermediate while leaving every correctness test passing.
+    fn default() -> Self {
+        Self::with_mid_budget(Self::MID_BUDGET_BYTES)
+    }
 }
 
 impl PrefixCache {
-    /// One entry per render mode.
-    const CAP: usize = 2;
+    /// One complete prefix output per render mode (fit and native).
+    const FINALS_CAP: usize = 2;
 
-    /// Only the tests need this — production code never asks how full the cache is.
+    /// Ceiling on the intermediates. 256 MB holds the full chain in both render modes on a
+    /// 26 Mpx sensor (219 MB worst case); on larger files it bounds the growth instead, and
+    /// native degrades to keeping only the deepest checkpoints that fit.
+    const MID_BUDGET_BYTES: usize = 256 << 20;
+
+    fn with_mid_budget(mid_budget: usize) -> Self {
+        Self {
+            finals: Vec::new(),
+            mids: Vec::new(),
+            mid_budget,
+        }
+    }
+
+    /// Only the tests ask how full a tier is — production code never does.
     #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
+    fn final_len(&self) -> usize {
+        self.finals.len()
     }
 
+    #[cfg(test)]
+    fn mid_len(&self) -> usize {
+        self.mids.len()
+    }
+
+    fn bytes(img: &ImageBuf) -> usize {
+        img.data().len() * std::mem::size_of::<f32>()
+    }
+
+    /// Look in both tiers, promoting a hit to the front of its own tier.
     fn get(&mut self, key: &CacheKey) -> Option<Arc<ImageBuf>> {
-        let i = self.entries.iter().position(|(k, _)| k == key)?;
-        let hit = self.entries.remove(i);
-        let img = hit.1.clone();
-        self.entries.insert(0, hit);
-        Some(img)
+        for tier in [&mut self.finals, &mut self.mids] {
+            if let Some(i) = tier.iter().position(|(k, _)| k == key) {
+                let hit = tier.remove(i);
+                let img = hit.1.clone();
+                tier.insert(0, hit);
+                return Some(img);
+            }
+        }
+        None
     }
 
-    fn insert(&mut self, key: CacheKey, img: Arc<ImageBuf>) {
-        self.entries.retain(|(k, _)| k != &key);
-        self.entries.insert(0, (key, img));
-        self.entries.truncate(Self::CAP);
+    fn insert(&mut self, key: CacheKey, img: Arc<ImageBuf>, tier: Tier) {
+        // A key lives in exactly one tier, but drop it from both: an edit set whose prefix
+        // shrinks (its last stage going neutral) turns a former mid into a final.
+        self.finals.retain(|(k, _)| k != &key);
+        self.mids.retain(|(k, _)| k != &key);
+
+        match tier {
+            Tier::Final => {
+                self.finals.insert(0, (key, img));
+                self.finals.truncate(Self::FINALS_CAP);
+            }
+            Tier::Mid => {
+                self.mids.insert(0, (key, img));
+                let mut total: usize = self.mids.iter().map(|(_, i)| Self::bytes(i)).sum();
+                while total > self.mid_budget {
+                    match self.mids.pop() {
+                        Some((_, evicted)) => total -= Self::bytes(&evicted),
+                        None => break,
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -224,7 +295,7 @@ fn render_cached(
         None => {
             let (prefix, _) = build_pipeline_split_in_region(edits, scale, None);
             let img = Arc::new(prefix.run(buffer.downscale_to(max_dim)));
-            cache.insert(key, img.clone());
+            cache.insert(key, img.clone(), Tier::Final);
             img
         }
     };
@@ -321,6 +392,89 @@ mod tests {
 
     fn varied() -> Arc<ImageBuf> {
         varied_sized(16)
+    }
+
+    /// A distinct dummy image of `n` x `n`, for cache tests that never render.
+    fn dummy(n: usize, v: f32) -> Arc<ImageBuf> {
+        let mut img = ImageBuf::new(n, n);
+        for y in 0..n {
+            for x in 0..n {
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        Arc::new(img)
+    }
+
+    /// A cache key that differs only by `tag`, so tests can fill tiers without rendering.
+    fn fake_key(tag: usize) -> CacheKey {
+        let e = Edits {
+            dehaze: edit_model::Dehaze {
+                amount: 1.0 + tag as f32,
+            },
+            ..Edits::default()
+        };
+        (PrefixKey::new(&e, RenderScale::FULL), tag)
+    }
+
+    #[test]
+    fn the_mid_budget_evicts_the_least_recently_used() {
+        // Each dummy is 4*4*3*4 = 192 bytes; a budget of 400 holds two.
+        let mut cache = PrefixCache::with_mid_budget(400);
+        cache.insert(fake_key(0), dummy(4, 0.1), Tier::Mid);
+        cache.insert(fake_key(1), dummy(4, 0.2), Tier::Mid);
+        cache.insert(fake_key(2), dummy(4, 0.3), Tier::Mid);
+
+        assert_eq!(cache.mid_len(), 2, "the budget must bound the mids tier");
+        // Insertion order within one render is shallow -> deep, so the most recent insert is
+        // the deepest checkpoint. Evicting the LRU is therefore evicting the shallowest.
+        assert!(
+            cache.get(&fake_key(2)).is_some(),
+            "the deepest must survive"
+        );
+        assert!(cache.get(&fake_key(1)).is_some());
+        assert!(
+            cache.get(&fake_key(0)).is_none(),
+            "the shallowest goes first"
+        );
+    }
+
+    #[test]
+    fn the_finals_tier_is_untouched_by_mid_pressure() {
+        // The two tiers cannot evict each other: that is what preserves the zoom guarantee.
+        // With a zero budget no mid survives, and both finals must still be there.
+        let mut cache = PrefixCache::with_mid_budget(0);
+        cache.insert(fake_key(10), dummy(4, 0.4), Tier::Final);
+        cache.insert(fake_key(11), dummy(4, 0.5), Tier::Final);
+        for tag in 0..5 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
+        }
+        assert_eq!(cache.mid_len(), 0);
+        assert_eq!(cache.final_len(), 2);
+        assert!(cache.get(&fake_key(10)).is_some());
+        assert!(cache.get(&fake_key(11)).is_some());
+    }
+
+    #[test]
+    fn the_finals_tier_still_holds_exactly_two() {
+        let mut cache = PrefixCache::default();
+        for tag in 0..4 {
+            cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Final);
+        }
+        assert_eq!(cache.final_len(), 2);
+        assert!(cache.get(&fake_key(3)).is_some());
+        assert!(cache.get(&fake_key(2)).is_some());
+        assert!(cache.get(&fake_key(0)).is_none());
+    }
+
+    #[test]
+    fn the_default_budget_is_the_real_one() {
+        // `#[derive(Default)]` would silently give a budget of 0 and disable every mid, which
+        // would leave the whole feature inert with all correctness tests still passing.
+        assert_eq!(
+            PrefixCache::default().mid_budget,
+            PrefixCache::MID_BUDGET_BYTES
+        );
+        assert!(PrefixCache::MID_BUDGET_BYTES > 0);
     }
 
     /// The RGBA sub-rect of a frame, for comparing a region render against a whole one.
@@ -454,7 +608,7 @@ mod tests {
 
         render_cached(&buf, &e, 8, 1.0, None, &mut cache); // "fit"
         render_cached(&buf, &e, 16, 1.0, None, &mut cache); // "native"
-        assert_eq!(cache.len(), 2, "both modes should stay cached");
+        assert_eq!(cache.final_len(), 2, "both modes should stay cached");
 
         let scale8 = render_scale(16, rendered_long_edge(16, 8), 1.0);
         let scale16 = render_scale(16, rendered_long_edge(16, 16), 1.0);
@@ -470,7 +624,7 @@ mod tests {
             ..e.clone()
         };
         render_cached(&buf, &e2, 16, 1.0, None, &mut cache);
-        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.final_len(), 2);
     }
 
     #[test]
