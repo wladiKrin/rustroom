@@ -227,22 +227,31 @@ actually applied per render, exposed for tests.
 | test | asserts |
 |---|---|
 | `every_cached_frame_matches_a_cold_render` | extended sequence, every frame bit-identical to cold |
-| `a_dehaze_change_reruns_only_dehaze` | with geometry + NR + dehaze active, a dehaze-only change applies exactly **1** prefix stage |
-| `a_noise_reduction_change_reruns_two_stages` | …and an NR-only change applies exactly 2, not 3 |
-| `the_native_seed_shares_the_buffer` | at `max_dim >= buffer_long` the seed is the buffer's own `Arc` and no mid is stored |
-| `the_mid_budget_keeps_the_deepest_checkpoints` | with a tiny budget, the shallow mids are evicted and the deepest survives |
+| `a_change_reruns_only_what_is_downstream_of_it` | with all three prefix stages active: a tail change runs **0** stages, a dehaze change **1**, an NR change **2**, a geometry change **3** |
+| `the_native_seed_shares_the_buffer_rather_than_copying_it` | at `max_dim >= buffer_long` the seed is the buffer's own `Arc` and no checkpoint 0 is stored |
+| `a_shrinking_prefix_does_not_serve_the_wrong_checkpoint` | turning the last prefix stage off promotes its checkpoint into `finals` rather than leaving the zoom guarantee in the budgeted tier |
+| `the_mid_budget_evicts_the_least_recently_used` | with a tiny budget the shallow mids go and the deepest survives |
 | `the_finals_tier_is_untouched_by_mid_pressure` | mid eviction never drops a final; both render modes stay warm |
+| `the_finals_tier_still_holds_exactly_two` | today's cap, unchanged |
+| `the_default_budget_is_the_real_one` | a derived `Default` would give budget 0 and leave the feature inert with every correctness test still green |
 | `the_prefix_holds_geometry_noise_reduction_and_dehaze` | kept — composition and order, which the compiler cannot pin |
+| `the_prefix_steps_are_the_prefix_pipeline` | the step list and the built prefix cannot drift |
+| `every_prefix_step_has_its_own_key` | changing one stage's params changes that step's key and no other's |
+| `a_truncated_prefix_key_ignores_the_stages_below_it` | two edit sets agreeing on the first *n* stages share checkpoint *n* |
 | `prefix_key_ignores_every_downstream_field` | kept, unchanged |
 | `prefix_key_changes_with_prefix_fields_and_scale` | kept, unchanged |
-| `every_prefix_step_has_its_own_key` | changing one stage's params changes that step's key and no other's |
 | `a_region_render_matches_the_whole_render_cropped` | kept, unchanged — must pass untouched |
 | the 29 goldens | byte-identical |
 
-The budget and the stage counter both need to be reachable from tests without being production
-knobs; the budget is a const the test module can override via a constructor
-(`PrefixCache::with_budget`), matching the injection pattern `DecodeWorker` and both preset
-stores already use.
+The budget needs to be reachable from tests without being a production knob, so the const is
+overridable through a constructor (`PrefixCache::with_mid_budget`), matching the injection
+pattern `DecodeWorker` and both preset stores already use. The stage count is a plain return
+value from `render_cached` that the worker discards.
+
+**Deepest-first needs no rule of its own.** Within a render, checkpoints are inserted shallow to
+deep, so the deepest is the most recently used; plain LRU eviction therefore drops the
+shallowest first, which is the order wanted. It is worth stating because it looks like an
+unimplemented requirement otherwise.
 
 ## 5. Bench
 
