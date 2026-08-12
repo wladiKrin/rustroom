@@ -3,7 +3,10 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::{build_pipeline, build_pipeline_split_in_region, PrefixKey, Region, RenderScale};
+use pipeline::{
+    build_pipeline, build_pipeline_split_in_region, build_prefix_steps, PrefixKey, Region,
+    RenderScale,
+};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -76,7 +79,8 @@ impl RenderEngine {
                         Err(TryRecvError::Disconnected) => return,
                     }
                 }
-                let frame = render_cached(
+                // The stage count is for the tests and the bench; the worker only wants pixels.
+                let (frame, _stages_run) = render_cached(
                     &buffer,
                     &req.edits,
                     req.max_dim,
@@ -188,6 +192,15 @@ struct PrefixCache {
     mid_budget: usize,
 }
 
+/// ⚠ A zero budget would evict every intermediate on insert, leaving the whole checkpoint chain
+/// inert while every correctness test still passed. Checked at compile time so it cannot regress.
+///
+/// It has to be a free-standing `const _` item: an *associated* const is only evaluated where it
+/// is used, so writing this inside `impl PrefixCache` compiles happily with a budget of 0 — a
+/// guard that does not guard, which is worse than none. Verified by setting the budget to 0 and
+/// watching this fail.
+const _: () = assert!(PrefixCache::MID_BUDGET_BYTES > 0);
+
 impl Default for PrefixCache {
     /// ⚠ Hand-written rather than derived: a derived `Default` would give a budget of **0**,
     /// silently disabling every intermediate while leaving every correctness test passing.
@@ -225,7 +238,7 @@ impl PrefixCache {
     }
 
     fn bytes(img: &ImageBuf) -> usize {
-        img.data().len() * std::mem::size_of::<f32>()
+        std::mem::size_of_val(img.data())
     }
 
     /// Look in both tiers, promoting a hit to the front of its own tier.
@@ -266,47 +279,98 @@ impl PrefixCache {
     }
 }
 
-/// Render one request, reusing the cached prefix output when the prefix parameters are
-/// unchanged.
+/// Render one request, resuming from the deepest cached prefix checkpoint.
 ///
-/// The prefix — geometry and noise reduction — is by far the expensive half once noise
-/// reduction is on, and its parameters do not change when an adjustment slider moves. See
-/// `docs/superpowers/specs/2026-08-06-preview-prefix-cache-design.md`.
+/// The prefix — geometry, noise reduction, dehaze — is by far the expensive half, and a slider
+/// move usually changes only one of its stages, or none. So each stage's output is cached
+/// separately and the walk restarts at the deepest checkpoint still valid, running only what is
+/// downstream of the change. See
+/// `docs/superpowers/specs/2026-08-12-second-prefix-checkpoint-design.md`.
+///
+/// Returns the frame and **how many prefix stages actually ran**. The worker ignores the count;
+/// it exists because the correctness tests would all still pass with the cache deleted, so
+/// something has to assert that work is genuinely being skipped.
 fn render_cached(
-    buffer: &ImageBuf,
+    buffer: &Arc<ImageBuf>,
     edits: &Edits,
     max_dim: usize,
     source_scale: f32,
     region: Option<RegionRect>,
     cache: &mut PrefixCache,
-) -> RenderedFrame {
+) -> (RenderedFrame, usize) {
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
         buffer_long,
         rendered_long_edge(buffer_long, max_dim),
         source_scale,
     );
-    let key = (PrefixKey::new(edits, scale), max_dim);
 
-    // The prefix never depends on the region, so it is built and cached without one — which
-    // is why panning re-runs only the tail and never invalidates the cache.
-    let mid = match cache.get(&key) {
-        Some(img) => img, // Arc clone: free
-        None => {
-            let (prefix, _) = build_pipeline_split_in_region(edits, scale, None);
-            let img = Arc::new(prefix.run(buffer.downscale_to(max_dim)));
-            cache.insert(key, img.clone(), Tier::Final);
-            img
+    // The prefix never depends on the region, so the whole chain is built and cached without
+    // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
+    let steps = build_prefix_steps(edits, scale);
+    let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
+    let tier_at = |n: usize| {
+        if n == steps.len() {
+            Tier::Final
+        } else {
+            Tier::Mid
         }
     };
 
+    // Resume from the deepest checkpoint still held. `n == 0` is the bare downscale.
+    let mut resumed = None;
+    for n in (0..=steps.len()).rev() {
+        if let Some(img) = cache.get(&key_at(n)) {
+            resumed = Some((n, img));
+            break;
+        }
+    }
+
+    let (start, mut img) = match resumed {
+        Some(hit) => hit,
+        None => {
+            // ⚠ When nothing needs shrinking, `downscale_to` is a clone of a buffer the engine
+            // already owns behind an `Arc`. Sharing it makes checkpoint 0 free in both time and
+            // memory; caching it would cost a whole buffer (78 MB on an X-T4) to save 2.2 ms.
+            let seed_is_free = max_dim == 0 || buffer_long <= max_dim;
+            let seed = if seed_is_free {
+                Arc::clone(buffer)
+            } else {
+                let s = Arc::new(buffer.downscale_to(max_dim));
+                cache.insert(key_at(0), s.clone(), tier_at(0));
+                s
+            };
+            (0, seed)
+        }
+    };
+
+    // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU seam
+    // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
+    // (fit) and 2.1 ms (native) against the 13–117 ms each avoided stage costs.
+    for (i, step) in steps.iter().enumerate().skip(start) {
+        img = Arc::new(step.stage.apply((*img).clone()));
+        cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
+    }
+    let ran = steps.len() - start;
+
+    // ⚠ The complete prefix output must always live in the protected tier, even when we
+    // resumed at it without running anything. A prefix that *shrinks* — its last stage going
+    // neutral — turns a former intermediate into the final, and leaving it in the budgeted
+    // tier would let a large render evict the very thing the zoom guarantee rests on.
+    // `steps.is_empty()` is excluded because there the final *is* checkpoint 0, which is
+    // either free (and must not be stored) or was already inserted as a final above.
+    if ran == 0 && !steps.is_empty() {
+        cache.insert(key_at(steps.len()), img.clone(), Tier::Final);
+    }
+
     // The region can only be resolved once the prefix output's dimensions are known, which is
-    // why the split is built a second time here. Building is a few Box allocations.
-    let (pw, ph) = (mid.width(), mid.height());
+    // why the tail is built here rather than alongside the steps. Building is a few Box
+    // allocations.
+    let (pw, ph) = (img.width(), img.height());
     let rect = region.and_then(|r| r.clamped(pw, ph));
     let (input, region) = match rect {
         Some(r) => (
-            mid.crop(r.x, r.y, r.w, r.h),
+            img.crop(r.x, r.y, r.w, r.h),
             Some(Region {
                 full_w: pw,
                 full_h: ph,
@@ -314,14 +378,11 @@ fn render_cached(
                 y0: r.y,
             }),
         ),
-        // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU
-        // seam clean — so a cached image must be copied before the tail can run. Measured at
-        // 0.6 ms against the 9 ms downscale it avoids.
-        None => ((*mid).clone(), None),
+        None => ((*img).clone(), None),
     };
 
     let (_, tail) = build_pipeline_split_in_region(edits, scale, region);
-    pack(tail.run(input), region)
+    (pack(tail.run(input), region), ran)
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -392,6 +453,128 @@ mod tests {
 
     fn varied() -> Arc<ImageBuf> {
         varied_sized(16)
+    }
+
+    /// Every prefix stage active, so a resume point is observable at each depth.
+    fn full_prefix() -> Edits {
+        Edits {
+            exposure: 0.5,
+            geometry: edit_model::Geometry {
+                angle: 2.0,
+                ..Default::default()
+            },
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 60.0,
+                color: 60.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 40.0 },
+            ..Edits::default()
+        }
+    }
+
+    #[test]
+    fn a_change_reruns_only_what_is_downstream_of_it() {
+        // The feature itself. `every_cached_frame_matches_a_cold_render` proves the output is
+        // right but would still pass with the cache deleted; this proves work is actually
+        // being skipped, which is the entire point of the change.
+        let buf = varied();
+        let base = full_prefix();
+        let mut cache = PrefixCache::default();
+
+        let (_, cold) = render_cached(&buf, &base, 8, 1.0, None, &mut cache);
+        assert_eq!(cold, 3, "a cold render runs every prefix stage");
+
+        let (_, hit) = render_cached(&buf, &base, 8, 1.0, None, &mut cache);
+        assert_eq!(hit, 0, "an unchanged prefix runs nothing");
+
+        // A tail-only change still runs nothing: it resumes at the final checkpoint.
+        let tail_only = Edits {
+            exposure: -1.5,
+            ..base.clone()
+        };
+        let (_, ran) = render_cached(&buf, &tail_only, 8, 1.0, None, &mut cache);
+        assert_eq!(ran, 0, "a tail change must not touch the prefix");
+
+        // Dehaze is last in the prefix, so only dehaze re-runs. This is the 86.8 ms case.
+        let dehaze = Edits {
+            dehaze: edit_model::Dehaze { amount: 85.0 },
+            ..base.clone()
+        };
+        let (_, ran) = render_cached(&buf, &dehaze, 8, 1.0, None, &mut cache);
+        assert_eq!(ran, 1, "a dehaze change must resume after noise reduction");
+
+        // Noise reduction is second, so NR and dehaze re-run but geometry does not.
+        let nr = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 15.0,
+                color: 15.0,
+                ..Default::default()
+            },
+            ..base.clone()
+        };
+        let (_, ran) = render_cached(&buf, &nr, 8, 1.0, None, &mut cache);
+        assert_eq!(ran, 2, "an NR change must resume after geometry");
+
+        // Geometry is first, so everything re-runs — but the downscale is still reused.
+        let geo = Edits {
+            geometry: edit_model::Geometry {
+                angle: 9.0,
+                ..Default::default()
+            },
+            ..base.clone()
+        };
+        let (_, ran) = render_cached(&buf, &geo, 8, 1.0, None, &mut cache);
+        assert_eq!(ran, 3, "a geometry change invalidates the whole prefix");
+    }
+
+    #[test]
+    fn the_native_seed_shares_the_buffer_rather_than_copying_it() {
+        // When nothing is downscaled, `downscale_to` is a clone of a buffer the engine already
+        // holds behind an `Arc`. Caching that would cost 78 MB on an X-T4 to save 2.2 ms, so
+        // the chain seeds from the Arc instead and stores no checkpoint 0.
+        let buf = varied(); // 16 x 16
+        let base = full_prefix();
+
+        let mut native = PrefixCache::default();
+        render_cached(&buf, &base, 16, 1.0, None, &mut native);
+        assert_eq!(
+            native.mid_len(),
+            2,
+            "native should store only the post-geometry and post-NR checkpoints"
+        );
+
+        let mut fit = PrefixCache::default();
+        render_cached(&buf, &base, 8, 1.0, None, &mut fit);
+        assert_eq!(
+            fit.mid_len(),
+            3,
+            "fit should additionally store the downscale"
+        );
+    }
+
+    #[test]
+    fn a_shrinking_prefix_does_not_serve_the_wrong_checkpoint() {
+        // Turning dehaze off makes the post-NR checkpoint the *final* one. Its key is the same
+        // value it had as a mid, so the tiers must not end up holding it twice with the two
+        // copies free to diverge.
+        let buf = varied();
+        let mut cache = PrefixCache::default();
+        let with = full_prefix();
+        render_cached(&buf, &with, 8, 1.0, None, &mut cache);
+
+        let without = Edits {
+            dehaze: edit_model::Dehaze::default(),
+            ..with.clone()
+        };
+        let (got, ran) = render_cached(&buf, &without, 8, 1.0, None, &mut cache);
+        assert_eq!(ran, 0, "the post-NR checkpoint is now the final one");
+        assert_eq!(got.rgba, render_once(&buf, &without, 8, 1.0).rgba);
+
+        // ...and it must have been *promoted* into the protected tier, not left in the
+        // budgeted one where a big render could evict the thing zooming back relies on.
+        assert_eq!(cache.final_len(), 2);
+        assert_eq!(cache.mid_len(), 2);
     }
 
     /// A distinct dummy image of `n` x `n`, for cache tests that never render.
@@ -470,11 +653,11 @@ mod tests {
     fn the_default_budget_is_the_real_one() {
         // `#[derive(Default)]` would silently give a budget of 0 and disable every mid, which
         // would leave the whole feature inert with all correctness tests still passing.
+        // (That the const itself is non-zero is a compile-time assertion on `PrefixCache`.)
         assert_eq!(
             PrefixCache::default().mid_budget,
             PrefixCache::MID_BUDGET_BYTES
         );
-        assert!(PrefixCache::MID_BUDGET_BYTES > 0);
     }
 
     /// The RGBA sub-rect of a frame, for comparing a region render against a whole one.
@@ -535,11 +718,11 @@ mod tests {
 
         // max_dim = n is native for this n x n buffer, i.e. no downscale, so the render
         // scale is exactly 1.0 and the inset above is the full-resolution kernel.
-        let whole = render_cached(&buf, &edits, n, 1.0, None, &mut PrefixCache::default());
+        let (whole, _) = render_cached(&buf, &edits, n, 1.0, None, &mut PrefixCache::default());
 
         // Guard against the test passing trivially: the spatial tail stages must actually
         // move pixels here, or the "weakened invariant" it exists to cover is not exercised.
-        let unsharpened = render_cached(
+        let (unsharpened, _) = render_cached(
             &buf,
             &Edits {
                 sharpening: edit_model::Sharpening::default(),
@@ -565,7 +748,7 @@ mod tests {
             "region must be wider than twice the kernel ({inset})"
         );
 
-        let got = render_cached(
+        let (got, _) = render_cached(
             &buf,
             &edits,
             n,
@@ -631,7 +814,7 @@ mod tests {
     fn a_region_bigger_than_the_image_is_clamped() {
         let buf = varied();
         let e = Edits::default();
-        let got = render_cached(
+        let (got, _) = render_cached(
             &buf,
             &e,
             16,
@@ -649,50 +832,51 @@ mod tests {
 
     #[test]
     fn every_cached_frame_matches_a_cold_render() {
-        // The property that matters: caching must be invisible in the output. The sequence
-        // walks a pure hit, a downstream-only change (hit), an NR change (miss), a return to
-        // an earlier state (miss, since there is one entry) and a geometry change (miss).
+        // The master test: caching must be invisible in the output. The sequence walks a pure
+        // hit, a tail-only change (resumes at the final), a dehaze change (resumes after NR),
+        // an NR change (resumes after geometry), a geometry change (resumes at the seed), and
+        // returns to earlier states so a stale checkpoint would show up.
         let buf = varied();
-        let a = Edits {
-            exposure: 0.5,
-            noise_reduction: edit_model::NoiseReduction {
-                luminance: 60.0,
-                color: 60.0,
-                ..Default::default()
-            },
-            ..Edits::default()
-        };
+        let a = full_prefix();
         let b = Edits {
             exposure: -1.0,
             ..a.clone()
-        }; // downstream only
+        }; // tail only
         let c = Edits {
+            dehaze: edit_model::Dehaze { amount: 85.0 },
+            ..a.clone()
+        }; // deepest prefix stage
+        let d = Edits {
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 10.0,
                 color: 10.0,
                 ..Default::default()
             },
             ..a.clone()
-        }; // prefix change
-        let d = Edits {
+        }; // middle prefix stage
+        let e = Edits {
             geometry: edit_model::Geometry {
-                angle: 4.0,
+                angle: 9.0,
                 ..Default::default()
             },
             ..a.clone()
-        }; // prefix change
+        }; // first prefix stage
 
         // Guard against the whole test passing trivially: these must actually differ.
         let cold_a = render_once(&buf, &a, 8, 1.0);
-        assert_ne!(cold_a.rgba, render_once(&buf, &b, 8, 1.0).rgba);
-        assert_ne!(cold_a.rgba, render_once(&buf, &c, 8, 1.0).rgba);
-        assert_ne!(cold_a.rgba, render_once(&buf, &d, 8, 1.0).rgba);
+        for (name, other) in [("b", &b), ("c", &c), ("d", &d), ("e", &e)] {
+            assert_ne!(
+                cold_a.rgba,
+                render_once(&buf, other, 8, 1.0).rgba,
+                "edit set {name} renders identically to a — the test proves nothing"
+            );
+        }
 
         let engine = RenderEngine::new(buf.clone(), 1.0, || {});
-        for (i, e) in [&a, &a, &b, &c, &a, &d].iter().enumerate() {
-            engine.request((*e).clone(), 8, None);
+        for (i, ed) in [&a, &a, &b, &c, &a, &d, &e, &a, &c].iter().enumerate() {
+            engine.request((*ed).clone(), 8, None);
             let got = wait_for_frame(&engine);
-            let cold = render_once(&buf, e, 8, 1.0);
+            let cold = render_once(&buf, ed, 8, 1.0);
             assert_eq!(got.rgba, cold.rgba, "frame {i} differs from a cold render");
         }
     }
