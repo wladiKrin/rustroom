@@ -221,37 +221,53 @@ impl ImageBuf {
     /// Downscale so the longer edge is at most `max_dim`, preserving aspect ratio, using
     /// area averaging in the current (linear) light. Never upscales; returns a copy if
     /// already small enough or if `max_dim == 0`.
+    ///
+    /// Parallel across **output rows**: each output pixel averages its own source rectangle
+    /// and reads nothing else, so the result is identical to the sequential one, bit for bit.
+    /// Rows rather than the fixed blocks [`ImageBuf::to_rgba8`] uses, because a row here is
+    /// already a substantial task — a 1600-wide output row averages tens of thousands of
+    /// source pixels, so there is none of the per-item dispatch overhead that made a
+    /// per-pixel split of the 8-bit pack slower than not threading at all.
     pub fn downscale_to(&self, max_dim: usize) -> ImageBuf {
         let long = self.width.max(self.height);
-        if max_dim == 0 || long <= max_dim {
+        // ⚠ The empty check is not redundant with the one below, and it is load-bearing twice
+        // over. `dw`/`dh` are clamped up to 1, so a 0 x 5 source used to produce a 1 x 2 image
+        // of `NaN` — the averaging loop found no source pixels and divided by zero. It also
+        // guarantees the row chunk width below is non-zero, which `par_chunks_exact_mut`
+        // requires.
+        if max_dim == 0 || long <= max_dim || self.width == 0 || self.height == 0 {
             return self.clone();
         }
         let scale = max_dim as f32 / long as f32;
         let dw = (self.width as f32 * scale).round().max(1.0) as usize;
         let dh = (self.height as f32 * scale).round().max(1.0) as usize;
 
-        let mut out = ImageBuf::new(dw, dh);
-        for oy in 0..dh {
-            let sy0 = oy * self.height / dh;
-            let sy1 = (((oy + 1) * self.height / dh).max(sy0 + 1)).min(self.height);
-            for ox in 0..dw {
-                let sx0 = ox * self.width / dw;
-                let sx1 = (((ox + 1) * self.width / dw).max(sx0 + 1)).min(self.width);
-                let mut acc = [0.0f32; 3];
-                let mut n = 0.0f32;
-                for sy in sy0..sy1 {
-                    for sx in sx0..sx1 {
-                        let p = self.pixel(sx, sy);
-                        acc[0] += p[0];
-                        acc[1] += p[1];
-                        acc[2] += p[2];
-                        n += 1.0;
+        let mut data = vec![0.0f32; dw * dh * Self::CHANNELS];
+        data.par_chunks_exact_mut(dw * Self::CHANNELS)
+            .enumerate()
+            .for_each(|(oy, orow)| {
+                let sy0 = oy * self.height / dh;
+                let sy1 = (((oy + 1) * self.height / dh).max(sy0 + 1)).min(self.height);
+                for (ox, out) in orow.chunks_exact_mut(Self::CHANNELS).enumerate() {
+                    let sx0 = ox * self.width / dw;
+                    let sx1 = (((ox + 1) * self.width / dw).max(sx0 + 1)).min(self.width);
+                    let mut acc = [0.0f32; 3];
+                    let mut n = 0.0f32;
+                    for sy in sy0..sy1 {
+                        for sx in sx0..sx1 {
+                            let p = self.pixel(sx, sy);
+                            acc[0] += p[0];
+                            acc[1] += p[1];
+                            acc[2] += p[2];
+                            n += 1.0;
+                        }
                     }
+                    out[0] = acc[0] / n;
+                    out[1] = acc[1] / n;
+                    out[2] = acc[2] / n;
                 }
-                out.set_pixel(ox, oy, [acc[0] / n, acc[1] / n, acc[2] / n]);
-            }
-        }
-        out
+            });
+        ImageBuf::from_vec(dw, dh, data)
     }
 }
 
@@ -299,6 +315,97 @@ mod tests {
             out.push(255);
         }
         out
+    }
+
+    /// The area-average downscale as a plain sequential loop, written out here rather than
+    /// shared with production so it can hold the old behaviour still while production changes.
+    fn downscale_reference(img: &ImageBuf, max_dim: usize) -> ImageBuf {
+        let long = img.width().max(img.height());
+        if max_dim == 0 || long <= max_dim {
+            return img.clone();
+        }
+        let scale = max_dim as f32 / long as f32;
+        let dw = (img.width() as f32 * scale).round().max(1.0) as usize;
+        let dh = (img.height() as f32 * scale).round().max(1.0) as usize;
+        let mut out = ImageBuf::new(dw, dh);
+        for oy in 0..dh {
+            let sy0 = oy * img.height() / dh;
+            let sy1 = (((oy + 1) * img.height() / dh).max(sy0 + 1)).min(img.height());
+            for ox in 0..dw {
+                let sx0 = ox * img.width() / dw;
+                let sx1 = (((ox + 1) * img.width() / dw).max(sx0 + 1)).min(img.width());
+                let mut acc = [0.0f32; 3];
+                let mut n = 0.0f32;
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        let p = img.pixel(sx, sy);
+                        acc[0] += p[0];
+                        acc[1] += p[1];
+                        acc[2] += p[2];
+                        n += 1.0;
+                    }
+                }
+                out.set_pixel(ox, oy, [acc[0] / n, acc[1] / n, acc[2] / n]);
+            }
+        }
+        out
+    }
+
+    /// A non-uniform image, so a mis-indexed row would show up rather than averaging away.
+    fn varied(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(
+                    x,
+                    y,
+                    [
+                        x as f32 / w as f32,
+                        y as f32 / h as f32,
+                        ((x * 7 + y * 13) % 11) as f32 / 11.0,
+                    ],
+                );
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn downscale_matches_a_sequential_reference() {
+        // ⚠ Parallelising over output rows must be invisible in the output. Sizes chosen so
+        // the source/output ratio is non-integral in both axes and the row count exceeds any
+        // plausible thread count, so a row-indexing mistake cannot hide.
+        for (w, h, max_dim) in [
+            (300_usize, 200_usize, 64_usize),
+            (200, 300, 64),
+            (301, 199, 97),
+            (64, 64, 63),
+            (17, 5, 4),
+        ] {
+            let img = varied(w, h);
+            let got = img.downscale_to(max_dim);
+            let want = downscale_reference(&img, max_dim);
+            assert_eq!(
+                (got.width(), got.height()),
+                (want.width(), want.height()),
+                "{w}x{h} -> {max_dim}"
+            );
+            assert_eq!(got.data(), want.data(), "{w}x{h} -> {max_dim}");
+        }
+    }
+
+    #[test]
+    fn downscale_handles_the_degenerate_sizes() {
+        // ⚠ Unlike `to_rgba8`, the row chunk width here is *derived*, so a zero would panic in
+        // `par_chunks_exact_mut`. It is unreachable: `dw`/`dh` are clamped to at least 1, and
+        // a zero-dimension image takes the early clone path. Pinned rather than trusted.
+        assert_eq!(ImageBuf::new(0, 0).downscale_to(16).width(), 0);
+        assert_eq!(ImageBuf::new(0, 5).downscale_to(2).width(), 0);
+        // An extreme ratio still yields at least one pixel per axis.
+        let thin = varied(1000, 3);
+        let out = thin.downscale_to(4);
+        assert_eq!((out.width(), out.height()), (4, 1));
+        assert_eq!(out.data(), downscale_reference(&thin, 4).data());
     }
 
     #[test]
