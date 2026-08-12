@@ -100,20 +100,24 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 > **▶ RESUME HERE (fresh session).** Working tree clean, all checks green, everything committed to `main` **locally** — the user pushes to `github.com/wladiKrin/rustroom` themselves, so **never push without asking**. **Commit messages carry no `Co-Authored-By` trailer** (explicit preference). **Run the GUI:** `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"` then `cargo run --release -p app` — always `--release`, and **launch it after every big update without being asked**, saying what to look at (skip it for small tweaks in a tuning loop).
 
-**▶ NEXT ACTION: photo edit history surviving a photo switch** (deferred add-on, user's call 2026-08-07). `History<Edits>` lives on `Session` and dies with it, so Ctrl+Z cannot reach across a switch — edit photo A, move to B, come back, and A's undo stack is gone even though its edits were restored from the sidecar. Needs a per-path history beside `BufferCache` plus a policy for how much to keep and whether any of it persists to disk. ⚠ Note the interaction with `action_log`: `forget_photo_edits()` exists precisely because a `PhotoEdit` entry outliving its session would pop the wrong photo's history, and a per-path history changes that calculus rather than merely extending it.
+**▶ NEXT ACTION: rework the full-resolution trigger to eager-on-settle, and collapse back to one engine.** Decided with the user 2026-08-12 after they used the 1:1 view: measured, the **NativeHalf tier (1.0–1.95× zoom) has 22.6% of samples differing by >2/255** from a properly demosaiced render, and Fit has 5.5% — so zoom-triggered decoding leaves a normal editing zoom visibly wrong. Lightroom's Develop module always works from a full decode; Smart Previews are its one opt-in downgrade.
+
+The shape: start the full decode once the `Session` has **settled** (an explicit dwell on session age — the ~1.2 s of debounce plus half decode is implicit, but a `BufferCache` hit creates a `Session` instantly and would otherwise fire decodes while arrowing back through recent photos). Then **every tier renders from the full buffer**, which makes the half-size engine dead weight — so `FullRes`, `active_full`, `Session::request` routing and the dual polling all **come out**, and the tier ladder generalises to "steps of ≤2× from fit resolution up to the buffer's long edge" (two tiers on a 3123 buffer, three on 6246, any sensor). Net: less code than now. ⚠ The `downscale_to` work above already erased the cost — fit from the full buffer is 8.6 ms against today's 9.1.
+
+**▶ THEN: photo edit history surviving a photo switch** (deferred add-on, user's call 2026-08-07). `History<Edits>` lives on `Session` and dies with it, so Ctrl+Z cannot reach across a switch — edit photo A, move to B, come back, and A's undo stack is gone even though its edits were restored from the sidecar. Needs a per-path history beside `BufferCache` plus a policy for how much to keep and whether any of it persists to disk. ⚠ Note the interaction with `action_log`: `forget_photo_edits()` exists precisely because a `PhotoEdit` entry outliving its session would pop the wrong photo's history, and a per-path history changes that calculus rather than merely extending it.
 
 Run it through **brainstorm → spec → plan → executing-plans, all inline** (the user picks inline every time; offer it but expect that answer).
 
 **What is left, in rough order of value:**
-1. **Photo edit history surviving a photo switch** — the next action above.
-2. **`--format` on the CLI's `render`** — small parity gap; the app writes five formats, the CLI one.
-3. **Matching the 1:1 view's demosaic to the export preset's** — small, contained; see the full-resolution section's caveat.
-4. **Parallelising `downscale_to`** — the last sequential hot loop in the render path, 9.1 ms on the fit prefix's seed. Same treatment the RGBA8 pack got; the block-granularity lesson there applies directly.
+1. **The full-resolution trigger rework** — the next action above.
+2. **Photo edit history surviving a photo switch** — then that.
+3. **`--format` on the CLI's `render`** — small parity gap; the app writes five formats, the CLI one.
+4. **Matching the 1:1 view's demosaic to the export preset's** — small, contained; see the full-resolution section's caveat.
 5. **Phase 3** — the roadmap's next phase.
 
 **Phase 2 status against the roadmap's own milestones** (`03-plan-of-action.md`): **M2.1 ✅**, **M2.2 ✅**, **M2.3 ✅** — HSL / vibrance / NR / vignette / sharpening / texture / clarity / **dehaze** all landed (2026-08-11) — **M2.4 ✅** — copy/paste, sync, batch export and **export presets** all landed (2026-08-11). **✅ Phase 2 is complete.** ⚠ The roadmap file in the Obsidian vault still shows M2.3 🟡 and needs its marker updated.
 
-**Standing perf items** (none blocking): parallelising `downscale_to`, the last sequential hot loop in the render path. The full-resolution 1:1 buffer, the RGBA8 pack, the per-stage prefix checkpoints and libraw's `user_qual` are all **done**; see their sections below. Docs live in `docs/superpowers/`.
+**Standing perf items:** none. `downscale_to`, the full-resolution 1:1 buffer, the RGBA8 pack, the per-stage prefix checkpoints and libraw's `user_qual` are all **done** — see their sections below. Docs live in `docs/superpowers/`.
 
 **Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
 
@@ -134,6 +138,14 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
 
 **⚠ Demosaic: we never set `user_qual`, so every decode inherits libraw's slowest.** Measured full-res on the X-T4 (unpack a flat ~850 ms in all cases): bilinear 405 ms → VNG 2,310 → PPG 6,782 → **AHD 10,148** (the default). So ~93% of an 11 s full-res decode is demosaic, chosen by a default nobody made. Two conclusions: **full-res is reachable in ~1.3 s, not 11.4** — which makes a future background full-res upgrade for true 1:1 far more tractable than it looked — and **the planned Phase 5 `wgpu` port would not fix it**, because that time is inside libraw's `dcraw_process`, entirely upstream of the `PipelineStage`s wgpu would touch. GPU demosaic means replacing libraw's, and on X-Trans that is Markesteijn/AMaZE-class work whose errors surface as exactly the fine-detail artifacts one zooms in to inspect. Every export also pays this ~11 s. Tracked as a separate task.
 
+**`downscale_to` is 3.2× faster — the last sequential hot loop in the render path is gone.** Parallel across **output rows**: each output pixel averages its own source rectangle and reads nothing else, so the result is bit-identical.
+
+- **Measured** (X-T4, release, best of 9): `downscale_to(1600)` from the half buffer **9.1 → 2.8 ms**; from a full-resolution buffer **27.3 → 8.6 ms**; `downscale_to(3123)` from full is 10.8 ms.
+- **⚠ Consequence for the pending trigger rework:** sourcing the *fit* tier from the full-resolution buffer now costs **8.6 ms, less than today's 9.1 ms** from the half one. The +18 ms regression that rework was going to pay simply does not exist any more — do it before, not after.
+- **Rows, not the fixed blocks `to_rgba8` uses**, and that is a deliberate difference: a 1600-wide output row already averages tens of thousands of source pixels, so there is none of the per-item dispatch overhead that made a per-pixel split of the 8-bit pack *slower than not threading at all*. The granularity was checked rather than assumed, which is the lesson that work left behind.
+- **⚠ It found a pre-existing bug on the way in.** `dw`/`dh` are clamped up to 1, so a 0×5 source produced a **1×2 image of `NaN`** — the averaging loop found no source pixels and divided by zero. The empty-dimension guard fixes that *and* is what makes the row chunk width provably non-zero, which `par_chunks_exact_mut` requires. `downscale_handles_the_degenerate_sizes` pins both.
+- **Bit-identity is proven against a sequential reference written inline in the tests**, over five source/output ratios chosen to be non-integral in both axes with more rows than any plausible thread count. Watched to fail by perturbing the row index.
+
 **True 1:1 done — the 1:1 view finally shows the real pixels.** What Rustroom called "100%" was a **half-size** decode that *skips demosaic entirely* (2×2 binning) while export runs a real algorithm. Zooming past ~2× now decodes the full image in the background and renders against it.
 
 - **Measured** (X-T4 `.RAF`, release, `Demosaic::Fast`):
@@ -142,7 +154,7 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
   |---|---|
   | half decode (unchanged) | 985 ms → 3123×2085, 78 MB |
   | **full decode** | **3026 ms** → 6246×4170, **313 MB** |
-  | `downscale_to(1600)` from half / from full | 9.1 ms / **27.3 ms** |
+  | `downscale_to(1600)` from half / from full | 9.1 ms / **27.3 ms** — *now 2.8 / 8.6, see below* |
   | geometry (angle) whole-buffer at full res | 203 ms |
   | noise reduction 50/50 at full res | 504 ms |
   | dehaze 60 at full res | 562 ms |
