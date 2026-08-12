@@ -291,4 +291,27 @@ fn main() {
             println!("{best:8.1} ms   {label}");
         }
     }
+
+    // The RGBA8 pack, at both render resolutions. It runs on every frame, including the ones
+    // the prefix checkpoints made cheap, so it is measured on its own rather than buried in a
+    // whole-frame number.
+    {
+        let long = buf.width().max(buf.height());
+        for (label, max_dim) in [("fit", PREVIEW_MAX_DIM), ("native", long)] {
+            let img = buf.downscale_to(max_dim);
+            let mut best = f64::MAX;
+            for _ in 0..9 {
+                let t = Instant::now();
+                let bytes = img.to_rgba8();
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                std::hint::black_box(&bytes);
+                best = best.min(ms);
+            }
+            println!(
+                "{best:8.2} ms   RGBA8 pack, {label} ({}x{})",
+                img.width(),
+                img.height()
+            );
+        }
+    }
 }
