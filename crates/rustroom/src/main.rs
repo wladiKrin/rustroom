@@ -30,6 +30,10 @@ enum Command {
         /// JPEG quality 1..=100.
         #[arg(long, default_value_t = 92)]
         quality: u8,
+        /// Demosaic quality: fastest, fast, better, best. Higher is slower — roughly 1.2 s
+        /// to 11 s per photo on a 26 Mpx RAW.
+        #[arg(long, default_value = "fast")]
+        demosaic: String,
     },
 }
 
@@ -42,7 +46,8 @@ fn main() -> Result<()> {
             output,
             edits,
             quality,
-        } => render(&input, &output, edits.as_deref(), quality),
+            demosaic,
+        } => render(&input, &output, edits.as_deref(), quality, &demosaic),
     }
 }
 
@@ -73,9 +78,31 @@ fn decode(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn render(input: &Path, output: &Path, edits_path: Option<&Path>, quality: u8) -> Result<()> {
-    let decoded = raw_decode::decode_raw(input, &raw_decode::DecodeOptions::linear_scene())
-        .with_context(|| format!("decoding {}", input.display()))?;
+fn render(
+    input: &Path,
+    output: &Path,
+    edits_path: Option<&Path>,
+    quality: u8,
+    demosaic: &str,
+) -> Result<()> {
+    // A plain string plus a match rather than a `clap::ValueEnum` derive, so `raw-decode`
+    // does not gain a `clap` dependency for a CLI concern. The error lists the valid values,
+    // which is what the derive would have bought.
+    let demosaic = match demosaic.to_ascii_lowercase().as_str() {
+        "fastest" => raw_decode::Demosaic::Fastest,
+        "fast" => raw_decode::Demosaic::Fast,
+        "better" => raw_decode::Demosaic::Better,
+        "best" => raw_decode::Demosaic::Best,
+        other => anyhow::bail!("unknown demosaic {other:?} (fastest|fast|better|best)"),
+    };
+    let decoded = raw_decode::decode_raw(
+        input,
+        &raw_decode::DecodeOptions {
+            demosaic,
+            ..raw_decode::DecodeOptions::linear_scene()
+        },
+    )
+    .with_context(|| format!("decoding {}", input.display()))?;
     let m = &decoded.metadata;
     eprintln!("Decoded {}x{}  {} {}", m.width, m.height, m.make, m.model);
 
