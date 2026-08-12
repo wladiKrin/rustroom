@@ -235,18 +235,6 @@ impl RustroomApp {
     }
 }
 
-/// A decoded full-resolution buffer and the engine that renders it.
-///
-/// A second engine rather than swapping the first one's buffer: `RenderEngine` owns its buffer
-/// for its thread's lifetime, and keeping both means Fit-mode rendering is byte-for-byte
-/// unchanged — in particular it never pays the 27.3 ms `downscale_to` a full-resolution source
-/// would cost, against 9.1 ms from the half-size one.
-struct FullRes {
-    engine: RenderEngine,
-    /// Long edge of the full-resolution buffer — `max_dim` for the NativeFull tier.
-    long: usize,
-}
-
 struct Session {
     path: PathBuf,
     engine: RenderEngine,
@@ -274,41 +262,22 @@ struct Session {
     /// from the other mode is still in flight the two differ, and using the current one drew
     /// the old texture far off-screen — a white flash when zooming out quickly.
     rendered_long: f32,
-    /// The editing buffer's long edge — `max_dim` for the NativeHalf tier.
+    /// The editing buffer's long edge — the top rung of the render ladder.
     buffer_long: usize,
-    /// The full-resolution buffer and its engine, once one has been decoded. `None` until the
-    /// user zooms past the half-size buffer's own resolution.
-    full: Option<FullRes>,
-    /// Whether the last request went to `full`'s engine. Frames from the *other* engine are
-    /// discarded, so this must be set at request time, not derived at poll time.
-    active_full: bool,
+    /// Whether `engine`'s buffer is already the full-resolution decode.
+    upgraded: bool,
+    /// When this session was created — the dwell the upgrade trigger waits on.
+    opened_at: Instant,
+    /// The rung the canvas last chose, so an edit made from a panel re-renders at the tier
+    /// currently on screen rather than snapping back to fit.
+    render_max_dim: usize,
 }
 
 impl Session {
-    /// The working resolution to re-render at: the active native buffer's long edge while a
-    /// region is being shown, the preview cap otherwise. Keeps an edit made while zoomed in
-    /// from snapping back to fit.
-    fn render_max_dim(&self) -> usize {
-        if self.requested_region.is_none() {
-            return PREVIEW_MAX_DIM;
-        }
-        if self.active_full {
-            full_res::native_long(self.buffer_long, self.full.as_ref().map(|f| f.long))
-        } else {
-            self.buffer_long
-        }
-    }
-
-    /// Send a render request to whichever engine owns the current tier's buffer.
-    ///
-    /// ⚠ Every request must go through here. Two engines mean two queues, and a request sent
-    /// to the inactive one produces a frame that is then discarded — the edit would silently
-    /// never appear.
+    /// Send a render request. A one-line delegate: it no longer routes anywhere, but "every
+    /// render request goes through one place" is worth keeping.
     fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
-        match (self.active_full, &self.full) {
-            (true, Some(f)) => f.engine.request(edits, max_dim, region),
-            _ => self.engine.request(edits, max_dim, region),
-        }
+        self.engine.request(edits, max_dim, region);
     }
 }
 
@@ -403,7 +372,7 @@ impl RustroomApp {
         let pushed = s.history.push(s.edits.clone());
         s.request(
             preview_edits(&s.edits, s.crop_mode),
-            s.render_max_dim(),
+            s.render_max_dim,
             s.requested_region,
         );
         pushed
@@ -648,7 +617,7 @@ impl RustroomApp {
             s.history = History::new(s.edits.clone());
             s.request(
                 preview_edits(&s.edits, s.crop_mode),
-                s.render_max_dim(),
+                s.render_max_dim,
                 s.requested_region,
             );
         }
@@ -662,7 +631,7 @@ impl RustroomApp {
         s.edits = s.history.get().clone();
         s.request(
             preview_edits(&s.edits, s.crop_mode),
-            s.render_max_dim(),
+            s.render_max_dim,
             s.requested_region,
         );
     }
@@ -890,8 +859,9 @@ impl RustroomApp {
             fit_image_size: egui::vec2(1.0, 1.0),
             rendered_long: 1.0,
             buffer_long: decoded.buffer.width().max(decoded.buffer.height()),
-            full: None,
-            active_full: false,
+            upgraded: false,
+            opened_at: Instant::now(),
+            render_max_dim: PREVIEW_MAX_DIM,
         });
         // ⚠ The previous session's `History<Edits>` just went away with it, so any
         // `PhotoEdit` still in the log would make an undo pop *this* photo's history and
@@ -899,6 +869,30 @@ impl RustroomApp {
         // and stay.
         self.actions.forget_photo_edits();
         self.status.clear();
+    }
+
+    /// Per-frame: start the full-resolution decode once the session has settled.
+    ///
+    /// ⚠ It must schedule its own repaint while waiting. egui does not redraw an idle window,
+    /// so without this the dwell could expire with nothing to notice, and the decode would
+    /// start only when the user next moved the mouse.
+    fn maybe_request_full_res(&mut self, ctx: &egui::Context) {
+        let in_flight = self.full_pending.is_some();
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        if !catalog::is_raw(&s.path) || s.upgraded || in_flight {
+            return;
+        }
+        let age = s.opened_at.elapsed();
+        if !full_res::wants_upgrade(true, false, false, age) {
+            ctx.request_repaint_after(full_res::SETTLE - age);
+            return;
+        }
+        let path = s.path.clone();
+        let seq = self.full_decoder.request(path.clone(), PREVIEW_MAX_DIM);
+        self.full_pending = Some((path, seq));
+        self.status = "Loading full resolution…".to_string();
     }
 
     /// Per-frame: absorb a finished full-resolution decode into the live session.
@@ -922,24 +916,29 @@ impl RustroomApp {
                     // existing preview-resolution one stays, so before/after does not change
                     // under the user. The waste is one ~60 ms render on a background thread
                     // during a 3 s decode.
+                    // ⚠ The old engine is *replaced*, not kept alongside: once every rung
+                    // renders from the full buffer the half-size one is dead weight. Dropping
+                    // it disconnects its channel, so its worker thread returns on its own. Its
+                    // prefix cache goes too — a one-off cost at the moment of upgrade.
                     let ctx2 = ctx.clone();
-                    let long = decoded.buffer.width().max(decoded.buffer.height());
-                    let engine = RenderEngine::new(
+                    s.buffer_long = decoded.buffer.width().max(decoded.buffer.height());
+                    s.engine = RenderEngine::new(
                         decoded.buffer.clone(),
                         decoded.source_scale,
                         move || ctx2.request_repaint(),
                     );
-                    s.full = Some(FullRes { engine, long });
+                    s.upgraded = true;
                     // ⚠ Load-bearing. Region rects are in *rendered* pixels, and those
-                    // coordinates double when the buffer does — reusing them would describe
-                    // the wrong quarter of the image. Clearing both forces the next frame to
+                    // coordinates change with the buffer — reusing them would describe the
+                    // wrong part of the image. Clearing both forces the next frame to
                     // re-request against the new resolution.
                     s.rendered_region = None;
                     s.requested_region = None;
                     self.status = "Full resolution ready".to_string();
                 }
                 Err(e) => {
-                    // NativeFull silently falls back to NativeHalf, i.e. today's behaviour.
+                    // The ladder simply tops out at the half-size buffer, i.e. the behaviour
+                    // before this feature existed.
                     self.status = format!("Full-resolution decode failed: {e}");
                 }
             }
@@ -1077,7 +1076,7 @@ impl RustroomApp {
             if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
                 s.request(
                     preview_edits(&s.edits, s.crop_mode),
-                    s.render_max_dim(),
+                    s.render_max_dim,
                     s.requested_region,
                 );
             }
@@ -1824,10 +1823,6 @@ impl RustroomApp {
         // sites sit inside closures that already hold `&mut self` through `self.session`,
         // so they cannot touch another field of `self`.
         let mut photo_edited = false;
-        let mut want_full_res = false;
-        // Read before the panels borrow `self.session`, so the canvas closure needs no second
-        // borrow of `self`.
-        let upgrade_in_flight = self.full_pending.is_some();
         if self.show_presets && self.session.is_some() {
             self.preset_panel(ui);
         }
@@ -1967,7 +1962,7 @@ impl RustroomApp {
                         if changed {
                             s.request(
                                 preview_edits(&s.edits, s.crop_mode),
-                                s.render_max_dim(),
+                                s.render_max_dim,
                                 s.requested_region,
                             );
                         }
@@ -2012,40 +2007,19 @@ impl RustroomApp {
                         // whole-image *native* render would be both expensive and placed by
                         // the fit-mode maths the overlay assumes.
                         let full_long = full.x.max(full.y);
-                        let half_ratio = s.buffer_long as f32 / full_long;
-                        let wanted = if s.crop_mode {
-                            view_region::RenderTier::Fit
+                        let fit_long = full_long.round().max(1.0) as usize;
+                        // Crop mode pins the fit rung: the overlay is drawn against the whole
+                        // image and placed by the fit-mode maths.
+                        let max_dim = if s.crop_mode {
+                            fit_long
                         } else {
-                            view_region::tier_for(fit, s.zoom, half_ratio)
+                            view_region::tier_max_dim(fit_long, s.buffer_long, fit, s.zoom)
                         };
-                        // Start the 3 s decode the first time the zoom asks for detail the
-                        // half-size buffer does not have. Recorded as a flag and acted on
-                        // after the panels close: `s` borrows `self.session`, and requesting
-                        // borrows `self.full_decoder`.
-                        //
-                        // ⚠ `upgrade_in_flight` is read from a local hoisted *before* the
-                        // panel closure, not from `self` here: `s` already holds a borrow of
-                        // `self`, and reaching for `self.full_pending` inside the closure is
-                        // the same borrow shape that has cost a compile error twice in this
-                        // file.
-                        want_full_res = full_res::wants_upgrade(
-                            catalog::is_raw(&s.path),
-                            wanted,
-                            s.full.is_some(),
-                            upgrade_in_flight,
-                        );
-                        let tier = wanted.clamped(s.full.is_some());
-                        let native = tier.is_native();
+                        let native = view_region::is_native(max_dim, fit_long);
 
                         // Dimensions of the image at the resolution we render it, and the
                         // screen pixels per rendered pixel.
-                        let render_long = match tier {
-                            view_region::RenderTier::Fit => full_long,
-                            view_region::RenderTier::NativeHalf => s.buffer_long as f32,
-                            view_region::RenderTier::NativeFull => {
-                                s.full.as_ref().map_or(s.buffer_long, |f| f.long) as f32
-                            }
-                        };
+                        let render_long = max_dim as f32;
                         let k = render_long / full_long;
                         let (iw, ih) =
                             ((full.x * k).round() as usize, (full.y * k).round() as usize);
@@ -2066,21 +2040,17 @@ impl RustroomApp {
                         } else {
                             None
                         };
-                        let want_full_engine = tier == view_region::RenderTier::NativeFull;
                         let covered = match (want, s.rendered_region) {
                             (None, None) => true,
                             (Some(w), Some(r)) => view_region::contains(r, w),
                             _ => false,
                         };
-                        // ⚠ A change of *engine* must re-request even when the region is
-                        // unchanged: frames from the inactive engine are discarded, so
-                        // without this the view would freeze on the old buffer's last frame.
-                        if (!covered && s.requested_region != want)
-                            || want_full_engine != s.active_full
-                        {
+                        // ⚠ A change of *rung* must re-request even when the region is
+                        // unchanged — otherwise moving between rungs, or an upgraded buffer
+                        // arriving, would leave the old texture on screen.
+                        if (!covered && s.requested_region != want) || max_dim != s.render_max_dim {
                             s.requested_region = want;
-                            s.active_full = want_full_engine;
-                            let max_dim = render_long.round() as usize;
+                            s.render_max_dim = max_dim;
                             s.request(preview_edits(&s.edits, s.crop_mode), max_dim, want);
                         }
 
@@ -2159,16 +2129,6 @@ impl RustroomApp {
         // slider, Ctrl+Z twice" undoes the slider and then restores the preset.
         if photo_edited {
             self.actions.push(ActionKind::PhotoEdit);
-        }
-
-        // Outside the panels for the borrow reason given at the flag's assignment.
-        if want_full_res {
-            if let Some(s) = &self.session {
-                let path = s.path.clone();
-                let seq = self.full_decoder.request(path.clone(), PREVIEW_MAX_DIM);
-                self.full_pending = Some((path, seq));
-                self.status = "Loading full resolution…".to_string();
-            }
         }
     }
 
@@ -2360,6 +2320,7 @@ impl eframe::App for RustroomApp {
         }
 
         self.pump_decodes(&ctx);
+        self.maybe_request_full_res(&ctx);
         self.pump_full_res(&ctx);
         // Outside the view match: Ctrl+V must reach a selection made in the Library grid,
         // not only one made in the filmstrip.
@@ -2368,14 +2329,7 @@ impl eframe::App for RustroomApp {
 
         // Pull any finished preview frame into a texture.
         if let Some(s) = &mut self.session {
-            // Drain *both* engines every frame, then apply only the active one's newest frame.
-            // Draining both matters: an undrained channel would accumulate whole 313 MB
-            // frames. Discarding the inactive one's is safe because any change of active
-            // engine re-requests — see `active_full` in the canvas.
-            let from_full = s.full.as_ref().and_then(|f| f.engine.poll_latest());
-            let from_half = s.engine.poll_latest();
-            let latest = if s.active_full { from_full } else { from_half };
-            if let Some(frame) = latest {
+            if let Some(frame) = s.engine.poll_latest() {
                 s.hist = histogram_rgba(&frame.rgba);
                 let img = egui::ColorImage::from_rgba_unmultiplied(
                     [frame.width, frame.height],
