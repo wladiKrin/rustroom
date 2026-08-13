@@ -210,8 +210,6 @@ struct RustroomApp {
 impl RustroomApp {
     fn new(ctx: &egui::Context) -> Self {
         let ctx2 = ctx.clone();
-        // A second clone: the one above is moved into `decoder`'s closure.
-        let ctx_for_full = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
         let export_preset_store = ExportPresetStore::user_default();
@@ -226,11 +224,7 @@ impl RustroomApp {
             decoder: DecodeWorker::new(decode_for_edit, MAX_CONCURRENT_DECODES, move || {
                 ctx2.request_repaint()
             }),
-            full_decoder: DecodeWorker::new(
-                decode_full_res,
-                MAX_CONCURRENT_FULL_DECODES,
-                move || ctx_for_full.request_repaint(),
-            ),
+            full_decoder: full_res_worker(settings.view_demosaic, ctx),
             full_pending: None,
             cache: BufferCache::new(BUFFER_CACHE_CAP),
             histories: HistoryStash::default(),
@@ -369,17 +363,60 @@ fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, Stri
     }
 }
 
-/// Decode a RAW at **full** resolution, for the true-1:1 view.
+/// What choosing `tier` for the 1:1 view costs, relative to the default.
 ///
-/// ⚠ Uses `Demosaic::Fast` (whatever `linear_scene()` carries), **not** the export preset's
-/// setting. Matching it would mean plumbing a parameter through `DecodeWorker`'s injected
-/// decode fn; the measured Fast-vs-Best gap is small, which is why export defaults to Fast
-/// too. See `docs/superpowers/specs/2026-08-12-full-res-one-to-one-design.md`, caveat 4.
-fn decode_full_res(path: &std::path::Path) -> Result<(core_image::ImageBuf, String, f32), String> {
-    let opts = raw_decode::DecodeOptions::linear_scene();
+/// ⚠ A **multiplier, not seconds.** The export dialog says "roughly 1.2 s to 11 s per photo",
+/// which are X-T4 numbers written into prose and wrong on any other body. Ratios are the
+/// stable part, and they matter more here because this cost is *recurring*: the
+/// full-resolution decode is eager, so a slower tier is paid on every photo you stop on,
+/// not once per export.
+///
+/// Derived from the measured end-to-end decodes — 1.25 / 2.89 / 6.9 / 11.42 s — recorded in
+/// `docs/superpowers/specs/2026-08-11-demosaic-backend-design.md`.
+///
+/// Lives here rather than on `raw_decode::Demosaic` because a cost measured on one camera is
+/// presentation, not a property of the algorithm; `raw-decode` exposes the neutral facts.
+fn view_quality_hint(tier: raw_decode::Demosaic) -> &'static str {
+    match tier {
+        raw_decode::Demosaic::Fastest => "about 0.4× the decode time of Fast",
+        raw_decode::Demosaic::Fast => "the default",
+        raw_decode::Demosaic::Better => "about 2.4× the decode time of Fast",
+        raw_decode::Demosaic::Best => "about 4× the decode time of Fast",
+    }
+}
+
+/// Decode a RAW at **full** resolution, for the true-1:1 view, at `tier`.
+///
+/// The tier comes from `Settings::view_demosaic`, not from any export preset — see that
+/// field's doc comment for why mirroring an export preset was rejected.
+fn decode_full_res(
+    path: &std::path::Path,
+    tier: raw_decode::Demosaic,
+) -> Result<(core_image::ImageBuf, String, f32), String> {
+    let opts = raw_decode::DecodeOptions {
+        demosaic: tier,
+        ..raw_decode::DecodeOptions::linear_scene()
+    };
     let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
     let label = format!("{} {}", d.metadata.make, d.metadata.model);
     Ok((d.image, label, opts.source_scale()))
+}
+
+/// Build the full-resolution decode worker for `tier`.
+///
+/// ⚠ The tier is **captured** here rather than passed per request. `DecodeWorker` is shared
+/// with the preview decode, where demosaic is inert — libraw skips it entirely for a
+/// half-size decode — so putting a tier on `DecodeWorker::request` would impose a parameter
+/// on a caller that cannot act on it. Changing the setting therefore rebuilds this worker;
+/// dropping the old one disconnects its channel, so a decode in flight finishes and discards
+/// its own result, the same abandon-don't-abort trade the full-resolution handover makes.
+fn full_res_worker(tier: raw_decode::Demosaic, ctx: &egui::Context) -> DecodeWorker {
+    let ctx = ctx.clone();
+    DecodeWorker::new(
+        move |p| decode_full_res(p, tier),
+        MAX_CONCURRENT_FULL_DECODES,
+        move || ctx.request_repaint(),
+    )
 }
 
 /// Full-resolution decode for export. Dispatches by file kind.
@@ -2943,6 +2980,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_demosaic_tier_has_a_cost_hint() {
+        // ⚠ A table test rather than four assertions: a fifth tier added to `Demosaic::ALL`
+        // must not ship with an empty hint in the Settings dialog, and nothing else would
+        // catch that.
+        for d in raw_decode::Demosaic::ALL {
+            let hint = view_quality_hint(d);
+            assert!(!hint.is_empty(), "{d:?} has no cost hint");
+        }
+    }
+
+    #[test]
+    fn the_default_tier_is_described_as_the_default() {
+        // The hint is the only place the dialog says which one costs nothing extra.
+        assert!(view_quality_hint(raw_decode::Demosaic::default()).contains("default"));
+    }
+
+    #[test]
     fn a_full_size_decode_is_twice_the_half_size_one() {
         // ⚠ Without this, a typo in `decode_full_res` would leave the whole feature inert but
         // entirely plausible-looking: a second engine, a second cache, a status line, and the
@@ -2953,7 +3007,8 @@ mod tests {
         };
         let p = std::path::Path::new(&path);
         let (half, _, half_scale) = decode_for_edit(p).expect("half decode");
-        let (full, _, full_scale) = decode_full_res(p).expect("full decode");
+        let (full, _, full_scale) =
+            decode_full_res(p, raw_decode::Demosaic::default()).expect("full decode");
         assert_eq!(half_scale, 0.5);
         assert_eq!(full_scale, 1.0);
         // libraw's half-size path halves each dimension, rounding down.
