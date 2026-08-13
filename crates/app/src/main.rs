@@ -2337,7 +2337,11 @@ impl RustroomApp {
                 // per frame is nothing against the thumbnails being drawn.
                 let visible = lib.visible.clone();
                 egui::Grid::new("thumb_grid").show(ui, |ui| {
-                    for &i in &visible {
+                    // ⚠ `pos` is the cell's place in the grid; `i` indexes `entries`. The row
+                    // break must use `pos`: once a filter is on, `i` is *sparse*, so counting
+                    // rows by it breaks after the wrong cells — gaps where a break was skipped
+                    // and overflowing rows where several were.
+                    for (pos, &i) in visible.iter().enumerate() {
                         let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
                         let resp = ui
                             .allocate_ui(egui::vec2(CELL, CELL), |ui| {
@@ -2369,7 +2373,7 @@ impl RustroomApp {
                         if resp.double_clicked() {
                             open_index = Some(i);
                         }
-                        if (i + 1) % cols == 0 {
+                        if (pos + 1) % cols == 0 {
                             ui.end_row();
                         }
                     }
@@ -2817,6 +2821,54 @@ mod tests {
             full.width(),
             half.width()
         );
+    }
+
+    /// Lay out `visible` cells in a grid of `cols` columns, breaking rows the way the Library
+    /// grid does, and return how many distinct rows the cells landed on.
+    ///
+    /// `by_index` reproduces the bug: counting rows by the *entry* index rather than the
+    /// cell's position in the grid.
+    fn grid_rows(visible: &[usize], cols: usize, by_index: bool) -> usize {
+        let ctx = egui::Context::default();
+        let mut tops: Vec<i32> = Vec::new();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::Grid::new("t").show(ui, |ui| {
+                for (pos, &i) in visible.iter().enumerate() {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                    tops.push(rect.top() as i32);
+                    let counter = if by_index { i } else { pos };
+                    if (counter + 1) % cols == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+        });
+        tops.sort_unstable();
+        tops.dedup();
+        tops.len()
+    }
+
+    #[test]
+    fn the_grid_breaks_rows_by_position_not_by_entry_index() {
+        // ⚠ Once a format is filtered out the visible indices are *sparse*, so counting rows
+        // by the entry index breaks after the wrong cells — gaps where a break was skipped,
+        // overflowing rows where several were. Six cells in three columns is two rows.
+        let sparse = vec![0usize, 2, 4, 6, 8, 10];
+        assert_eq!(grid_rows(&sparse, 3, false), 2);
+
+        // The bug, reproduced: every index here is even, so `(i + 1) % 3 == 0` fires only on
+        // i = 2 and i = 8 — three rows of wildly uneven length instead of two.
+        assert_ne!(
+            grid_rows(&sparse, 3, true),
+            2,
+            "the index-counted version should not lay out correctly"
+        );
+
+        // Dense indices are the case that always worked, and must keep working.
+        let dense: Vec<usize> = (0..6).collect();
+        assert_eq!(grid_rows(&dense, 3, false), 2);
+        assert_eq!(grid_rows(&dense, 3, true), 2);
     }
 
     /// Lay out three identical cells and return their allocated widths.
