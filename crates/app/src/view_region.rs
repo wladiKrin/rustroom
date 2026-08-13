@@ -107,6 +107,18 @@ pub fn with_margin(r: RegionRect, image_w: usize, image_h: usize, margin: usize)
     }
 }
 
+/// Whether a visible rect spans the entire image, so there is no point cropping to it.
+///
+/// ⚠ This, not "the rung is above the fit cap", is what decides a *region* render. The two were
+/// conflated while `fit` was clamped to 1.0 — a higher rung then only ever happened when zoomed,
+/// so the visible area was always a strict subset. Once `fit` may exceed 1.0 (a window larger
+/// than the fit texture) the whole image can be visible *at* a higher rung, and rendering it as
+/// a region would stop `fit_image_size` ever refreshing: it is only taken from whole-image
+/// frames, so a crop applied outside Geometry mode would leave it stale and drift the placement.
+pub fn covers_whole_image(vis: RegionRect, image_w: usize, image_h: usize) -> bool {
+    vis.x == 0 && vis.y == 0 && vis.w >= image_w && vis.h >= image_h
+}
+
 /// Whether `inner` lies entirely within `outer` — the test for "the rendered region still
 /// covers what is on screen, so nothing needs re-rendering".
 pub fn contains(outer: RegionRect, inner: RegionRect) -> bool {
@@ -210,6 +222,18 @@ mod tests {
         // Degenerate inputs must neither divide by zero nor loop forever.
         assert!(tier_max_dim(0, 0, 1.0, 2.0) >= 1);
         assert!(tier_max_dim(1600, 0, 1.0, 4.0) >= 1);
+    }
+
+    #[test]
+    fn a_fully_visible_image_is_not_worth_cropping_to() {
+        // Zoomed out or exactly filling: the visible rect is the whole image, so a region
+        // render would gain nothing and would cost the fit size its only source of truth.
+        let whole = visible_rect(100, 60, 400.0, 300.0, 1.0, 0.0, 0.0);
+        assert!(covers_whole_image(whole, 100, 60));
+
+        // Zoomed in: a strict subset, so a region render is exactly right.
+        let part = visible_rect(100, 60, 40.0, 30.0, 2.0, 0.0, 0.0);
+        assert!(!covers_whole_image(part, 100, 60));
     }
 
     #[test]

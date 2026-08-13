@@ -2120,7 +2120,12 @@ impl RustroomApp {
                         // fit/zoom are expressed against the post-geometry image at *fit*
                         // resolution, which stays constant as the render mode changes.
                         let full = s.fit_image_size;
-                        let fit = (avail.x / full.x).min(avail.y / full.y).min(1.0);
+                        // ⚠ No `.min(1.0)`. That clamp meant "never magnify past 100%" — but
+                        // 100% of *what*? Of an arbitrary 1600 px preview, not of the image.
+                        // On a canvas wider than the fit texture it letterboxed the photo at
+                        // 1600 points inside a 2302-point window. Unclamped, the ladder climbs
+                        // a rung on its own and supplies the texels to fill it.
+                        let fit = (avail.x / full.x).min(avail.y / full.y);
                         // Crop mode stays at fit resolution whatever the zoom: it is a framing
                         // operation, the overlay is drawn against the whole image, and a
                         // whole-image *native* render would be both expensive and placed by
@@ -2192,16 +2197,24 @@ impl RustroomApp {
 
                         // Which part of the image the view needs, and whether what is already
                         // rendered still covers it.
+                        // ⚠ Decided by *visibility*, not by the rung. Once `fit` may exceed 1.0
+                        // the whole image can be visible at a higher rung, and cropping to it
+                        // would gain nothing while starving `fit_image_size` — which is only
+                        // taken from whole-image frames — of any refresh.
                         let want = if native {
                             let vis = view_region::visible_rect(
                                 iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
                             );
-                            Some(view_region::with_margin(
-                                vis,
-                                iw,
-                                ih,
-                                view_region::REGION_MARGIN,
-                            ))
+                            if view_region::covers_whole_image(vis, iw, ih) {
+                                None
+                            } else {
+                                Some(view_region::with_margin(
+                                    vis,
+                                    iw,
+                                    ih,
+                                    view_region::REGION_MARGIN,
+                                ))
+                            }
                         } else {
                             None
                         };
@@ -2538,13 +2551,22 @@ impl eframe::App for RustroomApp {
                 // only thing that can tell us the post-geometry size — which changes with
                 // the crop and the straighten angle.
                 // A whole-image frame is the only thing that can tell us the post-geometry
-                // size, which changes with the crop and the straighten angle. ⚠ It must also
-                // have been rendered at the *fit rung* — checked against the frame's own
-                // `max_dim` rather than inferred from its size, because a native rung times a
-                // small crop factor lands below the preview cap and would sneak through.
+                // size, which changes with the crop and the straighten angle.
+                //
+                // ⚠ Scaled by the ratio of *caps*, not accepted only at the fit rung. Both are
+                // pre-geometry caps, so the crop factor cancels and this is exact: a frame is
+                // `max_dim x crop_factor` and the fit size is `fit_cap x crop_factor`. That
+                // generalisation is what lets a whole-image frame at a *higher* rung — which
+                // now happens whenever the window is larger than the fit texture — keep this
+                // fresh, where the old equality test would silently have rejected it.
+                //
+                // It is still not derived from a rendered size feeding back: `fit_cap` and
+                // `frame.max_dim` are both caps, and neither comes from `fit_image_size`.
                 let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
-                if frame.region.is_none() && frame.max_dim == fit_cap {
-                    s.fit_image_size = egui::vec2(frame.width as f32, frame.height as f32);
+                if frame.region.is_none() && frame.max_dim > 0 {
+                    let ratio = fit_cap as f32 / frame.max_dim as f32;
+                    s.fit_image_size =
+                        egui::vec2(frame.width as f32 * ratio, frame.height as f32 * ratio);
                 }
                 // A region frame carries the full post-geometry dimensions it was cut from,
                 // so this is exact either way.
