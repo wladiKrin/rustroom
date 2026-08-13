@@ -120,6 +120,30 @@ impl Selection {
         }
         self.anchor = self.anchor.filter(|&a| a < n);
     }
+
+    /// Drop every selected index that is not in `visible`, after the format filter changed.
+    ///
+    /// ⚠ Deliberately the same rule as [`Selection::clamp`]: if the *active* photo is dropped,
+    /// the whole selection goes. Two different rules for "the active index went away" would be
+    /// a smell, and silently moving the active photo elsewhere changes which photo a sync
+    /// copies **from** — a change with nothing on screen to announce it.
+    ///
+    /// `visible` must be ascending, which is what [`crate::format_filter::FormatFilter`]
+    /// produces.
+    pub fn retain_visible(&mut self, visible: &[usize]) {
+        self.set.retain(|i| visible.binary_search(i).is_ok());
+        if self
+            .active
+            .is_some_and(|a| visible.binary_search(&a).is_err())
+        {
+            self.active = None;
+        }
+        if self.active.is_none() {
+            // Targets with no source are not a usable state.
+            self.set.clear();
+        }
+        self.anchor = self.anchor.filter(|a| visible.binary_search(a).is_ok());
+    }
 }
 
 #[cfg(test)]
@@ -141,6 +165,59 @@ mod tests {
 
     fn items(s: &Selection) -> Vec<usize> {
         s.iter().collect()
+    }
+
+    #[test]
+    fn pruning_drops_hidden_entries_from_the_selection() {
+        // ⚠ The data-loss guard. Select photos, hide their format, and without this the
+        // selection still holds them — so a sync or a paste writes to photos that are not on
+        // screen. Silent, and found as data loss rather than as a bug.
+        let mut s = Selection::default();
+        s.click(1);
+        s.toggle(3);
+        s.toggle(5);
+        s.retain_visible(&[1, 3]);
+        check(&s);
+        assert_eq!(items(&s), vec![1, 3]);
+        assert_eq!(s.active(), Some(1), "a surviving active photo stays put");
+    }
+
+    #[test]
+    fn pruning_the_active_photo_clears_the_selection() {
+        // Follows `clamp`: an active photo that goes away takes the selection with it, rather
+        // than silently moving to a different photo — which would change which photo a
+        // subsequent sync copies *from*, with nothing on screen to say so.
+        let mut s = Selection::default();
+        s.click(5);
+        s.toggle(1);
+        s.retain_visible(&[1, 3]);
+        check(&s);
+        assert_eq!(s.active(), None);
+        assert!(
+            s.is_empty(),
+            "targets with no source are not a usable state"
+        );
+    }
+
+    #[test]
+    fn pruning_everything_empties_the_selection() {
+        let mut s = Selection::default();
+        s.click(2);
+        s.retain_visible(&[]);
+        check(&s);
+        assert_eq!(s.active(), None);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn pruning_nothing_is_a_no_op() {
+        let mut s = Selection::default();
+        s.click(1);
+        s.toggle(2);
+        let before = s.clone();
+        s.retain_visible(&[0, 1, 2, 3]);
+        check(&s);
+        assert_eq!(s, before);
     }
 
     #[test]
