@@ -1775,7 +1775,8 @@ impl RustroomApp {
             ui.label(
                 egui::RichText::new(
                     "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
-                     Not shown in the preview, which skips demosaic entirely.",
+                     Independent of the 1:1 view's own quality setting, so judging this \
+                     means exporting a frame at two settings and comparing crops.",
                 )
                 .small(),
             );
@@ -1949,12 +1950,62 @@ impl RustroomApp {
     }
 
     /// The Settings window. One setting today; a modal is the right weight for that.
+    /// Adopt a new 1:1 view demosaic tier: persist it, rebuild the worker, and re-decode the
+    /// open photo so the change is visible rather than silently deferred to the next photo.
+    ///
+    /// ⚠ Clearing `full_pending` is load-bearing: that sequence number belongs to the worker
+    /// being dropped, and leaving it would make `pump_full_res` compare against a number no
+    /// live worker will ever produce — blocking `maybe_request_full_res`, which refuses while
+    /// a decode is in flight.
+    fn apply_view_demosaic(&mut self, tier: raw_decode::Demosaic, ctx: &egui::Context) {
+        self.settings.view_demosaic = tier;
+        self.save_settings();
+        self.full_decoder = full_res_worker(tier, ctx);
+        self.full_pending = None;
+        // RAW only. For JPEG/PNG/TIFF the buffer really is the whole file, so clearing this
+        // would be a lie — and `maybe_request_full_res` refuses on its own `is_raw` check
+        // anyway. The old buffer stays on screen until the new one lands, so nothing flickers.
+        if let Some(s) = self.session.as_mut() {
+            if catalog::is_raw(&s.path) {
+                s.buffer_is_full_res = false;
+            }
+        }
+    }
+
     fn settings_modal(&mut self, ctx: &egui::Context) {
         let mut confirm = self.settings.confirm_preset_delete;
+        let mut tier = self.settings.view_demosaic;
         let mut close = false;
 
         let dismissed = modal_dialog(ctx, "settings", "Settings", |ui| {
             ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                ui.label("1:1 view quality");
+                egui::ComboBox::from_id_salt("view_demosaic_pick")
+                    .selected_text(tier.label())
+                    .show_ui(ui, |ui| {
+                        for d in raw_decode::Demosaic::ALL {
+                            ui.selectable_value(&mut tier, d, d.label());
+                        }
+                    });
+                ui.label(egui::RichText::new(view_quality_hint(tier)).small());
+            });
+            // ⚠ Not decoration. Unlike the export setting, this cost is *recurring*: the
+            // full-resolution decode is eager, so a slower tier is paid on every photo you
+            // stop on. The dialog is the only place a user would find that out.
+            ui.label(
+                egui::RichText::new(
+                    "RAW only, and separate from the export setting. Sets the demosaic used \
+                     for the zoomed view. A slower tier costs that much extra on every photo \
+                     you stop on, not just on export — the full-resolution decode starts on \
+                     its own. The measured difference is small, which is why the default is \
+                     Fast. Changing this re-decodes the open photo.",
+                )
+                .small(),
+            );
+
             ui.separator();
             if ui.button("Close").clicked() {
                 close = true;
@@ -1965,6 +2016,11 @@ impl RustroomApp {
         if confirm != self.settings.confirm_preset_delete {
             self.settings.confirm_preset_delete = confirm;
             self.save_settings();
+        }
+        // ⚠ The inequality is what stops the worker being rebuilt and a decode fired on
+        // *every frame* the dialog is open — `settings_modal` runs once per frame.
+        if tier != self.settings.view_demosaic {
+            self.apply_view_demosaic(tier, ctx);
         }
         if close {
             self.modal = Modal::None;
