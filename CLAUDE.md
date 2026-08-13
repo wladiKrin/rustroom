@@ -79,7 +79,7 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 14 stages (incl. geometry, noise_reduction, dehaze, saturation, hsl, local_contrast, vignette, sharpening) + spatial::{box_blur, gaussian_blur, wide_blur, min_filter, guided_filter} + build_pipeline / build_pipeline_split(_in_region) / build_prefix_steps + PrefixStep/PrefixStepKey/PrefixKey + Region + tail_kernel_radius + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/action_log/selection/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region/full_res/format_filter/sharpen/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export
+│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/action_log/selection/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries; is_raw/is_supported (in-memory; SQLite DAM later)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -133,26 +133,18 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
 
 **⚠ Demosaic: we never set `user_qual`, so every decode inherits libraw's slowest.** Measured full-res on the X-T4 (unpack a flat ~850 ms in all cases): bilinear 405 ms → VNG 2,310 → PPG 6,782 → **AHD 10,148** (the default). So ~93% of an 11 s full-res decode is demosaic, chosen by a default nobody made. Two conclusions: **full-res is reachable in ~1.3 s, not 11.4** — which makes a future background full-res upgrade for true 1:1 far more tractable than it looked — and **the planned Phase 5 `wgpu` port would not fix it**, because that time is inside libraw's `dcraw_process`, entirely upstream of the `PipelineStage`s wgpu would touch. GPU demosaic means replacing libraw's, and on X-Trans that is Markesteijn/AMaZE-class work whose errors surface as exactly the fine-detail artifacts one zooms in to inspect. Every export also pays this ~11 s. Tracked as a separate task.
 
-**Progressive fit resolution done — the fit view is sharp when you look at it and fast when you drag.** The app never read `pixels_per_point`, so on any HiDPI display the fit view was a 1600-texel texture drawn across ~2800 physical pixels — upscaled ~1.75×, visibly soft.
+**The fit view now fills the window — and a progressive-sharpen feature was built and then removed.** The visible symptom was a soft fit view on a HiDPI display. The diagnosis took four rounds and three bugs, and the durable lessons are about *diagnosis*, not resolution.
 
-- **⚠ Correcting it naively costs 3.1× on every fit-mode slider**, which is why this is progressive rather than a bigger constant. Measured on the full-resolution buffer:
-
-  | fit cap | Mpx | prefix drag (NR) | tail slider |
-  |---|---|---|---|
-  | **1600** (the fast rung) | 1.7 | 31.2 ms | **14.6 ms** |
-  | 2000 | 2.7 | 48.2 ms | 23.6 ms |
-  | 2400 | 3.8 | 72.8 ms | 34.8 ms |
-  | **2800** (DPI-correct on a Retina laptop) | 5.2 | 92.7 ms | **45.9 ms** |
-  | 3200 | 6.8 | 119.5 ms | 59.5 ms |
-
-- **The shape: fast while interacting, sharp 200 ms after.** Sliders render at `PREVIEW_MAX_DIM` exactly as before; one further render at the canvas's true resolution once things go quiet. The two properties are wanted at different *times*, which is what made a progressive answer available rather than a compromise one.
-- **⚠ `sharp_cap` depends only on the viewport and the DPI — never on a rendered size.** Load-bearing rather than incidental: deriving a render cap from a rendered size is exactly the feedback loop that shrank a cropped photo to a few pixels. Quantized to 256 so dragging a window edge does not mint a new `max_dim` every frame and thrash the cache — the zoom ladder's reasoning again.
-- **⚠ `native` is decided from the ladder rung, *before* the sharpen override.** `sharp` exceeds the fit cap, so testing it afterwards would conclude the view is zoomed and request a cropped *region* while sitting at fit — the whole image would vanish.
-- **⚠ The sharpen pass must not count as interaction**, or it resets the settle timer it just satisfied and never fires again. `interacted |= !sharpen_now`.
-- **⚠ A sharp frame must not become `fit_image_size`** — and it already cannot: the canvas accepts a whole-image frame as the fit size only when `frame.max_dim == fit_cap`. That guard was added hours earlier for the cropped-photo bug and turns out to be exactly what makes this safe.
-- **`FINALS_CAP` 2 → 3.** Three resolutions are now in play — fast fit, sharp fit, native — and at two they would evict each other so every transition recomputed a prefix. Costs one more complete prefix output: ~398 MB worst case against ~334.
-- **The settle timer schedules its own repaint**, the same lesson the full-resolution dwell taught: egui does not redraw an idle window.
-- **Accepted caveats:** (1) ~200 ms of lag before the view sharpens, which is what keeps the drag fast; (2) ~64 MB more cache, and the sharp render costs ~46 ms when it runs; (3) it over-renders a portrait image in a wide window, since the bound is the viewport's long edge — using the image's aspect would be tighter but that is a *post-geometry* quantity and reaching for one here is the mistake above; (4) the first sharpen after a prefix change costs ~93 ms rather than ~46; (5) **non-HiDPI displays get nothing, correctly** — `sharp_cap` collapses to `fit_cap` there.
+- **⚠ The cause was one line, and not the one I measured.** `let fit = (…).min(1.0)` meant "never magnify past 100%" — but 100% of an arbitrary 1600 px preview, not of the image. On a 2302-point-wide canvas the photo was drawn at **1600 points: letterboxed at 70% of the window**, then upscaled 2× by the display. Removing the clamp fills the window *and* makes the existing zoom ladder climb to the 3200 rung on its own, closing most of the gap with **no new machinery**.
+- **⚠ Two things were conflated, and separating them is what made the clamp removal safe.** "Render a region" had meant "the rung is above the fit cap", equivalent to "zoomed in" only *because* `fit` was clamped. Unclamped, the whole image can be visible at a higher rung — and rendering that as a region would starve `fit_image_size`, which is only taken from whole-image frames, leaving it stale after any crop applied outside Geometry mode. Now decided by `view_region::covers_whole_image`.
+- **`fit_image_size` is derived from any whole-image frame** by the ratio `fit_cap / frame.max_dim`. Both are *pre-geometry caps*, so the crop factor cancels exactly and neither term comes from a rendered size — it cannot feed back. This replaced an equality test that would silently have rejected the higher-rung frames the clamp fix introduced.
+- **⚠⚠ The progressive sharpen was built, shipped, debugged three times, and removed.** Measured: simply raising the cap takes a tail slider **14.6 ms → 45.9 ms (3.1×)** at 2800 px, so it rendered at 1600 while interacting and re-rendered 200 ms after. It never once worked in use:
+  1. **It oscillated.** `wants_sharpen` required "the showing resolution is not yet sharp", which goes false the frame the sharp render lands — so the canvas reverted, counted that as interaction, and reset its own timer. Visible as nothing happening.
+  2. **It sharpened the *wrong buffer*.** `sharp_cap` clamps to `buffer_long`, which before the full-res upgrade is the **half-size, binned** buffer. Rendering at its native size shows binning artifacts 1:1 that downscaling had been averaging away — no detail gained, ~4× the pixels spent. That was the "slower Exposure slider".
+  3. **The clamp fix made its gate unreachable.** It tested "at the base rung", true only while `fit` was clamped.
+  With the gate finally right the residual was 1.44× → 1:1 sampling for ~2× the render, and **the user could not see it on or off**. Removed: `sharpen.rs`, the interaction tracking, the `FINALS_CAP` bump, the debug print.
+- **⚠ The lesson: one print settled what four rounds of reasoning had not.** The opening measurement was real but measured a *consequence*. Nobody checked what the fit view was actually doing on that display until an env-gated `eprintln` went in, and its first line (`native=true` — the user was never at the fit rung) reframed the problem. Reach for instrumentation earlier when the code reads correctly but the behaviour disagrees.
+- The design doc survives as `2026-08-13-progressive-fit-resolution-design.md`, marked **built, then removed**, carrying the measurements and the post-mortem.
 
 **Rotate and flip done — the Crop panel is now the Geometry panel.** Quarter turns and mirroring, the eight rigid transforms of a rectangle. Not in any milestone: the capability inventory lists "rotate" but the P0–P4 table never scheduled it.
 

@@ -16,7 +16,6 @@ pub mod render_engine;
 pub mod safe_name;
 pub mod selection;
 pub mod settings;
-pub mod sharpen;
 pub mod sidecar;
 pub mod sync;
 pub mod thumb_loader;

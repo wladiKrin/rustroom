@@ -19,7 +19,6 @@ use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::selection::Selection;
 use rustroom_app::settings::{ConfirmOutcome, Settings, SettingsStore};
-use rustroom_app::sharpen;
 use rustroom_app::sidecar;
 use rustroom_app::sync;
 use rustroom_app::thumb_loader::ThumbLoader;
@@ -144,9 +143,6 @@ struct RustroomApp {
     full_decoder: DecodeWorker,
     /// Path and sequence number of the full-resolution decode in flight, if any.
     full_pending: Option<(PathBuf, u64)>,
-    /// When the user last did something that triggered a render. The fit view re-renders at
-    /// the display's true resolution once this goes quiet — see `sharpen`.
-    last_interaction: Instant,
     cache: BufferCache,
     status: String,
     show_filmstrip: bool,
@@ -231,7 +227,6 @@ impl RustroomApp {
                 move || ctx_for_full.request_repaint(),
             ),
             full_pending: None,
-            last_interaction: Instant::now(),
             cache: BufferCache::new(BUFFER_CACHE_CAP),
             status: String::new(),
             show_filmstrip: true,
@@ -289,9 +284,7 @@ struct Session {
     buffer_long: usize,
     /// Whether `engine`'s buffer is the full-resolution decode.
     ///
-    /// ⚠ Also gates the fit-view sharpen: a half-size RAW buffer *skips demosaic*, so more
-    /// texels there are binning artifacts rather than detail. True from the start for
-    /// JPEG/PNG/TIFF, which are decoded at full size already.
+    /// True from the start for JPEG/PNG/TIFF, which are decoded at full size already.
     buffer_is_full_res: bool,
     /// When this session was created — the dwell the upgrade trigger waits on.
     opened_at: Instant,
@@ -1897,12 +1890,6 @@ impl RustroomApp {
         // sites sit inside closures that already hold `&mut self` through `self.session`,
         // so they cannot touch another field of `self`.
         let mut photo_edited = false;
-        // Set by any render request issued for a reason *other* than sharpening, and consumed
-        // after the panels close — the established shape, since a panel closure already holds
-        // a borrow of `self`. A request is only issued when something actually changed, so
-        // "issued a request" is the definition of "the user is interacting".
-        let mut interacted = false;
-        let idle = self.last_interaction.elapsed();
         if self.show_presets && self.session.is_some() {
             self.preset_panel(ui);
         }
@@ -2083,7 +2070,6 @@ impl RustroomApp {
                                 s.render_max_dim(),
                                 s.requested_region,
                             );
-                            interacted = true;
                         }
                         if settled {
                             photo_edited |= s.history.push(s.edits.clone());
@@ -2142,59 +2128,8 @@ impl RustroomApp {
                         } else {
                             view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom)
                         };
-                        // ⚠ Decided from the *ladder* rung, before the sharpen override below.
-                        // `sharp` exceeds the fit cap, so testing it after the override would
-                        // conclude the view is zoomed and request a cropped region while
-                        // sitting at fit — the whole image would vanish.
-                        let native = view_region::is_native(rung, fit_cap);
-
-                        // Once the user stops, re-render the fit view at the resolution the
-                        // display can actually show. Sliders stay on the fast rung.
-                        let sharp = sharpen::sharp_cap(
-                            avail.x.max(avail.y),
-                            ui.ctx().pixels_per_point(),
-                            fit_cap,
-                            s.buffer_long,
-                        );
-                        // The whole image is visible exactly when the user has not zoomed past
-                        // the fitting scale — non-circular, unlike anything derived from the
-                        // rendered size.
-                        let showing_whole_image = s.zoom <= 1.0;
-                        let sharpen_now = sharpen::wants_sharpen(
-                            showing_whole_image,
-                            s.buffer_is_full_res,
-                            sharp,
-                            rung,
-                            idle,
-                        );
-                        let max_dim = if sharpen_now { sharp } else { rung };
-                        // Diagnostic, off unless RUSTROOM_DEBUG_SHARPEN is set. Kept because
-                        // every value here is invisible from the outside, and the failure mode
-                        // is "nothing happens".
-                        if std::env::var_os("RUSTROOM_DEBUG_SHARPEN").is_some()
-                            && max_dim != s.render_rung
-                        {
-                            eprintln!(
-                                "sharpen: ppp={:.2} avail={:.0}x{:.0} fit_cap={fit_cap} \
-                                 sharp={sharp} rung={rung} max_dim={max_dim} \
-                                 render_rung={} idle={}ms native={native} now={sharpen_now}",
-                                ui.ctx().pixels_per_point(),
-                                avail.x,
-                                avail.y,
-                                s.render_rung,
-                                idle.as_millis(),
-                            );
-                        }
-                        // ⚠ egui does not redraw an idle window, so without this the settle
-                        // could expire with nothing to notice it.
-                        if showing_whole_image
-                            && s.buffer_is_full_res
-                            && sharp > rung
-                            && !sharpen_now
-                            && idle < sharpen::SETTLE
-                        {
-                            ui.ctx().request_repaint_after(sharpen::SETTLE - idle);
-                        }
+                        let max_dim = rung;
+                        let native = view_region::is_native(max_dim, fit_cap);
 
                         // Screen pixels per rendered pixel. `k` compares the two *caps*, so
                         // the crop factor cancels — it applies equally to both.
@@ -2239,9 +2174,6 @@ impl RustroomApp {
                             s.requested_region = want;
                             s.render_rung = max_dim;
                             s.request(preview_edits(&s.edits, s.geometry_mode), max_dim, want);
-                            // ⚠ The sharpen pass must *not* count as interaction, or it would
-                            // reset the settle timer it just satisfied and never fire again.
-                            interacted |= !sharpen_now;
                         }
 
                         // Place using the *texture's* own render resolution, not the current
@@ -2319,9 +2251,6 @@ impl RustroomApp {
         // slider, Ctrl+Z twice" undoes the slider and then restores the preset.
         if photo_edited {
             self.actions.push(ActionKind::PhotoEdit);
-        }
-        if interacted {
-            self.last_interaction = Instant::now();
         }
     }
 

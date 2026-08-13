@@ -1,7 +1,39 @@
 # A sharp fit view, without slow sliders — design
 
 Date: 2026-08-13
-Status: approved
+Status: **built, then removed.** The measurements below stand; the design's premise did not.
+
+> ## ⚠ Why this was backed out
+>
+> The premise — "the fit view is soft because `PREVIEW_MAX_DIM` ignores `pixels_per_point`" —
+> was **half right and misdiagnosed**. The real cause on a large display was one line in the
+> canvas:
+>
+> ```rust
+> let fit = (avail.x / full.x).min(avail.y / full.y).min(1.0);
+> ```
+>
+> That `.min(1.0)` meant "never magnify past 100%" — but 100% of an arbitrary 1600 px preview,
+> not of the image. On a 2302-point-wide canvas it drew the photo at 1600 points: **letterboxed
+> at 70% of the window, and upscaled 2× by the display on top**. The user had been zooming in to
+> compensate, which put them on a native rung where this feature deliberately never fired.
+>
+> Removing the clamp let the photo fill the window *and* made the existing zoom ladder climb to
+> the 3200 rung on its own — closing most of the gap with no new machinery. The residual was
+> 3200 texels across 4604 physical pixels, a 1.44× upsample, against 1.75× before.
+>
+> Closing that last 1.44× costs **~2× the render** (3200² → 4608²), and the user could see no
+> difference with it on or off. So it was removed: `sharpen.rs`, the interaction tracking, the
+> `FINALS_CAP` bump and the debug print all came out.
+>
+> **What survived, and was the actual fix:** the clamp removal; deciding a *region* render by
+> visibility rather than by the rung; and deriving `fit_image_size` from any whole-image frame
+> via the ratio of caps.
+>
+> **The lesson, which cost three bugs to learn:** the measurement that opened this document was
+> real, but it measured the *consequence*. Nobody checked what the fit view was actually doing
+> on the display in question until the instrumentation went in — and that took one print to
+> settle what four rounds of reasoning had not.
 
 ## The problem
 
