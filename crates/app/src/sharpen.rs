@@ -129,10 +129,9 @@ mod tests {
         let (fit, sharp) = (1600usize, 2816usize);
 
         // The shipped rule, run over successive frames.
-        let mut rung = fit;
         let mut idle = SETTLE;
         for frame in 0..8 {
-            rung = if wants_sharpen(true, sharp, fit, idle) {
+            let rung = if wants_sharpen(true, sharp, fit, idle) {
                 sharp
             } else {
                 fit
