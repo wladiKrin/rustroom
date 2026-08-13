@@ -109,9 +109,26 @@ pub fn button_row(
 ) -> (bool, bool);
 ```
 
-`hint` earns its place immediately: `egui::RichText::new(..).small()` is copy-pasted at **six**
+`hint` earns its place immediately: `egui::RichText::new(..).small()` appears at **eight**
 sites today, and that idiom is exactly what a later visual pass will want to change in one
 place.
+
+⚠ **But only four of the eight are hints**, and the distinction is worth encoding rather than
+flattening. `.small()` currently serves two unrelated roles:
+
+| role | sites | in this refactor? |
+|---|---|---|
+| **hint** — explanatory text under a control | 4, all in dialogs | ✅ becomes `theme::hint` |
+| **caption** — a filename under a thumbnail, a camera model beside a title | 2, in the Library grid and the develop toolbar | ❌ deferred |
+| test fixtures | 2 | ❌ untouched |
+
+The captions are deliberately left alone: they live in `develop_body` and `library_view`,
+which belong to the **canvas split**, and reaching into them here would spread this refactor
+past its own boundary. `theme::caption` arrives with that spec, where its call sites are.
+
+That two visually identical idioms mean different things is exactly the sort of thing a theme
+module exists to disentangle — and exactly why flattening them into one helper now would be a
+mistake.
 
 ⚠ **No `danger_button`.** An earlier draft of this spec proposed one; there is no visual
 distinction to encode yet, and adding an alias that does nothing but call `ui.button` is the
@@ -161,7 +178,7 @@ followed.
 So the visible change list reduces to **one item**:
 
 1. **Hint labels** route through `theme::hint`, which may alter their spacing very slightly
-   where an inline `.small()` had no consistent padding. Six sites.
+   where an inline `.small()` had no consistent padding. **Four sites**, all inside dialogs.
 
 Anything else a user can see is a regression.
 
@@ -193,6 +210,6 @@ already extracted and tested before this refactor.
    more than it should. The signature at least makes the coupling visible.
 3. **No new test coverage over the egui layer.** The refactor's safety comes from the compiler
    and from the pure functions' existing tests, not from new ones.
-4. **One small visible change** — hint-label spacing, at six sites.
+4. **One small visible change** — hint-label spacing, at four sites.
 5. **`theme` encodes today's look, which has never been designed.** It reproduces egui's
    defaults faithfully; that is the point of this step, not an endorsement of them.
