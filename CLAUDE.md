@@ -104,7 +104,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **The session before (2026-08-12/13) landed seven features.** In order: per-stage prefix checkpoints; the 10× RGBA8 pack; parallel `downscale_to`; the full-resolution editing buffer *and* its trigger rework to eager-on-settle; the Library format filter; rotate/flip with the Crop→Geometry rename; and the fit-view clamp fix. Five bugs were found in real use and fixed along the way — the two sections below on **"Three bugs from the first hour"** and **"The fit view now fills the window"** are the ones worth reading before touching the canvas, because both are about the same failure mode: two quantities that agree in the common case and diverge in the interesting one.
 
-**~65 commits sit on `main` unpushed.**
+**Push state: `origin/main` is at `b84e192`** (the CLI `--format` docs commit) — the user pushed mid-session on 2026-08-13. Only the **6** commits of the view-quality setting are unpushed. ⚠ Check `git log origin/main..main` rather than trusting a count written here; it goes stale the moment the user pushes.
 
 **▶ NEXT ACTION: Phase 3** — the roadmap's next phase, and the only item left on the list. Read `03-plan-of-action.md` in the Obsidian vault for what it contains before proposing anything.
 
