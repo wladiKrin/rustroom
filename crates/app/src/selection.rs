@@ -86,16 +86,22 @@ impl Selection {
         }
     }
 
-    /// Select `0..n`. With no active photo yet, index 0 becomes active — otherwise this
-    /// would produce a non-empty set with no source and break the invariant.
-    pub fn select_all(&mut self, n: usize) {
-        self.set = (0..n).collect();
-        if n == 0 {
-            self.active = None;
-            self.anchor = None;
-        } else if self.active.is_none_or(|a| a >= n) {
-            self.active = Some(0);
-            self.anchor = Some(0);
+    /// Select exactly `indices`. With no active photo among them, the first becomes active —
+    /// otherwise this would produce a non-empty set with no source and break the invariant.
+    ///
+    /// ⚠ Unlike [`Selection::retain_visible`], this *does* move the active photo when the
+    /// current one is not in the set — and the difference is deliberate. Ctrl+A is an explicit
+    /// "select these" from the user, so taking a source from what they asked for is expected;
+    /// a filter change is a side effect, where silently moving which photo a sync copies
+    /// **from** would go unnoticed.
+    pub fn select_indices(&mut self, indices: &[usize]) {
+        self.set = indices.iter().copied().collect();
+        if self.active.is_none_or(|a| !self.set.contains(&a)) {
+            self.active = self.set.iter().next().copied();
+            self.anchor = self.active;
+        }
+        if self.active.is_none() {
+            self.set.clear();
         }
     }
 
@@ -300,16 +306,16 @@ mod tests {
     }
 
     #[test]
-    fn select_all_adopts_index_zero_only_when_there_is_no_active_photo() {
+    fn select_indices_adopts_the_first_only_when_there_is_no_active_photo() {
         let mut fresh = Selection::default();
-        fresh.select_all(4);
+        fresh.select_indices(&[0, 1, 2, 3]);
         check(&fresh);
         assert_eq!(fresh.active(), Some(0));
         assert_eq!(items(&fresh), vec![0, 1, 2, 3]);
 
         let mut existing = Selection::default();
         existing.click(2);
-        existing.select_all(4);
+        existing.select_indices(&[0, 1, 2, 3]);
         check(&existing);
         assert_eq!(
             existing.active(),
@@ -318,9 +324,22 @@ mod tests {
         );
 
         let mut none = Selection::default();
-        none.select_all(0);
+        none.select_indices(&[]);
         check(&none);
         assert_eq!(none.active(), None);
+    }
+
+    #[test]
+    fn select_indices_takes_a_source_from_a_sparse_set() {
+        // Ctrl+A over a filtered folder: the visible list is sparse, and an active photo
+        // outside it must be replaced rather than left dangling. ⚠ This is the deliberate
+        // difference from `retain_visible`, which clears instead — see the doc comment.
+        let mut s = Selection::default();
+        s.click(0);
+        s.select_indices(&[1, 3, 5]);
+        check(&s);
+        assert_eq!(items(&s), vec![1, 3, 5]);
+        assert_eq!(s.active(), Some(1), "the first visible becomes the source");
     }
 
     #[test]

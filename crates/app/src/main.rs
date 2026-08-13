@@ -11,6 +11,7 @@ use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
 use rustroom_app::edit_clipboard;
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
+use rustroom_app::format_filter::{self, FormatFilter};
 use rustroom_app::full_res;
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::history::History;
@@ -64,6 +65,23 @@ struct Library {
     thumbs: Vec<Option<egui::TextureHandle>>, // parallel to entries; None = still loading
     selection: Selection,
     loader: ThumbLoader,
+    /// Which formats the browser hides. Reset when a folder is loaded.
+    filter: FormatFilter,
+    /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
+    /// `refilter`, never edited directly.
+    visible: Vec<usize>,
+}
+
+impl Library {
+    /// Recompute `visible` and prune the selection to it.
+    ///
+    /// ⚠ Both halves, always. Recomputing the visible list without pruning leaves the
+    /// selection holding photos that are not on screen, which a sync or a paste would then
+    /// write to.
+    fn refilter(&mut self) {
+        self.visible = self.filter.visible_indices(&self.entries);
+        self.selection.retain_visible(&self.visible);
+    }
 }
 
 /// A photo whose decode is scheduled or in flight. `Session` still means "fully decoded",
@@ -1053,6 +1071,9 @@ impl RustroomApp {
                     thumbs: (0..n).map(|_| None).collect(),
                     selection: Selection::default(),
                     loader,
+                    // A fresh `Library` per folder load, so the filter resets by construction.
+                    filter: FormatFilter::default(),
+                    visible: (0..n).collect(),
                 });
                 self.view = AppView::Library;
                 self.status = if n == 0 {
@@ -2178,16 +2199,17 @@ impl RustroomApp {
     fn handle_develop_arrows(&mut self, ctx: &egui::Context) {
         let nav = {
             let Some(lib) = &self.library else { return };
-            let n = lib.entries.len();
-            if n == 0 || ctx.memory(|m| m.focused().is_some()) {
+            if lib.visible.is_empty() || ctx.memory(|m| m.focused().is_some()) {
                 return;
             }
+            // ⚠ `cur` may not itself be visible: hiding the open photo's format does not close
+            // it, so `step` has to cope with starting from a hidden index.
             let cur = lib.selection.active().unwrap_or(0);
             ctx.input(|i| {
                 if i.key_pressed(egui::Key::ArrowRight) {
-                    Some((cur + 1).min(n - 1))
+                    format_filter::step(&lib.visible, cur, true)
                 } else if i.key_pressed(egui::Key::ArrowLeft) {
-                    Some(cur.saturating_sub(1))
+                    format_filter::step(&lib.visible, cur, false)
                 } else {
                     None
                 }
@@ -2219,9 +2241,10 @@ impl RustroomApp {
                 ui.set_min_height(avail_h);
                 let cell_h = (avail_h - 8.0).clamp(48.0, 400.0);
                 let box_size = egui::vec2(cell_h * 1.5, cell_h);
+                let visible = lib.visible.clone();
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        for i in 0..lib.entries.len() {
+                        for &i in &visible {
                             // The filmstrip's cell *is* its click target, so it opts in here.
                             let resp = thumb_cell(ui, box_size, lib.thumbs[i].as_ref())
                                 .interact(egui::Sense::click());
@@ -2265,11 +2288,16 @@ impl RustroomApp {
                 });
                 return;
             };
-            // A folder can be reloaded with fewer photos than the selection remembers.
+            // A folder can be reloaded with fewer photos than the selection remembers. This
+            // guards a *different* failure from filtering, so it stays.
             lib.selection.clamp(lib.entries.len());
-            if lib.entries.is_empty() {
+            if lib.visible.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label("No supported images in this folder.");
+                    ui.label(if lib.entries.is_empty() {
+                        "No supported images in this folder."
+                    } else {
+                        "Every format is hidden — re-enable one above."
+                    });
                 });
                 return;
             }
@@ -2277,19 +2305,26 @@ impl RustroomApp {
 
             // Keyboard: arrows move the selection, Enter opens it.
             ui.input(|i| {
-                let n = lib.entries.len();
+                // Steps through the *visible* list, so arrows skip a hidden format rather
+                // than landing on gaps.
                 let cur = lib.selection.active().unwrap_or(0);
                 if i.key_pressed(egui::Key::ArrowRight) {
-                    lib.selection.click((cur + 1).min(n - 1));
+                    if let Some(n) = format_filter::step(&lib.visible, cur, true) {
+                        lib.selection.click(n);
+                    }
                 }
                 if i.key_pressed(egui::Key::ArrowLeft) {
-                    lib.selection.click(cur.saturating_sub(1));
+                    if let Some(n) = format_filter::step(&lib.visible, cur, false) {
+                        lib.selection.click(n);
+                    }
                 }
                 if i.key_pressed(egui::Key::Enter) {
                     open_index = lib.selection.active();
                 }
                 if i.key_pressed(egui::Key::A) && i.modifiers.command {
-                    lib.selection.select_all(n);
+                    // Visible only: selecting hidden photos is the very hazard the prune
+                    // exists to prevent.
+                    lib.selection.select_indices(&lib.visible);
                 }
                 if i.key_pressed(egui::Key::Escape) {
                     lib.selection.clear();
@@ -2298,8 +2333,11 @@ impl RustroomApp {
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let cols = (ui.available_width() / CELL).floor().max(1.0) as usize;
+                // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
+                // per frame is nothing against the thumbnails being drawn.
+                let visible = lib.visible.clone();
                 egui::Grid::new("thumb_grid").show(ui, |ui| {
-                    for i in 0..lib.entries.len() {
+                    for &i in &visible {
                         let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
                         let resp = ui
                             .allocate_ui(egui::vec2(CELL, CELL), |ui| {
@@ -2432,6 +2470,26 @@ impl eframe::App for RustroomApp {
                 ui.selectable_value(&mut self.view, AppView::Library, "Library");
                 ui.selectable_value(&mut self.view, AppView::Develop, "Develop");
                 ui.separator();
+                // Format chips, only when there is a choice to make: a lone toggle can only
+                // ever blank the grid, which is a footgun with no upside.
+                let formats = self
+                    .library
+                    .as_ref()
+                    .map(|lib| format_filter::formats_present(&lib.entries))
+                    .unwrap_or_default();
+                if formats.len() >= 2 {
+                    if let Some(lib) = &mut self.library {
+                        for (ext, count) in &formats {
+                            let mut shown = !lib.filter.is_hidden(ext);
+                            let label = format!("{} ({count})", ext.to_uppercase());
+                            if ui.toggle_value(&mut shown, label).changed() {
+                                lib.filter.toggle(ext);
+                                lib.refilter();
+                            }
+                        }
+                        ui.separator();
+                    }
+                }
                 if self.view == AppView::Develop && self.session.is_some() {
                     let decoding = self.pending.is_some();
                     ui.add_enabled_ui(!decoding, |ui| self.develop_toolbar(ui, &ctx));
