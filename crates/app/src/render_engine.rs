@@ -231,8 +231,12 @@ impl Default for PrefixCache {
 }
 
 impl PrefixCache {
-    /// One complete prefix output per render mode (fit and native).
-    const FINALS_CAP: usize = 2;
+    /// One complete prefix output per render resolution in play.
+    ///
+    /// ⚠ Three, not two: the fast fit rung, the sharp fit rung and a native rung all compete
+    /// for these slots. At two they would evict each other and every transition between them
+    /// would recompute a whole prefix.
+    const FINALS_CAP: usize = 3;
 
     /// Ceiling on the bytes held as intermediates.
     ///
@@ -680,12 +684,15 @@ mod tests {
     }
 
     #[test]
-    fn the_finals_tier_still_holds_exactly_two() {
+    fn the_finals_tier_holds_one_per_render_resolution() {
+        // Three: the fast fit rung, the sharp fit rung and a native rung. At two they would
+        // evict each other and every transition would recompute a whole prefix.
         let mut cache = PrefixCache::default();
-        for tag in 0..4 {
+        for tag in 0..5 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Final);
         }
-        assert_eq!(cache.final_len(), 2);
+        assert_eq!(cache.final_len(), PrefixCache::FINALS_CAP);
+        assert!(cache.get(&fake_key(4)).is_some());
         assert!(cache.get(&fake_key(3)).is_some());
         assert!(cache.get(&fake_key(2)).is_some());
         assert!(cache.get(&fake_key(0)).is_none());
@@ -861,16 +868,21 @@ mod tests {
         };
         let mut cache = PrefixCache::default();
 
-        render_cached(&buf, &e, 8, 1.0, None, &mut cache); // "fit"
+        // The three resolutions in play: the fast fit rung, the sharp fit rung, and native.
+        render_cached(&buf, &e, 8, 1.0, None, &mut cache); // "fit, fast"
+        render_cached(&buf, &e, 12, 1.0, None, &mut cache); // "fit, sharpened"
         render_cached(&buf, &e, 16, 1.0, None, &mut cache); // "native"
-        assert_eq!(cache.final_len(), 2, "both modes should stay cached");
+        assert_eq!(cache.final_len(), 3, "all three should stay cached");
 
-        let scale8 = render_scale(16, rendered_long_edge(16, 8), 1.0);
-        let scale16 = render_scale(16, rendered_long_edge(16, 16), 1.0);
-        assert!(cache.get(&(PrefixKey::new(&e, scale8), 8)).is_some());
-        assert!(cache.get(&(PrefixKey::new(&e, scale16), 16)).is_some());
+        for max_dim in [8usize, 12, 16] {
+            let scale = render_scale(16, rendered_long_edge(16, max_dim), 1.0);
+            assert!(
+                cache.get(&(PrefixKey::new(&e, scale), max_dim)).is_some(),
+                "max_dim {max_dim} was evicted"
+            );
+        }
 
-        // A third distinct key evicts the least recently used.
+        // A fourth distinct key evicts the least recently used.
         let e2 = Edits {
             geometry: edit_model::Geometry {
                 angle: 2.0,
@@ -879,7 +891,7 @@ mod tests {
             ..e.clone()
         };
         render_cached(&buf, &e2, 16, 1.0, None, &mut cache);
-        assert_eq!(cache.final_len(), 2);
+        assert_eq!(cache.final_len(), 3);
     }
 
     #[test]
