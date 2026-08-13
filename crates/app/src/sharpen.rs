@@ -1,0 +1,125 @@
+//! Rendering the fit view at the resolution the display can actually show — but only once the
+//! user has stopped interacting, so sliders stay fast.
+//!
+//! Pure and `egui`-free, like `view_region` and `full_res`: this is resolution arithmetic, and
+//! a wrong answer here shows up as a soft image or a sluggish drag rather than as a failure.
+
+use std::time::Duration;
+
+/// How long after the last interaction the sharper render runs.
+///
+/// ⚠ Whatever schedules this must also `request_repaint_after`: egui does not redraw an idle
+/// window, so the timer would otherwise expire with nothing to notice it — the same lesson the
+/// full-resolution decode's dwell taught.
+pub const SETTLE: Duration = Duration::from_millis(200);
+
+/// Quantisation of [`sharp_cap`], in texels.
+///
+/// ⚠ Without it, dragging a window edge mints a new `max_dim` every frame and thrashes the
+/// prefix cache — the same reasoning as the zoom ladder's doubling rungs.
+const SHARP_STEP: usize = 256;
+
+/// The fit resolution the canvas can actually display, in texels.
+///
+/// ⚠ It depends only on the viewport and the DPI — **never on a rendered size**. That is
+/// load-bearing rather than incidental: deriving a render cap from a rendered size is exactly
+/// the feedback loop that shrank a cropped photo to a few pixels, so this function is built so
+/// it cannot participate in one.
+///
+/// Deliberately generous: the image can never be drawn larger than the viewport, so the
+/// viewport's long edge bounds the image's on-screen long edge. For a portrait image in a wide
+/// window this over-renders. Using the image's own aspect would be tighter, but the displayed
+/// aspect is *post-geometry* — and reaching for a post-geometry quantity here is precisely the
+/// mistake above.
+pub fn sharp_cap(
+    avail_long_points: f32,
+    pixels_per_point: f32,
+    fit_cap: usize,
+    buffer_long: usize,
+) -> usize {
+    let physical = avail_long_points.max(0.0) * pixels_per_point.max(0.0);
+    if !physical.is_finite() {
+        return fit_cap;
+    }
+    let steps = (physical / SHARP_STEP as f32).ceil().max(0.0) as usize;
+    let wanted = steps.saturating_mul(SHARP_STEP);
+    wanted.clamp(fit_cap, buffer_long.max(fit_cap))
+}
+
+/// Whether to spend a render on the sharper fit view now.
+///
+/// ⚠ `at_fit_rung` must be decided from the zoom *ladder*, before any sharpen override is
+/// applied — `sharp` exceeds the fit cap, so a test made after the override would conclude the
+/// view is zoomed and request a cropped region while sitting at fit.
+pub fn wants_sharpen(
+    at_fit_rung: bool,
+    current_max_dim: usize,
+    sharp: usize,
+    fit_cap: usize,
+    idle: Duration,
+) -> bool {
+    at_fit_rung && sharp > fit_cap && current_max_dim != sharp && idle >= SETTLE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sharp_cap_follows_the_display() {
+        // A Retina laptop: ~1400 points of canvas at 2x is 2800 physical pixels, rounded up to
+        // the next 256. Today's 1600-texel fit view is upscaled 1.75x across that.
+        assert_eq!(sharp_cap(1400.0, 2.0, 1600, 6246), 2816);
+        // ⚠ A non-HiDPI display gets nothing, correctly: 1400 physical pixels is *less* than
+        // the fit cap, so the clamp collapses it to the fast rung and nothing changes.
+        assert_eq!(sharp_cap(1400.0, 1.0, 1600, 6246), 1600);
+    }
+
+    #[test]
+    fn sharp_cap_is_quantised() {
+        // Dragging a window edge must not mint a new `max_dim` every frame.
+        let a = sharp_cap(1400.0, 2.0, 1600, 6246);
+        for w in [1290.0_f32, 1330.0, 1380.0, 1400.0] {
+            assert_eq!(sharp_cap(w, 2.0, 1600, 6246), a, "width {w} left the step");
+        }
+        // ...but a big enough change does move it.
+        assert_ne!(sharp_cap(1800.0, 2.0, 1600, 6246), a);
+    }
+
+    #[test]
+    fn sharp_cap_never_exceeds_the_buffer() {
+        // A 5K display against a half-size buffer: there is no more data to render.
+        assert_eq!(sharp_cap(2800.0, 2.0, 1600, 3123), 3123);
+        // And never drops below the fast rung.
+        assert_eq!(sharp_cap(10.0, 2.0, 1600, 6246), 1600);
+        // Degenerate inputs give a usable answer rather than a panic or a zero.
+        assert_eq!(sharp_cap(0.0, 0.0, 1600, 6246), 1600);
+        assert_eq!(sharp_cap(f32::NAN, 2.0, 1600, 6246), 1600);
+    }
+
+    #[test]
+    fn a_sharpen_is_only_wanted_at_the_fit_rung() {
+        let long = SETTLE + Duration::from_secs(1);
+        assert!(wants_sharpen(true, 1600, 2816, 1600, long));
+        // Never while zoomed: the ladder already renders more pixels there.
+        assert!(!wants_sharpen(false, 1600, 2816, 1600, long));
+        // Never when the sharp frame is already showing — otherwise the frame loop would
+        // re-request it forever.
+        assert!(!wants_sharpen(true, 2816, 2816, 1600, long));
+        // Never when there is nothing sharper to render (a non-HiDPI display).
+        assert!(!wants_sharpen(true, 1600, 1600, 1600, long));
+    }
+
+    #[test]
+    fn a_sharpen_waits_for_the_settle() {
+        assert!(!wants_sharpen(true, 1600, 2816, 1600, Duration::ZERO));
+        assert!(!wants_sharpen(
+            true,
+            1600,
+            2816,
+            1600,
+            SETTLE - Duration::from_millis(1)
+        ));
+        assert!(wants_sharpen(true, 1600, 2816, 1600, SETTLE));
+    }
+}
