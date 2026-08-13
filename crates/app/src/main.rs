@@ -2145,8 +2145,7 @@ impl RustroomApp {
                             fit_cap,
                             s.buffer_long,
                         );
-                        let sharpen_now =
-                            sharpen::wants_sharpen(!native, s.render_rung, sharp, fit_cap, idle);
+                        let sharpen_now = sharpen::wants_sharpen(!native, sharp, fit_cap, idle);
                         let max_dim = if sharpen_now { sharp } else { rung };
                         // ⚠ egui does not redraw an idle window, so without this the settle
                         // could expire with nothing to notice it.

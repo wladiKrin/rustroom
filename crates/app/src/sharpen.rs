@@ -46,19 +46,20 @@ pub fn sharp_cap(
     wanted.clamp(fit_cap, buffer_long.max(fit_cap))
 }
 
-/// Whether to spend a render on the sharper fit view now.
+/// Whether the fit view should currently be rendered at the sharper resolution.
+///
+/// ⚠ **A state, not an event.** It deliberately does *not* consider the resolution already
+/// showing. An earlier version required `current_max_dim != sharp`, which made the answer flip
+/// to `false` the instant the sharp frame landed — so the canvas reverted to the fast rung,
+/// counted that as interaction, reset the settle timer, and oscillated forever. The visible
+/// symptom was no sharpening at all. Not re-requesting what is already on screen is the
+/// caller's `max_dim != render_rung` check, and it was already doing that job.
 ///
 /// ⚠ `at_fit_rung` must be decided from the zoom *ladder*, before any sharpen override is
 /// applied — `sharp` exceeds the fit cap, so a test made after the override would conclude the
 /// view is zoomed and request a cropped region while sitting at fit.
-pub fn wants_sharpen(
-    at_fit_rung: bool,
-    current_max_dim: usize,
-    sharp: usize,
-    fit_cap: usize,
-    idle: Duration,
-) -> bool {
-    at_fit_rung && sharp > fit_cap && current_max_dim != sharp && idle >= SETTLE
+pub fn wants_sharpen(at_fit_rung: bool, sharp: usize, fit_cap: usize, idle: Duration) -> bool {
+    at_fit_rung && sharp > fit_cap && idle >= SETTLE
 }
 
 #[cfg(test)]
@@ -100,26 +101,63 @@ mod tests {
     #[test]
     fn a_sharpen_is_only_wanted_at_the_fit_rung() {
         let long = SETTLE + Duration::from_secs(1);
-        assert!(wants_sharpen(true, 1600, 2816, 1600, long));
+        assert!(wants_sharpen(true, 2816, 1600, long));
         // Never while zoomed: the ladder already renders more pixels there.
-        assert!(!wants_sharpen(false, 1600, 2816, 1600, long));
-        // Never when the sharp frame is already showing — otherwise the frame loop would
-        // re-request it forever.
-        assert!(!wants_sharpen(true, 2816, 2816, 1600, long));
+        assert!(!wants_sharpen(false, 2816, 1600, long));
         // Never when there is nothing sharper to render (a non-HiDPI display).
-        assert!(!wants_sharpen(true, 1600, 1600, 1600, long));
+        assert!(!wants_sharpen(true, 1600, 1600, long));
     }
 
     #[test]
     fn a_sharpen_waits_for_the_settle() {
-        assert!(!wants_sharpen(true, 1600, 2816, 1600, Duration::ZERO));
+        assert!(!wants_sharpen(true, 2816, 1600, Duration::ZERO));
         assert!(!wants_sharpen(
             true,
-            1600,
             2816,
             1600,
             SETTLE - Duration::from_millis(1)
         ));
-        assert!(wants_sharpen(true, 1600, 2816, 1600, SETTLE));
+        assert!(wants_sharpen(true, 2816, 1600, SETTLE));
+    }
+
+    #[test]
+    fn the_wanted_resolution_stabilises_once_sharp() {
+        // ⚠ Models the canvas loop, and pins the bug that shipped: gating on "the resolution
+        // showing is not yet sharp" made this flip false the moment the sharp frame landed, so
+        // the canvas reverted to the fast rung, counted that as interaction, reset the timer,
+        // and oscillated — visible as no sharpening whatsoever.
+        let (fit, sharp) = (1600usize, 2816usize);
+
+        // The shipped rule, run over successive frames.
+        let mut rung = fit;
+        let mut idle = SETTLE;
+        for frame in 0..8 {
+            rung = if wants_sharpen(true, sharp, fit, idle) {
+                sharp
+            } else {
+                fit
+            };
+            assert_eq!(rung, sharp, "reverted to the fast rung on frame {frame}");
+            // A sharpen pass must not count as interaction, so idle keeps growing.
+            idle += Duration::from_millis(16);
+        }
+
+        // The buggy rule, for contrast: it additionally required the showing resolution to
+        // differ from `sharp`, which is false from the second frame onwards.
+        let buggy =
+            |current: usize, idle: Duration| sharp > fit && current != sharp && idle >= SETTLE;
+        let mut rung = fit;
+        let mut flips = 0;
+        for _ in 0..8 {
+            let next = if buggy(rung, SETTLE) { sharp } else { fit };
+            if next != rung {
+                flips += 1;
+            }
+            rung = next;
+        }
+        assert!(
+            flips > 1,
+            "the old rule should oscillate, got {flips} flips"
+        );
     }
 }
