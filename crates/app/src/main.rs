@@ -265,7 +265,7 @@ struct Session {
     pan: egui::Vec2,
     history: History<Edits>,
     show_before: bool,
-    crop_mode: bool,
+    geometry_mode: bool,
     active_handle: Option<crop_tool::Handle>,
     /// The region the current texture covers, as a rect, so the canvas can both place it and
     /// test containment without consulting texture dimensions — which would be wrong while
@@ -326,11 +326,15 @@ impl Session {
     }
 }
 
-/// Edits to render for the preview. In crop mode the crop is reset to the full frame so
+/// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so
 /// the whole straightened image shows under the crop overlay.
-fn preview_edits(edits: &Edits, crop_mode: bool) -> Edits {
+///
+/// ⚠ **Only the crop.** The orientation must survive, or the preview would show a
+/// differently-oriented image from the one being edited — and the crop overlay would then be
+/// drawn against a frame that does not match it.
+fn preview_edits(edits: &Edits, geometry_mode: bool) -> Edits {
     let mut e = edits.clone();
-    if crop_mode {
+    if geometry_mode {
         e.geometry.crop = edit_model::CropRect::default();
     }
     e
@@ -417,7 +421,7 @@ impl RustroomApp {
         s.edits.merge_from(src, groups);
         let pushed = s.history.push(s.edits.clone());
         s.request(
-            preview_edits(&s.edits, s.crop_mode),
+            preview_edits(&s.edits, s.geometry_mode),
             s.render_max_dim(),
             s.requested_region,
         );
@@ -662,7 +666,7 @@ impl RustroomApp {
             // The old history described a state that is no longer on disk.
             s.history = History::new(s.edits.clone());
             s.request(
-                preview_edits(&s.edits, s.crop_mode),
+                preview_edits(&s.edits, s.geometry_mode),
                 s.render_max_dim(),
                 s.requested_region,
             );
@@ -676,7 +680,7 @@ impl RustroomApp {
         let Some(s) = &mut self.session else { return };
         s.edits = s.history.get().clone();
         s.request(
-            preview_edits(&s.edits, s.crop_mode),
+            preview_edits(&s.edits, s.geometry_mode),
             s.render_max_dim(),
             s.requested_region,
         );
@@ -900,7 +904,7 @@ impl RustroomApp {
             pan: egui::Vec2::ZERO,
             history: History::new(edits),
             show_before: false,
-            crop_mode: false,
+            geometry_mode: false,
             active_handle: None,
             rendered_region: None,
             requested_region: None,
@@ -989,7 +993,7 @@ impl RustroomApp {
                     // see an unchanged rung and a covered region and request nothing at all —
                     // leaving the old buffer's texture on screen, so the upgrade would be
                     // invisible until something else happened to trigger a render.
-                    s.request(preview_edits(&s.edits, s.crop_mode), s.fit_cap(), None);
+                    s.request(preview_edits(&s.edits, s.geometry_mode), s.fit_cap(), None);
                     self.status = "Full resolution ready".to_string();
                 }
                 Err(e) => {
@@ -1132,9 +1136,9 @@ impl RustroomApp {
                 s.pan = egui::Vec2::ZERO;
             }
             ui.toggle_value(&mut s.show_before, "Before/After");
-            if ui.toggle_value(&mut s.crop_mode, "Crop").clicked() {
+            if ui.toggle_value(&mut s.geometry_mode, "Geometry").clicked() {
                 s.request(
-                    preview_edits(&s.edits, s.crop_mode),
+                    preview_edits(&s.edits, s.geometry_mode),
                     s.render_max_dim(),
                     s.requested_region,
                 );
@@ -1988,9 +1992,47 @@ impl RustroomApp {
                             settled = true;
                         }
 
-                        if s.crop_mode {
+                        if s.geometry_mode {
                             ui.separator();
-                            ui.label("Crop");
+                            ui.label("Geometry");
+                            // Quarter turns and mirroring. ⚠ Each button moves the crop by the
+                            // *same* transform, or the crop lands on different content — see
+                            // `CropRect::rotated_cw`. Keep the two in step.
+                            ui.horizontal(|ui| {
+                                let g = &mut s.edits.geometry;
+                                let mut turned = false;
+                                if ui.button("⟲").on_hover_text("Rotate left").clicked() {
+                                    g.orientation.rotate_ccw();
+                                    for _ in 0..3 {
+                                        g.crop = g.crop.rotated_cw();
+                                    }
+                                    turned = true;
+                                }
+                                if ui.button("⟳").on_hover_text("Rotate right").clicked() {
+                                    g.orientation.rotate_cw();
+                                    g.crop = g.crop.rotated_cw();
+                                    turned = true;
+                                }
+                                if ui.button("⬌").on_hover_text("Flip horizontal").clicked() {
+                                    g.orientation.flip_h();
+                                    g.crop = g.crop.flipped_h();
+                                    turned = true;
+                                }
+                                if ui.button("⬍").on_hover_text("Flip vertical").clicked() {
+                                    g.orientation.flip_v();
+                                    g.crop = g.crop.flipped_h();
+                                    g.crop = g.crop.rotated_cw();
+                                    g.crop = g.crop.rotated_cw();
+                                    turned = true;
+                                }
+                                if turned {
+                                    // ⚠ `settled` too: a button press is a discrete act, so it
+                                    // is one history entry and one Ctrl+Z — unlike a slider,
+                                    // which pushes only on `drag_stopped`.
+                                    changed = true;
+                                    settled = true;
+                                }
+                            });
                             let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
                             let presets: [(&str, Option<f32>); 5] = [
                                 ("Free", None),
@@ -2020,7 +2062,7 @@ impl RustroomApp {
 
                         if changed {
                             s.request(
-                                preview_edits(&s.edits, s.crop_mode),
+                                preview_edits(&s.edits, s.geometry_mode),
                                 s.render_max_dim(),
                                 s.requested_region,
                             );
@@ -2072,7 +2114,7 @@ impl RustroomApp {
                         let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
                         // Crop mode pins the fit rung: the overlay is drawn against the whole
                         // image and placed by the fit-mode maths.
-                        let max_dim = if s.crop_mode {
+                        let max_dim = if s.geometry_mode {
                             fit_cap
                         } else {
                             view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom)
@@ -2113,7 +2155,7 @@ impl RustroomApp {
                         if (!covered && s.requested_region != want) || max_dim != s.render_rung {
                             s.requested_region = want;
                             s.render_rung = max_dim;
-                            s.request(preview_edits(&s.edits, s.crop_mode), max_dim, want);
+                            s.request(preview_edits(&s.edits, s.geometry_mode), max_dim, want);
                         }
 
                         // Place using the *texture's* own render resolution, not the current
@@ -2148,7 +2190,7 @@ impl RustroomApp {
                         let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                         egui::Image::new(shown).paint_at(ui, resp.rect);
 
-                        if s.crop_mode {
+                        if s.geometry_mode {
                             photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
                         } else {
                             if resp.dragged() {
