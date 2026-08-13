@@ -70,9 +70,18 @@ implies the selection is empty. `Selection` gains:
 pub fn retain_visible(&mut self, visible: &[usize]);
 ```
 
-If the active photo is pruned, `active` moves to another surviving member if there is one, and
-otherwise becomes `None` with an empty set. That mirrors what `clamp` already does for a
-shrinking folder.
+⚠ **Amended during implementation.** This section originally said the active photo should move
+to another surviving member. `Selection::clamp` already handles the identical situation the
+other way — it clears the whole set, on the stated grounds that "targets with no source are not
+a usable state" — and `retain_visible` follows it. Two rules for "the active index went away"
+would be a smell, and silently *moving* the active photo changes which photo a subsequent sync
+copies **from**, with nothing on screen to announce it. Clearing is visible and recoverable.
+
+⚠ **Ctrl+A is the deliberate exception.** `Selection::select_indices` (which replaces
+`select_all`, since "all" now means "all visible") *does* adopt a new active photo when the
+current one is outside the set. The difference is defensible: Ctrl+A is an explicit "select
+these" from the user, so taking a source from what they asked for is expected; a filter change
+is a side effect. Both behaviours are pinned by tests that name the distinction.
 
 **The open photo in Develop is deliberately *not* closed** when its format is hidden. Hiding a
 format is a browsing statement, not a "discard my work" one, and closing the session would
@@ -102,7 +111,9 @@ the count — `RAF (411)`, `JPG (411)`.
 | `an_unknown_extension_defaults_to_visible` | the hidden-not-shown choice, as a property: a format absent from the filter is visible |
 | `toggling_twice_restores_the_folder` | round trip |
 | `pruning_drops_hidden_entries_from_the_selection` | the data-loss guard of §3 |
-| `pruning_moves_the_active_photo_when_it_is_hidden` | the invariant survives, active lands on a surviving member |
+| `pruning_the_active_photo_clears_the_selection` | the amended rule of §3, matching `clamp` |
+| `select_indices_takes_a_source_from_a_sparse_set` | Ctrl+A over a filtered folder adopts the first visible photo — the deliberate exception |
+| `stepping_from_a_hidden_index_lands_on_a_neighbour` | arrow navigation when the open photo's format was hidden |
 | `pruning_everything_empties_the_selection` | `active` becomes `None`, not a dangling index |
 | the 29 goldens | byte-identical — this feature touches no pixels |
 
