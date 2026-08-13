@@ -159,5 +159,9 @@ mod tests {
             flips > 1,
             "the old rule should oscillate, got {flips} flips"
         );
+        assert_eq!(
+            rung, fit,
+            "and lands back on the fast rung, showing nothing"
+        );
     }
 }
