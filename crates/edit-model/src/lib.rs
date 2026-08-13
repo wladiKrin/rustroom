@@ -42,10 +42,121 @@ impl Default for CropRect {
     }
 }
 
-/// Geometry: straighten angle (degrees, + = clockwise) then crop. Neutral by default.
+impl CropRect {
+    /// The rect covering the same content after the frame turns clockwise.
+    ///
+    /// ⚠ Without this, rotating a cropped photo leaves the crop on entirely different pixels.
+    /// In the unit square a clockwise turn maps `(x, y) -> (1 - y, x)`.
+    pub fn rotated_cw(self) -> Self {
+        Self {
+            left: 1.0 - self.bottom,
+            top: self.left,
+            right: 1.0 - self.top,
+            bottom: self.right,
+        }
+    }
+
+    /// The rect covering the same content after the frame mirrors horizontally.
+    pub fn flipped_h(self) -> Self {
+        Self {
+            left: 1.0 - self.right,
+            top: self.top,
+            right: 1.0 - self.left,
+            bottom: self.bottom,
+        }
+    }
+}
+
+/// A quarter turn, clockwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Quarter {
+    #[default]
+    Zero,
+    Cw90,
+    Cw180,
+    Cw270,
+}
+
+impl Quarter {
+    /// Quarter turns clockwise, 0..=3 — the arithmetic form, so composition is modular
+    /// addition rather than a match table nobody can check.
+    fn turns(self) -> u8 {
+        match self {
+            Quarter::Zero => 0,
+            Quarter::Cw90 => 1,
+            Quarter::Cw180 => 2,
+            Quarter::Cw270 => 3,
+        }
+    }
+
+    fn from_turns(t: u8) -> Self {
+        match t % 4 {
+            0 => Quarter::Zero,
+            1 => Quarter::Cw90,
+            2 => Quarter::Cw180,
+            _ => Quarter::Cw270,
+        }
+    }
+
+    /// Whether this turn swaps width and height.
+    pub fn swaps_axes(self) -> bool {
+        matches!(self, Quarter::Cw90 | Quarter::Cw270)
+    }
+}
+
+/// One of the eight rigid transforms of a rectangle: mirror about the vertical axis if
+/// `mirror`, **then** turn by `rotate`.
+///
+/// ⚠ `mirror` is one flag, not two. A vertical flip is a horizontal flip plus a half turn, so
+/// storing `flip_h` and `flip_v` separately would make four of the eight states representable
+/// two ways. Flip-vertical is a derived *action* — see [`Orientation::flip_v`] — not a field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Orientation {
+    pub rotate: Quarter,
+    pub mirror: bool,
+}
+
+impl Orientation {
+    pub fn is_identity(self) -> bool {
+        self == Orientation::default()
+    }
+
+    pub fn rotate_cw(&mut self) {
+        self.rotate = Quarter::from_turns(self.rotate.turns() + 1);
+    }
+
+    pub fn rotate_ccw(&mut self) {
+        self.rotate = Quarter::from_turns(self.rotate.turns() + 3);
+    }
+
+    /// ⚠ Not just `mirror = !mirror`. The group is non-abelian: with `mirror` applied *first*,
+    /// post-composing a horizontal flip gives `M ∘ rot_r = rot_{-r} ∘ M`, so the rotation
+    /// negates too. Without this the buttons are each correct in isolation and wrong in
+    /// sequence — guarded by `each_button_matches_its_geometric_action`, which compares against
+    /// an independent corner model. ⚠ *Not* by the reachable-state count, which the wrong rule
+    /// also passes: it still reaches all eight states, just as a direct product rather than a
+    /// dihedral group.
+    pub fn flip_h(&mut self) {
+        self.rotate = Quarter::from_turns(4 - self.rotate.turns());
+        self.mirror = !self.mirror;
+    }
+
+    /// A horizontal flip and a half turn. Derived rather than stored, per the type's note.
+    pub fn flip_v(&mut self) {
+        self.flip_h();
+        self.rotate = Quarter::from_turns(self.rotate.turns() + 2);
+    }
+}
+
+/// Geometry: orientation, then straighten angle (degrees, + = clockwise), then crop. Neutral
+/// by default.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Geometry {
+    /// Quarter turns and mirroring, applied *before* the straighten angle.
+    #[serde(default)]
+    pub orientation: Orientation,
     /// Straighten angle in degrees. 0 = none.
     pub angle: f32,
     pub crop: CropRect,
@@ -465,6 +576,210 @@ pub enum EditLoadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every state reachable from the identity by the four buttons.
+    fn reachable() -> std::collections::BTreeSet<(u8, bool)> {
+        let key = |o: &Orientation| (o.rotate as u8, o.mirror);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut frontier = vec![Orientation::default()];
+        seen.insert(key(&Orientation::default()));
+        // ⚠ The annotation is required: each `fn` item has its own distinct type, so an
+        // unannotated array of them does not infer a common element type.
+        let acts: [fn(&mut Orientation); 4] = [
+            Orientation::rotate_cw,
+            Orientation::rotate_ccw,
+            Orientation::flip_h,
+            Orientation::flip_v,
+        ];
+        while let Some(o) = frontier.pop() {
+            for act in acts {
+                let mut next = o;
+                act(&mut next);
+                if seen.insert(key(&next)) {
+                    frontier.push(next);
+                }
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn the_generators_produce_exactly_eight_states() {
+        // A rectangle has exactly eight rigid transforms, and the buttons must reach all of
+        // them and no more.
+        //
+        // ⚠ **This is necessary but nowhere near sufficient**, and I checked rather than
+        // assumed: a `flip_h` that only flips `mirror` — the wrong, abelian rule — *also*
+        // reaches all eight, as a direct product instead of a dihedral group. The count cannot
+        // tell the two apart. `each_button_matches_its_geometric_action` is the test that can.
+        assert_eq!(reachable().len(), 8);
+    }
+
+    /// The eight states, built directly rather than by exploration.
+    fn all_states() -> Vec<Orientation> {
+        let mut v = Vec::new();
+        for rotate in [Quarter::Zero, Quarter::Cw90, Quarter::Cw180, Quarter::Cw270] {
+            for mirror in [false, true] {
+                v.push(Orientation { rotate, mirror });
+            }
+        }
+        v
+    }
+
+    /// Where the unit square's corners land under `o`.
+    ///
+    /// An **independent model** of what an orientation means — "mirror about x, then turn
+    /// clockwise" written out geometrically — so composition can be checked against geometry
+    /// rather than against the very rules under test.
+    fn corners(o: Orientation) -> Vec<(i32, i32)> {
+        [(0, 0), (1, 0), (0, 1), (1, 1)]
+            .into_iter()
+            .map(|(x, y)| {
+                let x = if o.mirror { 1 - x } else { x };
+                match o.rotate {
+                    Quarter::Zero => (x, y),
+                    Quarter::Cw90 => (1 - y, x),
+                    Quarter::Cw180 => (1 - x, 1 - y),
+                    Quarter::Cw270 => (y, 1 - x),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_button_matches_its_geometric_action() {
+        // ⚠ The real guard on the non-abelian composition. Pressing a button must move the
+        // stored state exactly as the corresponding *geometric* transform moves the frame —
+        // from every one of the eight starting states, not just from the identity.
+        //
+        // This is what catches `flip_h` forgetting to negate the rotation, which the
+        // reachable-state count does not.
+        let cw = |(x, y): (i32, i32)| (1 - y, x);
+        let ccw = |(x, y): (i32, i32)| (y, 1 - x);
+        let fh = |(x, y): (i32, i32)| (1 - x, y);
+        let fv = |(x, y): (i32, i32)| (x, 1 - y);
+
+        let cases: [(fn(&mut Orientation), fn((i32, i32)) -> (i32, i32), &str); 4] = [
+            (Orientation::rotate_cw, cw, "rotate_cw"),
+            (Orientation::rotate_ccw, ccw, "rotate_ccw"),
+            (Orientation::flip_h, fh, "flip_h"),
+            (Orientation::flip_v, fv, "flip_v"),
+        ];
+
+        for start in all_states() {
+            for (act, geom, name) in cases {
+                let mut moved = start;
+                act(&mut moved);
+                let want: Vec<_> = corners(start).into_iter().map(geom).collect();
+                assert_eq!(corners(moved), want, "{name} from {start:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_generator_returns_to_identity() {
+        let mut o = Orientation::default();
+        for _ in 0..4 {
+            o.rotate_cw();
+        }
+        assert_eq!(o, Orientation::default());
+
+        let mut o = Orientation::default();
+        for _ in 0..4 {
+            o.rotate_ccw();
+        }
+        assert_eq!(o, Orientation::default());
+
+        let flips: [fn(&mut Orientation); 2] = [Orientation::flip_h, Orientation::flip_v];
+        for act in flips {
+            let mut o = Orientation::default();
+            act(&mut o);
+            assert_ne!(o, Orientation::default(), "a flip must change something");
+            act(&mut o);
+            assert_eq!(o, Orientation::default());
+        }
+    }
+
+    #[test]
+    fn flipping_after_a_rotation_negates_it() {
+        // ⚠ The non-abelian rule, stated directly so a failure names itself rather than only
+        // showing up as a wrong state count. `M ∘ rot_r = rot_{-r} ∘ M`.
+        let mut o = Orientation::default();
+        o.rotate_cw(); // 90
+        o.flip_h();
+        assert_eq!(o.rotate, Quarter::Cw270, "90 must become 270 under a flip");
+        assert!(o.mirror);
+    }
+
+    #[test]
+    fn a_vertical_flip_is_a_horizontal_flip_and_a_half_turn() {
+        // Keeps the UI's four buttons honest against the two stored fields.
+        for start in [Quarter::Zero, Quarter::Cw90, Quarter::Cw180, Quarter::Cw270] {
+            for mirror in [false, true] {
+                let base = Orientation {
+                    rotate: start,
+                    mirror,
+                };
+                let mut via_v = base;
+                via_v.flip_v();
+
+                let mut via_h = base;
+                via_h.flip_h();
+                via_h.rotate_cw();
+                via_h.rotate_cw();
+
+                assert_eq!(via_v, via_h, "from {base:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_clockwise_turn_moves_the_left_half_to_the_top() {
+        // ⚠ The crop must follow the rotation, or rotating a cropped photo lands the crop on
+        // entirely different content. Checked by *content*, not by arithmetic.
+        let left_half = CropRect {
+            left: 0.0,
+            top: 0.0,
+            right: 0.5,
+            bottom: 1.0,
+        };
+        let top_half = CropRect {
+            left: 0.0,
+            top: 0.0,
+            right: 1.0,
+            bottom: 0.5,
+        };
+        assert_eq!(left_half.rotated_cw(), top_half);
+    }
+
+    #[test]
+    fn four_crop_rotations_restore_the_rect() {
+        // ⚠ Round trips are exact only to `f32` rounding: `1.0 - (1.0 - 0.1)` is 0.100000024,
+        // not 0.1. The tolerance is 1e-6 of a *normalised* rect — a millionth of the frame,
+        // sub-pixel on any image ever shot — so this is a statement about floats, not a
+        // weakened assertion.
+        let close = |a: CropRect, b: CropRect| {
+            let d = |x: f32, y: f32| (x - y).abs() < 1e-6;
+            d(a.left, b.left) && d(a.top, b.top) && d(a.right, b.right) && d(a.bottom, b.bottom)
+        };
+        let r = CropRect {
+            left: 0.1,
+            top: 0.2,
+            right: 0.7,
+            bottom: 0.9,
+        };
+        let mut got = r;
+        for _ in 0..4 {
+            got = got.rotated_cw();
+        }
+        assert!(close(got, r), "four turns gave {got:?}, want {r:?}");
+
+        // And a horizontal flip is its own inverse.
+        assert!(close(r.flipped_h().flipped_h(), r));
+
+        // A turn must actually move an asymmetric rect, or the test above passes trivially.
+        assert!(!close(r.rotated_cw(), r));
+    }
 
     #[test]
     fn edits_default_roundtrips_json() {
@@ -912,6 +1227,10 @@ mod tests {
                 ..Default::default()
             },
             geometry: Geometry {
+                orientation: Orientation {
+                    rotate: Quarter::Cw90,
+                    mirror: true,
+                },
                 angle: 2.0,
                 crop: CropRect {
                     left: 0.1,
