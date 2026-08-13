@@ -355,6 +355,42 @@ fn golden_crop_center() {
 }
 
 #[test]
+fn golden_orient_cw90() {
+    use edit_model::{Geometry, Orientation, Quarter};
+    check_golden(
+        "orient_cw90",
+        &Edits {
+            geometry: Geometry {
+                orientation: Orientation {
+                    rotate: Quarter::Cw90,
+                    mirror: false,
+                },
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+    )
+}
+
+#[test]
+fn golden_orient_mirror() {
+    use edit_model::{Geometry, Orientation, Quarter};
+    check_golden(
+        "orient_mirror",
+        &Edits {
+            geometry: Geometry {
+                orientation: Orientation {
+                    rotate: Quarter::Cw180,
+                    mirror: true,
+                },
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+    )
+}
+
+#[test]
 fn golden_saturation_plus50() {
     check_golden(
         "saturation_plus50",
