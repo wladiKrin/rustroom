@@ -6,6 +6,7 @@ pub mod buffer_cache;
 pub mod crop_tool;
 pub mod decode_worker;
 pub mod edit_clipboard;
+pub mod edit_history;
 pub mod export_presets;
 pub mod format_filter;
 pub mod full_res;
