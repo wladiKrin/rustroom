@@ -2,6 +2,11 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+mod format_arg;
+
+/// What `--quality` means when it is not given. Only JPEG reads it.
+const DEFAULT_JPEG_QUALITY: u8 = 92;
+
 #[derive(Parser)]
 #[command(name = "rustroom", about = "Rustroom — open-source RAW photo editor")]
 struct Cli {
@@ -18,18 +23,22 @@ enum Command {
         /// Output image (.tiff).
         output: PathBuf,
     },
-    /// Decode a RAW, run the develop pipeline (no edits yet), and export a JPEG.
+    /// Decode a RAW, run the develop pipeline, and export it.
     Render {
         /// Input RAW file.
         input: PathBuf,
-        /// Output JPEG.
+        /// Output image. Its extension picks the format unless --format says otherwise.
         output: PathBuf,
         /// Optional edits sidecar (JSON). Omitted = no edits.
         #[arg(long)]
         edits: Option<PathBuf>,
-        /// JPEG quality 1..=100.
-        #[arg(long, default_value_t = 92)]
-        quality: u8,
+        /// Output format: jpeg, png8, png16, tiff8, tiff16. Omitted = inferred from the
+        /// output extension, at 8 bits.
+        #[arg(long)]
+        format: Option<String>,
+        /// JPEG quality 1..=100. Ignored by the lossless formats. Default 92.
+        #[arg(long)]
+        quality: Option<u8>,
         /// Demosaic quality: fastest, fast, better, best. Higher is slower — roughly 1.2 s
         /// to 11 s per photo on a 26 Mpx RAW.
         #[arg(long, default_value = "fast")]
@@ -45,9 +54,17 @@ fn main() -> Result<()> {
             input,
             output,
             edits,
+            format,
             quality,
             demosaic,
-        } => render(&input, &output, edits.as_deref(), quality, &demosaic),
+        } => render(
+            &input,
+            &output,
+            edits.as_deref(),
+            format.as_deref(),
+            quality,
+            &demosaic,
+        ),
     }
 }
 
@@ -82,9 +99,24 @@ fn render(
     input: &Path,
     output: &Path,
     edits_path: Option<&Path>,
-    quality: u8,
+    format: Option<&str>,
+    quality: Option<u8>,
     demosaic: &str,
 ) -> Result<()> {
+    // Resolved before the decode, so a bad --format fails in milliseconds rather than after
+    // a multi-second decode and render.
+    let format = format_arg::resolve(output, format)?;
+    let quality = match quality {
+        Some(q) if !format.is_lossy() => {
+            eprintln!(
+                "warning: --quality {q} is ignored by {} (only JPEG is lossy)",
+                format.label()
+            );
+            q
+        }
+        Some(q) => q,
+        None => DEFAULT_JPEG_QUALITY,
+    };
     // A plain string plus a match rather than a `clap::ValueEnum` derive, so `raw-decode`
     // does not gain a `clap` dependency for a CLI concern. The error lists the valid values,
     // which is what the derive would have bought.
@@ -113,7 +145,7 @@ fn render(
     };
     let rendered = pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(decoded.image);
 
-    export::save(&rendered, output, export::ExportFormat::Jpeg, quality)
+    export::save(&rendered, output, format, quality)
         .with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Wrote {}", output.display());
     Ok(())
