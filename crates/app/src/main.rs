@@ -287,8 +287,12 @@ struct Session {
     rendered_long: f32,
     /// The editing buffer's long edge — the top rung of the render ladder.
     buffer_long: usize,
-    /// Whether `engine`'s buffer is already the full-resolution decode.
-    upgraded: bool,
+    /// Whether `engine`'s buffer is the full-resolution decode.
+    ///
+    /// ⚠ Also gates the fit-view sharpen: a half-size RAW buffer *skips demosaic*, so more
+    /// texels there are binning artifacts rather than detail. True from the start for
+    /// JPEG/PNG/TIFF, which are decoded at full size already.
+    buffer_is_full_res: bool,
     /// When this session was created — the dwell the upgrade trigger waits on.
     opened_at: Instant,
     /// The rung the canvas last chose, so an edit made from a panel re-renders at the tier
@@ -896,6 +900,8 @@ impl RustroomApp {
         // the canvas only accepts a frame as the fit size when its `max_dim` matches.
         let fit_cap = view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM);
         engine.request(edits.clone(), fit_cap, None);
+        // Non-RAW formats are decoded at full size, so their buffer is already the real thing.
+        let buffer_is_full_res = !catalog::is_raw(&path);
 
         self.session = Some(Session {
             path,
@@ -918,7 +924,7 @@ impl RustroomApp {
             fit_image_size: egui::vec2(1.0, 1.0),
             rendered_long: 1.0,
             buffer_long,
-            upgraded: false,
+            buffer_is_full_res,
             opened_at: Instant::now(),
             render_rung: PREVIEW_MAX_DIM,
         });
@@ -940,7 +946,7 @@ impl RustroomApp {
         let Some(s) = self.session.as_ref() else {
             return;
         };
-        if !catalog::is_raw(&s.path) || s.upgraded || in_flight {
+        if !catalog::is_raw(&s.path) || s.buffer_is_full_res || in_flight {
             return;
         }
         let age = s.opened_at.elapsed();
@@ -986,7 +992,7 @@ impl RustroomApp {
                         decoded.source_scale,
                         move || ctx2.request_repaint(),
                     );
-                    s.upgraded = true;
+                    s.buffer_is_full_res = true;
                     // ⚠ Load-bearing. Region rects are in *rendered* pixels, and those
                     // coordinates change with the buffer — reusing them would describe the
                     // wrong part of the image. Clearing both forces the next frame to
@@ -2145,8 +2151,31 @@ impl RustroomApp {
                             fit_cap,
                             s.buffer_long,
                         );
-                        let sharpen_now = sharpen::wants_sharpen(!native, sharp, fit_cap, idle);
+                        let sharpen_now = sharpen::wants_sharpen(
+                            !native,
+                            s.buffer_is_full_res,
+                            sharp,
+                            fit_cap,
+                            idle,
+                        );
                         let max_dim = if sharpen_now { sharp } else { rung };
+                        // Diagnostic, off unless RUSTROOM_DEBUG_SHARPEN is set. Kept because
+                        // every value here is invisible from the outside, and the failure mode
+                        // is "nothing happens".
+                        if std::env::var_os("RUSTROOM_DEBUG_SHARPEN").is_some()
+                            && max_dim != s.render_rung
+                        {
+                            eprintln!(
+                                "sharpen: ppp={:.2} avail={:.0}x{:.0} fit_cap={fit_cap} \
+                                 sharp={sharp} rung={rung} max_dim={max_dim} \
+                                 render_rung={} idle={}ms native={native} now={sharpen_now}",
+                                ui.ctx().pixels_per_point(),
+                                avail.x,
+                                avail.y,
+                                s.render_rung,
+                                idle.as_millis(),
+                            );
+                        }
                         // ⚠ egui does not redraw an idle window, so without this the settle
                         // could expire with nothing to notice it.
                         if !native && sharp > fit_cap && !sharpen_now && idle < sharpen::SETTLE {

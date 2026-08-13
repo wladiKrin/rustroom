@@ -58,8 +58,20 @@ pub fn sharp_cap(
 /// ⚠ `at_fit_rung` must be decided from the zoom *ladder*, before any sharpen override is
 /// applied — `sharp` exceeds the fit cap, so a test made after the override would conclude the
 /// view is zoomed and request a cropped region while sitting at fit.
-pub fn wants_sharpen(at_fit_rung: bool, sharp: usize, fit_cap: usize, idle: Duration) -> bool {
-    at_fit_rung && sharp > fit_cap && idle >= SETTLE
+/// ⚠ `buffer_is_full_res` is not a refinement, it is the difference between the feature working
+/// and being pure cost. While a RAW is still on its **half-size** buffer, that buffer *skips
+/// demosaic entirely* — so rendering the fit view at its native size shows binned pixels 1:1
+/// instead of a clean downscale of them. There is no detail to gain (downscaling was in fact
+/// averaging the binning artifacts away), and it costs ~4x the pixels. Measured in use: no
+/// visible change, a noticeably slower Exposure slider.
+pub fn wants_sharpen(
+    at_fit_rung: bool,
+    buffer_is_full_res: bool,
+    sharp: usize,
+    fit_cap: usize,
+    idle: Duration,
+) -> bool {
+    at_fit_rung && buffer_is_full_res && sharp > fit_cap && idle >= SETTLE
 }
 
 #[cfg(test)]
@@ -101,23 +113,27 @@ mod tests {
     #[test]
     fn a_sharpen_is_only_wanted_at_the_fit_rung() {
         let long = SETTLE + Duration::from_secs(1);
-        assert!(wants_sharpen(true, 2816, 1600, long));
+        assert!(wants_sharpen(true, true, 2816, 1600, long));
         // Never while zoomed: the ladder already renders more pixels there.
-        assert!(!wants_sharpen(false, 2816, 1600, long));
+        assert!(!wants_sharpen(false, true, 2816, 1600, long));
+        // ⚠ Never on a half-size RAW buffer: its pixels are binned, so more texels are not
+        // more detail — only more cost. This is the case that shipped broken.
+        assert!(!wants_sharpen(true, false, 2816, 1600, long));
         // Never when there is nothing sharper to render (a non-HiDPI display).
-        assert!(!wants_sharpen(true, 1600, 1600, long));
+        assert!(!wants_sharpen(true, true, 1600, 1600, long));
     }
 
     #[test]
     fn a_sharpen_waits_for_the_settle() {
-        assert!(!wants_sharpen(true, 2816, 1600, Duration::ZERO));
+        assert!(!wants_sharpen(true, true, 2816, 1600, Duration::ZERO));
         assert!(!wants_sharpen(
+            true,
             true,
             2816,
             1600,
             SETTLE - Duration::from_millis(1)
         ));
-        assert!(wants_sharpen(true, 2816, 1600, SETTLE));
+        assert!(wants_sharpen(true, true, 2816, 1600, SETTLE));
     }
 
     #[test]
@@ -131,7 +147,7 @@ mod tests {
         // The shipped rule, run over successive frames.
         let mut idle = SETTLE;
         for frame in 0..8 {
-            let rung = if wants_sharpen(true, sharp, fit, idle) {
+            let rung = if wants_sharpen(true, true, sharp, fit, idle) {
                 sharp
             } else {
                 fit
