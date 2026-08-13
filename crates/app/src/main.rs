@@ -2156,11 +2156,15 @@ impl RustroomApp {
                             fit_cap,
                             s.buffer_long,
                         );
+                        // The whole image is visible exactly when the user has not zoomed past
+                        // the fitting scale — non-circular, unlike anything derived from the
+                        // rendered size.
+                        let showing_whole_image = s.zoom <= 1.0;
                         let sharpen_now = sharpen::wants_sharpen(
-                            !native,
+                            showing_whole_image,
                             s.buffer_is_full_res,
                             sharp,
-                            fit_cap,
+                            rung,
                             idle,
                         );
                         let max_dim = if sharpen_now { sharp } else { rung };
@@ -2183,7 +2187,12 @@ impl RustroomApp {
                         }
                         // ⚠ egui does not redraw an idle window, so without this the settle
                         // could expire with nothing to notice it.
-                        if !native && sharp > fit_cap && !sharpen_now && idle < sharpen::SETTLE {
+                        if showing_whole_image
+                            && s.buffer_is_full_res
+                            && sharp > rung
+                            && !sharpen_now
+                            && idle < sharpen::SETTLE
+                        {
                             ui.ctx().request_repaint_after(sharpen::SETTLE - idle);
                         }
 

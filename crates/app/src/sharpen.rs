@@ -55,23 +55,30 @@ pub fn sharp_cap(
 /// symptom was no sharpening at all. Not re-requesting what is already on screen is the
 /// caller's `max_dim != render_rung` check, and it was already doing that job.
 ///
-/// ⚠ `at_fit_rung` must be decided from the zoom *ladder*, before any sharpen override is
-/// applied — `sharp` exceeds the fit cap, so a test made after the override would conclude the
-/// view is zoomed and request a cropped region while sitting at fit.
+/// ⚠ `showing_whole_image`, not "at the base rung". The earlier version tested the latter, which
+/// was only ever true because `fit` was clamped at 1.0; once the clamp went and the ladder began
+/// climbing at fit, the condition became unreachable on any display larger than the fit texture
+/// and this never fired. "The whole image is visible" is `zoom <= 1` — non-circular, and the
+/// thing actually meant.
+///
+/// ⚠ `current_rung`, not the fit cap. The ladder may already have climbed past the fit cap on a
+/// large window, so the question is whether the display can show more than *the rung already
+/// chosen* — otherwise this proposes a resolution below what is on screen.
+///
 /// ⚠ `buffer_is_full_res` is not a refinement, it is the difference between the feature working
 /// and being pure cost. While a RAW is still on its **half-size** buffer, that buffer *skips
-/// demosaic entirely* — so rendering the fit view at its native size shows binned pixels 1:1
-/// instead of a clean downscale of them. There is no detail to gain (downscaling was in fact
-/// averaging the binning artifacts away), and it costs ~4x the pixels. Measured in use: no
-/// visible change, a noticeably slower Exposure slider.
+/// demosaic entirely* — so rendering at its native size shows binned pixels 1:1 instead of a
+/// clean downscale of them. There is no detail to gain (downscaling was in fact averaging the
+/// binning artifacts away), and it costs ~4x the pixels. Measured in use: no visible change, a
+/// noticeably slower Exposure slider.
 pub fn wants_sharpen(
-    at_fit_rung: bool,
+    showing_whole_image: bool,
     buffer_is_full_res: bool,
     sharp: usize,
-    fit_cap: usize,
+    current_rung: usize,
     idle: Duration,
 ) -> bool {
-    at_fit_rung && buffer_is_full_res && sharp > fit_cap && idle >= SETTLE
+    showing_whole_image && buffer_is_full_res && sharp > current_rung && idle >= SETTLE
 }
 
 #[cfg(test)]
@@ -111,16 +118,32 @@ mod tests {
     }
 
     #[test]
-    fn a_sharpen_is_only_wanted_at_the_fit_rung() {
+    fn a_sharpen_is_only_wanted_when_the_whole_image_shows() {
         let long = SETTLE + Duration::from_secs(1);
         assert!(wants_sharpen(true, true, 2816, 1600, long));
-        // Never while zoomed: the ladder already renders more pixels there.
+        // Never while zoomed into a subset: the ladder already renders more pixels there.
         assert!(!wants_sharpen(false, true, 2816, 1600, long));
         // ⚠ Never on a half-size RAW buffer: its pixels are binned, so more texels are not
         // more detail — only more cost. This is the case that shipped broken.
         assert!(!wants_sharpen(true, false, 2816, 1600, long));
         // Never when there is nothing sharper to render (a non-HiDPI display).
         assert!(!wants_sharpen(true, true, 1600, 1600, long));
+    }
+
+    #[test]
+    fn a_sharpen_is_measured_against_the_rung_already_chosen() {
+        // ⚠ The gate that made this unreachable. On a large window the ladder has already
+        // climbed past the fit cap, so comparing against the cap would propose a resolution
+        // *below* what is on screen. Real numbers from a 2302x1233-point canvas at 2x.
+        let long = SETTLE + Duration::from_secs(1);
+        assert!(
+            wants_sharpen(true, true, 4608, 3200, long),
+            "4608 beats the 3200 rung, so there is still detail to gain"
+        );
+        assert!(
+            !wants_sharpen(true, true, 4608, 6246, long),
+            "the rung already exceeds what the display can show"
+        );
     }
 
     #[test]
