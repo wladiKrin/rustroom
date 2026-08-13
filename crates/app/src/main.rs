@@ -2332,7 +2332,7 @@ impl RustroomApp {
             });
 
             egui::ScrollArea::vertical().show(ui, |ui| {
-                let cols = (ui.available_width() / CELL).floor().max(1.0) as usize;
+                let cols = grid_columns(ui.available_width(), CELL, ui.spacing().item_spacing.x);
                 // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
                 // per frame is nothing against the thumbnails being drawn.
                 let visible = lib.visible.clone();
@@ -2687,6 +2687,20 @@ fn apply_click(sel: &mut Selection, i: usize, mods: egui::Modifiers) -> bool {
 
 /// Outline a selected cell: bright for the active photo, dim for the rest of the selection.
 /// Being able to tell the source from the targets is what makes a sync predictable.
+/// How many `cell`-wide columns fit in `avail`, given egui's inter-column `spacing`.
+///
+/// ⚠ `n` cells need `n*cell + (n-1)*spacing`, **not** `n*cell`. Ignoring the gaps overflows
+/// whenever the leftover width is smaller than the gaps the columns need — and that gets *more*
+/// likely as the window widens, because the gap total grows with the column count while the
+/// leftover stays uniform in `[0, cell)`. Which is exactly why it showed on a large monitor and
+/// not a small one: at 14 columns the gaps want 104 px of slack, at 7 only 48.
+fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
+    if cell <= 0.0 {
+        return 1;
+    }
+    (((avail + spacing) / (cell + spacing)).floor() as usize).max(1)
+}
+
 fn paint_selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected: bool) {
     if !selected {
         return;
@@ -2847,6 +2861,41 @@ mod tests {
         tops.sort_unstable();
         tops.dedup();
         tops.len()
+    }
+
+    #[test]
+    fn grid_columns_leaves_room_for_the_gaps() {
+        // ⚠ The property, over a sweep of window widths: the chosen columns must *fit* with
+        // their gaps, and one more must not — so it is neither overflowing nor wasteful.
+        const CELL: f32 = 168.0;
+        const GAP: f32 = 8.0;
+        let width_of = |n: f32| n * CELL + (n - 1.0) * GAP;
+        for avail in [300.0f32, 700.0, 1200.0, 1850.0, 2400.0, 3000.0] {
+            let n = grid_columns(avail, CELL, GAP) as f32;
+            assert!(
+                width_of(n) <= avail,
+                "{n} columns need {} > {avail}",
+                width_of(n)
+            );
+            assert!(
+                width_of(n + 1.0) > avail,
+                "{} columns would also have fit in {avail}",
+                n + 1.0
+            );
+        }
+
+        // The naive `avail / cell` overflows precisely where this does not — the bug, pinned.
+        let naive = (2400.0f32 / CELL).floor();
+        assert!(
+            width_of(naive) > 2400.0,
+            "the naive formula should overflow"
+        );
+        assert!((grid_columns(2400.0, CELL, GAP) as f32) < naive);
+
+        // Degenerate inputs still give a usable answer rather than 0 columns or a panic.
+        assert_eq!(grid_columns(0.0, CELL, GAP), 1);
+        assert_eq!(grid_columns(-50.0, CELL, GAP), 1);
+        assert_eq!(grid_columns(500.0, 0.0, GAP), 1);
     }
 
     #[test]
