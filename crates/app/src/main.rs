@@ -401,6 +401,16 @@ fn decode_for_export(
 impl RustroomApp {
     /// Save the current session's edits to its `<file>.json` sidecar, if it has any.
     /// Called before switching photos / on exit so edits are never lost.
+    /// The open photo, which is what the action log's photo-edit entries must match to be
+    /// undoable right now.
+    ///
+    /// ⚠ Returns an owned `PathBuf` rather than a borrow: every caller passes it *into* a
+    /// `&mut self.actions` method, and a borrow of `self` living across that call does not
+    /// compile. One clone per user gesture is not worth fighting the borrow checker over.
+    fn open_photo(&self) -> Option<PathBuf> {
+        self.session.as_ref().map(|s| s.path.clone())
+    }
+
     fn persist_current_session(&self) {
         if let Some(s) = &self.session {
             // `persist`, not `save`: neutral edits *delete* the sidecar. Skipping the write
@@ -504,8 +514,8 @@ impl RustroomApp {
         // A lone action does not need a wrapper — keep the log readable.
         match parts.len() {
             0 => {}
-            1 => self.actions.push(parts.remove(0)),
-            _ => self.actions.push(ActionKind::Batch(parts)),
+            1 => self.actions.push(parts.remove(0), open.as_deref()),
+            _ => self.actions.push(ActionKind::Batch(parts), open.as_deref()),
         }
         (touched, failed)
     }
@@ -532,11 +542,15 @@ impl RustroomApp {
                 report.failed.len()
             )
         };
-        self.actions.push(ActionKind::Sync(Box::new(SyncAction {
-            source,
-            groups,
-            prior: report.prior,
-        })));
+        let open = self.open_photo();
+        self.actions.push(
+            ActionKind::Sync(Box::new(SyncAction {
+                source,
+                groups,
+                prior: report.prior,
+            })),
+            open.as_deref(),
+        );
     }
 
     /// Sources and edits for a batch export: every selected photo, using the open photo's
@@ -695,7 +709,8 @@ impl RustroomApp {
 
     /// Undo the most recent action, whichever kind it was.
     fn undo_action(&mut self) {
-        if let Some(kind) = self.actions.undo() {
+        let open = self.open_photo();
+        if let Some(kind) = self.actions.undo(open.as_deref()) {
             self.undo_one(kind);
         }
     }
@@ -739,7 +754,8 @@ impl RustroomApp {
 
     /// Redo the most recently undone action.
     fn redo_action(&mut self) {
-        if let Some(kind) = self.actions.redo() {
+        let open = self.open_photo();
+        if let Some(kind) = self.actions.redo(open.as_deref()) {
             self.redo_one(kind);
         }
     }
@@ -1119,15 +1135,22 @@ impl RustroomApp {
         // Undo/Redo drive the unified `ActionLog`, so one control walks back through photo
         // edits and preset deletions in the order they actually happened. The label says
         // which, so "Undo" never silently does the surprising one.
-        let undo_label = match self.actions.peek_undo() {
+        let open = self.open_photo();
+        let undo_label = match self.actions.peek_undo(open.as_deref()) {
             Some(ActionKind::PresetDelete { name }) => format!("Undo delete “{name}”"),
             _ => "Undo".to_string(),
         };
         let undo_click = ui
-            .add_enabled(self.actions.can_undo(), egui::Button::new(undo_label))
+            .add_enabled(
+                self.actions.can_undo(open.as_deref()),
+                egui::Button::new(undo_label),
+            )
             .clicked();
         let redo_click = ui
-            .add_enabled(self.actions.can_redo(), egui::Button::new("Redo"))
+            .add_enabled(
+                self.actions.can_redo(open.as_deref()),
+                egui::Button::new("Redo"),
+            )
             .clicked();
         let (kundo, kredo) = ctx.input(|i| {
             let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
@@ -1225,7 +1248,8 @@ impl RustroomApp {
         // Shown whenever the next undo would restore a preset, so the restore is
         // discoverable rather than only a keystroke. It is the same action the toolbar's
         // Undo performs — not a second, competing one.
-        let undo_name = match self.actions.peek_undo() {
+        let open = self.open_photo();
+        let undo_name = match self.actions.peek_undo(open.as_deref()) {
             Some(ActionKind::PresetDelete { name }) => Some(name.clone()),
             _ => None,
         };
@@ -1299,9 +1323,13 @@ impl RustroomApp {
         match self.preset_store.delete(name) {
             Ok(()) => {
                 self.status = format!("Deleted preset “{name}” — Ctrl+Z to restore");
-                self.actions.push(ActionKind::PresetDelete {
-                    name: name.to_string(),
-                });
+                let open = self.open_photo();
+                self.actions.push(
+                    ActionKind::PresetDelete {
+                        name: name.to_string(),
+                    },
+                    open.as_deref(),
+                );
             }
             Err(e) => self.status = format!("Could not delete preset: {e}"),
         }
@@ -2255,8 +2283,13 @@ impl RustroomApp {
         // Recorded in the same order as everything else, so "delete a preset, move a
         // slider, Ctrl+Z twice" undoes the slider and then restores the preset.
         if photo_edited {
-            if let Some(path) = self.session.as_ref().map(|s| s.path.clone()) {
-                self.actions.push(ActionKind::PhotoEdit { path });
+            if let Some(path) = self.open_photo() {
+                // ⚠ `Some(path.as_path())`, not `Some(&path)`: the parameter is
+                // `Option<&Path>`, and deref coercion does not reach inside `Some`.
+                self.actions.push(
+                    ActionKind::PhotoEdit { path: path.clone() },
+                    Some(path.as_path()),
+                );
             }
         }
     }

@@ -9,7 +9,7 @@
 //! preset back — the two actions sit in one order rather than in two competing stacks.
 
 use edit_model::{EditGroups, Edits};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A single undoable action, in the order it happened.
 ///
@@ -52,70 +52,119 @@ pub struct SyncAction {
     pub prior: Vec<(PathBuf, Option<Edits>)>,
 }
 
-/// Undo/redo ordering over [`ActionKind`]. Mirrors `History`'s shape deliberately.
+/// One entry in the log, plus whether it is currently undone.
+///
+/// ⚠ A flag rather than two stacks. Filtering two stacks by reachability means taking an
+/// entry out of the *middle* of one and pushing it back on the *top* of the other, which
+/// scrambles chronological order across photos — observable as a wrong undo order the next
+/// time you switch, and repairable only with a sequence number on every entry. Marking in
+/// place makes the ordering intrinsic instead.
+#[derive(Debug, Clone, PartialEq)]
+struct Entry {
+    kind: ActionKind,
+    undone: bool,
+}
+
+/// Whether `kind` can be undone or redone while `open` is the photo on screen.
+///
+/// A preset deletion or a sync never touches a live session, so it is reachable from
+/// anywhere. A photo edit is reachable only from its own photo: undoing it from elsewhere
+/// would either change an image the user cannot see or yank the view to it, and both were
+/// rejected.
+///
+/// ⚠ A batch is reachable only when **every** member is, so one Ctrl+V stays one Ctrl+Z. It
+/// waits, intact, until you return to the photo it touched.
+fn reachable(kind: &ActionKind, open: Option<&Path>) -> bool {
+    match kind {
+        ActionKind::PhotoEdit { path } => open == Some(path.as_path()),
+        ActionKind::PresetDelete { .. } | ActionKind::Sync(_) => true,
+        ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
+    }
+}
+
+/// Undo/redo ordering over [`ActionKind`], scoped to the photo on screen.
 #[derive(Debug, Default)]
 pub struct ActionLog {
-    undo: Vec<ActionKind>,
-    redo: Vec<ActionKind>,
+    entries: Vec<Entry>,
 }
 
 impl ActionLog {
-    /// Record a new action. Clears the redo stack, like any undo history.
-    pub fn push(&mut self, kind: ActionKind) {
-        self.undo.push(kind);
-        self.redo.clear();
+    /// Record a new action.
+    ///
+    /// Clears the redo path **this action can reach** — edits to the open photo, and global
+    /// actions. Another photo's undone step is left alone: nothing done here invalidates it,
+    /// and discarding it would reintroduce "your stack is gone" one level down.
+    pub fn push(&mut self, kind: ActionKind, open: Option<&Path>) {
+        self.entries
+            .retain(|e| !(e.undone && reachable(&e.kind, open)));
+        self.entries.push(Entry {
+            kind,
+            undone: false,
+        });
     }
 
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
+    pub fn can_undo(&self, open: Option<&Path>) -> bool {
+        self.undo_index(open).is_some()
     }
 
-    pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+    pub fn can_redo(&self, open: Option<&Path>) -> bool {
+        self.redo_index(open).is_some()
     }
 
     /// What the next undo would reverse, without performing it — for a button label.
-    pub fn peek_undo(&self) -> Option<&ActionKind> {
-        self.undo.last()
+    pub fn peek_undo(&self, open: Option<&Path>) -> Option<&ActionKind> {
+        Some(&self.entries[self.undo_index(open)?].kind)
     }
 
-    /// Take the most recent action for undoing. The caller performs the reversal.
-    pub fn undo(&mut self) -> Option<ActionKind> {
-        let k = self.undo.pop()?;
-        self.redo.push(k.clone());
-        Some(k)
+    /// Take the most recent reachable action for undoing. The caller performs the reversal.
+    pub fn undo(&mut self, open: Option<&Path>) -> Option<ActionKind> {
+        let i = self.undo_index(open)?;
+        self.entries[i].undone = true;
+        Some(self.entries[i].kind.clone())
     }
 
-    /// Take the most recently undone action for redoing.
-    pub fn redo(&mut self) -> Option<ActionKind> {
-        let k = self.redo.pop()?;
-        self.undo.push(k.clone());
-        Some(k)
+    /// Take the most recently undone reachable action for redoing.
+    pub fn redo(&mut self, open: Option<&Path>) -> Option<ActionKind> {
+        let i = self.redo_index(open)?;
+        self.entries[i].undone = false;
+        Some(self.entries[i].kind.clone())
     }
 
-    /// Drop every photo edit, keeping preset deletions in their relative order.
+    /// The last reachable entry still in force.
+    fn undo_index(&self, open: Option<&Path>) -> Option<usize> {
+        self.entries
+            .iter()
+            .rposition(|e| !e.undone && reachable(&e.kind, open))
+    }
+
+    /// The first reachable entry that has been undone.
+    ///
+    /// ⚠ *First*, not last, and that is what makes redo the exact inverse of undo. Undo
+    /// always takes the last reachable entry in force, so within any one photo's subsequence
+    /// the entries in force form a prefix and the undone ones a suffix — the first undone one
+    /// is the boundary, which is the one undone most recently.
+    fn redo_index(&self, open: Option<&Path>) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|e| e.undone && reachable(&e.kind, open))
+    }
+
+    /// Drop every photo edit, keeping global actions in their relative order.
     ///
     /// ⚠ Called when the session changes. `Session::history` is discarded on a photo switch,
     /// so a `PhotoEdit` entry that outlived its session would make an undo pop a *different*
-    /// photo's history — silently reverting an edit the user never made here. Preset
-    /// deletions are global and survive.
-    pub fn forget_photo_edits(&mut self) {
-        Self::sweep(&mut self.undo);
-        Self::sweep(&mut self.redo);
-    }
-
-    /// Drop photo edits from one stack, **including those nested in a batch**.
+    /// photo's history — silently reverting an edit the user never made here.
     ///
-    /// A batch keeps its other members: stranding the sidecar half of a paste with no way
-    /// to undo it would be worse than losing the session half, which is unreachable anyway.
-    /// A batch left with nothing is not an undo step and goes.
-    fn sweep(stack: &mut Vec<ActionKind>) {
-        for kind in stack.iter_mut() {
-            if let ActionKind::Batch(parts) = kind {
+    /// A batch keeps its other members: stranding the sidecar half of a paste with no way to
+    /// undo it would be worse than losing the session half, which is unreachable anyway. A
+    /// batch left with nothing is not an undo step and goes.
+    pub fn forget_photo_edits(&mut self) {
+        for e in self.entries.iter_mut() {
+            if let ActionKind::Batch(parts) = &mut e.kind {
                 parts.retain(|p| !matches!(p, ActionKind::PhotoEdit { .. }));
             }
         }
-        stack.retain(|kind| match kind {
+        self.entries.retain(|e| match &e.kind {
             ActionKind::PhotoEdit { .. } => false,
             ActionKind::Batch(parts) => !parts.is_empty(),
             _ => true,
@@ -139,14 +188,23 @@ mod tests {
         }
     }
 
+    /// The two photos the reachability tests switch between.
+    fn a() -> Option<&'static Path> {
+        Some(Path::new("/a.RAF"))
+    }
+
+    fn b() -> Option<&'static Path> {
+        Some(Path::new("/b.RAF"))
+    }
+
     #[test]
     fn undo_returns_actions_most_recent_first() {
         let mut log = ActionLog::default();
-        log.push(del("A"));
-        log.push(edit("/a.RAF"));
-        assert_eq!(log.undo(), Some(edit("/a.RAF")));
-        assert_eq!(log.undo(), Some(del("A")));
-        assert_eq!(log.undo(), None);
+        log.push(del("A"), a());
+        log.push(edit("/a.RAF"), a());
+        assert_eq!(log.undo(a()), Some(edit("/a.RAF")));
+        assert_eq!(log.undo(a()), Some(del("A")));
+        assert_eq!(log.undo(a()), None);
     }
 
     #[test]
@@ -155,50 +213,50 @@ mod tests {
         // Ctrl+Z twice — the first undo reverses the setting, the second brings the preset
         // back. Two separate stacks could never express this ordering.
         let mut log = ActionLog::default();
-        log.push(del("Punchy"));
-        log.push(edit("/a.RAF"));
+        log.push(del("Punchy"), a());
+        log.push(edit("/a.RAF"), a());
 
-        assert_eq!(log.undo(), Some(edit("/a.RAF")));
-        assert_eq!(log.undo(), Some(del("Punchy")));
+        assert_eq!(log.undo(a()), Some(edit("/a.RAF")));
+        assert_eq!(log.undo(a()), Some(del("Punchy")));
     }
 
     #[test]
     fn several_deletions_undo_newest_first() {
         let mut log = ActionLog::default();
         for n in ["A", "B", "C"] {
-            log.push(del(n));
+            log.push(del(n), a());
         }
-        assert_eq!(log.undo(), Some(del("C")));
-        assert_eq!(log.undo(), Some(del("B")));
-        assert_eq!(log.undo(), Some(del("A")));
-        assert!(!log.can_undo());
+        assert_eq!(log.undo(a()), Some(del("C")));
+        assert_eq!(log.undo(a()), Some(del("B")));
+        assert_eq!(log.undo(a()), Some(del("A")));
+        assert!(!log.can_undo(a()));
     }
 
     #[test]
     fn redo_replays_in_the_original_order() {
         let mut log = ActionLog::default();
-        log.push(del("A"));
-        log.push(edit("/a.RAF"));
-        log.undo();
-        log.undo();
-        assert!(!log.can_undo());
-        assert!(log.can_redo());
+        log.push(del("A"), a());
+        log.push(edit("/a.RAF"), a());
+        log.undo(a());
+        log.undo(a());
+        assert!(!log.can_undo(a()));
+        assert!(log.can_redo(a()));
 
-        assert_eq!(log.redo(), Some(del("A")));
-        assert_eq!(log.redo(), Some(edit("/a.RAF")));
-        assert_eq!(log.redo(), None);
-        assert!(log.can_undo());
+        assert_eq!(log.redo(a()), Some(del("A")));
+        assert_eq!(log.redo(a()), Some(edit("/a.RAF")));
+        assert_eq!(log.redo(a()), None);
+        assert!(log.can_undo(a()));
     }
 
     #[test]
     fn a_new_action_clears_the_redo_stack() {
         let mut log = ActionLog::default();
-        log.push(del("A"));
-        log.undo();
-        assert!(log.can_redo());
-        log.push(edit("/a.RAF"));
+        log.push(del("A"), a());
+        log.undo(a());
+        assert!(log.can_redo(a()));
+        log.push(edit("/a.RAF"), a());
         assert!(
-            !log.can_redo(),
+            !log.can_redo(a()),
             "a new action must invalidate the redo path"
         );
     }
@@ -206,10 +264,10 @@ mod tests {
     #[test]
     fn peek_does_not_consume() {
         let mut log = ActionLog::default();
-        log.push(del("A"));
-        assert_eq!(log.peek_undo(), Some(&del("A")));
-        assert_eq!(log.peek_undo(), Some(&del("A")));
-        assert!(log.can_undo());
+        log.push(del("A"), a());
+        assert_eq!(log.peek_undo(a()), Some(&del("A")));
+        assert_eq!(log.peek_undo(a()), Some(&del("A")));
+        assert!(log.can_undo(a()));
     }
 
     fn sync_entry() -> ActionKind {
@@ -228,11 +286,11 @@ mod tests {
         // A sync touches other photos' sidecars, never the live session, so it is global
         // in exactly the way a preset deletion is.
         let mut log = ActionLog::default();
-        log.push(sync_entry());
-        log.push(edit("/a.RAF"));
+        log.push(sync_entry(), a());
+        log.push(edit("/a.RAF"), a());
         log.forget_photo_edits();
-        assert_eq!(log.undo(), Some(sync_entry()));
-        assert!(!log.can_undo());
+        assert_eq!(log.undo(a()), Some(sync_entry()));
+        assert!(!log.can_undo(a()));
     }
 
     #[test]
@@ -241,13 +299,13 @@ mod tests {
         // Ctrl+V take two Ctrl+Z.
         let mut log = ActionLog::default();
         let batch = ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]);
-        log.push(batch.clone());
-        log.push(edit("/a.RAF"));
+        log.push(batch.clone(), a());
+        log.push(edit("/a.RAF"), a());
 
-        assert_eq!(log.undo(), Some(edit("/a.RAF")));
-        assert_eq!(log.undo(), Some(batch.clone()));
-        assert!(!log.can_undo());
-        assert_eq!(log.redo(), Some(batch));
+        assert_eq!(log.undo(a()), Some(edit("/a.RAF")));
+        assert_eq!(log.undo(a()), Some(batch.clone()));
+        assert!(!log.can_undo(a()));
+        assert_eq!(log.redo(a()), Some(batch));
     }
 
     #[test]
@@ -257,54 +315,164 @@ mod tests {
         // prevent. But dropping the whole batch would strand the sidecar half of a paste
         // with no way to undo it, so the member goes and the rest stays.
         let mut log = ActionLog::default();
-        log.push(ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]));
+        log.push(ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]), a());
         log.forget_photo_edits();
-        assert_eq!(log.undo(), Some(ActionKind::Batch(vec![sync_entry()])));
+        assert_eq!(log.undo(a()), Some(ActionKind::Batch(vec![sync_entry()])));
     }
 
     #[test]
     fn a_batch_of_only_photo_edits_is_dropped_entirely() {
         let mut log = ActionLog::default();
-        log.push(ActionKind::Batch(vec![edit("/a.RAF"), edit("/a.RAF")]));
+        log.push(ActionKind::Batch(vec![edit("/a.RAF"), edit("/a.RAF")]), a());
         log.forget_photo_edits();
-        assert!(!log.can_undo(), "an empty batch is not an undo step");
+        assert!(!log.can_undo(a()), "an empty batch is not an undo step");
     }
 
     #[test]
     fn a_sync_orders_with_everything_else() {
         let mut log = ActionLog::default();
-        log.push(sync_entry());
-        log.push(edit("/a.RAF"));
-        assert_eq!(log.undo(), Some(edit("/a.RAF")));
-        assert_eq!(log.undo(), Some(sync_entry()));
+        log.push(sync_entry(), a());
+        log.push(edit("/a.RAF"), a());
+        assert_eq!(log.undo(a()), Some(edit("/a.RAF")));
+        assert_eq!(log.undo(a()), Some(sync_entry()));
     }
 
     #[test]
     fn forgetting_photo_edits_keeps_deletions_in_order() {
         // ⚠ A PhotoEdit that outlived its session would pop a different photo's history.
         let mut log = ActionLog::default();
-        log.push(del("A"));
-        log.push(edit("/a.RAF"));
-        log.push(del("B"));
-        log.push(edit("/a.RAF"));
+        log.push(del("A"), a());
+        log.push(edit("/a.RAF"), a());
+        log.push(del("B"), a());
+        log.push(edit("/a.RAF"), a());
 
         log.forget_photo_edits();
-        assert_eq!(log.undo(), Some(del("B")));
-        assert_eq!(log.undo(), Some(del("A")));
-        assert!(!log.can_undo());
+        assert_eq!(log.undo(a()), Some(del("B")));
+        assert_eq!(log.undo(a()), Some(del("A")));
+        assert!(!log.can_undo(a()));
     }
 
     #[test]
     fn forgetting_photo_edits_cleans_the_redo_stack_too() {
         // Otherwise a redo after a photo switch would replay into the new session.
         let mut log = ActionLog::default();
-        log.push(edit("/a.RAF"));
-        log.push(del("A"));
-        log.undo();
-        log.undo();
+        log.push(edit("/a.RAF"), a());
+        log.push(del("A"), a());
+        log.undo(a());
+        log.undo(a());
 
         log.forget_photo_edits();
-        assert_eq!(log.redo(), Some(del("A")));
-        assert_eq!(log.redo(), None, "the photo edit should be gone from redo");
+        assert_eq!(log.redo(a()), Some(del("A")));
+        assert_eq!(
+            log.redo(a()),
+            None,
+            "the photo edit should be gone from redo"
+        );
+    }
+
+    #[test]
+    fn an_edit_to_another_photo_is_not_undoable_here() {
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        assert!(!log.can_undo(b()));
+        assert_eq!(log.undo(b()), None);
+    }
+
+    #[test]
+    fn returning_to_a_photo_makes_its_edits_undoable_again() {
+        // The headline property, and the one that fails against the old anonymous entries:
+        // A's step is merely out of reach from B, not destroyed.
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        assert!(!log.can_undo(b()), "not reachable from B");
+        assert_eq!(
+            log.undo(a()),
+            Some(edit("/a.RAF")),
+            "but still there on return"
+        );
+    }
+
+    #[test]
+    fn a_new_action_clears_only_the_redo_it_can_reach() {
+        // Photo A has an undone step waiting. Editing B invalidates nothing about A.
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        log.undo(a());
+        log.push(edit("/b.RAF"), b());
+        assert_eq!(
+            log.redo(a()),
+            Some(edit("/a.RAF")),
+            "B's edit cannot invalidate A's redo path"
+        );
+    }
+
+    #[test]
+    fn a_new_action_clears_its_own_photos_redo() {
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        log.undo(a());
+        log.push(edit("/a.RAF"), a());
+        assert!(
+            !log.can_redo(a()),
+            "the classic rule still holds within a photo"
+        );
+    }
+
+    #[test]
+    fn a_new_action_clears_the_global_redo_from_any_photo() {
+        // A preset deletion is reachable everywhere, so an edit to any photo invalidates it.
+        let mut log = ActionLog::default();
+        log.push(del("P"), a());
+        log.undo(a());
+        log.push(edit("/b.RAF"), b());
+        assert!(!log.can_redo(a()));
+        assert_eq!(log.redo(b()), None);
+    }
+
+    #[test]
+    fn a_batch_waits_until_every_member_is_reachable() {
+        let batch = ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]);
+        let mut log = ActionLog::default();
+        log.push(batch.clone(), a());
+        assert!(!log.can_undo(b()), "half of it belongs to A");
+        assert_eq!(log.undo(a()), Some(batch));
+    }
+
+    #[test]
+    fn a_batch_survives_a_visit_to_another_photo_intact() {
+        // ⚠ The wart this rework removes. The old sweep tore the `PhotoEdit` member out of
+        // every batch on every switch, permanently stranding the sidecar half of a paste.
+        let batch = ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]);
+        let mut log = ActionLog::default();
+        log.push(batch.clone(), a());
+        assert!(!log.can_undo(b()));
+        assert_eq!(log.undo(a()), Some(batch), "intact, not half destroyed");
+    }
+
+    #[test]
+    fn undo_and_redo_are_inverses_with_two_photos_interleaved() {
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        log.push(del("P"), a());
+        log.push(edit("/b.RAF"), b());
+
+        // On B: B's own edit is newest, then the global deletion. A's edit is out of reach.
+        assert_eq!(log.undo(b()), Some(edit("/b.RAF")));
+        assert_eq!(log.undo(b()), Some(del("P")));
+        assert_eq!(log.undo(b()), None, "A's edit is not reachable from B");
+
+        // Redo replays in the order the entries were undone.
+        assert_eq!(log.redo(b()), Some(del("P")));
+        assert_eq!(log.redo(b()), Some(edit("/b.RAF")));
+        assert_eq!(log.redo(b()), None);
+    }
+
+    #[test]
+    fn with_no_photo_open_only_global_actions_are_reachable() {
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        log.push(del("P"), a());
+        assert_eq!(log.undo(None), Some(del("P")));
+        assert_eq!(log.undo(None), None);
     }
 }
