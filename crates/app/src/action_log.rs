@@ -16,8 +16,13 @@ use std::path::PathBuf;
 /// ⚠ Not `Eq`: `Edits` holds `f32`s, so it is `PartialEq` only. That is all the tests need.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionKind {
-    /// A step was recorded in the current session's `History<Edits>`.
-    PhotoEdit,
+    /// A step was recorded in the history of the photo at `path`.
+    ///
+    /// ⚠ The path is what makes the entry mean anything after a photo switch. It used to be
+    /// a unit variant, and an anonymous entry can only say "pop whatever history is current"
+    /// — which after a switch is a *different photo's*. That is the sole reason every such
+    /// entry had to be destroyed whenever the session changed.
+    PhotoEdit { path: PathBuf },
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
     PresetDelete { name: String },
@@ -107,11 +112,11 @@ impl ActionLog {
     fn sweep(stack: &mut Vec<ActionKind>) {
         for kind in stack.iter_mut() {
             if let ActionKind::Batch(parts) = kind {
-                parts.retain(|p| !matches!(p, ActionKind::PhotoEdit));
+                parts.retain(|p| !matches!(p, ActionKind::PhotoEdit { .. }));
             }
         }
         stack.retain(|kind| match kind {
-            ActionKind::PhotoEdit => false,
+            ActionKind::PhotoEdit { .. } => false,
             ActionKind::Batch(parts) => !parts.is_empty(),
             _ => true,
         });
@@ -128,12 +133,18 @@ mod tests {
         }
     }
 
+    fn edit(path: &str) -> ActionKind {
+        ActionKind::PhotoEdit {
+            path: PathBuf::from(path),
+        }
+    }
+
     #[test]
     fn undo_returns_actions_most_recent_first() {
         let mut log = ActionLog::default();
         log.push(del("A"));
-        log.push(ActionKind::PhotoEdit);
-        assert_eq!(log.undo(), Some(ActionKind::PhotoEdit));
+        log.push(edit("/a.RAF"));
+        assert_eq!(log.undo(), Some(edit("/a.RAF")));
         assert_eq!(log.undo(), Some(del("A")));
         assert_eq!(log.undo(), None);
     }
@@ -145,9 +156,9 @@ mod tests {
         // back. Two separate stacks could never express this ordering.
         let mut log = ActionLog::default();
         log.push(del("Punchy"));
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
 
-        assert_eq!(log.undo(), Some(ActionKind::PhotoEdit));
+        assert_eq!(log.undo(), Some(edit("/a.RAF")));
         assert_eq!(log.undo(), Some(del("Punchy")));
     }
 
@@ -167,14 +178,14 @@ mod tests {
     fn redo_replays_in_the_original_order() {
         let mut log = ActionLog::default();
         log.push(del("A"));
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
         log.undo();
         log.undo();
         assert!(!log.can_undo());
         assert!(log.can_redo());
 
         assert_eq!(log.redo(), Some(del("A")));
-        assert_eq!(log.redo(), Some(ActionKind::PhotoEdit));
+        assert_eq!(log.redo(), Some(edit("/a.RAF")));
         assert_eq!(log.redo(), None);
         assert!(log.can_undo());
     }
@@ -185,7 +196,7 @@ mod tests {
         log.push(del("A"));
         log.undo();
         assert!(log.can_redo());
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
         assert!(
             !log.can_redo(),
             "a new action must invalidate the redo path"
@@ -218,7 +229,7 @@ mod tests {
         // in exactly the way a preset deletion is.
         let mut log = ActionLog::default();
         log.push(sync_entry());
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
         log.forget_photo_edits();
         assert_eq!(log.undo(), Some(sync_entry()));
         assert!(!log.can_undo());
@@ -229,11 +240,11 @@ mod tests {
         // The log must hand back the whole group at once; splitting it would make one
         // Ctrl+V take two Ctrl+Z.
         let mut log = ActionLog::default();
-        let batch = ActionKind::Batch(vec![ActionKind::PhotoEdit, sync_entry()]);
+        let batch = ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]);
         log.push(batch.clone());
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
 
-        assert_eq!(log.undo(), Some(ActionKind::PhotoEdit));
+        assert_eq!(log.undo(), Some(edit("/a.RAF")));
         assert_eq!(log.undo(), Some(batch.clone()));
         assert!(!log.can_undo());
         assert_eq!(log.redo(), Some(batch));
@@ -246,7 +257,7 @@ mod tests {
         // prevent. But dropping the whole batch would strand the sidecar half of a paste
         // with no way to undo it, so the member goes and the rest stays.
         let mut log = ActionLog::default();
-        log.push(ActionKind::Batch(vec![ActionKind::PhotoEdit, sync_entry()]));
+        log.push(ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]));
         log.forget_photo_edits();
         assert_eq!(log.undo(), Some(ActionKind::Batch(vec![sync_entry()])));
     }
@@ -254,10 +265,7 @@ mod tests {
     #[test]
     fn a_batch_of_only_photo_edits_is_dropped_entirely() {
         let mut log = ActionLog::default();
-        log.push(ActionKind::Batch(vec![
-            ActionKind::PhotoEdit,
-            ActionKind::PhotoEdit,
-        ]));
+        log.push(ActionKind::Batch(vec![edit("/a.RAF"), edit("/a.RAF")]));
         log.forget_photo_edits();
         assert!(!log.can_undo(), "an empty batch is not an undo step");
     }
@@ -266,8 +274,8 @@ mod tests {
     fn a_sync_orders_with_everything_else() {
         let mut log = ActionLog::default();
         log.push(sync_entry());
-        log.push(ActionKind::PhotoEdit);
-        assert_eq!(log.undo(), Some(ActionKind::PhotoEdit));
+        log.push(edit("/a.RAF"));
+        assert_eq!(log.undo(), Some(edit("/a.RAF")));
         assert_eq!(log.undo(), Some(sync_entry()));
     }
 
@@ -276,9 +284,9 @@ mod tests {
         // ⚠ A PhotoEdit that outlived its session would pop a different photo's history.
         let mut log = ActionLog::default();
         log.push(del("A"));
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
         log.push(del("B"));
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
 
         log.forget_photo_edits();
         assert_eq!(log.undo(), Some(del("B")));
@@ -290,7 +298,7 @@ mod tests {
     fn forgetting_photo_edits_cleans_the_redo_stack_too() {
         // Otherwise a redo after a photo switch would replay into the new session.
         let mut log = ActionLog::default();
-        log.push(ActionKind::PhotoEdit);
+        log.push(edit("/a.RAF"));
         log.push(del("A"));
         log.undo();
         log.undo();

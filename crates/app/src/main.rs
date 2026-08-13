@@ -473,6 +473,7 @@ impl RustroomApp {
     fn apply_to_selection(&mut self, src: &Edits, groups: EditGroups) -> (usize, usize) {
         let targets = self.sync_targets();
         let into_session = self.open_photo_is_selected();
+        let open = self.session.as_ref().map(|s| s.path.clone());
         let mut parts: Vec<ActionKind> = Vec::new();
         let mut touched = 0usize;
         let mut failed = 0usize;
@@ -480,7 +481,11 @@ impl RustroomApp {
         if into_session {
             touched += 1;
             if self.apply_edits_to_session(src, groups) {
-                parts.push(ActionKind::PhotoEdit);
+                // `into_session` is only true when a session exists, so this `if let` always
+                // takes its branch — it is here because the compiler cannot know that.
+                if let Some(path) = open.clone() {
+                    parts.push(ActionKind::PhotoEdit { path });
+                }
             }
         }
         if !targets.is_empty() {
@@ -703,7 +708,7 @@ impl RustroomApp {
                     self.undo_one(part);
                 }
             }
-            ActionKind::PhotoEdit => {
+            ActionKind::PhotoEdit { .. } => {
                 if let Some(s) = &mut self.session {
                     s.history.undo();
                 }
@@ -746,7 +751,7 @@ impl RustroomApp {
                     self.redo_one(part);
                 }
             }
-            ActionKind::PhotoEdit => {
+            ActionKind::PhotoEdit { .. } => {
                 if let Some(s) = &mut self.session {
                     s.history.redo();
                 }
@@ -2250,7 +2255,9 @@ impl RustroomApp {
         // Recorded in the same order as everything else, so "delete a preset, move a
         // slider, Ctrl+Z twice" undoes the slider and then restores the preset.
         if photo_edited {
-            self.actions.push(ActionKind::PhotoEdit);
+            if let Some(path) = self.session.as_ref().map(|s| s.path.clone()) {
+                self.actions.push(ActionKind::PhotoEdit { path });
+            }
         }
     }
 
