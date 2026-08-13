@@ -149,25 +149,26 @@ impl ActionLog {
             .position(|e| e.undone && reachable(&e.kind, open))
     }
 
-    /// Drop every photo edit, keeping global actions in their relative order.
+    /// Drop the edits of one photo, keeping every other photo's and all global actions.
     ///
-    /// ⚠ Called when the session changes. `Session::history` is discarded on a photo switch,
-    /// so a `PhotoEdit` entry that outlived its session would make an undo pop a *different*
-    /// photo's history — silently reverting an edit the user never made here.
+    /// ⚠ Called only when that photo's `History<Edits>` has actually been discarded — when a
+    /// sync rewrote the sidecar under a live session, or when `HistoryStash` refused to hand
+    /// a stale stack back. An entry left pointing at a history that no longer holds its steps
+    /// would make an undo do nothing at all, silently.
     ///
     /// A batch keeps its other members: stranding the sidecar half of a paste with no way to
     /// undo it would be worse than losing the session half, which is unreachable anyway. A
     /// batch left with nothing is not an undo step and goes.
-    pub fn forget_photo_edits(&mut self) {
+    pub fn forget_edits_of(&mut self, path: &Path) {
+        let mine = |k: &ActionKind| matches!(k, ActionKind::PhotoEdit { path: p } if p == path);
         for e in self.entries.iter_mut() {
             if let ActionKind::Batch(parts) = &mut e.kind {
-                parts.retain(|p| !matches!(p, ActionKind::PhotoEdit { .. }));
+                parts.retain(|p| !mine(p));
             }
         }
         self.entries.retain(|e| match &e.kind {
-            ActionKind::PhotoEdit { .. } => false,
             ActionKind::Batch(parts) => !parts.is_empty(),
-            _ => true,
+            k => !mine(k),
         });
     }
 }
@@ -288,7 +289,7 @@ mod tests {
         let mut log = ActionLog::default();
         log.push(sync_entry(), a());
         log.push(edit("/a.RAF"), a());
-        log.forget_photo_edits();
+        log.forget_edits_of(Path::new("/a.RAF"));
         assert_eq!(log.undo(a()), Some(sync_entry()));
         assert!(!log.can_undo(a()));
     }
@@ -309,65 +310,12 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_photo_edits_reaches_inside_a_batch() {
-        // ⚠ A batch's `PhotoEdit` member belongs to a session that is now gone, so undoing
-        // it would pop a *different* photo's history — the very bug this method exists to
-        // prevent. But dropping the whole batch would strand the sidecar half of a paste
-        // with no way to undo it, so the member goes and the rest stays.
-        let mut log = ActionLog::default();
-        log.push(ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]), a());
-        log.forget_photo_edits();
-        assert_eq!(log.undo(a()), Some(ActionKind::Batch(vec![sync_entry()])));
-    }
-
-    #[test]
-    fn a_batch_of_only_photo_edits_is_dropped_entirely() {
-        let mut log = ActionLog::default();
-        log.push(ActionKind::Batch(vec![edit("/a.RAF"), edit("/a.RAF")]), a());
-        log.forget_photo_edits();
-        assert!(!log.can_undo(a()), "an empty batch is not an undo step");
-    }
-
-    #[test]
     fn a_sync_orders_with_everything_else() {
         let mut log = ActionLog::default();
         log.push(sync_entry(), a());
         log.push(edit("/a.RAF"), a());
         assert_eq!(log.undo(a()), Some(edit("/a.RAF")));
         assert_eq!(log.undo(a()), Some(sync_entry()));
-    }
-
-    #[test]
-    fn forgetting_photo_edits_keeps_deletions_in_order() {
-        // ⚠ A PhotoEdit that outlived its session would pop a different photo's history.
-        let mut log = ActionLog::default();
-        log.push(del("A"), a());
-        log.push(edit("/a.RAF"), a());
-        log.push(del("B"), a());
-        log.push(edit("/a.RAF"), a());
-
-        log.forget_photo_edits();
-        assert_eq!(log.undo(a()), Some(del("B")));
-        assert_eq!(log.undo(a()), Some(del("A")));
-        assert!(!log.can_undo(a()));
-    }
-
-    #[test]
-    fn forgetting_photo_edits_cleans_the_redo_stack_too() {
-        // Otherwise a redo after a photo switch would replay into the new session.
-        let mut log = ActionLog::default();
-        log.push(edit("/a.RAF"), a());
-        log.push(del("A"), a());
-        log.undo(a());
-        log.undo(a());
-
-        log.forget_photo_edits();
-        assert_eq!(log.redo(a()), Some(del("A")));
-        assert_eq!(
-            log.redo(a()),
-            None,
-            "the photo edit should be gone from redo"
-        );
     }
 
     #[test]
@@ -474,5 +422,61 @@ mod tests {
         log.push(del("P"), a());
         assert_eq!(log.undo(None), Some(del("P")));
         assert_eq!(log.undo(None), None);
+    }
+
+    #[test]
+    fn forgetting_one_photos_edits_leaves_other_photos_alone() {
+        // ⚠ The whole reason the sweep is targeted now: photo B's stack is still in the
+        // stash, so its entries must survive photo A's being discarded.
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        log.push(edit("/b.RAF"), b());
+        log.forget_edits_of(Path::new("/a.RAF"));
+
+        assert_eq!(log.undo(a()), None, "A's entry is gone");
+        assert_eq!(log.undo(b()), Some(edit("/b.RAF")), "B's is not");
+    }
+
+    #[test]
+    fn forgetting_a_photos_edits_reaches_inside_a_batch() {
+        // The member belongs to a history that was just discarded, so undoing it would pop
+        // steps that history no longer holds. Dropping the whole batch instead would strand
+        // the sidecar half of a paste with no way to undo it, so the member goes and the
+        // rest stays.
+        let mut log = ActionLog::default();
+        log.push(ActionKind::Batch(vec![edit("/a.RAF"), sync_entry()]), a());
+        log.forget_edits_of(Path::new("/a.RAF"));
+        assert_eq!(log.undo(a()), Some(ActionKind::Batch(vec![sync_entry()])));
+    }
+
+    #[test]
+    fn a_batch_of_only_that_photos_edits_is_dropped_entirely() {
+        let mut log = ActionLog::default();
+        log.push(ActionKind::Batch(vec![edit("/a.RAF"), edit("/a.RAF")]), a());
+        log.forget_edits_of(Path::new("/a.RAF"));
+        assert!(!log.can_undo(a()), "an empty batch is not an undo step");
+    }
+
+    #[test]
+    fn forgetting_a_photos_edits_clears_its_undone_entries_too() {
+        // Otherwise a redo after the discard would replay into a history that is gone.
+        let mut log = ActionLog::default();
+        log.push(edit("/a.RAF"), a());
+        log.undo(a());
+        log.forget_edits_of(Path::new("/a.RAF"));
+        assert!(!log.can_redo(a()));
+    }
+
+    #[test]
+    fn forgetting_a_photos_edits_keeps_global_actions_in_order() {
+        let mut log = ActionLog::default();
+        log.push(del("A"), a());
+        log.push(edit("/a.RAF"), a());
+        log.push(del("B"), a());
+        log.forget_edits_of(Path::new("/a.RAF"));
+
+        assert_eq!(log.undo(a()), Some(del("B")));
+        assert_eq!(log.undo(a()), Some(del("A")));
+        assert!(!log.can_undo(a()));
     }
 }

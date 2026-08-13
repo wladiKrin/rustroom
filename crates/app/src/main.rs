@@ -10,6 +10,7 @@ use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded};
 use rustroom_app::edit_clipboard;
+use rustroom_app::edit_history::HistoryStash;
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
 use rustroom_app::format_filter::{self, FormatFilter};
 use rustroom_app::full_res;
@@ -144,6 +145,10 @@ struct RustroomApp {
     /// Path and sequence number of the full-resolution decode in flight, if any.
     full_pending: Option<(PathBuf, u64)>,
     cache: BufferCache,
+    /// Undo stacks for photos that are not open, so switching away and back does not throw
+    /// one away. Unlike `cache`, which is capped at 3 because it holds decoded buffers, this
+    /// is unbounded — it holds `Edits`, not pixels.
+    histories: HistoryStash,
     status: String,
     show_filmstrip: bool,
     show_presets: bool,
@@ -228,6 +233,7 @@ impl RustroomApp {
             ),
             full_pending: None,
             cache: BufferCache::new(BUFFER_CACHE_CAP),
+            histories: HistoryStash::default(),
             status: String::new(),
             show_filmstrip: true,
             show_presets: false,
@@ -692,8 +698,9 @@ impl RustroomApp {
                 s.requested_region,
             );
         }
-        // Those history entries just became unreachable.
-        self.actions.forget_photo_edits();
+        // That photo's history was just replaced, so its entries point at steps it no longer
+        // holds. Every other photo's stack is untouched and stays.
+        self.actions.forget_edits_of(&open);
     }
 
     /// Re-render after the session's edits were changed by an undo or a redo.
@@ -896,7 +903,24 @@ impl RustroomApp {
 
     /// Build the editing `Session` from a decoded photo (cache hit or worker result).
     fn finalize_session(&mut self, ctx: &egui::Context, path: PathBuf, decoded: Arc<Decoded>) {
+        // ⚠ The only place `self.session` is ever assigned, and so the only choke point the
+        // stash needs: the outgoing history is put away here whether the switch came from a
+        // cache hit or from a finished background decode.
+        if let Some(old) = self.session.take() {
+            self.histories.stash(old.path, old.history);
+        }
+
         let edits = sidecar::load(&path).unwrap_or_default();
+        let history = match self.histories.take_matching(&path, &edits) {
+            Some(h) => h,
+            None => {
+                // Either this photo has no stack, or the one it had describes a state no
+                // longer on disk — a sync or a paste rewrote its sidecar while it was closed.
+                // Any log entry pointing at that stack would now pop steps it does not hold.
+                self.actions.forget_edits_of(&path);
+                History::new(edits.clone())
+            }
+        };
 
         let bf = &decoded.baseline;
         let baseline = ctx.load_texture(
@@ -920,14 +944,14 @@ impl RustroomApp {
         self.session = Some(Session {
             path,
             engine,
-            edits: edits.clone(),
+            edits,
             texture: None,
             baseline,
             hist: [[0; 256]; 3],
             make_model: decoded.label.clone(),
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
-            history: History::new(edits),
+            history,
             show_before: false,
             geometry_mode: false,
             active_handle: None,
@@ -942,11 +966,6 @@ impl RustroomApp {
             opened_at: Instant::now(),
             render_rung: PREVIEW_MAX_DIM,
         });
-        // ⚠ The previous session's `History<Edits>` just went away with it, so any
-        // `PhotoEdit` still in the log would make an undo pop *this* photo's history and
-        // silently revert an edit the user never made here. Preset deletions are global
-        // and stay.
-        self.actions.forget_photo_edits();
         self.status.clear();
     }
 
