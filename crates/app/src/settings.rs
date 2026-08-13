@@ -5,6 +5,7 @@
 //! particular are fiddly to save and restore, and that belongs in whatever spec needs them.
 
 use crate::batch_export::ExportOptions;
+use raw_decode::Demosaic;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -25,6 +26,16 @@ pub struct Settings {
     /// Suppressing the guard on the *recoverable* deletion must not disarm it on the
     /// irrecoverable one.
     pub confirm_export_preset_delete: bool,
+    /// Demosaic tier for the **full-resolution editing buffer** — what the 1:1 view shows.
+    ///
+    /// ⚠ Independent of `export.demosaic`, and deliberately not mirrored from it. "The export
+    /// preset's demosaic" is not one value — there are N named presets plus the last-used —
+    /// and the same photo legitimately goes out as web-JPEG-fast and archive-TIFF-best.
+    /// Inferring one would make the view's decode cost depend on distant state.
+    ///
+    /// Defaults to `Fast`, which is what `DecodeOptions::linear_scene()` already hardcodes, so
+    /// nobody who ignores this setting sees any change.
+    pub view_demosaic: Demosaic,
 }
 
 impl Default for Settings {
@@ -33,6 +44,7 @@ impl Default for Settings {
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
+            view_demosaic: Demosaic::default(),
         }
     }
 }
@@ -246,6 +258,10 @@ mod tests {
         let s = Settings {
             confirm_preset_delete: false,
             confirm_export_preset_delete: false,
+            // Listed explicitly rather than via `..Default::default()`: this literal being
+            // exhaustive is what makes a new `Settings` field a compile error here, forcing
+            // a decision about whether the round trip should carry it.
+            view_demosaic: Demosaic::Better,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -269,6 +285,42 @@ mod tests {
         let loaded = SettingsStore::new(f.0.clone()).load();
         assert!(!loaded.confirm_preset_delete, "the old field must survive");
         assert_eq!(loaded.export, ExportOptions::default());
+    }
+
+    #[test]
+    fn a_settings_file_from_before_view_demosaic_still_loads() {
+        // ⚠ Same property as the test above, for the same reason: `load()` is infallible, so
+        // a field that fails to parse does not surface an error — it silently reverts *every*
+        // setting to its default. A new field must therefore be fillable by `#[serde(default)]`.
+        let f = TempFile::new("view_demosaic_old");
+        std::fs::write(
+            &f.0,
+            r#"{"confirm_preset_delete": false, "confirm_export_preset_delete": false}"#,
+        )
+        .unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old fields must survive");
+        assert!(!loaded.confirm_export_preset_delete);
+        assert_eq!(
+            loaded.view_demosaic,
+            raw_decode::Demosaic::Fast,
+            "and the new one must default to what linear_scene() already hardcoded"
+        );
+    }
+
+    #[test]
+    fn the_view_tier_round_trips_through_a_file() {
+        let f = TempFile::new("view_demosaic_rt");
+        let store = SettingsStore::new(f.0.clone());
+        // ⚠ Struct-update syntax, not `let mut s = Settings::default();` followed by a field
+        // assignment — clippy's `field_reassign_with_default` is warn-by-default and CI runs
+        // with `-D warnings`.
+        let s = Settings {
+            view_demosaic: raw_decode::Demosaic::Best,
+            ..Default::default()
+        };
+        store.save(&s).unwrap();
+        assert_eq!(store.load().view_demosaic, raw_decode::Demosaic::Best);
     }
 
     /// A unique temp file path for one test, removed on drop.
