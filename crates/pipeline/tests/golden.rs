@@ -340,6 +340,7 @@ fn golden_crop_center() {
         "crop_center",
         &Edits {
             geometry: Geometry {
+                orientation: Default::default(),
                 angle: 0.0,
                 crop: CropRect {
                     left: 0.25,

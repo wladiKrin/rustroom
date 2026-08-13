@@ -408,6 +408,10 @@ mod tests {
             },
             geometry: edit_model::Geometry {
                 angle: 2.0,
+                orientation: edit_model::Orientation {
+                    rotate: edit_model::Quarter::Cw90,
+                    mirror: true,
+                },
                 ..Default::default()
             },
             version: 0,

@@ -1,9 +1,11 @@
 use crate::PipelineStage;
 use core_image::ImageBuf;
-use edit_model::{CropRect, Geometry};
+use edit_model::{CropRect, Geometry, Orientation, Quarter};
 
-/// Straighten (bilinear rotation about center) then crop to a normalized rectangle.
+/// Orient (quarter turns and mirroring), straighten (bilinear rotation about center), then
+/// crop to a normalized rectangle.
 pub struct GeometryStage {
+    orientation: Orientation,
     angle_rad: f32,
     crop: CropRect,
 }
@@ -11,10 +13,43 @@ pub struct GeometryStage {
 impl GeometryStage {
     pub fn new(g: &Geometry) -> Self {
         Self {
+            orientation: g.orientation,
             angle_rad: g.angle.to_radians(),
             crop: g.crop,
         }
     }
+}
+
+/// Apply a quarter turn and optional mirror. An index permutation — no resampling, so this is
+/// lossless and exact.
+///
+/// Follows [`Orientation`]'s convention: mirror about the vertical axis first, then turn.
+fn orient(src: &ImageBuf, o: Orientation) -> ImageBuf {
+    let (w, h) = (src.width(), src.height());
+    let (ow, oh) = if o.rotate.swaps_axes() {
+        (h, w)
+    } else {
+        (w, h)
+    };
+    let mut out = ImageBuf::new(ow, oh);
+    for oy in 0..oh {
+        for ox in 0..ow {
+            // Inverse map: where in the source does this output pixel come from?
+            let (mut sx, sy) = match o.rotate {
+                Quarter::Zero => (ox, oy),
+                Quarter::Cw90 => (oy, h - 1 - ox),
+                Quarter::Cw180 => (w - 1 - ox, h - 1 - oy),
+                Quarter::Cw270 => (w - 1 - oy, ox),
+            };
+            // Un-mirror in *source* space, after un-rotating — the inverse of "mirror first,
+            // then turn", so `w` is the source width whatever the turn.
+            if o.mirror {
+                sx = w - 1 - sx;
+            }
+            out.set_pixel(ox, oy, src.pixel(sx, sy));
+        }
+    }
+    out
 }
 
 impl PipelineStage for GeometryStage {
@@ -23,6 +58,13 @@ impl PipelineStage for GeometryStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
+        // Orientation first: a lossless whole-image reframe, so the straighten angle and the
+        // crop are both expressed in the oriented frame.
+        let image = if self.orientation.is_identity() {
+            image
+        } else {
+            orient(&image, self.orientation)
+        };
         let rotated = if self.angle_rad != 0.0 {
             rotate_bilinear(&image, self.angle_rad)
         } else {
@@ -98,6 +140,64 @@ fn apply_crop(image: ImageBuf, c: &CropRect) -> ImageBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edit_model::{Orientation, Quarter};
+
+    /// A 3x2 image whose every pixel is distinguishable, so a permutation is checked exactly
+    /// rather than by a summary statistic.
+    fn ramp() -> ImageBuf {
+        let mut img = ImageBuf::new(3, 2);
+        for y in 0..2 {
+            for x in 0..3 {
+                img.set_pixel(x, y, [x as f32, y as f32, 0.0]);
+            }
+        }
+        img
+    }
+
+    fn oriented(img: ImageBuf, rotate: Quarter, mirror: bool) -> ImageBuf {
+        let g = Geometry {
+            orientation: Orientation { rotate, mirror },
+            ..Default::default()
+        };
+        GeometryStage::new(&g).apply(img)
+    }
+
+    #[test]
+    fn orienting_is_an_index_permutation() {
+        // ⚠ Named pixels, not a summary: a transpose and a rotation agree on dimensions and on
+        // every statistic, and differ only in where individual pixels land.
+        let out = oriented(ramp(), Quarter::Cw90, false);
+        assert_eq!(
+            (out.width(), out.height()),
+            (2, 3),
+            "a quarter turn swaps axes"
+        );
+        // Clockwise: the source's bottom-left becomes the output's top-left.
+        assert_eq!(out.pixel(0, 0), [0.0, 1.0, 0.0]);
+        assert_eq!(out.pixel(1, 0), [0.0, 0.0, 0.0]);
+        assert_eq!(out.pixel(1, 2), [2.0, 0.0, 0.0]);
+
+        let out = oriented(ramp(), Quarter::Zero, true);
+        assert_eq!((out.width(), out.height()), (3, 2), "a mirror does not");
+        assert_eq!(out.pixel(0, 0), [2.0, 0.0, 0.0], "mirrored about x");
+        assert_eq!(out.pixel(2, 0), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn orienting_twice_by_180_is_the_identity() {
+        let src = ramp();
+        let once = oriented(src.clone(), Quarter::Cw180, false);
+        let twice = oriented(once, Quarter::Cw180, false);
+        assert_eq!(twice.data(), src.data(), "bit-identical, no resampling");
+    }
+
+    #[test]
+    fn the_identity_orientation_changes_nothing() {
+        // What keeps all 29 existing goldens byte-identical.
+        let src = ramp();
+        let out = oriented(src.clone(), Quarter::Zero, false);
+        assert_eq!(out.data(), src.data());
+    }
 
     #[test]
     fn zero_angle_full_crop_is_identity() {
@@ -111,6 +211,7 @@ mod tests {
     #[test]
     fn crop_changes_dimensions_and_content() {
         let g = GeometryStage::new(&Geometry {
+            orientation: Default::default(),
             angle: 0.0,
             crop: CropRect {
                 left: 0.5,

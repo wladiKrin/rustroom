@@ -659,7 +659,13 @@ mod tests {
         let fh = |(x, y): (i32, i32)| (1 - x, y);
         let fv = |(x, y): (i32, i32)| (x, 1 - y);
 
-        let cases: [(fn(&mut Orientation), fn((i32, i32)) -> (i32, i32), &str); 4] = [
+        /// A button, the geometric transform it should match, and its name.
+        type Case = (
+            fn(&mut Orientation),
+            fn((i32, i32)) -> (i32, i32),
+            &'static str,
+        );
+        let cases: [Case; 4] = [
             (Orientation::rotate_cw, cw, "rotate_cw"),
             (Orientation::rotate_ccw, ccw, "rotate_ccw"),
             (Orientation::flip_h, fh, "flip_h"),
