@@ -49,6 +49,16 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }
 
+/// A caption: a filename under a thumbnail, a camera model beside a title.
+///
+/// ⚠ Renders identically to [`hint`] today and means something different — a hint is
+/// explanatory text *under a control*, a caption labels a thing. Kept separate so the visual
+/// identity pass can move one without the other. Merging two idioms because they currently
+/// look alike is how a design system loses the distinctions it exists to hold.
+pub fn caption(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).small());
+}
+
 /// The trailing confirm/dismiss button pair. Returns `(confirmed, dismissed)`.
 ///
 /// ⚠ This **encodes the order the dialogs already use** — confirm first, dismiss second — it
