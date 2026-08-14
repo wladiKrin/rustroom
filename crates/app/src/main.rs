@@ -28,6 +28,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod theme;
+
 const PREVIEW_MAX_DIM: usize = 1600;
 /// How long the selection must sit still before we commit to a decode. Holding an arrow key
 /// therefore starts zero decodes until you settle.
@@ -209,6 +211,7 @@ struct RustroomApp {
 
 impl RustroomApp {
     fn new(ctx: &egui::Context) -> Self {
+        theme::apply(ctx);
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
@@ -1592,10 +1595,7 @@ impl RustroomApp {
 
         let dismissed = modal_dialog(ctx, "confirm_delete_export", "Delete export preset", |ui| {
             ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
-            ui.label(
-                egui::RichText::new("This cannot be undone — export presets have no trash.")
-                    .small(),
-            );
+            theme::hint(ui, "This cannot be undone — export presets have no trash.");
             ui.checkbox(&mut dont_ask, "Don't ask again");
             ui.separator();
             ui.horizontal(|ui| {
@@ -1772,13 +1772,11 @@ impl RustroomApp {
             });
             // ⚠ Not decoration. This is the one export control whose effect cannot be
             // previewed, and the dialog is the only place a user would find that out.
-            ui.label(
-                egui::RichText::new(
-                    "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
-                     Independent of the 1:1 view's own quality setting, so judging this \
-                     means exporting a frame at two settings and comparing crops.",
-                )
-                .small(),
+            theme::hint(
+                ui,
+                "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
+                 Independent of the 1:1 view's own quality setting, so judging this \
+                 means exporting a frame at two settings and comparing crops.",
             );
 
             ui.separator();
@@ -1990,20 +1988,18 @@ impl RustroomApp {
                             ui.selectable_value(&mut tier, d, d.label());
                         }
                     });
-                ui.label(egui::RichText::new(view_quality_hint(tier)).small());
+                theme::hint(ui, view_quality_hint(tier));
             });
             // ⚠ Not decoration. Unlike the export setting, this cost is *recurring*: the
             // full-resolution decode is eager, so a slower tier is paid on every photo you
             // stop on. The dialog is the only place a user would find that out.
-            ui.label(
-                egui::RichText::new(
-                    "RAW only, and separate from the export setting. Sets the demosaic used \
-                     for the zoomed view. A slower tier costs that much extra on every photo \
-                     you stop on, not just on export — the full-resolution decode starts on \
-                     its own. The measured difference is small, which is why the default is \
-                     Fast. Changing this re-decodes the open photo.",
-                )
-                .small(),
+            theme::hint(
+                ui,
+                "RAW only, and separate from the export setting. Sets the demosaic used \
+                 for the zoomed view. A slower tier costs that much extra on every photo \
+                 you stop on, not just on export — the full-resolution decode starts on \
+                 its own. The measured difference is small, which is why the default is \
+                 Fast. Changing this re-decodes the open photo.",
             );
 
             ui.separator();
