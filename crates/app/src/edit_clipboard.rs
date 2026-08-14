@@ -130,6 +130,17 @@ mod tests {
                 angle: 1.5,
                 ..Default::default()
             },
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 1.0],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.75,
+                    ..Default::default()
+                },
+            }],
         };
         assert_eq!(decode(&encode(&rich)), Some(rich));
     }

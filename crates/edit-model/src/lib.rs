@@ -350,13 +350,14 @@ impl Dehaze {
 
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
-pub const EDIT_GROUP_NAMES: [&str; 6] = [
+pub const EDIT_GROUP_NAMES: [&str; 7] = [
     "White Balance",
     "Tone",
     "Color",
     "Detail",
     "Effects",
     "Geometry",
+    "Masks",
 ];
 
 /// Which groups of settings a paste or a preset carries.
@@ -378,6 +379,11 @@ pub struct EditGroups {
     pub effects: bool,
     /// Crop and straighten.
     pub geometry: bool,
+    /// Masked local adjustments.
+    ///
+    /// ⚠ Off by default, like `geometry` and for the same reason: a gradient positioned for
+    /// one composition is meaningless on another.
+    pub masks: bool,
 }
 
 impl Default for EditGroups {
@@ -389,6 +395,7 @@ impl Default for EditGroups {
             detail: true,
             effects: true,
             geometry: false,
+            masks: false,
         }
     }
 }
@@ -401,6 +408,7 @@ impl EditGroups {
         detail: true,
         effects: true,
         geometry: true,
+        masks: true,
     };
 
     pub const NONE: Self = Self {
@@ -410,6 +418,7 @@ impl EditGroups {
         detail: false,
         effects: false,
         geometry: false,
+        masks: false,
     };
 
     /// Only group `i`, indexed as in [`EDIT_GROUP_NAMES`].
@@ -434,6 +443,7 @@ impl EditGroups {
             3 => self.detail,
             4 => self.effects,
             5 => self.geometry,
+            6 => self.masks,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -450,9 +460,71 @@ impl EditGroups {
             3 => &mut self.detail,
             4 => &mut self.effects,
             5 => &mut self.geometry,
+            6 => &mut self.masks,
             _ => panic!("edit group index {i} out of range"),
         }
     }
+}
+
+/// A graduated filter. Coverage ramps from 0 at `from` to 1 at `to`, measured along the axis
+/// between them and constant on lines perpendicular to it.
+///
+/// Endpoints are in **normalised frame coordinates**, as [`CropRect`] is — so a mask means the
+/// same thing on the 1600 px preview and on the full-resolution export.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LinearGradient {
+    pub from: [f32; 2],
+    pub to: [f32; 2],
+    pub invert: bool,
+}
+
+/// The mask primitives. 3.1b adds `Radial`, 3.1c adds `Brush`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Mask {
+    Linear(LinearGradient),
+}
+
+impl Default for Mask {
+    fn default() -> Self {
+        Mask::Linear(LinearGradient::default())
+    }
+}
+
+/// What a mask can carry: the **per-pixel** adjustments, and only those.
+///
+/// ⚠ Not an arbitrary subset. It is exactly the set where "apply the stage, then blend the
+/// result by coverage" is both correct and cheap, because each output pixel depends only on
+/// its own input pixel. A spatial stage — noise reduction, sharpening, clarity, dehaze, HSL —
+/// reads neighbours *outside* the mask, so "masked" needs a separate decision for each and is
+/// out of scope here.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LocalAdjustments {
+    pub white_balance: WhiteBalance,
+    pub exposure: f32,
+    pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
+    pub saturation: f32,
+    pub vibrance: f32,
+}
+
+impl LocalAdjustments {
+    /// Whether this would change any pixel. An inactive set inserts no stages at all.
+    pub fn is_active(&self) -> bool {
+        *self != Self::default()
+    }
+}
+
+/// One mask and the adjustments it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MaskedAdjustment {
+    pub mask: Mask,
+    pub adjustments: LocalAdjustments,
 }
 
 /// All edits applied to one image. Every field is neutral by default.
@@ -486,6 +558,9 @@ pub struct Edits {
     pub vignette: Vignette,
     pub sharpening: Sharpening,
     pub geometry: Geometry,
+    /// Local adjustments, each confined to a mask. Applied in order, after the global
+    /// per-pixel adjustments and before the vignette.
+    pub masks: Vec<MaskedAdjustment>,
 }
 
 impl Edits {
@@ -531,6 +606,7 @@ impl Edits {
             sharpening,
             vignette,
             geometry,
+            masks,
         } = src;
 
         if groups.white_balance {
@@ -561,6 +637,9 @@ impl Edits {
         }
         if groups.geometry {
             self.geometry = *geometry;
+        }
+        if groups.masks {
+            self.masks = masks.clone();
         }
     }
 }
@@ -1245,6 +1324,17 @@ mod tests {
                     bottom: 0.9,
                 },
             },
+            masks: vec![MaskedAdjustment {
+                mask: Mask::Linear(LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 1.0],
+                    invert: false,
+                }),
+                adjustments: LocalAdjustments {
+                    exposure: 0.75,
+                    ..Default::default()
+                },
+            }],
         }
     }
 
@@ -1385,5 +1475,59 @@ mod tests {
         let back = Edits::from_json_file(&path).unwrap();
         assert_eq!(e, back);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_sidecar_from_before_masks_still_loads() {
+        // `Edits` carries `#[serde(default)]`, so an older sidecar must load with no masks
+        // rather than failing — the same forgiving-load property every added field needs.
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.exposure, 0.5);
+        assert!(e.masks.is_empty());
+    }
+
+    #[test]
+    fn a_masked_adjustment_round_trips_through_json() {
+        let e = Edits {
+            masks: vec![MaskedAdjustment {
+                mask: Mask::Linear(LinearGradient {
+                    from: [0.1, 0.2],
+                    to: [0.8, 0.9],
+                    invert: true,
+                }),
+                adjustments: LocalAdjustments {
+                    exposure: -1.5,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        };
+        let text = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, e);
+    }
+
+    #[test]
+    fn masks_do_not_transfer_by_default() {
+        // ⚠ The same treatment geometry gets, for the same reason: a gradient positioned for
+        // one composition is meaningless on another, so carrying it across photos by default
+        // would be wrong more often than right.
+        assert!(!EditGroups::default().masks);
+        // ⚠ Via `get(6)` rather than the field: that is the path the dialog and the generic
+        // partition tests index through, so this also checks the new arm exists — and a bare
+        // `EditGroups::ALL.masks` is a compile-time constant, which clippy rejects.
+        assert!(
+            EditGroups::ALL.get(6),
+            "but it must be reachable when asked for"
+        );
+    }
+
+    #[test]
+    fn the_masks_group_transfers_masks_and_nothing_else() {
+        let src = all_nonneutral();
+        let mut dst = Edits::default();
+        dst.merge_from(&src, EditGroups::only(6));
+        assert_eq!(dst.masks, src.masks);
+        assert_eq!(dst.exposure, 0.0, "only the masks group was selected");
     }
 }

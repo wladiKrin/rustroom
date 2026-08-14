@@ -415,6 +415,17 @@ mod tests {
                 ..Default::default()
             },
             version: 0,
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 1.0],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.75,
+                    ..Default::default()
+                },
+            }],
         }
     }
 
