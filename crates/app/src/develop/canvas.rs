@@ -123,13 +123,24 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             shown.size_vec2() * pscale,
                         ),
                     };
+                    // ⚠ Where the **whole frame** sits on screen, which is *not* `img_rect`
+                    // once a region render is on: `img_rect` then covers only the rendered
+                    // slice. A mask is defined in whole-frame normalised coordinates, so its
+                    // overlay must be placed against this rect or it drifts with the region —
+                    // appearing to follow the view as you pan, which is exactly how the bug
+                    // showed up. `origin` is the same whole-image corner the region placement
+                    // above derives from, so the two agree by construction.
+                    let frame_size = egui::vec2(full.x * pk, full.y * pk) * pscale;
+                    let frame_rect =
+                        egui::Rect::from_center_size(ui.max_rect().center() + s.pan, frame_size);
+
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                     egui::Image::new(shown).paint_at(ui, resp.rect);
 
                     if s.geometry_mode {
                         photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
                     } else {
-                        photo_edited |= draw_mask_overlay(ui, s, &resp, img_rect);
+                        photo_edited |= draw_mask_overlay(ui, s, &resp, img_rect, frame_rect);
                         // ⚠ Pan only when the mask did not claim this gesture. Without the
                         // `active_mask_handle` guard, dragging a handle would also pan the
                         // image underneath it.
@@ -277,11 +288,17 @@ fn draw_crop_overlay(
 /// ⚠ **Three lines, not a tint.** A faithful coverage tint needs three quads, because coverage
 /// is clamped flat either side of the ramp; two boundary lines state the same thing exactly
 /// and do not wash out the photograph being judged.
+/// ⚠ **Every coordinate here is against `frame_rect`, never `img_rect`.** A mask is defined in
+/// whole-frame normalised coordinates, but `img_rect` covers only the *rendered slice* once a
+/// region render is on. Using it made the overlay drift with the view while panning at high
+/// zoom — and silently corrupted `aspect` too, since a region's aspect is not the frame's.
+/// `img_rect` is still the right clip: there is no photograph outside it to annotate.
 fn draw_mask_overlay(
     ui: &egui::Ui,
     s: &mut Session,
     resp: &egui::Response,
     img_rect: egui::Rect,
+    frame_rect: egui::Rect,
 ) -> bool {
     let Some(i) = s.selected_mask else {
         return false;
@@ -290,11 +307,14 @@ fn draw_mask_overlay(
         return false;
     };
     let edit_model::Mask::Linear(g) = m.mask;
+    if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
+        return false;
+    }
 
     let to_screen = |p: [f32; 2]| {
         egui::pos2(
-            img_rect.left() + p[0] * img_rect.width(),
-            img_rect.top() + p[1] * img_rect.height(),
+            frame_rect.left() + p[0] * frame_rect.width(),
+            frame_rect.top() + p[1] * frame_rect.height(),
         )
     };
     let (a, b) = (to_screen(g.from), to_screen(g.to));
@@ -310,7 +330,8 @@ fn draw_mask_overlay(
     let len = axis.length();
     if len > f32::EPSILON {
         let perp = egui::vec2(-axis.y, axis.x) / len;
-        // Long enough to cross the image from any point inside it.
+        // Long enough to cross the clip region from any point inside it — measured on
+        // `img_rect`, since that is what bounds what will actually be drawn.
         let reach = img_rect.width() + img_rect.height();
         for end in [a, b] {
             painter.line_segment(
@@ -323,21 +344,23 @@ fn draw_mask_overlay(
         painter.circle_filled(end, 5.0, egui::Color32::WHITE);
     }
 
-    let aspect = img_rect.width() / img_rect.height();
+    let aspect = frame_rect.width() / frame_rect.height();
+    let mut moved = false;
     if let Some(p) = resp.interact_pointer_pos() {
-        let nx = ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0);
-        let ny = ((p.y - img_rect.top()) / img_rect.height()).clamp(0.0, 1.0);
+        let nx = ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0);
+        let ny = ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0);
         if resp.drag_started() {
             s.active_mask_handle = mask_tool::hit_test(&g, [nx, ny], aspect, 0.04);
         }
         if resp.dragged() {
             if let Some(h) = s.active_mask_handle {
                 let d = resp.drag_delta();
-                let dx = d.x / img_rect.width();
-                let dy = d.y / img_rect.height();
+                let dx = d.x / frame_rect.width();
+                let dy = d.y / frame_rect.height();
                 if let Some(m) = s.edits.masks.get_mut(i) {
                     let edit_model::Mask::Linear(cur) = m.mask;
                     m.mask = edit_model::Mask::Linear(mask_tool::apply_drag(cur, h, dx, dy));
+                    moved = true;
                 }
             }
         }
@@ -345,6 +368,19 @@ fn draw_mask_overlay(
             s.history.push(s.edits.clone());
             return true;
         }
+    }
+
+    // ⚠ Moving a mask changes the *rendered image*, so it must ask for a re-render — the
+    // panel's sliders do exactly this on `changed`. Without it the handles moved while the
+    // photo kept showing the mask's previous position, updating only when some later edit
+    // happened to request a frame. Unlike `draw_crop_overlay`, which needs no request because
+    // `preview_edits` strips the crop in geometry mode and the overlay *is* the feedback.
+    if moved {
+        s.request(
+            preview_edits(&s.edits, s.geometry_mode),
+            s.render_max_dim(),
+            s.requested_region,
+        );
     }
     false
 }
