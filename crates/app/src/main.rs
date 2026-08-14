@@ -16,7 +16,7 @@ use rustroom_app::history::History;
 use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::selection::Selection;
-use rustroom_app::settings::{Settings, SettingsStore};
+use rustroom_app::settings::{Accent, Settings, SettingsStore, ThemeChoice};
 use rustroom_app::sidecar;
 use rustroom_app::sync;
 use rustroom_app::thumb_loader::ThumbLoader;
@@ -179,7 +179,6 @@ struct RustroomApp {
 
 impl RustroomApp {
     fn new(ctx: &egui::Context) -> Self {
-        theme::apply(ctx);
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
@@ -187,6 +186,10 @@ impl RustroomApp {
         let export_preset_list = export_preset_store.list();
         let settings_store = SettingsStore::user_default();
         let settings = settings_store.load();
+        // ⚠ After the load, not before: the style now depends on the persisted theme and
+        // accent, so applying it earlier would style the app from the defaults and then
+        // silently disagree with what the user chose.
+        theme::apply(ctx, &settings);
         Self {
             view: AppView::default(),
             library: None,
@@ -1186,6 +1189,19 @@ impl RustroomApp {
     }
 
     /// The Settings window. One setting today; a modal is the right weight for that.
+    /// Adopt new appearance settings: persist them and re-style immediately, so the change is
+    /// visible rather than deferred to the next launch.
+    ///
+    /// ⚠ Cheap enough to do inline — unlike `apply_view_demosaic`, nothing is decoded. It is
+    /// still guarded by a change comparison at the call site, because the Settings dialog body
+    /// runs every frame it is open.
+    fn apply_appearance(&mut self, theme_choice: ThemeChoice, accent: Accent, ctx: &egui::Context) {
+        self.settings.theme = theme_choice;
+        self.settings.accent = accent;
+        self.save_settings();
+        theme::apply(ctx, &self.settings);
+    }
+
     /// Adopt a new 1:1 view demosaic tier: persist it, rebuild the worker, and re-decode the
     /// open photo so the change is visible rather than silently deferred to the next photo.
     ///
