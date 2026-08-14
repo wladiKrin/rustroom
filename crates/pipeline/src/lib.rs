@@ -209,6 +209,38 @@ impl PrefixKey {
     }
 }
 
+/// Build the per-pixel stages for one set of adjustments.
+///
+/// ⚠ **One list, two consumers**: the global tail calls it with the values from `Edits`, and
+/// every mask calls it with its own `LocalAdjustments`. A stage added here reaches both — the
+/// same guard [`build_prefix_steps`] provides for the prefix, and the reason `LocalAdjustments`
+/// repeating field *names* from `Edits` is harmless: the duplication that would actually hurt
+/// is this logic, and it exists once.
+fn per_pixel_stages(a: &edit_model::LocalAdjustments) -> Vec<Box<dyn PipelineStage>> {
+    let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
+    if a.white_balance != edit_model::WhiteBalance::default() {
+        out.push(Box::new(WhiteBalanceStage::new(&a.white_balance)));
+    }
+    if a.exposure != 0.0 {
+        out.push(Box::new(ExposureStage::new(a.exposure)));
+    }
+    if a.contrast != 0.0 {
+        out.push(Box::new(ContrastStage::new(a.contrast)));
+    }
+    if a.highlights != 0.0 || a.shadows != 0.0 || a.whites != 0.0 || a.blacks != 0.0 {
+        out.push(Box::new(ToneRegionsStage::new(
+            a.highlights,
+            a.shadows,
+            a.whites,
+            a.blacks,
+        )));
+    }
+    if a.saturation != 0.0 || a.vibrance != 0.0 {
+        out.push(Box::new(SaturationStage::new(a.saturation, a.vibrance)));
+    }
+    out
+}
+
 /// The develop pipeline in two halves, split where the preview cache checkpoints.
 ///
 /// The **prefix** — geometry, then noise reduction — depends only on `edits.geometry` and
@@ -232,25 +264,23 @@ pub fn build_pipeline_split_in_region(
         .map(|s| s.stage)
         .collect();
 
-    let mut tail: Vec<Box<dyn PipelineStage>> = Vec::new();
-    if edits.white_balance != edit_model::WhiteBalance::default() {
-        tail.push(Box::new(WhiteBalanceStage::new(&edits.white_balance)));
-    }
-    if edits.exposure != 0.0 {
-        tail.push(Box::new(ExposureStage::new(edits.exposure)));
-    }
-    if edits.contrast != 0.0 {
-        tail.push(Box::new(ContrastStage::new(edits.contrast)));
-    }
-    if edits.highlights != 0.0 || edits.shadows != 0.0 || edits.whites != 0.0 || edits.blacks != 0.0
-    {
-        tail.push(Box::new(ToneRegionsStage::new(
-            edits.highlights,
-            edits.shadows,
-            edits.whites,
-            edits.blacks,
-        )));
-    }
+    // ⚠ `saturation`/`vibrance` are passed as **zero** here, deliberately. In the global chain
+    // saturation runs *after* the tone curve and local contrast, not with the basic
+    // adjustments — so it stays where it is, further down this tail. Passing the real values
+    // would silently move it earlier and change every golden. Inside a mask there is no tone
+    // curve, so ordering within `per_pixel_stages` is the whole story and saturation belongs
+    // in it.
+    let mut tail: Vec<Box<dyn PipelineStage>> = per_pixel_stages(&edit_model::LocalAdjustments {
+        white_balance: edits.white_balance,
+        exposure: edits.exposure,
+        contrast: edits.contrast,
+        highlights: edits.highlights,
+        shadows: edits.shadows,
+        whites: edits.whites,
+        blacks: edits.blacks,
+        saturation: 0.0,
+        vibrance: 0.0,
+    });
     if !edits.tone_curve.points.is_empty() {
         tail.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
     }
