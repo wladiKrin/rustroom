@@ -1,0 +1,147 @@
+//! The modal dialogs.
+//!
+//! Each dialog is a free function taking `&mut RustroomApp`. That is deliberately more
+//! explicit than an `impl RustroomApp` block in another file, which would have been a pure
+//! cut-and-paste with zero call-site churn — and would have kept every dialog silently able
+//! to reach anything on `self`, teaching a reader nothing.
+//!
+//! ⚠ **No visibility changes were needed for this.** Rust privacy is "visible in the declaring
+//! module *and its descendants*", and this module is a descendant of the crate root where
+//! `RustroomApp` lives, so its private fields are reachable without a single `pub`.
+//!
+//! # The borrow idiom
+//!
+//! Every dialog follows the same shape, and it is load-bearing rather than incidental:
+//!
+//! ```ignore
+//! let mut local = app.settings.field;   // copy out
+//! let mut close = false;
+//! let dismissed = dialog(ctx, "id", "Title", |ui| { /* mutate locals only */ });
+//! close |= dismissed;
+//! if local != app.settings.field { /* apply */ }
+//! ```
+//!
+//! The closure cannot touch `app`, because `dialog` already holds it. Reaching for `app`
+//! inside the closure has cost compile errors twice in this codebase's history.
+//!
+//! ⚠ **A dialog body runs every frame it is open.** Any side effect must therefore be guarded
+//! by a change comparison — `if tier != app.settings.view_demosaic` — never fired
+//! unconditionally. Without that guard, `apply_view_demosaic` would rebuild a decode worker
+//! and start an 11-second decode sixty times a second.
+
+pub mod edits;
+pub mod export;
+pub mod presets;
+pub mod settings;
+
+use crate::RustroomApp;
+use edit_model::EditGroups;
+use eframe::egui;
+
+/// Show a centred modal with a heading and a separator. Returns whether the backdrop was
+/// clicked, which every dialog treats as a dismissal.
+///
+/// ⚠ `egui::Modal`, not `egui::Window`: a Window opens at the top-left and is genuinely easy
+/// to miss, while a Modal centres on the viewport, dims the backdrop and blocks clicks behind
+/// it.
+pub fn dialog<R>(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> bool {
+    egui::Modal::new(egui::Id::new(id))
+        .show(ctx, |ui| {
+            ui.heading(title);
+            ui.separator();
+            content(ui);
+        })
+        .backdrop_response
+        .clicked()
+}
+
+/// Which modal dialog is open. At most one at a time, so this is an enum rather than a
+/// pile of booleans that could contradict each other.
+#[derive(Default, PartialEq)]
+pub enum Modal {
+    #[default]
+    None,
+    /// Naming a new preset and choosing the groups it will carry.
+    SavePreset {
+        name: String,
+        groups: EditGroups,
+    },
+    /// Choosing which groups a paste applies.
+    PasteSettings,
+    /// Choosing which groups a sync applies to the rest of the selection.
+    SyncSettings,
+    /// Choosing where and how to export the selection.
+    ExportSettings,
+    /// Naming a new export preset. Returns to `ExportSettings` when closed, so the export
+    /// dialog does not vanish underneath the user.
+    SaveExportPreset {
+        name: String,
+    },
+    /// Confirming an export-preset deletion. `dont_ask_again` is scratch state, committed to
+    /// `Settings` only on the Delete path. Returns to `ExportSettings` when closed.
+    ConfirmDeleteExportPreset {
+        name: String,
+        dont_ask_again: bool,
+    },
+    /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
+    /// `Settings` only on the Delete path, never on Cancel.
+    ConfirmDeletePreset {
+        name: String,
+        dont_ask_again: bool,
+    },
+    Settings,
+}
+
+/// Draw whichever dialog is open.
+///
+/// ⚠ The local `Which` enum is not ceremony: matching directly on `app.modal` keeps the
+/// scrutinee borrowed across the `&mut app` call in each arm, which does not compile. Decide
+/// *which* dialog into a plain value first, then dispatch.
+/// Draw whichever modal is open. Called once per frame from `ui`.
+pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
+    // Decide *which* modal first, then dispatch. Matching on `app.modal` directly and
+    // calling a `&mut self` method from an arm keeps the scrutinee's borrow alive across
+    // the call, which does not compile.
+    enum Which {
+        None,
+        Save,
+        Paste,
+        Sync,
+        Export,
+        SaveExport,
+        ConfirmDeleteExport,
+        ConfirmDelete,
+        Settings,
+    }
+    let which = match &app.modal {
+        Modal::None => Which::None,
+        Modal::SavePreset { .. } => Which::Save,
+        Modal::PasteSettings => Which::Paste,
+        Modal::SyncSettings => Which::Sync,
+        Modal::ExportSettings => Which::Export,
+        Modal::SaveExportPreset { .. } => Which::SaveExport,
+        Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
+        Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
+        Modal::Settings => Which::Settings,
+    };
+    // Independent of `app.modal`: a collision arrives while no dialog is open.
+    if app.export_collision.is_some() {
+        export::collision(app, ctx);
+    }
+    match which {
+        Which::None => {}
+        Which::Save => presets::save(app, ctx),
+        Which::Paste => edits::paste(app, ctx),
+        Which::Sync => edits::sync(app, ctx),
+        Which::Export => export::settings(app, ctx),
+        Which::SaveExport => export::save_preset(app, ctx),
+        Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
+        Which::ConfirmDelete => presets::confirm_delete(app, ctx),
+        Which::Settings => settings::show(app, ctx),
+    }
+}

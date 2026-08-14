@@ -49,6 +49,35 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }
 
+/// The trailing confirm/dismiss button pair. Returns `(confirmed, dismissed)`.
+///
+/// ⚠ This **encodes the order the dialogs already use** — confirm first, dismiss second — it
+/// does not impose a new one. An audit of all nine before the split found them already
+/// uniform, with "Close" appearing only in Settings, the one dialog that has nothing to
+/// abandon. Its job is to stop that drifting as dialogs are added, which is why it earns its
+/// place even though it changes nothing today.
+pub fn button_row(
+    ui: &mut egui::Ui,
+    confirm: &str,
+    confirm_enabled: bool,
+    dismiss: &str,
+) -> (bool, bool) {
+    let mut confirmed = false;
+    let mut dismissed = false;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(confirm_enabled, egui::Button::new(confirm))
+            .clicked()
+        {
+            confirmed = true;
+        }
+        if ui.button(dismiss).clicked() {
+            dismissed = true;
+        }
+    });
+    (confirmed, dismissed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
