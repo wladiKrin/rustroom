@@ -9,6 +9,73 @@ use raw_decode::Demosaic;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Which theme to render in.
+///
+/// ⚠ A mirror of `egui::ThemePreference`, which `CLAUDE.md` warns against on the grounds that
+/// "a mapping that exists twice is one that will disagree" — the reason `Demosaic` lives in
+/// `raw-decode` rather than being duplicated. Accepted here because the direction is forced:
+/// this crate's **lib** must not depend on egui, since that separation is what keeps
+/// `history`, `selection` and the rest testable without a windowing system. The mitigation is
+/// that `theme.rs` maps it with three exhaustive match arms, so a new variant is a compile
+/// error rather than a silent gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ThemeChoice {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
+impl ThemeChoice {
+    pub const ALL: [ThemeChoice; 3] = [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::System];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeChoice::Dark => "Dark",
+            ThemeChoice::Light => "Light",
+            ThemeChoice::System => "Follow system",
+        }
+    }
+}
+
+/// The colour used for *active* state — slider fill and handle, the open section, the primary
+/// button.
+///
+/// ⚠ `Neutral` is not an absence: it is a grey, so "no accent" is a real choice rather than a
+/// discarded one. Its cost is that active state falls back to lightness alone, which is
+/// genuinely harder to read.
+///
+/// ⚠ **Amber is deliberately absent.** The objection is functional, not aesthetic: it sits on
+/// the skin-tone and colour-temperature axis, which is precisely the judgement Temp and Tint
+/// exist to serve, so a warm cast in the image becomes harder to see against it. It also
+/// collides with amber's conventional meaning as a warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Accent {
+    Neutral,
+    #[default]
+    SteelBlue,
+    Teal,
+    Violet,
+}
+
+impl Accent {
+    pub const ALL: [Accent; 4] = [
+        Accent::Neutral,
+        Accent::SteelBlue,
+        Accent::Teal,
+        Accent::Violet,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Accent::Neutral => "Neutral (no accent)",
+            Accent::SteelBlue => "Steel blue",
+            Accent::Teal => "Teal",
+            Accent::Violet => "Violet",
+        }
+    }
+}
+
 /// User preferences that survive a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -36,6 +103,11 @@ pub struct Settings {
     /// Defaults to `Fast`, which is what `DecodeOptions::linear_scene()` already hardcodes, so
     /// nobody who ignores this setting sees any change.
     pub view_demosaic: Demosaic,
+    /// Which theme to render in. Dark by default: a light surround measurably changes how you
+    /// judge exposure, so a photo editor defaults to dark and offers the rest.
+    pub theme: ThemeChoice,
+    /// The accent colour for active state.
+    pub accent: Accent,
 }
 
 impl Default for Settings {
@@ -45,6 +117,8 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
+            theme: ThemeChoice::default(),
+            accent: Accent::default(),
         }
     }
 }
@@ -262,6 +336,8 @@ mod tests {
             // exhaustive is what makes a new `Settings` field a compile error here, forcing
             // a decision about whether the round trip should carry it.
             view_demosaic: Demosaic::Better,
+            theme: ThemeChoice::System,
+            accent: Accent::Teal,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -413,5 +489,46 @@ mod tests {
             suppress_future: false
         }));
         assert!(s.confirm_preset_delete);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_appearance_settings_still_loads() {
+        // ⚠ The guard every new `Settings` field needs. `load()` is infallible, so a field
+        // that fails to parse does not surface an error — it silently reverts *every* setting.
+        let f = TempFile::new("appearance_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert_eq!(loaded.theme, ThemeChoice::Dark, "dark is the default");
+        assert_eq!(loaded.accent, Accent::SteelBlue);
+    }
+
+    #[test]
+    fn the_appearance_settings_round_trip() {
+        let f = TempFile::new("appearance_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let s = Settings {
+            theme: ThemeChoice::Light,
+            accent: Accent::Violet,
+            ..Default::default()
+        };
+        store.save(&s).unwrap();
+        let loaded = store.load();
+        assert_eq!(loaded.theme, ThemeChoice::Light);
+        assert_eq!(loaded.accent, Accent::Violet);
+    }
+
+    #[test]
+    fn every_accent_and_theme_is_in_its_table() {
+        // The dialog and the colour lookup both iterate `ALL`; a variant missing from it is
+        // invisible in the UI rather than a compile error, so it is worth an explicit check.
+        assert_eq!(Accent::ALL.len(), 4);
+        assert_eq!(ThemeChoice::ALL.len(), 3);
+        for a in Accent::ALL {
+            assert!(!a.label().is_empty());
+        }
+        for t in ThemeChoice::ALL {
+            assert!(!t.label().is_empty());
+        }
     }
 }
