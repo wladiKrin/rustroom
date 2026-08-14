@@ -13,6 +13,7 @@ use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
 use rustroom_app::format_filter::{self, FormatFilter};
 use rustroom_app::full_res;
 use rustroom_app::history::History;
+use rustroom_app::mask_tool;
 use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::selection::Selection;
@@ -241,6 +242,17 @@ struct Session {
     show_before: bool,
     geometry_mode: bool,
     active_handle: Option<crop_tool::Handle>,
+    /// Which mask the canvas is editing, if any. Index into `edits.masks`.
+    ///
+    /// ⚠ **View state, not an edit.** It must not reach the sidecar, transfer on a paste or
+    /// appear in a preset — `Edits` is the file format, and a selection is not part of the
+    /// photograph's description. `Session` is per-photo, so this resets on a switch for free.
+    selected_mask: Option<usize>,
+    /// The mask handle this drag is moving, if the drag started on one.
+    ///
+    /// ⚠ Load-bearing for panning: a drag that did *not* start on a handle must still pan the
+    /// image, so this records whether the mask claimed the gesture.
+    active_mask_handle: Option<mask_tool::Handle>,
     /// The region the current texture covers, as a rect, so the canvas can both place it and
     /// test containment without consulting texture dimensions — which would be wrong while
     /// `show_before` swaps in the whole-image baseline. `None` = whole image.
@@ -966,6 +978,8 @@ impl RustroomApp {
             show_before: false,
             geometry_mode: false,
             active_handle: None,
+            selected_mask: None,
+            active_mask_handle: None,
             rendered_region: None,
             requested_region: None,
             // Corrected by the first frame that arrives; the placeholder only has to be

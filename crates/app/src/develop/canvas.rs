@@ -2,7 +2,7 @@
 
 use crate::{preview_edits, rects_around, PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
 use eframe::egui;
-use rustroom_app::{crop_tool, view_region};
+use rustroom_app::{crop_tool, mask_tool, view_region};
 
 /// Draw the image canvas.
 ///
@@ -129,7 +129,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     if s.geometry_mode {
                         photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
                     } else {
-                        if resp.dragged() {
+                        photo_edited |= draw_mask_overlay(ui, s, &resp, img_rect);
+                        // ⚠ Pan only when the mask did not claim this gesture. Without the
+                        // `active_mask_handle` guard, dragging a handle would also pan the
+                        // image underneath it.
+                        if resp.dragged() && s.active_mask_handle.is_none() {
                             s.pan += resp.drag_delta();
                         }
                         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -258,6 +262,86 @@ fn draw_crop_overlay(
         }
         if resp.drag_stopped() {
             s.active_handle = None;
+            s.history.push(s.edits.clone());
+            return true;
+        }
+    }
+    false
+}
+
+/// Draw the selected mask's handles and guide lines, and apply any drag.
+///
+/// Returns whether a drag settled into a new history entry — the same contract
+/// `draw_crop_overlay` has.
+///
+/// ⚠ **Three lines, not a tint.** A faithful coverage tint needs three quads, because coverage
+/// is clamped flat either side of the ramp; two boundary lines state the same thing exactly
+/// and do not wash out the photograph being judged.
+fn draw_mask_overlay(
+    ui: &egui::Ui,
+    s: &mut Session,
+    resp: &egui::Response,
+    img_rect: egui::Rect,
+) -> bool {
+    let Some(i) = s.selected_mask else {
+        return false;
+    };
+    let Some(m) = s.edits.masks.get(i) else {
+        return false;
+    };
+    let edit_model::Mask::Linear(g) = m.mask;
+
+    let to_screen = |p: [f32; 2]| {
+        egui::pos2(
+            img_rect.left() + p[0] * img_rect.width(),
+            img_rect.top() + p[1] * img_rect.height(),
+        )
+    };
+    let (a, b) = (to_screen(g.from), to_screen(g.to));
+
+    let painter = ui.painter_at(img_rect);
+    let stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
+    painter.line_segment([a, b], stroke);
+
+    // ⚠ The perpendicular is computed **in screen space**, from the on-screen axis — the same
+    // trap as `coverage` and `hit_test`, in its third guise. A normalised-space perpendicular
+    // is visibly not perpendicular on a 3:2 frame.
+    let axis = b - a;
+    let len = axis.length();
+    if len > f32::EPSILON {
+        let perp = egui::vec2(-axis.y, axis.x) / len;
+        // Long enough to cross the image from any point inside it.
+        let reach = img_rect.width() + img_rect.height();
+        for end in [a, b] {
+            painter.line_segment(
+                [end - perp * reach, end + perp * reach],
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(120)),
+            );
+        }
+    }
+    for end in [a, b] {
+        painter.circle_filled(end, 5.0, egui::Color32::WHITE);
+    }
+
+    let aspect = img_rect.width() / img_rect.height();
+    if let Some(p) = resp.interact_pointer_pos() {
+        let nx = ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0);
+        let ny = ((p.y - img_rect.top()) / img_rect.height()).clamp(0.0, 1.0);
+        if resp.drag_started() {
+            s.active_mask_handle = mask_tool::hit_test(&g, [nx, ny], aspect, 0.04);
+        }
+        if resp.dragged() {
+            if let Some(h) = s.active_mask_handle {
+                let d = resp.drag_delta();
+                let dx = d.x / img_rect.width();
+                let dy = d.y / img_rect.height();
+                if let Some(m) = s.edits.masks.get_mut(i) {
+                    let edit_model::Mask::Linear(cur) = m.mask;
+                    m.mask = edit_model::Mask::Linear(mask_tool::apply_drag(cur, h, dx, dy));
+                }
+            }
+        }
+        if resp.drag_stopped() && s.active_mask_handle.take().is_some() {
             s.history.push(s.edits.clone());
             return true;
         }
