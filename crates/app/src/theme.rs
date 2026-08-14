@@ -85,6 +85,21 @@ fn tune(style: &mut egui::Style) {
     style.spacing.item_spacing.y = 2.0;
     style.spacing.interact_size.y = 16.0;
     style.spacing.slider_rail_height = 4.0;
+
+    // ⚠ Both of these are **off by default in egui**, and their absence is why the shipped
+    // sliders looked nothing like the mockups they were chosen from — a grey rectangle on a
+    // grey rail rather than a coloured track with a dot.
+    //
+    // `slider_trailing_fill` paints the rail left of the handle with `selection.bg_fill`,
+    // which is already the accent — so the accent ends up carrying "where is this set",
+    // which is the signal the comparison was actually judged on.
+    style.visuals.slider_trailing_fill = true;
+    style.visuals.handle_shape = egui::style::HandleShape::Circle;
+
+    // ⚠ Not done, deliberately: colouring the handle *at rest* would mean setting
+    // `widgets.inactive.bg_fill`, which is shared by every button **and** by the slider rail
+    // itself — so the rail and the whole toolbar would go accent-coloured too. The trailing
+    // fill already carries the signal.
 }
 
 /// The small explanatory line under a control.
