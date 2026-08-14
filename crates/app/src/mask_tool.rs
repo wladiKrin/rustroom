@@ -212,6 +212,19 @@ mod tests {
         assert_eq!(selection_after_delete(Some(2), 2, 3), None);
         assert_eq!(selection_after_delete(Some(0), 2, 3), Some(0));
         assert_eq!(selection_after_delete(None, 1, 3), None);
+        // ⚠ The out-of-range guard is real, reachable logic, not just the `sel?` early
+        // return — a regression that dropped it or flipped its comparison would pass every
+        // assertion above.
+        assert_eq!(
+            selection_after_delete(Some(5), 1, 3),
+            None,
+            "selection past the end"
+        );
+        assert_eq!(
+            selection_after_delete(Some(1), 5, 3),
+            None,
+            "removed past the end"
+        );
     }
 
     #[test]
