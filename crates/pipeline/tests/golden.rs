@@ -662,3 +662,49 @@ fn golden_dehaze_minus() {
         hazy_chart(),
     )
 }
+
+#[test]
+fn golden_mask_linear_exposure() {
+    // A graduated exposure lift across the chart: the left edge untouched, the right at +1 EV.
+    check_golden(
+        "mask_linear_exposure",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 0.0],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 1.0,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
+
+#[test]
+fn golden_mask_linear_inverted_saturation() {
+    // A different payload, inverted and diagonal, so the reference covers more than one stage
+    // inside the mask and the `invert` flag reaches a real image.
+    check_golden(
+        "mask_linear_inverted_saturation",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.2, 0.0],
+                    to: [0.8, 1.0],
+                    invert: true,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    saturation: -100.0,
+                    exposure: -0.5,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}

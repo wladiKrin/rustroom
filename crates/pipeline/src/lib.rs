@@ -13,6 +13,7 @@ pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
 pub use stages::local_contrast::LocalContrastStage;
+pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransformSrgb;
 pub use stages::saturation::SaturationStage;
@@ -307,6 +308,17 @@ pub fn build_pipeline_split_in_region(
         tail.push(Box::new(HslStage::new(&edits.hsl)));
     }
 
+    // ⚠ After the global per-pixel block because a mask is the same kind of operation,
+    // localised — it should act on the global look rather than be re-mapped by it. Before the
+    // vignette and sharpening because both have earned their end-of-chain positions: the
+    // vignette's "+100 = exactly white" endpoint depends on running after the tone curve, and
+    // sharpening must not amplify anything a later stage would then stretch.
+    for m in &edits.masks {
+        if m.adjustments.is_active() {
+            tail.push(Box::new(MaskStage::new_in_region(m, scale, region)));
+        }
+    }
+
     // A creative effect over the finished grade, so it runs last. It is post-crop for free:
     // `GeometryStage` ran first, so the frame it sees is already cropped. It takes no
     // `RenderScale` — normalized coordinates make it resolution-independent.
@@ -354,6 +366,17 @@ pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
 /// noise reduction can never produce a seam however you pan.
 ///
 /// An inactive stage contributes 0.
+///
+/// ⚠ **The reaches add, they do not `max`.** Sharpening runs *after* local contrast, so a
+/// wrong value at the region's edge propagates 120 px inward through clarity and then a
+/// further 15 px through sharpening — 135, not 120. This was a `max` until masking exposed
+/// it: `a_region_render_matches_the_whole_render_cropped` had been passing with an inset
+/// ~15 px too small, because the residual differences happened to round the same way. Adding
+/// a masked +0.6 EV — up to a 1.5× gain — pushed them across a quantisation boundary and the
+/// test failed. The slack was luck, not margin.
+///
+/// A per-pixel stage between them contributes nothing: it cannot move information sideways.
+/// That is why masks, the vignette and every colour stage are absent here.
 pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
     let sharp = if edits.sharpening.is_active() {
         stages::sharpening::max_kernel_radius(edits.sharpening.radius, scale)
@@ -361,7 +384,7 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
         0
     };
     let local = stages::local_contrast::kernel_reach(&edits.local_contrast, scale);
-    sharp.max(local)
+    sharp + local
 }
 
 /// [`tail_kernel_radius`] maximised over every representable setting — what a fixed render
@@ -1079,14 +1102,20 @@ mod tests {
         };
         assert_eq!(tail_kernel_radius(&clarity, RenderScale::FULL), 120);
 
-        // Both: the max, because the two stages are sequential in the pipeline but each
-        // reads its own neighbourhood of that stage's input.
+        // ⚠ Both: the **sum**, not the max — and this assertion used to say 120, with a
+        // comment claiming each stage "reads its own neighbourhood of that stage's input".
+        // That reasoning is wrong, and masking disproved it empirically: sharpening runs on
+        // local contrast's *output*, so a wrong value at the region edge travels 120 px
+        // through clarity and a further 9 px through sharpening. The old inset was ~9 px too
+        // small and the region-equality test was passing only because the residual
+        // differences happened to round the same way; a masked +0.6 EV pushed them across a
+        // quantisation boundary and it failed.
         let both = Edits {
             sharpening: sharp.sharpening,
             local_contrast: clarity.local_contrast,
             ..Edits::default()
         };
-        assert_eq!(tail_kernel_radius(&both, RenderScale::FULL), 120);
+        assert_eq!(tail_kernel_radius(&both, RenderScale::FULL), 129);
 
         // The worst case must bound every representable setting.
         let worst = max_tail_kernel_radius(RenderScale::FULL);

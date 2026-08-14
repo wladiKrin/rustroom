@@ -780,6 +780,20 @@ mod tests {
                 detail: 50.0,
                 masking: 60.0,
             },
+            // ⚠ A mask joins the master invariant because that test validates the region
+            // maths, the vignette correction *and* the prefix cache at once — so this is what
+            // proves masks survive the cached render path, not just a bare stage call.
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.1, 0.1],
+                    to: [0.9, 0.8],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.6,
+                    ..Default::default()
+                },
+            }],
             ..Edits::default()
         };
 

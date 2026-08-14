@@ -4,6 +4,7 @@ pub mod exposure;
 pub mod geometry;
 pub mod hsl;
 pub mod local_contrast;
+pub mod mask;
 pub mod noise_reduction;
 pub mod output_transform;
 pub mod saturation;
