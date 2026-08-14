@@ -75,6 +75,28 @@ pub fn apply_drag(g: LinearGradient, handle: Handle, dx: f32, dy: f32) -> Linear
     out
 }
 
+/// Where the selection lands after the mask at `removed` is deleted from a list of `len`.
+///
+/// ⚠ Deleting the selected mask clears the selection rather than moving it to a neighbour —
+/// the same rule `Selection::clamp` follows for the Library, and for the same reason: silently
+/// selecting a *different* thing is worse than selecting nothing, because the next slider drag
+/// would then edit something the user never chose.
+pub fn selection_after_delete(
+    selected: Option<usize>,
+    removed: usize,
+    len: usize,
+) -> Option<usize> {
+    let sel = selected?;
+    if sel >= len || removed >= len {
+        return None;
+    }
+    match sel.cmp(&removed) {
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(sel - 1),
+        std::cmp::Ordering::Less => Some(sel),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +201,22 @@ mod tests {
         };
         assert!(apply_drag(g, Handle::Line, 0.1, 0.1).invert);
         assert!(apply_drag(g, Handle::From, 0.1, 0.1).invert);
+    }
+
+    #[test]
+    fn deleting_a_mask_keeps_the_selection_valid() {
+        // Deleting *before* the selection shifts it down; deleting the selection itself drops
+        // it; deleting after leaves it alone. The same class of rule `Selection::clamp`
+        // already owns for the Library grid.
+        assert_eq!(selection_after_delete(Some(2), 0, 3), Some(1));
+        assert_eq!(selection_after_delete(Some(2), 2, 3), None);
+        assert_eq!(selection_after_delete(Some(0), 2, 3), Some(0));
+        assert_eq!(selection_after_delete(None, 1, 3), None);
+    }
+
+    #[test]
+    fn deleting_the_last_mask_clears_the_selection() {
+        assert_eq!(selection_after_delete(Some(0), 0, 1), None);
     }
 
     #[test]

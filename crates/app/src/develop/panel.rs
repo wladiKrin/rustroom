@@ -3,7 +3,7 @@
 use crate::{preview_edits, theme, RustroomApp};
 use edit_model::Edits;
 use eframe::egui;
-use rustroom_app::crop_tool;
+use rustroom_app::{crop_tool, mask_tool};
 
 /// Draw the adjustments panel.
 ///
@@ -109,6 +109,89 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
                         slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
                     });
+                    // ⚠ `mask_list_changed` is a local, not a direct write to `changed`/
+                    // `settled` from inside this closure: the closure also calls `slider`,
+                    // which already holds its own mutable capture of those two, and a second
+                    // direct capture of the same variables from this closure would be two
+                    // simultaneous mutable borrows — a compile error. Folding the add/delete
+                    // events into `changed`/`settled` happens after the closure returns
+                    // instead, the same restructuring `develop_body` already uses elsewhere
+                    // in this codebase for the same reason.
+                    let mut mask_list_changed = false;
+                    egui::CollapsingHeader::new("Masks").show(ui, |ui| {
+                        if ui.button("Add graduated filter").clicked() {
+                            s.edits.masks.push(edit_model::MaskedAdjustment {
+                                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                                    // A visible default: top to bottom across the middle
+                                    // third, so the handles land on screen and the ramp is
+                                    // immediately obvious.
+                                    from: [0.5, 0.33],
+                                    to: [0.5, 0.67],
+                                    invert: false,
+                                }),
+                                adjustments: edit_model::LocalAdjustments::default(),
+                            });
+                            s.selected_mask = Some(s.edits.masks.len() - 1);
+                            mask_list_changed = true;
+                        }
+
+                        let mut remove: Option<usize> = None;
+                        for i in 0..s.edits.masks.len() {
+                            ui.horizontal(|ui| {
+                                let picked = s.selected_mask == Some(i);
+                                if ui
+                                    .selectable_label(picked, format!("Gradient {}", i + 1))
+                                    .clicked()
+                                {
+                                    s.selected_mask = if picked { None } else { Some(i) };
+                                }
+                                if ui.button("Delete").clicked() {
+                                    remove = Some(i);
+                                }
+                            });
+                        }
+                        if let Some(i) = remove {
+                            s.selected_mask = mask_tool::selection_after_delete(
+                                s.selected_mask,
+                                i,
+                                s.edits.masks.len(),
+                            );
+                            s.edits.masks.remove(i);
+                            // ⚠ Clear any in-flight drag handle too: the canvas overlay
+                            // returns early when the selection is gone, which would
+                            // otherwise leave a stale handle set and panning dead.
+                            s.active_mask_handle = None;
+                            mask_list_changed = true;
+                        }
+
+                        if let Some(i) = s.selected_mask {
+                            if let Some(m) = s.edits.masks.get_mut(i) {
+                                ui.separator();
+                                let a = &mut m.adjustments;
+                                slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
+                                slider(ui, &mut a.white_balance.tint, -100.0..=100.0, "Tint");
+                                slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
+                                slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
+                                slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");
+                                slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows");
+                                slider(ui, &mut a.whites, -100.0..=100.0, "Whites");
+                                slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks");
+                                slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation");
+                                slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance");
+                            }
+                        }
+
+                        theme::hint(
+                            ui,
+                            "Select a mask to drag its handles on the image. The two \
+                             outer lines mark where the effect starts and reaches full \
+                             strength.",
+                        );
+                    });
+                    if mask_list_changed {
+                        changed = true;
+                        settled = true;
+                    }
 
                     ui.separator();
                     if ui.button("Reset all").clicked() {
