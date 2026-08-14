@@ -15,6 +15,13 @@ pub enum Handle {
 ///
 /// `aspect` is the frame's width divided by its height.
 ///
+/// ⚠ **`tol` is in units of frame height, not normalized units** — unlike
+/// [`crate::crop_tool::hit_test`], whose `tol` is normalized. The two are siblings with the
+/// same shape and different units, so a tolerance copied from one to the other is wrong by a
+/// factor of the aspect ratio on the horizontal axis. It has to be this way here: the whole
+/// point of the aspect correction below is that distances are isotropic, and a tolerance
+/// compared against them must share their metric.
+///
 /// ⚠ **Distances are measured in screen space, not normalized space** — the same requirement
 /// `LinearGradient::coverage` has, for the same reason. Without it the grab region is
 /// anisotropic: on a 3:1 frame you could grab the line from three times further away
@@ -172,5 +179,21 @@ mod tests {
         };
         assert!(apply_drag(g, Handle::Line, 0.1, 0.1).invert);
         assert!(apply_drag(g, Handle::From, 0.1, 0.1).invert);
+    }
+
+    #[test]
+    fn a_zero_length_gradient_grabs_nothing_away_from_its_point() {
+        // ⚠ Both endpoints equal: there is no axis to project onto, and `len2` is exactly
+        // zero. Correct by inspection — the endpoint checks catch anything near the shared
+        // point and the guard returns `None` rather than dividing — but "correct by
+        // inspection" is what a test is for. A NaN escaping here would reach the canvas as a
+        // handle that can never be grabbed again.
+        let g = LinearGradient {
+            from: [0.5, 0.5],
+            to: [0.5, 0.5],
+            invert: false,
+        };
+        assert_eq!(hit_test(&g, [0.1, 0.1], 1.0, 0.04), None);
+        assert_eq!(hit_test(&g, [0.5, 0.5], 1.0, 0.04), Some(Handle::From));
     }
 }
