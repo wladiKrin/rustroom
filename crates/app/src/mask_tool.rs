@@ -105,21 +105,29 @@ mod tests {
 
     #[test]
     fn hit_testing_the_line_is_aspect_correct() {
-        // ⚠ The same non-square trap `LinearGradient::coverage` needed, in its third guise.
-        // On a 3:1 frame a point 0.05 *normalised* below a horizontal axis is only 0.05 frame
-        // *heights* away — but a point 0.05 normalised to the side is 0.15 heights away.
-        // Distance to the axis must be measured in screen space or the grab region is
-        // anisotropic: generous vertically, mean horizontally.
+        // ⚠ The same non-square trap `LinearGradient::coverage` needed, in its third guise:
+        // distance to the axis must be measured in screen space, or the grab region is
+        // anisotropic — on a 3:1 frame you could grab the line from three times further away
+        // horizontally than vertically.
+        //
+        // ⚠⚠ The axis here is **vertical** and the probe points are offset **horizontally**,
+        // and that is the whole point. An earlier version used a horizontal axis with the
+        // point directly below it — where the perpendicular distance is purely vertical, so
+        // scaling x cannot change the answer. It passed with the correction removed, i.e. it
+        // could not detect the very bug it names. A test is only as good as the property it
+        // actually exercises.
         let g = LinearGradient {
-            from: [0.2, 0.5],
-            to: [0.8, 0.5],
+            from: [0.5, 0.2],
+            to: [0.5, 0.8],
             invert: false,
         };
         let aspect = 3.0;
-        // 0.06 normalised below the axis = 0.06 heights: outside a 0.04 tolerance.
-        assert_eq!(hit_test(&g, [0.5, 0.56], aspect, 0.04), None);
-        // 0.03 normalised below = 0.03 heights: inside it.
-        assert_eq!(hit_test(&g, [0.5, 0.53], aspect, 0.04), Some(Handle::Line));
+        // 0.03 normalised to the side of a vertical axis is 0.09 frame *heights* away on a
+        // 3:1 frame — outside a 0.04 tolerance. Without the correction it measures 0.03 and
+        // is wrongly grabbed.
+        assert_eq!(hit_test(&g, [0.53, 0.5], aspect, 0.04), None);
+        // 0.01 normalised = 0.03 heights: inside the tolerance either way.
+        assert_eq!(hit_test(&g, [0.51, 0.5], aspect, 0.04), Some(Handle::Line));
     }
 
     #[test]
