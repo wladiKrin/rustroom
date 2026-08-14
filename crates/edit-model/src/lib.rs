@@ -479,6 +479,37 @@ pub struct LinearGradient {
     pub invert: bool,
 }
 
+impl LinearGradient {
+    /// Coverage at `(u, v)` in normalised frame coordinates, in `0.0..=1.0`.
+    ///
+    /// `aspect` is the frame's width divided by its height.
+    ///
+    /// ⚠ **The aspect is not decoration.** Coverage is a projection onto the axis, and a
+    /// projection needs a metric. In raw normalised space the metric is anisotropic, so lines
+    /// perpendicular to the axis *in that space* are not perpendicular on screen — a diagonal
+    /// gradient's iso-lines would visibly skew. Scaling `u` by `aspect` restores an isotropic
+    /// metric before projecting. Same species of problem as the vignette's `roundness`.
+    pub fn coverage(&self, u: f32, v: f32, aspect: f32) -> f32 {
+        // Work in units of frame height, where both axes have the same pixel scale.
+        let (ax, ay) = (self.from[0] * aspect, self.from[1]);
+        let (bx, by) = (self.to[0] * aspect, self.to[1]);
+        let (dx, dy) = (bx - ax, by - ay);
+        let len2 = dx * dx + dy * dy;
+        if len2 <= f32::EPSILON {
+            // No axis to project onto. Full coverage rather than NaN: the alternative reaches
+            // the blend and paints the frame with garbage.
+            return 1.0;
+        }
+        let t = (((u * aspect) - ax) * dx + (v - ay) * dy) / len2;
+        let t = t.clamp(0.0, 1.0);
+        if self.invert {
+            1.0 - t
+        } else {
+            t
+        }
+    }
+}
+
 /// The mask primitives. 3.1b adds `Radial`, 3.1c adds `Brush`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mask {
@@ -488,6 +519,18 @@ pub enum Mask {
 impl Default for Mask {
     fn default() -> Self {
         Mask::Linear(LinearGradient::default())
+    }
+}
+
+impl Mask {
+    /// Coverage at `(u, v)` in normalised frame coordinates, in `0.0..=1.0`.
+    ///
+    /// `aspect` is the frame's width divided by its height — see
+    /// [`LinearGradient::coverage`] for why a projection needs it.
+    pub fn coverage(&self, u: f32, v: f32, aspect: f32) -> f32 {
+        match self {
+            Mask::Linear(g) => g.coverage(u, v, aspect),
+        }
     }
 }
 
@@ -1529,5 +1572,95 @@ mod tests {
         dst.merge_from(&src, EditGroups::only(6));
         assert_eq!(dst.masks, src.masks);
         assert_eq!(dst.exposure, 0.0, "only the masks group was selected");
+    }
+
+    #[test]
+    fn coverage_ramps_from_zero_at_from_to_one_at_to() {
+        let g = LinearGradient {
+            from: [0.0, 0.0],
+            to: [1.0, 0.0],
+            invert: false,
+        };
+        assert!((g.coverage(0.0, 0.0, 1.0) - 0.0).abs() < 1e-6);
+        assert!((g.coverage(1.0, 0.0, 1.0) - 1.0).abs() < 1e-6);
+        assert!((g.coverage(0.5, 0.0, 1.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn coverage_clamps_outside_the_axis() {
+        let g = LinearGradient {
+            from: [0.25, 0.0],
+            to: [0.75, 0.0],
+            invert: false,
+        };
+        assert_eq!(g.coverage(0.0, 0.0, 1.0), 0.0);
+        assert_eq!(g.coverage(1.0, 0.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn coverage_is_constant_perpendicular_to_the_axis() {
+        // A graduated filter's whole point: it varies along one direction only.
+        let g = LinearGradient {
+            from: [0.0, 0.0],
+            to: [1.0, 0.0],
+            invert: false,
+        };
+        let a = g.coverage(0.3, 0.0, 1.0);
+        for v in [0.1, 0.5, 0.9] {
+            assert!((g.coverage(0.3, v, 1.0) - a).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn invert_mirrors_the_ramp() {
+        let g = LinearGradient {
+            from: [0.0, 0.0],
+            to: [1.0, 0.0],
+            invert: true,
+        };
+        assert!((g.coverage(0.0, 0.0, 1.0) - 1.0).abs() < 1e-6);
+        assert!((g.coverage(1.0, 0.0, 1.0) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_diagonal_gradient_is_not_skewed_by_a_non_square_frame() {
+        // ⚠⚠ The subtle one, and the reason `coverage` takes an aspect at all.
+        //
+        // A *line* through two points survives anisotropic scaling — but lines *perpendicular*
+        // to it do not. Compute coverage in raw normalised space and a diagonal gradient's
+        // iso-lines skew on screen, which reads as a rendering glitch rather than a coordinate
+        // error. This is the vignette's `roundness` problem in a different hat.
+        //
+        // On a 2:1 frame, take two points equidistant from the axis *in pixel space* and
+        // assert they get the same coverage.
+        let aspect = 2.0f32;
+        let g = LinearGradient {
+            from: [0.0, 0.0],
+            to: [1.0, 1.0],
+            invert: false,
+        };
+        // In units of frame height the axis runs (0,0) -> (2,1); its perpendicular is
+        // (1,-2)/sqrt(5). Offsets are converted back to normalised by dividing x by `aspect`.
+        let (px, py) = (1.0f32 / 5.0f32.sqrt(), -2.0f32 / 5.0f32.sqrt());
+        let d = 0.1f32;
+        let c1 = g.coverage(0.5 + d * px / aspect, 0.5 + d * py, aspect);
+        let c2 = g.coverage(0.5 - d * px / aspect, 0.5 - d * py, aspect);
+        assert!(
+            (c1 - c2).abs() < 1e-5,
+            "perpendicular offsets gave {c1} and {c2} — the gradient is skewed"
+        );
+    }
+
+    #[test]
+    fn a_degenerate_gradient_covers_everything() {
+        // Both endpoints equal: no axis to project onto. Returns full coverage rather than
+        // dividing by zero — the safe direction, since the alternative is NaN reaching the
+        // blend and painting the frame with garbage.
+        let g = LinearGradient {
+            from: [0.5, 0.5],
+            to: [0.5, 0.5],
+            invert: false,
+        };
+        assert_eq!(g.coverage(0.1, 0.9, 1.5), 1.0);
     }
 }
