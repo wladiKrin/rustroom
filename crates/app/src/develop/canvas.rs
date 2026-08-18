@@ -477,12 +477,32 @@ fn draw_mask_overlay(
                             .is_none_or(|last| brush_tool::should_record(*last, src, radius));
                         if keep {
                             stroke.points.push(src);
-                            moved = true;
+                            // ⚠ Deliberately does NOT set `moved`, so no pipeline render is
+                            // requested mid-drag. See the note on `drag_stopped` below.
                         }
                     }
                 }
             }
             if resp.drag_stopped() {
+                // ⚠⚠ **The pipeline is re-run once here, not on every frame of the drag**, and
+                // that is a design decision rather than a throttle.
+                //
+                // At 1:1 on a full-resolution buffer the frame is 6246x4170, where rasterizing a
+                // stroke costs ~24 ms before the tail render and pack — measured, and reported as
+                // "very sluggish" in use. But the *feedback* a brush needs while drawing is where
+                // the mask is, and the tint already shows that live at screen resolution for well
+                // under a millisecond. Re-running the full pipeline per frame buys only the
+                // adjustment's pixel effect, which at those rates is not smooth anyway.
+                //
+                // So: live tint while dragging, real pixels on release. The alternative —
+                // retaining the in-progress stroke's coverage and splatting only new dabs — is
+                // the way to get both, and is the follow-up if release-time feedback proves too
+                // coarse.
+                s.request(
+                    preview_edits(&s.edits, s.geometry_mode),
+                    s.render_max_dim(),
+                    s.requested_region,
+                );
                 s.history.push(s.edits.clone());
                 return true;
             }
