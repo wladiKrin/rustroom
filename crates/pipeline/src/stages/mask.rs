@@ -75,7 +75,14 @@ impl PipelineStage for MaskStage {
             // Pixel position in the *frame's* normalised coordinates.
             let u = (x0 + x) as f32 / fw as f32;
             let v = (y0 + y) as f32 / fh as f32;
-            let c = self.masked.mask.coverage(u, v, aspect).clamp(0.0, 1.0);
+            // Task 7 replaces this with a `CoverageSource` resolved outside the loop; for now
+            // the two analytic shapes are the only ones that exist.
+            let c = self
+                .masked
+                .mask
+                .analytic_coverage(u, v, aspect)
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
             let adj = adjusted.pixel(x, y);
             [
                 base[0] + (adj[0] - base[0]) * c,

@@ -647,15 +647,19 @@ impl Default for Mask {
 }
 
 impl Mask {
-    /// Coverage at `(u, v)` in normalised frame coordinates, in `0.0..=1.0`.
+    /// Coverage at `(u, v)` in normalised frame coordinates, for the **analytic** shapes.
+    ///
+    /// `None` means the shape is sampled data — a brush — and must be rasterized instead. It is
+    /// an `Option` rather than a `0.0` fallback because a fallback compiles, runs, and silently
+    /// produces a mask that covers nothing; the `Option` forces every caller to decide.
     ///
     /// `aspect` is the frame's width divided by its height. ⚠ Whether a variant *needs* it
     /// differs: see [`LinearGradient::coverage`] for why a projection does, and
     /// [`RadialGradient::coverage`] for why an axis-aligned ellipse does not.
-    pub fn coverage(&self, u: f32, v: f32, aspect: f32) -> f32 {
+    pub fn analytic_coverage(&self, u: f32, v: f32, aspect: f32) -> Option<f32> {
         match self {
-            Mask::Linear(g) => g.coverage(u, v, aspect),
-            Mask::Radial(r) => r.coverage(u, v, aspect),
+            Mask::Linear(g) => Some(g.coverage(u, v, aspect)),
+            Mask::Radial(r) => Some(r.coverage(u, v, aspect)),
         }
     }
 
@@ -2054,5 +2058,19 @@ mod tests {
         let s: BrushStroke = serde_json::from_str(r#"{"points":[[0.5,0.5]]}"#).unwrap();
         assert_eq!(s.points, vec![[0.5, 0.5]]);
         assert!(!s.erase, "a stroke paints unless it says otherwise");
+    }
+
+    #[test]
+    fn the_analytic_masks_answer_coverage_directly() {
+        // Both existing shapes are pure functions of position, so they answer `Some`. The brush
+        // will not, which is what this method's `Option` exists to express.
+        let lin = Mask::Linear(LinearGradient {
+            from: [0.0, 0.0],
+            to: [1.0, 0.0],
+            invert: false,
+        });
+        assert_eq!(lin.analytic_coverage(0.5, 0.5, 1.0), Some(0.5));
+        let rad = Mask::Radial(RadialGradient::default());
+        assert_eq!(rad.analytic_coverage(0.5, 0.5, 1.0), Some(1.0));
     }
 }
