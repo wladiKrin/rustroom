@@ -517,6 +517,20 @@ fn draw_mask_overlay(
         // 6246x4170, where rasterizing a stroke costs ~24 ms before the tail render and pack. The
         // feedback a brush needs *while* drawing is where the mask is, and the tint shows that
         // live at screen resolution for well under a millisecond.
+        // ⚠ Env-gated instrumentation, kept because this project's own history says to reach for
+        // a print when the code reads correctly and the behaviour disagrees — the fit-view
+        // investigation went four rounds on reasoning before one `eprintln` reframed it.
+        if std::env::var("RUSTROOM_DEBUG_BRUSH").is_ok() {
+            if let Some(edit_model::Mask::Brush(b)) = s.edits.masks.get(i).map(|m| &m.mask) {
+                eprintln!(
+                    "brush: drag_stopped, {} strokes, last has {} points, max_dim {}, region {:?}",
+                    b.strokes.len(),
+                    b.strokes.last().map_or(0, |st| st.points.len()),
+                    s.render_max_dim(),
+                    s.requested_region.is_some(),
+                );
+            }
+        }
         s.request(
             preview_edits(&s.edits, s.geometry_mode),
             s.render_max_dim(),
@@ -554,7 +568,14 @@ fn draw_mask_overlay(
     false
 }
 
-/// A memoised screen-resolution tint, held as an uploaded **texture**.
+/// The largest edge the tint's coverage is rasterized at, whatever the zoom.
+///
+/// ⚠ The tint is an indicator over the photograph, not the photograph, so it does not need the
+/// frame's real resolution — and at 1:1 the frame is the full decode. Capping makes the cost
+/// constant in zoom.
+const TINT_MAX_DIM: usize = 1400;
+
+/// A memoised tint, rasterized at a capped resolution and held as an uploaded **texture**.
 ///
 /// ⚠⚠ **A mesh is the wrong representation and it crashed the app.** The first version emitted
 /// one quad per run of equal coverage along a row. That collapses a stroke's flat interior, but
@@ -605,13 +626,32 @@ fn paint_tint(
     if w == 0 || h == 0 {
         return;
     }
+    // ⚠⚠ **`frame_rect` is the WHOLE FRAME's on-screen rect, not the viewport.** At 1:1 on a
+    // full-resolution buffer that is ~6246x4170 — so rasterizing "at screen resolution" was
+    // rasterizing at *full* resolution, ~24 ms plus a 26 MB texture upload, every time the memo
+    // missed. Reported in use as: responsive with the mask hidden, sluggish with it shown.
+    //
+    // The tint is a translucent indicator, not the photograph. Capping it and letting the GPU
+    // stretch the texture makes its cost constant in zoom, and a slightly soft tint edge is
+    // invisible against a 50% overlay. The spec's claim of "~1400x900, sub-millisecond" was
+    // simply wrong about which rectangle it meant.
+    let long = w.max(h);
+    let scale = if long > TINT_MAX_DIM {
+        TINT_MAX_DIM as f32 / long as f32
+    } else {
+        1.0
+    };
+    let (tw, th) = (
+        ((w as f32 * scale) as usize).max(1),
+        ((h as f32 * scale) as usize).max(1),
+    );
     TINT.with(|slot| {
         let mut slot = slot.borrow_mut();
         let hit = slot
             .as_ref()
             .is_some_and(|c| c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b);
         if !hit {
-            let cov = pipeline::brush::rasterize(b, geometry, w, h);
+            let cov = pipeline::brush::rasterize(b, geometry, tw, th);
             let outside = cov.outside;
             let drawn = if cov.w == 0 || cov.h == 0 {
                 None
@@ -633,9 +673,11 @@ fn paint_tint(
                     painter
                         .ctx()
                         .load_texture("mask_tint", img, egui::TextureOptions::LINEAR);
+                // Back out of the capped resolution into frame coordinates.
+                let inv = 1.0 / scale;
                 let rect = egui::Rect::from_min_size(
-                    frame_rect.min + egui::vec2(cov.x0 as f32, cov.y0 as f32),
-                    egui::vec2(cov.w as f32, cov.h as f32),
+                    frame_rect.min + egui::vec2(cov.x0 as f32 * inv, cov.y0 as f32 * inv),
+                    egui::vec2(cov.w as f32 * inv, cov.h as f32 * inv),
                 );
                 Some((tex, rect))
             };
