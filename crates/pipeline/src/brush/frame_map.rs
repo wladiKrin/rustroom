@@ -81,6 +81,47 @@ impl FrameMap {
             (rv - self.crop.top) / ch * self.fh,
         )
     }
+
+    /// The inverse of [`FrameMap::point`]: frame pixels back to pre-geometry source normalised
+    /// coordinates.
+    ///
+    /// ⚠ Painting needs this direction. `point` exists because splatting a dab goes source →
+    /// frame; a pointer gives a frame position and the stroke must be **recorded** in source
+    /// coordinates, which is the whole basis of the anchoring guarantee.
+    ///
+    /// ⚠ An error here lands strokes *near* the pointer rather than obviously wrong, so it is
+    /// guarded twice: a round trip against `point`, and agreement with `GeometryStage`. The round
+    /// trip alone would not do — a forward and inverse wrong in mirrored ways round-trip
+    /// perfectly.
+    pub fn inverse_point(&self, x: f32, y: f32) -> [f32; 2] {
+        // 4'. Frame pixels to normalised, then un-crop.
+        let cw = (self.crop.right - self.crop.left).max(CROP_EPS);
+        let ch = (self.crop.bottom - self.crop.top).max(CROP_EPS);
+        let ru = self.crop.left + (x / self.fw.max(CROP_EPS)) * cw;
+        let rv = self.crop.top + (y / self.fh.max(CROP_EPS)) * ch;
+
+        // 3'. Un-rotate, in units of the oriented image's height so the space is isotropic — the
+        //     same requirement `point` has. `point` applies R(θ), so this is R(-θ).
+        let (cx, cy) = (self.aspect_o * 0.5, 0.5);
+        let (dx, dy) = (ru * self.aspect_o - cx, rv - cy);
+        let ox = cx + dx * self.cos + dy * self.sin;
+        let oy = cy - dx * self.sin + dy * self.cos;
+        let (ou, ov) = (ox / self.aspect_o.max(CROP_EPS), oy);
+
+        // 2'. Un-permute the orientation: the inverse of `point`'s table.
+        let (mut u, v) = match self.orientation.rotate {
+            Quarter::Zero => (ou, ov),
+            Quarter::Cw90 => (ov, 1.0 - ou),
+            Quarter::Cw180 => (1.0 - ou, 1.0 - ov),
+            Quarter::Cw270 => (1.0 - ov, ou),
+        };
+
+        // 1'. Un-mirror.
+        if self.orientation.mirror {
+            u = 1.0 - u;
+        }
+        [u, v]
+    }
 }
 
 #[cfg(test)]
@@ -291,5 +332,78 @@ mod tests {
             "{}",
             half.radius_scale
         );
+    }
+
+    /// A geometry with real leverage in every component.
+    ///
+    /// ⚠ 12° and off-centre probes are not arbitrary. 3.1c-A's sabotage proved a rotation sign
+    /// error displaces a point *in proportion to its distance from the centre*: a 7° probe at
+    /// 0.34 of the half-width moved only 1.34 px and passed against broken code.
+    fn leveraged() -> Geometry {
+        geo(
+            Orientation {
+                rotate: Quarter::Cw90,
+                mirror: true,
+            },
+            12.0,
+            CropRect {
+                left: 0.1,
+                top: 0.15,
+                right: 0.85,
+                bottom: 0.9,
+            },
+        )
+    }
+
+    #[test]
+    fn inverse_point_round_trips_the_forward_map() {
+        let g = leveraged();
+        let map = FrameMap::new(&g, 120, 90);
+        for p in [
+            [0.15, 0.2],
+            [0.85, 0.25],
+            [0.2, 0.8],
+            [0.9, 0.85],
+            [0.5, 0.5],
+        ] {
+            let (x, y) = map.point(p);
+            let back = map.inverse_point(x, y);
+            assert!(
+                (back[0] - p[0]).abs() < 1e-4 && (back[1] - p[1]).abs() < 1e-4,
+                "{p:?} -> ({x:.2}, {y:.2}) -> {back:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inverse_point_agrees_with_geometry_stage() {
+        // ⚠⚠ A round trip alone is NOT sufficient, and this test exists for exactly that reason:
+        // a forward and an inverse wrong in mirrored ways round-trip perfectly. This anchors the
+        // pair to the real transform.
+        let g = leveraged();
+        let (w, h) = (120usize, 90usize);
+        let (sx, sy) = (34usize, 61usize);
+        let (fw, fh, gx, gy) = run(&g, w, h, sx, sy);
+        let map = FrameMap::new(&g, fw, fh);
+        let back = map.inverse_point(gx, gy);
+        let want = [(sx as f32 + 0.5) / w as f32, (sy as f32 + 0.5) / h as f32];
+        // Loose because the brightest-pixel search quantises to whole frame pixels.
+        assert!(
+            (back[0] - want[0]).abs() < 0.02 && (back[1] - want[1]).abs() < 0.02,
+            "inverse says {back:?}, source was {want:?}"
+        );
+    }
+
+    #[test]
+    fn the_radius_scale_is_screen_relative_when_built_at_screen_size() {
+        // ⚠ The property the canvas relies on to turn a screen-point brush size into a source
+        // radius with a single division.
+        let map = FrameMap::new(&Geometry::default(), 700, 350);
+        assert!(
+            (map.radius_scale - 700.0).abs() < 1e-3,
+            "{}",
+            map.radius_scale
+        );
+        assert!((35.0 / map.radius_scale - 0.05).abs() < 1e-6);
     }
 }
