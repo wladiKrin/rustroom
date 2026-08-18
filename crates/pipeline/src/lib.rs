@@ -4,6 +4,7 @@
 use core_image::ImageBuf;
 use edit_model::Edits;
 
+pub mod brush;
 pub mod spatial;
 mod stages;
 
