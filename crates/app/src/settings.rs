@@ -76,6 +76,46 @@ impl Accent {
     }
 }
 
+/// How a *drag* pans the canvas.
+///
+/// ⚠ Scroll and two-finger swipe always pan and are deliberately **not** configurable — they are
+/// the universal route that works on every device, and making them optional would let a user
+/// lock themselves out of panning entirely. Only the extra *drag* gesture is a setting.
+///
+/// ⚠ A closed three-value enum, not a keybinding system. The risk in this area is ballooning
+/// into general rebinding; three values already cover every device. A mouse button is not a
+/// modifier, which is why the set spans both kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PanDrag {
+    /// Middle-button drag. ⚠ Unavailable on an Apple Magic Mouse, which has no middle button —
+    /// those users pan by swiping, which always works.
+    #[default]
+    Middle,
+    /// Right-button drag. Free: nothing on the canvas uses secondary click or a context menu.
+    Secondary,
+    /// Hold Space and left-drag. The only option needing no extra hardware, and the
+    /// Photoshop/Figma convention.
+    SpaceLeft,
+}
+
+impl PanDrag {
+    /// Every variant, for the settings dropdown and for table-driven tests.
+    pub const ALL: [PanDrag; 3] = [PanDrag::Middle, PanDrag::Secondary, PanDrag::SpaceLeft];
+
+    /// How to describe this binding in the UI.
+    ///
+    /// ⚠ The toolbar hint must name the *configured* binding rather than saying "middle-drag"
+    /// literally, or it becomes a lie the moment the setting changes. Same shape as
+    /// `Mask::label()`.
+    pub fn label(self) -> &'static str {
+        match self {
+            PanDrag::Middle => "middle-drag",
+            PanDrag::Secondary => "right-drag",
+            PanDrag::SpaceLeft => "Space+drag",
+        }
+    }
+}
+
 /// User preferences that survive a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -108,6 +148,8 @@ pub struct Settings {
     pub theme: ThemeChoice,
     /// The accent colour for active state.
     pub accent: Accent,
+    /// Which drag gesture pans the canvas. Scroll and two-finger swipe always pan.
+    pub pan_drag: PanDrag,
 }
 
 impl Default for Settings {
@@ -119,6 +161,7 @@ impl Default for Settings {
             view_demosaic: Demosaic::default(),
             theme: ThemeChoice::default(),
             accent: Accent::default(),
+            pan_drag: PanDrag::default(),
         }
     }
 }
@@ -338,6 +381,9 @@ mod tests {
             view_demosaic: Demosaic::Better,
             theme: ThemeChoice::System,
             accent: Accent::Teal,
+            // A non-default value on purpose: it proves the field is actually persisted
+            // rather than being re-defaulted on load.
+            pan_drag: PanDrag::Secondary,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -530,5 +576,53 @@ mod tests {
         for t in ThemeChoice::ALL {
             assert!(!t.label().is_empty());
         }
+    }
+
+    #[test]
+    fn every_pan_drag_has_a_label() {
+        // A table over every variant so a fourth cannot ship showing nothing in the toolbar
+        // hint. The same shape `every_demosaic_tier_has_a_cost_hint` and `Mask::label` use.
+        for b in PanDrag::ALL {
+            assert!(!b.label().is_empty(), "{b:?} has no label");
+        }
+    }
+
+    #[test]
+    fn the_pan_drag_labels_are_distinct() {
+        // Two variants sharing a label would make the hint ambiguous about which is active.
+        for (i, a) in PanDrag::ALL.iter().enumerate() {
+            for b in &PanDrag::ALL[i + 1..] {
+                assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_pan_drag_is_the_middle_button() {
+        assert_eq!(PanDrag::default(), PanDrag::Middle);
+        assert_eq!(Settings::default().pan_drag, PanDrag::Middle);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_pan_drag_still_loads() {
+        // ⚠ `SettingsStore::load()` is infallible, so a field that fails to parse silently
+        // reverts EVERY setting rather than erroring. That is why this test exists and is not
+        // a nicety — the same trap the view-demosaic work documented.
+        //
+        // ⚠ `confirm_preset_delete` is written as `false` deliberately: it *defaults* to true,
+        // so a whole-file parse failure is visible as it flipping back. Asserting a field whose
+        // written value equalled its default would prove nothing.
+        let f = TempFile::new("pan_drag_compat");
+        std::fs::write(
+            &f.0,
+            r#"{"confirm_preset_delete":false,"confirm_export_preset_delete":false}"#,
+        )
+        .unwrap();
+        let s = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(s.pan_drag, PanDrag::Middle, "the new field must default");
+        assert!(
+            !s.confirm_preset_delete,
+            "an old field must survive — if this flipped to true, the whole file failed to parse"
+        );
     }
 }
