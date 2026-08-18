@@ -596,6 +596,43 @@ impl RadialGradient {
     }
 }
 
+/// One continuous drag of the brush.
+///
+/// ⚠ **Points are in pre-geometry SOURCE normalised coordinates**, unlike [`LinearGradient`] and
+/// [`RadialGradient`], which are in *frame* coordinates. `MaskStage` runs after `GeometryStage`,
+/// so a frame-anchored stroke would slide across the image content whenever the crop changed —
+/// invisible for a gradient, ruinous for a stroke painted onto a subject. The asymmetry is
+/// principled: a gradient is compositional, a stroke is content-referred.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BrushStroke {
+    pub points: Vec<[f32; 2]>,
+    /// Radius as a fraction of the source image's **long edge**.
+    ///
+    /// ⚠ The long edge, not the width — `points` are normalised per axis and so live in an
+    /// anisotropic space. A radius measured against width but compared against height would make
+    /// every dab an ellipse. Choosing an isotropic unit avoids the correction that
+    /// [`LinearGradient::coverage`] and `mask_tool::hit_test` both need.
+    pub radius: f32,
+    /// 0 = maximally soft, 100 = a hard edge.
+    ///
+    /// ⚠ Arithmetically this is `100 − feather` in [`RadialGradient`]'s maths. It keeps the brush
+    /// word because that is what every brush calls it. **Do not "unify" the two** — the inversion
+    /// would be silent, since both spellings look plausible.
+    pub hardness: f32,
+    /// Subtract from coverage rather than adding to it.
+    pub erase: bool,
+}
+
+/// A painted mask: an ordered list of strokes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Brush {
+    pub strokes: Vec<BrushStroke>,
+    /// Flip coverage, as both analytic shapes do.
+    pub invert: bool,
+}
+
 /// The mask primitives. 3.1c adds `Brush`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mask {
@@ -1980,5 +2017,42 @@ mod tests {
             *m.invert_mut() = true;
             assert!(*m.invert_mut(), "invert_mut must expose the real field");
         }
+    }
+
+    #[test]
+    fn a_brush_defaults_to_no_strokes() {
+        // An empty brush must be inert rather than covering everything: a mask added but not yet
+        // painted has to do nothing at all.
+        assert!(Brush::default().strokes.is_empty());
+    }
+
+    #[test]
+    fn a_brush_round_trips_through_json() {
+        let src = Brush {
+            invert: false,
+            strokes: vec![
+                BrushStroke {
+                    points: vec![[0.1, 0.2], [0.3, 0.4]],
+                    radius: 0.05,
+                    hardness: 60.0,
+                    erase: false,
+                },
+                BrushStroke {
+                    points: vec![[0.5, 0.5]],
+                    radius: 0.02,
+                    hardness: 100.0,
+                    erase: true,
+                },
+            ],
+        };
+        let back: Brush = serde_json::from_str(&serde_json::to_string(&src).unwrap()).unwrap();
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn a_partial_stroke_json_gets_defaults() {
+        let s: BrushStroke = serde_json::from_str(r#"{"points":[[0.5,0.5]]}"#).unwrap();
+        assert_eq!(s.points, vec![[0.5, 0.5]]);
+        assert!(!s.erase, "a stroke paints unless it says otherwise");
     }
 }
