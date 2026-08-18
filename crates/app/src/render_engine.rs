@@ -3,10 +3,7 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::{
-    build_pipeline, build_pipeline_split_in_region, build_prefix_steps, PrefixKey, Region,
-    RenderScale,
-};
+use pipeline::{build_pipeline, build_prefix_steps, PrefixKey, Region, RenderScale};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -740,7 +737,6 @@ mod tests {
     #[test]
     fn the_mid_budget_evicts_the_least_recently_used() {
         // Each dummy is 4*4*3*4 = 192 bytes; a budget of 400 holds two.
-        let mut bc = BrushCache::default();
         let mut cache = PrefixCache::with_mid_budget(400);
         cache.insert(fake_key(0), dummy(4, 0.1), Tier::Mid);
         cache.insert(fake_key(1), dummy(4, 0.2), Tier::Mid);
@@ -764,7 +760,6 @@ mod tests {
     fn the_finals_tier_is_untouched_by_mid_pressure() {
         // The two tiers cannot evict each other: that is what preserves the zoom guarantee.
         // With a zero budget no mid survives, and both finals must still be there.
-        let mut bc = BrushCache::default();
         let mut cache = PrefixCache::with_mid_budget(0);
         cache.insert(fake_key(10), dummy(4, 0.4), Tier::Final);
         cache.insert(fake_key(11), dummy(4, 0.5), Tier::Final);
@@ -780,7 +775,6 @@ mod tests {
     #[test]
     fn the_finals_tier_holds_one_per_render_mode() {
         let mut cache = PrefixCache::default();
-        let mut bc = BrushCache::default();
         for tag in 0..4 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Final);
         }
@@ -797,7 +791,6 @@ mod tests {
         // which means a bigger budget retains more garbage. A render's useful chain is at most
         // 3 mids, so 6 keeps the current chain plus one previous state.
         let mut cache = PrefixCache::default();
-        let mut bc = BrushCache::default();
         for tag in 0..20 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
         }
@@ -813,7 +806,6 @@ mod tests {
     fn the_budget_still_evicts_before_the_cap() {
         // Bytes bind first when the entries are large — which is the full-resolution case,
         // where one checkpoint is 313 MB and the cap is nowhere near reached.
-        let mut bc = BrushCache::default();
         let mut cache = PrefixCache::with_mid_budget(400); // holds two 192-byte dummies
         for tag in 0..5 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
