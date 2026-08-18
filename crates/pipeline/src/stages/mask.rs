@@ -122,7 +122,7 @@ impl PipelineStage for MaskStage {
         // coverage 0 is bit-exactly the identity, so the output is already right without this.
         // What it saves is a full-image clone plus a full run of every sub-stage, which for an
         // unpainted brush is the entire cost of the stage.
-        if coverage.as_ref().is_some_and(|c| c.is_empty()) {
+        if coverage.as_ref().is_some_and(|c| c.is_inert()) {
             return image;
         }
 

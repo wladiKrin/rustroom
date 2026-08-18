@@ -555,8 +555,15 @@ struct TintCache {
     geometry: edit_model::Geometry,
     w: usize,
     h: usize,
-    /// `None` when the brush paints nothing at all.
+    /// `None` when the brush paints nothing inside its box.
     drawn: Option<(egui::TextureHandle, egui::Rect)>,
+    /// Coverage outside the box — non-zero for an **inverted** brush, which covers the whole
+    /// frame except what was painted.
+    ///
+    /// ⚠ Without this the tint showed the inversion only inside a rectangle around the strokes,
+    /// which grew as more was painted. Found in use, and the same omission the coverage map
+    /// itself had.
+    outside: u8,
 }
 
 thread_local! {
@@ -587,7 +594,8 @@ fn paint_tint(
             .is_some_and(|c| c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b);
         if !hit {
             let cov = pipeline::brush::rasterize(b, geometry, w, h);
-            let drawn = if cov.is_empty() {
+            let outside = cov.outside;
+            let drawn = if cov.w == 0 || cov.h == 0 {
                 None
             } else {
                 // ⚠ Red because it is conventional and because none of the four accents is red,
@@ -619,9 +627,19 @@ fn paint_tint(
                 w,
                 h,
                 drawn,
+                outside,
             });
         }
-        if let Some((tex, rect)) = slot.as_ref().and_then(|c| c.drawn.as_ref()) {
+        let Some(cache) = slot.as_ref() else { return };
+        // The inverted region first, so the painted box draws over it.
+        if cache.outside > 0 {
+            painter.rect_filled(
+                frame_rect,
+                egui::CornerRadius::ZERO,
+                egui::Color32::from_rgba_unmultiplied(255, 40, 40, cache.outside / 2),
+            );
+        }
+        if let Some((tex, rect)) = cache.drawn.as_ref() {
             painter.image(
                 tex.id(),
                 *rect,

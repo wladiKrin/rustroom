@@ -17,20 +17,31 @@ pub struct CoverageMap {
     pub h: usize,
     /// `w * h` samples.
     pub data: Vec<u8>,
+    /// Coverage **everywhere outside the box**.
+    ///
+    /// ⚠⚠ Load-bearing, and its absence was a real bug found in use. An **inverted** brush covers
+    /// the whole frame *except* what was painted — but the box only spans what was painted, so
+    /// returning 0 outside it confined the inversion to a rectangle around the strokes, which
+    /// grew as more was painted. Storing the outside value keeps the box's memory win (a
+    /// full-frame map is 26 MB at full resolution) while making the map total.
+    pub outside: u8,
 }
 
 impl CoverageMap {
     /// Coverage at a **frame** pixel. Everything outside the box reads 0.
     pub fn at(&self, x: usize, y: usize) -> u8 {
         if x < self.x0 || y < self.y0 || x >= self.x0 + self.w || y >= self.y0 + self.h {
-            return 0;
+            return self.outside;
         }
         self.data[(y - self.y0) * self.w + (x - self.x0)]
     }
 
-    /// Whether this map covers nothing at all.
-    pub fn is_empty(&self) -> bool {
-        self.w == 0 || self.h == 0
+    /// Whether this map covers nothing at all — no box *and* nothing outside it.
+    ///
+    /// ⚠ Not merely "the box is empty": an inverted brush with no strokes has no box and covers
+    /// **everything**, so a box-only test would call it inert and skip a stage that must run.
+    pub fn is_inert(&self) -> bool {
+        (self.w == 0 || self.h == 0) && self.outside == 0
     }
 }
 
@@ -76,8 +87,13 @@ pub fn rasterize(
     frame_w: usize,
     frame_h: usize,
 ) -> CoverageMap {
+    // ⚠ An inverted brush with no strokes covers everything, not nothing.
+    let outside = if brush.invert { 255 } else { 0 };
     if brush.strokes.is_empty() || frame_w == 0 || frame_h == 0 {
-        return CoverageMap::default();
+        return CoverageMap {
+            outside,
+            ..Default::default()
+        };
     }
     let map = FrameMap::new(geometry, frame_w, frame_h);
 
@@ -120,7 +136,10 @@ pub fn rasterize(
         });
     }
     if strokes.iter().all(|s| s.dabs.is_empty()) {
-        return CoverageMap::default();
+        return CoverageMap {
+            outside,
+            ..Default::default()
+        };
     }
 
     // Bounding box, clipped to the frame.
@@ -136,7 +155,10 @@ pub fn rasterize(
     let x1 = ((hx.ceil().clamp(0.0, frame_w as f32) as usize) + 1).min(frame_w);
     let y1 = ((hy.ceil().clamp(0.0, frame_h as f32) as usize) + 1).min(frame_h);
     if x1 <= x0 || y1 <= y0 {
-        return CoverageMap::default();
+        return CoverageMap {
+            outside,
+            ..Default::default()
+        };
     }
     let (w, h) = (x1 - x0, y1 - y0);
 
@@ -215,7 +237,14 @@ pub fn rasterize(
         })
         .collect();
 
-    CoverageMap { x0, y0, w, h, data }
+    CoverageMap {
+        x0,
+        y0,
+        w,
+        h,
+        data,
+        outside,
+    }
 }
 
 /// A dab's alpha at distance `d` from its centre.
@@ -268,7 +297,7 @@ mod tests {
     fn an_empty_brush_covers_nothing() {
         // A mask added but not yet painted must be inert.
         let m = rasterize(&brush(vec![]), &Geometry::default(), 80, 40);
-        assert!(m.is_empty());
+        assert!(m.is_inert());
         assert_eq!(m.at(10, 10), 0);
     }
 
@@ -604,5 +633,74 @@ mod tests {
             assert!(v > 0, "sample at {x} should be painted");
         }
         assert_eq!(m.at(40, 20), 255, "the centre is still full at flow 100");
+    }
+
+    #[test]
+    fn an_inverted_brush_covers_the_whole_frame_outside_its_strokes() {
+        // ⚠⚠ Found in real use, and the report diagnosed it exactly: after painting, inverting
+        // showed the mask only inside "a cropped window" that *grew as more was painted*. That
+        // window was the bounding box. `at()` returned 0 outside it, so the inversion stopped at
+        // the edge of what had been painted.
+        //
+        // The far corners of the frame are nowhere near the stroke and must be fully covered.
+        let m = rasterize(
+            &Brush {
+                strokes: vec![dot(0.5, 0.5, 0.05, 100.0, false)],
+                invert: true,
+            },
+            &Geometry::default(),
+            80,
+            40,
+        );
+        assert_eq!(m.at(0, 0), 255, "the top-left corner must be covered");
+        assert_eq!(m.at(79, 39), 255, "the bottom-right corner must be covered");
+        assert_eq!(m.at(40, 20), 0, "the painted centre must be clear");
+    }
+
+    #[test]
+    fn an_inverted_brush_with_no_strokes_covers_everything() {
+        // ⚠ "Everything except nothing" is everything. A box-only emptiness test would call this
+        // inert and skip the stage entirely.
+        let m = rasterize(
+            &Brush {
+                strokes: vec![],
+                invert: true,
+            },
+            &Geometry::default(),
+            80,
+            40,
+        );
+        assert!(!m.is_inert(), "an inverted empty brush is not inert");
+        assert_eq!(m.at(40, 20), 255);
+        assert_eq!(m.at(0, 0), 255);
+    }
+
+    #[test]
+    fn a_plain_brush_with_no_strokes_is_inert() {
+        let m = rasterize(&brush(vec![]), &Geometry::default(), 80, 40);
+        assert!(m.is_inert());
+        assert_eq!(m.at(40, 20), 0);
+    }
+
+    #[test]
+    fn the_bbox_does_not_grow_just_because_a_brush_is_inverted() {
+        // ⚠ The whole point of storing an outside value rather than falling back to a full-frame
+        // map: a full-frame coverage map is 26 MB at full resolution, and an inverted mask would
+        // otherwise force one.
+        let m = rasterize(
+            &Brush {
+                strokes: vec![dot(0.5, 0.5, 0.05, 100.0, false)],
+                invert: true,
+            },
+            &Geometry::default(),
+            80,
+            40,
+        );
+        assert!(
+            m.w < 20 && m.h < 20,
+            "box {}x{} should stay small",
+            m.w,
+            m.h
+        );
     }
 }
