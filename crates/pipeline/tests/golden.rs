@@ -708,3 +708,64 @@ fn golden_mask_linear_inverted_saturation() {
         },
     );
 }
+
+#[test]
+fn golden_mask_radial_exposure() {
+    // An elliptical exposure lift in the middle of the 64x16 chart: full strength at the
+    // centre, falling to nothing at the boundary. The radii are fractions of their own axis,
+    // so on this 4:1 chart the ellipse is 45 px wide and 14 px tall — wide enough to sample
+    // the ramp across the bands' 0..1 gradient.
+    //
+    // ⚠ **+0.55 EV, not +1.0, and the reason is discriminating power.** At +1.0 EV six of
+    // twenty samples across the green band pinned at 255, so the reference could not tell the
+    // ellipse's peak coverage from any larger value — the same weakness 3.1a recorded for its
+    // linear exposure golden, whose right quarter clips. At +0.55 nothing clips, so every
+    // sample inside the ellipse encodes the smoothstep profile and a change to the feather or
+    // the radii moves it. Verified by measurement, not by eye.
+    check_golden(
+        "mask_radial_exposure",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Radial(edit_model::RadialGradient {
+                    center: [0.5, 0.5],
+                    radius: [0.35, 0.45],
+                    feather: 50.0,
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.55,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
+
+#[test]
+fn golden_mask_radial_inverted_saturation() {
+    // The subject vignette: everything *except* the ellipse is desaturated and darkened. This
+    // is the case that `invert` exists for, and the one that had no UI until M3.1b.
+    //
+    // Off-centre and with a tighter feather, so the reference covers a different part of the
+    // parameter space from the case above.
+    check_golden(
+        "mask_radial_inverted_saturation",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Radial(edit_model::RadialGradient {
+                    center: [0.3, 0.5],
+                    radius: [0.25, 0.6],
+                    feather: 25.0,
+                    invert: true,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    saturation: -100.0,
+                    exposure: -0.5,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
