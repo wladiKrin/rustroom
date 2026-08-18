@@ -1,6 +1,6 @@
 # Canvas navigation — pan moves off left-drag
 
-**Status:** spec, 2026-08-18.
+**Status:** implemented, 2026-08-18. See "Outcome" at the end.
 
 ## Scope
 
@@ -206,3 +206,50 @@ review.
 4. **Three bindings, not general rebinding.** A fourth device convention would need a code change.
 5. **The hint is Develop-only.** The Library grid has no pan.
 6. **ctrl+scroll rather than cmd+scroll on macOS**, inherited from egui.
+
+## Outcome
+
+**Implemented 2026-08-18.** 602 tests, up from 582. No golden moved and nothing outside
+`crates/app` was touched.
+
+### Two things the spec got wrong, both found by reading egui's source while planning
+
+1. **⚠ Any button starts a widget drag.** `interaction.rs` matches `PointerEvent::Pressed { .. }`
+   and **ignores the button** when setting `potential_drag_id`, so `resp.dragged()` is true for a
+   middle- or right-drag too. The spec's gesture map quietly assumed otherwise. **Consequence:
+   without gating, the new pan button would also drag crop rectangles and mask handles.** That
+   became its own task, landing *before* the pan change so a tool regression could not hide
+   inside the remap — and it is confirmed empirically, not just by reading: with the gate
+   removed, a middle-drag and a right-drag both drive the tools.
+2. **⚠ The pan-at-fit reset was narrower than the spec claimed.** It sat *inside* the scroll
+   branch, so a left-drag at fit genuinely could push a fitting image off-centre into grey with
+   nothing putting it back until the next scroll. It is unconditional now — a small deliberate
+   behaviour fix rather than a port.
+
+### Two bugs the tests caught before they shipped
+
+Both would have reached the user; neither was visible in review.
+
+- **⚠⚠ A re-entrant lock that panics.** `pan_delta` first took `&egui::InputState`, but
+  `Response::dragged_by` calls `self.ctx.input(..)` internally — holding the lock across it
+  panics in epaint's mutex. **It hides in casual testing** because `dragged_by` is
+  `dragged() && ctx.input(..)`, and `dragged()` reads a plain flag, so the `&&` short-circuits
+  and never takes the second lock *unless something is actually being dragged*. It would have
+  crashed on the first real middle-drag. `pan_delta` takes plain values now, which is a better
+  signature anyway.
+- **⚠⚠ A harness bug that made the most important test vacuous.** `drag_delta()` is per-frame,
+  and the first harness moved the pointer once on pass 2 while reading on pass 3 — so it read
+  `[0,0]`, and **`a_left_drag_does_not_pan` would have passed with the gating deleted
+  entirely.** Found by instrumenting rather than by re-reading: one `eprintln` showed
+  `dragged=true, down_mid=true, delta=[0,0]` and the cause was immediate. The pointer now keeps
+  moving on every pass, and the sabotage step confirms the test fails when a stray pan is
+  reintroduced. **This is the eighth recorded instance in this project of a test that could not
+  detect its own subject, and the first caused by the *harness* rather than the assertion.**
+
+### Settled rather than guessed
+
+**The scroll sign is right by egui's own convention**, not by trial: `Event::MouseWheel`'s doc
+says the delta "indicates how to move the *content* being viewed … positive values, the content
+should move to the right and down". Panning is exactly moving the content, so `pan += delta`
+follows. Recorded because the obvious alternative — flipping signs until it feels right — leaves
+nothing behind for the next person.
