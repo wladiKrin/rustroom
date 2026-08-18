@@ -1,6 +1,6 @@
 //! Pure linear-gradient interaction math on `edit_model::LinearGradient` (normalized [0,1]).
 
-use edit_model::LinearGradient;
+use edit_model::{LinearGradient, Mask};
 
 /// What a drag is moving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,9 +27,21 @@ pub enum Handle {
 /// anisotropic: on a 3:1 frame you could grab the line from three times further away
 /// horizontally than vertically. Working in units of frame height makes it round.
 ///
+/// ⚠ Note this is the *opposite* of `RadialGradient::coverage`, which takes an aspect and
+/// ignores it. Coverage of an axis-aligned ellipse survives the anisotropy; a distance does
+/// not. Both facts are load-bearing and each is guarded by its own test.
+///
+/// Takes a `Mask` rather than a shape so the canvas's drag plumbing stays shape-agnostic and is
+/// written once.
+pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> {
+    match m {
+        Mask::Linear(g) => hit_test_linear(g, p, aspect, tol),
+    }
+}
+
 /// Endpoints are tested before the line, so aiming at an end moves that end rather than the
 /// whole gradient.
-pub fn hit_test(g: &LinearGradient, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> {
+fn hit_test_linear(g: &LinearGradient, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> {
     // Everything below is in units of frame height.
     let pt = (p[0] * aspect, p[1]);
     let a = (g.from[0] * aspect, g.from[1]);
@@ -61,18 +73,20 @@ pub fn hit_test(g: &LinearGradient, p: [f32; 2], aspect: f32, tol: f32) -> Optio
 /// Apply a normalized drag `(dx, dy)` to `handle`, clamped to the frame.
 ///
 /// ⚠ Clamping matters: an endpoint dragged off the canvas would be unreachable afterwards.
-pub fn apply_drag(g: LinearGradient, handle: Handle, dx: f32, dy: f32) -> LinearGradient {
+pub fn apply_drag(m: Mask, handle: Handle, dx: f32, dy: f32) -> Mask {
     let mv = |p: [f32; 2]| [(p[0] + dx).clamp(0.0, 1.0), (p[1] + dy).clamp(0.0, 1.0)];
-    let mut out = g;
-    match handle {
-        Handle::From => out.from = mv(g.from),
-        Handle::To => out.to = mv(g.to),
-        Handle::Line => {
-            out.from = mv(g.from);
-            out.to = mv(g.to);
-        }
+    match (m, handle) {
+        (Mask::Linear(g), Handle::From) => Mask::Linear(LinearGradient {
+            from: mv(g.from),
+            ..g
+        }),
+        (Mask::Linear(g), Handle::To) => Mask::Linear(LinearGradient { to: mv(g.to), ..g }),
+        (Mask::Linear(g), Handle::Line) => Mask::Linear(LinearGradient {
+            from: mv(g.from),
+            to: mv(g.to),
+            ..g
+        }),
     }
-    out
 }
 
 /// Where the selection lands after the mask at `removed` is deleted from a list of `len`.
@@ -102,11 +116,22 @@ mod tests {
     use super::*;
 
     /// A gradient running left to right across the middle of a square frame.
-    fn horizontal() -> LinearGradient {
+    fn horizontal_gradient() -> LinearGradient {
         LinearGradient {
             from: [0.2, 0.5],
             to: [0.8, 0.5],
             invert: false,
+        }
+    }
+
+    fn horizontal() -> Mask {
+        Mask::Linear(horizontal_gradient())
+    }
+
+    /// The gradient inside a mask, for tests that assert on endpoints.
+    fn gradient_of(m: Mask) -> LinearGradient {
+        match m {
+            Mask::Linear(g) => g,
         }
     }
 
@@ -145,11 +170,11 @@ mod tests {
         // scaling x cannot change the answer. It passed with the correction removed, i.e. it
         // could not detect the very bug it names. A test is only as good as the property it
         // actually exercises.
-        let g = LinearGradient {
+        let g = Mask::Linear(LinearGradient {
             from: [0.5, 0.2],
             to: [0.5, 0.8],
             invert: false,
-        };
+        });
         let aspect = 3.0;
         // 0.03 normalised to the side of a vertical axis is 0.09 frame *heights* away on a
         // 3:1 frame — outside a 0.04 tolerance. Without the correction it measures 0.03 and
@@ -162,9 +187,13 @@ mod tests {
     #[test]
     fn dragging_an_endpoint_leaves_the_other_alone() {
         let g = horizontal();
-        let out = apply_drag(g, Handle::From, 0.1, -0.2);
+        let out = gradient_of(apply_drag(g, Handle::From, 0.1, -0.2));
         assert_eq!(out.from, [0.3, 0.3]);
-        assert_eq!(out.to, g.to, "the far end must not move");
+        assert_eq!(
+            out.to,
+            horizontal_gradient().to,
+            "the far end must not move"
+        );
     }
 
     #[test]
@@ -177,7 +206,7 @@ mod tests {
         // ("1.0 - (1.0 - 0.1) is 0.100000024"). `crop_tool`'s own arithmetic-result tests use
         // the same 1e-6 tolerance for the same reason.
         let g = horizontal();
-        let out = apply_drag(g, Handle::Line, 0.1, 0.05);
+        let out = gradient_of(apply_drag(g, Handle::Line, 0.1, 0.05));
         let close =
             |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
         assert!(close(out.from, [0.3, 0.55]), "{:?}", out.from);
@@ -188,19 +217,19 @@ mod tests {
     fn dragging_clamps_to_the_frame() {
         // An endpoint dragged off the canvas would be unreachable afterwards.
         let g = horizontal();
-        let out = apply_drag(g, Handle::To, 5.0, 5.0);
+        let out = gradient_of(apply_drag(g, Handle::To, 5.0, 5.0));
         assert_eq!(out.to, [1.0, 1.0]);
     }
 
     #[test]
     fn invert_survives_a_drag() {
         // It is not a positional property, so no drag should disturb it.
-        let g = LinearGradient {
+        let g = Mask::Linear(LinearGradient {
             invert: true,
-            ..horizontal()
-        };
-        assert!(apply_drag(g, Handle::Line, 0.1, 0.1).invert);
-        assert!(apply_drag(g, Handle::From, 0.1, 0.1).invert);
+            ..horizontal_gradient()
+        });
+        assert!(gradient_of(apply_drag(g, Handle::Line, 0.1, 0.1)).invert);
+        assert!(gradient_of(apply_drag(g, Handle::From, 0.1, 0.1)).invert);
     }
 
     #[test]
@@ -239,11 +268,11 @@ mod tests {
         // point and the guard returns `None` rather than dividing — but "correct by
         // inspection" is what a test is for. A NaN escaping here would reach the canvas as a
         // handle that can never be grabbed again.
-        let g = LinearGradient {
+        let g = Mask::Linear(LinearGradient {
             from: [0.5, 0.5],
             to: [0.5, 0.5],
             invert: false,
-        };
+        });
         assert_eq!(hit_test(&g, [0.1, 0.1], 1.0, 0.04), None);
         assert_eq!(hit_test(&g, [0.5, 0.5], 1.0, 0.04), Some(Handle::From));
     }

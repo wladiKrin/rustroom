@@ -644,7 +644,7 @@ to:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cargo test -p rustroom-app 2>&1 | tail -10`
+Run: `cargo test -p app 2>&1 | tail -10`
 Expected: PASS — every `mask_tool` test still passes with its assertions unchanged in meaning. That is the regression argument for this refactor.
 
 - [ ] **Step 5: Check the workspace builds and lints**
@@ -1005,7 +1005,7 @@ import here would be a duplicate and would fail `clippy -D warnings`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test -p rustroom-app radial 2>&1 | tail -20`
+Run: `cargo test -p app radial 2>&1 | tail -20`
 Expected: FAIL to compile — `no variant named Radial found for enum Mask`, `cannot find type Side`.
 
 - [ ] **Step 3: Add the variant and its accessors**
@@ -1297,11 +1297,11 @@ Expected: PASS. The golden tests still pass because no mask is added to any exis
 - [ ] **Step 7: Sabotage — the aspect and ordering tests**
 
 Delete the `* aspect` from `pt` and `c` in `hit_test_radial` (four occurrences of the multiplication across the two tuples and `rx`).
-Run: `cargo test -p rustroom-app hit_testing_an_edge_handle_is_aspect_correct 2>&1 | tail -20`
+Run: `cargo test -p app hit_testing_an_edge_handle_is_aspect_correct 2>&1 | tail -20`
 Expected: **FAIL** — the first assertion gets `Some(Edge(Top))` where `None` is required.
 
 Restore. Then move the centre check below the edge loop in `hit_test_radial`.
-Run: `cargo test -p rustroom-app a_tiny_ellipse 2>&1 | tail -20`
+Run: `cargo test -p app a_tiny_ellipse 2>&1 | tail -20`
 Expected: **FAIL** — `Some(Edge(Left))` where `Some(Center)` is required.
 
 Restore. Then break the axis independence in `resize_radial` by changing its `Side::Right` arm to:
@@ -1313,11 +1313,11 @@ Restore. Then break the axis independence in `resize_radial` by changing its `Si
         }
 ```
 
-Run: `cargo test -p rustroom-app dragging_an_edge_resizes_about_a_fixed_centre 2>&1 | tail -20`
+Run: `cargo test -p app dragging_an_edge_resizes_about_a_fixed_centre 2>&1 | tail -20`
 Expected: **FAIL** on "the other radius must not move".
 
 Restore. Then change `_ => m` in `apply_drag` to `_ => unreachable!()`.
-Run: `cargo test -p rustroom-app a_mismatched_handle 2>&1 | tail -20`
+Run: `cargo test -p app a_mismatched_handle 2>&1 | tail -20`
 Expected: **FAIL** with a panic.
 
 Restore. Then change `Mask`'s derive to add `#[serde(untagged)]` above the enum.

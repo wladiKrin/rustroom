@@ -306,7 +306,8 @@ fn draw_mask_overlay(
     let Some(m) = s.edits.masks.get(i) else {
         return false;
     };
-    let edit_model::Mask::Linear(g) = m.mask;
+    let mask = m.mask;
+    let edit_model::Mask::Linear(g) = mask;
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
         return false;
     }
@@ -350,7 +351,7 @@ fn draw_mask_overlay(
         let nx = ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0);
         let ny = ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0);
         if resp.drag_started() {
-            s.active_mask_handle = mask_tool::hit_test(&g, [nx, ny], aspect, 0.04);
+            s.active_mask_handle = mask_tool::hit_test(&mask, [nx, ny], aspect, 0.04);
         }
         if resp.dragged() {
             if let Some(h) = s.active_mask_handle {
@@ -358,8 +359,7 @@ fn draw_mask_overlay(
                 let dx = d.x / frame_rect.width();
                 let dy = d.y / frame_rect.height();
                 if let Some(m) = s.edits.masks.get_mut(i) {
-                    let edit_model::Mask::Linear(cur) = m.mask;
-                    m.mask = edit_model::Mask::Linear(mask_tool::apply_drag(cur, h, dx, dy));
+                    m.mask = mask_tool::apply_drag(m.mask, h, dx, dy);
                     moved = true;
                 }
             }
