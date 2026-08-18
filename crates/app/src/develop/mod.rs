@@ -3,7 +3,7 @@
 pub mod canvas;
 pub mod panel;
 
-use crate::{filmstrip, preview_edits, Modal, RustroomApp};
+use crate::{filmstrip, preview_edits, theme, Modal, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
@@ -141,6 +141,15 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         if ui.button("Settings…").clicked() {
             app.modal = Modal::Settings;
         }
+        // ⚠ The binding is named from the setting through `PanDrag::label()` rather than
+        // hardcoded as "middle-drag", which would become a lie the moment someone changed it.
+        theme::hint(
+            ui,
+            &format!(
+                "Scroll or {} to pan · pinch or Ctrl+scroll to zoom",
+                app.settings.pan_drag.label()
+            ),
+        );
     }
     if app.library.is_some() {
         ui.toggle_value(&mut app.show_filmstrip, "Filmstrip");

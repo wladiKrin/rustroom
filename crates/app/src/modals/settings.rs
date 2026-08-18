@@ -3,7 +3,7 @@
 use super::dialog;
 use crate::{theme, view_quality_hint, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::settings::{Accent, ThemeChoice};
+use rustroom_app::settings::{Accent, PanDrag, ThemeChoice};
 
 /// The Settings window: preferences that survive a restart.
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
@@ -11,6 +11,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut tier = app.settings.view_demosaic;
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
+    let mut pan_drag = app.settings.pan_drag;
     let mut close = false;
 
     let dismissed = dialog(ctx, "settings", "Settings", |ui| {
@@ -68,6 +69,24 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         );
 
         ui.separator();
+
+        ui.horizontal(|ui| {
+            ui.label("Pan with");
+            egui::ComboBox::from_id_salt("pan_drag_pick")
+                .selected_text(pan_drag.label())
+                .show_ui(ui, |ui| {
+                    for b in PanDrag::ALL {
+                        ui.selectable_value(&mut pan_drag, b, b.label());
+                    }
+                });
+        });
+        theme::hint(
+            ui,
+            "Scrolling and two-finger swipe always pan — this is the extra drag gesture, \
+             for when a middle button is missing or broken.",
+        );
+
+        ui.separator();
         if ui.button("Close").clicked() {
             close = true;
         }
@@ -87,6 +106,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     if tier != app.settings.view_demosaic {
         app.apply_view_demosaic(tier, ctx);
+    }
+    // ⚠ A change guard like its neighbours, though for a weaker reason: this has no side
+    // effect beyond the write, because the canvas reads `settings.pan_drag` afresh every
+    // frame — no worker rebuild, no re-decode. The guard is here so the settings file is not
+    // rewritten on every frame the dialog is open.
+    if pan_drag != app.settings.pan_drag {
+        app.settings.pan_drag = pan_drag;
+        app.save_settings();
     }
     if close {
         app.modal = Modal::None;
