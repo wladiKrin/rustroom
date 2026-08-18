@@ -678,6 +678,11 @@ Also a pure refactor with one variant, so the seam exists before the variant nee
 **Files:**
 - Modify: `crates/app/src/develop/canvas.rs`
 
+⚠ **Do NOT add `ELLIPSE_SEGMENTS` in this task.** It has no caller until Task 4's radial arm,
+and a `const` with no caller in a **binary** crate is dead code that fails
+`clippy -D warnings` — the same trap `button_row` and the CLI's `format_arg` both hit. Task 4
+introduces it alongside its first use.
+
 - [ ] **Step 1: Extract `paint_mask`**
 
 In `crates/app/src/develop/canvas.rs`, inside `draw_mask_overlay`, delete this block (from the `to_screen` closure down to and including the endpoint-dot loop):
@@ -1252,7 +1257,8 @@ fn resize_radial(r: RadialGradient, side: Side, dx: f32, dy: f32) -> RadialGradi
 
 - [ ] **Step 5: Fill the canvas painting arm**
 
-In `crates/app/src/develop/canvas.rs`, add above `fn paint_mask`:
+In `crates/app/src/develop/canvas.rs`, add above `fn paint_mask` — ⚠ **in this task, not
+Task 3**, because a `const` with no caller in a binary crate is dead code:
 
 ```rust
 /// Points used to approximate a mask ellipse. egui has no ellipse primitive, so it is drawn as

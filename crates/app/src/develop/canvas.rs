@@ -307,43 +307,11 @@ fn draw_mask_overlay(
         return false;
     };
     let mask = m.mask;
-    let edit_model::Mask::Linear(g) = mask;
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
         return false;
     }
 
-    let to_screen = |p: [f32; 2]| {
-        egui::pos2(
-            frame_rect.left() + p[0] * frame_rect.width(),
-            frame_rect.top() + p[1] * frame_rect.height(),
-        )
-    };
-    let (a, b) = (to_screen(g.from), to_screen(g.to));
-
-    let painter = ui.painter_at(img_rect);
-    let stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
-    painter.line_segment([a, b], stroke);
-
-    // ⚠ The perpendicular is computed **in screen space**, from the on-screen axis — the same
-    // trap as `coverage` and `hit_test`, in its third guise. A normalised-space perpendicular
-    // is visibly not perpendicular on a 3:2 frame.
-    let axis = b - a;
-    let len = axis.length();
-    if len > f32::EPSILON {
-        let perp = egui::vec2(-axis.y, axis.x) / len;
-        // Long enough to cross the clip region from any point inside it — measured on
-        // `img_rect`, since that is what bounds what will actually be drawn.
-        let reach = img_rect.width() + img_rect.height();
-        for end in [a, b] {
-            painter.line_segment(
-                [end - perp * reach, end + perp * reach],
-                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(120)),
-            );
-        }
-    }
-    for end in [a, b] {
-        painter.circle_filled(end, 5.0, egui::Color32::WHITE);
-    }
+    paint_mask(&ui.painter_at(img_rect), mask, frame_rect, img_rect);
 
     let aspect = frame_rect.width() / frame_rect.height();
     let mut moved = false;
@@ -383,4 +351,56 @@ fn draw_mask_overlay(
         );
     }
     false
+}
+
+/// Paint one mask's handles and guides.
+///
+/// ⚠ **Split from `draw_mask_overlay` deliberately, on painting rather than on the whole
+/// function.** The drag plumbing — hit-testing, applying the drag, pushing history and calling
+/// `s.request` — is shared by every shape and must be written once. Duplicating it per shape is
+/// exactly how the two would drift, and it is where both of 3.1a's real-use bugs lived.
+///
+/// ⚠ `frame_rect` places everything; `clip` only bounds what is drawn. They differ once a
+/// region render is on, and using `clip` for placement is the bug that made the overlay drift
+/// with the view while panning at high zoom.
+fn paint_mask(
+    painter: &egui::Painter,
+    mask: edit_model::Mask,
+    frame_rect: egui::Rect,
+    clip: egui::Rect,
+) {
+    let to_screen = |p: [f32; 2]| {
+        egui::pos2(
+            frame_rect.left() + p[0] * frame_rect.width(),
+            frame_rect.top() + p[1] * frame_rect.height(),
+        )
+    };
+    let stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
+
+    match mask {
+        edit_model::Mask::Linear(g) => {
+            let (a, b) = (to_screen(g.from), to_screen(g.to));
+            painter.line_segment([a, b], stroke);
+
+            // ⚠ The perpendicular is computed **in screen space**, from the on-screen axis —
+            // the same trap as `coverage` and `hit_test`, in its third guise. A
+            // normalised-space perpendicular is visibly not perpendicular on a 3:2 frame.
+            let axis = b - a;
+            let len = axis.length();
+            if len > f32::EPSILON {
+                let perp = egui::vec2(-axis.y, axis.x) / len;
+                // Long enough to cross the clip region from any point inside it.
+                let reach = clip.width() + clip.height();
+                for end in [a, b] {
+                    painter.line_segment(
+                        [end - perp * reach, end + perp * reach],
+                        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(120)),
+                    );
+                }
+            }
+            for end in [a, b] {
+                painter.circle_filled(end, 5.0, egui::Color32::WHITE);
+            }
+        }
+    }
 }
