@@ -462,7 +462,15 @@ fn draw_mask_overlay(
                         flow: tool.flow,
                         erase: tool.erase,
                     });
-                    moved = true;
+                    // ⚠⚠ **Deliberately does NOT set `moved`.** Requesting a render here starts a
+                    // full-resolution render of a ONE-POINT stroke you are about to extend. At
+                    // 1:1 that takes seconds, occupies the render worker for the whole drag, and
+                    // lands *after* the line is finished — repainting the single initial dab over
+                    // the correct result, which then has to queue behind it.
+                    //
+                    // Diagnosed from `RUSTROOM_DEBUG_BRUSH` output showing strokes recorded
+                    // correctly (20-52 points) at `max_dim 6246`: the model was right and the
+                    // render was stale. Reported as "the initial dot is still there".
                 }
             } else if tool_drag(resp) {
                 // ⚠ `else if`, not a second `if`: both predicates are true on the frame a drag
