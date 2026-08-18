@@ -1146,6 +1146,7 @@ mod tests {
                         points: vec![[0.3, 0.5], [0.7, 0.5]],
                         radius: 0.1,
                         hardness: 50.0,
+                        flow: 100.0,
                         erase: false,
                     }],
                     invert: false,

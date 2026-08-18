@@ -598,12 +598,17 @@ impl RadialGradient {
 
 /// One continuous drag of the brush.
 ///
+/// ⚠ `Default` is hand-written, not derived: `flow` must default to **100**, not to
+/// `f32::default()`. Container-level `#[serde(default)]` fills a missing field from the struct's
+/// `Default`, so a derived one would make every stroke in every pre-flow sidecar invisible. The
+/// same trap `RadialGradient`'s feather hit.
+///
 /// ⚠ **Points are in pre-geometry SOURCE normalised coordinates**, unlike [`LinearGradient`] and
 /// [`RadialGradient`], which are in *frame* coordinates. `MaskStage` runs after `GeometryStage`,
 /// so a frame-anchored stroke would slide across the image content whenever the crop changed —
 /// invisible for a gradient, ruinous for a stroke painted onto a subject. The asymmetry is
 /// principled: a gradient is compositional, a stroke is content-referred.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrushStroke {
     pub points: Vec<[f32; 2]>,
@@ -620,8 +625,30 @@ pub struct BrushStroke {
     /// word because that is what every brush calls it. **Do not "unify" the two** — the inversion
     /// would be silent, since both spellings look plausible.
     pub hardness: f32,
+    /// How much of full coverage one pass of this stroke lays down, 0..=100.
+    ///
+    /// ⚠ **This is the strength control, and `hardness` is not.** Hardness shapes a dab's *edge*;
+    /// even at hardness 0 a dab's centre reaches full coverage. Without flow the softest possible
+    /// brush still painted at full strength and repeated passes did nothing at all — which is
+    /// exactly what it felt like in use, and why this was pulled forward from a later milestone
+    /// rather than left deferred.
+    ///
+    /// ⚠ **Defaults to 100**, so a stroke written before this field existed keeps its meaning.
+    pub flow: f32,
     /// Subtract from coverage rather than adding to it.
     pub erase: bool,
+}
+
+impl Default for BrushStroke {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            radius: 0.0,
+            hardness: 0.0,
+            flow: 100.0,
+            erase: false,
+        }
+    }
 }
 
 /// A painted mask: an ordered list of strokes.
@@ -2002,12 +2029,14 @@ mod tests {
                     points: vec![[0.1, 0.2], [0.3, 0.4]],
                     radius: 0.05,
                     hardness: 60.0,
+                    flow: 100.0,
                     erase: false,
                 },
                 BrushStroke {
                     points: vec![[0.5, 0.5]],
                     radius: 0.02,
                     hardness: 100.0,
+                    flow: 100.0,
                     erase: true,
                 },
             ],

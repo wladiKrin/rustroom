@@ -789,6 +789,7 @@ fn golden_mask_brush_exposure() {
                         points: vec![[0.1, 0.5], [0.45, 0.5]],
                         radius: 0.1,
                         hardness: 40.0,
+                        flow: 100.0,
                         erase: false,
                     }],
                     invert: false,
@@ -817,12 +818,14 @@ fn golden_mask_brush_erase() {
                             points: vec![[0.1, 0.5], [0.9, 0.5]],
                             radius: 0.2,
                             hardness: 60.0,
+                            flow: 100.0,
                             erase: false,
                         },
                         edit_model::BrushStroke {
                             points: vec![[0.3, 0.5], [0.7, 0.5]],
                             radius: 0.08,
                             hardness: 100.0,
+                            flow: 100.0,
                             erase: true,
                         },
                     ],
@@ -831,6 +834,41 @@ fn golden_mask_brush_erase() {
                 adjustments: edit_model::LocalAdjustments {
                     saturation: -100.0,
                     exposure: -0.5,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
+
+#[test]
+fn golden_mask_brush_flow_buildup() {
+    // ⚠ **This case exists because the other two could not witness the flow change.** When dabs
+    // moved from a flat `max` to per-stroke max plus compositing, all 37 goldens stayed
+    // byte-identical — `mask_brush_exposure` has one stroke (where the two rules agree exactly)
+    // and `mask_brush_erase` uses a hard-edged eraser (where they also agree). A model change no
+    // reference can see is a model change with no regression guard.
+    //
+    // Three overlapping passes at flow 35: each adds a fraction of what is still uncovered, so
+    // the overlap region is visibly stronger than the single-pass tails.
+    let pass = |from: f32, to: f32| edit_model::BrushStroke {
+        points: vec![[from, 0.5], [to, 0.5]],
+        radius: 0.15,
+        hardness: 30.0,
+        flow: 35.0,
+        erase: false,
+    };
+    check_golden(
+        "mask_brush_flow_buildup",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![pass(0.1, 0.5), pass(0.2, 0.6), pass(0.3, 0.5)],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.55,
                     ..Default::default()
                 },
             }],

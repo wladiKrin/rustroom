@@ -123,6 +123,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // E0499. Written back after it closes.
                     let mut brush_size = app.brush_size;
                     let mut brush_hardness = app.brush_hardness;
+                    let mut brush_flow = app.brush_flow;
                     let mut brush_erase = app.brush_erase;
                     let mut show_mask_tint = app.show_mask_tint;
                     egui::CollapsingHeader::new("Masks").show(ui, |ui| {
@@ -214,9 +215,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     // copy at the moment it is drawn.
                                     slider(ui, &mut brush_size, 4.0..=300.0, "Size");
                                     slider(ui, &mut brush_hardness, 0.0..=100.0, "Hardness");
+                                    slider(ui, &mut brush_flow, 1.0..=100.0, "Flow");
                                     ui.checkbox(&mut brush_erase, "Erase");
                                     ui.checkbox(&mut show_mask_tint, "Show mask");
-                                    theme::hint(ui, "Drag on the image to paint.");
+                                    theme::hint(
+                                        ui,
+                                        "Drag to paint. Hardness shapes the edge; Flow is \
+                                         strength, and repeated passes build up.",
+                                    );
                                 }
                                 ui.separator();
                                 let a = &mut m.adjustments;
@@ -245,6 +251,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // render.
                     app.brush_size = brush_size;
                     app.brush_hardness = brush_hardness;
+                    app.brush_flow = brush_flow;
                     app.brush_erase = brush_erase;
                     app.show_mask_tint = show_mask_tint;
                     if mask_changed {

@@ -130,8 +130,13 @@ struct RustroomApp {
     /// brush. The other three could be persisted, but splitting one tool's settings across two
     /// lifetimes is worse than one honest rule.
     brush_size: f32,
-    /// 0 = maximally soft, 100 = a hard edge.
+    /// 0 = maximally soft, 100 = a hard edge. ⚠ Edge shape, **not** strength — see `brush_flow`.
     brush_hardness: f32,
+    /// How much coverage one pass lays down, 0..=100 — the **strength** control.
+    ///
+    /// ⚠ Separate from hardness because they are genuinely different things, and conflating them
+    /// is what made the first version's softest brush still paint at full strength.
+    brush_flow: f32,
     /// Whether the next stroke subtracts.
     brush_erase: bool,
     /// Whether to tint the selected brush mask's coverage on the canvas.
@@ -221,6 +226,7 @@ impl RustroomApp {
             show_presets: false,
             brush_size: 40.0,
             brush_hardness: 50.0,
+            brush_flow: 100.0,
             brush_erase: false,
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.

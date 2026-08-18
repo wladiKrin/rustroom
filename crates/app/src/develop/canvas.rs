@@ -223,6 +223,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             BrushTool {
                                 size: app_brush_size,
                                 hardness: app_brush_hardness,
+                                flow: app.brush_flow,
                                 erase: app_brush_erase,
                                 show_tint: app.show_mask_tint,
                             },
@@ -402,6 +403,7 @@ fn draw_crop_overlay(
 struct BrushTool {
     size: f32,
     hardness: f32,
+    flow: f32,
     erase: bool,
     show_tint: bool,
 }
@@ -457,6 +459,7 @@ fn draw_mask_overlay(
                         points: vec![src],
                         radius,
                         hardness: tool.hardness,
+                        flow: tool.flow,
                         erase: tool.erase,
                     });
                     moved = true;

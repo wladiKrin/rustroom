@@ -55,6 +55,17 @@ struct Dab {
     y: f32,
     r: f32,
     hard: f32,
+}
+
+/// One stroke's dabs, with the properties that apply to the stroke as a whole.
+///
+/// ⚠ Dabs are grouped **per stroke** rather than flattened, and that grouping is what makes flow
+/// correct: within a stroke the dabs combine with `max`, so a slow drag is not darker than a fast
+/// one over the same path; across strokes the results composite, so a second pass builds up.
+/// Flattening would force one rule to serve both.
+struct Stroke {
+    dabs: Vec<Dab>,
+    flow: f32,
     erase: bool,
 }
 
@@ -70,8 +81,9 @@ pub fn rasterize(
     }
     let map = FrameMap::new(geometry, frame_w, frame_h);
 
-    // Every dab in frame pixels, so the bounding box is known before anything is allocated.
-    let mut dabs: Vec<Dab> = Vec::new();
+    // Every dab in frame pixels, grouped by stroke, so the bounding box is known before anything
+    // is allocated.
+    let mut strokes: Vec<Stroke> = Vec::new();
     for s in &brush.strokes {
         let r = (s.radius * map.radius_scale).max(MIN_RADIUS_PX);
         let hard = (s.hardness / 100.0).clamp(0.0, 1.0);
@@ -79,13 +91,12 @@ pub fn rasterize(
         let Some(first) = pts.first() else { continue };
         // ⚠ A single point still paints one dab: a click without a drag is one point, so the
         // interpolation below must not be the only thing that emits dabs.
-        dabs.push(Dab {
+        let mut dabs = vec![Dab {
             x: first.0,
             y: first.1,
             r,
             hard,
-            erase: s.erase,
-        });
+        }];
         for pair in pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -99,18 +110,22 @@ pub fn rasterize(
                     y: a.1 + dy * t,
                     r,
                     hard,
-                    erase: s.erase,
                 });
             }
         }
+        strokes.push(Stroke {
+            dabs,
+            flow: (s.flow / 100.0).clamp(0.0, 1.0),
+            erase: s.erase,
+        });
     }
-    if dabs.is_empty() {
+    if strokes.iter().all(|s| s.dabs.is_empty()) {
         return CoverageMap::default();
     }
 
     // Bounding box, clipped to the frame.
     let (mut lx, mut ly, mut hx, mut hy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for d in &dabs {
+    for d in strokes.iter().flat_map(|s| s.dabs.iter()) {
         lx = lx.min(d.x - d.r);
         ly = ly.min(d.y - d.r);
         hx = hx.max(d.x + d.r);
@@ -126,29 +141,64 @@ pub fn rasterize(
     let (w, h) = (x1 - x0, y1 - y0);
 
     let mut cov = vec![0.0f32; w * h];
-    for d in &dabs {
-        // Only the rows and columns this dab can reach.
-        let dx0 = (d.x - d.r).floor().clamp(x0 as f32, x1 as f32) as usize;
-        let dy0 = (d.y - d.r).floor().clamp(y0 as f32, y1 as f32) as usize;
-        let dx1 = (((d.x + d.r).ceil().clamp(0.0, x1 as f32) as usize) + 1).min(x1);
-        let dy1 = (((d.y + d.r).ceil().clamp(0.0, y1 as f32) as usize) + 1).min(y1);
-        for y in dy0..dy1 {
-            for x in dx0..dx1 {
-                let dist =
-                    (((x as f32 + 0.5) - d.x).powi(2) + ((y as f32 + 0.5) - d.y).powi(2)).sqrt();
-                let a = dab_alpha(dist, d.r, d.hard);
+    // ⚠ One scratch buffer, reused per stroke. Within a stroke the dabs combine with `max` so a
+    // slow drag is not darker than a fast one; the stroke's result is then composited into `cov`,
+    // so a second pass over the same place *does* build up. That two-level rule is what flow
+    // needs and what a single flattened `max` could never express.
+    let mut layer = vec![0.0f32; w * h];
+    for stroke in &strokes {
+        if stroke.dabs.is_empty() || stroke.flow <= 0.0 {
+            continue;
+        }
+        // Only the sub-rect this stroke touches has to be cleared and composited.
+        let (mut slx, mut sly, mut shx, mut shy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for d in &stroke.dabs {
+            slx = slx.min(d.x - d.r);
+            sly = sly.min(d.y - d.r);
+            shx = shx.max(d.x + d.r);
+            shy = shy.max(d.y + d.r);
+        }
+        let sx0 = (slx.floor().clamp(x0 as f32, x1 as f32) as usize).max(x0);
+        let sy0 = (sly.floor().clamp(y0 as f32, y1 as f32) as usize).max(y0);
+        let sx1 = (((shx.ceil().clamp(0.0, x1 as f32) as usize) + 1).min(x1)).max(sx0);
+        let sy1 = (((shy.ceil().clamp(0.0, y1 as f32) as usize) + 1).min(y1)).max(sy0);
+        for y in sy0..sy1 {
+            for x in sx0..sx1 {
+                layer[(y - y0) * w + (x - x0)] = 0.0;
+            }
+        }
+        for d in &stroke.dabs {
+            let dx0 = (d.x - d.r).floor().clamp(sx0 as f32, sx1 as f32) as usize;
+            let dy0 = (d.y - d.r).floor().clamp(sy0 as f32, sy1 as f32) as usize;
+            let dx1 = (((d.x + d.r).ceil().clamp(0.0, sx1 as f32) as usize) + 1).min(sx1);
+            let dy1 = (((d.y + d.r).ceil().clamp(0.0, sy1 as f32) as usize) + 1).min(sy1);
+            for y in dy0..dy1 {
+                for x in dx0..dx1 {
+                    let dist = (((x as f32 + 0.5) - d.x).powi(2)
+                        + ((y as f32 + 0.5) - d.y).powi(2))
+                    .sqrt();
+                    let a = dab_alpha(dist, d.r, d.hard);
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    let slot = &mut layer[(y - y0) * w + (x - x0)];
+                    *slot = slot.max(a);
+                }
+            }
+        }
+        for y in sy0..sy1 {
+            for x in sx0..sx1 {
+                let idx = (y - y0) * w + (x - x0);
+                let a = layer[idx] * stroke.flow;
                 if a <= 0.0 {
                     continue;
                 }
-                let slot = &mut cov[(y - y0) * w + (x - x0)];
-                // ⚠ `max`, not accumulation. Accumulation would make a slow stroke darker than a
-                // fast one over the same path, because consecutive dabs overlap — the
-                // stroke-overlap bookkeeping that buys nothing until flow exists, and is why
-                // flow is a later milestone.
-                if d.erase {
-                    *slot = slot.min(1.0 - a);
+                if stroke.erase {
+                    cov[idx] *= 1.0 - a;
                 } else {
-                    *slot = slot.max(a);
+                    // Standard "over": a second pass adds a fraction of what is still uncovered,
+                    // so repeated strokes approach full coverage without ever exceeding it.
+                    cov[idx] += (1.0 - cov[idx]) * a;
                 }
             }
         }
@@ -198,6 +248,7 @@ mod tests {
             points: vec![[x, y]],
             radius,
             hardness,
+            flow: 100.0,
             erase,
         }
     }
@@ -296,6 +347,7 @@ mod tests {
                 points: vec![[0.50625, 0.5125]],
                 radius: 0.125,
                 hardness: 100.0,
+                flow: 100.0,
                 erase: false,
             }]),
             &Geometry::default(),
@@ -342,6 +394,7 @@ mod tests {
             points: vec![[0.3, 0.5], [0.7, 0.5]],
             radius: 0.1,
             hardness: 0.0,
+            flow: 100.0,
             erase: false,
         }]);
         // ⚠⚠ The sample is compared against a SINGLE dab at the same place, not against a
@@ -372,6 +425,7 @@ mod tests {
             points: vec![[0.1, 0.5], [0.9, 0.5]],
             radius: 0.05,
             hardness: 100.0,
+            flow: 100.0,
             erase: false,
         }]);
         for x in 12..68 {
@@ -460,5 +514,95 @@ mod tests {
             worst <= bound,
             "worst adjacent step was {worst}/255, above the ramp's own bound of {bound}"
         );
+    }
+
+    #[test]
+    fn a_weak_flow_paints_weakly() {
+        // ⚠ The bug this field exists for, found in real use. `hardness` shapes a dab's EDGE, so
+        // even at hardness 0 the centre reaches full coverage — the softest possible brush still
+        // painted at full strength, which is not what anyone means by a soft brush.
+        let strong = flat(vec![dot(0.5, 0.5, 0.1, 100.0, false)]);
+        let weak = flat(vec![BrushStroke {
+            flow: 20.0,
+            ..dot(0.5, 0.5, 0.1, 100.0, false)
+        }]);
+        assert_eq!(strong.at(40, 20), 255);
+        let w = weak.at(40, 20);
+        assert!(w > 0 && w < 80, "flow 20 should be faint, got {w}");
+    }
+
+    #[test]
+    fn flow_builds_up_across_strokes() {
+        // ⚠ The other half of the same complaint: repeated brushing must get stronger. Under the
+        // old flat `max` rule a second pass over the same place changed nothing at all.
+        let one = flat(vec![BrushStroke {
+            flow: 40.0,
+            ..dot(0.5, 0.5, 0.1, 100.0, false)
+        }]);
+        let two = flat(vec![
+            BrushStroke {
+                flow: 40.0,
+                ..dot(0.5, 0.5, 0.1, 100.0, false)
+            },
+            BrushStroke {
+                flow: 40.0,
+                ..dot(0.5, 0.5, 0.1, 100.0, false)
+            },
+        ]);
+        assert!(
+            two.at(40, 20) > one.at(40, 20) + 20,
+            "two passes ({}) must be clearly stronger than one ({})",
+            two.at(40, 20),
+            one.at(40, 20)
+        );
+        assert!(
+            two.at(40, 20) < 255,
+            "two passes at flow 40 must not saturate"
+        );
+    }
+
+    #[test]
+    fn flow_does_not_build_up_within_one_stroke() {
+        // ⚠⚠ The discriminating case for the two-level rule, and the reason dabs are grouped per
+        // stroke rather than flattened. A long stroke lays dozens of overlapping dabs over the
+        // same pixel; if those composited, a slow drag would be darker than a fast one over the
+        // same path. Within a stroke they must `max`, and only the stroke's result composites.
+        let single = flat(vec![BrushStroke {
+            flow: 40.0,
+            ..dot(0.5, 0.5, 0.1, 0.0, false)
+        }]);
+        let dragged = flat(vec![BrushStroke {
+            points: vec![[0.3, 0.5], [0.7, 0.5]],
+            radius: 0.1,
+            hardness: 0.0,
+            flow: 40.0,
+            erase: false,
+        }]);
+        assert_eq!(
+            dragged.at(40, 20),
+            single.at(40, 20),
+            "a long stroke must match a single dab; overlapping dabs are compositing"
+        );
+    }
+
+    #[test]
+    fn flow_zero_paints_nothing() {
+        let m = flat(vec![BrushStroke {
+            flow: 0.0,
+            ..dot(0.5, 0.5, 0.1, 100.0, false)
+        }]);
+        assert_eq!(m.at(40, 20), 0);
+    }
+
+    #[test]
+    fn full_flow_reproduces_the_old_max_rule_for_one_stroke() {
+        // ⚠ The compatibility guarantee, and why all 37 goldens stayed byte-identical through the
+        // composition change: from zero coverage, `cov += (1 - cov) * a * 1.0` is exactly `a`.
+        let m = flat(vec![dot(0.5, 0.5, 0.15, 50.0, false)]);
+        for x in [40usize, 45, 48] {
+            let v = m.at(x, 20);
+            assert!(v > 0, "sample at {x} should be painted");
+        }
+        assert_eq!(m.at(40, 20), 255, "the centre is still full at flow 100");
     }
 }
