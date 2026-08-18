@@ -25,7 +25,10 @@ enum CoverageSource {
 }
 
 pub struct MaskStage {
-    masked: MaskedAdjustment,
+    // ⚠ The `MaskedAdjustment` itself is deliberately not retained. Everything needed is
+    // extracted at construction — the coverage source and the sub-stage list — and keeping a copy
+    // as well was dead weight that `-D warnings` caught the moment the coverage lookup stopped
+    // going through it.
     source: CoverageSource,
     stages: Vec<Box<dyn PipelineStage>>,
     region: Option<Region>,
@@ -56,7 +59,6 @@ impl MaskStage {
             other => CoverageSource::Analytic(other.clone()),
         };
         Self {
-            masked: masked.clone(),
             source,
             stages: per_pixel_stages(&masked.adjustments),
             region,
