@@ -536,55 +536,98 @@ fn draw_mask_overlay(
     false
 }
 
-/// A memoised screen-resolution coverage map for the tint.
+/// A memoised screen-resolution tint, held as an uploaded **texture**.
 ///
-/// ⚠⚠ **`paint_mask` runs on every egui frame, so without this the tint re-rasterizes at ~60 Hz
-/// even while merely hovering.** One stroke is ~1.2 ms at screen size, so thirty strokes is
-/// ~36 ms *per frame with nothing happening* — which is exactly how it felt in use. The
-/// benchmark missed it because it timed a single stroke once; the cost scales with stroke count
-/// and is paid continuously.
+/// ⚠⚠ **A mesh is the wrong representation and it crashed the app.** The first version emitted
+/// one quad per run of equal coverage along a row. That collapses a stroke's flat interior, but
+/// across a *soft* brush's gradient almost every pixel differs from its neighbour, so every run
+/// is length 1 — and a large soft stroke is mostly gradient. wgpu refused a 711 MB vertex buffer
+/// (~7 million quads) against a 268 MB limit. One textured quad is O(1) geometry whatever the
+/// stroke.
 ///
-/// Keyed on everything the map is built from, so a hit is exact.
+/// ⚠ `paint_mask` runs on every egui frame, so without this memo the tint would re-rasterize
+/// *and* re-upload at ~60 Hz while merely hovering. One stroke is ~1.2 ms at screen size, so
+/// thirty strokes was ~36 ms per frame with nothing happening — the "sluggish moving the brush
+/// around" reported in use. The benchmark could not have found it: it timed one stroke once,
+/// while the real cost scales with stroke count and is paid continuously.
 struct TintCache {
     brush: edit_model::Brush,
     geometry: edit_model::Geometry,
     w: usize,
     h: usize,
-    cov: pipeline::brush::CoverageMap,
+    /// `None` when the brush paints nothing at all.
+    drawn: Option<(egui::TextureHandle, egui::Rect)>,
 }
 
 thread_local! {
     /// ⚠ Thread-local rather than a field on `RustroomApp`: `paint_mask` is a free function
-    /// reached from deep inside egui closures that already hold `&mut app`, and threading a
-    /// cache down would mean widening four signatures for something with no observable
-    /// behaviour. egui is single-threaded per context, so this is the same thread every frame.
+    /// reached from inside egui closures that already hold `&mut app`, and threading a cache down
+    /// would widen four signatures for something with no observable behaviour. egui is
+    /// single-threaded per context, so this is the same thread every frame.
     static TINT: std::cell::RefCell<Option<TintCache>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The tint's coverage, rasterized only when something it depends on has changed.
-fn tint_coverage(
+/// Paint the brush's coverage as a translucent red tint.
+///
+/// The texture is rebuilt only when the strokes, geometry or screen size change.
+fn paint_tint(
+    painter: &egui::Painter,
     b: &edit_model::Brush,
     geometry: &edit_model::Geometry,
-    w: usize,
-    h: usize,
-    f: impl FnOnce(&pipeline::brush::CoverageMap),
+    frame_rect: egui::Rect,
 ) {
+    let (w, h) = (frame_rect.width() as usize, frame_rect.height() as usize);
+    if w == 0 || h == 0 {
+        return;
+    }
     TINT.with(|slot| {
         let mut slot = slot.borrow_mut();
         let hit = slot
             .as_ref()
             .is_some_and(|c| c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b);
         if !hit {
+            let cov = pipeline::brush::rasterize(b, geometry, w, h);
+            let drawn = if cov.is_empty() {
+                None
+            } else {
+                // ⚠ Red because it is conventional and because none of the four accents is red,
+                // so the tint can never be confused with active state. Alpha is coverage/2, so a
+                // weak stroke reads as a weak tint — which is what makes Flow legible.
+                let px: Vec<egui::Color32> = cov
+                    .data
+                    .iter()
+                    .map(|&a| egui::Color32::from_rgba_unmultiplied(255, 40, 40, a / 2))
+                    .collect();
+                let img = egui::ColorImage {
+                    size: [cov.w, cov.h],
+                    pixels: px,
+                    source_size: egui::vec2(cov.w as f32, cov.h as f32),
+                };
+                let tex =
+                    painter
+                        .ctx()
+                        .load_texture("mask_tint", img, egui::TextureOptions::LINEAR);
+                let rect = egui::Rect::from_min_size(
+                    frame_rect.min + egui::vec2(cov.x0 as f32, cov.y0 as f32),
+                    egui::vec2(cov.w as f32, cov.h as f32),
+                );
+                Some((tex, rect))
+            };
             *slot = Some(TintCache {
                 brush: b.clone(),
                 geometry: *geometry,
                 w,
                 h,
-                cov: pipeline::brush::rasterize(b, geometry, w, h),
+                drawn,
             });
         }
-        if let Some(c) = slot.as_ref() {
-            f(&c.cov);
+        if let Some((tex, rect)) = slot.as_ref().and_then(|c| c.drawn.as_ref()) {
+            painter.image(
+                tex.id(),
+                *rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
         }
     });
 }
@@ -669,58 +712,11 @@ fn paint_mask(
             }
         }
         edit_model::Mask::Brush(b) => {
-            // ⚠ The canvas rasterizes its OWN coverage at screen resolution rather than reusing
-            // the render worker's. A deliberate second rasterization: reusing the worker's would
-            // give one source of truth but make the tint lag the stroke by a full render, and for
-            // a brush, seeing the mark appear under the cursor *is* the experience.
-            //
-            // There are no handles — a stroke is not a shape with grab points, the same
+            // ⚠ There are no handles — a stroke is not a shape with grab points, the same
             // observation that makes `mask_tool::hit_test` return `None` for a brush.
-            if !show_tint || b.strokes.is_empty() {
-                return;
+            if show_tint {
+                paint_tint(painter, b, geometry, frame_rect);
             }
-            let (w, h) = (frame_rect.width() as usize, frame_rect.height() as usize);
-            if w == 0 || h == 0 {
-                return;
-            }
-            tint_coverage(b, geometry, w, h, |cov| {
-                if cov.is_empty() {
-                    return;
-                }
-                // ⚠ Red because it is conventional and because none of the four accents is red, so
-                // the tint can never be confused with active state.
-                //
-                // ⚠ One quad per *run* of equal coverage along a row, not one per pixel. A per-pixel
-                // mesh over a large stroke is hundreds of thousands of quads; runs collapse the flat
-                // interior of a stroke — which is most of it — into a handful.
-                let mut mesh = egui::Mesh::default();
-                for y in 0..cov.h {
-                    let mut x = 0usize;
-                    while x < cov.w {
-                        let a = cov.at(cov.x0 + x, cov.y0 + y);
-                        if a == 0 {
-                            x += 1;
-                            continue;
-                        }
-                        let start = x;
-                        while x < cov.w && cov.at(cov.x0 + x, cov.y0 + y) == a {
-                            x += 1;
-                        }
-                        let rect = egui::Rect::from_min_size(
-                            egui::pos2(
-                                frame_rect.left() + (cov.x0 + start) as f32,
-                                frame_rect.top() + (cov.y0 + y) as f32,
-                            ),
-                            egui::vec2((x - start) as f32, 1.0),
-                        );
-                        mesh.add_colored_rect(
-                            rect,
-                            egui::Color32::from_rgba_unmultiplied(255, 40, 40, a / 2),
-                        );
-                    }
-                }
-                painter.add(egui::Shape::mesh(mesh));
-            });
         }
     }
 }
