@@ -769,3 +769,72 @@ fn golden_mask_radial_inverted_saturation() {
         },
     );
 }
+
+#[test]
+fn golden_mask_brush_exposure() {
+    // A soft horizontal stroke over the LEFT half of the 64x16 chart.
+    //
+    // ⚠ **The left half, and that is measured rather than aesthetic.** Each band of the chart is
+    // a 0..1 ramp, so the right end already sits near 253 and *any* positive lift clips there. A
+    // stroke across the full width put 15 of 64 samples at 255, which is the weakness M3.1b's
+    // radial golden had to be regenerated for: a reference that pins cannot discriminate the
+    // stroke's peak coverage from any greater value. Confined to the darker half there is
+    // headroom for the whole ramp.
+    check_golden(
+        "mask_brush_exposure",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![edit_model::BrushStroke {
+                        points: vec![[0.1, 0.5], [0.45, 0.5]],
+                        radius: 0.1,
+                        hardness: 40.0,
+                        erase: false,
+                    }],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.55,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
+
+#[test]
+fn golden_mask_brush_erase() {
+    // A broad stroke with a narrower eraser through it: the reference shows a treated band with a
+    // clear channel down its middle, which is the ordering rule made visible.
+    check_golden(
+        "mask_brush_erase",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![
+                        edit_model::BrushStroke {
+                            points: vec![[0.1, 0.5], [0.9, 0.5]],
+                            radius: 0.2,
+                            hardness: 60.0,
+                            erase: false,
+                        },
+                        edit_model::BrushStroke {
+                            points: vec![[0.3, 0.5], [0.7, 0.5]],
+                            radius: 0.08,
+                            hardness: 100.0,
+                            erase: true,
+                        },
+                    ],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    saturation: -100.0,
+                    exposure: -0.5,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
