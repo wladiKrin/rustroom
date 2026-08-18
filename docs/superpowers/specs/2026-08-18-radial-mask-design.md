@@ -1,6 +1,6 @@
 # M3.1b — the radial gradient mask
 
-**Status:** spec, 2026-08-18.
+**Status:** implemented, 2026-08-18. See "Did the architecture hold" for the outcome.
 
 ## Scope
 
@@ -238,11 +238,11 @@ detect, one of them in this very feature's predecessor.
 |---|---|
 | `radial_coverage_is_one_at_the_centre_and_zero_outside` | invert the comparison |
 | **`radial_coverage_is_independent_of_aspect`** | **multiply `u` by `aspect` and watch it fail** |
-| `feather_zero_is_a_hard_edge` | remove the `FEATHER_EPS` branch (expect NaN or a panic) |
+| `feather_zero_is_a_hard_edge` | remove the `FEATHER_EPS` branch — ⚠ **must probe exactly `d == 1.0`**, see the verdict |
 | `feather_one_hundred_ramps_from_the_centre` | clamp `f` to 0.5 |
 | `radial_invert_flips_coverage` | drop the `invert` arm |
 | `a_zero_radius_radial_is_inert_not_nan` | remove the guard |
-| `a_sidecar_without_a_radial_still_loads` | — (pins the serde tag) |
+| `an_existing_linear_sidecar_still_loads` | `#[serde(untagged)]` on `Mask` — ⚠ **must assert the endpoints, not the variant**, see the verdict |
 | `a_partial_radial_gets_a_usable_default` | swap the hand-written `Default` for a derived one |
 
 ⚠ **`radial_coverage_is_independent_of_aspect` is the load-bearing one.** It is the only thing
@@ -258,7 +258,7 @@ insensitive to a correction on the other one, which is the precise shape of the 
 |---|---|
 | `the_centre_is_grabbed_in_preference_to_an_edge` | reorder the checks |
 | **`hit_testing_an_edge_handle_is_aspect_correct`** | delete the aspect scaling |
-| `dragging_an_edge_resizes_about_a_fixed_centre` | move the centre too |
+| `dragging_an_edge_resizes_about_a_fixed_centre` | leak `dy` into `rx`'s arm — ⚠ **every drag must be diagonal**, see the verdict |
 | `dragging_the_centre_leaves_the_radii_alone` | scale the radii |
 | `radii_clamp_to_a_usable_range` | remove the clamp |
 | `the_centre_clamps_to_the_frame` | remove the clamp |
@@ -274,8 +274,9 @@ correction deleted.
 
 ### Goldens
 
-33 → 35: `mask_radial` and `mask_radial_inverted`, both on the existing chart with a masked
-exposure lift large enough to be unambiguous.
+33 → 35: `mask_radial_exposure` and `mask_radial_inverted_saturation`, both on the existing
+chart. ⚠ The exposure lift must be large enough to be unambiguous **and small enough not to
+clip** — those pull against each other, and +0.55 EV is where both hold. See the verdict.
 
 ⚠ **The existing 33 must come out byte-identical**, and that is the actual acceptance criterion
 for the whole change — it is the proof the variant is additive and that nothing in the shared
@@ -283,26 +284,72 @@ path shifted. The two new files are the smaller half of the evidence.
 
 ## Did the architecture hold
 
-To be filled in on completion, but the prediction from the design work:
+**Completed 2026-08-18. Verdict: held.** What actually happened, against the prediction:
 
-- **(a) `Mask::coverage` arm** — yes, one arm, as predicted.
-- **(b) `mask_tool::hit_test` arm** — yes, but with a **signature change** (`&LinearGradient` →
-  `&Mask`) and a widened `Handle` enum. This is the one structural wrinkle, and it is a
-  consequence of `Session` holding a single `active_mask_handle`, not of the mask model.
-- **(c) canvas overlay arm** — yes, plus a split of `draw_mask_overlay` into shared plumbing and
-  a matching painter. A refactor, not a reshape.
-- **(d) panel button** — yes.
-- **(e) unpredicted:** `Mask::label()` for the list row, a shape-specific Feather slider, a
-  hand-written `Default` where the linear derived one, and an **`invert` checkbox that 3.1a
-  never wired up** — a latent gap the radial turns into a blocker.
+- **(a) `Mask::coverage` arm** — one arm, as predicted. ✅
+- **(b) `mask_tool::hit_test` arm** — as predicted, with the **signature change**
+  (`&LinearGradient` → `&Mask`) and a widened `Handle` enum. The one structural wrinkle, and a
+  consequence of `Session` holding a single `active_mask_handle` rather than of the mask model.
+  ✅
+- **(c) canvas overlay arm** — one arm in `paint_mask`, plus the split of `draw_mask_overlay`.
+  ✅
+- **(d) panel button** — yes, two buttons in a row. ✅
+- **(e) unpredicted:** `Mask::label()`, `Mask::invert_mut()`, a shape-specific Feather slider, a
+  hand-written `Default`, and the **`invert` checkbox 3.1a never wired up**.
 - **Zero change** in `pipeline`, `EditGroups`, `merge_from`, the sidecar format, and every
-  feature that moves `Edits` wholesale.
+  feature that moves `Edits` wholesale — confirmed by the 33 existing goldens coming out
+  byte-identical. ✅
 
-That reads as **held**. The signature change is the only item that touches an existing seam, and
-it touches interaction code rather than the model or the pipeline. Nothing here argues for
-reshaping before 3.1c — though the brush will test the same `Handle` decision much harder,
-since a stroke's "handles" are not points at all, and that is where the nested-enum option
-becomes worth revisiting.
+⚠ **Two predictions were wrong, and both in the same direction — the plan's own sequencing
+dissolved them before they could bite.**
+
+1. **The "three wanted compile errors" never arrived as three.** Retargeting `mask_tool` at
+   `Mask` (Task 2) and splitting `paint_mask` out (Task 3) *before* adding the variant meant
+   those seams already existed as one-armed matches. Adding the variant produced exactly **one**
+   compile error — `paint_mask`'s non-exhaustive match — plus one in a test helper. The
+   irrefutable `let Mask::Linear(g) = m.mask` binding the spec flagged had already been deleted
+   by Task 3 rather than becoming an error. **The lesson generalises: preparing a seam converts
+   a compile error into a match arm, which is a better place to make the decision.**
+2. **The `E0499` borrow trap did not fire.** The spec expected the Masks section's new checkbox
+   to collide with `slider`'s capture. It did not: `mask_changed` is captured once by the
+   `CollapsingHeader` closure, and `ui.checkbox` is not a second closure competing for it. The
+   trap needs *two closures over the same local*, which was 3.1a's shape and is not this one.
+
+⚠ **Three of the plan's own tests could not detect what they named.** Every one was found by
+running the sabotage step, not by review — see "Testing" above for the corrected versions. This
+is now the standing lesson's fourth, fifth and sixth instances, and they share a shape worth
+naming: **each asserted a property at inputs where the bug is inert.**
+
+- `feather_zero_is_a_hard_edge` probed either side of the boundary but never *on* it. Without
+  the `FEATHER_EPS` guard the ramp is `(1−d)/0.0`, which is `+inf` inside and `−inf` outside —
+  both clamping to the correct answer. The guard is load-bearing only at exactly `d == 1.0`,
+  where it is `0.0/0.0`.
+- `dragging_an_edge_resizes_about_a_fixed_centre` dragged horizontal edges with `dy = 0` and
+  vertical ones with `dx = 0`, so a cross-axis leak was a no-op. Every drag is diagonal now,
+  which is also what a real mouse produces.
+- `an_existing_linear_sidecar_still_loads` asserted the *variant* and not the *payload*. Under
+  `#[serde(untagged)]` serde reads `LinearGradient` from the whole object, and its
+  container-level `#[serde(default)]` makes the unknown `"Linear"` key be ignored and every
+  field default — so the variant still matched, with `from`/`to` silently `[0,0]`.
+
+⚠ **A fourth: the exposure golden clipped.** At +1.0 EV six of twenty samples pinned at 255, so
+the reference could not tell the ellipse's peak coverage from any larger value — the identical
+weakness 3.1a recorded and did not fix. Regenerated at **+0.55 EV**, where nothing clips and 14
+of 20 samples discriminate. Found by measuring the generated PNG rather than looking at it.
+
+**Nothing here argues for reshaping before 3.1c.** The signature change is the only item
+touching an existing seam, and it touches interaction code rather than the model or the
+pipeline. But the brush will test the `Handle` decision much harder, since a stroke's "handles"
+are not points at all — that is where the nested-enum option becomes worth revisiting.
+
+**Validated on a real X-T4 `.RAF`**, both directions, measured rather than squinted at.
+Inverted, −1.5 EV: the centre is untouched at ratio **1.000** while corners and edges land at
+**0.52–0.60**. ⚠ Note 0.58 is *full* application, not partial — −1.5 EV is ×0.354 in linear
+light, which sRGB-encodes to ≈0.61; reading the linear figure off an encoded file would have
+looked like the mask was only half working. Non-inverted, +1.2 EV and +60 saturation: the
+ellipse reads **1.483×** and every probe outside it is **1.000**, unchanged to the byte.
+
+**582 tests**, up from 559.
 
 ## Accepted caveats
 
