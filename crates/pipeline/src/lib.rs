@@ -316,7 +316,12 @@ pub fn build_pipeline_split_in_region(
     // sharpening must not amplify anything a later stage would then stretch.
     for m in &edits.masks {
         if m.adjustments.is_active() {
-            tail.push(Box::new(MaskStage::new_in_region(m, scale, region)));
+            tail.push(Box::new(MaskStage::new_in_region(
+                m,
+                scale,
+                region,
+                &edits.geometry,
+            )));
         }
     }
 
