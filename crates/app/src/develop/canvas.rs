@@ -353,6 +353,10 @@ fn draw_mask_overlay(
     false
 }
 
+/// Points used to approximate a mask ellipse. egui has no ellipse primitive, so it is drawn as
+/// a closed polyline; 64 is smooth at any zoom this canvas reaches.
+const ELLIPSE_SEGMENTS: usize = 64;
+
 /// Paint one mask's handles and guides.
 ///
 /// ⚠ **Split from `draw_mask_overlay` deliberately, on painting rather than on the whole
@@ -400,6 +404,30 @@ fn paint_mask(
             }
             for end in [a, b] {
                 painter.circle_filled(end, 5.0, egui::Color32::WHITE);
+            }
+        }
+        edit_model::Mask::Radial(r) => {
+            let points: Vec<egui::Pos2> = (0..ELLIPSE_SEGMENTS)
+                .map(|i| {
+                    let th = i as f32 / ELLIPSE_SEGMENTS as f32 * std::f32::consts::TAU;
+                    to_screen([
+                        r.center[0] + r.radius[0] * th.cos(),
+                        r.center[1] + r.radius[1] * th.sin(),
+                    ])
+                })
+                .collect();
+            painter.add(egui::Shape::closed_line(points, stroke));
+            // Centre plus the four edge handles, in the order `mask_tool::hit_test_radial`
+            // tests them.
+            let handles = [
+                r.center,
+                [r.center[0] - r.radius[0], r.center[1]],
+                [r.center[0] + r.radius[0], r.center[1]],
+                [r.center[0], r.center[1] - r.radius[1]],
+                [r.center[0], r.center[1] + r.radius[1]],
+            ];
+            for h in handles {
+                painter.circle_filled(to_screen(h), 5.0, egui::Color32::WHITE);
             }
         }
     }

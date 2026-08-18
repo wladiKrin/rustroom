@@ -596,10 +596,11 @@ impl RadialGradient {
     }
 }
 
-/// The mask primitives. 3.1b adds `Radial`, 3.1c adds `Brush`.
+/// The mask primitives. 3.1c adds `Brush`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mask {
     Linear(LinearGradient),
+    Radial(RadialGradient),
 }
 
 impl Default for Mask {
@@ -611,11 +612,33 @@ impl Default for Mask {
 impl Mask {
     /// Coverage at `(u, v)` in normalised frame coordinates, in `0.0..=1.0`.
     ///
-    /// `aspect` is the frame's width divided by its height — see
-    /// [`LinearGradient::coverage`] for why a projection needs it.
+    /// `aspect` is the frame's width divided by its height. ⚠ Whether a variant *needs* it
+    /// differs: see [`LinearGradient::coverage`] for why a projection does, and
+    /// [`RadialGradient::coverage`] for why an axis-aligned ellipse does not.
     pub fn coverage(&self, u: f32, v: f32, aspect: f32) -> f32 {
         match self {
             Mask::Linear(g) => g.coverage(u, v, aspect),
+            Mask::Radial(r) => r.coverage(u, v, aspect),
+        }
+    }
+
+    /// The shape's name, for the mask list in the UI.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Mask::Linear(_) => "Gradient",
+            Mask::Radial(_) => "Radial",
+        }
+    }
+
+    /// The `invert` flag, wherever it lives on this shape.
+    ///
+    /// Every shape carries one and none of them means anything shape-specific by it, so the
+    /// panel offers a single checkbox rather than a match. Returning `&mut bool` rather than a
+    /// getter/setter pair is what lets `ui.checkbox` drive it directly.
+    pub fn invert_mut(&mut self) -> &mut bool {
+        match self {
+            Mask::Linear(g) => &mut g.invert,
+            Mask::Radial(r) => &mut r.invert,
         }
     }
 }
@@ -1899,5 +1922,63 @@ mod tests {
         assert_eq!(r.center, [0.25, 0.75]);
         assert_eq!(r.radius, RadialGradient::default().radius);
         assert_eq!(r.feather, 50.0);
+    }
+
+    #[test]
+    fn an_existing_linear_sidecar_still_loads() {
+        // ⚠ `Mask` is externally tagged, so every sidecar written before M3.1b holds
+        // `{"Linear": {...}}`. Adding a variant to an externally tagged enum is backward
+        // compatible — but "is" is doing a lot of work in that sentence, and a switch to an
+        // internally tagged or untagged representation would silently break every file on
+        // disk while every other test kept passing.
+        let json = r#"{"masks":[{"mask":{"Linear":{"from":[0.0,0.0],"to":[1.0,0.0],
+                      "invert":false}},"adjustments":{"exposure":1.0}}]}"#;
+        let e: Edits = serde_json::from_str(json).unwrap();
+        assert_eq!(e.masks.len(), 1);
+        assert_eq!(e.masks[0].adjustments.exposure, 1.0);
+
+        // ⚠⚠ Assert the **payload**, not just the variant. `matches!(.., Mask::Linear(_))`
+        // alone is not enough, and finding out why was instructive: under
+        // `#[serde(untagged)]` serde tries to read `LinearGradient` from the whole object, and
+        // because `LinearGradient` carries container-level `#[serde(default)]` the unknown
+        // "Linear" key is simply *ignored* and every field defaults. The variant still
+        // matches — with `from` and `to` both silently `[0.0, 0.0]`, a degenerate gradient
+        // that covers the entire frame. So the variant check passed with the tagging
+        // sabotaged; only the endpoints detect it.
+        let Mask::Linear(g) = e.masks[0].mask else {
+            panic!("expected a linear gradient, got {:?}", e.masks[0].mask);
+        };
+        assert_eq!(g.from, [0.0, 0.0]);
+        assert_eq!(
+            g.to,
+            [1.0, 0.0],
+            "the endpoints must survive the round trip"
+        );
+    }
+
+    #[test]
+    fn a_radial_round_trips_through_json() {
+        let src = Mask::Radial(RadialGradient {
+            center: [0.25, 0.75],
+            radius: [0.4, 0.1],
+            feather: 12.5,
+            invert: true,
+        });
+        let back: Mask = serde_json::from_str(&serde_json::to_string(&src).unwrap()).unwrap();
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn every_mask_variant_has_a_label_and_an_invert() {
+        // A table over both variants, so a third one cannot ship with an empty list row or an
+        // `invert` the panel's checkbox cannot reach. 3.1c's brush will land here.
+        for mut m in [
+            Mask::Linear(LinearGradient::default()),
+            Mask::Radial(RadialGradient::default()),
+        ] {
+            assert!(!m.label().is_empty());
+            *m.invert_mut() = true;
+            assert!(*m.invert_mut(), "invert_mut must expose the real field");
+        }
     }
 }

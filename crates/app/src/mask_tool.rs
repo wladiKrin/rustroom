@@ -1,14 +1,40 @@
 //! Pure linear-gradient interaction math on `edit_model::LinearGradient` (normalized [0,1]).
 
-use edit_model::{LinearGradient, Mask};
+use edit_model::{LinearGradient, Mask, RadialGradient};
+
+/// Which edge of a radial mask's ellipse a handle sits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// The smallest a radius may be dragged. Below this the five handles stack on one point and the
+/// shape becomes ungrabbable — the same class of trap the linear gradient's frame clamp avoids.
+pub const RADIUS_MIN: f32 = 0.01;
+/// The largest. An ellipse twice the frame is a legitimate look; a fast drag producing 40 is
+/// not.
+pub const RADIUS_MAX: f32 = 2.0;
 
 /// What a drag is moving.
+///
+/// ⚠ **One flat enum across every shape**, rather than `Handle { Linear(..), Radial(..) }`.
+/// `Session.active_mask_handle` is a single field and must hold either, and nesting would not
+/// make a mismatched (mask, handle) pair unrepresentable — it would only add a level. So the
+/// simplest spelling wins, and `apply_drag`'s catch-all arm handles the pair that cannot occur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handle {
+    // Linear.
     From,
     To,
     /// The whole gradient — both endpoints move together.
     Line,
+    // Radial.
+    Center,
+    /// One edge of the ellipse. Dragging it resizes about a fixed centre.
+    Edge(Side),
 }
 
 /// Which handle (if any) is under normalized point `p`, within `tol`.
@@ -36,6 +62,7 @@ pub enum Handle {
 pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> {
     match m {
         Mask::Linear(g) => hit_test_linear(g, p, aspect, tol),
+        Mask::Radial(r) => hit_test_radial(r, p, aspect, tol),
     }
 }
 
@@ -70,6 +97,35 @@ fn hit_test_linear(g: &LinearGradient, p: [f32; 2], aspect: f32, tol: f32) -> Op
     None
 }
 
+/// The centre is tested before the edges, so aiming at the middle of a small ellipse moves the
+/// whole shape rather than resizing it — the same preference `hit_test_linear` gives endpoints
+/// over the line.
+fn hit_test_radial(r: &RadialGradient, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> {
+    // ⚠ In units of frame height, like the linear case and for the same reason: a tolerance
+    // must share the metric of the distances it is compared against. Note this is the opposite
+    // of `RadialGradient::coverage`, which needs no correction — coverage of an axis-aligned
+    // ellipse survives the anisotropy, but a distance does not.
+    let pt = (p[0] * aspect, p[1]);
+    let c = (r.center[0] * aspect, r.center[1]);
+    let dist = |q: (f32, f32)| ((pt.0 - q.0).powi(2) + (pt.1 - q.1).powi(2)).sqrt();
+
+    if dist(c) <= tol {
+        return Some(Handle::Center);
+    }
+    let (rx, ry) = (r.radius[0] * aspect, r.radius[1]);
+    for (side, q) in [
+        (Side::Left, (c.0 - rx, c.1)),
+        (Side::Right, (c.0 + rx, c.1)),
+        (Side::Top, (c.0, c.1 - ry)),
+        (Side::Bottom, (c.0, c.1 + ry)),
+    ] {
+        if dist(q) <= tol {
+            return Some(Handle::Edge(side));
+        }
+    }
+    None
+}
+
 /// Apply a normalized drag `(dx, dy)` to `handle`, clamped to the frame.
 ///
 /// ⚠ Clamping matters: an endpoint dragged off the canvas would be unreachable afterwards.
@@ -86,6 +142,33 @@ pub fn apply_drag(m: Mask, handle: Handle, dx: f32, dy: f32) -> Mask {
             to: mv(g.to),
             ..g
         }),
+        (Mask::Radial(r), Handle::Center) => Mask::Radial(RadialGradient {
+            center: mv(r.center),
+            ..r
+        }),
+        (Mask::Radial(r), Handle::Edge(side)) => Mask::Radial(resize_radial(r, side, dx, dy)),
+        // ⚠ A handle belonging to the other shape. Unreachable — there is no UI to change a
+        // mask's kind, let alone mid-drag — and doing nothing is the right failure for a UI.
+        _ => m,
+    }
+}
+
+/// Resize about a **fixed centre**: each edge grows away from the middle, which is what a marked
+/// centre implies and what Lightroom does.
+fn resize_radial(r: RadialGradient, side: Side, dx: f32, dy: f32) -> RadialGradient {
+    let (mut rx, mut ry) = (r.radius[0], r.radius[1]);
+    match side {
+        Side::Right => rx += dx,
+        Side::Left => rx -= dx,
+        Side::Bottom => ry += dy,
+        Side::Top => ry -= dy,
+    }
+    RadialGradient {
+        radius: [
+            rx.clamp(RADIUS_MIN, RADIUS_MAX),
+            ry.clamp(RADIUS_MIN, RADIUS_MAX),
+        ],
+        ..r
     }
 }
 
@@ -132,6 +215,7 @@ mod tests {
     fn gradient_of(m: Mask) -> LinearGradient {
         match m {
             Mask::Linear(g) => g,
+            other => panic!("expected a linear gradient, got {other:?}"),
         }
     }
 
@@ -275,5 +359,205 @@ mod tests {
         });
         assert_eq!(hit_test(&g, [0.1, 0.1], 1.0, 0.04), None);
         assert_eq!(hit_test(&g, [0.5, 0.5], 1.0, 0.04), Some(Handle::From));
+    }
+
+    /// An ellipse in the middle of a square frame.
+    fn ellipse() -> RadialGradient {
+        RadialGradient {
+            center: [0.5, 0.5],
+            radius: [0.25, 0.2],
+            feather: 50.0,
+            invert: false,
+        }
+    }
+
+    fn radial_of(m: Mask) -> RadialGradient {
+        match m {
+            Mask::Radial(r) => r,
+            other => panic!("expected a radial, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_centre_is_grabbed_in_preference_to_an_edge() {
+        let m = Mask::Radial(ellipse());
+        assert_eq!(hit_test(&m, [0.5, 0.5], 1.0, 0.04), Some(Handle::Center));
+        assert_eq!(
+            hit_test(&m, [0.75, 0.5], 1.0, 0.04),
+            Some(Handle::Edge(Side::Right))
+        );
+        assert_eq!(
+            hit_test(&m, [0.25, 0.5], 1.0, 0.04),
+            Some(Handle::Edge(Side::Left))
+        );
+        assert_eq!(
+            hit_test(&m, [0.5, 0.3], 1.0, 0.04),
+            Some(Handle::Edge(Side::Top))
+        );
+        assert_eq!(
+            hit_test(&m, [0.5, 0.7], 1.0, 0.04),
+            Some(Handle::Edge(Side::Bottom))
+        );
+        assert_eq!(hit_test(&m, [0.9, 0.9], 1.0, 0.04), None);
+    }
+
+    #[test]
+    fn a_tiny_ellipse_gives_the_centre_to_the_pointer_over_its_edges() {
+        // ⚠ The discriminating case for the ordering above: with a radius inside the
+        // tolerance, the centre and all four edge handles are simultaneously in range.
+        // Reordering the checks changes the answer here and nowhere else.
+        let m = Mask::Radial(RadialGradient {
+            radius: [0.01, 0.01],
+            ..ellipse()
+        });
+        assert_eq!(hit_test(&m, [0.5, 0.5], 1.0, 0.04), Some(Handle::Center));
+    }
+
+    #[test]
+    fn hit_testing_an_edge_handle_is_aspect_correct() {
+        // ⚠⚠ Designed against the 3.1a lesson. The probe is offset along the axis where the
+        // scaling actually changes the answer: the **top** handle, probed **horizontally**, on
+        // a 3:1 frame. A vertical offset from the same handle would be untouched by the
+        // scaling and would pass with the correction deleted — the exact mistake
+        // `hit_testing_the_line_is_aspect_correct` originally made.
+        let m = Mask::Radial(RadialGradient {
+            center: [0.5, 0.5],
+            radius: [0.1, 0.2],
+            ..ellipse()
+        });
+        let aspect = 3.0;
+        // The top handle sits at normalised (0.5, 0.3). A 0.03 normalised offset in x is 0.09
+        // frame *heights* on a 3:1 frame — outside a 0.04 tolerance. Without the correction it
+        // measures 0.03 and is wrongly grabbed.
+        assert_eq!(hit_test(&m, [0.53, 0.3], aspect, 0.04), None);
+        // 0.01 normalised = 0.03 heights: inside the tolerance either way.
+        assert_eq!(
+            hit_test(&m, [0.51, 0.3], aspect, 0.04),
+            Some(Handle::Edge(Side::Top))
+        );
+    }
+
+    #[test]
+    fn dragging_an_edge_resizes_about_a_fixed_centre() {
+        // Lightroom's behaviour, and what a marked centre implies. Each side grows away from
+        // the centre, so the left edge widens the ellipse on a negative dx.
+        //
+        // ⚠⚠ **Every drag here is diagonal, and that is the whole point.** An earlier version
+        // dragged the horizontal edges with `dy = 0.0` and the vertical ones with `dx = 0.0`,
+        // which makes a cross-axis leak invisible — `ry += dy` with `dy == 0` is a no-op. It
+        // passed with `Side::Right` sabotaged to change *both* radii. A real mouse drag
+        // essentially never has a zero component, so that was a live bug class the test could
+        // not see. Found by running the sabotage step; the same species as the FEATHER_EPS
+        // guard in `edit-model`.
+        //
+        // A horizontal edge constrains x only and must discard the drag's y entirely.
+        let m = Mask::Radial(ellipse());
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+
+        let right = radial_of(apply_drag(m, Handle::Edge(Side::Right), 0.1, 0.07));
+        assert!(close(right.radius[0], 0.35), "{:?}", right.radius);
+        assert!(
+            close(right.radius[1], 0.2),
+            "a horizontal edge must discard dy: {:?}",
+            right.radius
+        );
+        assert_eq!(right.center, [0.5, 0.5], "the centre must not move");
+
+        let left = radial_of(apply_drag(m, Handle::Edge(Side::Left), -0.1, -0.07));
+        assert!(close(left.radius[0], 0.35), "{:?}", left.radius);
+        assert!(
+            close(left.radius[1], 0.2),
+            "a horizontal edge must discard dy: {:?}",
+            left.radius
+        );
+        assert_eq!(left.center, [0.5, 0.5]);
+
+        let bottom = radial_of(apply_drag(m, Handle::Edge(Side::Bottom), 0.09, 0.05));
+        assert!(close(bottom.radius[1], 0.25), "{:?}", bottom.radius);
+        assert!(
+            close(bottom.radius[0], 0.25),
+            "a vertical edge must discard dx: {:?}",
+            bottom.radius
+        );
+        assert_eq!(bottom.center, [0.5, 0.5]);
+
+        let top = radial_of(apply_drag(m, Handle::Edge(Side::Top), -0.09, -0.05));
+        assert!(close(top.radius[1], 0.25), "{:?}", top.radius);
+        assert!(
+            close(top.radius[0], 0.25),
+            "a vertical edge must discard dx: {:?}",
+            top.radius
+        );
+    }
+
+    #[test]
+    fn dragging_the_centre_leaves_the_radii_alone() {
+        let m = Mask::Radial(ellipse());
+        let out = radial_of(apply_drag(m, Handle::Center, 0.1, -0.2));
+        let close =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+        assert!(close(out.center, [0.6, 0.3]), "{:?}", out.center);
+        assert!(close(out.radius, ellipse().radius), "{:?}", out.radius);
+    }
+
+    #[test]
+    fn the_radial_centre_clamps_to_the_frame() {
+        // A centre dragged off the canvas would be unreachable afterwards — the same rule the
+        // linear gradient's endpoints follow.
+        let m = Mask::Radial(ellipse());
+        assert_eq!(
+            radial_of(apply_drag(m, Handle::Center, 5.0, 5.0)).center,
+            [1.0, 1.0]
+        );
+        assert_eq!(
+            radial_of(apply_drag(m, Handle::Center, -5.0, -5.0)).center,
+            [0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn radii_clamp_to_a_usable_range() {
+        // ⚠ The minimum is what keeps the ellipse grabbable: a zero-radius shape has all five
+        // handles stacked on one point and is inert. The maximum stops a fast drag producing
+        // an absurd value while still allowing an ellipse twice the frame, a legitimate look.
+        let m = Mask::Radial(ellipse());
+        let shrunk = radial_of(apply_drag(m, Handle::Edge(Side::Right), -5.0, 0.0));
+        assert_eq!(shrunk.radius[0], RADIUS_MIN);
+        let grown = radial_of(apply_drag(m, Handle::Edge(Side::Bottom), 0.0, 50.0));
+        assert_eq!(grown.radius[1], RADIUS_MAX);
+    }
+
+    #[test]
+    fn radial_invert_survives_a_drag() {
+        let m = Mask::Radial(RadialGradient {
+            invert: true,
+            ..ellipse()
+        });
+        assert!(radial_of(apply_drag(m, Handle::Center, 0.1, 0.1)).invert);
+        assert!(radial_of(apply_drag(m, Handle::Edge(Side::Right), 0.1, 0.0)).invert);
+    }
+
+    #[test]
+    fn radial_feather_survives_a_drag() {
+        // Like `invert`, not a positional property.
+        let m = Mask::Radial(RadialGradient {
+            feather: 17.0,
+            ..ellipse()
+        });
+        assert_eq!(
+            radial_of(apply_drag(m, Handle::Center, 0.1, 0.1)).feather,
+            17.0
+        );
+    }
+
+    #[test]
+    fn a_mismatched_handle_leaves_the_mask_unchanged() {
+        // ⚠ Unreachable in the app — there is no UI to change a mask's kind, let alone
+        // mid-drag — but the flat `Handle` enum admits the pair, so the degradation is worth
+        // pinning. Doing nothing is the right failure for a UI; panicking is not.
+        let radial = Mask::Radial(ellipse());
+        assert_eq!(apply_drag(radial, Handle::Line, 0.1, 0.1), radial);
+        let linear = horizontal();
+        assert_eq!(apply_drag(linear, Handle::Center, 0.1, 0.1), linear);
     }
 }
