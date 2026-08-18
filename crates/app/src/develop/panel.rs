@@ -109,40 +109,54 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
                         slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
                     });
-                    // ⚠ `mask_list_changed` is a local, not a direct write to `changed`/
-                    // `settled` from inside this closure: the closure also calls `slider`,
-                    // which already holds its own mutable capture of those two, and a second
-                    // direct capture of the same variables from this closure would be two
-                    // simultaneous mutable borrows — a compile error. Folding the add/delete
-                    // events into `changed`/`settled` happens after the closure returns
-                    // instead, the same restructuring `develop_body` already uses elsewhere
-                    // in this codebase for the same reason.
-                    let mut mask_list_changed = false;
+                    // ⚠ `mask_changed` is a local, not a direct write to `changed`/`settled`
+                    // from inside this closure: the closure also calls `slider`, which already
+                    // holds its own mutable capture of those two, and a second direct capture
+                    // of the same variables from this closure would be two simultaneous
+                    // mutable borrows — a compile error. Folding the add/delete/invert events
+                    // into `changed`/`settled` happens after the closure returns instead, the
+                    // same restructuring `develop_body` already uses elsewhere in this
+                    // codebase for the same reason.
+                    let mut mask_changed = false;
                     egui::CollapsingHeader::new("Masks").show(ui, |ui| {
-                        if ui.button("Add graduated filter").clicked() {
+                        let mut added: Option<edit_model::Mask> = None;
+                        ui.horizontal(|ui| {
+                            if ui.button("Add graduated filter").clicked() {
+                                added =
+                                    Some(edit_model::Mask::Linear(edit_model::LinearGradient {
+                                        // A visible default: top to bottom across the middle
+                                        // third, so the handles land on screen and the ramp is
+                                        // immediately obvious.
+                                        from: [0.5, 0.33],
+                                        to: [0.5, 0.67],
+                                        invert: false,
+                                    }));
+                            }
+                            if ui.button("Add radial filter").clicked() {
+                                // ⚠ The hand-written `Default`: centred, a quarter of each
+                                // axis, feather 50. Both radii being fractions of their own
+                                // axis makes the default ellipse *similar to the frame*, which
+                                // is usually the shape being reached for.
+                                added = Some(edit_model::Mask::Radial(
+                                    edit_model::RadialGradient::default(),
+                                ));
+                            }
+                        });
+                        if let Some(mask) = added {
                             s.edits.masks.push(edit_model::MaskedAdjustment {
-                                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
-                                    // A visible default: top to bottom across the middle
-                                    // third, so the handles land on screen and the ramp is
-                                    // immediately obvious.
-                                    from: [0.5, 0.33],
-                                    to: [0.5, 0.67],
-                                    invert: false,
-                                }),
+                                mask,
                                 adjustments: edit_model::LocalAdjustments::default(),
                             });
                             s.selected_mask = Some(s.edits.masks.len() - 1);
-                            mask_list_changed = true;
+                            mask_changed = true;
                         }
 
                         let mut remove: Option<usize> = None;
                         for i in 0..s.edits.masks.len() {
                             ui.horizontal(|ui| {
                                 let picked = s.selected_mask == Some(i);
-                                if ui
-                                    .selectable_label(picked, format!("Gradient {}", i + 1))
-                                    .clicked()
-                                {
+                                let name = format!("{} {}", s.edits.masks[i].mask.label(), i + 1);
+                                if ui.selectable_label(picked, name).clicked() {
                                     s.selected_mask = if picked { None } else { Some(i) };
                                 }
                                 if ui.button("Delete").clicked() {
@@ -161,11 +175,26 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             // returns early when the selection is gone, which would
                             // otherwise leave a stale handle set and panning dead.
                             s.active_mask_handle = None;
-                            mask_list_changed = true;
+                            mask_changed = true;
                         }
 
                         if let Some(i) = s.selected_mask {
                             if let Some(m) = s.edits.masks.get_mut(i) {
+                                ui.separator();
+                                // Shape properties, kept apart from the adjustments below:
+                                // these describe the mask, not what it carries.
+                                //
+                                // ⚠ `invert` had no UI at all until now. Survivable for a
+                                // linear gradient, which can be inverted by dragging its
+                                // endpoints past each other; not survivable for a radial,
+                                // where the subject vignette — darken everything except the
+                                // ellipse — depends on it and no drag substitutes.
+                                if ui.checkbox(m.mask.invert_mut(), "Invert").changed() {
+                                    mask_changed = true;
+                                }
+                                if let edit_model::Mask::Radial(r) = &mut m.mask {
+                                    slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
+                                }
                                 ui.separator();
                                 let a = &mut m.adjustments;
                                 slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
@@ -183,12 +212,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
 
                         theme::hint(
                             ui,
-                            "Select a mask to drag its handles on the image. The two \
+                            "Select a mask to drag its handles on the image. A gradient's two \
                              outer lines mark where the effect starts and reaches full \
-                             strength.",
+                             strength; a radial's ellipse marks where it falls to nothing.",
                         );
                     });
-                    if mask_list_changed {
+                    if mask_changed {
                         changed = true;
                         settled = true;
                     }
