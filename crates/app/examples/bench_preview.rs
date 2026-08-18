@@ -38,6 +38,32 @@ fn main() {
         ("NR luminance 50 only", nr(50.0, 0.0)),
         ("NR both 50", nr(50.0, 50.0)),
         (
+            "brush ~50 dabs",
+            Edits {
+                masks: vec![edit_model::MaskedAdjustment {
+                    mask: edit_model::Mask::Brush(edit_model::Brush {
+                        // ⚠ Two endpoints, not 50 literal points: the rasterizer interpolates
+                        // dabs at a quarter-radius spacing, so a stroke spanning 0.6 of the frame
+                        // at radius 0.02 yields roughly 50 dabs — which is what costs time.
+                        // Recording 50 points would measure something the app never produces,
+                        // because painting decimates to exactly this spacing.
+                        strokes: vec![edit_model::BrushStroke {
+                            points: vec![[0.2, 0.5], [0.8, 0.5]],
+                            radius: 0.02,
+                            hardness: 50.0,
+                            erase: false,
+                        }],
+                        invert: false,
+                    }),
+                    adjustments: edit_model::LocalAdjustments {
+                        exposure: 0.5,
+                        ..Default::default()
+                    },
+                }],
+                ..Edits::default()
+            },
+        ),
+        (
             "vignette -60",
             Edits {
                 vignette: edit_model::Vignette {
@@ -289,6 +315,37 @@ fn main() {
                 best = best.min(ms);
             }
             println!("{best:8.1} ms   {label}");
+        }
+    }
+
+    // ⚠ The rasterizer alone, at the frame sizes that actually matter. The cases above run
+    // against the half-size decode; painting at 1:1 on a full-resolution buffer rasterizes at the
+    // FULL frame size, which is where the incremental-splatting question lives.
+    {
+        let brush = edit_model::Brush {
+            strokes: vec![edit_model::BrushStroke {
+                points: vec![[0.2, 0.5], [0.8, 0.5]],
+                radius: 0.02,
+                hardness: 50.0,
+                erase: false,
+            }],
+            invert: false,
+        };
+        let g = edit_model::Geometry::default();
+        println!();
+        for (label, fw, fh) in [
+            ("fit 1600x1068", 1600usize, 1068usize),
+            ("half 3123x2085", 3123, 2085),
+            ("full 6246x4170", 6246, 4170),
+        ] {
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let t = std::time::Instant::now();
+                let cov = pipeline::brush::rasterize(&brush, &g, fw, fh);
+                std::hint::black_box(&cov);
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("{best:8.2} ms   brush rasterize, {label}");
         }
     }
 
