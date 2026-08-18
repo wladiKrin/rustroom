@@ -135,7 +135,32 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **The habit that catches all of them: after writing a test, break the thing it names and watch it fail.** Every `⚠ watched failing` note in this file is one of those. When a sabotage step *doesn't* fail, that is a finding about the test, not a formality to wave through — one of this session's subagents refused to move on for exactly that reason and was right.
 
-**▶ NEXT ACTION: M3.1c — the brush.** The last of M3.1's three primitives, and the one that **closes the milestone** — M3.1's own "Done when" names dodge/burn with a brush. Only then does the parked button/layout work resume.
+**▶ NEXT ACTION: the canvas navigation rework** (user's call, 2026-08-18), *then* M3.1c.
+
+**Pan moves off left-drag; left-drag becomes free.** Target mapping: **plain scroll / two-finger swipe → pan** (both axes), **pinch and ctrl+scroll → zoom** (egui folds both into `i.zoom_delta()`, so mouse users keep a zoom gesture), **middle-drag → pan** for mice.
+
+⚠ **This is not "add a pan gesture" — zoom has to move off plain scroll first.** `develop/canvas.rs:150` reads `smooth_scroll_delta.y` and zooms, and **on a macOS trackpad a two-finger swipe *is* `smooth_scroll_delta`** — so the proposed pan gesture and the existing zoom gesture are the same event. They cannot coexist.
+
+**Why it is its own change and not part of 3.1c:** it alters navigation for every photo whether or not masks are involved, so a panning regression would otherwise hide inside a large brush diff. It also wants the GUI in hand to tune feel.
+
+---
+
+**M3.1c — the brush. Decisions already taken in brainstorming (2026-08-18), before the navigation rework preempted it:**
+
+- **Storage: vector strokes in `Edits`, rasterized to a cached coverage buffer.** `Vec<Stroke>` (points, radius, hardness, erase) is small, exact, resolution-independent and remappable. The renderer rasterizes once per render into a frame-space coverage map. Rejected: a raster buffer *in* `Edits` (soft at 1:1, bloats every sidecar, makes "undo one stroke" impossible); and per-pixel evaluation over every stroke (O(strokes × points) per pixel).
+- **⚠⚠ Anchoring: brush strokes live in PRE-geometry (source image) coordinates. Linear and radial keep frame coordinates.** This is the biggest finding of the brainstorm and it is a **latent bug the brush makes acute**, structurally identical to `invert` having no UI in 3.1b. `MaskStage` runs in the **tail**, after `GeometryStage`, so `u = (x0+x)/fw` is normalised against the *already-cropped, already-rotated* frame — **change the crop and every mask slides over the image content.** Invisible for a gradient, tolerable for a radial, ruinous for a stroke painted onto a subject. The asymmetry is principled, not a hack: **a gradient is compositional** ("darken the top" should stay at the top after a re-crop) **and a stroke is content-referred** (it must stay on the cat). Existing sidecars are untouched, which is the other reason not to convert all three.
+- **⚠ The rasterizer, not `MaskStage`, applies the geometry transform.** Because coverage is rasterized into a *frame-space* buffer, `MaskStage` just samples it and never learns geometry exists. Rotation preserves circles and the crop does not stretch, so a dab of radius R source-pixels splats as a disc of radius R×scale frame-pixels — O(dabs × dab area), not O(pixels × dabs).
+- **⚠ The cache key must NOT include the region**, exactly as `PrefixCache`'s does not — rasterize whole-frame, sample the sub-rect, so panning never invalidates.
+- **⚠ Suggested seam, following the `Region` precedent:** `MaskStage` rasterizes internally when handed no pre-built coverage, so the CLI, export and all 35 goldens compile untouched; the engine passes a cached buffer when it has one. That is the pattern that gave the 1:1 region work "zero call-site churn".
+- **Controls: size, hardness, erase.** Erase earns its place — overshooting is inevitable and undoing the whole stroke throws away the good part of the same drag.
+- **⚠ Flow is deferred to a later roadmap milestone** (user's call, 2026-08-18). It complicates stroke-overlap handling in the rasterizer, which is the part worth keeping simple while 3.1c proves the architecture. **The roadmap file in the Obsidian vault still needs this note added.**
+- **⚠ `Mask` and `MaskedAdjustment` lose `Copy`** — a stroke list cannot be `Copy`. Three sites depend on it today: `stages/mask.rs:35` (`masked: *masked`), and `develop/canvas.rs:309`/`330`. ⚠ `mask_tool::apply_drag(m: Mask, ..) -> Mask` should become `&mut Mask` in place rather than clone a stroke list on every drag frame.
+- **⚠ Coverage map as `u8`, not `f32`** — a full-res frame map is 26 MB rather than 104 MB, and 256 levels across a soft edge is below the visibility threshold.
+- **Still open:** whether `MaskStage`'s bounding-box optimisation (deferred at 3.1a and again at 3.1b) comes in here. Brush is the case that motivates it, but measure before assuming.
+
+**After the navigation rework, resume from here.** The original framing follows.
+
+**M3.1c — the brush.** The last of M3.1's three primitives, and the one that **closes the milestone** — M3.1's own "Done when" names dodge/burn with a brush. Only then does the parked button/layout work resume.
 
 ⚠ **Read M3.1b's "did the architecture hold" verdict first** (`docs/superpowers/specs/2026-08-18-radial-mask-design.md`). Short version: it held, and the one structural item was `mask_tool`'s `Handle` enum. **The brush will test that decision much harder**, because a stroke's "handles" are not points at all — there is no fixed set of five positions to hit-test. That is where the rejected nested-`Handle` option becomes worth revisiting, and where the flat enum may genuinely stop paying.
 
