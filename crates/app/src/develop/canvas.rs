@@ -411,7 +411,7 @@ fn draw_mask_overlay(
                 let dx = d.x / frame_rect.width();
                 let dy = d.y / frame_rect.height();
                 if let Some(m) = s.edits.masks.get_mut(i) {
-                    m.mask = mask_tool::apply_drag(m.mask, h, dx, dy);
+                    mask_tool::apply_drag(&mut m.mask, h, dx, dy);
                     moved = true;
                 }
             }

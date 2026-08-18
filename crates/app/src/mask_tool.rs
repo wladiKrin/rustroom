@@ -128,34 +128,30 @@ fn hit_test_radial(r: &RadialGradient, p: [f32; 2], aspect: f32, tol: f32) -> Op
 
 /// Apply a normalized drag `(dx, dy)` to `handle`, clamped to the frame.
 ///
+/// ⚠ **In place, not `Mask -> Mask`.** A brush carries a `Vec<BrushStroke>`, so the by-value form
+/// would clone an entire stroke list on every frame of every drag.
+///
 /// ⚠ Clamping matters: an endpoint dragged off the canvas would be unreachable afterwards.
-pub fn apply_drag(m: Mask, handle: Handle, dx: f32, dy: f32) -> Mask {
+pub fn apply_drag(m: &mut Mask, handle: Handle, dx: f32, dy: f32) {
     let mv = |p: [f32; 2]| [(p[0] + dx).clamp(0.0, 1.0), (p[1] + dy).clamp(0.0, 1.0)];
     match (m, handle) {
-        (Mask::Linear(g), Handle::From) => Mask::Linear(LinearGradient {
-            from: mv(g.from),
-            ..g
-        }),
-        (Mask::Linear(g), Handle::To) => Mask::Linear(LinearGradient { to: mv(g.to), ..g }),
-        (Mask::Linear(g), Handle::Line) => Mask::Linear(LinearGradient {
-            from: mv(g.from),
-            to: mv(g.to),
-            ..g
-        }),
-        (Mask::Radial(r), Handle::Center) => Mask::Radial(RadialGradient {
-            center: mv(r.center),
-            ..r
-        }),
-        (Mask::Radial(r), Handle::Edge(side)) => Mask::Radial(resize_radial(r, side, dx, dy)),
-        // ⚠ A handle belonging to the other shape. Unreachable — there is no UI to change a
-        // mask's kind, let alone mid-drag — and doing nothing is the right failure for a UI.
-        _ => m,
+        (Mask::Linear(g), Handle::From) => g.from = mv(g.from),
+        (Mask::Linear(g), Handle::To) => g.to = mv(g.to),
+        (Mask::Linear(g), Handle::Line) => {
+            g.from = mv(g.from);
+            g.to = mv(g.to);
+        }
+        (Mask::Radial(r), Handle::Center) => r.center = mv(r.center),
+        (Mask::Radial(r), Handle::Edge(side)) => resize_radial(r, side, dx, dy),
+        // ⚠ A handle belonging to another shape. Unreachable — there is no UI to change a mask's
+        // kind, let alone mid-drag — and doing nothing is the right failure for a UI.
+        _ => {}
     }
 }
 
 /// Resize about a **fixed centre**: each edge grows away from the middle, which is what a marked
 /// centre implies and what Lightroom does.
-fn resize_radial(r: RadialGradient, side: Side, dx: f32, dy: f32) -> RadialGradient {
+fn resize_radial(r: &mut RadialGradient, side: Side, dx: f32, dy: f32) {
     let (mut rx, mut ry) = (r.radius[0], r.radius[1]);
     match side {
         Side::Right => rx += dx,
@@ -163,13 +159,10 @@ fn resize_radial(r: RadialGradient, side: Side, dx: f32, dy: f32) -> RadialGradi
         Side::Bottom => ry += dy,
         Side::Top => ry -= dy,
     }
-    RadialGradient {
-        radius: [
-            rx.clamp(RADIUS_MIN, RADIUS_MAX),
-            ry.clamp(RADIUS_MIN, RADIUS_MAX),
-        ],
-        ..r
-    }
+    r.radius = [
+        rx.clamp(RADIUS_MIN, RADIUS_MAX),
+        ry.clamp(RADIUS_MIN, RADIUS_MAX),
+    ];
 }
 
 /// Where the selection lands after the mask at `removed` is deleted from a list of `len`.
@@ -209,6 +202,20 @@ mod tests {
 
     fn horizontal() -> Mask {
         Mask::Linear(horizontal_gradient())
+    }
+
+    /// Apply a drag to a copy and return it.
+    ///
+    /// ⚠ `apply_drag` mutates in place — a brush's stroke list must not be cloned on every drag
+    /// frame — but these tests read better as expressions, and keeping their assertions
+    /// *unchanged* is the regression argument for that signature change. Takes `&Mask` so the
+    /// call sites do not churn again when `Mask` loses `Copy`.
+    fn dragged(m: &Mask, handle: Handle, dx: f32, dy: f32) -> Mask {
+        // `*m` while `Mask` is still `Copy`; the brush variant turns this into `m.clone()`, and
+        // the compiler will say so.
+        let mut out = *m;
+        apply_drag(&mut out, handle, dx, dy);
+        out
     }
 
     /// The gradient inside a mask, for tests that assert on endpoints.
@@ -271,7 +278,7 @@ mod tests {
     #[test]
     fn dragging_an_endpoint_leaves_the_other_alone() {
         let g = horizontal();
-        let out = gradient_of(apply_drag(g, Handle::From, 0.1, -0.2));
+        let out = gradient_of(dragged(&g, Handle::From, 0.1, -0.2));
         assert_eq!(out.from, [0.3, 0.3]);
         assert_eq!(
             out.to,
@@ -290,7 +297,7 @@ mod tests {
         // ("1.0 - (1.0 - 0.1) is 0.100000024"). `crop_tool`'s own arithmetic-result tests use
         // the same 1e-6 tolerance for the same reason.
         let g = horizontal();
-        let out = gradient_of(apply_drag(g, Handle::Line, 0.1, 0.05));
+        let out = gradient_of(dragged(&g, Handle::Line, 0.1, 0.05));
         let close =
             |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
         assert!(close(out.from, [0.3, 0.55]), "{:?}", out.from);
@@ -301,7 +308,7 @@ mod tests {
     fn dragging_clamps_to_the_frame() {
         // An endpoint dragged off the canvas would be unreachable afterwards.
         let g = horizontal();
-        let out = gradient_of(apply_drag(g, Handle::To, 5.0, 5.0));
+        let out = gradient_of(dragged(&g, Handle::To, 5.0, 5.0));
         assert_eq!(out.to, [1.0, 1.0]);
     }
 
@@ -312,8 +319,8 @@ mod tests {
             invert: true,
             ..horizontal_gradient()
         });
-        assert!(gradient_of(apply_drag(g, Handle::Line, 0.1, 0.1)).invert);
-        assert!(gradient_of(apply_drag(g, Handle::From, 0.1, 0.1)).invert);
+        assert!(gradient_of(dragged(&g, Handle::Line, 0.1, 0.1)).invert);
+        assert!(gradient_of(dragged(&g, Handle::From, 0.1, 0.1)).invert);
     }
 
     #[test]
@@ -454,7 +461,7 @@ mod tests {
         let m = Mask::Radial(ellipse());
         let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
 
-        let right = radial_of(apply_drag(m, Handle::Edge(Side::Right), 0.1, 0.07));
+        let right = radial_of(dragged(&m, Handle::Edge(Side::Right), 0.1, 0.07));
         assert!(close(right.radius[0], 0.35), "{:?}", right.radius);
         assert!(
             close(right.radius[1], 0.2),
@@ -463,7 +470,7 @@ mod tests {
         );
         assert_eq!(right.center, [0.5, 0.5], "the centre must not move");
 
-        let left = radial_of(apply_drag(m, Handle::Edge(Side::Left), -0.1, -0.07));
+        let left = radial_of(dragged(&m, Handle::Edge(Side::Left), -0.1, -0.07));
         assert!(close(left.radius[0], 0.35), "{:?}", left.radius);
         assert!(
             close(left.radius[1], 0.2),
@@ -472,7 +479,7 @@ mod tests {
         );
         assert_eq!(left.center, [0.5, 0.5]);
 
-        let bottom = radial_of(apply_drag(m, Handle::Edge(Side::Bottom), 0.09, 0.05));
+        let bottom = radial_of(dragged(&m, Handle::Edge(Side::Bottom), 0.09, 0.05));
         assert!(close(bottom.radius[1], 0.25), "{:?}", bottom.radius);
         assert!(
             close(bottom.radius[0], 0.25),
@@ -481,7 +488,7 @@ mod tests {
         );
         assert_eq!(bottom.center, [0.5, 0.5]);
 
-        let top = radial_of(apply_drag(m, Handle::Edge(Side::Top), -0.09, -0.05));
+        let top = radial_of(dragged(&m, Handle::Edge(Side::Top), -0.09, -0.05));
         assert!(close(top.radius[1], 0.25), "{:?}", top.radius);
         assert!(
             close(top.radius[0], 0.25),
@@ -493,7 +500,7 @@ mod tests {
     #[test]
     fn dragging_the_centre_leaves_the_radii_alone() {
         let m = Mask::Radial(ellipse());
-        let out = radial_of(apply_drag(m, Handle::Center, 0.1, -0.2));
+        let out = radial_of(dragged(&m, Handle::Center, 0.1, -0.2));
         let close =
             |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
         assert!(close(out.center, [0.6, 0.3]), "{:?}", out.center);
@@ -506,11 +513,11 @@ mod tests {
         // linear gradient's endpoints follow.
         let m = Mask::Radial(ellipse());
         assert_eq!(
-            radial_of(apply_drag(m, Handle::Center, 5.0, 5.0)).center,
+            radial_of(dragged(&m, Handle::Center, 5.0, 5.0)).center,
             [1.0, 1.0]
         );
         assert_eq!(
-            radial_of(apply_drag(m, Handle::Center, -5.0, -5.0)).center,
+            radial_of(dragged(&m, Handle::Center, -5.0, -5.0)).center,
             [0.0, 0.0]
         );
     }
@@ -521,9 +528,9 @@ mod tests {
         // handles stacked on one point and is inert. The maximum stops a fast drag producing
         // an absurd value while still allowing an ellipse twice the frame, a legitimate look.
         let m = Mask::Radial(ellipse());
-        let shrunk = radial_of(apply_drag(m, Handle::Edge(Side::Right), -5.0, 0.0));
+        let shrunk = radial_of(dragged(&m, Handle::Edge(Side::Right), -5.0, 0.0));
         assert_eq!(shrunk.radius[0], RADIUS_MIN);
-        let grown = radial_of(apply_drag(m, Handle::Edge(Side::Bottom), 0.0, 50.0));
+        let grown = radial_of(dragged(&m, Handle::Edge(Side::Bottom), 0.0, 50.0));
         assert_eq!(grown.radius[1], RADIUS_MAX);
     }
 
@@ -533,8 +540,8 @@ mod tests {
             invert: true,
             ..ellipse()
         });
-        assert!(radial_of(apply_drag(m, Handle::Center, 0.1, 0.1)).invert);
-        assert!(radial_of(apply_drag(m, Handle::Edge(Side::Right), 0.1, 0.0)).invert);
+        assert!(radial_of(dragged(&m, Handle::Center, 0.1, 0.1)).invert);
+        assert!(radial_of(dragged(&m, Handle::Edge(Side::Right), 0.1, 0.0)).invert);
     }
 
     #[test]
@@ -545,7 +552,7 @@ mod tests {
             ..ellipse()
         });
         assert_eq!(
-            radial_of(apply_drag(m, Handle::Center, 0.1, 0.1)).feather,
+            radial_of(dragged(&m, Handle::Center, 0.1, 0.1)).feather,
             17.0
         );
     }
@@ -556,8 +563,8 @@ mod tests {
         // mid-drag — but the flat `Handle` enum admits the pair, so the degradation is worth
         // pinning. Doing nothing is the right failure for a UI; panicking is not.
         let radial = Mask::Radial(ellipse());
-        assert_eq!(apply_drag(radial, Handle::Line, 0.1, 0.1), radial);
+        assert_eq!(dragged(&radial, Handle::Line, 0.1, 0.1), radial);
         let linear = horizontal();
-        assert_eq!(apply_drag(linear, Handle::Center, 0.1, 0.1), linear);
+        assert_eq!(dragged(&linear, Handle::Center, 0.1, 0.1), linear);
     }
 }
