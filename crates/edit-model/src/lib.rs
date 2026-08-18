@@ -510,6 +510,92 @@ impl LinearGradient {
     }
 }
 
+/// A radial filter. Coverage is 1 inside the ellipse and ramps to 0 at its boundary.
+///
+/// `center` is in **normalised frame coordinates**, as [`CropRect`] is. `radius[0]` is a
+/// fraction of the frame's *width* and `radius[1]` a fraction of its *height* — so a mask means
+/// the same thing on the 1600 px preview and on the full-resolution export, and the default
+/// radius renders as an ellipse *similar to the frame*.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RadialGradient {
+    pub center: [f32; 2],
+    pub radius: [f32; 2],
+    /// 0 = a hard edge at the ellipse, 100 = a ramp all the way from the centre.
+    pub feather: f32,
+    pub invert: bool,
+}
+
+/// ⚠ **Hand-written, not derived** — unlike [`LinearGradient`]. Container-level
+/// `#[serde(default)]` fills a missing field from the *struct's* `Default`, so a derived one
+/// would give every partial sidecar a zero-radius point-ellipse. `feather: 50` cannot come
+/// from `f32::default()` in any case.
+impl Default for RadialGradient {
+    fn default() -> Self {
+        Self {
+            center: [0.5, 0.5],
+            radius: [0.25, 0.25],
+            feather: 50.0,
+            invert: false,
+        }
+    }
+}
+
+impl RadialGradient {
+    /// Below this the ramp is treated as a hard edge. The only thing between feather 0 and a
+    /// division by zero — the same role `WIDTH_EPS` plays in the vignette.
+    const FEATHER_EPS: f32 = 1e-4;
+
+    /// Coverage at `(u, v)` in normalised frame coordinates, in `0.0..=1.0`.
+    ///
+    /// ⚠⚠ **`aspect` is deliberately unused, and this is not an oversight.** Every sibling
+    /// mask function needs it: [`LinearGradient::coverage`] projects onto an axis and
+    /// `mask_tool::hit_test` measures a screen-space distance, and the anisotropic scaling
+    /// between normalised and screen space destroys *perpendicularity* and *distance*
+    /// respectively. It does **not** destroy axis-alignment: an axis-aligned ellipse maps to an
+    /// axis-aligned ellipse, so the expression below is already a correct on-screen ellipse.
+    ///
+    /// Rotation is precisely the feature that would bring the correction back, which is the
+    /// main reason this shape is axis-aligned. `radial_coverage_is_independent_of_aspect` is
+    /// the guard against someone "fixing" the omission.
+    ///
+    /// The parameter stays in the signature so [`Mask::coverage`] has one shape across
+    /// variants.
+    pub fn coverage(&self, u: f32, v: f32, _aspect: f32) -> f32 {
+        let (rx, ry) = (self.radius[0], self.radius[1]);
+        let c = if rx <= f32::EPSILON || ry <= f32::EPSILON {
+            // A degenerate ellipse honestly covers nothing. Unlike `LinearGradient`'s guard,
+            // which chooses 1.0 only because its alternative was NaN, 0.0 is the true answer
+            // here and cannot paint garbage either.
+            0.0
+        } else {
+            // Normalised elliptical distance: exactly 1.0 on the boundary.
+            let dx = (u - self.center[0]) / rx;
+            let dy = (v - self.center[1]) / ry;
+            let d = (dx * dx + dy * dy).sqrt();
+            let f = (self.feather / 100.0).clamp(0.0, 1.0);
+            if f <= Self::FEATHER_EPS {
+                if d <= 1.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            } else {
+                // Smoothstep rather than a linear ramp: a linear ramp in radial distance
+                // leaves a visible crease ring where the derivative jumps. The vignette's
+                // feather made the same choice for the same reason.
+                let t = ((1.0 - d) / f).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            }
+        };
+        if self.invert {
+            1.0 - c
+        } else {
+            c
+        }
+    }
+}
+
 /// The mask primitives. 3.1b adds `Radial`, 3.1c adds `Brush`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mask {
@@ -1662,5 +1748,156 @@ mod tests {
             invert: false,
         };
         assert_eq!(g.coverage(0.1, 0.9, 1.5), 1.0);
+    }
+
+    /// An ellipse in the middle of the frame, half as wide as the frame and 60% as tall.
+    fn radial() -> RadialGradient {
+        RadialGradient {
+            center: [0.5, 0.5],
+            radius: [0.25, 0.3],
+            feather: 50.0,
+            invert: false,
+        }
+    }
+
+    #[test]
+    fn radial_coverage_is_one_at_the_centre_and_zero_outside() {
+        let r = radial();
+        assert!((r.coverage(0.5, 0.5, 1.0) - 1.0).abs() < 1e-6);
+        // Well outside on each axis.
+        assert_eq!(r.coverage(0.95, 0.5, 1.0), 0.0);
+        assert_eq!(r.coverage(0.05, 0.5, 1.0), 0.0);
+        assert_eq!(r.coverage(0.5, 0.95, 1.0), 0.0);
+        assert_eq!(r.coverage(0.5, 0.05, 1.0), 0.0);
+        // Exactly on the boundary: the ramp has reached zero.
+        assert!(r.coverage(0.75, 0.5, 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn radial_coverage_is_independent_of_aspect() {
+        // ⚠⚠ The load-bearing test of this whole feature, and the only thing standing between
+        // this design and a future reader "fixing" the missing aspect correction that three
+        // sibling functions all genuinely need.
+        //
+        // An axis-aligned ellipse is immune to the anisotropic scaling between normalised and
+        // screen space, because that scaling maps an axis-aligned ellipse to an axis-aligned
+        // ellipse. `LinearGradient::coverage` needs the correction only because it projects
+        // onto an axis, and *perpendicularity* is what anisotropic scaling destroys.
+        //
+        // ⚠ The probe sits off-centre on BOTH axes. A point on either axis would be
+        // insensitive to a correction applied to the other one — which is the precise shape of
+        // the mistake `hit_testing_the_line_is_aspect_correct` made in 3.1a.
+        let r = radial();
+        let (u, v) = (0.62, 0.58);
+        let base = r.coverage(u, v, 1.0);
+        assert!(
+            base > 0.0 && base < 1.0,
+            "probe must land on the ramp: {base}"
+        );
+        for aspect in [0.33, 1.5, 3.0, 10.0] {
+            assert!(
+                (r.coverage(u, v, aspect) - base).abs() < 1e-6,
+                "aspect {aspect} changed coverage: {} vs {base}",
+                r.coverage(u, v, aspect)
+            );
+        }
+    }
+
+    #[test]
+    fn feather_zero_is_a_hard_edge() {
+        let r = RadialGradient {
+            feather: 0.0,
+            ..radial()
+        };
+        // Just inside and just outside the boundary at u = 0.75.
+        assert_eq!(r.coverage(0.74, 0.5, 1.0), 1.0);
+        assert_eq!(r.coverage(0.76, 0.5, 1.0), 0.0);
+
+        // ⚠⚠ **The probe that actually tests the `FEATHER_EPS` guard is this one**, exactly on
+        // the boundary — and the two above cannot substitute for it.
+        //
+        // Without the guard the ramp computes `(1.0 - d) / 0.0`. For `d < 1` that is `+inf`,
+        // which clamps to 1.0; for `d > 1` it is `-inf`, which clamps to 0.0. IEEE infinity
+        // arithmetic therefore produces the *correct* answer everywhere except at `d == 1.0`,
+        // where it is `0.0 / 0.0` — NaN, which `f32::clamp` propagates rather than clamping,
+        // and which would reach the mask blend and paint garbage.
+        //
+        // This was found by deleting the guard and watching the two assertions above pass. A
+        // test that names a guard it cannot detect the removal of is the exact failure this
+        // codebase has now hit four times.
+        //
+        // `center[0] + radius[0]` is 0.5 + 0.25, all exact in binary, so `d` is exactly 1.0.
+        let on_boundary = r.coverage(0.75, 0.5, 1.0);
+        assert!(!on_boundary.is_nan(), "the boundary must not produce NaN");
+        assert_eq!(on_boundary, 1.0, "a hard edge includes its own boundary");
+    }
+
+    #[test]
+    fn feather_one_hundred_ramps_from_the_centre() {
+        let r = RadialGradient {
+            feather: 100.0,
+            ..radial()
+        };
+        // At the centre, full; halfway to the boundary, strictly between; at it, zero.
+        assert!((r.coverage(0.5, 0.5, 1.0) - 1.0).abs() < 1e-6);
+        let mid = r.coverage(0.625, 0.5, 1.0);
+        assert!(mid > 0.0 && mid < 1.0, "{mid}");
+        assert!(r.coverage(0.75, 0.5, 1.0).abs() < 1e-6);
+        // Contrast with feather 50, where the inner half is still flat at full coverage.
+        assert!((radial().coverage(0.625, 0.5, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn radial_invert_flips_coverage() {
+        let r = RadialGradient {
+            invert: true,
+            ..radial()
+        };
+        assert!(r.coverage(0.5, 0.5, 1.0).abs() < 1e-6);
+        assert!((r.coverage(0.95, 0.5, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_zero_radius_radial_is_inert_not_nan() {
+        // ⚠ Reachable only from a hand-edited sidecar — `Default` and the panel both build a
+        // usable ellipse — but a NaN here would reach the blend and paint the frame with
+        // garbage, exactly as `LinearGradient`'s zero-length guard prevents.
+        //
+        // The guard yields pre-invert coverage 0.0 and then falls through the invert, so an
+        // inverted point-ellipse covers everything. That is the limit of the surrounding
+        // behaviour rather than a special case: as the radius shrinks, an inverted mask covers
+        // all but a vanishing point.
+        let r = RadialGradient {
+            radius: [0.0, 0.0],
+            ..radial()
+        };
+        assert_eq!(r.coverage(0.5, 0.5, 1.0), 0.0);
+        assert_eq!(r.coverage(0.1, 0.9, 2.0), 0.0);
+        assert!(!r.coverage(0.5, 0.5, 1.0).is_nan());
+        let inv = RadialGradient { invert: true, ..r };
+        assert_eq!(inv.coverage(0.5, 0.5, 1.0), 1.0);
+    }
+
+    #[test]
+    fn a_radial_default_is_a_usable_ellipse() {
+        // ⚠ NOT a derived `Default`. Container-level `#[serde(default)]` fills missing fields
+        // from the struct's `Default`, so a derived one would give every partial sidecar a
+        // zero-radius point-ellipse — and `feather: 50` cannot come from `f32::default()`
+        // under any arrangement.
+        let d = RadialGradient::default();
+        assert_eq!(d.center, [0.5, 0.5]);
+        assert!(d.radius[0] > 0.0 && d.radius[1] > 0.0);
+        assert_eq!(d.feather, 50.0);
+        assert!(!d.invert);
+        // It covers its own centre, which a derived default would not.
+        assert!((d.coverage(0.5, 0.5, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_partial_radial_json_gets_the_hand_written_defaults() {
+        let r: RadialGradient = serde_json::from_str(r#"{"center":[0.25,0.75]}"#).unwrap();
+        assert_eq!(r.center, [0.25, 0.75]);
+        assert_eq!(r.radius, RadialGradient::default().radius);
+        assert_eq!(r.feather, 50.0);
     }
 }
