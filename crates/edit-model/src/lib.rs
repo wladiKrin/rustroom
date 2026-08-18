@@ -633,11 +633,15 @@ pub struct Brush {
     pub invert: bool,
 }
 
-/// The mask primitives. 3.1c adds `Brush`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// The mask primitives.
+///
+/// ⚠ **Not `Copy`** — `Mask::Brush` carries a `Vec<BrushStroke>`. [`MaskedAdjustment`] is
+/// therefore not `Copy` either. Both are still `Clone`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mask {
     Linear(LinearGradient),
     Radial(RadialGradient),
+    Brush(Brush),
 }
 
 impl Default for Mask {
@@ -660,6 +664,8 @@ impl Mask {
         match self {
             Mask::Linear(g) => Some(g.coverage(u, v, aspect)),
             Mask::Radial(r) => Some(r.coverage(u, v, aspect)),
+            // Sampled data — `pipeline::brush::rasterize` answers for this one.
+            Mask::Brush(_) => None,
         }
     }
 
@@ -668,6 +674,7 @@ impl Mask {
         match self {
             Mask::Linear(_) => "Gradient",
             Mask::Radial(_) => "Radial",
+            Mask::Brush(_) => "Brush",
         }
     }
 
@@ -680,6 +687,7 @@ impl Mask {
         match self {
             Mask::Linear(g) => &mut g.invert,
             Mask::Radial(r) => &mut r.invert,
+            Mask::Brush(b) => &mut b.invert,
         }
     }
 }
@@ -713,7 +721,8 @@ impl LocalAdjustments {
 }
 
 /// One mask and the adjustments it carries.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+/// ⚠ Not `Copy`: [`Mask::Brush`] carries a stroke list. Still `Clone`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct MaskedAdjustment {
     pub mask: Mask,
@@ -1966,38 +1975,6 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_linear_sidecar_still_loads() {
-        // ⚠ `Mask` is externally tagged, so every sidecar written before M3.1b holds
-        // `{"Linear": {...}}`. Adding a variant to an externally tagged enum is backward
-        // compatible — but "is" is doing a lot of work in that sentence, and a switch to an
-        // internally tagged or untagged representation would silently break every file on
-        // disk while every other test kept passing.
-        let json = r#"{"masks":[{"mask":{"Linear":{"from":[0.0,0.0],"to":[1.0,0.0],
-                      "invert":false}},"adjustments":{"exposure":1.0}}]}"#;
-        let e: Edits = serde_json::from_str(json).unwrap();
-        assert_eq!(e.masks.len(), 1);
-        assert_eq!(e.masks[0].adjustments.exposure, 1.0);
-
-        // ⚠⚠ Assert the **payload**, not just the variant. `matches!(.., Mask::Linear(_))`
-        // alone is not enough, and finding out why was instructive: under
-        // `#[serde(untagged)]` serde tries to read `LinearGradient` from the whole object, and
-        // because `LinearGradient` carries container-level `#[serde(default)]` the unknown
-        // "Linear" key is simply *ignored* and every field defaults. The variant still
-        // matches — with `from` and `to` both silently `[0.0, 0.0]`, a degenerate gradient
-        // that covers the entire frame. So the variant check passed with the tagging
-        // sabotaged; only the endpoints detect it.
-        let Mask::Linear(g) = e.masks[0].mask else {
-            panic!("expected a linear gradient, got {:?}", e.masks[0].mask);
-        };
-        assert_eq!(g.from, [0.0, 0.0]);
-        assert_eq!(
-            g.to,
-            [1.0, 0.0],
-            "the endpoints must survive the round trip"
-        );
-    }
-
-    #[test]
     fn a_radial_round_trips_through_json() {
         let src = Mask::Radial(RadialGradient {
             center: [0.25, 0.75],
@@ -2007,20 +1984,6 @@ mod tests {
         });
         let back: Mask = serde_json::from_str(&serde_json::to_string(&src).unwrap()).unwrap();
         assert_eq!(back, src);
-    }
-
-    #[test]
-    fn every_mask_variant_has_a_label_and_an_invert() {
-        // A table over both variants, so a third one cannot ship with an empty list row or an
-        // `invert` the panel's checkbox cannot reach. 3.1c's brush will land here.
-        for mut m in [
-            Mask::Linear(LinearGradient::default()),
-            Mask::Radial(RadialGradient::default()),
-        ] {
-            assert!(!m.label().is_empty());
-            *m.invert_mut() = true;
-            assert!(*m.invert_mut(), "invert_mut must expose the real field");
-        }
     }
 
     #[test]
@@ -2072,5 +2035,53 @@ mod tests {
         assert_eq!(lin.analytic_coverage(0.5, 0.5, 1.0), Some(0.5));
         let rad = Mask::Radial(RadialGradient::default());
         assert_eq!(rad.analytic_coverage(0.5, 0.5, 1.0), Some(1.0));
+    }
+
+    #[test]
+    fn a_brush_has_no_analytic_coverage() {
+        // ⚠ The whole reason `analytic_coverage` returns an Option. A `0.0` here would compile,
+        // run, and produce a mask that silently covers nothing.
+        let m = Mask::Brush(Brush::default());
+        assert_eq!(m.analytic_coverage(0.5, 0.5, 1.0), None);
+    }
+
+    #[test]
+    fn every_mask_variant_has_a_label_and_an_invert() {
+        // A table over every variant, so a fourth cannot ship with an empty list row or an
+        // `invert` the panel's checkbox cannot reach.
+        for mut m in [
+            Mask::Linear(LinearGradient::default()),
+            Mask::Radial(RadialGradient::default()),
+            Mask::Brush(Brush::default()),
+        ] {
+            assert!(!m.label().is_empty());
+            *m.invert_mut() = true;
+            assert!(*m.invert_mut(), "invert_mut must expose the real field");
+        }
+    }
+
+    #[test]
+    fn an_existing_sidecar_without_a_brush_still_loads() {
+        // ⚠ `Mask` is externally tagged, so every sidecar written before M3.1c holds
+        // `{"Linear": {...}}`. Adding a variant is backward compatible — but a switch to an
+        // untagged representation would silently break every file on disk.
+        //
+        // ⚠ Assert the PAYLOAD, not the variant. Under `#[serde(untagged)]` serde reads
+        // `LinearGradient` from the whole object, and its container-level `#[serde(default)]`
+        // makes the unknown "Linear" key be ignored and every field default — so the variant
+        // still matches with `from`/`to` silently `[0,0]`.
+        let json = r#"{"masks":[{"mask":{"Linear":{"from":[0.0,0.0],"to":[1.0,0.0],
+                      "invert":false}},"adjustments":{"exposure":1.0}}]}"#;
+        let e: Edits = serde_json::from_str(json).unwrap();
+        assert_eq!(e.masks.len(), 1);
+        assert_eq!(e.masks[0].adjustments.exposure, 1.0);
+        let Mask::Linear(g) = &e.masks[0].mask else {
+            panic!("expected a linear gradient, got {:?}", e.masks[0].mask);
+        };
+        assert_eq!(
+            g.to,
+            [1.0, 0.0],
+            "the endpoints must survive the round trip"
+        );
     }
 }

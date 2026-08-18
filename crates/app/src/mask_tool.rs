@@ -63,6 +63,10 @@ pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> 
     match m {
         Mask::Linear(g) => hit_test_linear(g, p, aspect, tol),
         Mask::Radial(r) => hit_test_radial(r, p, aspect, tol),
+        // ⚠ A brush has no handles at all. A stroke is not a shape with grab points, which is
+        // the observation that shapes 3.1c-B's canvas work: painting is the interaction, and
+        // there is nothing to drag.
+        Mask::Brush(_) => None,
     }
 }
 
@@ -211,9 +215,7 @@ mod tests {
     /// *unchanged* is the regression argument for that signature change. Takes `&Mask` so the
     /// call sites do not churn again when `Mask` loses `Copy`.
     fn dragged(m: &Mask, handle: Handle, dx: f32, dy: f32) -> Mask {
-        // `*m` while `Mask` is still `Copy`; the brush variant turns this into `m.clone()`, and
-        // the compiler will say so.
-        let mut out = *m;
+        let mut out = m.clone();
         apply_drag(&mut out, handle, dx, dy);
         out
     }

@@ -390,12 +390,12 @@ fn draw_mask_overlay(
     let Some(m) = s.edits.masks.get(i) else {
         return false;
     };
-    let mask = m.mask;
+    let mask = m.mask.clone();
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
         return false;
     }
 
-    paint_mask(&ui.painter_at(img_rect), mask, frame_rect, img_rect);
+    paint_mask(&ui.painter_at(img_rect), &mask, frame_rect, img_rect);
 
     let aspect = frame_rect.width() / frame_rect.height();
     let mut moved = false;
@@ -453,7 +453,7 @@ const ELLIPSE_SEGMENTS: usize = 64;
 /// with the view while panning at high zoom.
 fn paint_mask(
     painter: &egui::Painter,
-    mask: edit_model::Mask,
+    mask: &edit_model::Mask,
     frame_rect: egui::Rect,
     clip: egui::Rect,
 ) {
@@ -514,6 +514,10 @@ fn paint_mask(
                 painter.circle_filled(to_screen(h), 5.0, egui::Color32::WHITE);
             }
         }
+        // ⚠ Nothing to draw yet. 3.1c-B paints the coverage tint and the brush cursor; there are
+        // no handles, because a stroke is not a shape with grab points — the same observation
+        // that makes `mask_tool::hit_test` return `None` for a brush.
+        edit_model::Mask::Brush(_) => {}
     }
 }
 

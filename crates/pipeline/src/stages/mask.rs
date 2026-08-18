@@ -32,7 +32,7 @@ impl MaskStage {
         // brush will need the scale, for the stroke radius.
         let _ = scale;
         Self {
-            masked: *masked,
+            masked: masked.clone(),
             stages: per_pixel_stages(&masked.adjustments),
             region,
         }
