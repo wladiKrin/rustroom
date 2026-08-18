@@ -224,6 +224,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 size: app_brush_size,
                                 hardness: app_brush_hardness,
                                 erase: app_brush_erase,
+                                show_tint: app.show_mask_tint,
                             },
                         );
                         // Zoom first, then pan: the anchor correction below depends on the
@@ -402,6 +403,7 @@ struct BrushTool {
     size: f32,
     hardness: f32,
     erase: bool,
+    show_tint: bool,
 }
 
 fn draw_mask_overlay(
@@ -423,7 +425,14 @@ fn draw_mask_overlay(
         return false;
     }
 
-    paint_mask(&ui.painter_at(img_rect), &mask, frame_rect, img_rect);
+    paint_mask(
+        &ui.painter_at(img_rect),
+        &mask,
+        frame_rect,
+        img_rect,
+        &s.edits.geometry,
+        tool.show_tint,
+    );
 
     let aspect = frame_rect.width() / frame_rect.height();
     let mut moved = false;
@@ -496,6 +505,19 @@ fn draw_mask_overlay(
         }
     }
 
+    // The brush cursor: a circle at the pointer at the current screen radius. ⚠ Without it the
+    // Size slider is guesswork, because a screen-point size has no other on-screen
+    // representation. `hover_pos`, not `interact_pointer_pos`: it must show before a drag begins.
+    if matches!(mask, edit_model::Mask::Brush(_)) {
+        if let Some(hp) = resp.hover_pos() {
+            ui.painter_at(img_rect).circle_stroke(
+                hp,
+                tool.size,
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(180)),
+            );
+        }
+    }
+
     // ⚠ Moving a mask changes the *rendered image*, so it must ask for a re-render — the
     // panel's sliders do exactly this on `changed`. Without it the handles moved while the
     // photo kept showing the mask's previous position, updating only when some later edit
@@ -530,6 +552,8 @@ fn paint_mask(
     mask: &edit_model::Mask,
     frame_rect: egui::Rect,
     clip: egui::Rect,
+    geometry: &edit_model::Geometry,
+    show_tint: bool,
 ) {
     let to_screen = |p: [f32; 2]| {
         egui::pos2(
@@ -588,10 +612,59 @@ fn paint_mask(
                 painter.circle_filled(to_screen(h), 5.0, egui::Color32::WHITE);
             }
         }
-        // ⚠ Nothing to draw yet. 3.1c-B paints the coverage tint and the brush cursor; there are
-        // no handles, because a stroke is not a shape with grab points — the same observation
-        // that makes `mask_tool::hit_test` return `None` for a brush.
-        edit_model::Mask::Brush(_) => {}
+        edit_model::Mask::Brush(b) => {
+            // ⚠ The canvas rasterizes its OWN coverage at screen resolution rather than reusing
+            // the render worker's. A deliberate second rasterization: reusing the worker's would
+            // give one source of truth but make the tint lag the stroke by a full render, and for
+            // a brush, seeing the mark appear under the cursor *is* the experience.
+            //
+            // There are no handles — a stroke is not a shape with grab points, the same
+            // observation that makes `mask_tool::hit_test` return `None` for a brush.
+            if !show_tint || b.strokes.is_empty() {
+                return;
+            }
+            let (w, h) = (frame_rect.width() as usize, frame_rect.height() as usize);
+            if w == 0 || h == 0 {
+                return;
+            }
+            let cov = pipeline::brush::rasterize(b, geometry, w, h);
+            if cov.is_empty() {
+                return;
+            }
+            // ⚠ Red because it is conventional and because none of the four accents is red, so
+            // the tint can never be confused with active state.
+            //
+            // ⚠ One quad per *run* of equal coverage along a row, not one per pixel. A per-pixel
+            // mesh over a large stroke is hundreds of thousands of quads; runs collapse the flat
+            // interior of a stroke — which is most of it — into a handful.
+            let mut mesh = egui::Mesh::default();
+            for y in 0..cov.h {
+                let mut x = 0usize;
+                while x < cov.w {
+                    let a = cov.at(cov.x0 + x, cov.y0 + y);
+                    if a == 0 {
+                        x += 1;
+                        continue;
+                    }
+                    let start = x;
+                    while x < cov.w && cov.at(cov.x0 + x, cov.y0 + y) == a {
+                        x += 1;
+                    }
+                    let rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            frame_rect.left() + (cov.x0 + start) as f32,
+                            frame_rect.top() + (cov.y0 + y) as f32,
+                        ),
+                        egui::vec2((x - start) as f32, 1.0),
+                    );
+                    mesh.add_colored_rect(
+                        rect,
+                        egui::Color32::from_rgba_unmultiplied(255, 40, 40, a / 2),
+                    );
+                }
+            }
+            painter.add(egui::Shape::mesh(mesh));
+        }
     }
 }
 
