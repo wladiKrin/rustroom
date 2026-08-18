@@ -1,6 +1,6 @@
 # M3.1c-A — the brush mask, headless
 
-**Status:** spec, 2026-08-18.
+**Status:** implemented, 2026-08-18. See "Outcome" at the end.
 
 ## Scope
 
@@ -301,3 +301,63 @@ the one cropped one.
 6. **8-bit coverage**, so a very gradual gain over a very soft edge could in principle band.
    Measured, not assumed.
 7. **M3.1 does not close here.**
+
+## Outcome
+
+**Implemented 2026-08-18.** 635 tests, up from 607. All 35 pre-existing goldens byte-identical;
+`build_pipeline`, `build_pipeline_split` and `build_pipeline_split_in_region` kept their
+signatures, so the CLI, export and every golden compiled untouched.
+
+**The central claim validates on a real X-T4 `.RAF`.** The same stroke rendered with and without a
+crop lands at source fraction **(0.358, 0.394) in both**, identical to 0.0008, while occupying a
+*different frame position* (0.358 vs 0.225 horizontally). Content-referred, not frame-referred —
+which is the whole point of pre-geometry anchoring, and only a cropped case could have shown it.
+
+### Where the spec was wrong
+
+⚠ **`HARDNESS_EPS` is a fast path, not a NaN guard.** The spec said it plays "the same
+load-bearing role `FEATHER_EPS` plays". It does not. `0.0 / 0.0` in the ramp needs exactly
+`q == 1 && hard == 1`, and the `q >= 1.0` early return already excludes `q == 1`; for any `q < 1`
+with `hard == 1` the division yields `+inf`, which clamps to the correct `1.0`. Verified by
+deleting it and watching every test still pass. `RadialGradient::FEATHER_EPS` genuinely is
+load-bearing because that ramp has no equivalent early return — the comment now draws the
+contrast, and the test was renamed from `a_hard_brush_edge_is_not_nan` to
+`a_hard_brush_has_no_partial_coverage`, which is what it actually pins.
+
+⚠ **`MaskStage`'s `is_empty` early return is an optimisation, not a correctness guard.** The plan
+predicted this was possible and the sabotage confirmed it: an empty coverage map reads 0
+everywhere, and blending at coverage 0 is bit-exactly the identity. What it saves is a full-image
+clone plus a full run of every sub-stage.
+
+### Tests that could not detect what they named
+
+⚠ All found by running the sabotage step; none by review. **Three were genuinely undetecting:**
+
+- **`frame_map_agrees_with_geometry_stage_on_a_straighten_angle`** — a rotation sign error
+  displaces a point *in proportion to its distance from the centre*. The original probe sat at
+  0.34 of the half-width, where flipping the sign moves it **1.34 px**, inside the suite's 1.5 px
+  tolerance. Now 12° at 0.71 of the half-width, moving 5.61 px. **A geometric test needs leverage,
+  not merely a plausible input.**
+- **`a_dab_is_round_on_a_wide_frame`** — on an 80×40 frame the long edge *is* the width, so
+  scaling the radius by width instead of the long edge was a **no-op**. A portrait case, where the
+  two differ by 2×, now discriminates.
+- **`overlapping_dabs_in_one_stroke_do_not_double_up`** — asserted a range (`> 0 && < 250`), and
+  the accumulated value (181) sat inside it. Now compares against a single dab **exactly**, which
+  `max` reproduces and accumulation cannot.
+
+**Two more asserted something false about a correct implementation**, a related but distinct fault:
+
+- **`a_soft_dab_ramps_from_the_centre_outward`** demanded exactly 255 at the centre. Normalised
+  0.5 of an 80 px frame is `x = 40.0` — a pixel *boundary*, while pixel centres sit at `x + 0.5` —
+  so no sample coincides with the dab centre and the peak is 254. The test was wrong, not the code.
+- **`an_eight_bit_edge_has_no_visible_banding`** asserted `worst <= 8`, a threshold picked without
+  computing it. A smoothstep's steepest gradient is 1.5× its average, so the ramp inherently steps
+  ~12/255 over this radius. The bound is now derived from the radius plus one quantization step.
+
+### A process finding
+
+⚠⚠ **A sabotage that fails to compile looks exactly like a sabotage that passes.** Placing
+`#[serde(untagged)]` *above* the `#[derive]` rather than below it made the edit-model sabotage a
+compile error; grepping the output for a test result found nothing, which reads as a clean pass.
+**Confirm a sabotage compiled before believing its result.** Every sabotage in this task was run
+through a helper that checks for compile errors first.
