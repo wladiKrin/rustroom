@@ -2,7 +2,7 @@
 
 use crate::{preview_edits, rects_around, PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
 use eframe::egui;
-use rustroom_app::{crop_tool, mask_tool, settings::PanDrag, view_region};
+use rustroom_app::{brush_tool, crop_tool, mask_tool, settings::PanDrag, view_region};
 
 /// Whether a drag belongs to the active tool — the crop rectangle, a mask handle, and later
 /// the brush.
@@ -80,6 +80,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
+    // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
+    // mutable borrow.
+    let app_brush_size = app.brush_size;
+    let app_brush_hardness = app.brush_hardness;
+    let app_brush_erase = app.brush_erase;
     egui::CentralPanel::default().show(ui, |ui| {
         if let Some(p) = &app.pending {
             draw_pending_canvas(ui, p, app.session.as_ref());
@@ -209,7 +214,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     if s.geometry_mode {
                         photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
                     } else {
-                        photo_edited |= draw_mask_overlay(ui, s, &resp, img_rect, frame_rect);
+                        photo_edited |= draw_mask_overlay(
+                            ui,
+                            s,
+                            &resp,
+                            img_rect,
+                            frame_rect,
+                            BrushTool {
+                                size: app_brush_size,
+                                hardness: app_brush_hardness,
+                                erase: app_brush_erase,
+                            },
+                        );
                         // Zoom first, then pan: the anchor correction below depends on the
                         // new zoom, and the other order would anchor against a stale factor.
                         //
@@ -377,12 +393,24 @@ fn draw_crop_overlay(
 /// region render is on. Using it made the overlay drift with the view while panning at high
 /// zoom — and silently corrupted `aspect` too, since a region's aspect is not the frame's.
 /// `img_rect` is still the right clip: there is no photograph outside it to annotate.
+/// The brush tool's live settings, copied out of `RustroomApp` before the session borrow.
+///
+/// ⚠ A struct rather than four loose parameters: `draw_mask_overlay` already takes five, and a
+/// nine-argument function is where argument-order mistakes start.
+#[derive(Clone, Copy)]
+struct BrushTool {
+    size: f32,
+    hardness: f32,
+    erase: bool,
+}
+
 fn draw_mask_overlay(
     ui: &egui::Ui,
     s: &mut Session,
     resp: &egui::Response,
     img_rect: egui::Rect,
     frame_rect: egui::Rect,
+    tool: BrushTool,
 ) -> bool {
     let Some(i) = s.selected_mask else {
         return false;
@@ -402,23 +430,69 @@ fn draw_mask_overlay(
     if let Some(p) = resp.interact_pointer_pos() {
         let nx = ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0);
         let ny = ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0);
-        if tool_drag_started(resp) {
-            s.active_mask_handle = mask_tool::hit_test(&mask, [nx, ny], aspect, 0.04);
-        }
-        if tool_drag(resp) {
-            if let Some(h) = s.active_mask_handle {
-                let d = resp.drag_delta();
-                let dx = d.x / frame_rect.width();
-                let dy = d.y / frame_rect.height();
-                if let Some(m) = s.edits.masks.get_mut(i) {
-                    mask_tool::apply_drag(&mut m.mask, h, dx, dy);
+        if matches!(mask, edit_model::Mask::Brush(_)) {
+            // ⚠ No paint mode. Left-drag is free because the navigation rework moved panning onto
+            // scroll and a drag button, which is the whole reason that landed first.
+            let map = pipeline::brush::FrameMap::new(
+                &s.edits.geometry,
+                frame_rect.width() as usize,
+                frame_rect.height() as usize,
+            );
+            let radius = (tool.size / map.radius_scale.max(1e-6)).max(1e-4);
+            let src = map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top());
+            if tool_drag_started(resp) {
+                if let Some(edit_model::Mask::Brush(b)) =
+                    s.edits.masks.get_mut(i).map(|m| &mut m.mask)
+                {
+                    b.strokes.push(edit_model::BrushStroke {
+                        points: vec![src],
+                        radius,
+                        hardness: tool.hardness,
+                        erase: tool.erase,
+                    });
                     moved = true;
                 }
+            } else if tool_drag(resp) {
+                // ⚠ `else if`, not a second `if`: both predicates are true on the frame a drag
+                // begins, and without the `else` that frame would record its first point twice.
+                if let Some(edit_model::Mask::Brush(b)) =
+                    s.edits.masks.get_mut(i).map(|m| &mut m.mask)
+                {
+                    if let Some(stroke) = b.strokes.last_mut() {
+                        let keep = stroke
+                            .points
+                            .last()
+                            .is_none_or(|last| brush_tool::should_record(*last, src, radius));
+                        if keep {
+                            stroke.points.push(src);
+                            moved = true;
+                        }
+                    }
+                }
             }
-        }
-        if resp.drag_stopped() && s.active_mask_handle.take().is_some() {
-            s.history.push(s.edits.clone());
-            return true;
+            if resp.drag_stopped() {
+                s.history.push(s.edits.clone());
+                return true;
+            }
+        } else {
+            if tool_drag_started(resp) {
+                s.active_mask_handle = mask_tool::hit_test(&mask, [nx, ny], aspect, 0.04);
+            }
+            if tool_drag(resp) {
+                if let Some(h) = s.active_mask_handle {
+                    let d = resp.drag_delta();
+                    let dx = d.x / frame_rect.width();
+                    let dy = d.y / frame_rect.height();
+                    if let Some(m) = s.edits.masks.get_mut(i) {
+                        mask_tool::apply_drag(&mut m.mask, h, dx, dy);
+                        moved = true;
+                    }
+                }
+            }
+            if resp.drag_stopped() && s.active_mask_handle.take().is_some() {
+                s.history.push(s.edits.clone());
+                return true;
+            }
         }
     }
 
