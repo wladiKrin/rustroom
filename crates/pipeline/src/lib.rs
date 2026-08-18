@@ -5,6 +5,22 @@ use core_image::ImageBuf;
 use edit_model::Edits;
 
 pub mod brush;
+
+/// Pre-rasterized coverage for a photo's brush masks, indexed by **position in `Edits::masks`**.
+///
+/// ⚠ Optional and additive, following the `Region` precedent: [`build_pipeline`] and
+/// [`build_pipeline_split`] delegate with `None`, so the CLI, export and every golden compile
+/// untouched.
+#[derive(Default)]
+pub struct BrushCoverage {
+    pub maps: Vec<Option<std::sync::Arc<brush::CoverageMap>>>,
+}
+
+impl BrushCoverage {
+    pub fn get(&self, i: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
+        self.maps.get(i).and_then(|m| m.clone())
+    }
+}
 pub mod spatial;
 mod stages;
 
@@ -259,6 +275,19 @@ pub fn build_pipeline_split_in_region(
     scale: RenderScale,
     region: Option<Region>,
 ) -> (Pipeline, Pipeline) {
+    build_pipeline_split_in_region_with_brush(edits, scale, region, None)
+}
+
+/// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
+///
+/// ⚠ The extra parameter is additive with a delegating wrapper — the `Region` precedent, which
+/// gave that work zero call-site churn. The CLI, export and every golden go through the wrapper.
+pub fn build_pipeline_split_in_region_with_brush(
+    edits: &Edits,
+    scale: RenderScale,
+    region: Option<Region>,
+    brush: Option<&BrushCoverage>,
+) -> (Pipeline, Pipeline) {
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
     let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale)
@@ -314,13 +343,19 @@ pub fn build_pipeline_split_in_region(
     // vignette and sharpening because both have earned their end-of-chain positions: the
     // vignette's "+100 = exactly white" endpoint depends on running after the tone curve, and
     // sharpening must not amplify anything a later stage would then stretch.
-    for m in &edits.masks {
+    // ⚠ The index is the position in `edits.masks`, **not** a counter over *active* masks. An
+    // inactive mask is skipped here but still owns a slot in `BrushCoverage`, so a separate
+    // counter would misalign every map after the first inactive one — the same sparse-versus-dense
+    // index bug this codebase has already hit three times (the crop feedback loop,
+    // `render_max_dim`, the Library grid).
+    for (i, m) in edits.masks.iter().enumerate() {
         if m.adjustments.is_active() {
             tail.push(Box::new(MaskStage::new_in_region(
                 m,
                 scale,
                 region,
                 &edits.geometry,
+                brush.and_then(|b| b.get(i)),
             )));
         }
     }

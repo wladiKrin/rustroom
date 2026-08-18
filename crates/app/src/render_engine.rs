@@ -77,6 +77,9 @@ impl RenderEngine {
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let handle = thread::spawn(move || {
             let mut cache = PrefixCache::default();
+            // Lives beside the prefix cache and for the same reason: this thread is the sole
+            // renderer, so neither needs locking.
+            let mut brush_cache = BrushCache::default();
             while let Ok(mut req) = req_rx.recv() {
                 // Coalesce: skip to the most recent pending request.
                 loop {
@@ -94,6 +97,7 @@ impl RenderEngine {
                     source_scale,
                     req.region,
                     &mut cache,
+                    &mut brush_cache,
                 );
                 if res_tx.send(frame).is_err() {
                     return;
@@ -332,6 +336,89 @@ impl PrefixCache {
 /// Returns the frame and **how many prefix stages actually ran**. The worker ignores the count;
 /// it exists because the correctness tests would all still pass with the cache deleted, so
 /// something has to assert that work is genuinely being skipped.
+/// What a cached set of brush coverage maps was built from.
+#[derive(PartialEq)]
+struct BrushKey {
+    /// Every mask's brush **by position** — `None` for the analytic shapes.
+    ///
+    /// ⚠ All masks, not just the brushes, so the positional index into `BrushCoverage` cannot
+    /// drift when a mask is added, removed or changed kind.
+    brushes: Vec<Option<edit_model::Brush>>,
+    geometry: edit_model::Geometry,
+    fw: usize,
+    fh: usize,
+}
+
+/// Rasterized brush coverage, so an unrelated slider drag does not re-rasterize.
+///
+/// ⚠ **The region is not in the key**, exactly as [`PrefixCache`]'s is not: rasterize whole-frame
+/// and sample the sub-rect, so panning never invalidates.
+///
+/// ⚠ It misses on every frame *while painting*, and that is correct — the strokes really did
+/// change, so there is nothing to reuse. Its job is that dragging Exposure with a brush mask
+/// present does not re-rasterize the strokes on every frame of that drag.
+#[derive(Default)]
+struct BrushCache {
+    entries: Vec<(BrushKey, Arc<pipeline::BrushCoverage>)>,
+}
+
+impl BrushCache {
+    /// ⚠ Two, not one, and for the reason [`PrefixCache::FINALS_CAP`] is two: the frame dimensions
+    /// are in the key, so a single entry would be evicted on every zoom change and re-rasterized
+    /// coming back — reintroducing at the brush layer the cost that decision removed at the prefix
+    /// layer.
+    const CAP: usize = 2;
+
+    fn key(edits: &Edits, fw: usize, fh: usize) -> BrushKey {
+        BrushKey {
+            brushes: edits
+                .masks
+                .iter()
+                .map(|m| match &m.mask {
+                    edit_model::Mask::Brush(b) => Some(b.clone()),
+                    _ => None,
+                })
+                .collect(),
+            geometry: edits.geometry,
+            fw,
+            fh,
+        }
+    }
+
+    fn get_or_build(
+        &mut self,
+        edits: &Edits,
+        fw: usize,
+        fh: usize,
+    ) -> Arc<pipeline::BrushCoverage> {
+        let key = Self::key(edits, fw, fh);
+        if let Some(i) = self.entries.iter().position(|(k, _)| *k == key) {
+            // Promote the hit, so the least recently used entry is the one evicted.
+            let hit = self.entries.remove(i);
+            let out = Arc::clone(&hit.1);
+            self.entries.insert(0, hit);
+            return out;
+        }
+        let maps = edits
+            .masks
+            .iter()
+            .map(|m| match &m.mask {
+                edit_model::Mask::Brush(b) => Some(Arc::new(pipeline::brush::rasterize(
+                    b,
+                    &edits.geometry,
+                    fw,
+                    fh,
+                ))),
+                _ => None,
+            })
+            .collect();
+        let built = Arc::new(pipeline::BrushCoverage { maps });
+        self.entries.insert(0, (key, Arc::clone(&built)));
+        self.entries.truncate(Self::CAP);
+        built
+    }
+}
+
 fn render_cached(
     buffer: &Arc<ImageBuf>,
     edits: &Edits,
@@ -339,6 +426,7 @@ fn render_cached(
     source_scale: f32,
     region: Option<RegionRect>,
     cache: &mut PrefixCache,
+    brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, usize) {
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
@@ -423,7 +511,12 @@ fn render_cached(
         None => ((*img).clone(), None),
     };
 
-    let (_, tail) = build_pipeline_split_in_region(edits, scale, region);
+    // ⚠ The frame dimensions are the PREFIX OUTPUT's — `(pw, ph)` — not the region's. That image
+    // *is* the frame. Passing the region's would rasterize at the wrong size and, because the dims
+    // are in the key, would also thrash the cache on every pan.
+    let coverage = brush_cache.get_or_build(edits, pw, ph);
+    let (_, tail) =
+        pipeline::build_pipeline_split_in_region_with_brush(edits, scale, region, Some(&coverage));
     (pack(tail.run(input), region, max_dim), ran)
 }
 
@@ -523,11 +616,12 @@ mod tests {
         let buf = varied();
         let base = full_prefix();
         let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
 
-        let (_, cold) = render_cached(&buf, &base, 8, 1.0, None, &mut cache);
+        let (_, cold) = render_cached(&buf, &base, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(cold, 3, "a cold render runs every prefix stage");
 
-        let (_, hit) = render_cached(&buf, &base, 8, 1.0, None, &mut cache);
+        let (_, hit) = render_cached(&buf, &base, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(hit, 0, "an unchanged prefix runs nothing");
 
         // A tail-only change still runs nothing: it resumes at the final checkpoint.
@@ -535,7 +629,7 @@ mod tests {
             exposure: -1.5,
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &tail_only, 8, 1.0, None, &mut cache);
+        let (_, ran) = render_cached(&buf, &tail_only, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(ran, 0, "a tail change must not touch the prefix");
 
         // Dehaze is last in the prefix, so only dehaze re-runs. This is the 86.8 ms case.
@@ -543,7 +637,7 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 85.0 },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &dehaze, 8, 1.0, None, &mut cache);
+        let (_, ran) = render_cached(&buf, &dehaze, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(ran, 1, "a dehaze change must resume after noise reduction");
 
         // Noise reduction is second, so NR and dehaze re-run but geometry does not.
@@ -555,7 +649,7 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &nr, 8, 1.0, None, &mut cache);
+        let (_, ran) = render_cached(&buf, &nr, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(ran, 2, "an NR change must resume after geometry");
 
         // Geometry is first, so everything re-runs — but the downscale is still reused.
@@ -566,7 +660,7 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &geo, 8, 1.0, None, &mut cache);
+        let (_, ran) = render_cached(&buf, &geo, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(ran, 3, "a geometry change invalidates the whole prefix");
     }
 
@@ -577,9 +671,10 @@ mod tests {
         // the chain seeds from the Arc instead and stores no checkpoint 0.
         let buf = varied(); // 16 x 16
         let base = full_prefix();
+        let mut bc = BrushCache::default();
 
         let mut native = PrefixCache::default();
-        render_cached(&buf, &base, 16, 1.0, None, &mut native);
+        render_cached(&buf, &base, 16, 1.0, None, &mut native, &mut bc);
         assert_eq!(
             native.mid_len(),
             2,
@@ -587,7 +682,7 @@ mod tests {
         );
 
         let mut fit = PrefixCache::default();
-        render_cached(&buf, &base, 8, 1.0, None, &mut fit);
+        render_cached(&buf, &base, 8, 1.0, None, &mut fit, &mut bc);
         assert_eq!(
             fit.mid_len(),
             3,
@@ -602,14 +697,15 @@ mod tests {
         // copies free to diverge.
         let buf = varied();
         let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
         let with = full_prefix();
-        render_cached(&buf, &with, 8, 1.0, None, &mut cache);
+        render_cached(&buf, &with, 8, 1.0, None, &mut cache, &mut bc);
 
         let without = Edits {
             dehaze: edit_model::Dehaze::default(),
             ..with.clone()
         };
-        let (got, ran) = render_cached(&buf, &without, 8, 1.0, None, &mut cache);
+        let (got, ran) = render_cached(&buf, &without, 8, 1.0, None, &mut cache, &mut bc);
         assert_eq!(ran, 0, "the post-NR checkpoint is now the final one");
         assert_eq!(got.rgba, render_once(&buf, &without, 8, 1.0).rgba);
 
@@ -644,6 +740,7 @@ mod tests {
     #[test]
     fn the_mid_budget_evicts_the_least_recently_used() {
         // Each dummy is 4*4*3*4 = 192 bytes; a budget of 400 holds two.
+        let mut bc = BrushCache::default();
         let mut cache = PrefixCache::with_mid_budget(400);
         cache.insert(fake_key(0), dummy(4, 0.1), Tier::Mid);
         cache.insert(fake_key(1), dummy(4, 0.2), Tier::Mid);
@@ -667,6 +764,7 @@ mod tests {
     fn the_finals_tier_is_untouched_by_mid_pressure() {
         // The two tiers cannot evict each other: that is what preserves the zoom guarantee.
         // With a zero budget no mid survives, and both finals must still be there.
+        let mut bc = BrushCache::default();
         let mut cache = PrefixCache::with_mid_budget(0);
         cache.insert(fake_key(10), dummy(4, 0.4), Tier::Final);
         cache.insert(fake_key(11), dummy(4, 0.5), Tier::Final);
@@ -682,6 +780,7 @@ mod tests {
     #[test]
     fn the_finals_tier_holds_one_per_render_mode() {
         let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
         for tag in 0..4 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Final);
         }
@@ -698,6 +797,7 @@ mod tests {
         // which means a bigger budget retains more garbage. A render's useful chain is at most
         // 3 mids, so 6 keeps the current chain plus one previous state.
         let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
         for tag in 0..20 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
         }
@@ -713,6 +813,7 @@ mod tests {
     fn the_budget_still_evicts_before_the_cap() {
         // Bytes bind first when the entries are large — which is the full-resolution case,
         // where one checkpoint is 313 MB and the cap is nowhere near reached.
+        let mut bc = BrushCache::default();
         let mut cache = PrefixCache::with_mid_budget(400); // holds two 192-byte dummies
         for tag in 0..5 {
             cache.insert(fake_key(tag), dummy(4, 0.1), Tier::Mid);
@@ -804,7 +905,15 @@ mod tests {
 
         // max_dim = n is native for this n x n buffer, i.e. no downscale, so the render
         // scale is exactly 1.0 and the inset above is the full-resolution kernel.
-        let (whole, _) = render_cached(&buf, &edits, n, 1.0, None, &mut PrefixCache::default());
+        let (whole, _) = render_cached(
+            &buf,
+            &edits,
+            n,
+            1.0,
+            None,
+            &mut PrefixCache::default(),
+            &mut BrushCache::default(),
+        );
 
         // Guard against the test passing trivially: the spatial tail stages must actually
         // move pixels here, or the "weakened invariant" it exists to cover is not exercised.
@@ -819,6 +928,7 @@ mod tests {
             1.0,
             None,
             &mut PrefixCache::default(),
+            &mut BrushCache::default(),
         );
         assert_ne!(
             whole.rgba, unsharpened.rgba,
@@ -841,6 +951,7 @@ mod tests {
             1.0,
             Some(RegionRect { x, y, w, h }),
             &mut PrefixCache::default(),
+            &mut BrushCache::default(),
         );
 
         assert_eq!((got.width, got.height), (w, h));
@@ -874,9 +985,10 @@ mod tests {
             ..Edits::default()
         };
         let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
 
-        render_cached(&buf, &e, 8, 1.0, None, &mut cache); // "fit"
-        render_cached(&buf, &e, 16, 1.0, None, &mut cache); // "native"
+        render_cached(&buf, &e, 8, 1.0, None, &mut cache, &mut bc); // "fit"
+        render_cached(&buf, &e, 16, 1.0, None, &mut cache, &mut bc); // "native"
         assert_eq!(cache.final_len(), 2, "both modes should stay cached");
 
         for max_dim in [8usize, 16] {
@@ -895,7 +1007,7 @@ mod tests {
             },
             ..e.clone()
         };
-        render_cached(&buf, &e2, 16, 1.0, None, &mut cache);
+        render_cached(&buf, &e2, 16, 1.0, None, &mut cache, &mut bc);
         assert_eq!(cache.final_len(), 2);
     }
 
@@ -915,6 +1027,7 @@ mod tests {
                 h: 999,
             }),
             &mut PrefixCache::default(),
+            &mut BrushCache::default(),
         );
         assert_eq!((got.width, got.height), (6, 6));
     }
@@ -1031,5 +1144,77 @@ mod tests {
         let f = render_once(&img, &Edits::default(), 4, 1.0);
         assert_eq!((f.width, f.height), (4, 4));
         assert!(f.rgba[0] > 180 && f.rgba[0] < 195);
+    }
+
+    fn brush_edits() -> Edits {
+        Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![edit_model::BrushStroke {
+                        points: vec![[0.3, 0.5], [0.7, 0.5]],
+                        radius: 0.1,
+                        hardness: 50.0,
+                        erase: false,
+                    }],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 1.0,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        }
+    }
+
+    #[test]
+    fn the_brush_cache_hits_and_keeps_both_zoom_levels() {
+        // ⚠ Every other test in this file would pass with the brush cache deleted, because it is
+        // a caching change and nothing else. This one asserts identity of the Arc, which is the
+        // only observable difference between a hit and a rebuild.
+        let mut cache = BrushCache::default();
+        let edits = brush_edits();
+        let a = cache.get_or_build(&edits, 200, 100);
+        let b = cache.get_or_build(&edits, 200, 100);
+        assert!(Arc::ptr_eq(&a, &b), "the second call must hit");
+
+        let c = cache.get_or_build(&edits, 400, 200);
+        assert!(!Arc::ptr_eq(&a, &c), "different frame dims must miss");
+
+        // ⚠ The assertion that pins CAP = 2 rather than 1. With a single entry the 400x200 build
+        // would have evicted the 200x100 one, and this would rebuild — which is exactly the zoom
+        // thrash the capacity exists to prevent.
+        let d = cache.get_or_build(&edits, 200, 100);
+        assert!(Arc::ptr_eq(&a, &d), "CAP=2 must keep both zoom levels warm");
+    }
+
+    #[test]
+    fn changing_a_stroke_misses_the_brush_cache() {
+        // The other half: a hit must depend on the strokes, not merely on the dimensions.
+        let mut cache = BrushCache::default();
+        let a = cache.get_or_build(&brush_edits(), 200, 100);
+        let mut edited = brush_edits();
+        if let edit_model::Mask::Brush(b) = &mut edited.masks[0].mask {
+            b.strokes[0].points.push([0.8, 0.6]);
+        }
+        let c = cache.get_or_build(&edited, 200, 100);
+        assert!(!Arc::ptr_eq(&a, &c), "an extra point must miss");
+    }
+
+    #[test]
+    fn the_coverage_index_follows_the_mask_position_not_the_active_count() {
+        // ⚠ An INACTIVE mask still owns a slot. A counter over active masks would misalign every
+        // map after the first inactive one — the same sparse-versus-dense index bug this codebase
+        // has hit three times before.
+        let mut edits = brush_edits();
+        let inactive = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
+            adjustments: edit_model::LocalAdjustments::default(),
+        };
+        edits.masks.insert(0, inactive);
+        let mut cache = BrushCache::default();
+        let cov = cache.get_or_build(&edits, 200, 100);
+        assert!(cov.get(0).is_none(), "slot 0 is the analytic mask");
+        assert!(cov.get(1).is_some(), "slot 1 is the brush");
     }
 }

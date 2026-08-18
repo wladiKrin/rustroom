@@ -17,11 +17,22 @@ use edit_model::{Geometry, MaskedAdjustment};
 enum CoverageSource {
     /// Linear and radial — a pure function of position.
     Analytic(edit_model::Mask),
-    /// Brush. ⚠ Kept **unrasterized**: the frame's dimensions are not known until `apply`,
-    /// because with no region the frame *is* the image, and the pipeline is built before the image
-    /// flows through it. Rasterizing on every render is correct and slow — 3.1c-B's cache is what
-    /// makes it cheap, and the CLI walks this path once.
-    Painted(edit_model::Brush, Geometry),
+    /// Brush.
+    ///
+    /// ⚠ Kept **unrasterized** when no prebuilt map is supplied: the frame's dimensions are not
+    /// known until `apply`, because with no region the frame *is* the image and the pipeline is
+    /// built before the image flows through it. That path is correct and slow, and it is the one
+    /// the CLI and export walk — they render once and have nothing to reuse.
+    Painted {
+        brush: edit_model::Brush,
+        geometry: Geometry,
+        /// A map the caller already rasterized, from `render_engine`'s cache.
+        ///
+        /// ⚠ It **must** have been built at the same `fw`/`fh`. The cache key includes them, so
+        /// this holds by construction — a mismatch would silently sample the wrong pixels rather
+        /// than erroring, which is why the key must never lose them.
+        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+    },
 }
 
 pub struct MaskStage {
@@ -37,7 +48,7 @@ pub struct MaskStage {
 impl MaskStage {
     /// For a render covering the whole frame.
     pub fn new(masked: &MaskedAdjustment, scale: RenderScale, geometry: &Geometry) -> Self {
-        Self::new_in_region(masked, scale, None, geometry)
+        Self::new_in_region(masked, scale, None, geometry, None)
     }
 
     /// For a render covering only part of the frame — coverage is still measured against the
@@ -50,12 +61,17 @@ impl MaskStage {
         scale: RenderScale,
         region: Option<Region>,
         geometry: &Geometry,
+        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
     ) -> Self {
         // No spatial sub-stage yet: every adjustment a mask can carry is per-pixel. The stroke
         // radius scales through `FrameMap`, not through this.
         let _ = scale;
         let source = match &masked.mask {
-            edit_model::Mask::Brush(b) => CoverageSource::Painted(b.clone(), *geometry),
+            edit_model::Mask::Brush(b) => CoverageSource::Painted {
+                brush: b.clone(),
+                geometry: *geometry,
+                prebuilt,
+            },
             other => CoverageSource::Analytic(other.clone()),
         };
         Self {
@@ -92,7 +108,14 @@ impl PipelineStage for MaskStage {
         // hit in 3.1a.
         let coverage = match &self.source {
             CoverageSource::Analytic(_) => None,
-            CoverageSource::Painted(b, g) => Some(crate::brush::rasterize(b, g, fw, fh)),
+            CoverageSource::Painted {
+                prebuilt: Some(c), ..
+            } => Some(std::sync::Arc::clone(c)),
+            CoverageSource::Painted {
+                brush, geometry, ..
+            } => Some(std::sync::Arc::new(crate::brush::rasterize(
+                brush, geometry, fw, fh,
+            ))),
         };
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
         // every test still pass. An empty coverage map reads 0 everywhere, and blending at
@@ -123,8 +146,10 @@ impl PipelineStage for MaskStage {
                     m.analytic_coverage(u, v, aspect).unwrap_or(0.0)
                 }
                 // ⚠ Indexed by FRAME pixel, not by the region-relative `(x, y)`.
-                (CoverageSource::Painted(..), Some(cov)) => cov.at(x0 + x, y0 + y) as f32 / 255.0,
-                (CoverageSource::Painted(..), None) => 0.0,
+                (CoverageSource::Painted { .. }, Some(cov)) => {
+                    cov.at(x0 + x, y0 + y) as f32 / 255.0
+                }
+                (CoverageSource::Painted { .. }, None) => 0.0,
             }
             .clamp(0.0, 1.0);
             let adj = adjusted.pixel(x, y);
@@ -216,9 +241,14 @@ mod tests {
             x0,
             y0,
         };
-        let part =
-            MaskStage::new_in_region(&m, RenderScale::FULL, Some(region), &Geometry::default())
-                .apply(flat(rw, rh));
+        let part = MaskStage::new_in_region(
+            &m,
+            RenderScale::FULL,
+            Some(region),
+            &Geometry::default(),
+            None,
+        )
+        .apply(flat(rw, rh));
 
         for y in 0..rh {
             for x in 0..rw {
@@ -301,6 +331,7 @@ mod tests {
             RenderScale::FULL,
             Some(region),
             &Geometry::default(),
+            None,
         )
         .apply(flat(20, 20));
         for y in 0..20 {
