@@ -483,29 +483,6 @@ fn draw_mask_overlay(
                     }
                 }
             }
-            if resp.drag_stopped() {
-                // ⚠⚠ **The pipeline is re-run once here, not on every frame of the drag**, and
-                // that is a design decision rather than a throttle.
-                //
-                // At 1:1 on a full-resolution buffer the frame is 6246x4170, where rasterizing a
-                // stroke costs ~24 ms before the tail render and pack — measured, and reported as
-                // "very sluggish" in use. But the *feedback* a brush needs while drawing is where
-                // the mask is, and the tint already shows that live at screen resolution for well
-                // under a millisecond. Re-running the full pipeline per frame buys only the
-                // adjustment's pixel effect, which at those rates is not smooth anyway.
-                //
-                // So: live tint while dragging, real pixels on release. The alternative —
-                // retaining the in-progress stroke's coverage and splatting only new dabs — is
-                // the way to get both, and is the follow-up if release-time feedback proves too
-                // coarse.
-                s.request(
-                    preview_edits(&s.edits, s.geometry_mode),
-                    s.render_max_dim(),
-                    s.requested_region,
-                );
-                s.history.push(s.edits.clone());
-                return true;
-            }
         } else {
             if tool_drag_started(resp) {
                 s.active_mask_handle = mask_tool::hit_test(&mask, [nx, ny], aspect, 0.04);
@@ -526,6 +503,27 @@ fn draw_mask_overlay(
                 return true;
             }
         }
+    }
+
+    // ⚠⚠ **Outside the `interact_pointer_pos` block on purpose.** On the frame a drag ends egui
+    // often reports no interact position, so a `drag_stopped` handler nested inside it simply
+    // never runs. That is not hypothetical: it shipped for one build, and the symptom was that
+    // after drawing a line only the *first dab* appeared once the tint was hidden — the last
+    // render was the one from `drag_started`, when the stroke had a single point. The history
+    // push was being skipped too, so the stroke was not undoable.
+    if matches!(mask, edit_model::Mask::Brush(_)) && resp.drag_stopped() {
+        // ⚠ **The pipeline is re-run once here, not on every frame of the drag**, and that is a
+        // design decision rather than a throttle. At 1:1 on a full-resolution buffer the frame is
+        // 6246x4170, where rasterizing a stroke costs ~24 ms before the tail render and pack. The
+        // feedback a brush needs *while* drawing is where the mask is, and the tint shows that
+        // live at screen resolution for well under a millisecond.
+        s.request(
+            preview_edits(&s.edits, s.geometry_mode),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+        s.history.push(s.edits.clone());
+        return true;
     }
 
     // The brush cursor: a circle at the pointer at the current screen radius. ⚠ Without it the
@@ -651,13 +649,45 @@ fn paint_tint(
             });
         }
         let Some(cache) = slot.as_ref() else { return };
-        // The inverted region first, so the painted box draws over it.
         if cache.outside > 0 {
-            painter.rect_filled(
-                frame_rect,
-                egui::CornerRadius::ZERO,
-                egui::Color32::from_rgba_unmultiplied(255, 40, 40, cache.outside / 2),
-            );
+            let tint = egui::Color32::from_rgba_unmultiplied(255, 40, 40, cache.outside / 2);
+            // ⚠⚠ Painted **around** the box, never under it. A single full-frame rect plus the
+            // box's own texture double-blends wherever they overlap — and for an inverted brush
+            // the area inside the box but outside the strokes is *also* fully covered, so the box
+            // showed up as a distinctly brighter rectangle over the photograph. Reported in use
+            // as "an additional mask box".
+            let box_rect = cache.drawn.as_ref().map(|(_, r)| *r);
+            match box_rect {
+                None => {
+                    painter.rect_filled(frame_rect, egui::CornerRadius::ZERO, tint);
+                }
+                Some(b) => {
+                    let b = b.intersect(frame_rect);
+                    for r in [
+                        // above, below, left, right — no overlap with `b` and none with each other.
+                        egui::Rect::from_min_max(
+                            frame_rect.min,
+                            egui::pos2(frame_rect.max.x, b.min.y),
+                        ),
+                        egui::Rect::from_min_max(
+                            egui::pos2(frame_rect.min.x, b.max.y),
+                            frame_rect.max,
+                        ),
+                        egui::Rect::from_min_max(
+                            egui::pos2(frame_rect.min.x, b.min.y),
+                            egui::pos2(b.min.x, b.max.y),
+                        ),
+                        egui::Rect::from_min_max(
+                            egui::pos2(b.max.x, b.min.y),
+                            egui::pos2(frame_rect.max.x, b.max.y),
+                        ),
+                    ] {
+                        if r.width() > 0.0 && r.height() > 0.0 {
+                            painter.rect_filled(r, egui::CornerRadius::ZERO, tint);
+                        }
+                    }
+                }
+            }
         }
         if let Some((tex, rect)) = cache.drawn.as_ref() {
             painter.image(
