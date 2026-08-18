@@ -4,6 +4,22 @@ use crate::{preview_edits, rects_around, PendingOpen, RustroomApp, Session, PREV
 use eframe::egui;
 use rustroom_app::{crop_tool, mask_tool, view_region};
 
+/// Whether a drag belongs to the active tool — the crop rectangle, a mask handle, and later
+/// the brush.
+///
+/// ⚠ **egui reports `dragged()` for every button, not just the primary one.** `interaction.rs`
+/// matches `PointerEvent::Pressed { .. }` and ignores the button when setting
+/// `potential_drag_id`. Since panning now lives on middle- or right-drag, an ungated tool would
+/// be driven by the pan gesture as well — dragging a crop corner while trying to pan.
+fn tool_drag(resp: &egui::Response) -> bool {
+    resp.dragged_by(egui::PointerButton::Primary)
+}
+
+/// Whether a drag on the tool's button has just begun. Same gating, same reason.
+fn tool_drag_started(resp: &egui::Response) -> bool {
+    resp.drag_started_by(egui::PointerButton::Primary)
+}
+
 /// Draw the image canvas.
 ///
 /// Returns whether a photo edit settled into a new history entry — the crop overlay is the one
@@ -260,10 +276,10 @@ fn draw_crop_overlay(
     if let Some(p) = resp.interact_pointer_pos() {
         let nx = ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0);
         let ny = ((p.y - img_rect.top()) / img_rect.height()).clamp(0.0, 1.0);
-        if resp.drag_started() {
+        if tool_drag_started(resp) {
             s.active_handle = crop_tool::hit_test(&s.edits.geometry.crop, [nx, ny], 0.03);
         }
-        if resp.dragged() {
+        if tool_drag(resp) {
             if let Some(h) = s.active_handle {
                 let d = resp.drag_delta();
                 let dx = d.x / img_rect.width();
@@ -318,10 +334,10 @@ fn draw_mask_overlay(
     if let Some(p) = resp.interact_pointer_pos() {
         let nx = ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0);
         let ny = ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0);
-        if resp.drag_started() {
+        if tool_drag_started(resp) {
             s.active_mask_handle = mask_tool::hit_test(&mask, [nx, ny], aspect, 0.04);
         }
-        if resp.dragged() {
+        if tool_drag(resp) {
             if let Some(h) = s.active_mask_handle {
                 let d = resp.drag_delta();
                 let dx = d.x / frame_rect.width();
@@ -430,5 +446,73 @@ fn paint_mask(
                 painter.circle_filled(to_screen(h), 5.0, egui::Color32::WHITE);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drive a real allocated rect through a press-and-move gesture with `button`, and report
+    /// what `tool_drag` said on the final pass.
+    ///
+    /// ⚠ Four passes, not three. egui only becomes "decidedly dragging" once the pointer has
+    /// moved far enough *after* the press (`is_decidedly_dragging` requires `!any_pressed()`),
+    /// so the press and the movement must land on different frames.
+    fn tool_drag_for(button: egui::PointerButton) -> bool {
+        let ctx = egui::Context::default();
+        let mut out = false;
+        let start = egui::pos2(100.0, 100.0);
+        for pass in 0..4 {
+            let pos = if pass >= 2 {
+                start + egui::vec2(40.0, 40.0)
+            } else {
+                start
+            };
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            input.events.push(egui::Event::PointerMoved(pos));
+            if pass == 1 {
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+            }
+            let _ = ctx.run_ui(input, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+                let resp = ui.allocate_rect(rect, egui::Sense::drag());
+                if pass == 3 {
+                    out = tool_drag(&resp);
+                }
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn a_primary_drag_belongs_to_the_tools() {
+        assert!(tool_drag_for(egui::PointerButton::Primary));
+    }
+
+    #[test]
+    fn a_middle_drag_does_not_belong_to_the_tools() {
+        // ⚠ Not hypothetical. egui's `interaction.rs` matches `PointerEvent::Pressed { .. }`
+        // and IGNORES the button when deciding what is being dragged, so `resp.dragged()` is
+        // true for a middle-drag too. Without this gate the pan button would also drag crop
+        // rectangles and mask handles.
+        assert!(!tool_drag_for(egui::PointerButton::Middle));
+    }
+
+    #[test]
+    fn a_secondary_drag_does_not_belong_to_the_tools() {
+        // Right-drag is one of the selectable pan bindings, so it needs the same exclusion.
+        assert!(!tool_drag_for(egui::PointerButton::Secondary));
     }
 }
