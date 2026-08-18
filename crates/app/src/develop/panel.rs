@@ -118,6 +118,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // same restructuring `develop_body` already uses elsewhere in this
                     // codebase for the same reason.
                     let mut mask_changed = false;
+                    // ⚠ Copied into locals for the same reason `modals/settings.rs` does: the
+                    // closure below already borrows `app` through `s`, and a second capture is
+                    // E0499. Written back after it closes.
+                    let mut brush_size = app.brush_size;
+                    let mut brush_hardness = app.brush_hardness;
+                    let mut brush_erase = app.brush_erase;
+                    let mut show_mask_tint = app.show_mask_tint;
                     egui::CollapsingHeader::new("Masks").show(ui, |ui| {
                         let mut added: Option<edit_model::Mask> = None;
                         ui.horizontal(|ui| {
@@ -131,6 +138,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                         to: [0.5, 0.67],
                                         invert: false,
                                     }));
+                            }
+                            if ui.button("Add brush").clicked() {
+                                // ⚠ `Brush::default()` has no strokes, so the mask is inert until
+                                // painted — which is exactly why the tint defaults on.
+                                added = Some(edit_model::Mask::Brush(edit_model::Brush::default()));
                             }
                             if ui.button("Add radial filter").clicked() {
                                 // ⚠ The hand-written `Default`: centred, a quarter of each
@@ -195,6 +207,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 if let edit_model::Mask::Radial(r) = &mut m.mask {
                                     slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
                                 }
+                                if matches!(m.mask, edit_model::Mask::Brush(_)) {
+                                    // ⚠ Brush settings live on the app, not on the mask: they are
+                                    // the *tool's* state and apply to the next stroke, exactly as
+                                    // a brush size does in any editor. Each stroke records its own
+                                    // copy at the moment it is drawn.
+                                    slider(ui, &mut brush_size, 4.0..=300.0, "Size");
+                                    slider(ui, &mut brush_hardness, 0.0..=100.0, "Hardness");
+                                    ui.checkbox(&mut brush_erase, "Erase");
+                                    ui.checkbox(&mut show_mask_tint, "Show mask");
+                                    theme::hint(ui, "Drag on the image to paint.");
+                                }
                                 ui.separator();
                                 let a = &mut m.adjustments;
                                 slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
@@ -217,6 +240,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                              strength; a radial's ellipse marks where it falls to nothing.",
                         );
                     });
+                    // ⚠ Deliberately NOT folded into `changed`/`settled`: a tool setting does not
+                    // alter the photograph, so it must not push a history entry or request a
+                    // render.
+                    app.brush_size = brush_size;
+                    app.brush_hardness = brush_hardness;
+                    app.brush_erase = brush_erase;
+                    app.show_mask_tint = show_mask_tint;
                     if mask_changed {
                         changed = true;
                         settled = true;

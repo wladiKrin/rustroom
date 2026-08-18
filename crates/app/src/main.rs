@@ -123,6 +123,19 @@ struct RustroomApp {
     status: String,
     show_filmstrip: bool,
     show_presets: bool,
+    /// Brush radius in **screen points**.
+    ///
+    /// ⚠ Not persisted, and not in `Settings`. A screen-point size is view-dependent, so
+    /// restoring last session's value at a different window size or zoom restores a *different*
+    /// brush. The other three could be persisted, but splitting one tool's settings across two
+    /// lifetimes is worse than one honest rule.
+    brush_size: f32,
+    /// 0 = maximally soft, 100 = a hard edge.
+    brush_hardness: f32,
+    /// Whether the next stroke subtracts.
+    brush_erase: bool,
+    /// Whether to tint the selected brush mask's coverage on the canvas.
+    show_mask_tint: bool,
     /// This session's copied edits. A copy *also* writes a tagged payload to the system
     /// clipboard (see [`edit_clipboard`]), so pasting works between two running instances;
     /// this field is what the "Paste…" button uses, because egui can only hand us the
@@ -206,6 +219,12 @@ impl RustroomApp {
             status: String::new(),
             show_filmstrip: true,
             show_presets: false,
+            brush_size: 40.0,
+            brush_hardness: 50.0,
+            brush_erase: false,
+            // On by default: a freshly added brush mask with no adjustment yet is otherwise
+            // completely invisible, which is a poor first five minutes.
+            show_mask_tint: true,
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),
