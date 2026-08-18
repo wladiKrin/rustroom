@@ -1,6 +1,6 @@
 # M3.1c-B — the brush canvas
 
-**Status:** spec, 2026-08-18.
+**Status:** implemented, 2026-08-18. See "Outcome" at the end. **M3.1 is closed.**
 
 ## Scope
 
@@ -224,3 +224,92 @@ matters most — **painting, then changing the crop, and confirming the stroke s
 5. **Tool state is not persisted**, by the reasoning above.
 6. **A stray click paints a dab.**
 7. **One cache entry**, so several brush masks on one photo re-rasterize.
+
+## Outcome
+
+**Implemented 2026-08-18, and M3.1 closes with it.** 655 tests, 38 goldens, no golden moved by any
+canvas change.
+
+### The measurement, and the decision it did *not* settle
+
+| frame | rasterize |
+|---|---|
+| fit 1600×1068 | 1.62 ms |
+| half 3123×2085 | 6.11 ms |
+| full 6246×4170 | 23.76 ms |
+
+The spec fixed a ~30 ms threshold in advance to keep the incremental-splatting decision honest.
+The number landed almost exactly on it — and then **real use showed the threshold was measuring
+the wrong thing entirely.** Two of the three costs at 1:1 turned out to be waste I had introduced,
+not inherent work. Fixing them made painting smooth without any incremental machinery.
+
+### ⚠⚠ Six bugs, all found by using it, none by the tests
+
+This is the finding of the whole feature and it should not read as bad luck.
+
+| bug | cause |
+|---|---|
+| wgpu crash: 711 MB vertex buffer | tint drawn as a mesh — millions of quads across a soft gradient |
+| the softest brush still painted at full strength | `hardness` shapes an edge; **nothing controlled strength** |
+| invert covered only a rectangle around the strokes | `CoverageMap` had no value for outside its bbox |
+| a drawn line rendered as its first dab only | `drag_started` kicked off a full-res render of a one-point stroke, which landed late and painted over the good one |
+| sluggish at 1:1 only with the mask shown | the tint rasterized at **`frame_rect`**, which at 1:1 is the *whole frame*, not the viewport |
+| the tint drifted with the window when panning | the cache stored a **screen rect**, so a hit survived a pan |
+
+**Every one is in the canvas wiring.** The pure functions — `FrameMap`, `inverse_point`, the
+rasterizer, decimation — carry ~30 tests between them and produced not one defect. The suite
+covers arithmetic well and interaction hardly at all, and headless `RawInput` tests of the drag
+lifecycle would have caught at least the first, fourth and sixth.
+
+⚠ **The last one is a regression of a bug this project had already fixed.** 3.1a's overlay drifted
+while panning because it was placed against the wrong rect; the fix made every coordinate
+frame-relative and CLAUDE.md records it. Caching a *derived screen position* quietly undid that
+guarantee. **Cache the expensive thing, never the placement.**
+
+### Where the spec was wrong
+
+⚠ **"The tint calls `rasterize` with the on-screen rect as the frame — roughly 1400×900,
+sub-millisecond."** `frame_rect` is the whole frame's on-screen rect, so at 1:1 on a
+full-resolution buffer it is ~6246×4170. The tint was rasterizing at full resolution and uploading
+a 26 MB texture. It is capped at 1400 px on the long edge now and stretched by the GPU; the cost
+is constant in zoom and a soft edge is invisible under a 50% overlay.
+
+⚠ **"One quad per run of equal coverage" was defended as sufficient and is not.** Run-length
+collapses a stroke's flat interior — but across a *soft* brush's gradient almost every pixel
+differs from its neighbour, so every run is length 1, and a large soft stroke is mostly gradient.
+The optimisation helped precisely where the cost was not. A texture is one quad regardless.
+
+⚠ **Flow should never have been deferred.** The spec inherited "flow is a later milestone" from
+3.1c-A. Without it `hardness` was the only brush control that looked like strength and was not
+one: the softest brush painted at full strength and repeated passes did nothing. Pulled in, with a
+two-level rule — per-stroke `max`, then composite across strokes — that turned out cleaner than
+the deferral feared.
+
+### Diagnosis notes worth keeping
+
+⚠ **Instrumentation beat reasoning twice, and both times I reached for it late.** The "first dab
+only" bug survived three readings of the drag code because the drag code was *correct* — the
+points were all there. One `RUSTROOM_DEBUG_BRUSH` line (`14 strokes, last has 42 points,
+max_dim 6246`) reframed it instantly as a stale render. The env-gated print is kept.
+
+⚠ **The user's phrasing was the diagnosis, again.** "Responsive without the mask, sluggish with it
+on" isolates the tint from the render exactly, and stopped me building incremental splatting for a
+bottleneck that was not there. Symptom sequences are evidence — read them literally.
+
+## Recommended follow-up: region-scoped coverage, not incremental splatting
+
+Painting still defers the pixel effect to release. Lightroom shows it live.
+
+⚠ **The structural difference is resolution scope, and it points somewhere better than incremental
+splatting.** Lightroom's Develop view renders at *screen* resolution, so at 1:1 it works on the
+visible portion only. Rustroom rasterizes brush coverage **whole-frame**, deliberately, so that
+the region stays out of the cache key and panning never invalidates — which makes panning free and
+painting expensive.
+
+**Rasterize the coverage over the rendered region instead.** At ~1400×900 that is ~1.6 ms rather
+than ~24 ms, cheap enough to render live on every drag frame. Panning would re-rasterize, but
+panning already re-runs the entire tail, so the trade is consistent with the rest of the pipeline.
+
+⚠ It is *less* machinery than incremental splatting and strictly more useful: incremental helps
+only the in-progress stroke, while region-scoping helps every render at zoom, including a slider
+drag with several brush masks present.
