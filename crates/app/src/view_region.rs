@@ -14,6 +14,45 @@ pub use crate::render_engine::RegionRect;
 /// 20% more pixels in the region tail (~1.5 ms) and buys room for the next spatial stage.
 pub const REGION_MARGIN: usize = 192;
 
+/// The closest the view can be zoomed out: fit, where the whole image is on screen.
+pub const MIN_ZOOM: f32 = 1.0;
+/// The furthest in. Beyond this the render ladder has no more rungs to climb.
+pub const MAX_ZOOM: f32 = 8.0;
+
+/// The new zoom after a gesture, clamped to the usable range.
+///
+/// ⚠ `factor` is **multiplicative and 1.0 when idle**, matching `egui::InputState::zoom_delta`,
+/// which folds trackpad pinch together with ctrl+scroll. It is not a delta: treating it as one
+/// would collapse the zoom to nothing on every idle frame.
+pub fn zoom_step(zoom: f32, factor: f32) -> f32 {
+    (zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM)
+}
+
+/// The pan correction that keeps the point under the cursor fixed while zooming.
+///
+/// `pointer` and `anchor` are `(x, y)` in the same screen space; the result is `(dx, dy)` to add
+/// to the pan. Magnifying by `r = new/old` moves a point at offset `d` from the anchor to `d*r`,
+/// so `d*(1-r)` puts it back.
+///
+/// ⚠ Plain tuples rather than `egui::Vec2`: this module is deliberately free of `egui` types so
+/// it can be tested without a window, and every other function here holds to that. The caller
+/// converts at the boundary, as it already does for `RegionRect`.
+pub fn zoom_anchor_shift(
+    pointer: (f32, f32),
+    anchor: (f32, f32),
+    old: f32,
+    new: f32,
+) -> (f32, f32) {
+    if old <= f32::EPSILON {
+        return (0.0, 0.0);
+    }
+    let r = new / old;
+    (
+        (pointer.0 - anchor.0) * (1.0 - r),
+        (pointer.1 - anchor.1) * (1.0 - r),
+    )
+}
+
 /// The working resolution to render at, chosen from a ladder of rungs that double from fit
 /// resolution up to the buffer's own.
 ///
@@ -406,5 +445,45 @@ mod tests {
                 h: 10
             }
         ));
+    }
+
+    #[test]
+    fn zoom_step_clamps_to_the_usable_range() {
+        assert_eq!(zoom_step(1.0, 0.5), MIN_ZOOM, "cannot zoom out past fit");
+        assert_eq!(zoom_step(8.0, 2.0), MAX_ZOOM, "cannot zoom in past the cap");
+        assert!((zoom_step(2.0, 1.5) - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_idle_gesture_does_not_change_the_zoom() {
+        // ⚠ `egui::InputState::zoom_delta()` returns 1.0 when idle, NOT 0.0 — it is a
+        // multiplicative factor, not a delta. Treating it as a delta would collapse the zoom
+        // to nothing on every frame in which the user does nothing at all.
+        assert_eq!(zoom_step(3.5, 1.0), 3.5);
+    }
+
+    #[test]
+    fn zoom_anchor_shift_keeps_the_cursor_point_fixed() {
+        // Magnifying by r moves a point at offset d from the anchor to d*r, so the pan must
+        // move by d*(1-r) to put it back. Sign errors here are invisible in review and
+        // obvious in use, which is the whole reason this is a pure function.
+        let shift = zoom_anchor_shift((110.0, 220.0), (100.0, 200.0), 1.0, 2.0);
+        assert!((shift.0 - -10.0).abs() < 1e-6, "{shift:?}");
+        assert!((shift.1 - -20.0).abs() < 1e-6, "{shift:?}");
+    }
+
+    #[test]
+    fn zooming_out_shifts_the_opposite_way() {
+        // ⚠ The discriminating case: a sign error that negates the whole expression passes the
+        // test above only if it also passes this one with the same sign, which it cannot.
+        let shift = zoom_anchor_shift((110.0, 220.0), (100.0, 200.0), 2.0, 1.0);
+        assert!((shift.0 - 5.0).abs() < 1e-6, "{shift:?}");
+        assert!((shift.1 - 10.0).abs() < 1e-6, "{shift:?}");
+    }
+
+    #[test]
+    fn a_cursor_on_the_anchor_needs_no_shift() {
+        let shift = zoom_anchor_shift((100.0, 200.0), (100.0, 200.0), 1.0, 4.0);
+        assert_eq!(shift, (0.0, 0.0));
     }
 }
