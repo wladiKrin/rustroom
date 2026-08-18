@@ -536,6 +536,59 @@ fn draw_mask_overlay(
     false
 }
 
+/// A memoised screen-resolution coverage map for the tint.
+///
+/// ⚠⚠ **`paint_mask` runs on every egui frame, so without this the tint re-rasterizes at ~60 Hz
+/// even while merely hovering.** One stroke is ~1.2 ms at screen size, so thirty strokes is
+/// ~36 ms *per frame with nothing happening* — which is exactly how it felt in use. The
+/// benchmark missed it because it timed a single stroke once; the cost scales with stroke count
+/// and is paid continuously.
+///
+/// Keyed on everything the map is built from, so a hit is exact.
+struct TintCache {
+    brush: edit_model::Brush,
+    geometry: edit_model::Geometry,
+    w: usize,
+    h: usize,
+    cov: pipeline::brush::CoverageMap,
+}
+
+thread_local! {
+    /// ⚠ Thread-local rather than a field on `RustroomApp`: `paint_mask` is a free function
+    /// reached from deep inside egui closures that already hold `&mut app`, and threading a
+    /// cache down would mean widening four signatures for something with no observable
+    /// behaviour. egui is single-threaded per context, so this is the same thread every frame.
+    static TINT: std::cell::RefCell<Option<TintCache>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The tint's coverage, rasterized only when something it depends on has changed.
+fn tint_coverage(
+    b: &edit_model::Brush,
+    geometry: &edit_model::Geometry,
+    w: usize,
+    h: usize,
+    f: impl FnOnce(&pipeline::brush::CoverageMap),
+) {
+    TINT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let hit = slot
+            .as_ref()
+            .is_some_and(|c| c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b);
+        if !hit {
+            *slot = Some(TintCache {
+                brush: b.clone(),
+                geometry: *geometry,
+                w,
+                h,
+                cov: pipeline::brush::rasterize(b, geometry, w, h),
+            });
+        }
+        if let Some(c) = slot.as_ref() {
+            f(&c.cov);
+        }
+    });
+}
+
 /// Points used to approximate a mask ellipse. egui has no ellipse primitive, so it is drawn as
 /// a closed polyline; 64 is smooth at any zoom this canvas reaches.
 const ELLIPSE_SEGMENTS: usize = 64;
@@ -630,43 +683,44 @@ fn paint_mask(
             if w == 0 || h == 0 {
                 return;
             }
-            let cov = pipeline::brush::rasterize(b, geometry, w, h);
-            if cov.is_empty() {
-                return;
-            }
-            // ⚠ Red because it is conventional and because none of the four accents is red, so
-            // the tint can never be confused with active state.
-            //
-            // ⚠ One quad per *run* of equal coverage along a row, not one per pixel. A per-pixel
-            // mesh over a large stroke is hundreds of thousands of quads; runs collapse the flat
-            // interior of a stroke — which is most of it — into a handful.
-            let mut mesh = egui::Mesh::default();
-            for y in 0..cov.h {
-                let mut x = 0usize;
-                while x < cov.w {
-                    let a = cov.at(cov.x0 + x, cov.y0 + y);
-                    if a == 0 {
-                        x += 1;
-                        continue;
-                    }
-                    let start = x;
-                    while x < cov.w && cov.at(cov.x0 + x, cov.y0 + y) == a {
-                        x += 1;
-                    }
-                    let rect = egui::Rect::from_min_size(
-                        egui::pos2(
-                            frame_rect.left() + (cov.x0 + start) as f32,
-                            frame_rect.top() + (cov.y0 + y) as f32,
-                        ),
-                        egui::vec2((x - start) as f32, 1.0),
-                    );
-                    mesh.add_colored_rect(
-                        rect,
-                        egui::Color32::from_rgba_unmultiplied(255, 40, 40, a / 2),
-                    );
+            tint_coverage(b, geometry, w, h, |cov| {
+                if cov.is_empty() {
+                    return;
                 }
-            }
-            painter.add(egui::Shape::mesh(mesh));
+                // ⚠ Red because it is conventional and because none of the four accents is red, so
+                // the tint can never be confused with active state.
+                //
+                // ⚠ One quad per *run* of equal coverage along a row, not one per pixel. A per-pixel
+                // mesh over a large stroke is hundreds of thousands of quads; runs collapse the flat
+                // interior of a stroke — which is most of it — into a handful.
+                let mut mesh = egui::Mesh::default();
+                for y in 0..cov.h {
+                    let mut x = 0usize;
+                    while x < cov.w {
+                        let a = cov.at(cov.x0 + x, cov.y0 + y);
+                        if a == 0 {
+                            x += 1;
+                            continue;
+                        }
+                        let start = x;
+                        while x < cov.w && cov.at(cov.x0 + x, cov.y0 + y) == a {
+                            x += 1;
+                        }
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                frame_rect.left() + (cov.x0 + start) as f32,
+                                frame_rect.top() + (cov.y0 + y) as f32,
+                            ),
+                            egui::vec2((x - start) as f32, 1.0),
+                        );
+                        mesh.add_colored_rect(
+                            rect,
+                            egui::Color32::from_rgba_unmultiplied(255, 40, 40, a / 2),
+                        );
+                    }
+                }
+                painter.add(egui::Shape::mesh(mesh));
+            });
         }
     }
 }
