@@ -602,8 +602,15 @@ struct TintCache {
     geometry: edit_model::Geometry,
     w: usize,
     h: usize,
-    /// `None` when the brush paints nothing inside its box.
-    drawn: Option<(egui::TextureHandle, egui::Rect)>,
+    /// The uploaded coverage, with its box in **coverage-pixel** coordinates and the scale it was
+    /// rasterized at. `None` when the brush paints nothing inside its box.
+    ///
+    /// ⚠⚠ **A screen `Rect` must NOT be cached here.** It was, and panning at zoom then left the
+    /// tint fixed in window coordinates while the image slid under it, snapping back the moment a
+    /// brush stroke invalidated the entry. That is precisely 3.1a's second real-use bug — an
+    /// overlay placed from a stale rect rather than recomputed against the live `frame_rect` —
+    /// reintroduced through a cache. Placement is derived every frame; only the texture is kept.
+    drawn: Option<(egui::TextureHandle, [usize; 4], f32)>,
     /// Coverage outside the box — non-zero for an **inverted** brush, which covers the whole
     /// frame except what was painted.
     ///
@@ -681,13 +688,7 @@ fn paint_tint(
                     painter
                         .ctx()
                         .load_texture("mask_tint", img, egui::TextureOptions::LINEAR);
-                // Back out of the capped resolution into frame coordinates.
-                let inv = 1.0 / scale;
-                let rect = egui::Rect::from_min_size(
-                    frame_rect.min + egui::vec2(cov.x0 as f32 * inv, cov.y0 as f32 * inv),
-                    egui::vec2(cov.w as f32 * inv, cov.h as f32 * inv),
-                );
-                Some((tex, rect))
+                Some((tex, [cov.x0, cov.y0, cov.w, cov.h], scale))
             };
             *slot = Some(TintCache {
                 brush: b.clone(),
@@ -706,7 +707,13 @@ fn paint_tint(
             // the area inside the box but outside the strokes is *also* fully covered, so the box
             // showed up as a distinctly brighter rectangle over the photograph. Reported in use
             // as "an additional mask box".
-            let box_rect = cache.drawn.as_ref().map(|(_, r)| *r);
+            let box_rect = cache.drawn.as_ref().map(|(_, b, sc)| {
+                let inv = 1.0 / sc;
+                egui::Rect::from_min_size(
+                    frame_rect.min + egui::vec2(b[0] as f32 * inv, b[1] as f32 * inv),
+                    egui::vec2(b[2] as f32 * inv, b[3] as f32 * inv),
+                )
+            });
             match box_rect {
                 None => {
                     painter.rect_filled(frame_rect, egui::CornerRadius::ZERO, tint);
@@ -739,10 +746,17 @@ fn paint_tint(
                 }
             }
         }
-        if let Some((tex, rect)) = cache.drawn.as_ref() {
+        if let Some((tex, b, sc)) = cache.drawn.as_ref() {
+            // ⚠ Derived from the LIVE `frame_rect`, never from a cached rect — see the field's
+            // note. `frame_rect` moves with the pan, so the tint must be placed against it afresh.
+            let inv = 1.0 / sc;
+            let rect = egui::Rect::from_min_size(
+                frame_rect.min + egui::vec2(b[0] as f32 * inv, b[1] as f32 * inv),
+                egui::vec2(b[2] as f32 * inv, b[3] as f32 * inv),
+            );
             painter.image(
                 tex.id(),
-                *rect,
+                rect,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
