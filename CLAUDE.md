@@ -160,11 +160,22 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **The habit that catches all of them: after writing a test, break the thing it names and watch it fail.** Every `⚠ watched failing` note in this file is one of those. When a sabotage step *doesn't* fail, that is a finding about the test, not a formality to wave through — one of this session's subagents refused to move on for exactly that reason and was right.
 
-**🎯 M3.1 IS CLOSED.** All three mask primitives — linear, radial, brush — are authorable on the canvas. That was the last thing blocking the layout work.
+**🎯 M3.1 IS CLOSED.** All three mask primitives — linear, radial, brush — are authorable on the canvas.
 
-**▶ NEXT ACTION: the parked button/layout work.** Deferred on 2026-08-13 with the rule *"reordering controls inside a container that already exists is cheap any time; changing what containers exist or where they live is what waits"* — because masking was going to introduce a mask list the layout had nowhere to put. It now has one, so the constraint is gone. See the "Deferred, user's call" note below, which is **live** rather than parked.
+**▶ NEXT ACTION: region-scoped brush coverage** (user's call, 2026-08-19), *then* the layout work below.
 
-⚠ **Before starting, read "Six bugs, all found by using it" in `2026-08-18-brush-canvas-design.md`.** Layout work is canvas/panel work, which is exactly the area that suite does not cover.
+Recorded in M3.1c-B's outcome as the recommended follow-up and now scheduled. Coverage is rasterized **whole-frame** so the region stays out of the cache key and panning never invalidates — free panning, expensive painting. Rasterizing over the **rendered region** instead is ~1.6 ms against ~24 ms at 1:1, cheap enough to render the pixel effect *live* per drag frame rather than deferring it to release, which is what Lightroom does and what this currently does not. ⚠ Chosen over incremental splatting deliberately: less machinery, and it helps every render at zoom rather than only the in-progress stroke.
+
+**▶ THEN: the button/layout work.** Parked 2026-08-13, unblocked when M3.1 closed. ⚠ **All four problems below were confirmed by the user on 2026-08-19** — this is a mandate, not a proposal:
+
+1. **The toolbar is thirteen controls on one level** — view (Fit, Before/After), a mode (Geometry), edit transfer (Copy, Paste, Sync, Presets), output (Export), app (Settings) and panel toggles (Presets, Filmstrip), with a single divider. Nothing distinguishes modes from actions from panel toggles.
+2. **The right panel stacks two organising principles** — thirteen always-open ungrouped sliders (Temp…Vibrance, with *no header at all*), then seven `CollapsingHeader` sections. The top half cannot be collapsed.
+3. **Masks is last, below Vignette**, purely because it was added last. It is now a primary tool with its own canvas interaction.
+4. **Presets is both a toolbar button and a dedicated left panel** — the only feature with one.
+
+⚠ **Before starting the layout work, read "Six bugs, all found by using it" in `2026-08-18-brush-canvas-design.md`.** Layout work is canvas/panel work, which is exactly the area that suite does not cover.
+
+⚠ The original 2026-08-13 rule still applies to sequencing *within* that work: *reordering controls inside a container that already exists is cheap; changing what containers exist or where they live is what carries risk.*
 
 ---
 
