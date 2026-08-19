@@ -349,6 +349,22 @@ fn main() {
             }
             println!("{best:8.2} ms   brush rasterize, {label}");
         }
+        // ⚠ The number the live-rendering decision rests on: a full-resolution frame with the
+        // coverage clipped to a viewport-sized region, which is what painting at 1:1 now does.
+        let mut best = f64::MAX;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let cov = pipeline::brush::rasterize_in(
+                &brush,
+                &g,
+                6246,
+                4170,
+                Some((2400, 1600, 1400, 900)),
+            );
+            std::hint::black_box(&cov);
+            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("{best:8.2} ms   brush rasterize CLIPPED to 1400x900, full 6246x4170");
     }
 
     // The RGBA8 pack, at both render resolutions. It runs on every frame, including the ones

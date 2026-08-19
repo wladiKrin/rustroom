@@ -485,8 +485,19 @@ fn draw_mask_overlay(
                             .is_none_or(|last| brush_tool::should_record(*last, src, radius));
                         if keep {
                             stroke.points.push(src);
-                            // ⚠ Deliberately does NOT set `moved`, so no pipeline render is
-                            // requested mid-drag. See the note on `drag_stopped` below.
+                            // ⚠ Live rendering, enabled by region-scoped coverage: a paint frame
+                            // is now bounded by the viewport rather than by the image. Measured
+                            // at ~16.6 ms at 1:1 on a full-resolution X-T4 buffer — 9.03 ms
+                            // clipped rasterization, 7.2 ms region tail, ~0.4 ms pack — which is
+                            // marginal against a 60 Hz budget and recorded as such rather than
+                            // claimed as comfortable.
+                            //
+                            // ⚠ `drag_started` stays suppressed. Rendering a one-point stroke you
+                            // are about to extend was pure waste and caused the "initial dot"
+                            // bug: a full-resolution render landing after the line was finished
+                            // and painting over it. Live rendering means rendering on **motion**,
+                            // never on press.
+                            moved = true;
                         }
                     }
                 }
@@ -520,11 +531,8 @@ fn draw_mask_overlay(
     // render was the one from `drag_started`, when the stroke had a single point. The history
     // push was being skipped too, so the stroke was not undoable.
     if matches!(mask, edit_model::Mask::Brush(_)) && resp.drag_stopped() {
-        // ⚠ **The pipeline is re-run once here, not on every frame of the drag**, and that is a
-        // design decision rather than a throttle. At 1:1 on a full-resolution buffer the frame is
-        // 6246x4170, where rasterizing a stroke costs ~24 ms before the tail render and pack. The
-        // feedback a brush needs *while* drawing is where the mask is, and the tint shows that
-        // live at screen resolution for well under a millisecond.
+        // The final render for this stroke, and the one that pushes history. Motion frames render
+        // too now — see the note there — so this mostly guarantees the last few points land.
         // ⚠ Env-gated instrumentation, kept because this project's own history says to reach for
         // a print when the code reads correctly and the behaviour disagrees — the fit-view
         // investigation went four rounds on reasoning before one `eprintln` reframed it.
