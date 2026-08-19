@@ -113,9 +113,20 @@ impl PipelineStage for MaskStage {
             } => Some(std::sync::Arc::clone(c)),
             CoverageSource::Painted {
                 brush, geometry, ..
-            } => Some(std::sync::Arc::new(crate::brush::rasterize(
-                brush, geometry, fw, fh,
-            ))),
+            } => {
+                // ⚠ Clip to this render's region. `w`/`h` are the incoming image's dimensions,
+                // which *are* the region's size, and `x0`/`y0` its frame-space origin. With no
+                // region the clip is `None` and the result is the whole frame, byte for byte.
+                //
+                // ⚠ This must be the same rectangle `render_engine`'s `BrushCache` clips to, or a
+                // prebuilt map would disagree with this fallback. It is, by construction: both
+                // derive from the same `RegionRect`. A mismatch would not error — it would read
+                // `outside` across the difference, fading the mask out partway across the image.
+                let clip = self.region.map(|r| (r.x0, r.y0, w, h));
+                Some(std::sync::Arc::new(crate::brush::rasterize_in(
+                    brush, geometry, fw, fh, clip,
+                )))
+            }
         };
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
         // every test still pass. An empty coverage map reads 0 everywhere, and blending at
@@ -317,7 +328,11 @@ mod tests {
     #[test]
     fn a_brush_mask_in_a_region_matches_the_same_part_of_the_whole() {
         // The region path must agree with the whole-frame path pixel for pixel, which is what
-        // makes zooming safe. The same property `a_region_render_matches_the_whole_render_cropped`
+        // makes zooming safe.
+        //
+        // ⚠ This test predates region-scoped coverage and now guards it too: the region path
+        // rasterizes a *clipped* map while the whole-frame path does not, so any clip that shifts
+        // or truncates coverage shows up here. Watched failing with the clip origin dropped. The same property `a_region_render_matches_the_whole_render_cropped`
         // pins for the pipeline at large.
         let whole =
             MaskStage::new(&painted(), RenderScale::FULL, &Geometry::default()).apply(flat(80, 40));
