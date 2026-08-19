@@ -80,16 +80,54 @@ struct Stroke {
     erase: bool,
 }
 
-/// Rasterize a brush into a coverage map over the frame.
+/// Rasterize a brush into a coverage map over the whole frame.
+///
+/// The uncached path: the CLI, every export, and the fit view.
 pub fn rasterize(
     brush: &Brush,
     geometry: &Geometry,
     frame_w: usize,
     frame_h: usize,
 ) -> CoverageMap {
+    rasterize_in(brush, geometry, frame_w, frame_h, None)
+}
+
+/// Rasterize only what falls inside `clip` — the rendered region, as `(x0, y0, w, h)` in **frame
+/// pixels**.
+///
+/// ⚠ **`FrameMap` is untouched and dab positions are unchanged.** Only the output box is clipped,
+/// so a clipped map and a whole-frame one agree exactly at every frame coordinate inside the clip.
+/// That is the property that makes this safe, and `a_clipped_raster_matches_the_whole_frame_one`
+/// is the guard.
+///
+/// ⚠ `None` rasterizes the whole frame and is byte-identical to the pre-clip behaviour — which is
+/// why no golden moved when this landed.
+pub fn rasterize_in(
+    brush: &Brush,
+    geometry: &Geometry,
+    frame_w: usize,
+    frame_h: usize,
+    clip: Option<(usize, usize, usize, usize)>,
+) -> CoverageMap {
     // ⚠ An inverted brush with no strokes covers everything, not nothing.
     let outside = if brush.invert { 255 } else { 0 };
     if brush.strokes.is_empty() || frame_w == 0 || frame_h == 0 {
+        return CoverageMap {
+            outside,
+            ..Default::default()
+        };
+    }
+    // The clip in frame pixels, clamped to the frame. `None` is the whole frame.
+    let (cx0, cy0, cx1, cy1) = match clip {
+        Some((x, y, w, h)) => (
+            x.min(frame_w),
+            y.min(frame_h),
+            (x + w).min(frame_w),
+            (y + h).min(frame_h),
+        ),
+        None => (0, 0, frame_w, frame_h),
+    };
+    if cx1 <= cx0 || cy1 <= cy0 {
         return CoverageMap {
             outside,
             ..Default::default()
@@ -107,12 +145,31 @@ pub fn rasterize(
         let Some(first) = pts.first() else { continue };
         // ⚠ A single point still paints one dab: a click without a drag is one point, so the
         // interpolation below must not be the only thing that emits dabs.
-        let mut dabs = vec![Dab {
-            x: first.0,
-            y: first.1,
-            r,
-            hard,
-        }];
+        // A dab entirely outside the clip cannot affect any pixel inside it, so it is dropped
+        // before it can widen the bounding box or cost a buffer. This is where the saving comes
+        // from on a long stroke that runs off-screen — the common case at 1:1.
+        //
+        // ⚠ **An optimisation, not a correctness guard** — verified by replacing this with
+        // `|_, _| true` and watching every test still pass. The bounding box is clamped to the
+        // clip regardless, so an out-of-clip dab would contribute nothing to the output anyway;
+        // what the skip saves is the box being widened to the stroke's full extent and both f32
+        // buffers being sized for it. `a_dab_entirely_outside_the_clip_contributes_nothing`
+        // therefore guards the *output*, not this branch.
+        let keep = |x: f32, y: f32| {
+            !(x + r < cx0 as f32
+                || x - r >= cx1 as f32
+                || y + r < cy0 as f32
+                || y - r >= cy1 as f32)
+        };
+        let mut dabs: Vec<Dab> = Vec::new();
+        if keep(first.0, first.1) {
+            dabs.push(Dab {
+                x: first.0,
+                y: first.1,
+                r,
+                hard,
+            });
+        }
         for pair in pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -121,12 +178,15 @@ pub fn rasterize(
             let n = ((len / step).ceil() as usize).max(1);
             for i in 1..=n {
                 let t = i as f32 / n as f32;
-                dabs.push(Dab {
-                    x: a.0 + dx * t,
-                    y: a.1 + dy * t,
-                    r,
-                    hard,
-                });
+                let (px, py) = (a.0 + dx * t, a.1 + dy * t);
+                if keep(px, py) {
+                    dabs.push(Dab {
+                        x: px,
+                        y: py,
+                        r,
+                        hard,
+                    });
+                }
             }
         }
         strokes.push(Stroke {
@@ -150,10 +210,13 @@ pub fn rasterize(
         hx = hx.max(d.x + d.r);
         hy = hy.max(d.y + d.r);
     }
-    let x0 = lx.floor().clamp(0.0, frame_w as f32) as usize;
-    let y0 = ly.floor().clamp(0.0, frame_h as f32) as usize;
-    let x1 = ((hx.ceil().clamp(0.0, frame_w as f32) as usize) + 1).min(frame_w);
-    let y1 = ((hy.ceil().clamp(0.0, frame_h as f32) as usize) + 1).min(frame_h);
+    // ⚠ Clamped to the CLIP, not the frame. That single change is most of this feature: the box,
+    // and therefore both f32 buffers below, shrink from the stroke's full extent to its visible
+    // part.
+    let x0 = lx.floor().clamp(cx0 as f32, cx1 as f32) as usize;
+    let y0 = ly.floor().clamp(cy0 as f32, cy1 as f32) as usize;
+    let x1 = ((hx.ceil().clamp(cx0 as f32, cx1 as f32) as usize) + 1).min(cx1);
+    let y1 = ((hy.ceil().clamp(cy0 as f32, cy1 as f32) as usize) + 1).min(cy1);
     if x1 <= x0 || y1 <= y0 {
         return CoverageMap {
             outside,
@@ -702,5 +765,88 @@ mod tests {
             m.w,
             m.h
         );
+    }
+
+    /// A stroke crossing most of the frame, so a clip genuinely cuts it.
+    fn wide_stroke() -> Brush {
+        brush(vec![BrushStroke {
+            points: vec![[0.1, 0.5], [0.9, 0.5]],
+            radius: 0.06,
+            hardness: 40.0,
+            flow: 100.0,
+            erase: false,
+        }])
+    }
+
+    #[test]
+    fn a_clipped_raster_matches_the_whole_frame_one() {
+        // ⚠⚠ The load-bearing test. It compares COVERAGE VALUES AT FRAME COORDINATES, never the
+        // maps' fields: the boxes legitimately differ — that is the entire point of clipping — so
+        // asserting on `x0` or `w` would fail against a correct implementation. The same trap
+        // `a_stroke_survives_a_crop` had to avoid.
+        let b = wide_stroke();
+        let g = Geometry::default();
+        let whole = rasterize(&b, &g, 80, 40);
+        let clip = (30usize, 12usize, 20usize, 16usize);
+        let part = rasterize_in(&b, &g, 80, 40, Some(clip));
+        for y in clip.1..clip.1 + clip.3 {
+            for x in clip.0..clip.0 + clip.2 {
+                assert_eq!(part.at(x, y), whole.at(x, y), "at frame ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn the_clip_does_not_shift_dab_positions() {
+        // ⚠ The bug clipping invites: subtracting the clip origin somewhere it should not be,
+        // which lands every stroke off by the region offset — visible only when zoomed, and easy
+        // to mistake for a mask that "drifts".
+        let b = brush(vec![dot(0.5, 0.5, 0.05, 100.0, false)]);
+        let g = Geometry::default();
+        let part = rasterize_in(&b, &g, 80, 40, Some((30, 12, 20, 16)));
+        assert_eq!(part.at(40, 20), 255, "the dab centre is at frame (40, 20)");
+        assert_eq!(part.at(31, 13), 0, "the clip's own corner is not painted");
+    }
+
+    #[test]
+    fn a_dab_entirely_outside_the_clip_contributes_nothing() {
+        // ⚠ Guards the output, not the skip in `keep`. Removing that skip leaves this passing —
+        // checked — because the bounding box is clamped to the clip either way. The skip is an
+        // optimisation and its comment says so.
+        let far = brush(vec![dot(0.9, 0.9, 0.03, 100.0, false)]);
+        let part = rasterize_in(&far, &Geometry::default(), 80, 40, Some((0, 0, 20, 10)));
+        assert!(part.is_inert(), "nothing inside the clip should be painted");
+    }
+
+    #[test]
+    fn an_inverted_mask_still_covers_the_clipped_area() {
+        // ⚠ The bbox-versus-outside bug must not come back through the clip.
+        let b = Brush {
+            strokes: vec![dot(0.5, 0.5, 0.05, 100.0, false)],
+            invert: true,
+        };
+        let part = rasterize_in(&b, &Geometry::default(), 80, 40, Some((0, 0, 20, 10)));
+        assert_eq!(part.at(5, 5), 255, "inverted coverage inside the clip");
+        assert_eq!(part.at(40, 20), 255, "and outside it, via `outside`");
+    }
+
+    #[test]
+    fn no_clip_is_byte_identical_to_the_whole_frame() {
+        let b = wide_stroke();
+        let g = Geometry::default();
+        assert_eq!(
+            rasterize_in(&b, &g, 80, 40, None),
+            rasterize(&b, &g, 80, 40)
+        );
+    }
+
+    #[test]
+    fn a_clip_larger_than_the_frame_is_harmless() {
+        // The canvas clamps its region, but a clip must not index out of bounds if one slips
+        // through.
+        let b = wide_stroke();
+        let g = Geometry::default();
+        let part = rasterize_in(&b, &g, 80, 40, Some((0, 0, 9999, 9999)));
+        assert_eq!(part, rasterize(&b, &g, 80, 40));
     }
 }
