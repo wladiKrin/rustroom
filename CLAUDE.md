@@ -124,7 +124,7 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **The session before (2026-08-12/13) landed seven features.** In order: per-stage prefix checkpoints; the 10× RGBA8 pack; parallel `downscale_to`; the full-resolution editing buffer *and* its trigger rework to eager-on-settle; the Library format filter; rotate/flip with the Crop→Geometry rename; and the fit-view clamp fix. Five bugs were found in real use and fixed along the way — the two sections below on **"Three bugs from the first hour"** and **"The fit view now fills the window"** are the ones worth reading before touching the canvas, because both are about the same failure mode: two quantities that agree in the common case and diverge in the interesting one.
 
-**Push state: M3.1c-B sits on branch `m3.1c-b-brush-canvas`, 16 commits ahead of `main`.** Everything before it is merged and pushed. ⚠ **Run `git log origin/main..main` and `git branch --merged main` rather than trusting this.**
+**Push state: everything is merged to `main` and pushed** — M3.1c-B included, and every feature branch deleted after merging. ⚠ **Run `git log origin/main..main` rather than trusting that** — the user pushes themselves, so it goes stale immediately.
 
 ⚠ **Branch-per-feature is the established default now** — three in a row (`m3.1b-radial-mask`, `canvas-navigation`, `m3.1c-a-brush-headless`), each merged and pushed by the user. Branch without asking; never push.
 
