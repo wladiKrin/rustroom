@@ -344,6 +344,19 @@ struct BrushKey {
     geometry: edit_model::Geometry,
     fw: usize,
     fh: usize,
+    /// The rendered region as `(x0, y0, w, h)` in frame pixels, or `None` for the whole frame.
+    ///
+    /// ⚠⚠ **In the key on purpose, and this is the OPPOSITE of [`PrefixCache`]'s rule.** That
+    /// rule — region out of the key, so panning never invalidates — is right for the prefix,
+    /// which runs whole-buffer and whose output *is* the frame. Copied to the brush it buys a
+    /// cache that survives a pan (invisible, since panning re-runs the whole tail regardless) and
+    /// costs a full-frame rasterization on every paint frame: 23.76 ms at 6246x4170, measured,
+    /// and reported in use as "very sluggish at 1:1". **Do not "unify" the two caches.**
+    ///
+    /// ⚠ It also makes a clip mismatch unrepresentable: a map clipped to one region handed to a
+    /// `MaskStage` rendering another would sample `outside` across the difference — a mask that
+    /// fades out partway across the image rather than an error.
+    region: Option<(usize, usize, usize, usize)>,
 }
 
 /// Rasterized brush coverage, so an unrelated slider drag does not re-rasterize.
@@ -366,7 +379,12 @@ impl BrushCache {
     /// layer.
     const CAP: usize = 2;
 
-    fn key(edits: &Edits, fw: usize, fh: usize) -> BrushKey {
+    fn key(
+        edits: &Edits,
+        fw: usize,
+        fh: usize,
+        region: Option<(usize, usize, usize, usize)>,
+    ) -> BrushKey {
         BrushKey {
             brushes: edits
                 .masks
@@ -379,6 +397,7 @@ impl BrushCache {
             geometry: edits.geometry,
             fw,
             fh,
+            region,
         }
     }
 
@@ -387,8 +406,9 @@ impl BrushCache {
         edits: &Edits,
         fw: usize,
         fh: usize,
+        region: Option<(usize, usize, usize, usize)>,
     ) -> Arc<pipeline::BrushCoverage> {
-        let key = Self::key(edits, fw, fh);
+        let key = Self::key(edits, fw, fh, region);
         if let Some(i) = self.entries.iter().position(|(k, _)| *k == key) {
             // Promote the hit, so the least recently used entry is the one evicted.
             let hit = self.entries.remove(i);
@@ -400,11 +420,12 @@ impl BrushCache {
             .masks
             .iter()
             .map(|m| match &m.mask {
-                edit_model::Mask::Brush(b) => Some(Arc::new(pipeline::brush::rasterize(
+                edit_model::Mask::Brush(b) => Some(Arc::new(pipeline::brush::rasterize_in(
                     b,
                     &edits.geometry,
                     fw,
                     fh,
+                    region,
                 ))),
                 _ => None,
             })
@@ -511,7 +532,13 @@ fn render_cached(
     // ⚠ The frame dimensions are the PREFIX OUTPUT's — `(pw, ph)` — not the region's. That image
     // *is* the frame. Passing the region's would rasterize at the wrong size and, because the dims
     // are in the key, would also thrash the cache on every pan.
-    let coverage = brush_cache.get_or_build(edits, pw, ph);
+    // ⚠ The clip comes from `rect`, which carries the region's own width and height. `Region`
+    // holds only the origin plus the full frame's size, so deriving the size as "frame minus
+    // origin" would clip to the bottom-right corner of the frame rather than to the viewport —
+    // larger than intended, and silently so, because the output would still be correct and merely
+    // slow.
+    let clip = rect.map(|r| (r.x, r.y, r.w, r.h));
+    let coverage = brush_cache.get_or_build(edits, pw, ph, clip);
     let (_, tail) =
         pipeline::build_pipeline_split_in_region_with_brush(edits, scale, region, Some(&coverage));
     (pack(tail.run(input), region, max_dim), ran)
@@ -1167,17 +1194,17 @@ mod tests {
         // only observable difference between a hit and a rebuild.
         let mut cache = BrushCache::default();
         let edits = brush_edits();
-        let a = cache.get_or_build(&edits, 200, 100);
-        let b = cache.get_or_build(&edits, 200, 100);
+        let a = cache.get_or_build(&edits, 200, 100, None);
+        let b = cache.get_or_build(&edits, 200, 100, None);
         assert!(Arc::ptr_eq(&a, &b), "the second call must hit");
 
-        let c = cache.get_or_build(&edits, 400, 200);
+        let c = cache.get_or_build(&edits, 400, 200, None);
         assert!(!Arc::ptr_eq(&a, &c), "different frame dims must miss");
 
         // ⚠ The assertion that pins CAP = 2 rather than 1. With a single entry the 400x200 build
         // would have evicted the 200x100 one, and this would rebuild — which is exactly the zoom
         // thrash the capacity exists to prevent.
-        let d = cache.get_or_build(&edits, 200, 100);
+        let d = cache.get_or_build(&edits, 200, 100, None);
         assert!(Arc::ptr_eq(&a, &d), "CAP=2 must keep both zoom levels warm");
     }
 
@@ -1185,12 +1212,12 @@ mod tests {
     fn changing_a_stroke_misses_the_brush_cache() {
         // The other half: a hit must depend on the strokes, not merely on the dimensions.
         let mut cache = BrushCache::default();
-        let a = cache.get_or_build(&brush_edits(), 200, 100);
+        let a = cache.get_or_build(&brush_edits(), 200, 100, None);
         let mut edited = brush_edits();
         if let edit_model::Mask::Brush(b) = &mut edited.masks[0].mask {
             b.strokes[0].points.push([0.8, 0.6]);
         }
-        let c = cache.get_or_build(&edited, 200, 100);
+        let c = cache.get_or_build(&edited, 200, 100, None);
         assert!(!Arc::ptr_eq(&a, &c), "an extra point must miss");
     }
 
@@ -1206,8 +1233,50 @@ mod tests {
         };
         edits.masks.insert(0, inactive);
         let mut cache = BrushCache::default();
-        let cov = cache.get_or_build(&edits, 200, 100);
+        let cov = cache.get_or_build(&edits, 200, 100, None);
         assert!(cov.get(0).is_none(), "slot 0 is the analytic mask");
         assert!(cov.get(1).is_some(), "slot 1 is the brush");
+    }
+
+    #[test]
+    fn the_brush_cache_misses_when_the_region_moves() {
+        // ⚠⚠ This REVERSES the rule `PrefixCache` follows, deliberately. Keeping the region out
+        // of the key buys a cache that survives a pan — invisible, because panning re-runs the
+        // whole tail anyway — and costs a full-frame rasterization on every paint frame:
+        // 23.76 ms at 6246x4170, measured, and reported in use as "very sluggish at 1:1".
+        let mut cache = BrushCache::default();
+        let e = brush_edits();
+        let a = cache.get_or_build(&e, 200, 100, Some((0, 0, 50, 50)));
+        let b = cache.get_or_build(&e, 200, 100, Some((0, 0, 50, 50)));
+        assert!(Arc::ptr_eq(&a, &b), "the same region must hit");
+        let c = cache.get_or_build(&e, 200, 100, Some((20, 0, 50, 50)));
+        assert!(!Arc::ptr_eq(&a, &c), "a moved region must miss");
+    }
+
+    #[test]
+    fn the_brush_cache_still_hits_when_only_a_slider_moves() {
+        // The cache's remaining job, and the reason it exists at all: dragging an unrelated
+        // slider with a brush mask present must not re-rasterize on every frame.
+        let mut cache = BrushCache::default();
+        let a = cache.get_or_build(&brush_edits(), 200, 100, None);
+        let mut louder = brush_edits();
+        louder.exposure = 1.5;
+        let b = cache.get_or_build(&louder, 200, 100, None);
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "a global slider does not touch the strokes and must hit"
+        );
+    }
+
+    #[test]
+    fn a_clipped_cache_entry_covers_only_its_region() {
+        // ⚠ The clip really is applied, not merely keyed on. Without it the two entries would be
+        // identical maps and this would pass for the wrong reason, so it asserts a frame pixel
+        // *outside* the clip reads nothing.
+        let mut cache = BrushCache::default();
+        let e = brush_edits();
+        let cov = cache.get_or_build(&e, 200, 100, Some((0, 0, 40, 100)));
+        let map = cov.get(0).expect("the brush mask has a map");
+        assert_eq!(map.at(120, 50), 0, "beyond the clip there is no coverage");
     }
 }
