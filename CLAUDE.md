@@ -100,13 +100,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 > **▶ RESUME HERE (fresh session).**
 >
-> **⚠⚠ FIRST: there is unmerged work.** Branch **`region-scoped-coverage`** holds 5 commits that are **not on `main`** — region-scoped brush coverage, complete, verified and confirmed smooth in use. **Do not start the next feature on top of an unmerged branch.** Check the real state before anything else:
+> **FIRST: check the real state before anything else** — this block goes stale the moment the user pushes.
 >
 > ```
 > git branch --show-current && git log main..HEAD --oneline && git log origin/main..main --oneline
 > ```
 >
-> If the user has merged it since, delete the branch and refresh the push-state line below. If not, ask whether to merge — **and never push either way; the user pushes to `github.com/wladiKrin/rustroom` himself.**
+> As of 2026-08-23 everything is merged: `main == origin/main`, working tree clean, no feature branches. If a branch shows up ahead of `main`, do not start the next feature on top of it — ask whether to merge, **and never push either way; the user pushes to `github.com/wladiKrin/rustroom` himself.**
 >
 > **⚠ Conventions that are not negotiable:** commit messages carry **no `Co-Authored-By` trailer**; **branch per feature** without asking; **never push**.
 >
@@ -144,7 +144,7 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **The session before (2026-08-12/13) landed seven features.** In order: per-stage prefix checkpoints; the 10× RGBA8 pack; parallel `downscale_to`; the full-resolution editing buffer *and* its trigger rework to eager-on-settle; the Library format filter; rotate/flip with the Crop→Geometry rename; and the fit-view clamp fix. Five bugs were found in real use and fixed along the way — the two sections below on **"Three bugs from the first hour"** and **"The fit view now fills the window"** are the ones worth reading before touching the canvas, because both are about the same failure mode: two quantities that agree in the common case and diverge in the interesting one.
 
-**Push state: region-scoped coverage sits on branch `region-scoped-coverage`, 5 commits ahead of `main`.** Everything before it is merged and pushed. ⚠ **Run `git log origin/main..main` rather than trusting this.**
+**Push state: everything through region-scoped coverage is merged and pushed** (`main == origin/main` at `58bdce8`, 2026-08-23; the `region-scoped-coverage` branch was merged by the user and deleted). ⚠ **Run `git log origin/main..main` rather than trusting this.**
 
 ⚠ **Branch-per-feature is the established default now** — three in a row (`m3.1b-radial-mask`, `canvas-navigation`, `m3.1c-a-brush-headless`), each merged and pushed by the user. Branch without asking; never push.
 
