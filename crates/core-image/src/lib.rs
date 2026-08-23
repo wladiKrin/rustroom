@@ -153,12 +153,18 @@ impl ImageBuf {
             .zip(self.data.par_chunks_exact(row))
             .enumerate()
             .for_each(|(y, (orow, srow))| {
+                // ⚠ `as_chunks` rather than `chunks_exact`: it yields `[f32; CHANNELS]` arrays
+                // instead of slices, so the pixel is a value the optimiser knows the length of.
+                // Required by clippy's `chunks_exact_to_as_chunks` from 1.98 onward, and it also
+                // lets the closure's result be assigned directly rather than copied slice-wise.
                 for (x, (out, px)) in orow
-                    .chunks_exact_mut(Self::CHANNELS)
-                    .zip(srow.chunks_exact(Self::CHANNELS))
+                    .as_chunks_mut::<{ Self::CHANNELS }>()
+                    .0
+                    .iter_mut()
+                    .zip(srow.as_chunks::<{ Self::CHANNELS }>().0)
                     .enumerate()
                 {
-                    out.copy_from_slice(&f(x, y, [px[0], px[1], px[2]]));
+                    *out = f(x, y, *px);
                 }
             });
         ImageBuf::from_vec(self.width, self.height, data)
@@ -208,7 +214,12 @@ impl ImageBuf {
         out.par_chunks_mut(PACK_BLOCK_PX * 4)
             .zip(self.data.par_chunks(PACK_BLOCK_PX * Self::CHANNELS))
             .for_each(|(ob, sb)| {
-                for (dst, src) in ob.chunks_exact_mut(4).zip(sb.chunks_exact(Self::CHANNELS)) {
+                for (dst, src) in ob
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(sb.as_chunks::<{ Self::CHANNELS }>().0)
+                {
                     dst[0] = Self::quantize(src[0]);
                     dst[1] = Self::quantize(src[1]);
                     dst[2] = Self::quantize(src[2]);
@@ -248,7 +259,12 @@ impl ImageBuf {
             .for_each(|(oy, orow)| {
                 let sy0 = oy * self.height / dh;
                 let sy1 = (((oy + 1) * self.height / dh).max(sy0 + 1)).min(self.height);
-                for (ox, out) in orow.chunks_exact_mut(Self::CHANNELS).enumerate() {
+                for (ox, out) in orow
+                    .as_chunks_mut::<{ Self::CHANNELS }>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
                     let sx0 = ox * self.width / dw;
                     let sx1 = (((ox + 1) * self.width / dw).max(sx0 + 1)).min(self.width);
                     let mut acc = [0.0f32; 3];
@@ -308,7 +324,7 @@ mod tests {
 
     fn rgba8_reference(img: &ImageBuf) -> Vec<u8> {
         let mut out = Vec::with_capacity(img.width() * img.height() * 4);
-        for px in img.data().chunks_exact(ImageBuf::CHANNELS) {
+        for px in img.data().as_chunks::<{ ImageBuf::CHANNELS }>().0 {
             out.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
             out.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
             out.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -429,7 +445,7 @@ mod tests {
         let img = awkward();
         let rgb = img.to_rgb8();
         let rgba = img.to_rgba8();
-        for (i, px) in rgba.chunks_exact(4).enumerate() {
+        for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(&px[..3], &rgb[i * 3..i * 3 + 3], "pixel {i} colour differs");
             assert_eq!(px[3], 255, "pixel {i} is not opaque");
         }
@@ -504,7 +520,7 @@ mod tests {
         }
         let out = img.downscale_to(2);
         assert_eq!((out.width(), out.height()), (2, 2));
-        for p in out.data().chunks_exact(3) {
+        for p in out.data().as_chunks::<3>().0 {
             assert!(
                 (p[0] - 0.2).abs() < 1e-5 && (p[1] - 0.4).abs() < 1e-5 && (p[2] - 0.6).abs() < 1e-5
             );

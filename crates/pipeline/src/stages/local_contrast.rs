@@ -473,7 +473,13 @@ mod tests {
             src.clone(),
         );
         let mut moved = 0usize;
-        for (o, s) in out.data().chunks_exact(3).zip(src.data().chunks_exact(3)) {
+        for (o, s) in out
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(src.data().as_chunks::<3>().0)
+        {
             if o[0] <= 0.0 {
                 continue;
             }

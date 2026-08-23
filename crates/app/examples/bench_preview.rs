@@ -189,7 +189,7 @@ fn main() {
             let t = Instant::now();
             let out = tail.run(mid.clone());
             let mut rgba = Vec::with_capacity(out.width() * out.height() * 4);
-            for px in out.data().chunks_exact(3) {
+            for px in out.data().as_chunks::<3>().0 {
                 rgba.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
                 rgba.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
                 rgba.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -305,7 +305,7 @@ fn main() {
                 }
                 let out = tail.run(img);
                 let mut rgba = Vec::with_capacity(out.width() * out.height() * 4);
-                for px in out.data().chunks_exact(3) {
+                for px in out.data().as_chunks::<3>().0 {
                     rgba.push((px[0].clamp(0.0, 1.0) * 255.0).round() as u8);
                     rgba.push((px[1].clamp(0.0, 1.0) * 255.0).round() as u8);
                     rgba.push((px[2].clamp(0.0, 1.0) * 255.0).round() as u8);

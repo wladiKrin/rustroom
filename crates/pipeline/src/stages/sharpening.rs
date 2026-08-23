@@ -201,7 +201,13 @@ mod tests {
         }
         let out = run(sharpen(60.0), src.clone());
         let mut moved = 0usize;
-        for (o, s) in out.data().chunks_exact(3).zip(src.data().chunks_exact(3)) {
+        for (o, s) in out
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(src.data().as_chunks::<3>().0)
+        {
             if o[0] <= 0.0 {
                 // A gain clamped to 0 is still a scalar multiply; there is simply no ratio
                 // left to compare.
@@ -341,7 +347,13 @@ mod tests {
             ..Default::default()
         };
         let out = run(p, src.clone());
-        let l: Vec<f32> = src.data().chunks_exact(3).map(luma).collect();
+        let l: Vec<f32> = src
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| luma(p))
+            .collect();
         let blur = gaussian_blur(&l, 64, 64, sigma_for(&p, RenderScale::FULL));
         let (x, y) = (32usize, 32usize);
         let i = y * 64 + x;

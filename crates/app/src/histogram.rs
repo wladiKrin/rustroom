@@ -3,7 +3,7 @@
 /// Per-channel 256-bin counts [R, G, B] from an interleaved RGBA byte buffer.
 pub fn histogram_rgba(rgba: &[u8]) -> [[u32; 256]; 3] {
     let mut h = [[0u32; 256]; 3];
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         h[0][px[0] as usize] += 1;
         h[1][px[1] as usize] += 1;
         h[2][px[2] as usize] += 1;

@@ -173,7 +173,9 @@ mod tests {
     fn l_sd(img: &ImageBuf) -> f32 {
         let ls: Vec<f32> = img
             .data()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| linear_srgb_to_oklab([p[0], p[1], p[2]])[0])
             .collect();
         let mean = ls.iter().sum::<f32>() / ls.len() as f32;
@@ -184,7 +186,9 @@ mod tests {
     fn chroma_sd(img: &ImageBuf) -> f32 {
         let cs: Vec<f32> = img
             .data()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| {
                 let lab = linear_srgb_to_oklab([p[0], p[1], p[2]]);
                 [lab[1], lab[2]]
@@ -198,7 +202,7 @@ mod tests {
     fn mean_ab(img: &ImageBuf) -> (f32, f32) {
         let n = (img.width() * img.height()) as f32;
         let (mut sa, mut sb) = (0.0, 0.0);
-        for p in img.data().chunks_exact(3) {
+        for p in img.data().as_chunks::<3>().0 {
             let lab = linear_srgb_to_oklab([p[0], p[1], p[2]]);
             sa += lab[1];
             sb += lab[2];
