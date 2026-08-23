@@ -1,6 +1,6 @@
 # Region-scoped brush coverage
 
-**Status:** spec, 2026-08-19.
+**Status:** implemented, 2026-08-23. See "Outcome" at the end.
 
 ## Scope
 
@@ -168,3 +168,60 @@ using it is the point.
 3. **No incremental splatting.** A single very large stroke at 1:1 still re-rasterizes its visible
    part every frame. That is bounded by the viewport now, which is the fix.
 4. **The tint is still a second rasterization**, unchanged from M3.1c-B and deliberate.
+
+## Outcome
+
+**Implemented 2026-08-23.** 664 tests, **no golden moved** — which is the whole safety argument,
+since with no region the behaviour is byte-identical.
+
+### The measurement, and where the spec was wrong
+
+Measured on an X-T4 at 1:1 on a full-resolution buffer, best of 5:
+
+| | |
+|---|---|
+| brush rasterize, full 6246×4170 | 24.64 ms |
+| **brush rasterize clipped to 1400×900** | **9.03 ms** |
+| region tail 1400×900 | 7.20 ms |
+| pack, ~1400×900 | ~0.4 ms |
+
+**A paint frame is ~16.6 ms**, which falls in the middle band the spec fixed in advance: render
+live, and record it as known-marginal against a 60 Hz budget rather than claim it is comfortable.
+Confirmed smooth in use.
+
+⚠⚠ **The spec predicted ~1.6 ms for the clipped rasterization and that was wrong by 5×.** The clip
+bounds the **box**, but every dab that falls *inside* it still costs its full area — and at 1:1 a
+dab of radius 0.02 is 125 px across. The bad estimate came from extrapolating the fit-resolution
+number (1.76 ms at 1600×1068), where dabs are small in absolute pixels. **A 2.7× win, not 15×.**
+
+That matters beyond the arithmetic: it means the remaining cost is *dab area*, not frame area. If
+this ever needs to be faster again, incremental splatting is the lever — and now for a
+well-understood 9 ms rather than the 24 ms it had been misattributed to.
+
+### ⚠ The dab skip is an optimisation, not a correctness guard
+
+The plan pre-flagged that this sabotage might legitimately pass, and it did: replacing the
+skip with `|_, _| true` leaves every test green. The bounding box is clamped to the clip
+regardless, so an out-of-clip dab contributes nothing to the output either way. What the skip
+saves is the box being widened to the stroke's full extent and both `f32` buffers being sized for
+it. Both the code comment and
+`a_dab_entirely_outside_the_clip_contributes_nothing` now say the test guards the *output*, not
+the branch.
+
+### The reversal held up
+
+`BrushCache` keys on the region; `PrefixCache` does not. Both sites carry a comment saying why,
+because the asymmetry reads as an inconsistency. Panning at 1:1 with a brush mask selected now
+misses the brush cache — the trade this change makes — and was not reported as worse.
+
+⚠ The second reason the region belongs in the key proved its worth during implementation: it makes
+a clip mismatch unrepresentable. `MaskStage` derives its clip from `Region` plus the incoming
+image's dimensions, `render_engine` from `RegionRect`; both must be the same rectangle, and a
+mismatch would read `outside` across the difference — a mask fading out partway across the image
+rather than an error.
+
+### Nothing else moved
+
+`FrameMap` is untouched, so dab positions and the pre-geometry anchoring guarantee are exactly as
+3.1c-A left them. `outside`/`is_inert` are unaffected, so the inverted-mask bug cannot return
+through the clip — pinned by `an_inverted_mask_still_covers_the_clipped_area`.
