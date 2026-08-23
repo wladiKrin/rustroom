@@ -5,6 +5,51 @@ use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::{crop_tool, mask_tool};
 
+/// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
+/// settled into a history entry.
+///
+/// ⚠ **A struct rather than a closure, and that is what makes the panel splittable.** The
+/// previous shape was one `FnMut` capturing `changed` and `settled` for the whole function,
+/// so any *second* closure touching either was `E0499` — two simultaneous mutable captures
+/// of the same local. Two comments in this file used to describe working around that. A
+/// `&mut Edited` passed to each section has neither problem, and it crosses a function
+/// boundary, which a capture cannot.
+#[derive(Default)]
+pub struct Edited {
+    /// Something changed this frame; the preview must be re-requested.
+    pub changed: bool,
+    /// A drag ended or a discrete control was used; push one history entry.
+    pub settled: bool,
+}
+
+impl Edited {
+    /// A slider bound to `value`, recording change and settle separately.
+    ///
+    /// ⚠ One history entry per *settled* drag, not per changed frame: `r.changed()` and
+    /// `r.drag_stopped()` are recorded apart, so dragging Exposure across its range is one
+    /// Ctrl+Z rather than two hundred.
+    pub fn slider(
+        &mut self,
+        ui: &mut egui::Ui,
+        value: &mut f32,
+        range: std::ops::RangeInclusive<f32>,
+        label: &str,
+    ) {
+        let r = ui.add(egui::Slider::new(value, range).text(label));
+        self.changed |= r.changed();
+        self.settled |= r.drag_stopped();
+    }
+
+    /// A discrete act — a button, a checkbox, a preset click.
+    ///
+    /// ⚠ Both flags, unlike a slider: a press is a complete act, so it is one history entry
+    /// immediately rather than waiting for a `drag_stopped` that will never come.
+    pub fn discrete(&mut self) {
+        self.changed = true;
+        self.settled = true;
+    }
+}
+
 /// Draw the adjustments panel.
 ///
 /// Returns whether a photo edit settled into a new history entry.
@@ -25,99 +70,84 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     draw_histogram(ui, &s.hist);
                     ui.separator();
 
-                    let mut changed = false;
-                    let mut settled = false;
-                    let mut slider = |ui: &mut egui::Ui, value: &mut f32, range, label| {
-                        let r = ui.add(egui::Slider::new(value, range).text(label));
-                        changed |= r.changed();
-                        settled |= r.drag_stopped();
-                    };
-                    slider(ui, &mut s.edits.white_balance.temp, -100.0..=100.0, "Temp");
-                    slider(ui, &mut s.edits.white_balance.tint, -100.0..=100.0, "Tint");
-                    slider(ui, &mut s.edits.exposure, -5.0..=5.0, "Exposure");
-                    slider(ui, &mut s.edits.contrast, -100.0..=100.0, "Contrast");
-                    slider(ui, &mut s.edits.highlights, -100.0..=100.0, "Highlights");
-                    slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
-                    slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
-                    slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
+                    let mut ed = Edited::default();
+                    ed.slider(ui, &mut s.edits.white_balance.temp, -100.0..=100.0, "Temp");
+                    ed.slider(ui, &mut s.edits.white_balance.tint, -100.0..=100.0, "Tint");
+                    ed.slider(ui, &mut s.edits.exposure, -5.0..=5.0, "Exposure");
+                    ed.slider(ui, &mut s.edits.contrast, -100.0..=100.0, "Contrast");
+                    ed.slider(ui, &mut s.edits.highlights, -100.0..=100.0, "Highlights");
+                    ed.slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
+                    ed.slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
+                    ed.slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
                     // Lightroom's "Presence" grouping, and it reflects that these are
                     // tonal rather than detail controls — which is also why they are in
                     // the Tone edit group rather than Detail.
-                    slider(
+                    ed.slider(
                         ui,
                         &mut s.edits.local_contrast.texture,
                         -100.0..=100.0,
                         "Texture",
                     );
-                    slider(
+                    ed.slider(
                         ui,
                         &mut s.edits.local_contrast.clarity,
                         -100.0..=100.0,
                         "Clarity",
                     );
-                    slider(ui, &mut s.edits.dehaze.amount, -100.0..=100.0, "Dehaze");
-                    slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
-                    slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
+                    ed.slider(ui, &mut s.edits.dehaze.amount, -100.0..=100.0, "Dehaze");
+                    ed.slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
+                    ed.slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
 
                     ui.separator();
                     egui::CollapsingHeader::new("Hue").show(ui, |ui| {
                         for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-                            slider(ui, &mut s.edits.hsl.bands[i].hue, -100.0..=100.0, *name);
+                            ed.slider(ui, &mut s.edits.hsl.bands[i].hue, -100.0..=100.0, name);
                         }
                     });
                     egui::CollapsingHeader::new("Saturation").show(ui, |ui| {
                         for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-                            slider(
+                            ed.slider(
                                 ui,
                                 &mut s.edits.hsl.bands[i].saturation,
                                 -100.0..=100.0,
-                                *name,
+                                name,
                             );
                         }
                     });
                     egui::CollapsingHeader::new("Luminance").show(ui, |ui| {
                         for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-                            slider(
+                            ed.slider(
                                 ui,
                                 &mut s.edits.hsl.bands[i].luminance,
                                 -100.0..=100.0,
-                                *name,
+                                name,
                             );
                         }
                     });
                     egui::CollapsingHeader::new("Sharpening").show(ui, |ui| {
                         let sh = &mut s.edits.sharpening;
-                        slider(ui, &mut sh.amount, 0.0..=100.0, "Amount");
+                        ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount");
                         // The one slider not on a 0..100 scale: it is a physical pixel
                         // quantity, in full-resolution pixels, and naming it in pixels
                         // is what makes "scaled for the render" comprehensible.
-                        slider(ui, &mut sh.radius, 0.5..=3.0, "Radius (px)");
-                        slider(ui, &mut sh.detail, 0.0..=100.0, "Detail");
-                        slider(ui, &mut sh.masking, 0.0..=100.0, "Masking");
+                        ed.slider(ui, &mut sh.radius, 0.5..=3.0, "Radius (px)");
+                        ed.slider(ui, &mut sh.detail, 0.0..=100.0, "Detail");
+                        ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking");
                     });
                     egui::CollapsingHeader::new("Noise Reduction").show(ui, |ui| {
                         let nr = &mut s.edits.noise_reduction;
-                        slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
-                        slider(ui, &mut nr.detail, 0.0..=100.0, "Detail");
-                        slider(ui, &mut nr.color, 0.0..=100.0, "Color");
-                        slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
+                        ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
+                        ed.slider(ui, &mut nr.detail, 0.0..=100.0, "Detail");
+                        ed.slider(ui, &mut nr.color, 0.0..=100.0, "Color");
+                        ed.slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
                     });
                     egui::CollapsingHeader::new("Vignette").show(ui, |ui| {
                         let v = &mut s.edits.vignette;
-                        slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
-                        slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
-                        slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
-                        slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
+                        ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
+                        ed.slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
+                        ed.slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
+                        ed.slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
                     });
-                    // ⚠ `mask_changed` is a local, not a direct write to `changed`/`settled`
-                    // from inside this closure: the closure also calls `slider`, which already
-                    // holds its own mutable capture of those two, and a second direct capture
-                    // of the same variables from this closure would be two simultaneous
-                    // mutable borrows — a compile error. Folding the add/delete/invert events
-                    // into `changed`/`settled` happens after the closure returns instead, the
-                    // same restructuring `develop_body` already uses elsewhere in this
-                    // codebase for the same reason.
-                    let mut mask_changed = false;
                     // ⚠ Copied into locals for the same reason `modals/settings.rs` does: the
                     // closure below already borrows `app` through `s`, and a second capture is
                     // E0499. Written back after it closes.
@@ -161,7 +191,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 adjustments: edit_model::LocalAdjustments::default(),
                             });
                             s.selected_mask = Some(s.edits.masks.len() - 1);
-                            mask_changed = true;
+                            ed.discrete();
                         }
 
                         let mut remove: Option<usize> = None;
@@ -188,7 +218,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             // returns early when the selection is gone, which would
                             // otherwise leave a stale handle set and panning dead.
                             s.active_mask_handle = None;
-                            mask_changed = true;
+                            ed.discrete();
                         }
 
                         if let Some(i) = s.selected_mask {
@@ -203,19 +233,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 // where the subject vignette — darken everything except the
                                 // ellipse — depends on it and no drag substitutes.
                                 if ui.checkbox(m.mask.invert_mut(), "Invert").changed() {
-                                    mask_changed = true;
+                                    ed.discrete();
                                 }
                                 if let edit_model::Mask::Radial(r) = &mut m.mask {
-                                    slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
+                                    ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
                                 }
                                 if matches!(m.mask, edit_model::Mask::Brush(_)) {
                                     // ⚠ Brush settings live on the app, not on the mask: they are
                                     // the *tool's* state and apply to the next stroke, exactly as
                                     // a brush size does in any editor. Each stroke records its own
                                     // copy at the moment it is drawn.
-                                    slider(ui, &mut brush_size, 4.0..=300.0, "Size");
-                                    slider(ui, &mut brush_hardness, 0.0..=100.0, "Hardness");
-                                    slider(ui, &mut brush_flow, 1.0..=100.0, "Flow");
+                                    ed.slider(ui, &mut brush_size, 4.0..=300.0, "Size");
+                                    ed.slider(ui, &mut brush_hardness, 0.0..=100.0, "Hardness");
+                                    ed.slider(ui, &mut brush_flow, 1.0..=100.0, "Flow");
                                     ui.checkbox(&mut brush_erase, "Erase");
                                     ui.checkbox(&mut show_mask_tint, "Show mask");
                                     theme::hint(
@@ -226,16 +256,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 }
                                 ui.separator();
                                 let a = &mut m.adjustments;
-                                slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
-                                slider(ui, &mut a.white_balance.tint, -100.0..=100.0, "Tint");
-                                slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
-                                slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
-                                slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");
-                                slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows");
-                                slider(ui, &mut a.whites, -100.0..=100.0, "Whites");
-                                slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks");
-                                slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation");
-                                slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance");
+                                ed.slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
+                                ed.slider(ui, &mut a.white_balance.tint, -100.0..=100.0, "Tint");
+                                ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
+                                ed.slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
+                                ed.slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");
+                                ed.slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows");
+                                ed.slider(ui, &mut a.whites, -100.0..=100.0, "Whites");
+                                ed.slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks");
+                                ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation");
+                                ed.slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance");
                             }
                         }
 
@@ -254,16 +284,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     app.brush_flow = brush_flow;
                     app.brush_erase = brush_erase;
                     app.show_mask_tint = show_mask_tint;
-                    if mask_changed {
-                        changed = true;
-                        settled = true;
-                    }
 
                     ui.separator();
                     if ui.button("Reset all").clicked() {
                         s.edits = Edits::default();
-                        changed = true;
-                        settled = true;
+                        ed.discrete();
                     }
 
                     if s.geometry_mode {
@@ -303,8 +328,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 // ⚠ `settled` too: a button press is a discrete act, so it
                                 // is one history entry and one Ctrl+Z — unlike a slider,
                                 // which pushes only on `drag_stopped`.
-                                changed = true;
-                                settled = true;
+                                ed.discrete();
                             }
                         });
                         let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
@@ -322,26 +346,21 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                         Some(a) => crop_tool::snap_to_aspect(a / img_aspect),
                                         None => edit_model::CropRect::default(),
                                     };
-                                    settled = true;
+                                    ed.discrete();
                                 }
                             }
                         });
-                        let ar = ui.add(
-                            egui::Slider::new(&mut s.edits.geometry.angle, -45.0..=45.0)
-                                .text("Straighten"),
-                        );
-                        changed |= ar.changed();
-                        settled |= ar.drag_stopped();
+                        ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Straighten");
                     }
 
-                    if changed {
+                    if ed.changed {
                         s.request(
                             preview_edits(&s.edits, s.geometry_mode),
                             s.render_max_dim(),
                             s.requested_region,
                         );
                     }
-                    if settled {
+                    if ed.settled {
                         photo_edited |= s.history.push(s.edits.clone());
                     }
 
@@ -388,5 +407,31 @@ fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
                 egui::Stroke::new(1.0, colors[ci].linear_multiply(0.5)),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_discrete_act_is_both_changed_and_settled() {
+        // ⚠ A button press is one history entry and one Ctrl+Z, unlike a slider, which
+        // pushes only on `drag_stopped`. Conflating the two is how a single click became
+        // either zero undo steps or two.
+        let mut e = Edited::default();
+        assert!(!e.changed && !e.settled);
+        e.discrete();
+        assert!(e.changed, "a discrete act must request a render");
+        assert!(e.settled, "a discrete act must push one history entry");
+    }
+
+    #[test]
+    fn an_untouched_frame_records_nothing() {
+        // The overwhelmingly common case: the panel runs every frame and must not push a
+        // history entry for merely existing.
+        let e = Edited::default();
+        assert!(!e.changed);
+        assert!(!e.settled);
     }
 }
