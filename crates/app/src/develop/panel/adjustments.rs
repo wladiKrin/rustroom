@@ -241,4 +241,58 @@ mod tests {
             .collect();
         assert_eq!(missing, vec!["Geometry", "Masks"]);
     }
+
+    /// Click the segment labelled `want` and report the channel afterwards.
+    ///
+    /// Three passes: lay out with the pointer in place, press, release — egui resolves a
+    /// click against the widgets registered on the *previous* pass, which is why a
+    /// single-pass harness reads zeros and passes vacuously. That exact harness bug made
+    /// `a_left_drag_does_not_pan` inert once already.
+    fn click_segment(want: HslChannel) -> HslChannel {
+        let ctx = egui::Context::default();
+        let mut channel = HslChannel::Hue;
+        let mut target = egui::Pos2::ZERO;
+        for pass in 0..3 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            input.events.push(egui::Event::PointerMoved(target));
+            if pass == 1 || pass == 2 {
+                input.events.push(egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: pass == 1,
+                    modifiers: Default::default(),
+                });
+            }
+            let _ = ctx.run_ui(input, |ui| {
+                ui.horizontal(|ui| {
+                    for c in HslChannel::ALL {
+                        let r = ui.selectable_value(&mut channel, c, c.label());
+                        if c == want && pass == 0 {
+                            target = r.rect.center();
+                        }
+                    }
+                });
+            });
+        }
+        channel
+    }
+
+    #[test]
+    fn clicking_a_segment_switches_the_channel() {
+        // ⚠ `value_mut` being right proves nothing about the segments being wired to it.
+        // Every non-default channel is exercised, because a selector stuck on its default
+        // would pass a test that only ever clicked Hue.
+        assert_eq!(
+            click_segment(HslChannel::Saturation),
+            HslChannel::Saturation
+        );
+        assert_eq!(click_segment(HslChannel::Luminance), HslChannel::Luminance);
+        assert_eq!(click_segment(HslChannel::Hue), HslChannel::Hue);
+    }
 }
