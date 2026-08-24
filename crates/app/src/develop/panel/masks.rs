@@ -1,8 +1,8 @@
 //! The Masks section: add, select, delete, shape properties, brush settings, adjustments.
 //!
-//! ⚠ Sits at the **top** of the panel, above the adjustment sections. Not aesthetic: step 2
-//! of this rework turns it into a rail tool's drawer, which opens exactly here — so it is
-//! already in its final position and that step only has to move its trigger.
+//! ⚠ Shown only while the **Masks** tool is selected on the rail, and it is then the *whole*
+//! panel — the global adjustment sliders are not visible alongside it. A mask carries its own
+//! Temp…Vibrance, so nothing here needs them.
 
 use crate::develop::panel::Edited;
 use crate::{theme, Session};
@@ -25,10 +25,10 @@ pub struct BrushTool<'a> {
     pub show_tint: &'a mut bool,
 }
 
-/// Draw the Masks drawer's contents.
+/// Draw the Masks tool's controls.
 ///
-/// ⚠ No `CollapsingHeader` of its own — the rail's drawer supplies the container and the
-/// title. A header inside a header is a nesting level this rework exists to remove.
+/// ⚠ No `CollapsingHeader` of its own — the panel supplies the heading. A header inside a
+/// header is a nesting level this rework exists to remove.
 pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut Edited) {
     let mut added: Option<edit_model::Mask> = None;
     ui.horizontal(|ui| {

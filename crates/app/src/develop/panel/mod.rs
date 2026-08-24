@@ -83,54 +83,55 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 }
                 ui.separator();
 
-                // ⚠ Presets is drawn here, outside the mutable session borrow, because it is
-                // the one drawer that edits neither `Session` nor `Edits` — it applies to the
-                // whole selection. Inside the drawer `match` below it would need `&mut app`
-                // while `s` already holds `&mut app.session`, which are not disjoint fields.
+                // ⚠ **The panel is exclusive: exactly one tool's controls at a time.** The
+                // global sliders are reachable only under `Edit`. An earlier design kept them
+                // permanently below a drawer so they stayed available while masking; that was
+                // reversed in use — mixing a tool's controls with the global stack made it
+                // ambiguous which of the two a slider belonged to.
+                //
+                // ⚠ A plain heading, not a `CollapsingHeader`. Now that the tool's controls
+                // are the *only* thing in the panel, collapsing them would leave it empty.
+                if let Some(title) = tool.panel_heading() {
+                    ui.heading(title);
+                }
+                // ⚠ Presets is drawn outside the mutable session borrow, because it is the one
+                // tool that edits neither `Session` nor `Edits` — it applies to the whole
+                // selection. Inside the `match` below it would need `&mut app` while `s`
+                // already holds `&mut app.session`, which are not disjoint fields.
                 if tool == Tool::Presets {
-                    egui::CollapsingHeader::new("Presets")
-                        .default_open(true)
-                        .show(ui, |ui| presets::show(app, ui));
-                    ui.separator();
+                    presets::show(app, ui);
                 }
 
                 if let Some(s) = &mut app.session {
                     let mut ed = Edited::default();
-                    // The tool's drawer, above the permanent adjustment stack — the global
-                    // sliders stay reachable while a mask is being painted. ⚠ `Tool::Edit`
-                    // opens nothing, which is what makes the panel at rest exactly the five
-                    // adjustment sections.
-                    if let Some(title) = tool.drawer_label() {
-                        egui::CollapsingHeader::new(title)
-                            .default_open(true)
-                            .show(ui, |ui| match tool {
-                                Tool::Crop => geometry::show(ui, s, &mut ed),
-                                Tool::Masks => masks::show(
-                                    ui,
-                                    s,
-                                    masks::BrushTool {
-                                        size: &mut app.brush_size,
-                                        hardness: &mut app.brush_hardness,
-                                        flow: &mut app.brush_flow,
-                                        erase: &mut app.brush_erase,
-                                        show_tint: &mut app.show_mask_tint,
-                                    },
-                                    &mut ed,
-                                ),
-                                // Drawn above, outside the session borrow — see the comment
-                                // there. ⚠ A match arm, not a wildcard: a fifth tool must
-                                // force a decision here.
-                                Tool::Presets => {}
-                                Tool::Edit => {}
-                            });
-                        ui.separator();
-                    }
-                    adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
-
-                    ui.separator();
-                    if ui.button("Reset all").clicked() {
-                        s.edits = Edits::default();
-                        ed.discrete();
+                    // ⚠ An exhaustive match, not a wildcard: a fifth tool must force a
+                    // decision about what the panel shows under it.
+                    match tool {
+                        Tool::Edit => {
+                            adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
+                            ui.separator();
+                            // ⚠ Lives under Edit because it resets the *global* edits. Under
+                            // Masks it would read as "reset this mask", which it is not.
+                            if ui.button("Reset all").clicked() {
+                                s.edits = Edits::default();
+                                ed.discrete();
+                            }
+                        }
+                        Tool::Crop => geometry::show(ui, s, &mut ed),
+                        Tool::Masks => masks::show(
+                            ui,
+                            s,
+                            masks::BrushTool {
+                                size: &mut app.brush_size,
+                                hardness: &mut app.brush_hardness,
+                                flow: &mut app.brush_flow,
+                                erase: &mut app.brush_erase,
+                                show_tint: &mut app.show_mask_tint,
+                            },
+                            &mut ed,
+                        ),
+                        // Drawn above, outside the session borrow — see the comment there.
+                        Tool::Presets => {}
                     }
 
                     if ed.changed {

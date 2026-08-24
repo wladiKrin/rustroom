@@ -7,7 +7,7 @@
 //! ⚠ No egui here: `lib.rs`'s rule is what keeps these units testable without a windowing
 //! system. The rendering lives in the bin, in `develop/rail.rs`.
 
-/// A Develop tool. `Edit` is the default and opens no drawer.
+/// A Develop tool. `Edit` is the default and shows the global adjustment sections.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Tool {
     #[default]
@@ -47,11 +47,17 @@ impl Tool {
         }
     }
 
-    /// The header of this tool's drawer, or `None` when it opens none.
+    /// The heading shown above this tool's controls, or `None` for the adjustment stack.
     ///
-    /// ⚠ `Edit` has no drawer *by design*: it is the resting state, where the panel is exactly
-    /// the five adjustment sections and nothing else.
-    pub fn drawer_label(self) -> Option<&'static str> {
+    /// ⚠ `Edit` returns `None` because its content **is** the five adjustment sections, which
+    /// carry their own edit-group headers — a heading above them would be a level of nesting
+    /// for nothing.
+    ///
+    /// ⚠ The panel is **exclusive**: exactly one tool's controls are shown at a time, so the
+    /// global sliders are reachable only under `Edit`. An earlier design put the tool's
+    /// controls in a *drawer above* a permanent adjustment stack; that was reversed in use —
+    /// see the spec's "Exclusive, reversed 2026-08-24" section.
+    pub fn panel_heading(self) -> Option<&'static str> {
         match self {
             Self::Edit => None,
             Self::Crop => Some("Crop & Geometry"),
@@ -80,16 +86,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn edit_is_the_default_and_the_only_tool_without_a_drawer() {
-        // ⚠ Both halves matter. Edit being default is what makes the panel at rest just the
-        // five adjustment sections; Edit being the *only* drawerless tool is what stops a
-        // future tool silently opening nothing.
+    fn only_edit_shows_the_adjustment_stack() {
+        // ⚠ Both halves matter. Edit being default is what makes the panel at rest the five
+        // adjustment sections; Edit being the *only* tool without a heading is what stops a
+        // future tool silently rendering untitled.
         assert_eq!(Tool::default(), Tool::Edit);
-        let drawerless: Vec<Tool> = Tool::ALL
+        let unheaded: Vec<Tool> = Tool::ALL
             .into_iter()
-            .filter(|t| t.drawer_label().is_none())
+            .filter(|t| t.panel_heading().is_none())
             .collect();
-        assert_eq!(drawerless, vec![Tool::Edit]);
+        assert_eq!(unheaded, vec![Tool::Edit]);
     }
 
     #[test]

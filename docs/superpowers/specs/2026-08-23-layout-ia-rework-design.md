@@ -48,10 +48,18 @@ Three surfaces replace one crowded row.
   CC's arrangement. A left rail was considered — it keeps the image visually centred, which is
   Photoshop's and Capture One's reason — and rejected because it puts the control as far as possible
   from its consequence.
-- **The drawer is non-exclusive.** Selecting a tool opens its drawer *above* a permanent adjustment
-  stack rather than replacing it, so the global sliders stay reachable while painting a mask. This is
-  Lightroom Classic's shape. The exclusive alternative (Lightroom CC) was rejected because the cost
-  of losing the global sliders mid-edit is higher than the vertical space the drawer takes.
+- **⚠⚠ The panel is EXCLUSIVE — reversed 2026-08-24, in use.** Selecting a tool replaces the panel's
+  contents, so the global adjustment sections are reachable **only under `Edit`**. The original
+  choice was Lightroom Classic's shape — a drawer *above* a permanent adjustment stack, so the global
+  sliders stayed reachable while painting a mask — and it was reversed after trying it: mixing a
+  tool's own controls with the global stack made it ambiguous which of the two a given slider
+  belonged to, and a mask already carries its own Temp…Vibrance so nothing in the Masks tool needed
+  the global ones. This is Lightroom CC's shape, and it was the recommended option at the original
+  brainstorm.
+  - Consequence: **`Reset all` lives under `Edit`**, because it resets the *global* edits — under
+    Masks it would read as "reset this mask", which it is not.
+  - Consequence: the heading is a **plain heading, not a `CollapsingHeader`**. With the tool's
+    controls the only thing in the panel, collapsing them would leave it empty.
 - **Presets becomes a rail tool**, so the left panel disappears entirely and the image gets its
   width. That resolves problem 4 by giving the feature exactly one home.
 
@@ -247,6 +255,17 @@ either.
 **Glyph above text**, right edge, outermost. The user chose this over text-only knowing it
 **reverses the recorded "no icons — everything stays text" decision**, which CLAUDE.md holds as a
 decision taken rather than an omission.
+
+⚠⚠ **The candidate glyphs named in this spec (▦ ⧉ ◐ ≡) are ALL ABSENT from egui's bundled fonts** —
+measured, not guessed. The shipped set is **Edit ☰ · Crop ▣ · Masks ◑ · Presets ★**, every one
+verified by `every_rail_glyph_is_renderable`. Do not reinstate the originals from this document.
+
+⚠ **Rail typography, settled in use (2026-08-24).** The rail is **88 pt** wide with a **22 pt**
+glyph over a **13 pt** label, and the entry is built from a `LayoutJob` with `halign: Center`. The
+first version used a `"{glyph}\n{label}"` string at the default compact size in a 64 pt rail: the two
+rows were left-aligned against each other so the glyph sat hard left of the word, the label was too
+small, and "Presets" wrapped onto a second line. `halign` centres each row against the widest; the
+surrounding `vertical_centered_justified` layout centres the block in the rail.
 
 ⚠ **Glyph coverage is not guaranteed and must not be assumed.** egui bundles Hack, Ubuntu-Light,
 NotoEmoji and `emoji-icon-font`; nothing promises an arbitrary Geometric-Shapes character is in any

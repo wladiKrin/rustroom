@@ -1,12 +1,12 @@
-//! The Presets drawer: save the current edits as a preset, apply one, or delete one.
+//! The Presets tool: save the current edits as a preset, apply one, or delete one.
 //!
 //! ⚠ Was a dedicated **left panel** plus a toolbar toggle — the only feature in the app with
 //! two homes. It is a rail tool now, with exactly one.
 //!
-//! ⚠ Drawn *outside* the panel's mutable `Session` borrow, because it is the one drawer that
+//! ⚠ Drawn *outside* the panel's mutable `Session` borrow, because it is the one tool that
 //! edits neither `Session` nor `Edits`: applying a preset targets the whole *selection*
 //! through `app.apply_to_selection`. That is why it needs `&mut RustroomApp` and cannot sit
-//! inside the drawer `match` with the others.
+//! inside the tool `match` with the others.
 
 use crate::{Modal, RustroomApp};
 use edit_model::EditGroups;
@@ -15,7 +15,7 @@ use rustroom_app::action_log::ActionKind;
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // ⚠ egui borrows `app` through the closure, so a click is recorded here and acted on
-    // after the drawer closes. Keep this indirection — it is not incidental.
+    // after the panel closes. Keep this indirection — it is not incidental.
     enum Action {
         None,
         Apply(usize),

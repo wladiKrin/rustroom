@@ -7,8 +7,19 @@
 use eframe::egui;
 use rustroom_app::tool::Tool;
 
-/// Rail width in points. Wide enough for "Presets" at the small text size.
-const RAIL_WIDTH: f32 = 64.0;
+/// Rail width in points.
+///
+/// ⚠ Sized so **"Presets" fits on one line** at [`LABEL_SIZE`]. At 64.0 it wrapped across two
+/// lines, which is what made the rail look broken rather than merely narrow.
+const RAIL_WIDTH: f32 = 88.0;
+
+/// The glyph's point size — deliberately much larger than the label, so the rail reads as an
+/// icon strip rather than as two lines of text.
+const GLYPH_SIZE: f32 = 22.0;
+
+/// The label's point size. Larger than `theme`'s compact body text: the rail is a primary
+/// navigation control, and the compact density exists for panels of sliders, not for this.
+const LABEL_SIZE: f32 = 13.0;
 
 /// Draw the rail.
 ///
@@ -23,13 +34,57 @@ pub fn show(ui: &mut egui::Ui, tool: &mut Tool) {
             ui.vertical_centered_justified(|ui| {
                 for t in Tool::ALL {
                     let picked = *tool == t;
-                    let text = format!("{}\n{}", t.glyph(), t.label());
-                    if ui.selectable_label(picked, text).clicked() {
+                    let entry = egui::Button::selectable(picked, entry_text(ui, t, picked))
+                        // ⚠ Extend, not Wrap: "Presets" wrapping onto a second line was the
+                        // visible symptom. The rail is sized to fit instead.
+                        .wrap_mode(egui::TextWrapMode::Extend);
+                    if ui.add(entry).clicked() {
                         *tool = t;
                     }
                 }
             });
         });
+}
+
+/// The two-line label for one rail entry: the glyph above the name.
+///
+/// ⚠ **A `LayoutJob` with `halign: Center`, not a `"{glyph}\n{label}"` string.** A plain
+/// newline leaves the two rows left-aligned against each other, so a one-character glyph sits
+/// hard left of a seven-character word — which is exactly how the first version looked wrong.
+/// `halign` centres each row against the widest, putting the glyph over the middle of the name.
+///
+/// The surrounding `vertical_centered_justified` layout then centres the whole block in the
+/// rail, because `AtomLayout` takes its default alignment from `ui.layout()`.
+fn entry_text(ui: &egui::Ui, t: Tool, picked: bool) -> egui::WidgetText {
+    // Selected entries sit on the accent fill, where the ordinary body colour is low contrast.
+    let color = if picked {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    let mut job = egui::text::LayoutJob {
+        halign: egui::Align::Center,
+        ..Default::default()
+    };
+    job.append(
+        &t.glyph().to_string(),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(GLYPH_SIZE),
+            color,
+            ..Default::default()
+        },
+    );
+    job.append(
+        &format!("\n{}", t.label()),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(LABEL_SIZE),
+            color,
+            ..Default::default()
+        },
+    );
+    job.into()
 }
 
 #[cfg(test)]
@@ -69,8 +124,10 @@ mod tests {
     /// once inert.
     ///
     /// ⚠ Re-declares the rail body rather than calling `show`, because the harness must
-    /// observe the click on a specific pass. Keep the two in step: if `show`'s widget stops
-    /// being a `selectable_label`, this must change with it or it stops describing what ships.
+    /// observe the click on a specific pass. It builds the entry through the **same
+    /// `entry_text`** production uses, so the two cannot drift in the part that matters — the
+    /// hit rect. If `show`'s widget changes, this must change with it or it stops describing
+    /// what ships.
     fn click_rail(want: Tool) -> Tool {
         let ctx = egui::Context::default();
         let mut tool = Tool::Edit;
@@ -97,8 +154,10 @@ mod tests {
                     ui.vertical_centered_justified(|ui| {
                         for t in Tool::ALL {
                             let picked = tool == t;
-                            let text = format!("{}\n{}", t.glyph(), t.label());
-                            let r = ui.selectable_label(picked, text);
+                            let r = ui.add(
+                                egui::Button::selectable(picked, entry_text(ui, t, picked))
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            );
                             if t == want && pass == 0 {
                                 target = r.rect.center();
                             }
