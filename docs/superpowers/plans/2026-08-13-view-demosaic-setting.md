@@ -184,7 +184,7 @@ git commit -m "feat(app): a persisted demosaic tier for the 1:1 view"
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-cargo test -p app --bin rustroom-gui view_quality_hint
+cargo test -p app --bin Rustroom view_quality_hint
 ```
 
 Expected: **compile error**, `cannot find function view_quality_hint in this scope`.
@@ -220,7 +220,7 @@ fn view_quality_hint(tier: raw_decode::Demosaic) -> &'static str {
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-cargo test -p app --bin rustroom-gui view_quality_hint
+cargo test -p app --bin Rustroom view_quality_hint
 ```
 
 Expected: `test result: ok. 2 passed`.

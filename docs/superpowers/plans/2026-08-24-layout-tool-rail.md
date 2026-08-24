@@ -402,7 +402,7 @@ test stops describing the shipped widget.
 - [ ] **Step 3: Run the tests**
 
 ```bash
-cargo test -p app --bin rustroom-gui rail:: 2>&1 | tail -12
+cargo test -p app --bin Rustroom rail:: 2>&1 | tail -12
 ```
 
 Expected: 2 PASS. **If `every_rail_glyph_is_renderable` fails, do not change the test** — pick a
@@ -417,8 +417,8 @@ In `crates/app/src/tool.rs`, change Masks' glyph to the spec's original:
 ```
 
 ```bash
-cargo test -p app --bin rustroom-gui --no-run 2>&1 | grep -cE "^error" || echo "0 compile errors"
-cargo test -p app --bin rustroom-gui every_rail_glyph_is_renderable 2>&1 | tail -8
+cargo test -p app --bin Rustroom --no-run 2>&1 | grep -cE "^error" || echo "0 compile errors"
+cargo test -p app --bin Rustroom every_rail_glyph_is_renderable 2>&1 | tail -8
 ```
 
 Expected: zero compile errors, then FAIL naming `Masks` and `U+25D0`. Restore `'◑'`, then

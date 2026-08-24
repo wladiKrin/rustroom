@@ -232,6 +232,8 @@ fn egui_key(c: char) -> Option<egui::Key> {
         'V' => egui::Key::V,
         'G' => egui::Key::G,
         'D' => egui::Key::D,
+        '+' => egui::Key::Plus,
+        '-' => egui::Key::Minus,
         '0' => egui::Key::Num0,
         '1' => egui::Key::Num1,
         '2' => egui::Key::Num2,

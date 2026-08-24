@@ -115,7 +115,7 @@ mod tests {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cargo test -p app --bin rustroom-gui a_discrete_act_is_both 2>&1 | tail -20
+cargo test -p app --bin Rustroom a_discrete_act_is_both 2>&1 | tail -20
 ```
 
 Expected: FAIL — `cannot find type Edited in this scope`.
@@ -174,8 +174,8 @@ impl Edited {
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cargo test -p app --bin rustroom-gui a_discrete_act_is_both 2>&1 | tail -10
-cargo test -p app --bin rustroom-gui an_untouched_frame 2>&1 | tail -10
+cargo test -p app --bin Rustroom a_discrete_act_is_both 2>&1 | tail -10
+cargo test -p app --bin Rustroom an_untouched_frame 2>&1 | tail -10
 ```
 
 Expected: both PASS.
@@ -192,7 +192,7 @@ Change `discrete` to set only `changed`:
 
 ```bash
 cargo build -p app 2>&1 | grep -c "^error" || true
-cargo test -p app --bin rustroom-gui a_discrete_act_is_both 2>&1 | tail -10
+cargo test -p app --bin Rustroom a_discrete_act_is_both 2>&1 | tail -10
 ```
 
 Expected: **zero compile errors** (confirm this first — a sabotage that fails to compile looks exactly like one that passes), then FAIL on `a discrete act must push one history entry`. **Restore the line, then `touch crates/app/src/develop/panel/mod.rs`** — restoring a file can leave cargo reusing the sabotaged artifact.
@@ -348,7 +348,7 @@ pub mod adjustments;
 - [ ] **Step 2: Run the tests**
 
 ```bash
-cargo test -p app --bin rustroom-gui adjustments:: 2>&1 | tail -15
+cargo test -p app --bin Rustroom adjustments:: 2>&1 | tail -15
 ```
 
 Expected: PASS — the type and its tests land together, because a `pub` item with no caller in a **binary** crate is a `dead_code` error under `-D warnings`, so it cannot be committed one step earlier. (This trap has bitten this codebase three times: `theme::button_row`, the CLI's `format_arg`, `ELLIPSE_SEGMENTS`.)
@@ -362,7 +362,7 @@ Expected: PASS — the type and its tests land together, because a `pub` item wi
 
 ```bash
 cargo build -p app 2>&1 | grep -c "^error:" || true
-cargo test -p app --bin rustroom-gui each_channel_edits_its_own_field 2>&1 | tail -10
+cargo test -p app --bin Rustroom each_channel_edits_its_own_field 2>&1 | tail -10
 ```
 
 Expected: **zero compile errors first**, then FAIL with `Hue wrote the wrong field`. Restore, then `touch crates/app/src/develop/panel/adjustments.rs`.
@@ -447,7 +447,7 @@ Add to the `tests` module in `adjustments.rs`:
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cargo test -p app --bin rustroom-gui the_panel_sections_are 2>&1 | tail -15
+cargo test -p app --bin Rustroom the_panel_sections_are 2>&1 | tail -15
 ```
 
 Expected: FAIL — `cannot find value SECTIONS in this scope`.
@@ -491,7 +491,7 @@ pub const SECTIONS: [Section; 5] = [
 - [ ] **Step 4: Run the tests**
 
 ```bash
-cargo test -p app --bin rustroom-gui adjustments:: 2>&1 | tail -12
+cargo test -p app --bin Rustroom adjustments:: 2>&1 | tail -12
 ```
 
 Expected: all PASS.
@@ -502,7 +502,7 @@ Remove `Section(2)` from the array and change the type to `[Section; 4]`.
 
 ```bash
 cargo build -p app 2>&1 | grep -c "^error:" || true
-cargo test -p app --bin rustroom-gui geometry_and_masks_are 2>&1 | tail -10
+cargo test -p app --bin Rustroom geometry_and_masks_are 2>&1 | tail -10
 ```
 
 Expected: zero compile errors in the **test** target, then FAIL — `missing` gains `"Color"`. Restore and `touch`.
@@ -889,7 +889,7 @@ Add to `adjustments.rs`'s `tests` module:
 - [ ] **Step 2: Run it**
 
 ```bash
-cargo test -p app --bin rustroom-gui clicking_a_segment 2>&1 | tail -15
+cargo test -p app --bin Rustroom clicking_a_segment 2>&1 | tail -15
 ```
 
 Expected: PASS.
@@ -900,7 +900,7 @@ Replace the harness loop bound `for pass in 0..3` with `for pass in 0..1`.
 
 ```bash
 cargo build -p app 2>&1 | grep -c "^error:" || true
-cargo test -p app --bin rustroom-gui clicking_a_segment 2>&1 | tail -10
+cargo test -p app --bin Rustroom clicking_a_segment 2>&1 | tail -10
 ```
 
 Expected: zero compile errors, then FAIL. **If it passes, the test is vacuous and must be fixed before continuing** — that is the eighth recorded instance of a test naming a bug it cannot detect, and it was a harness fault exactly like this one. Restore and `touch`.

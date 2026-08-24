@@ -79,7 +79,7 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 14 stages (incl. geometry, noise_reduction, dehaze, saturation, hsl, local_contrast, vignette, sharpening) + spatial::{box_blur, gaussian_blur, wide_blur, min_filter, guided_filter} + build_pipeline / build_pipeline_split(_in_region) / build_prefix_steps + PrefixStep/PrefixStepKey/PrefixKey + Region + tail_kernel_radius + golden tests
 │   ├── export/               # ✅ to_rgb8 + save_jpeg (resize/sharpen later)
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export; bin-only modules=theme/modals/develop{mod,panel,canvas}/library/filmstrip/thumb/shell (egui lives here, not in the lib)
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). lib=history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export; bin-only modules=theme/modals/develop{mod,panel,canvas}/library/filmstrip/thumb/shell (egui lives here, not in the lib)
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries; is_raw/is_supported (in-memory; SQLite DAM later)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -995,7 +995,7 @@ M1.4b (done) — all in `crates/app`:
 - **MVP simplifications:** aspect presets *snap* the rect (no fully aspect-locked interactive drag); straighten is a slider; sidecar path is `<file>.json`.
 - More egui 0.35 API notes: `Panel::top/right(id).show(ui,..)`; `Response::drag_stopped`; `ui.add_enabled` + `egui::Button::new`; `ui.toggle_value`; painter `rect_filled/rect_stroke(…, egui::CornerRadius::ZERO, …, egui::StrokeKind::Inside)/circle_filled`; `Color32::from_black_alpha`; `InputState::key_pressed(Key::Z)` + `modifiers.command`.
 
-M1.4a (done) — `crates/app`, binary **`rustroom-gui`** (eframe/egui **0.35** on the wgpu backend; the develop pipeline stays CPU and its sRGB output is uploaded as a texture):
+M1.4a (done) — `crates/app`, binary **`Rustroom`** (eframe/egui **0.35** on the wgpu backend; the develop pipeline stays CPU and its sRGB output is uploaded as a texture):
 - `core-image` — `downscale_to(max_dim)` (area-average, linear).
 - `raw-decode` — `DecodeOptions::preview()` = half-size linear decode (fast open); `half_size` set before `unpack()`.
 - `app` lib (unit-tested, no egui): `render_engine` (background worker thread; coalesces superseded requests; `Arc<ImageBuf>` → `build_pipeline().run()` → RGBA), `histogram` (`histogram_rgba`).

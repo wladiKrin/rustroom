@@ -698,8 +698,8 @@ mod tests {
 Remove the `'G' => egui::Key::G,` arm.
 
 ```bash
-cargo test -p app --bin rustroom-gui --no-run 2>&1 | grep -cE "^error" || echo "0 compile errors"
-cargo test -p app --bin rustroom-gui every_shortcut_maps 2>&1 | tail -8
+cargo test -p app --bin Rustroom --no-run 2>&1 | grep -cE "^error" || echo "0 compile errors"
+cargo test -p app --bin Rustroom every_shortcut_maps 2>&1 | tail -8
 ```
 
 Expected: zero compile errors, then FAIL naming Library. Restore and `touch`.

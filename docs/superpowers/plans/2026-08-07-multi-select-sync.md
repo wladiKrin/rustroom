@@ -30,7 +30,7 @@ Every command assumes:
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-**Package names:** crate `app`, lib `rustroom_app`, binary `rustroom-gui`. Use `cargo test -p app`.
+**Package names:** crate `app`, lib `rustroom_app`, binary `Rustroom`. Use `cargo test -p app`.
 
 ---
 

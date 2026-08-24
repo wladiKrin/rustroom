@@ -54,8 +54,31 @@ fn events() -> &'static Events {
     })
 }
 
+/// Stop AppKit injecting Emoji & Symbols, Start Dictation and friends into our Edit menu.
+///
+/// ⚠ **AppKit adds these to any menu titled "Edit", uninvited.** They are not ours and they
+/// do nothing useful in a photo editor. The two documented defaults keys suppress them.
+///
+/// ⚠ `registerDefaults`, **not** `setBool_forKey` — registering applies for this process only,
+/// where setting would write into the user's own preferences plist. We have no business
+/// changing that.
+fn suppress_injected_edit_items() {
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{ns_string, NSDictionary, NSUserDefaults};
+    let keys = [
+        ns_string!("NSDisabledDictationMenuItem"),
+        ns_string!("NSDisabledCharacterPaletteMenuItem"),
+    ];
+    // ⚠ `&**` twice: `ns_string!` gives `&NSString`, which derefs to `&NSObject` and then to
+    // `&AnyObject` — the value type `registerDefaults` insists on.
+    let yes: [&AnyObject; 2] = [&**ns_string!("YES"), &**ns_string!("YES")];
+    let dict = NSDictionary::from_slices(&keys, &yes);
+    unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&dict) };
+}
+
 /// Build and install the menu. Call once, from the app's constructor.
 pub fn install(ctx: &egui::Context) {
+    suppress_injected_edit_items();
     let menu = Menu::new();
     let mut by_id = HashMap::new();
 
@@ -67,6 +90,13 @@ pub fn install(ctx: &egui::Context) {
     let about = MenuItem::new("About Rustroom", true, None);
     by_id.insert(about.id().clone(), Command::About);
     let _ = app_menu.append(&about);
+    let _ = app_menu.append(&PredefinedMenuItem::separator());
+    // ⚠ Settings belongs in the application menu on macOS, with ⌘, — that is where every Mac
+    // user looks for it. The model keeps it under File for the in-window bar, which has no
+    // application menu, and the File rendering below skips it.
+    let settings = MenuItem::new("Settings…", true, accelerator(menu::Shortcut::cmd(',')));
+    by_id.insert(settings.id().clone(), Command::Settings);
+    let _ = app_menu.append(&settings);
     let _ = app_menu.append(&PredefinedMenuItem::separator());
     let _ = app_menu.append(&PredefinedMenuItem::hide(None));
     let _ = app_menu.append(&PredefinedMenuItem::hide_others(None));
@@ -82,11 +112,12 @@ pub fn install(ctx: &egui::Context) {
                 Item::Separator => {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                 }
-                // ⚠ About lives in the application menu on macOS, where users look for it —
-                // so it is skipped here rather than shown twice. The model keeps it under Help
-                // for the in-window bar, which has no app menu.
+                // ⚠ About and Settings live in the application menu on macOS, where users
+                // look for them — so they are skipped here rather than shown twice. The model
+                // keeps both in their cross-platform places for the in-window bar, which has
+                // no application menu.
                 Item::Action {
-                    command: Command::About,
+                    command: Command::About | Command::Settings,
                     ..
                 } => {}
                 Item::Action {
@@ -167,6 +198,10 @@ fn accelerator(sc: menu::Shortcut) -> Option<muda::accelerator::Accelerator> {
         '[' => Code::BracketLeft,
         ']' => Code::BracketRight,
         '0' => Code::Digit0,
+        '1' => Code::Digit1,
+        // ⚠ `+` sits on the `=` key; its physical code is Equal.
+        '+' => Code::Equal,
+        '-' => Code::Minus,
         _ => return None,
     };
     let mut mods = Modifiers::empty();

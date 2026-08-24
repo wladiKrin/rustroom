@@ -109,7 +109,7 @@ Each calls `thumb_cell(` — rename those calls to `cell(` (they are inside `thu
 - [ ] **Step 3: Run the tests**
 
 ```bash
-cargo test -p app --bin rustroom-gui
+cargo test -p app --bin Rustroom
 ```
 
 Expected: `test result: ok. 11 passed` — the same eleven as before, six now reported under `thumb::tests::`.

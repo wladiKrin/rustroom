@@ -109,6 +109,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // 1600 points inside a 2302-point window. Unclamped, the ladder climbs
                     // a rung on its own and supplies the texels to fill it.
                     let fit = (avail.x / full.x).min(avail.y / full.y);
+                    // ⚠ Recorded for `Command::ZoomActual`, which has no other way to learn it.
+                    s.fit_scale = fit;
                     // Crop mode stays at fit resolution whatever the zoom: it is a framing
                     // operation, the overlay is drawn against the whole image, and a
                     // whole-image *native* render would be both expensive and placed by

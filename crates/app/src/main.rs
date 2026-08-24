@@ -289,6 +289,12 @@ struct Session {
     hist: [[u32; 256]; 3],
     make_model: String,
     zoom: f32,
+    /// The scale that fits `fit_image_size` into the canvas, as of the last frame.
+    ///
+    /// ⚠ Written by the canvas, which is the only thing that knows the viewport. "Zoom to 1:1"
+    /// needs it and cannot compute it — the same reason `fit_image_size` is stored rather than
+    /// derived. It is a cache of per-frame view geometry, never an edit.
+    fit_scale: f32,
     pan: egui::Vec2,
     history: History<Edits>,
     show_before: bool,
@@ -1130,6 +1136,7 @@ impl RustroomApp {
             hist: [[0; 256]; 3],
             make_model: decoded.label.clone(),
             zoom: 1.0,
+            fit_scale: 1.0,
             pan: egui::Vec2::ZERO,
             history,
             show_before: false,

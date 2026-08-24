@@ -311,7 +311,7 @@ Add to `theme.rs`'s `mod tests`:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cargo test -p app --bin rustroom-gui theme
+cargo test -p app --bin Rustroom theme
 ```
 
 Expected: **compile error**, `cannot find function accent_color` and `cannot find function base_fill`.
@@ -415,7 +415,7 @@ pub fn apply(ctx: &egui::Context, settings: &Settings) {
 - [ ] **Step 6: Run the tests to verify they pass**
 
 ```bash
-cargo test -p app --bin rustroom-gui theme
+cargo test -p app --bin Rustroom theme
 ```
 
 Expected: `test result: ok. 6 passed` — the three original plus the three added.
@@ -427,7 +427,7 @@ Expected: `test result: ok. 6 passed` — the three original plus the three adde
 Temporarily change the light steel blue to the dark one — `(Accent::SteelBlue, false) => (0x7f, 0xb0, 0xd8),` — then run:
 
 ```bash
-cargo test -p app --bin rustroom-gui theme
+cargo test -p app --bin Rustroom theme
 ```
 
 Expected: **both** `every_accent_has_usable_contrast` (`SteelBlue on light base: 1.86:1 is below 3:1`) and `every_accent_differs_between_themes` fail. Restore the value and re-run to confirm green.

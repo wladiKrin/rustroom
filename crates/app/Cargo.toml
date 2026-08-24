@@ -8,8 +8,11 @@ license.workspace = true
 name = "rustroom_app"
 path = "src/lib.rs"
 
+# ⚠ The binary name is what macOS shows as the application menu's title: an unbundled
+# executable has no CFBundleName, so AppKit falls back to the process name. It read
+# "rustroom-gui" until this was capitalised.
 [[bin]]
-name = "rustroom-gui"
+name = "Rustroom"
 path = "src/main.rs"
 
 [dependencies]
@@ -36,3 +39,12 @@ image = { workspace = true }
 # provide. Linux CI therefore never builds it — see `native_menu.rs`.
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.19"
+# Only to suppress the items AppKit injects into any menu titled "Edit" — see
+# `native_menu::suppress_injected_edit_items`. Already in the tree via muda.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSDictionary",
+    "NSUserDefaults",
+] }
