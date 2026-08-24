@@ -16,6 +16,14 @@ pub struct RenderedFrame {
     /// Where this frame sits in the post-geometry image; `None` = the whole image. The canvas
     /// needs it to place the texture.
     pub region: Option<Region>,
+    /// The image's histogram, computed **before** the display transform.
+    ///
+    /// ⚠⚠ Carried on the frame rather than derived from `rgba` by the caller, and that is the
+    /// whole point: `rgba` is in the *display's* primaries, so bucketing it would produce a
+    /// histogram that changes when you change monitors — useless as a clipping instrument,
+    /// which is the one job it has. This was shipped wrong once and caught by asking what
+    /// `shell.rs` actually reads.
+    pub hist: [[u32; 256]; 3],
     /// The `max_dim` this frame was rendered at.
     ///
     /// ⚠ Carried rather than inferred. The canvas caches the post-geometry size from
@@ -187,10 +195,19 @@ fn pack(
     max_dim: usize,
     display_space: color::OutputSpace,
 ) -> RenderedFrame {
-    let out = if display_space == color::OutputSpace::Srgb {
-        out
+    let (width, height) = (out.width(), out.height());
+    // ⚠ Quantized to sRGB *first*, and the histogram taken from that. The histogram describes
+    // the image; the texture describes what this monitor must be driven with. Deriving one from
+    // the other is the bug this ordering exists to prevent.
+    let srgb8 = out.to_rgba8();
+    let hist = crate::histogram::histogram_rgba(&srgb8);
+
+    let rgba = if display_space == color::OutputSpace::Srgb {
+        srgb8
     } else {
-        // The image is sRGB-*encoded* here, so decode, change primaries, re-encode.
+        // ⚠ Converted from the **float** image, not from `srgb8`. An 8-bit → 8-bit conversion
+        // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
+        // sky. The extra quantization pass is paid only when a display space is actually set.
         out.map_pixels(move |c| {
             let lin = c.map(color::srgb_to_linear);
             let conv = display_space.from_srgb(lin);
@@ -200,11 +217,14 @@ fn pack(
                 display_space.encode(conv[2]),
             ]
         })
+        .to_rgba8()
     };
+
     RenderedFrame {
-        width: out.width(),
-        height: out.height(),
-        rgba: out.to_rgba8(),
+        width,
+        height,
+        rgba,
+        hist,
         region,
         max_dim,
     }
@@ -1384,6 +1404,35 @@ mod tests {
             "P3 red {} should be below sRGB red {}",
             p3.rgba[0],
             srgb.rgba[0]
+        );
+    }
+
+    #[test]
+    fn the_histogram_is_unaffected_by_the_display_space() {
+        // ⚠⚠ The property this whole design exists to protect, and it was **shipped broken
+        // once**: the transform went into `pack`, and `shell.rs` derived the histogram from
+        // `pack`'s output — so the histogram silently became display-referred. A histogram that
+        // moves when you change monitors cannot tell you what is clipping.
+        let mut buf = ImageBuf::new(2, 1);
+        buf.set_pixel(0, 0, color::srgb_to_prophoto([0.95, 0.15, 0.1]));
+        buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
+
+        let srgb = render_once(&buf, &Edits::default(), 2, 1.0, color::OutputSpace::Srgb);
+        let p3 = render_once(
+            &buf,
+            &Edits::default(),
+            2,
+            1.0,
+            color::OutputSpace::DisplayP3,
+        );
+
+        assert_ne!(
+            srgb.rgba, p3.rgba,
+            "the display space did not reach the texture"
+        );
+        assert_eq!(
+            srgb.hist, p3.hist,
+            "the histogram must describe the image, not the monitor"
         );
     }
 }

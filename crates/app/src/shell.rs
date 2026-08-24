@@ -5,7 +5,6 @@
 
 use crate::{commands, develop, library, menu_bar, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
 use eframe::egui;
-use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::menu::{self, Command};
 use rustroom_app::render_engine::RegionRect;
 use rustroom_app::{format_filter, view_region};
@@ -53,7 +52,9 @@ impl eframe::App for RustroomApp {
         // Pull any finished preview frame into a texture.
         if let Some(s) = &mut self.session {
             if let Some(frame) = s.engine.poll_latest() {
-                s.hist = histogram_rgba(&frame.rgba);
+                // ⚠ Taken from the frame, never recomputed from `frame.rgba` — those bytes are in
+                // the display's primaries. See `RenderedFrame::hist`.
+                s.hist = frame.hist;
                 let img = egui::ColorImage::from_rgba_unmultiplied(
                     [frame.width, frame.height],
                     &frame.rgba,
