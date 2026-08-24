@@ -123,7 +123,6 @@ struct RustroomApp {
     histories: HistoryStash,
     status: String,
     show_filmstrip: bool,
-    show_presets: bool,
     /// Brush radius in **screen points**.
     ///
     /// ⚠ Not persisted, and not in `Settings`. A screen-point size is view-dependent, so
@@ -231,7 +230,6 @@ impl RustroomApp {
             histories: HistoryStash::default(),
             status: String::new(),
             show_filmstrip: true,
-            show_presets: false,
             brush_size: 40.0,
             brush_hardness: 50.0,
             brush_flow: 100.0,

@@ -3,6 +3,7 @@
 pub mod adjustments;
 pub mod geometry;
 pub mod masks;
+pub mod presets;
 
 use crate::{preview_edits, theme, RustroomApp};
 use edit_model::Edits;
@@ -70,11 +71,30 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 ui.disable();
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
+                if app.session.is_none() {
+                    ui.label("No image open.");
+                    return;
+                }
                 let tool = app.tool;
-                if let Some(s) = &mut app.session {
+                // ⚠ A *shared* borrow that ends on this line, so `presets::show` below can take
+                // `&mut app`. The histogram only reads.
+                if let Some(s) = &app.session {
                     draw_histogram(ui, &s.hist);
-                    ui.separator();
+                }
+                ui.separator();
 
+                // ⚠ Presets is drawn here, outside the mutable session borrow, because it is
+                // the one drawer that edits neither `Session` nor `Edits` — it applies to the
+                // whole selection. Inside the drawer `match` below it would need `&mut app`
+                // while `s` already holds `&mut app.session`, which are not disjoint fields.
+                if tool == Tool::Presets {
+                    egui::CollapsingHeader::new("Presets")
+                        .default_open(true)
+                        .show(ui, |ui| presets::show(app, ui));
+                    ui.separator();
+                }
+
+                if let Some(s) = &mut app.session {
                     let mut ed = Edited::default();
                     // The tool's drawer, above the permanent adjustment stack — the global
                     // sliders stay reachable while a mask is being painted. ⚠ `Tool::Edit`
@@ -131,8 +151,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         ui.label(egui::RichText::new(name.to_string_lossy()).strong());
                     }
                     theme::caption(ui, &s.make_model);
-                } else {
-                    ui.label("No image open.");
                 }
             });
         });
