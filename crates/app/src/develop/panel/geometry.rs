@@ -1,8 +1,8 @@
 //! The geometry-mode block: rotate and flip, aspect presets, Straighten.
 //!
-//! ⚠ Shown only while `geometry_mode` is on. Step 2 of this rework makes that a derived
-//! property of the selected rail tool rather than a stored flag, and moves this into a
-//! drawer — which is why it is already a separate file.
+//! ⚠ Shown only while the **Crop** tool is selected on the rail. There is no stored
+//! `geometry_mode` flag any more — it is derived from `Tool::is_geometry`, so the mode and the
+//! selection cannot disagree.
 
 use crate::develop::panel::Edited;
 use crate::Session;

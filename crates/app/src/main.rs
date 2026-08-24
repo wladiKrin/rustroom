@@ -21,6 +21,7 @@ use rustroom_app::settings::{Accent, Settings, SettingsStore, ThemeChoice};
 use rustroom_app::sidecar;
 use rustroom_app::sync;
 use rustroom_app::thumb_loader::ThumbLoader;
+use rustroom_app::tool::Tool;
 use rustroom_app::view_region;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -147,7 +148,7 @@ struct RustroomApp {
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
-    tool: rustroom_app::tool::Tool,
+    tool: Tool,
     /// This session's copied edits. A copy *also* writes a tagged payload to the system
     /// clipboard (see [`edit_clipboard`]), so pasting works between two running instances;
     /// this field is what the "Paste…" button uses, because egui can only hand us the
@@ -274,7 +275,6 @@ struct Session {
     pan: egui::Vec2,
     history: History<Edits>,
     show_before: bool,
-    geometry_mode: bool,
     active_handle: Option<crop_tool::Handle>,
     /// Which mask the canvas is editing, if any. Index into `edits.masks`.
     ///
@@ -354,9 +354,9 @@ impl Session {
 /// ⚠ **Only the crop.** The orientation must survive, or the preview would show a
 /// differently-oriented image from the one being edited — and the crop overlay would then be
 /// drawn against a frame that does not match it.
-fn preview_edits(edits: &Edits, geometry_mode: bool) -> Edits {
+fn preview_edits(edits: &Edits, tool: Tool) -> Edits {
     let mut e = edits.clone();
-    if geometry_mode {
+    if tool.is_geometry() {
         e.geometry.crop = edit_model::CropRect::default();
     }
     e
@@ -490,13 +490,17 @@ impl RustroomApp {
     /// action log from the session history. The caller decides how to log it, which is what
     /// lets a paste bundle this together with a sync into one undo step.
     fn apply_edits_to_session(&mut self, src: &Edits, groups: EditGroups) -> bool {
+        // ⚠ Hoisted before the session borrow: `self.tool` is an immutable borrow of `self`
+        // and `&mut self.session` is a mutable one, so reading it afterwards is E0502.
+        // `Tool` is `Copy`, so the hoist is free.
+        let tool = self.tool;
         let Some(s) = &mut self.session else {
             return false;
         };
         s.edits.merge_from(src, groups);
         let pushed = s.history.push(s.edits.clone());
         s.request(
-            preview_edits(&s.edits, s.geometry_mode),
+            preview_edits(&s.edits, tool),
             s.render_max_dim(),
             s.requested_region,
         );
@@ -745,12 +749,13 @@ impl RustroomApp {
             return;
         }
         let edits = sidecar::load(&open).unwrap_or_default();
+        let tool = self.tool;
         if let Some(s) = &mut self.session {
             s.edits = edits;
             // The old history described a state that is no longer on disk.
             s.history = History::new(s.edits.clone());
             s.request(
-                preview_edits(&s.edits, s.geometry_mode),
+                preview_edits(&s.edits, tool),
                 s.render_max_dim(),
                 s.requested_region,
             );
@@ -762,10 +767,11 @@ impl RustroomApp {
 
     /// Re-render after the session's edits were changed by an undo or a redo.
     fn rerender_current(&mut self) {
+        let tool = self.tool;
         let Some(s) = &mut self.session else { return };
         s.edits = s.history.get().clone();
         s.request(
-            preview_edits(&s.edits, s.geometry_mode),
+            preview_edits(&s.edits, tool),
             s.render_max_dim(),
             s.requested_region,
         );
@@ -1010,7 +1016,6 @@ impl RustroomApp {
             pan: egui::Vec2::ZERO,
             history,
             show_before: false,
-            geometry_mode: false,
             active_handle: None,
             selected_mask: None,
             active_mask_handle: None,
@@ -1054,6 +1059,7 @@ impl RustroomApp {
 
     /// Per-frame: absorb a finished full-resolution decode into the live session.
     fn pump_full_res(&mut self, ctx: &egui::Context) {
+        let tool = self.tool;
         for res in self.full_decoder.poll() {
             let is_current = self.full_pending.as_ref().map(|(_, seq)| *seq) == Some(res.seq);
             if is_current {
@@ -1096,7 +1102,7 @@ impl RustroomApp {
                     // see an unchanged rung and a covered region and request nothing at all —
                     // leaving the old buffer's texture on screen, so the upgrade would be
                     // invisible until something else happened to trigger a render.
-                    s.request(preview_edits(&s.edits, s.geometry_mode), s.fit_cap(), None);
+                    s.request(preview_edits(&s.edits, tool), s.fit_cap(), None);
                     self.status = "Full resolution ready".to_string();
                 }
                 Err(e) => {

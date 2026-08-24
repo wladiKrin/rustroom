@@ -9,6 +9,7 @@ use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::edit_clipboard;
+use rustroom_app::tool::Tool;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
 ///
@@ -87,12 +88,21 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             s.pan = egui::Vec2::ZERO;
         }
         ui.toggle_value(&mut s.show_before, "Before/After");
-        if ui.toggle_value(&mut s.geometry_mode, "Geometry").clicked() {
-            s.request(
-                preview_edits(&s.edits, s.geometry_mode),
-                s.render_max_dim(),
-                s.requested_region,
-            );
+    }
+    if app.session.is_some() {
+        // ⚠ Temporary shim: the rail owns this from the next commit. It exists only so this
+        // commit never leaves geometry mode unreachable.
+        let mut geo = app.tool.is_geometry();
+        if ui.toggle_value(&mut geo, "Geometry").clicked() {
+            app.tool = if geo { Tool::Crop } else { Tool::Edit };
+            let tool = app.tool;
+            if let Some(s) = &mut app.session {
+                s.request(
+                    preview_edits(&s.edits, tool),
+                    s.render_max_dim(),
+                    s.requested_region,
+                );
+            }
         }
     }
     if app.session.is_some() {

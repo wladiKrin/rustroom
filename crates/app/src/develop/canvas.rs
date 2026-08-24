@@ -2,6 +2,7 @@
 
 use crate::{preview_edits, rects_around, PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
 use eframe::egui;
+use rustroom_app::tool::Tool;
 use rustroom_app::{brush_tool, crop_tool, mask_tool, settings::PanDrag, view_region};
 
 /// Whether a drag belongs to the active tool — the crop rectangle, a mask handle, and later
@@ -76,6 +77,9 @@ fn pan_delta(
 /// thing here that changes `Edits`. The caller ORs this with the panel's answer and records a
 /// single action-log entry, so one gesture stays one Ctrl+Z.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> bool {
+    // ⚠ Hoisted before `app.session` is borrowed mutably: `app.tool` is a disjoint field, but
+    // reading it *through* `app` after the borrow is E0502. `Tool` is `Copy`, so this is free.
+    let tool = app.tool;
     let mut photo_edited = false;
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
@@ -116,7 +120,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
                     // Geometry mode pins the fit rung: the overlay is drawn against the
                     // whole image and placed by the fit-mode maths.
-                    let rung = if s.geometry_mode {
+                    let rung = if tool.is_geometry() {
                         fit_cap
                     } else {
                         view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom)
@@ -165,7 +169,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     if (!covered && s.requested_region != want) || max_dim != s.render_rung {
                         s.requested_region = want;
                         s.render_rung = max_dim;
-                        s.request(preview_edits(&s.edits, s.geometry_mode), max_dim, want);
+                        s.request(preview_edits(&s.edits, tool), max_dim, want);
                     }
 
                     // Place using the *texture's* own render resolution, not the current
@@ -211,7 +215,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                     egui::Image::new(shown).paint_at(ui, resp.rect);
 
-                    if s.geometry_mode {
+                    if tool.is_geometry() {
                         photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
                     } else {
                         photo_edited |= draw_mask_overlay(
@@ -227,6 +231,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 erase: app_brush_erase,
                                 show_tint: app.show_mask_tint,
                             },
+                            tool,
                         );
                         // Zoom first, then pan: the anchor correction below depends on the
                         // new zoom, and the other order would anchor against a stale factor.
@@ -414,7 +419,8 @@ fn draw_mask_overlay(
     resp: &egui::Response,
     img_rect: egui::Rect,
     frame_rect: egui::Rect,
-    tool: BrushTool,
+    brush: BrushTool,
+    tool: Tool,
 ) -> bool {
     let Some(i) = s.selected_mask else {
         return false;
@@ -433,7 +439,7 @@ fn draw_mask_overlay(
         frame_rect,
         img_rect,
         &s.edits.geometry,
-        tool.show_tint,
+        brush.show_tint,
     );
 
     let aspect = frame_rect.width() / frame_rect.height();
@@ -449,7 +455,7 @@ fn draw_mask_overlay(
                 frame_rect.width() as usize,
                 frame_rect.height() as usize,
             );
-            let radius = (tool.size / map.radius_scale.max(1e-6)).max(1e-4);
+            let radius = (brush.size / map.radius_scale.max(1e-6)).max(1e-4);
             let src = map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top());
             if tool_drag_started(resp) {
                 if let Some(edit_model::Mask::Brush(b)) =
@@ -458,9 +464,9 @@ fn draw_mask_overlay(
                     b.strokes.push(edit_model::BrushStroke {
                         points: vec![src],
                         radius,
-                        hardness: tool.hardness,
-                        flow: tool.flow,
-                        erase: tool.erase,
+                        hardness: brush.hardness,
+                        flow: brush.flow,
+                        erase: brush.erase,
                     });
                     // ⚠⚠ **Deliberately does NOT set `moved`.** Requesting a render here starts a
                     // full-resolution render of a ONE-POINT stroke you are about to extend. At
@@ -548,7 +554,7 @@ fn draw_mask_overlay(
             }
         }
         s.request(
-            preview_edits(&s.edits, s.geometry_mode),
+            preview_edits(&s.edits, tool),
             s.render_max_dim(),
             s.requested_region,
         );
@@ -563,7 +569,7 @@ fn draw_mask_overlay(
         if let Some(hp) = resp.hover_pos() {
             ui.painter_at(img_rect).circle_stroke(
                 hp,
-                tool.size,
+                brush.size,
                 egui::Stroke::new(1.0, egui::Color32::from_white_alpha(180)),
             );
         }
@@ -576,7 +582,7 @@ fn draw_mask_overlay(
     // `preview_edits` strips the crop in geometry mode and the overlay *is* the feedback.
     if moved {
         s.request(
-            preview_edits(&s.edits, s.geometry_mode),
+            preview_edits(&s.edits, tool),
             s.render_max_dim(),
             s.requested_region,
         );

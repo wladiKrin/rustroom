@@ -69,6 +69,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 ui.disable();
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
+                let tool = app.tool;
                 if let Some(s) = &mut app.session {
                     draw_histogram(ui, &s.hist);
                     ui.separator();
@@ -94,14 +95,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         ed.discrete();
                     }
 
-                    if s.geometry_mode {
+                    if tool.is_geometry() {
                         ui.separator();
                         geometry::show(ui, s, &mut ed);
                     }
 
                     if ed.changed {
                         s.request(
-                            preview_edits(&s.edits, s.geometry_mode),
+                            preview_edits(&s.edits, tool),
                             s.render_max_dim(),
                             s.requested_region,
                         );
