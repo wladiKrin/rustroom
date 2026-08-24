@@ -15,7 +15,7 @@ use rustroom_app::full_res;
 use rustroom_app::history::History;
 use rustroom_app::mask_tool;
 use rustroom_app::presets::{Preset, PresetStore};
-use rustroom_app::render_engine::{RegionRect, RenderEngine};
+use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
 use rustroom_app::selection::Selection;
 use rustroom_app::settings::{Accent, Settings, SettingsStore, ThemeChoice};
 use rustroom_app::sidecar;
@@ -380,7 +380,14 @@ impl Session {
     /// Send a render request. A one-line delegate: it no longer routes anywhere, but "every
     /// render request goes through one place" is worth keeping.
     fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
-        self.engine.request(edits, max_dim, region);
+        self.engine.request(
+            edits,
+            FrameSpec {
+                max_dim,
+                region,
+                display_space: color::OutputSpace::Srgb,
+            },
+        );
     }
 }
 
@@ -1147,7 +1154,7 @@ impl RustroomApp {
         // `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the cap, and
         // the canvas only accepts a frame as the fit size when its `max_dim` matches.
         let fit_cap = view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM);
-        engine.request(edits.clone(), fit_cap, None);
+        engine.request(edits.clone(), FrameSpec::fit(fit_cap));
         // Non-RAW formats are decoded at full size, so their buffer is already the real thing.
         let buffer_is_full_res = !catalog::is_raw(&path);
 

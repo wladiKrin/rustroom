@@ -157,7 +157,13 @@ fn main() {
         let mut best = f64::MAX;
         for _ in 0..5 {
             let t = Instant::now();
-            let f = render_once(&buf, &edits, PREVIEW_MAX_DIM, scale);
+            let f = render_once(
+                &buf,
+                &edits,
+                PREVIEW_MAX_DIM,
+                scale,
+                color::OutputSpace::Srgb,
+            );
             let ms = t.elapsed().as_secs_f64() * 1000.0;
             std::hint::black_box(&f);
             best = best.min(ms);

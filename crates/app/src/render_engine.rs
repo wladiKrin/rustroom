@@ -48,10 +48,35 @@ impl RegionRect {
     }
 }
 
+/// What frame to produce: the working resolution, the visible sub-rect, and the display's
+/// primaries.
+///
+/// Grouped because the three travel together the whole way from a request to `pack`, and
+/// threading them individually pushed `render_cached` past clippy's argument limit — which was
+/// a fair complaint rather than a lint to silence.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameSpec {
+    pub max_dim: usize,
+    pub region: Option<RegionRect>,
+    /// ⚠ Applied in `pack`, *after* the pipeline — never as a pipeline stage, or the histogram
+    /// becomes display-referred. See the spec.
+    pub display_space: color::OutputSpace,
+}
+
+impl FrameSpec {
+    /// A whole-frame render in sRGB — the shape the tests and the reference paths use.
+    pub fn fit(max_dim: usize) -> Self {
+        Self {
+            max_dim,
+            region: None,
+            display_space: color::OutputSpace::Srgb,
+        }
+    }
+}
+
 struct Request {
     edits: Edits,
-    max_dim: usize,
-    region: Option<RegionRect>,
+    spec: FrameSpec,
 }
 
 /// Owns a worker thread that renders against a fixed editing buffer.
@@ -90,9 +115,8 @@ impl RenderEngine {
                 let (frame, _stages_run) = render_cached(
                     &buffer,
                     &req.edits,
-                    req.max_dim,
+                    req.spec,
                     source_scale,
-                    req.region,
                     &mut cache,
                     &mut brush_cache,
                 );
@@ -110,12 +134,8 @@ impl RenderEngine {
     }
 
     /// Queue a render at the given working resolution, optionally cropped to `region`.
-    pub fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
-        let _ = self.req_tx.send(Request {
-            edits,
-            max_dim,
-            region,
-        });
+    pub fn request(&self, edits: Edits, spec: FrameSpec) {
+        let _ = self.req_tx.send(Request { edits, spec });
     }
 
     /// Return the newest finished frame, if any (drops older ones).
@@ -155,7 +175,32 @@ fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> 
 ///
 /// The quantization lives on `ImageBuf`, where the buffer and rayon already are — which is also
 /// why `app` needs no `rayon` dependency of its own.
-fn pack(out: ImageBuf, region: Option<Region>, max_dim: usize) -> RenderedFrame {
+/// Quantize a rendered frame for the GPU, converting into the display's primaries on the way.
+///
+/// ⚠ The conversion happens **here, in float, before quantizing** — not on the packed bytes. An
+/// 8-bit → 8-bit conversion compresses the range and costs roughly 0.8 bits, which shows as
+/// banding on a smooth sky. It also happens *after* the pipeline rather than inside it, so the
+/// histogram stays image-referred; see the spec for why that is the whole design.
+fn pack(
+    out: ImageBuf,
+    region: Option<Region>,
+    max_dim: usize,
+    display_space: color::OutputSpace,
+) -> RenderedFrame {
+    let out = if display_space == color::OutputSpace::Srgb {
+        out
+    } else {
+        // The image is sRGB-*encoded* here, so decode, change primaries, re-encode.
+        out.map_pixels(move |c| {
+            let lin = c.map(color::srgb_to_linear);
+            let conv = display_space.from_srgb(lin);
+            [
+                display_space.encode(conv[0]),
+                display_space.encode(conv[1]),
+                display_space.encode(conv[2]),
+            ]
+        })
+    };
     RenderedFrame {
         width: out.width(),
         height: out.height(),
@@ -440,12 +485,17 @@ impl BrushCache {
 fn render_cached(
     buffer: &Arc<ImageBuf>,
     edits: &Edits,
-    max_dim: usize,
+    spec: FrameSpec,
     source_scale: f32,
-    region: Option<RegionRect>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, usize) {
+    // Destructured so the body below reads exactly as it did before these three were grouped.
+    let FrameSpec {
+        max_dim,
+        region,
+        display_space,
+    } = spec;
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
         buffer_long,
@@ -544,11 +594,11 @@ fn render_cached(
         scale,
         region,
         Some(&coverage),
-        // The preview is always sRGB — the display is assumed sRGB until a display
-        // profile exists. See `pipeline::OutputTransform`.
+        // ⚠ The **pipeline** is always sRGB. The display transform is a post-step in `pack`,
+        // deliberately outside the pipeline so the histogram stays image-referred.
         color::OutputSpace::Srgb,
     );
-    (pack(tail.run(input), region, max_dim), ran)
+    (pack(tail.run(input), region, max_dim, display_space), ran)
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -563,6 +613,7 @@ pub fn render_once(
     edits: &Edits,
     max_dim: usize,
     source_scale: f32,
+    display_space: color::OutputSpace,
 ) -> RenderedFrame {
     let preview = buffer.downscale_to(max_dim);
     let scale = render_scale(
@@ -570,7 +621,12 @@ pub fn render_once(
         preview.width().max(preview.height()),
         source_scale,
     );
-    pack(build_pipeline(edits, scale).run(preview), None, max_dim) // sRGB, 0..=1
+    pack(
+        build_pipeline(edits, scale).run(preview),
+        None,
+        max_dim,
+        display_space,
+    )
 }
 
 #[cfg(test)]
@@ -649,10 +705,10 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
 
-        let (_, cold) = render_cached(&buf, &base, 8, 1.0, None, &mut cache, &mut bc);
+        let (_, cold) = render_cached(&buf, &base, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
         assert_eq!(cold, 3, "a cold render runs every prefix stage");
 
-        let (_, hit) = render_cached(&buf, &base, 8, 1.0, None, &mut cache, &mut bc);
+        let (_, hit) = render_cached(&buf, &base, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
         assert_eq!(hit, 0, "an unchanged prefix runs nothing");
 
         // A tail-only change still runs nothing: it resumes at the final checkpoint.
@@ -660,7 +716,14 @@ mod tests {
             exposure: -1.5,
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &tail_only, 8, 1.0, None, &mut cache, &mut bc);
+        let (_, ran) = render_cached(
+            &buf,
+            &tail_only,
+            FrameSpec::fit(8),
+            1.0,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(ran, 0, "a tail change must not touch the prefix");
 
         // Dehaze is last in the prefix, so only dehaze re-runs. This is the 86.8 ms case.
@@ -668,7 +731,7 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 85.0 },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &dehaze, 8, 1.0, None, &mut cache, &mut bc);
+        let (_, ran) = render_cached(&buf, &dehaze, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
         assert_eq!(ran, 1, "a dehaze change must resume after noise reduction");
 
         // Noise reduction is second, so NR and dehaze re-run but geometry does not.
@@ -680,7 +743,7 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &nr, 8, 1.0, None, &mut cache, &mut bc);
+        let (_, ran) = render_cached(&buf, &nr, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
         assert_eq!(ran, 2, "an NR change must resume after geometry");
 
         // Geometry is first, so everything re-runs — but the downscale is still reused.
@@ -691,7 +754,7 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &geo, 8, 1.0, None, &mut cache, &mut bc);
+        let (_, ran) = render_cached(&buf, &geo, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
         assert_eq!(ran, 3, "a geometry change invalidates the whole prefix");
     }
 
@@ -705,7 +768,7 @@ mod tests {
         let mut bc = BrushCache::default();
 
         let mut native = PrefixCache::default();
-        render_cached(&buf, &base, 16, 1.0, None, &mut native, &mut bc);
+        render_cached(&buf, &base, FrameSpec::fit(16), 1.0, &mut native, &mut bc);
         assert_eq!(
             native.mid_len(),
             2,
@@ -713,7 +776,7 @@ mod tests {
         );
 
         let mut fit = PrefixCache::default();
-        render_cached(&buf, &base, 8, 1.0, None, &mut fit, &mut bc);
+        render_cached(&buf, &base, FrameSpec::fit(8), 1.0, &mut fit, &mut bc);
         assert_eq!(
             fit.mid_len(),
             3,
@@ -730,15 +793,18 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
         let with = full_prefix();
-        render_cached(&buf, &with, 8, 1.0, None, &mut cache, &mut bc);
+        render_cached(&buf, &with, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
 
         let without = Edits {
             dehaze: edit_model::Dehaze::default(),
             ..with.clone()
         };
-        let (got, ran) = render_cached(&buf, &without, 8, 1.0, None, &mut cache, &mut bc);
+        let (got, ran) = render_cached(&buf, &without, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
         assert_eq!(ran, 0, "the post-NR checkpoint is now the final one");
-        assert_eq!(got.rgba, render_once(&buf, &without, 8, 1.0).rgba);
+        assert_eq!(
+            got.rgba,
+            render_once(&buf, &without, 8, 1.0, color::OutputSpace::Srgb).rgba
+        );
 
         // ...and it must have been *promoted* into the protected tier, not left in the
         // budgeted one where a big render could evict the thing zooming back relies on.
@@ -934,9 +1000,8 @@ mod tests {
         let (whole, _) = render_cached(
             &buf,
             &edits,
-            n,
+            FrameSpec::fit(n),
             1.0,
-            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -950,9 +1015,8 @@ mod tests {
                 local_contrast: edit_model::LocalContrast::default(),
                 ..edits.clone()
             },
-            n,
+            FrameSpec::fit(n),
             1.0,
-            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -973,9 +1037,12 @@ mod tests {
         let (got, _) = render_cached(
             &buf,
             &edits,
-            n,
+            FrameSpec {
+                max_dim: n,
+                region: Some(RegionRect { x, y, w, h }),
+                display_space: color::OutputSpace::Srgb,
+            },
             1.0,
-            Some(RegionRect { x, y, w, h }),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1013,8 +1080,8 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
 
-        render_cached(&buf, &e, 8, 1.0, None, &mut cache, &mut bc); // "fit"
-        render_cached(&buf, &e, 16, 1.0, None, &mut cache, &mut bc); // "native"
+        render_cached(&buf, &e, FrameSpec::fit(8), 1.0, &mut cache, &mut bc); // "fit"
+        render_cached(&buf, &e, FrameSpec::fit(16), 1.0, &mut cache, &mut bc); // "native"
         assert_eq!(cache.final_len(), 2, "both modes should stay cached");
 
         for max_dim in [8usize, 16] {
@@ -1033,7 +1100,7 @@ mod tests {
             },
             ..e.clone()
         };
-        render_cached(&buf, &e2, 16, 1.0, None, &mut cache, &mut bc);
+        render_cached(&buf, &e2, FrameSpec::fit(16), 1.0, &mut cache, &mut bc);
         assert_eq!(cache.final_len(), 2);
     }
 
@@ -1044,14 +1111,17 @@ mod tests {
         let (got, _) = render_cached(
             &buf,
             &e,
-            16,
+            FrameSpec {
+                max_dim: 16,
+                region: Some(RegionRect {
+                    x: 10,
+                    y: 10,
+                    w: 999,
+                    h: 999,
+                }),
+                display_space: color::OutputSpace::Srgb,
+            },
             1.0,
-            Some(RegionRect {
-                x: 10,
-                y: 10,
-                w: 999,
-                h: 999,
-            }),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1091,20 +1161,20 @@ mod tests {
         }; // first prefix stage
 
         // Guard against the whole test passing trivially: these must actually differ.
-        let cold_a = render_once(&buf, &a, 8, 1.0);
+        let cold_a = render_once(&buf, &a, 8, 1.0, color::OutputSpace::Srgb);
         for (name, other) in [("b", &b), ("c", &c), ("d", &d), ("e", &e)] {
             assert_ne!(
                 cold_a.rgba,
-                render_once(&buf, other, 8, 1.0).rgba,
+                render_once(&buf, other, 8, 1.0, color::OutputSpace::Srgb).rgba,
                 "edit set {name} renders identically to a — the test proves nothing"
             );
         }
 
         let engine = RenderEngine::new(buf.clone(), 1.0, || {});
         for (i, ed) in [&a, &a, &b, &c, &a, &d, &e, &a, &c].iter().enumerate() {
-            engine.request((*ed).clone(), 8, None);
+            engine.request((*ed).clone(), FrameSpec::fit(8));
             let got = wait_for_frame(&engine);
-            let cold = render_once(&buf, ed, 8, 1.0);
+            let cold = render_once(&buf, ed, 8, 1.0, color::OutputSpace::Srgb);
             assert_eq!(got.rgba, cold.rgba, "frame {i} differs from a cold render");
         }
     }
@@ -1140,7 +1210,7 @@ mod tests {
     #[test]
     fn produces_rgba_frame_of_expected_size() {
         let engine = RenderEngine::new(tiny(), 1.0, || {});
-        engine.request(Edits::default(), 4, None); // downscale 8 -> 4
+        engine.request(Edits::default(), FrameSpec::fit(4)); // downscale 8 -> 4
         let f = wait_for_frame(&engine);
         assert_eq!((f.width, f.height), (4, 4));
         assert_eq!(f.rgba.len(), 4 * 4 * 4);
@@ -1157,8 +1227,7 @@ mod tests {
                 exposure: 2.0,
                 ..Edits::default()
             },
-            4,
-            None,
+            FrameSpec::fit(4),
         );
         let f = wait_for_frame(&engine);
         assert!(f.rgba[0] > 240); // much brighter
@@ -1167,7 +1236,7 @@ mod tests {
     #[test]
     fn render_once_matches_expected_gray() {
         let img = tiny();
-        let f = render_once(&img, &Edits::default(), 4, 1.0);
+        let f = render_once(&img, &Edits::default(), 4, 1.0, color::OutputSpace::Srgb);
         assert_eq!((f.width, f.height), (4, 4));
         assert!(f.rgba[0] > 180 && f.rgba[0] < 195);
     }
@@ -1285,5 +1354,36 @@ mod tests {
         let cov = cache.get_or_build(&e, 200, 100, Some((0, 0, 40, 100)));
         let map = cov.get(0).expect("the brush mask has a map");
         assert_eq!(map.at(120, 50), 0, "beyond the clip there is no coverage");
+    }
+
+    #[test]
+    fn the_display_space_changes_the_packed_pixels_and_srgb_does_not() {
+        // ⚠ Two claims. The sRGB half is the regression guard — it is the default, and if it
+        // moved every preview would shift for people who never touched the setting. The P3 half
+        // proves the parameter is actually reaching `pack`; without it the setting would be a
+        // dropdown that does nothing, which is the failure this whole task risks.
+        let mut buf = ImageBuf::new(2, 1);
+        buf.set_pixel(0, 0, color::srgb_to_prophoto([0.9, 0.1, 0.1]));
+        buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
+
+        let srgb = render_once(&buf, &Edits::default(), 2, 1.0, color::OutputSpace::Srgb);
+        let p3 = render_once(
+            &buf,
+            &Edits::default(),
+            2,
+            1.0,
+            color::OutputSpace::DisplayP3,
+        );
+
+        assert_ne!(srgb.rgba, p3.rgba, "the display space did not reach `pack`");
+        // ⚠ The corrected image must be *less* saturated in red, not more — an inverted
+        // transform would also differ, and would reproduce the very bug this fixes while
+        // passing an `assert_ne!`.
+        assert!(
+            p3.rgba[0] < srgb.rgba[0],
+            "P3 red {} should be below sRGB red {}",
+            p3.rgba[0],
+            srgb.rgba[0]
+        );
     }
 }

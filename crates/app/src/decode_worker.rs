@@ -121,7 +121,16 @@ impl DecodeWorker {
         std::thread::spawn(move || {
             let outcome = decode(&req.path).map(|(image, label, source_scale)| {
                 let buffer = Arc::new(image);
-                let baseline = render_once(&buffer, &Edits::default(), req.max_dim, source_scale);
+                // ⚠ `Srgb` regardless of the display setting: this baseline texture is never drawn.
+                // `show_before` is an ordinary render now, and the baseline survives only for
+                // its dimensions (`develop/panel/geometry.rs`).
+                let baseline = render_once(
+                    &buffer,
+                    &Edits::default(),
+                    req.max_dim,
+                    source_scale,
+                    color::OutputSpace::Srgb,
+                );
                 Arc::new(Decoded {
                     buffer,
                     label,
