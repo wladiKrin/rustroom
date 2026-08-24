@@ -118,7 +118,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **State at handoff (2026-08-24):** 714 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean.
 >
-> As of 2026-08-24 everything is merged into `main` by fast-forward — the layout/IA rework, the icon font, both colour-management plans and the output profile choice — matching this project's linear history. Working tree clean. ⚠ **`main` is 22 commits AHEAD of `origin/main`: the colour-management work and piece B are unpushed.** The `output-profile` branch still exists locally. ⚠ This block goes stale the moment the user pushes — run `git log origin/main..main --oneline` rather than trusting it, and **never push either way**.
+> As of 2026-08-24 everything is merged into `main` by fast-forward — the layout/IA rework, the icon font, both colour-management plans and the output profile choice — matching this project's linear history. Working tree clean. ⚠ **`main` is ahead of `origin/main`: the colour-management work and piece B are unpushed.** No feature branches remain. ⚠ This block goes stale the moment the user pushes — run `git log origin/main..main --oneline` rather than trusting it, and **never push either way**.
 >
 > ⚠ **The GUI binary is now `Rustroom`, not `rustroom-gui`** — `cargo test -p app --bin Rustroom`. The name is what macOS shows as the application menu's title.
 
@@ -154,7 +154,7 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **The session before (2026-08-12/13) landed seven features.** In order: per-stage prefix checkpoints; the 10× RGBA8 pack; parallel `downscale_to`; the full-resolution editing buffer *and* its trigger rework to eager-on-settle; the Library format filter; rotate/flip with the Crop→Geometry rename; and the fit-view clamp fix. Five bugs were found in real use and fixed along the way — the two sections below on **"Three bugs from the first hour"** and **"The fit view now fills the window"** are the ones worth reading before touching the canvas, because both are about the same failure mode: two quantities that agree in the common case and diverge in the interesting one.
 
-**Push state: everything is merged into `main`, and `main` is 22 commits ahead of `origin/main` (2026-08-24)** — the colour-management work and the output profile choice are unpushed. `layout-ia-rework` was merged and deleted; `output-profile` was merged and still exists locally. ⚠ **Run `git log origin/main..main` rather than trusting this.**
+**Push state: everything is merged into `main`, and `main` is ahead of `origin/main` (2026-08-24)** — the colour-management work and the output profile choice are unpushed. `layout-ia-rework` and `output-profile` were both fast-forward merged and deleted. ⚠ **Run `git log origin/main..main` rather than trusting this.**
 
 ⚠ **Branch-per-feature is the established default now** — three in a row (`m3.1b-radial-mask`, `canvas-navigation`, `m3.1c-a-brush-headless`), each merged and pushed by the user. Branch without asking; never push.
 
