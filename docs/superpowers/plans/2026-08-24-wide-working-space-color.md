@@ -375,10 +375,19 @@ cargo test -p color --no-run 2>&1 | grep -cE "^error" || echo "0 compile errors"
 cargo test -p color an_srgb_colour_reaches_the_same_oklab 2>&1 | tail -8
 ```
 
-Expected: zero compile errors, then FAIL. ⚠ Note `grey_has_no_chroma_in_prophoto` and
-`prophoto_oklab_round_trips` would both still **pass** — a row swap preserves greys and stays
-self-inverse. Only the cross-check against the independent sRGB path catches it, which is why that
-test is the one that matters. Restore, then `touch crates/color/src/oklab.rs`.
+Expected: zero compile errors, then FAIL on **both** `an_srgb_colour_reaches_the_same_oklab` and
+`prophoto_oklab_round_trips`.
+
+⚠ **The round trip fails only because the swap is one-directional** — `oklab_to_prophoto` is left
+untouched, so the pair is no longer inverse. That is a general trap when predicting a sabotage on a
+matrix pair: *any* change to one direction breaks the round trip, so the round trip can never
+isolate what the other tests are for.
+
+⚠ **The claim that matters did hold: `grey_has_no_chroma_in_prophoto` passes.** A row swap preserves
+neutrals, so greys alone would never catch it. Only the cross-check against the independent sRGB
+path does — which is why that test is the one that earns its place.
+
+Restore, then `touch crates/color/src/oklab.rs`.
 
 - [ ] **Step 5: Commit**
 
