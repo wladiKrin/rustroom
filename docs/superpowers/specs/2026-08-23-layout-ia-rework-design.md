@@ -1,6 +1,11 @@
 # Layout and IA rework — a tool rail, a menu bar, and a panel that matches the edit groups
 
-Status: **design agreed 2026-08-23**, not yet implemented.
+Status: **steps 1 and 2 implemented 2026-08-24** on branch `layout-ia-rework` (the panel, then the
+rail); **step 3 (the menu bar) not yet planned**.
+
+⚠ Two things in this document were **corrected by implementation** and the corrections are marked
+inline where they apply: the rail's four glyphs (all of the originals were absent from egui's fonts)
+and the drawer's exclusivity (reversed in use). Read those marks rather than the surrounding prose.
 
 ## Scope
 
@@ -30,15 +35,15 @@ Three surfaces replace one crowded row.
 ├──────────────────────────────────────────────────────────────────────┤
 │ Library │Develop│ Undo Redo │ Fit Before/After          DSCF1042.RAF │  ← 6 controls
 ├───────────────────────────────────────┬──────────────────┬──────────┤
-│                                       │ histogram        │  ▦ Edit  │
-│                                       │ ┌──────────────┐ │  ⧉ Crop  │
-│              image                    │ │ Masks drawer │ │  ◐ Masks │  ← rail
-│                                       │ └──────────────┘ │  ≡ Preset│
-│                                       │ White Balance    │          │
-│                                       │ Tone             │          │
+│                                       │ histogram        │  ☰ Edit  │
+│                                       │ ──────────────── │  ▣ Crop  │
+│              image                    │ White Balance    │  ◑ Masks │  ← rail
+│                                       │ Tone             │  ★ Presets│
 │                                       │ Color            │          │
 │                                       │ Detail           │          │
 │                                       │ Effects          │          │
+│                                       │ [Reset all]      │          │
+│                                       │  (Edit tool)     │          │
 ├───────────────────────────────────────┴──────────────────┴──────────┤
 │ filmstrip                                                            │
 └──────────────────────────────────────────────────────────────────────┘
