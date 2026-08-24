@@ -31,6 +31,7 @@ mod commands;
 mod develop;
 mod filmstrip;
 mod library;
+mod menu_bar;
 mod modals;
 mod shell;
 mod theme;

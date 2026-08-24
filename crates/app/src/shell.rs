@@ -3,7 +3,7 @@
 //! ⚠ This is a **trait impl moved to another module of the same crate**, which Rust allows —
 //! so unlike every other move in this refactor, `self` stays `self` and the body is verbatim.
 
-use crate::{commands, develop, library, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
+use crate::{commands, develop, library, menu_bar, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
 use eframe::egui;
 use rustroom_app::histogram::histogram_rgba;
 use rustroom_app::menu::{self, Command};
@@ -99,7 +99,18 @@ impl eframe::App for RustroomApp {
             }
         }
 
+        // ⚠ Applied after the panel closure closes: `commands::execute` takes `&mut self`
+        // and the closure already holds it. The same deferred-action shape the preset list
+        // uses.
+        let mut pending_command: Option<Command> = None;
         egui::Panel::top("top").show(ui, |ui| {
+            // ⚠ macOS gets the real system menu bar instead; drawing this one too would put a
+            // redundant row under a nearly-empty system menu.
+            if !cfg!(target_os = "macos") {
+                if let Some(cmd) = menu_bar::show(ui) {
+                    pending_command = Some(cmd);
+                }
+            }
             ui.horizontal(|ui| {
                 if ui.button("Open file…").clicked() {
                     self.open_dialog(&ctx);
@@ -146,6 +157,10 @@ impl eframe::App for RustroomApp {
                 }
             });
         });
+
+        if let Some(cmd) = pending_command {
+            commands::execute(self, &ctx, cmd);
+        }
 
         match self.view {
             AppView::Develop => develop::body(self, ui, &ctx),
