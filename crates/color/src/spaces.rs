@@ -44,6 +44,30 @@ pub const PROPHOTO_TO_ADOBE_RGB: [[f32; 3]; 3] = [
     [-0.0176254437, -0.0962570231, 1.1138824667],
 ];
 
+/// Linear sRGB → linear Display P3. Both are D65, so no chromatic adaptation is involved.
+///
+/// ⚠ Every entry is non-negative and no in-range input can produce a negative output, because
+/// sRGB's gamut sits strictly *inside* P3 — the opposite of [`PROPHOTO_TO_SRGB`], which must
+/// produce negatives. Do not copy a clamping decision between the two.
+pub const SRGB_TO_DISPLAY_P3: [[f32; 3]; 3] = [
+    [0.8224619687, 0.1775380313, 0.0000000000],
+    [0.0331941989, 0.9668058011, 0.0000000000],
+    [0.0170826307, 0.0723974407, 0.9105199286],
+];
+
+/// Linear sRGB → linear Adobe RGB (1998). Both are D65.
+///
+/// ⚠⚠ **The middle row really is `[0, 1, 0]`.** It looks like a copy-paste error and is not:
+/// Adobe RGB shares sRGB's red and blue primaries and differs only in green, and the green
+/// *channel value* comes through unchanged. Cross-checked independently — sRGB green expressed
+/// here is `(0.2849, 1.0, 0.0412)`, whose luminance through Adobe's own Y coefficients
+/// (0.2974 / 0.6273 / 0.0753) is 0.7151, matching sRGB green's known 0.7152.
+pub const SRGB_TO_ADOBE_RGB: [[f32; 3]; 3] = [
+    [0.7151256069, 0.2848743931, 0.0000000000],
+    [0.0000000000, 1.0000000000, 0.0000000000],
+    [0.0000000000, 0.0411619485, 0.9588380515],
+];
+
 /// Apply a 3×3 matrix to a pixel.
 #[inline]
 pub fn apply(m: &[[f32; 3]; 3], c: [f32; 3]) -> [f32; 3] {
