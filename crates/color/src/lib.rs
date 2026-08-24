@@ -29,31 +29,33 @@ pub fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-/// Perceptual lightness of a linear **ProPhoto** pixel — Oklab's L.
+/// Linear **luminance** (CIE Y) of a linear ProPhoto pixel.
 ///
-/// ⚠⚠ **This exists because ProPhoto's own luminance coefficients are unusable.** The ROMM→XYZ
-/// luminance row is `R 0.2880, G 0.7119, B 0.0001` — blue contributes essentially nothing,
-/// because ProPhoto's blue primary sits at y = 0.0001 on the chromaticity diagram. A stage using
-/// that as "luma" would stop seeing blue detail entirely: sharpening would leave a blue iris or a
-/// sky gradient untouched, and dehaze estimates airlight from brightness while haze is blue.
+/// ⚠ **This is real, physical luminance**, so it is *the same quantity* the Rec.709 weights give
+/// for sRGB data — converting a colour between spaces does not change how bright it is. sRGB blue
+/// reads 0.0722 through the Rec.709 weights and 0.0606 here; green reads 0.7152 and 0.7169. The
+/// small differences are chromatic adaptation, not a change of meaning.
 ///
-/// Oklab L is defined from XYZ, so it is working-space independent and does not collapse any
-/// channel. `every_channel_contributes_to_lightness` is the guard.
+/// ⚠⚠ **An earlier design claimed these weights "collapse blue" because the B coefficient is
+/// 0.0001, and specified Oklab L instead. That was wrong.** The 0.0001 applies to ProPhoto's *own
+/// blue primary* — a far more saturated blue than sRGB's, which genuinely carries almost no
+/// luminance. Real blue *content*, expressed in ProPhoto, has ordinary luminance. Generalising
+/// from the primary to all blues is the mistake; `luminance_matches_rec709` is the guard that
+/// would have caught it.
 ///
-/// ⚠ **L is a cube root, not linear luminance.** Constants tuned against linear luma do not
-/// carry over — see [`MID_GREY_L`] and the spec's "five tuned constants" section.
-pub fn lightness(rgb: [f32; 3]) -> f32 {
-    oklab::prophoto_to_oklab(rgb)[0]
+/// ⚠ Because this is linear luminance, every constant tuned against the old Rec.709 luma —
+/// `local_contrast`'s `MID_GRAY = 0.18`, `sharpening`'s `LUMA_EPS` and `GAIN_MAX` — **carries over
+/// unchanged**. Swapping in a perceptual lightness would have invalidated all of them.
+pub fn luminance(rgb: [f32; 3]) -> f32 {
+    PROPHOTO_LUMA[0] * rgb[0] + PROPHOTO_LUMA[1] * rgb[1] + PROPHOTO_LUMA[2] * rgb[2]
 }
 
-/// The lightness of mid-grey — linear 0.18 — in [`lightness`]'s units.
+/// The Y row of ProPhoto→XYZ: the luminance contribution of each primary.
 ///
-/// ⚠ **0.5646, not 0.18.** Any stage weighting midtones must use this: `local_contrast`'s
-/// midtone weight is `t = l / (l + 0.18)`, and left at 0.18 against Oklab L it peaks a shade
-/// above black, applying Clarity's midtone protection to the *shadows* instead. That is close to
-/// the inverse of its purpose and produces a plausible-looking image, which is what makes it the
-/// dangerous one.
-pub const MID_GREY_L: f32 = 0.5646;
+/// ⚠ **One definition, replacing the Rec.709 triple that was duplicated across six stage files.**
+/// Six copies of a constant that changes with the working space is six chances to update it
+/// differently.
+pub const PROPHOTO_LUMA: [f32; 3] = [0.2880402, 0.7118741, 0.0000857];
 
 #[cfg(test)]
 mod tests {
@@ -85,48 +87,50 @@ mod tests {
     }
 
     #[test]
-    fn every_channel_contributes_to_lightness() {
-        // ⚠⚠ The regression guard for the finding this whole design rests on. ProPhoto's own
-        // luminance weights give blue 0.0001, so a "simplification" back to working-space luma
-        // would make pure blue almost black — and nothing else in the suite would notice.
-        let black = lightness([0.0, 0.0, 0.0]);
-        for (name, c) in [
-            ("red", [1.0, 0.0, 0.0]),
-            ("green", [0.0, 1.0, 0.0]),
-            ("blue", [0.0, 0.0, 1.0]),
+    fn luminance_matches_rec709() {
+        // ⚠⚠ The test that would have caught the mistake this function's doc comment records.
+        // Luminance is physical: taking a colour into ProPhoto and measuring it here must agree
+        // with measuring the original through the Rec.709 weights. If it does not, the matrix is
+        // wrong — or someone has confused a *primary* with the colours users actually have.
+        fn rec709(c: [f32; 3]) -> f32 {
+            0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+        }
+        for c in [
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.35, 0.55, 0.9],
+            [0.05, 0.08, 0.35],
+            [0.5, 0.5, 0.5],
         ] {
-            let l = lightness(c);
+            let direct = rec709(c);
+            let via = luminance(spaces::srgb_to_prophoto(c));
             assert!(
-                l > black + 0.2,
-                "{name} has lightness {l}, barely above black {black} — \
-                 this is what working-space luma does to blue"
+                (direct - via).abs() < 0.02,
+                "{c:?}: Rec.709 says {direct}, ProPhoto says {via}"
             );
         }
     }
 
     #[test]
-    fn mid_grey_l_matches_the_function() {
-        // ⚠ The constant and the function must not drift. A hand-written constant that no test
-        // ties to its source is one that silently goes stale the day the space changes.
-        let measured = lightness([0.18, 0.18, 0.18]);
-        assert!(
-            (measured - MID_GREY_L).abs() < 1e-3,
-            "MID_GREY_L is {MID_GREY_L} but lightness(0.18) is {measured}"
-        );
+    fn a_neutral_has_luminance_equal_to_its_value() {
+        // The weights must sum to 1, or every grey reads brighter or darker than it is and each
+        // luminance-weighted stage drifts with it.
+        for v in [0.0_f32, 0.18, 0.5, 1.0] {
+            let l = luminance([v, v, v]);
+            assert!((l - v).abs() < 1e-4, "grey {v} has luminance {l}");
+        }
     }
 
     #[test]
-    fn lightness_is_monotonic_and_compresses_the_shadows() {
-        // ⚠ Pins the *character* change, not just the values: L is a cube root, so it rises
-        // steeply out of black. A stage guard tuned for linear luma — `LUMA_EPS = 1e-3` in
-        // sharpening — fires far higher up the range here, which is why the spec re-derives it.
-        let a = lightness([0.001, 0.001, 0.001]);
-        let b = lightness([0.01, 0.01, 0.01]);
-        let c = lightness([0.5, 0.5, 0.5]);
-        assert!(a < b && b < c, "lightness must be monotonic");
+    fn no_channel_is_ignored() {
+        // ⚠ Weaker than the old claim on purpose. Blue's coefficient really is tiny, and that is
+        // correct — but it must not be zero, or a pure-primary blue would be exactly black and
+        // any luminance-ratio stage would divide by it.
         assert!(
-            a > 0.05,
-            "linear 0.001 should already be well off the floor in L, got {a}"
+            PROPHOTO_LUMA.iter().all(|w| *w > 0.0),
+            "a weight is zero or negative"
         );
+        assert!(luminance([0.0, 0.0, 1.0]) > 0.0);
     }
 }
