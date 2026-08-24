@@ -116,9 +116,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ A visual-companion server may still be running** from the layout brainstorm at `http://localhost:51282`, with content in `.superpowers/brainstorm/` (gitignored). It auto-exits after 30 minutes idle; restart it from the brainstorming skill's `scripts/start-server.sh` if the layout work resumes and it is gone.
 >
-> **State at handoff (2026-08-24):** 688 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green. Branch **`layout-ia-rework`** holds steps 1 (the panel) and 2 (the rail) of the layout rework; step 3 (the menu bar) is specced and not yet planned.
+> **State at handoff (2026-08-24):** 696 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green. Branch **`layout-ia-rework`** holds the **complete** layout/IA rework — all three steps — and is unmerged.
 
-**Most recent work (2026-08-24). The tool rail — step 2 of 3 of the layout/IA rework.** **678 tests, 38 goldens byte-identical.** Its section is **"The tool rail"** below. Step 1 (the panel) is the section after it.
+**🎯 THE LAYOUT/IA REWORK IS COMPLETE (2026-08-24)** — all three steps: the panel, the rail, the menu bar. **696 tests, 38 goldens byte-identical.** The menu-bar section is next; the rail and panel sections follow it.
+
+**Most recent work (2026-08-24). The menu bar — step 3 of 3.** **678 tests, 38 goldens byte-identical.** Its section is **"The tool rail"** below. Step 1 (the panel) is the section after it.
 
 ⚠ **The single most useful finding: the spec's four rail glyphs were ALL absent from egui's fonts** and would have shipped as tofu boxes. Caught by probing before writing the plan, not after. See the rail section.
 
@@ -186,7 +188,7 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **🎯 M3.1 IS CLOSED.** All three mask primitives — linear, radial, brush — are authorable on the canvas.
 
-**▶ NEXT ACTION: step 3 of the layout/IA rework** — the menu bar (native NSMenu on macOS via `muda`, `egui::MenuBar` elsewhere), the `Command` dispatcher, and the toolbar slimming to six controls. Steps 1 (the panel) and 2 (the rail) landed 2026-08-24 on `layout-ia-rework`. The full design is specced in `docs/superpowers/specs/2026-08-23-layout-ia-rework-design.md`; write a plan per step, as step 1 did. ⚠ **All four problems below were confirmed by the user on 2026-08-19** — this is a mandate, not a proposal, and problems 2 and 3 are now fixed:
+**▶ NEXT ACTION: none chosen.** The layout/IA rework is **complete** — all four confirmed problems are fixed. Branch `layout-ia-rework` is unmerged; ask before starting anything on top of it. Open follow-ups worth considering, none urgent: colour management (lcms2 emits one static sRGB profile and nothing else — a hidden prerequisite for M3.3 grading), M3.2 lens corrections via lensfun, M3.4 virtual copies, and per-tool resets for anything a future rail tool adds.
 
 1. **The toolbar is thirteen controls on one level** — view (Fit, Before/After), a mode (Geometry), edit transfer (Copy, Paste, Sync, Presets), output (Export), app (Settings) and panel toggles (Presets, Filmstrip), with a single divider. Nothing distinguishes modes from actions from panel toggles.
 2. **The right panel stacks two organising principles** — thirteen always-open ungrouped sliders (Temp…Vibrance, with *no header at all*), then seven `CollapsingHeader` sections. The top half cannot be collapsed.
@@ -239,6 +241,21 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
 **Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
 
 **The user wants the GUI launched after every big update so they can cross-check it themselves** — start it in the background without being asked, and say what to look at. Skip it for small follow-up tweaks in a tuning loop.
+
+**The menu bar — step 3 of 3, and the rework closes with it.** A native NSMenu on macOS and an in-window `egui::MenuBar` elsewhere, both built from one model, with the Develop toolbar falling from ~14 controls to **three plus the filename**. 688 → **696 tests**; no golden moved.
+
+- **⚠⚠ THE SAFETY RULE THAT REPLACED THE SPEC'S DESIGN.** The spec proposed disabling Copy/Paste on the native menu while a text field has focus. That machinery was **not built**; `Shortcut::safe_as_native_accelerator` removes the hazard at its source instead. A native accelerator is consumed *before* winit sees the key, so **a bare key** (`G`, `D`, `\`, `1`–`4`) would steal every such character typed into the Save-preset field, and **a text-editing chord** (⌘Z/C/V/X/A) would break editing inside it. Only ⌘O, ⇧⌘O, ⌘E, ⌘, , ⌘[ , ⌘] are safe. The rest keep egui's existing focus-gated handling and show their chord *in the label*. Less machinery, and nothing to forget on a frame.
+- **⚠ The egui menu bar compiles on EVERY platform; only its invocation is gated.** The spec implied `#[cfg]`-ing it to non-macOS — which would mean the developer (on macOS) never compiles it and Linux CI never compiles the muda one, leaving **both halves unverified by whoever is looking**. `native_menu.rs` is the sole gated module and is deliberately thin.
+- **⚠ `muda` is a target-specific dependency** (`[target.'cfg(target_os = "macos")'.dependencies]`), so Linux CI never builds it. Its Linux backend needs GTK, which eframe/winit does not provide — that constraint is what forced two renderers in the first place.
+- **⚠ Two documentation facts that were wrong and cost a compile each.** `Modifiers::CMD_OR_CTRL` does not exist — `CMD_OR_CTRL` is a **free const in `muda::accelerator`**, resolving to `SUPER` on macOS. And `Tool` needed `Hash` because `Command::SelectTool(Tool)` keys the native id map. **Read the vendored crate source, not a docs summary.**
+- **⚠ `MenuEvent::set_event_handler` is used only to `request_repaint`, and `poll` still drains the channel.** egui does not redraw an idle window and a menu click generates no winit event, so without the repaint the command sits in the channel until the mouse moves — the same class of bug as the full-res trigger needing `request_repaint_after`. The dispatch stays in `poll` because a `'static` closure cannot hold `&mut RustroomApp`.
+- **⚠ muda's types are `!Send`/`!Sync` and macOS menus panic off the main thread**, so the menu lives in a `thread_local!` rather than on `RustroomApp` — which keeps `#[cfg]` out of the app struct entirely.
+- **⚠ A test caught an incomplete mapping, and the fix was to complete the table rather than weaken the test.** `every_shortcut_maps_to_an_egui_key` failed on ⌘C/⌘V, which `pressed_command` deliberately skips. Adding a skip to the *test* would have been the "assertion asserts something false about correct code" trap; instead `egui_key` is now a **total** mapping and the skip stays in `pressed_command`, where it is documented. A hole in the table would make the completeness test unable to say what it means.
+- **⚠ Tasks 2 and 3 had to land in one commit** — `commands::execute` is a `pub fn` in a **binary** crate with no caller until the key routing exists. **Fifth instance** of that trap, after `theme::button_row`, the CLI's `format_arg`, `ELLIPSE_SEGMENTS` and step 1's `HslChannel`.
+- **The Keyboard-shortcuts dialog is generated from `menu::model()`**, never hand-written — a reference listing a chord the app does not have is worse than no reference.
+- **⚠ BEHAVIOUR CHANGE: `Export…` and `Sync…` lose their dynamic counts.** A menu item cannot carry a label that changes usefully. That count is how the selection-wide scope was discoverable, so this is a real regression, taken knowingly; the count is in the dialogs, which name their targets.
+- **⚠ The in-window bar has NEVER BEEN RUN**, only unit-tested — there is no Linux machine here and macOS never shows it. `the_bar_renders_every_section_without_panicking` is the whole of its coverage. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
+- **Accepted caveats:** (1) `native_menu.rs` can rot silently, since CI never compiles it; (2) the unsafe chords show as label text rather than native right-aligned accelerators on macOS; (3) no user-defined shortcuts; (4) the Library view's toolbar is unchanged apart from losing what moved into menus.
 
 **Per-tool resets and a lockable crop aspect (2026-08-24).** Follow-ups to the rail, found by using it. **688 tests.**
 
