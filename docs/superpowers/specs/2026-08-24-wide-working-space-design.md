@@ -149,7 +149,7 @@ why the chart change is part of this spec rather than an incidental tidy-up.
 
 ## Two plans
 
-1. **`color` only.** The matrices, the Oklab compositions and `lightness()`, with their tests.
+1. **`color` only.** The matrices, the Oklab compositions and `luminance()`, with their tests. **Landed 2026-08-24.**
    **No behaviour change and no golden moves** — it ships provable value on its own and de-risks the
    arithmetic before anything depends on it.
 2. **The switch.** Decode flag, output transform, the eight stages, the chart authoring, regenerated
