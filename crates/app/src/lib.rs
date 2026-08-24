@@ -14,6 +14,7 @@ pub mod full_res;
 pub mod histogram;
 pub mod history;
 pub mod mask_tool;
+pub mod menu;
 pub mod presets;
 pub mod render_engine;
 pub mod safe_name;

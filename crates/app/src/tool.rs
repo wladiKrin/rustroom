@@ -8,7 +8,8 @@
 //! system. The rendering lives in the bin, in `develop/rail.rs`.
 
 /// A Develop tool. `Edit` is the default and shows the global adjustment sections.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+// ⚠ `Hash` because `Command::SelectTool(Tool)` is a key in the native menu's id map.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Tool {
     #[default]
     Edit,
