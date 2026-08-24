@@ -5,7 +5,7 @@ pub mod panel;
 pub mod rail;
 
 use crate::commands;
-use crate::{filmstrip, theme, RustroomApp};
+use crate::{filmstrip, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::menu::Command;
@@ -110,17 +110,10 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         {
             commands::execute(app, ctx, Command::ToggleBeforeAfter);
         }
-
-        // ⚠ The filename, right-aligned. The row that used to hold fourteen controls now
-        // carries the one piece of context worth always seeing.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(s) = &app.session {
-                if let Some(name) = s.path.file_name() {
-                    theme::caption(ui, &name.to_string_lossy());
-                }
-            }
-        });
     }
+    // ⚠ The filename is **not** drawn here. `shell` owns the row's right-aligned cluster, so
+    // that the status line and the filename cannot fight over the same remaining space — which
+    // is exactly what happened when this function right-aligned it itself.
 }
 
 /// A toolbar icon button with a tooltip. Returns whether it was clicked.

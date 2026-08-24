@@ -118,45 +118,36 @@ impl eframe::App for RustroomApp {
                 }
             }
             ui.horizontal(|ui| {
-                // ⚠ Open file / Open folder are File-menu items now. They were the last
-                // duplicated commands in this row: everything here is either a mode switch or
-                // a Library-only filter.
-                ui.selectable_value(&mut self.view, AppView::Library, "Library");
-                ui.selectable_value(&mut self.view, AppView::Develop, "Develop");
-                ui.separator();
-                // Format chips, only when there is a choice to make: a lone toggle can only
-                // ever blank the grid, which is a footgun with no upside.
-                let formats = self
-                    .library
-                    .as_ref()
-                    .map(|lib| format_filter::formats_present(&lib.entries))
-                    .unwrap_or_default();
-                if formats.len() >= 2 {
-                    if let Some(lib) = &mut self.library {
-                        for (ext, count) in &formats {
-                            let mut shown = !lib.filter.is_hidden(ext);
-                            let label = format!("{} ({count})", ext.to_uppercase());
-                            if ui.toggle_value(&mut shown, label).changed() {
-                                lib.filter.toggle(ext);
-                                lib.refilter();
-                            }
-                        }
-                        ui.separator();
-                    }
-                }
+                view_switch(ui, &mut self.view);
                 if self.view == AppView::Develop && self.session.is_some() {
+                    ui.separator();
                     let decoding = self.pending.is_some();
                     ui.add_enabled_ui(!decoding, |ui| develop::toolbar(self, ui, &ctx));
                 }
-                if !self.export_progress.is_empty() {
-                    ui.separator();
-                    ui.label(&self.export_progress);
-                    if ui.button("Cancel").clicked() {
-                        self.cancel_export();
+                // ⚠ One right-aligned cluster for everything that belongs at the far end, laid
+                // out **rightmost first**. Previously the develop toolbar right-aligned the
+                // filename itself and then the status label was added after it — which meant
+                // the status was pushed into a row that had no space left.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    match self.view {
+                        AppView::Library => format_bullets(self, ui),
+                        AppView::Develop => {
+                            if let Some(s) = &self.session {
+                                if let Some(name) = s.path.file_name() {
+                                    crate::theme::caption(ui, &name.to_string_lossy());
+                                }
+                            }
+                        }
                     }
-                } else if !self.status.is_empty() {
-                    ui.label(&self.status);
-                }
+                    if !self.export_progress.is_empty() {
+                        if ui.button("Cancel").clicked() {
+                            self.cancel_export();
+                        }
+                        ui.label(&self.export_progress);
+                    } else if !self.status.is_empty() {
+                        ui.label(&self.status);
+                    }
+                });
             });
         });
 
@@ -245,6 +236,65 @@ fn egui_key(c: char) -> Option<egui::Key> {
         '\\' => egui::Key::Backslash,
         _ => return None,
     })
+}
+
+/// The Library / Develop switch, as one segmented control.
+///
+/// ⚠ Zero spacing between the two halves is the whole of the effect: as separate buttons they
+/// read as two unrelated actions, and abutted they read as one control with two states — which
+/// is what a module switch is. The padded labels give it the proportions of a segment rather
+/// than of a word.
+fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.selectable_value(view, AppView::Library, "  Library  ");
+        ui.selectable_value(view, AppView::Develop, "  Develop  ");
+    });
+}
+
+/// The Library's format filter, as a single choice: All, or one format.
+///
+/// ⚠ **Library only.** The filter decides what the grid and the filmstrip contain, which is a
+/// browsing decision — it has no meaning while a single photo is open, and it sat in the
+/// Develop toolbar for no better reason than living in a shared row.
+///
+/// ⚠ Shown only at two or more formats, as the chips were: a lone control here could only ever
+/// blank the grid, which is a footgun with no upside.
+///
+/// ⚠ Radios rather than the previous per-format toggles, so the selection is legible at a
+/// glance. The cost, stated: two of three formats can no longer be shown together — "All" or
+/// one. The underlying hidden-set still supports it, so restoring that is a UI change only.
+fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let formats = app
+        .library
+        .as_ref()
+        .map(|lib| format_filter::formats_present(&lib.entries))
+        .unwrap_or_default();
+    if formats.len() < 2 {
+        return;
+    }
+    let present: Vec<String> = formats.iter().map(|(e, _)| e.clone()).collect();
+    let Some(lib) = &mut app.library else { return };
+    // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
+    // is what puts All on the left of the group, where a reader starts.
+    let mut pick: Option<Option<String>> = None;
+    for (ext, count) in formats.iter().rev() {
+        let selected = lib.filter.only_shown(&present) == Some(ext.as_str());
+        let label = format!("{} ({count})", ext.to_uppercase());
+        if ui.radio(selected, label).clicked() {
+            pick = Some(Some(ext.clone()));
+        }
+    }
+    if ui
+        .radio(lib.filter.only_shown(&present).is_none(), "All")
+        .clicked()
+    {
+        pick = Some(None);
+    }
+    if let Some(choice) = pick {
+        lib.filter.show_only(choice.as_deref(), &present);
+        lib.refilter();
+    }
 }
 
 #[cfg(test)]
