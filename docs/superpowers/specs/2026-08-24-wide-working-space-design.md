@@ -29,48 +29,49 @@ Chosen over linear Rec.2020 and linear ACEScg for one practical reason and one b
 ⚠ ProPhoto's usual objection — banding in 16-bit — **does not apply here**: the pipeline is `f32`
 end to end, from decode to output transform.
 
-## ⚠⚠ The finding that shapes everything: ProPhoto luma is useless
+## ⚠⚠ CORRECTED 2026-08-24: the "ProPhoto luma collapses blue" finding was wrong
 
-Computing the ROMM→XYZ matrix from ProPhoto's own primaries gives a luminance row of:
+**An earlier version of this spec claimed ProPhoto's luminance row makes blue vanish, and specified
+Oklab L to work around it. That was a mistake, and it is recorded here rather than quietly deleted
+because the reasoning error is instructive.**
 
-```
-ProPhoto:  R 0.2880   G 0.7119   B 0.0001
-sRGB:      R 0.2126   G 0.7152   B 0.0722     (the familiar Rec.709 weights)
-```
+The observation was real: ProPhoto's ROMM→XYZ luminance row is `R 0.2880, G 0.7119, B 0.0001`
+against sRGB's `0.2126 / 0.7152 / 0.0722`. The inference from it was not.
 
-**Blue contributes essentially nothing.** That is not an arithmetic slip — ProPhoto's blue primary
-sits at y = 0.0001 on the chromaticity diagram, almost exactly where luminance is zero.
+**Luminance is a physical quantity.** Taking a colour into ProPhoto and measuring Y with ProPhoto's
+row returns what it always was:
 
-Six stages take a luma and act on it, and using the working space's own coefficients — the
-mathematically correct-sounding move — breaks all of them:
+| colour (sRGB) | Y via Rec.709 | Y via ProPhoto row |
+|---|---|---|
+| blue `[0,0,1]` | 0.0722 | 0.0606 |
+| red `[1,0,0]` | 0.2126 | 0.2225 |
+| green `[0,1,0]` | 0.7152 | 0.7169 |
+| sky `[.35,.55,.9]` | 0.5327 | 0.5267 |
 
-- **Sharpening** would stop sharpening blue detail entirely. A blue sky gradient, an iris, water:
-  none of that detail is in the luma at all.
-- **Saturation and vibrance** rotate colour around luma, so blues would swing differently from
-  everything else in the frame.
-- **Dehaze** estimates airlight from luminance, and haze is blue.
+The residual differences are chromatic adaptation, not a change of meaning.
 
-### So lightness becomes Oklab L
+**The `0.0001` applies to ProPhoto's own blue *primary*** — a far more saturated blue than sRGB's,
+which genuinely does carry almost no luminance. **Generalising from the primary to all blues was the
+error**, and it was never checked against a real colour before being written down.
 
-`color::lightness()` returns Oklab **L**, and every stage that wanted a luma uses it.
+### What follows: luma stays linear
 
-Oklab is defined from XYZ, so L is **working-space independent** — the same value whether the pixel
-is expressed in sRGB, ProPhoto or Rec.2020 — and it does not collapse blue. The crate already has
-Oklab, and four stages already use it, so this turns "eight primary-dependent stages" into one
-conversion done once.
+`color::luminance()` returns ProPhoto's Y. Every stage that wanted a luma uses it, and:
 
-Rejected alternatives, with the reason each fails:
+- **The five constants tuned against linear luma carry over unchanged** — `local_contrast`'s
+  `MID_GRAY = 0.18`, `sharpening`'s `LUMA_EPS` and `GAIN_MAX` and `HALO_KNEE`, `dehaze`'s airlight
+  percentile. No re-derivation, and no re-tuning against a photograph.
+- **Sharpening, clarity and dehaze keep their character.** A cube-root perceptual lightness would
+  have changed how they feel, not merely their numbers.
+- The six duplicated copies of the Rec.709 triple still collapse into **one** definition, which was
+  the other half of the original motivation and remains worth doing.
 
-- **Rec.709 luma computed after converting to sRGB primaries.** Preserves today's behaviour exactly
-  and barely moves the goldens — but it measures brightness in a space we are not editing in, and
-  out-of-gamut colours go negative on the way.
-- **ProPhoto's own luma.** Internally consistent and produces the blue-detail failure above.
+⚠ `luminance_matches_rec709` in `color` is the guard: it checks the value against the Rec.709 result
+for real colours, which is exactly the check whose absence let the wrong finding stand.
 
-⚠ **The cost, stated plainly: Oklab L is a cube-root perceptual lightness, not linear luminance.**
-Sharpening, clarity and dehaze change in *character*, not merely in magnitude. This has to be judged
-by eye on a real photograph; tolerance alone cannot tell a better result from a worse one. It also
-invalidates five tuned constants — see the section below, which is the part of this change most
-likely to ship broken and unnoticed.
+⚠ **Oklab is still needed**, and `prophoto_to_oklab` / `oklab_to_prophoto` from plan 1 are correct
+and unaffected — `hsl`, `noise_reduction`, `sharpening` and `local_contrast` use Oklab for chroma
+work, which is a separate matter from luma.
 
 ## What `color` gains
 
@@ -81,7 +82,7 @@ likely to ship broken and unnoticed.
 | XYZ → Oklab | Ottosson's LMS step, factored out of the existing sRGB path. |
 | `prophoto_to_oklab` / `oklab_to_prophoto` | The compositions the stages call. |
 | `prophoto_to_srgb` | For the output transform. |
-| `lightness()` | Oklab L. **One function**, replacing the Rec.709 triple currently duplicated in six files. |
+| `luminance()` + `PROPHOTO_LUMA` | ProPhoto's Y row. **One definition**, replacing the Rec.709 triple currently duplicated in six files. |
 
 ⚠ **`linear_srgb_to_oklab` stays.** The golden charts and any sRGB-sourced image still need it. It
 gains a sibling; it is not replaced.
@@ -93,39 +94,27 @@ change makes acute: six copies of a constant that is now wrong is six chances to
 
 | stage | what changes |
 |---|---|
-| `white_balance` | `LUMA` const → `lightness()` |
-| `tone_regions` | Rec.709 luma → `lightness()` |
-| `saturation` | `LUMA_R`/luma → `lightness()` |
-| `dehaze` | luma → `lightness()`; airlight estimation now perceptual |
-| `sharpening` | luma → `lightness()`; Oklab call → ProPhoto variant |
-| `local_contrast` | luma → `lightness()`; Oklab call → ProPhoto variant |
+| `white_balance` | local `LUMA` const → `color::luminance()` |
+| `tone_regions` | local `LUMA` const → `color::luminance()` |
+| `saturation` | `LUMA_R`/luma → `color::luminance()` |
+| `dehaze` | local `luma` fn → `color::luminance()`; airlight statistic unchanged in kind |
+| `sharpening` | local `luma` fn → `color::luminance()`; Oklab call → ProPhoto variant |
+| `local_contrast` | local `luma` fn → `color::luminance()`; Oklab call → ProPhoto variant |
 | `hsl` | Oklab call → ProPhoto variant |
 | `noise_reduction` | Oklab call → ProPhoto variant |
 
 Untouched, because they are primary-independent: `exposure` and `vignette` (scalar multiplies),
 `geometry` (resampling), `mask` (blending), `tone_curve` (a per-channel LUT).
 
-## ⚠⚠ Five tuned constants assume *linear* luminance and must be re-derived
+## The tuned constants are unaffected
 
-This is the part most easily missed, because nothing about it fails to compile. Several stages
-carry constants chosen against linear luma, and Oklab L is a cube root — so the same number means
-something different.
+⚠ **Recorded because an earlier draft said the opposite.** `local_contrast`'s `MID_GRAY = 0.18`,
+`sharpening`'s `LUMA_EPS`, `GAIN_MAX` and `HALO_KNEE`, and `dehaze`'s airlight percentile are all
+expressed against **linear luminance** — and `luminance()` is linear luminance. They carry over
+with no change and no re-tuning.
 
-| constant | where | why it breaks |
-|---|---|---|
-| `0.18` mid-grey | `local_contrast`'s midtone weight `t = l / (l + 0.18)` | **The sharpest case.** 0.18 is mid-grey in *linear* light; in Oklab L mid-grey is ≈ **0.565**. Left alone, the weight peaks at roughly a quarter-stop above black — Clarity's midtone protection would apply to shadows instead of midtones, which is close to the opposite of its purpose. |
-| `LUMA_EPS = 1e-3` | `sharpening` | A near-black guard against dividing by ~0. Cube root lifts small values hard: linear 1e-3 is L ≈ 0.1, so the guard would fire across a huge swath of the shadows rather than at the very bottom. |
-| `GAIN_MAX = 4.0` | `sharpening` | Bounds the halo in near-black regions, expressed as a ratio of linear luma. The ratio means something different against L. |
-| `HALO_KNEE = 0.05` | `sharpening` | A local-contrast magnitude in luma units. |
-| `A_MIN` / airlight percentile | `dehaze` | The dark-channel prior and its airlight are gathered on a brightness statistic; the distribution's shape changes under a cube root. |
-
-⚠ **These are re-derived, not carried over.** Each is a number to be recomputed against L and then
-checked on a real photograph — the same way the vignette's amount model took three revisions before
-it felt right, and for the same reason: a constant like this cannot be settled from the spec.
-
-⚠ **`local_contrast`'s `0.18` is the one to get right first.** It is the only one whose wrong value
-produces a plausible-looking image rather than an obviously broken one, so it is the one that could
-ship unnoticed.
+That is a direct consequence of the correction above: it was only the cube-root perceptual lightness
+that would have invalidated them.
 
 ## ⚠⚠ The goldens, and how the charts are built
 
@@ -152,13 +141,8 @@ why the chart change is part of this spec rather than an incidental tidy-up.
 - **Known values**: ProPhoto→XYZ checked against the published ROMM matrix; D50→D65 against a
   published Bradford matrix. ⚠ Against *published references*, not against a second derivation of our
   own — re-deriving in the test proves only that the same mistake was made twice.
-- **`lightness()` does not collapse blue**: pure blue must have clearly non-zero L. This is the
-  regression guard for the whole finding above, and it fails loudly if anyone "simplifies"
-  `lightness` back to working-space luma.
-- **The midtone weight peaks at mid-grey**: `local_contrast`'s `t` must reach its maximum at a
-  mid-grey pixel, not in the shadows. That is the test which catches the `0.18` → `0.565`
-  re-derivation being forgotten, and it is the one constant whose wrong value still looks
-  plausible.
+- **`luminance()` agrees with Rec.709 for real colours** — the guard whose absence let the wrong
+  finding stand, and the one that keeps anyone from "fixing" the weights back to sRGB's.
 - **The `neutral` golden stays within `TOL`** — the round-trip property, as above.
 - **Judged on a real X-T4 `.RAF`**: a saturated subject rendered before and after, checked for the
   gamut win actually appearing, and sharpening/clarity/dehaze checked for character change.
