@@ -69,4 +69,20 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         }
     });
     ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Straighten");
+
+    ui.separator();
+    // ⚠ Scoped to the Geometry group, the same rule the Edit tool's reset follows: under an
+    // exclusive panel each tool resets its own domain and nothing else. Targeted by the named
+    // `GEOMETRY_GROUP` rather than a literal index.
+    if ui
+        .button("Reset crop")
+        .on_hover_text("Resets the crop, the straighten angle and any rotation or flip. Leaves the adjustments and any masks alone.")
+        .clicked()
+    {
+        s.edits.merge_from(
+            &edit_model::Edits::default(),
+            edit_model::EditGroups::only(edit_model::GEOMETRY_GROUP),
+        );
+        ed.discrete();
+    }
 }

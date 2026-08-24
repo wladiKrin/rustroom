@@ -149,4 +149,26 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
          outer lines mark where the effect starts and reaches full \
          strength; a radial's ellipse marks where it falls to nothing.",
     );
+
+    ui.separator();
+    // ⚠ Scoped to the Masks group, the same rule the Edit and Crop tools follow. Disabled when
+    // there is nothing to remove, so the button never looks like it did nothing.
+    if ui
+        .add_enabled(
+            !s.edits.masks.is_empty(),
+            egui::Button::new("Remove all masks"),
+        )
+        .on_hover_text("Deletes every mask. Leaves the adjustments and the crop alone.")
+        .clicked()
+    {
+        s.edits.merge_from(
+            &edit_model::Edits::default(),
+            edit_model::EditGroups::only(edit_model::MASKS_GROUP),
+        );
+        // ⚠ Both must be cleared, for the reason `selection_after_delete` exists: the canvas
+        // overlay returns early on a stale selection, which would leave a dead handle set.
+        s.selected_mask = None;
+        s.active_mask_handle = None;
+        ed.discrete();
+    }
 }

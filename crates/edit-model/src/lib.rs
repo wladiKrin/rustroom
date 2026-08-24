@@ -360,6 +360,16 @@ pub const EDIT_GROUP_NAMES: [&str; 7] = [
     "Masks",
 ];
 
+/// The `Geometry` group's index into [`EDIT_GROUP_NAMES`].
+///
+/// ⚠ Named rather than written as `5` at call sites: the Crop tool's own reset targets exactly
+/// this group, and a magic index would silently reset the wrong one if the table ever changed
+/// order. `the_named_group_indices_match_the_table` is the guard.
+pub const GEOMETRY_GROUP: usize = 5;
+
+/// The `Masks` group's index into [`EDIT_GROUP_NAMES`]. See [`GEOMETRY_GROUP`].
+pub const MASKS_GROUP: usize = 6;
+
 /// Which groups of settings a paste or a preset carries.
 ///
 /// [`Default`] is everything **except** geometry: a crop framed for one composition reframes
@@ -1122,6 +1132,16 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"exposure": 1.5}"#).unwrap();
         assert_eq!(e.exposure, 1.5);
         assert_eq!(e.contrast, 0.0);
+    }
+
+    #[test]
+    fn the_named_group_indices_match_the_table() {
+        // ⚠ A tripwire, not a discovery. The two constants exist so a per-tool reset does not
+        // write a magic `5` or `6`; this is what stops them going stale if the table is
+        // reordered, which nothing else would catch — a wrong index still compiles and still
+        // resets *something*.
+        assert_eq!(EDIT_GROUP_NAMES[GEOMETRY_GROUP], "Geometry");
+        assert_eq!(EDIT_GROUP_NAMES[MASKS_GROUP], "Masks");
     }
 
     #[test]
