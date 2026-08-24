@@ -26,6 +26,7 @@ fn main() {
                 }
             },
             threads,
+            color::OutputSpace::Srgb,
             || {},
         );
         let mut got = 0;

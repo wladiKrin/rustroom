@@ -38,6 +38,20 @@ fn load_thumbnail(path: &Path) -> Option<Thumbnail> {
     }
 }
 
+/// Convert a thumbnail's pixels into the display's primaries, leaving alpha alone.
+///
+/// ⚠ 8-bit → 8-bit here, unlike the canvas, which converts in float before quantizing. A
+/// thumbnail is a camera JPEG with no float behind it, so there is no precision to preserve.
+fn convert_thumb(thumb: &mut Thumbnail, space: color::OutputSpace) {
+    if space == color::OutputSpace::Srgb {
+        return;
+    }
+    for px in thumb.rgba.as_chunks_mut::<4>().0 {
+        let out = space.convert_srgb8([px[0], px[1], px[2]]);
+        px[..3].copy_from_slice(&out);
+    }
+}
+
 /// Owns the worker threads that load a fixed list of paths.
 pub struct ThumbLoader {
     rx: Receiver<ThumbResult>,
@@ -46,8 +60,18 @@ pub struct ThumbLoader {
 
 impl ThumbLoader {
     /// `on_progress` is called after each thumbnail (e.g. `ctx.request_repaint`).
-    pub fn new(paths: Vec<PathBuf>, on_progress: impl Fn() + Send + Sync + 'static) -> Self {
-        Self::with_loader(paths, load_thumbnail, worker_count(), on_progress)
+    pub fn new(
+        paths: Vec<PathBuf>,
+        display_space: color::OutputSpace,
+        on_progress: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_loader(
+            paths,
+            load_thumbnail,
+            worker_count(),
+            display_space,
+            on_progress,
+        )
     }
 
     /// The injectable form: `load` and the thread count are parameters so the whole loop is
@@ -60,6 +84,7 @@ impl ThumbLoader {
         paths: Vec<PathBuf>,
         load: fn(&Path) -> Option<Thumbnail>,
         threads: usize,
+        display_space: color::OutputSpace,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let (tx, rx) = channel::<ThumbResult>();
@@ -77,7 +102,14 @@ impl ThumbLoader {
                 thread::spawn(move || loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(path) = paths.get(index) else { return };
-                    let thumb = load(path);
+                    let mut thumb = load(path);
+                    // ⚠ Converted here rather than at upload, so a thumbnail is stored the way
+                    // it will be shown. Not optional polish: the filmstrip sits directly beside
+                    // the canvas showing the same photo, so correcting only the canvas would
+                    // leave a visibly more saturated strip next to a corrected image.
+                    if let Some(t) = thumb.as_mut() {
+                        convert_thumb(t, display_space);
+                    }
                     // An error means the UI dropped the loader — stop rather than finish a
                     // folder nobody is looking at any more.
                     if tx.send(ThumbResult { index, thumb }).is_err() {
@@ -133,7 +165,7 @@ mod tests {
     #[test]
     fn streams_results_keyed_by_index_even_on_failure() {
         // Non-existent files fail extraction -> thumb is None, but a result still streams.
-        let loader = ThumbLoader::new(paths(2), || {});
+        let loader = ThumbLoader::new(paths(2), color::OutputSpace::Srgb, || {});
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].index, 0);
@@ -146,7 +178,8 @@ mod tests {
         // The shared cursor must hand out each index to exactly one worker — an off-by-one
         // in `fetch_add` would either duplicate or skip, and both would be invisible in the
         // UI until a thumbnail was silently missing.
-        let loader = ThumbLoader::with_loader(paths(50), |_| None, 4, || {});
+        let loader =
+            ThumbLoader::with_loader(paths(50), |_| None, 4, color::OutputSpace::Srgb, || {});
         let results = collect(&loader, 50);
         assert_eq!(results.len(), 50, "wrong number of results");
         let indices: Vec<usize> = results.iter().map(|r| r.index).collect();
@@ -190,7 +223,8 @@ mod tests {
         }
         // The thread count is injected rather than taken from `worker_count()`, so this is
         // deterministic on any machine, including a single-core CI box.
-        let loader = ThumbLoader::with_loader(paths(PAR), gated, PAR, || {});
+        let loader =
+            ThumbLoader::with_loader(paths(PAR), gated, PAR, color::OutputSpace::Srgb, || {});
         assert_eq!(collect(&loader, PAR).len(), PAR);
         assert_eq!(
             PEAK.load(Ordering::SeqCst),
@@ -208,7 +242,8 @@ mod tests {
             thread::sleep(std::time::Duration::from_millis(10));
             None
         }
-        let loader = ThumbLoader::with_loader(paths(500), counted, 2, || {});
+        let loader =
+            ThumbLoader::with_loader(paths(500), counted, 2, color::OutputSpace::Srgb, || {});
         thread::sleep(std::time::Duration::from_millis(30));
         drop(loader);
         let at_drop = STARTED.load(Ordering::SeqCst);
@@ -223,10 +258,12 @@ mod tests {
 
     #[test]
     fn more_threads_than_files_is_harmless() {
-        let loader = ThumbLoader::with_loader(paths(2), |_| None, 32, || {});
+        let loader =
+            ThumbLoader::with_loader(paths(2), |_| None, 32, color::OutputSpace::Srgb, || {});
         assert_eq!(collect(&loader, 2).len(), 2);
         // And an empty folder must not spawn a thread that indexes past the end.
-        let empty = ThumbLoader::with_loader(Vec::new(), |_| None, 4, || {});
+        let empty =
+            ThumbLoader::with_loader(Vec::new(), |_| None, 4, color::OutputSpace::Srgb, || {});
         assert!(collect(&empty, 0).is_empty());
     }
 
@@ -241,5 +278,37 @@ mod tests {
                 "left no core for the render pipeline"
             );
         }
+    }
+
+    #[test]
+    fn a_thumbnail_is_converted_into_the_display_space() {
+        // ⚠ The direction matters, not merely that it changed: an inverted transform would also
+        // change the pixels, and would oversaturate exactly as the uncorrected preview does.
+        let mut t = Thumbnail {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 255],
+        };
+        convert_thumb(&mut t, color::OutputSpace::DisplayP3);
+        assert!(t.rgba[0] < 255, "P3 red should be below 255: {}", t.rgba[0]);
+        assert!(
+            t.rgba[1] > 0 && t.rgba[2] > 0,
+            "sRGB red is less saturated than P3 red, so it needs some green and blue: {:?}",
+            &t.rgba[..3]
+        );
+        assert_eq!(t.rgba[3], 255, "alpha must be left alone");
+    }
+
+    #[test]
+    fn srgb_leaves_a_thumbnail_untouched() {
+        // The default must cost nothing — including not walking the buffer at all.
+        let original = vec![255, 0, 0, 255, 12, 200, 90, 128];
+        let mut t = Thumbnail {
+            width: 2,
+            height: 1,
+            rgba: original.clone(),
+        };
+        convert_thumb(&mut t, color::OutputSpace::Srgb);
+        assert_eq!(t.rgba, original);
     }
 }

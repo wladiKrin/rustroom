@@ -348,6 +348,12 @@ struct Session {
     /// currently on screen rather than snapping back to fit. Read through
     /// [`Session::render_max_dim`], never directly.
     render_rung: usize,
+    /// The display's primaries, copied from `Settings` when the session opens.
+    ///
+    /// ⚠ Held here rather than reached through the app because `Session::request` — which every
+    /// render goes through — has no access to `RustroomApp`. `apply_display_space` writes it on
+    /// the open session so a change takes effect without reopening the photo.
+    display_space: color::OutputSpace,
 }
 
 impl Session {
@@ -385,7 +391,7 @@ impl Session {
             FrameSpec {
                 max_dim,
                 region,
-                display_space: color::OutputSpace::Srgb,
+                display_space: self.display_space,
             },
         );
     }
@@ -1159,6 +1165,7 @@ impl RustroomApp {
         let buffer_is_full_res = !catalog::is_raw(&path);
 
         self.session = Some(Session {
+            display_space: self.settings.display_space,
             path,
             engine,
             edits,
@@ -1338,7 +1345,8 @@ impl RustroomApp {
                 let n = entries.len();
                 let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
                 let ctx2 = ctx.clone();
-                let loader = ThumbLoader::new(paths, move || ctx2.request_repaint());
+                let space = self.settings.display_space;
+                let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
                 self.library = Some(Library {
                     entries,
                     thumbs: (0..n).map(|_| None).collect(),
@@ -1414,6 +1422,33 @@ impl RustroomApp {
         self.settings.accent = accent;
         self.save_settings();
         theme::apply(ctx, &self.settings);
+    }
+
+    /// Adopt a new display space: persist it, reload the thumbnails so the filmstrip agrees
+    /// with the canvas, and re-render the open photo so the change is visible immediately.
+    ///
+    /// ⚠ Thumbnails are converted **at load**, so the loader has to be rebuilt and the cached
+    /// thumbnails dropped. They reload in parallel and cost about 41 ms each, which is why this
+    /// is affordable to do eagerly rather than deferring to the next folder open.
+    fn apply_display_space(&mut self, space: color::OutputSpace, ctx: &egui::Context) {
+        self.settings.display_space = space;
+        self.save_settings();
+        if let Some(lib) = self.library.as_mut() {
+            let paths: Vec<_> = lib.entries.iter().map(|e| e.path.clone()).collect();
+            let n = paths.len();
+            let ctx2 = ctx.clone();
+            lib.loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
+            lib.thumbs = (0..n).map(|_| None).collect();
+        }
+        // The canvas is a plain re-render: nothing is decoded. `Session::request` reads the
+        // new value on its way through, so it has to be written on the session first.
+        let tool = self.tool;
+        if let Some(s) = self.session.as_mut() {
+            s.display_space = space;
+            let edits = s.view_edits(tool);
+            let (max_dim, region) = (s.render_max_dim(), s.requested_region);
+            s.request(edits, max_dim, region);
+        }
     }
 
     /// Adopt a new 1:1 view demosaic tier: persist it, rebuild the worker, and re-decode the

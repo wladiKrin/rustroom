@@ -12,6 +12,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
     let mut pan_drag = app.settings.pan_drag;
+    let mut display_space = app.settings.display_space;
     let mut close = false;
 
     let dismissed = dialog(ctx, "settings", "Settings", |ui| {
@@ -42,6 +43,26 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui,
             "Dark is the default because a light surround changes how you judge exposure. \
              The accent marks active controls; Neutral turns it off.",
+        );
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            ui.label("Display");
+            egui::ComboBox::from_id_salt("display_space_pick")
+                .selected_text(display_space.label())
+                .show_ui(ui, |ui| {
+                    // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, so offering it is a
+                    // pure footgun.
+                    for s in color::OutputSpace::DISPLAYS {
+                        ui.selectable_value(&mut display_space, s, s.label());
+                    }
+                });
+        });
+        theme::hint(
+            ui,
+            "The primaries of your monitor. Most are sRGB; recent Apple displays and many \
+             laptops are Display P3. Affects only what you see — never an export, and never \
+             the histogram.",
         );
         ui.separator();
 
@@ -106,6 +127,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     if tier != app.settings.view_demosaic {
         app.apply_view_demosaic(tier, ctx);
+    }
+    // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
+    // rebuilds the thumbnail loader and re-renders, so an unguarded call would reload the whole
+    // folder's thumbnails sixty times a second.
+    if display_space != app.settings.display_space {
+        app.apply_display_space(display_space, ctx);
     }
     // ⚠ A change guard like its neighbours, though for a weaker reason: this has no side
     // effect beyond the write, because the canvas reads `settings.pan_drag` afresh every

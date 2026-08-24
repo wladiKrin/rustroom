@@ -143,6 +143,15 @@ pub struct Settings {
     /// Defaults to `Fast`, which is what `DecodeOptions::linear_scene()` already hardcodes, so
     /// nobody who ignores this setting sees any change.
     pub view_demosaic: Demosaic,
+    /// The primaries of the display Rustroom is being viewed on.
+    ///
+    /// ⚠ Applied to the preview and to thumbnails only — **never to an export**, and never
+    /// inside the pipeline. The transform lives in `render_engine::pack`, after the histogram
+    /// is derived, so the histogram stays image-referred rather than describing your monitor.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field already falls back to this struct's `Default`.
+    pub display_space: color::OutputSpace,
     /// Which theme to render in. Dark by default: a light surround measurably changes how you
     /// judge exposure, so a photo editor defaults to dark and offers the rest.
     pub theme: ThemeChoice,
@@ -159,6 +168,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
+            display_space: color::OutputSpace::default(),
             theme: ThemeChoice::default(),
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
@@ -379,6 +389,7 @@ mod tests {
             // exhaustive is what makes a new `Settings` field a compile error here, forcing
             // a decision about whether the round trip should carry it.
             view_demosaic: Demosaic::Better,
+            display_space: color::OutputSpace::DisplayP3,
             theme: ThemeChoice::System,
             accent: Accent::Teal,
             // A non-default value on purpose: it proves the field is actually persisted
@@ -624,5 +635,18 @@ mod tests {
             !s.confirm_preset_delete,
             "an old field must survive — if this flipped to true, the whole file failed to parse"
         );
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_display_space_still_loads() {
+        // ⚠ `SettingsStore::load()` is infallible, so a field that fails to parse silently
+        // reverts *every* setting. The container-level `#[serde(default)]` is what prevents
+        // that — so what this test actually discriminates is the **value**: the default must be
+        // sRGB, because a wide space arriving by default would change what every existing user
+        // sees without them asking for it.
+        let json = r#"{"confirm_preset_delete":true}"#;
+        let s: Settings = serde_json::from_str(json).expect("older settings should load");
+        assert_eq!(s.display_space, color::OutputSpace::Srgb);
+        assert!(s.confirm_preset_delete);
     }
 }
