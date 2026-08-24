@@ -49,6 +49,24 @@ impl Section {
     pub fn name(self) -> &'static str {
         edit_model::EDIT_GROUP_NAMES[self.0]
     }
+
+    /// This section's index into [`edit_model::EDIT_GROUP_NAMES`].
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// The edit groups this panel shows — exactly the five in [`SECTIONS`].
+///
+/// ⚠ **Derived from `SECTIONS`, never listed a second time.** It is what "Reset adjustments"
+/// resets, so deriving it makes the button provably reset what the panel shows and nothing
+/// else. A hand-written second list would drift the moment a section moved.
+pub fn edit_groups() -> edit_model::EditGroups {
+    let mut g = edit_model::EditGroups::NONE;
+    for s in SECTIONS {
+        *g.get_mut(s.index()) = true;
+    }
+    g
 }
 
 /// The five adjustment sections, in the order the decisions are made in.
@@ -294,5 +312,45 @@ mod tests {
         );
         assert_eq!(click_segment(HslChannel::Luminance), HslChannel::Luminance);
         assert_eq!(click_segment(HslChannel::Hue), HslChannel::Hue);
+    }
+
+    #[test]
+    fn resetting_the_adjustments_leaves_geometry_and_masks_alone() {
+        // ⚠ The property that makes a *scoped* reset safe: under an exclusive panel, each tool
+        // owns its own domain, so the Edit tool's reset must not throw away a crop or a
+        // painted mask the user cannot even see from here.
+        let g = edit_groups();
+        for s in SECTIONS {
+            assert!(
+                g.get(s.index()),
+                "{} is shown but would not reset",
+                s.name()
+            );
+        }
+        let names = edit_model::EDIT_GROUP_NAMES;
+        let untouched: Vec<&str> = (0..names.len())
+            .filter(|i| !g.get(*i))
+            .map(|i| names[i])
+            .collect();
+        assert_eq!(untouched, vec!["Geometry", "Masks"]);
+    }
+
+    #[test]
+    fn a_scoped_reset_really_keeps_the_crop() {
+        // ⚠ Asserts through `merge_from` itself rather than re-deriving what it should do —
+        // the same reason `FrameMap` is tested against `GeometryStage` and not a re-derivation.
+        let mut e = edit_model::Edits {
+            exposure: 2.0,
+            ..Default::default()
+        };
+        e.geometry.crop.left = 0.25;
+        e.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush::default()),
+            adjustments: edit_model::LocalAdjustments::default(),
+        });
+        e.merge_from(&edit_model::Edits::default(), edit_groups());
+        assert_eq!(e.exposure, 0.0, "the adjustments should be reset");
+        assert_eq!(e.geometry.crop.left, 0.25, "the crop must survive");
+        assert_eq!(e.masks.len(), 1, "the masks must survive");
     }
 }

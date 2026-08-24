@@ -21,6 +21,12 @@ const GLYPH_SIZE: f32 = 22.0;
 /// navigation control, and the compact density exists for panels of sliders, not for this.
 const LABEL_SIZE: f32 = 13.0;
 
+/// Vertical padding above the glyph and below the label.
+const PAD: f32 = 6.0;
+
+/// The gap between glyph and label.
+const GAP: f32 = 2.0;
+
 /// Draw the rail.
 ///
 /// ⚠ Returns nothing on purpose. `body` detects a tool change by comparing against the
@@ -31,60 +37,66 @@ pub fn show(ui: &mut egui::Ui, tool: &mut Tool) {
         .resizable(false)
         .default_size(RAIL_WIDTH)
         .show(ui, |ui| {
-            ui.vertical_centered_justified(|ui| {
-                for t in Tool::ALL {
-                    let picked = *tool == t;
-                    let entry = egui::Button::selectable(picked, entry_text(ui, t, picked))
-                        // ⚠ Extend, not Wrap: "Presets" wrapping onto a second line was the
-                        // visible symptom. The rail is sized to fit instead.
-                        .wrap_mode(egui::TextWrapMode::Extend);
-                    if ui.add(entry).clicked() {
-                        *tool = t;
-                    }
+            for t in Tool::ALL {
+                if entry(ui, t, *tool == t).clicked() {
+                    *tool = t;
                 }
-            });
+            }
         });
 }
 
-/// The two-line label for one rail entry: the glyph above the name.
+/// One rail entry: the glyph centred over the label, in a full-width clickable frame.
 ///
-/// ⚠ **A `LayoutJob` with `halign: Center`, not a `"{glyph}\n{label}"` string.** A plain
-/// newline leaves the two rows left-aligned against each other, so a one-character glyph sits
-/// hard left of a seven-character word — which is exactly how the first version looked wrong.
-/// `halign` centres each row against the widest, putting the glyph over the middle of the name.
-///
-/// The surrounding `vertical_centered_justified` layout then centres the whole block in the
-/// rail, because `AtomLayout` takes its default alignment from `ui.layout()`.
-fn entry_text(ui: &egui::Ui, t: Tool, picked: bool) -> egui::WidgetText {
+/// ⚠ **Painted by hand rather than built as a `Button` with a two-line label**, and the two
+/// failed attempts are worth knowing. A `"{glyph}\n{label}"` string leaves the rows
+/// left-aligned against each other, so a one-character glyph sits hard left of a
+/// seven-character word. Fixing that with a `LayoutJob { halign: Center }` centres the *rows*
+/// but positions them about x = 0, so the galley's own rect starts negative and the whole
+/// block then sits left inside the button frame. Painting each line at the frame's centre with
+/// `Align2::CENTER_TOP` has neither problem and needs no assumptions about how egui aligns
+/// widget content.
+fn entry(ui: &mut egui::Ui, t: Tool, picked: bool) -> egui::Response {
+    let height = PAD * 2.0 + GLYPH_SIZE + GAP + LABEL_SIZE;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+
+    let visuals = ui.style().interact_selectable(&resp, picked);
+    let fill = if picked {
+        ui.visuals().selection.bg_fill
+    } else if resp.hovered() {
+        visuals.bg_fill
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if fill != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, visuals.corner_radius, fill);
+    }
+
     // Selected entries sit on the accent fill, where the ordinary body colour is low contrast.
     let color = if picked {
         ui.visuals().strong_text_color()
     } else {
         ui.visuals().text_color()
     };
-    let mut job = egui::text::LayoutJob {
-        halign: egui::Align::Center,
-        ..Default::default()
-    };
-    job.append(
-        &t.glyph().to_string(),
-        0.0,
-        egui::TextFormat {
-            font_id: egui::FontId::proportional(GLYPH_SIZE),
-            color,
-            ..Default::default()
-        },
+    let cx = rect.center().x;
+    let painter = ui.painter();
+    painter.text(
+        egui::pos2(cx, rect.top() + PAD),
+        egui::Align2::CENTER_TOP,
+        t.glyph(),
+        egui::FontId::proportional(GLYPH_SIZE),
+        color,
     );
-    job.append(
-        &format!("\n{}", t.label()),
-        0.0,
-        egui::TextFormat {
-            font_id: egui::FontId::proportional(LABEL_SIZE),
-            color,
-            ..Default::default()
-        },
+    painter.text(
+        egui::pos2(cx, rect.top() + PAD + GLYPH_SIZE + GAP),
+        egui::Align2::CENTER_TOP,
+        t.label(),
+        egui::FontId::proportional(LABEL_SIZE),
+        color,
     );
-    job.into()
+    resp
 }
 
 #[cfg(test)]
@@ -123,11 +135,10 @@ mod tests {
     /// reads zeros and passes vacuously, which is exactly how `a_left_drag_does_not_pan` was
     /// once inert.
     ///
-    /// ⚠ Re-declares the rail body rather than calling `show`, because the harness must
-    /// observe the click on a specific pass. It builds the entry through the **same
-    /// `entry_text`** production uses, so the two cannot drift in the part that matters — the
-    /// hit rect. If `show`'s widget changes, this must change with it or it stops describing
-    /// what ships.
+    /// ⚠ Re-declares the rail's *loop* rather than calling `show`, because the harness must
+    /// observe the click on a specific pass — but it calls the **same `entry`** production
+    /// does, so the widget under test is literally the shipped one. Only the panel wrapper
+    /// differs.
     fn click_rail(want: Tool) -> Tool {
         let ctx = egui::Context::default();
         let mut tool = Tool::Edit;
@@ -151,21 +162,16 @@ mod tests {
             }
             let _ = ctx.run_ui(input, |ui| {
                 egui::Panel::right("rail").show(ui, |ui| {
-                    ui.vertical_centered_justified(|ui| {
-                        for t in Tool::ALL {
-                            let picked = tool == t;
-                            let r = ui.add(
-                                egui::Button::selectable(picked, entry_text(ui, t, picked))
-                                    .wrap_mode(egui::TextWrapMode::Extend),
-                            );
-                            if t == want && pass == 0 {
-                                target = r.rect.center();
-                            }
-                            if r.clicked() {
-                                tool = t;
-                            }
+                    for t in Tool::ALL {
+                        let picked = tool == t;
+                        let r = entry(ui, t, picked);
+                        if t == want && pass == 0 {
+                            target = r.rect.center();
                         }
-                    });
+                        if r.clicked() {
+                            tool = t;
+                        }
+                    }
                 });
             });
         }

@@ -110,10 +110,22 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         Tool::Edit => {
                             adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
                             ui.separator();
-                            // ⚠ Lives under Edit because it resets the *global* edits. Under
-                            // Masks it would read as "reset this mask", which it is not.
-                            if ui.button("Reset all").clicked() {
-                                s.edits = Edits::default();
+                            // ⚠ **Scoped to the five sections above, not to everything.**
+                            // Under an exclusive panel each tool owns its own domain, so this
+                            // must not throw away a crop or a painted mask the user cannot
+                            // even see from here. The group set is *derived* from `SECTIONS`,
+                            // so it resets exactly what is on screen.
+                            //
+                            // ⚠ Consequence, accepted: geometry and masks have no reset of
+                            // their own yet. Crop is undone by the "Free" aspect preset and a
+                            // zero angle; a mask by deleting it.
+                            if ui
+                                .button("Reset adjustments")
+                                .on_hover_text("Resets White Balance, Tone, Color, Detail and Effects. Leaves the crop and any masks alone.")
+                                .clicked()
+                            {
+                                s.edits
+                                    .merge_from(&Edits::default(), adjustments::edit_groups());
                                 ed.discrete();
                             }
                         }

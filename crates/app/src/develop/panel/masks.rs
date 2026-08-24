@@ -69,13 +69,15 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
     let mut remove: Option<usize> = None;
     for i in 0..s.edits.masks.len() {
         ui.horizontal(|ui| {
+            // ⚠ The same "× then name" row the Presets tool uses. Two delete idioms in one
+            // app is how a design system loses the conventions it exists to hold.
+            if ui.button("×").on_hover_text("Delete").clicked() {
+                remove = Some(i);
+            }
             let picked = s.selected_mask == Some(i);
             let name = format!("{} {}", s.edits.masks[i].mask.label(), i + 1);
             if ui.selectable_label(picked, name).clicked() {
                 s.selected_mask = if picked { None } else { Some(i) };
-            }
-            if ui.button("Delete").clicked() {
-                remove = Some(i);
             }
         });
     }
