@@ -223,7 +223,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // decision about what the canvas does under it.
                     match tool {
                         Tool::Crop => {
-                            photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
+                            photo_edited |=
+                                draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
                         }
                         Tool::Masks => {
                             photo_edited |= draw_mask_overlay(
@@ -350,7 +351,13 @@ fn draw_crop_overlay(
     s: &mut Session,
     resp: &egui::Response,
     img_rect: egui::Rect,
+    crop_aspect: Option<f32>,
 ) -> bool {
+    // ⚠ Normalized here, from the *baseline* texture, because that is the same source the
+    // Crop panel uses to pick its presets. Two different aspect sources would disagree on any
+    // photo whose preview and baseline differ, and the crop would drift as you dragged.
+    let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
+    let norm_aspect = crop_aspect.map(|a| a / img_aspect);
     let g = s.edits.geometry.crop;
     let to_screen = |nx: f32, ny: f32| {
         egui::pos2(
@@ -392,7 +399,8 @@ fn draw_crop_overlay(
                 let d = resp.drag_delta();
                 let dx = d.x / img_rect.width();
                 let dy = d.y / img_rect.height();
-                s.edits.geometry.crop = crop_tool::apply_drag(s.edits.geometry.crop, h, dx, dy);
+                s.edits.geometry.crop =
+                    crop_tool::apply_drag(s.edits.geometry.crop, h, dx, dy, norm_aspect);
             }
         }
         if resp.drag_stopped() {

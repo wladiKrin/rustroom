@@ -10,7 +10,7 @@ use eframe::egui;
 use rustroom_app::crop_tool;
 
 /// Draw the geometry controls. The caller decides whether geometry mode is on.
-pub fn show(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
+pub fn show(ui: &mut egui::Ui, s: &mut Session, crop_aspect: &mut Option<f32>, ed: &mut Edited) {
     ui.label("Geometry");
     // Quarter turns and mirroring. ⚠ Each button moves the crop by the
     // *same* transform, or the crop lands on different content — see
@@ -57,14 +57,25 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         ("4:3", Some(4.0 / 3.0)),
         ("16:9", Some(16.0 / 9.0)),
     ];
+    // ⚠ `selectable_label`, not `button`: the lock is otherwise **invisible state**. Without a
+    // shown selection there is no way to tell a locked crop from a free one until you drag a
+    // handle and it refuses to move the way you expected.
     ui.horizontal(|ui| {
         for (label, pa) in presets {
-            if ui.button(label).clicked() {
-                s.edits.geometry.crop = match pa {
-                    Some(a) => crop_tool::snap_to_aspect(a / img_aspect),
-                    None => edit_model::CropRect::default(),
-                };
-                ed.discrete();
+            let active = match (pa, *crop_aspect) {
+                (None, None) => true,
+                (Some(a), Some(cur)) => (a - cur).abs() < 1e-4,
+                _ => false,
+            };
+            if ui.selectable_label(active, label).clicked() {
+                *crop_aspect = pa;
+                // ⚠ Only a *ratio* reshapes the crop. "Free" merely unlocks, leaving the crop
+                // where it is — it used to reset to the full frame, which made unlocking
+                // destructive and is now the job of "Reset crop" below.
+                if let Some(a) = pa {
+                    s.edits.geometry.crop = crop_tool::snap_to_aspect(a / img_aspect);
+                    ed.discrete();
+                }
             }
         }
     });

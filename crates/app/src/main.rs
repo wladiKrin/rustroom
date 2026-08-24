@@ -148,6 +148,15 @@ struct RustroomApp {
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
     tool: Tool,
+    /// The pixel aspect ratio the crop is locked to, or `None` for a free crop.
+    ///
+    /// ⚠ Stored as the **pixel** ratio (1.0, 1.5, …), not the normalized one. The normalized
+    /// aspect is `pixel / image_aspect` and so differs per photo; storing that would silently
+    /// change shape the moment you switched to a photo with different dimensions.
+    ///
+    /// ⚠ Tool state, not an edit: it must never reach the sidecar, a paste or a preset, for
+    /// the same reason `Session::selected_mask` does not.
+    crop_aspect: Option<f32>,
     /// This session's copied edits. A copy *also* writes a tagged payload to the system
     /// clipboard (see [`edit_clipboard`]), so pasting works between two running instances;
     /// this field is what the "Paste…" button uses, because egui can only hand us the
@@ -239,6 +248,7 @@ impl RustroomApp {
             show_mask_tint: true,
             hsl_channel: Default::default(),
             tool: Default::default(),
+            crop_aspect: None,
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),

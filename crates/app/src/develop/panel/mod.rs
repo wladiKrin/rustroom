@@ -129,7 +129,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 ed.discrete();
                             }
                         }
-                        Tool::Crop => geometry::show(ui, s, &mut ed),
+                        Tool::Crop => geometry::show(ui, s, &mut app.crop_aspect, &mut ed),
                         Tool::Masks => masks::show(
                             ui,
                             s,
