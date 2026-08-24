@@ -383,20 +383,23 @@ and in the initialiser near line 233:
             hsl_channel: Default::default(),
 ```
 
-- [ ] **Step 5: Verify it still builds**
+⚠⚠ **CORRECTED DURING EXECUTION — Task 3 cannot be committed on its own.** The original plan
+expected clippy to be clean here and predicted a commit. It is not: `ALL`, `label`, `value_mut`
+and the new `hsl_channel` field have **no production caller** until Task 4 builds the sections,
+so `-D warnings` rejects all four as dead code:
 
-```bash
-cargo clippy --all-targets --all-features -- -D warnings 2>&1 | tail -5
+```
+error: variants `Saturation` and `Luminance` are never constructed
+error: associated items `ALL`, `label`, and `value_mut` are never used
+error: field `hsl_channel` is never read
 ```
 
-Expected: clean. The field is unread so far, which is fine — it is a *private* struct field with an initialiser, not a `pub fn`.
+This is the **binary-crate dead-code trap**, whose fourth instance this is after `theme::button_row`,
+the CLI's `format_arg` and `ELLIPSE_SEGMENTS`. The plan half-accounted for it — it noted the *type*
+must land with its tests — but missed that the *methods and the field* need a production caller too.
 
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/app/src/develop/panel/adjustments.rs crates/app/src/develop/panel/mod.rs crates/app/src/main.rs
-git commit -m "feat(app): HslChannel, the selector's pure half"
-```
+**So: do not commit after Task 3. Continue straight into Task 4 and commit them together.** The rule
+that generalises: in a bin crate an item lands **with its first caller**, always.
 
 ---
 
@@ -634,9 +637,11 @@ Expected: clean; test count is the Task 1 baseline **+ 7** (2 from Task 2, 3 fro
 - [ ] **Step 9: Commit**
 
 ```bash
-git add crates/app/src/develop/panel/
+git add crates/app/src/develop/panel/ crates/app/src/main.rs
 git commit -m "feat(app): the panel's sections are the edit groups"
 ```
+
+⚠ This commit carries **Task 3 and Task 4 together**, for the reason recorded under Task 3.
 
 ---
 
