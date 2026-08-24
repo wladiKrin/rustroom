@@ -212,11 +212,14 @@ cargo test -p color white_maps_to_white 2>&1 | tail -8
 Expected: **zero compile errors first**, then FAIL — white maps to `[1.176, 0.976, 0.722]`, a
 strong warm cast on every neutral in every image.
 
-⚠ Two things about this sabotage are worth noticing. **`the_two_matrices_are_inverses` would still
-pass**, because an un-adapted pair is perfectly self-consistent — which is exactly why
-`white_maps_to_white` has to be a separate test. And a *partial* sabotage (leaving
-`SRGB_TO_PROPHOTO` adapted) would break the round trip instead, so replace only the one matrix as
-shown.
+⚠ **Both `white_maps_to_white` and `the_two_matrices_are_inverses` fail here**, because replacing
+only `PROPHOTO_TO_SRGB` leaves the pair non-inverse. That is fine — it proves the tests are live —
+but it does not isolate what `white_maps_to_white` is for.
+
+⚠ **To see why that test has to exist separately, replace *both* matrices** with their un-adapted
+forms. The round trip then passes — an un-adapted pair is perfectly self-consistent — and only
+`white_maps_to_white` fails. That is the case the test was written for: a colour pipeline that is
+internally consistent and uniformly wrong.
 
 Restore, then `touch crates/color/src/spaces.rs`.
 
