@@ -25,6 +25,12 @@ impl eframe::App for RustroomApp {
             std::process::exit(0);
         }
 
+        // ⚠ The status line is per view. "Full resolution ready" or "Decoding …" following the
+        // user into the Library is noise there — it describes work in a view they have left.
+        if self.view != self.last_view {
+            self.status.clear();
+            self.last_view = self.view;
+        }
         self.pump_decodes(&ctx);
         self.maybe_request_full_res(&ctx);
         self.pump_full_res(&ctx);
@@ -259,7 +265,8 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
 ///
 /// ⚠ **Multi-select, so there is no "All" entry** — showing everything is simply every box
 /// ticked, which is both the default and self-evident. An "All" radio alongside per-format
-/// radios would additionally make "RAF and JPG but not PNG" unreachable.
+/// radios would additionally make "RAF and JPG but not PNG" unreachable, which is a real
+/// combination on a mixed folder.
 fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let formats = app
         .library
@@ -269,23 +276,20 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     if formats.len() < 2 {
         return;
     }
-    let present: Vec<String> = formats.iter().map(|(e, _)| e.clone()).collect();
     let Some(lib) = &mut app.library else { return };
-    let shown_count = present.iter().filter(|e| !lib.filter.is_hidden(e)).count();
 
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
     // is what keeps the on-screen order the same as `formats_present` returns.
+    //
+    // ⚠ **Every box stays enabled, including the last ticked one.** Disabling it to prevent an
+    // empty grid greyed out whichever format was still shown — which reads, from the other
+    // side, as "the ones I did not click went dark". Unticking everything is recoverable in
+    // one click because the boxes are still there, so the guard cost more than it bought.
     let mut toggled: Option<String> = None;
     for (ext, count) in formats.iter().rev() {
         let mut shown = !lib.filter.is_hidden(ext);
-        // ⚠ The last visible format cannot be unticked. Every box clear means an empty grid
-        // with no hint as to why, and the way out is not obvious once nothing is on screen.
-        let last_one = shown && shown_count == 1;
         let label = format!("{} ({count})", ext.to_uppercase());
-        if ui
-            .add_enabled(!last_one, egui::Checkbox::new(&mut shown, label))
-            .changed()
-        {
+        if ui.checkbox(&mut shown, label).changed() {
             toggled = Some(ext.clone());
         }
     }

@@ -66,7 +66,8 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-#[derive(Default, PartialEq)]
+// ⚠ `Copy` so the frame loop can snapshot the previous view for edge detection.
+#[derive(Default, PartialEq, Eq, Clone, Copy)]
 enum AppView {
     #[default]
     Library,
@@ -112,6 +113,13 @@ struct PendingOpen {
 
 struct RustroomApp {
     view: AppView,
+    /// The view as of the previous frame, so a switch can be noticed.
+    ///
+    /// ⚠ An edge detector, not a second source of truth: it is only ever compared against
+    /// `view` and then updated. The view itself is set from several places — the segmented
+    /// switch, the View menu, the G/D keys — and this catches all of them without each having
+    /// to remember to clear the status line.
+    last_view: AppView,
     library: Option<Library>,
     session: Option<Session>,
     pending: Option<PendingOpen>,
@@ -236,6 +244,7 @@ impl RustroomApp {
         theme::apply(ctx, &settings);
         Self {
             view: AppView::default(),
+            last_view: AppView::default(),
             library: None,
             session: None,
             pending: None,
@@ -1238,7 +1247,12 @@ impl RustroomApp {
                     // leaving the old buffer's texture on screen, so the upgrade would be
                     // invisible until something else happened to trigger a render.
                     s.request(s.view_edits(tool), s.fit_cap(), None);
-                    self.status = "Full resolution ready".to_string();
+                    // ⚠ Only worth saying where it is visible. A full-resolution decode can
+                    // finish while the user is browsing the Library, where the message means
+                    // nothing and merely displaces something that does.
+                    if self.view == AppView::Develop {
+                        self.status = "Full resolution ready".to_string();
+                    }
                 }
                 Err(e) => {
                     // The ladder simply tops out at the half-size buffer, i.e. the behaviour
