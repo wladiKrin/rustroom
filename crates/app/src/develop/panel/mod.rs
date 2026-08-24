@@ -1,11 +1,12 @@
 //! The right-hand adjustments panel: histogram, then every Develop control.
 
 pub mod adjustments;
+pub mod masks;
 
 use crate::{preview_edits, theme, RustroomApp};
 use edit_model::Edits;
 use eframe::egui;
-use rustroom_app::{crop_tool, mask_tool};
+use rustroom_app::crop_tool;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
 /// settled into a history entry.
@@ -73,143 +74,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     ui.separator();
 
                     let mut ed = Edited::default();
+                    masks::show(
+                        ui,
+                        s,
+                        masks::BrushTool {
+                            size: &mut app.brush_size,
+                            hardness: &mut app.brush_hardness,
+                            flow: &mut app.brush_flow,
+                            erase: &mut app.brush_erase,
+                            show_tint: &mut app.show_mask_tint,
+                        },
+                        &mut ed,
+                    );
                     adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
-                    // ⚠ Copied into locals for the same reason `modals/settings.rs` does: the
-                    // closure below already borrows `app` through `s`, and a second capture is
-                    // E0499. Written back after it closes.
-                    let mut brush_size = app.brush_size;
-                    let mut brush_hardness = app.brush_hardness;
-                    let mut brush_flow = app.brush_flow;
-                    let mut brush_erase = app.brush_erase;
-                    let mut show_mask_tint = app.show_mask_tint;
-                    egui::CollapsingHeader::new("Masks").show(ui, |ui| {
-                        let mut added: Option<edit_model::Mask> = None;
-                        ui.horizontal(|ui| {
-                            if ui.button("Add graduated filter").clicked() {
-                                added =
-                                    Some(edit_model::Mask::Linear(edit_model::LinearGradient {
-                                        // A visible default: top to bottom across the middle
-                                        // third, so the handles land on screen and the ramp is
-                                        // immediately obvious.
-                                        from: [0.5, 0.33],
-                                        to: [0.5, 0.67],
-                                        invert: false,
-                                    }));
-                            }
-                            if ui.button("Add brush").clicked() {
-                                // ⚠ `Brush::default()` has no strokes, so the mask is inert until
-                                // painted — which is exactly why the tint defaults on.
-                                added = Some(edit_model::Mask::Brush(edit_model::Brush::default()));
-                            }
-                            if ui.button("Add radial filter").clicked() {
-                                // ⚠ The hand-written `Default`: centred, a quarter of each
-                                // axis, feather 50. Both radii being fractions of their own
-                                // axis makes the default ellipse *similar to the frame*, which
-                                // is usually the shape being reached for.
-                                added = Some(edit_model::Mask::Radial(
-                                    edit_model::RadialGradient::default(),
-                                ));
-                            }
-                        });
-                        if let Some(mask) = added {
-                            s.edits.masks.push(edit_model::MaskedAdjustment {
-                                mask,
-                                adjustments: edit_model::LocalAdjustments::default(),
-                            });
-                            s.selected_mask = Some(s.edits.masks.len() - 1);
-                            ed.discrete();
-                        }
-
-                        let mut remove: Option<usize> = None;
-                        for i in 0..s.edits.masks.len() {
-                            ui.horizontal(|ui| {
-                                let picked = s.selected_mask == Some(i);
-                                let name = format!("{} {}", s.edits.masks[i].mask.label(), i + 1);
-                                if ui.selectable_label(picked, name).clicked() {
-                                    s.selected_mask = if picked { None } else { Some(i) };
-                                }
-                                if ui.button("Delete").clicked() {
-                                    remove = Some(i);
-                                }
-                            });
-                        }
-                        if let Some(i) = remove {
-                            s.selected_mask = mask_tool::selection_after_delete(
-                                s.selected_mask,
-                                i,
-                                s.edits.masks.len(),
-                            );
-                            s.edits.masks.remove(i);
-                            // ⚠ Clear any in-flight drag handle too: the canvas overlay
-                            // returns early when the selection is gone, which would
-                            // otherwise leave a stale handle set and panning dead.
-                            s.active_mask_handle = None;
-                            ed.discrete();
-                        }
-
-                        if let Some(i) = s.selected_mask {
-                            if let Some(m) = s.edits.masks.get_mut(i) {
-                                ui.separator();
-                                // Shape properties, kept apart from the adjustments below:
-                                // these describe the mask, not what it carries.
-                                //
-                                // ⚠ `invert` had no UI at all until now. Survivable for a
-                                // linear gradient, which can be inverted by dragging its
-                                // endpoints past each other; not survivable for a radial,
-                                // where the subject vignette — darken everything except the
-                                // ellipse — depends on it and no drag substitutes.
-                                if ui.checkbox(m.mask.invert_mut(), "Invert").changed() {
-                                    ed.discrete();
-                                }
-                                if let edit_model::Mask::Radial(r) = &mut m.mask {
-                                    ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
-                                }
-                                if matches!(m.mask, edit_model::Mask::Brush(_)) {
-                                    // ⚠ Brush settings live on the app, not on the mask: they are
-                                    // the *tool's* state and apply to the next stroke, exactly as
-                                    // a brush size does in any editor. Each stroke records its own
-                                    // copy at the moment it is drawn.
-                                    ed.slider(ui, &mut brush_size, 4.0..=300.0, "Size");
-                                    ed.slider(ui, &mut brush_hardness, 0.0..=100.0, "Hardness");
-                                    ed.slider(ui, &mut brush_flow, 1.0..=100.0, "Flow");
-                                    ui.checkbox(&mut brush_erase, "Erase");
-                                    ui.checkbox(&mut show_mask_tint, "Show mask");
-                                    theme::hint(
-                                        ui,
-                                        "Drag to paint. Hardness shapes the edge; Flow is \
-                                         strength, and repeated passes build up.",
-                                    );
-                                }
-                                ui.separator();
-                                let a = &mut m.adjustments;
-                                ed.slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
-                                ed.slider(ui, &mut a.white_balance.tint, -100.0..=100.0, "Tint");
-                                ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
-                                ed.slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
-                                ed.slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");
-                                ed.slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows");
-                                ed.slider(ui, &mut a.whites, -100.0..=100.0, "Whites");
-                                ed.slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks");
-                                ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation");
-                                ed.slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance");
-                            }
-                        }
-
-                        theme::hint(
-                            ui,
-                            "Select a mask to drag its handles on the image. A gradient's two \
-                             outer lines mark where the effect starts and reaches full \
-                             strength; a radial's ellipse marks where it falls to nothing.",
-                        );
-                    });
-                    // ⚠ Deliberately NOT folded into `changed`/`settled`: a tool setting does not
-                    // alter the photograph, so it must not push a history entry or request a
-                    // render.
-                    app.brush_size = brush_size;
-                    app.brush_hardness = brush_hardness;
-                    app.brush_flow = brush_flow;
-                    app.brush_erase = brush_erase;
-                    app.show_mask_tint = show_mask_tint;
 
                     ui.separator();
                     if ui.button("Reset all").clicked() {
