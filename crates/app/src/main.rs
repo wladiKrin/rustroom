@@ -141,6 +141,9 @@ struct RustroomApp {
     brush_erase: bool,
     /// Whether to tint the selected brush mask's coverage on the canvas.
     show_mask_tint: bool,
+    /// Which HSL channel the Color section's selector is showing. View state, per app —
+    /// like a brush size, it is a property of the tool and not of the photograph.
+    hsl_channel: develop::panel::adjustments::HslChannel,
     /// This session's copied edits. A copy *also* writes a tagged payload to the system
     /// clipboard (see [`edit_clipboard`]), so pasting works between two running instances;
     /// this field is what the "Paste…" button uses, because egui can only hand us the
@@ -231,6 +234,7 @@ impl RustroomApp {
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
             show_mask_tint: true,
+            hsl_channel: Default::default(),
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),

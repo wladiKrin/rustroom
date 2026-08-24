@@ -1,5 +1,7 @@
 //! The right-hand adjustments panel: histogram, then every Develop control.
 
+pub mod adjustments;
+
 use crate::{preview_edits, theme, RustroomApp};
 use edit_model::Edits;
 use eframe::egui;
@@ -71,83 +73,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     ui.separator();
 
                     let mut ed = Edited::default();
-                    ed.slider(ui, &mut s.edits.white_balance.temp, -100.0..=100.0, "Temp");
-                    ed.slider(ui, &mut s.edits.white_balance.tint, -100.0..=100.0, "Tint");
-                    ed.slider(ui, &mut s.edits.exposure, -5.0..=5.0, "Exposure");
-                    ed.slider(ui, &mut s.edits.contrast, -100.0..=100.0, "Contrast");
-                    ed.slider(ui, &mut s.edits.highlights, -100.0..=100.0, "Highlights");
-                    ed.slider(ui, &mut s.edits.shadows, -100.0..=100.0, "Shadows");
-                    ed.slider(ui, &mut s.edits.whites, -100.0..=100.0, "Whites");
-                    ed.slider(ui, &mut s.edits.blacks, -100.0..=100.0, "Blacks");
-                    // Lightroom's "Presence" grouping, and it reflects that these are
-                    // tonal rather than detail controls — which is also why they are in
-                    // the Tone edit group rather than Detail.
-                    ed.slider(
-                        ui,
-                        &mut s.edits.local_contrast.texture,
-                        -100.0..=100.0,
-                        "Texture",
-                    );
-                    ed.slider(
-                        ui,
-                        &mut s.edits.local_contrast.clarity,
-                        -100.0..=100.0,
-                        "Clarity",
-                    );
-                    ed.slider(ui, &mut s.edits.dehaze.amount, -100.0..=100.0, "Dehaze");
-                    ed.slider(ui, &mut s.edits.saturation, -100.0..=100.0, "Saturation");
-                    ed.slider(ui, &mut s.edits.vibrance, -100.0..=100.0, "Vibrance");
-
-                    ui.separator();
-                    egui::CollapsingHeader::new("Hue").show(ui, |ui| {
-                        for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-                            ed.slider(ui, &mut s.edits.hsl.bands[i].hue, -100.0..=100.0, name);
-                        }
-                    });
-                    egui::CollapsingHeader::new("Saturation").show(ui, |ui| {
-                        for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-                            ed.slider(
-                                ui,
-                                &mut s.edits.hsl.bands[i].saturation,
-                                -100.0..=100.0,
-                                name,
-                            );
-                        }
-                    });
-                    egui::CollapsingHeader::new("Luminance").show(ui, |ui| {
-                        for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-                            ed.slider(
-                                ui,
-                                &mut s.edits.hsl.bands[i].luminance,
-                                -100.0..=100.0,
-                                name,
-                            );
-                        }
-                    });
-                    egui::CollapsingHeader::new("Sharpening").show(ui, |ui| {
-                        let sh = &mut s.edits.sharpening;
-                        ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount");
-                        // The one slider not on a 0..100 scale: it is a physical pixel
-                        // quantity, in full-resolution pixels, and naming it in pixels
-                        // is what makes "scaled for the render" comprehensible.
-                        ed.slider(ui, &mut sh.radius, 0.5..=3.0, "Radius (px)");
-                        ed.slider(ui, &mut sh.detail, 0.0..=100.0, "Detail");
-                        ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking");
-                    });
-                    egui::CollapsingHeader::new("Noise Reduction").show(ui, |ui| {
-                        let nr = &mut s.edits.noise_reduction;
-                        ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
-                        ed.slider(ui, &mut nr.detail, 0.0..=100.0, "Detail");
-                        ed.slider(ui, &mut nr.color, 0.0..=100.0, "Color");
-                        ed.slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
-                    });
-                    egui::CollapsingHeader::new("Vignette").show(ui, |ui| {
-                        let v = &mut s.edits.vignette;
-                        ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
-                        ed.slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
-                        ed.slider(ui, &mut v.roundness, -100.0..=100.0, "Roundness");
-                        ed.slider(ui, &mut v.feather, 0.0..=100.0, "Feather");
-                    });
+                    adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
                     // ⚠ Copied into locals for the same reason `modals/settings.rs` does: the
                     // closure below already borrows `app` through `s`, and a second capture is
                     // E0499. Written back after it closes.
