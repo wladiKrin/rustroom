@@ -34,10 +34,13 @@ being driven at 1.0.** The preview is more saturated than the file it will expor
 The obvious implementation — reuse piece B's seam and render the canvas with
 `build_pipeline_to(.., display_space)` — is wrong, for two independent reasons.
 
-**1. It would silently make the histogram display-referred.** `shell.rs` computes the histogram
-from the packed RGBA (`histogram_rgba(&frame.rgba)`), so anything baked into the texture lands in
+**1. It would silently make the histogram display-referred.** `shell.rs` computed the histogram
+from the packed RGBA (`histogram_rgba(&frame.rgba)`), so anything baked into the texture landed in
 the histogram too. A histogram that shifts when you change monitors is useless as a clipping
 instrument, which is the one job it has.
+
+⚠ Keeping the transform out of the pipeline is **necessary but not sufficient** — see the
+correction below. Anything downstream of the packed bytes has the same problem.
 
 **2. The bug is oversaturation, not missing gamut.** The preview should match the export. Making
 it *also* show colour beyond sRGB is **soft-proofing** — a real feature, and a different one.
@@ -49,7 +52,14 @@ Consequences, all of them good:
 
 - **Nothing in `pipeline` changes** — no new parameter, no golden risk, no cache-key question.
   The prefix cache holds pre-tail checkpoints and never sees this.
-- **The histogram stays correct** with no work at all, because the conversion happens after it.
+- **The histogram stays correct — but NOT "for free", and an earlier draft of this spec was wrong
+  about why.** It said the conversion "happens after" the histogram. It does not: `shell.rs`
+  derived the histogram from `pack`'s output, so putting the transform in `pack` made it
+  display-referred. ⚠ **This shipped and was caught by re-reading what `shell.rs` actually
+  consumes.** The histogram is now computed *inside* `pack`, from the sRGB quantization, and
+  carried on `RenderedFrame`; `shell.rs` reads it rather than recomputing.
+  `the_histogram_is_unaffected_by_the_display_space` is the guard, verified by reintroducing the
+  bug and watching it fail.
 - The default (`Srgb`) is the identity, so it costs nothing for the people it does not help.
 
 ## What `color` gains

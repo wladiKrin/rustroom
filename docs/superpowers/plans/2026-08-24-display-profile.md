@@ -86,9 +86,12 @@ the transform inverted.
 ⚠ In float, not on the packed bytes: an 8-bit → 8-bit conversion compresses the range and costs
 roughly 0.8 bits, which shows as banding on a smooth sky.
 
-⚠⚠ **In `pack`, not in the pipeline.** `shell.rs` computes the histogram from `frame.rgba`, so a
-pipeline stage would silently make the histogram display-referred — a histogram that shifts when
-you change monitors is useless as a clipping instrument.
+⚠⚠ **In `pack`, not in the pipeline** — and that is necessary but **not sufficient**, which this
+task got wrong on the first pass. `shell.rs` derived the histogram from `frame.rgba`, i.e. from
+`pack`'s *output*, so the transform landing in `pack` made the histogram display-referred anyway.
+Fixed in a follow-up commit: `pack` quantizes to sRGB, takes the histogram from that, and only then
+converts; `RenderedFrame` carries the result. **Anything downstream of the packed bytes has this
+problem** — check what actually consumes them, not just where the transform sits.
 
 - [x] **Step 2: `FrameSpec { max_dim, region, display_space }`.**
 
