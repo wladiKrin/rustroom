@@ -31,7 +31,7 @@ Every command below assumes:
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-**Note on package names:** the GUI crate is package `app`, lib `rustroom_app`, binary `Rustroom`. Use `cargo test -p app`, never `-p rustroom-app`.
+**Note on package names:** the GUI crate is package `app`, lib `rustroom_app`, binary `rustroom-gui`. Use `cargo test -p app`, never `-p rustroom-app`.
 
 ---
 
@@ -1712,7 +1712,7 @@ In the crate-layout block, change the `edit-model/` line to mention `EditGroups`
 
 ```
 │   ├── edit-model/           # ✅ serde Edits op-list (WB/exposure/contrast/tone/curve/saturation/hsl/NR/sharpening/vignette/geometry) + EditGroups partition + merge_from
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region/presets/settings
+│   ├── app/                  # ✅ GUI `rustroom-gui` (eframe/egui 0.35 + wgpu). lib=history/crop_tool/histogram/render_engine/thumb_loader/decode_worker/buffer_cache/view_region/presets/settings
 ```
 
 - [ ] **Step 2: Rewrite the RESUME HERE next-action**

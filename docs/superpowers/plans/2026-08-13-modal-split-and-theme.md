@@ -97,7 +97,7 @@ mod theme;
 - [ ] **Step 3: Run the tests to verify they fail**
 
 ```bash
-cargo test -p app --bin Rustroom theme
+cargo test -p app --bin rustroom-gui theme
 ```
 
 Expected: **compile error**, `cannot find function style in this scope` (twice).
@@ -145,7 +145,7 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-cargo test -p app --bin Rustroom theme
+cargo test -p app --bin rustroom-gui theme
 ```
 
 Expected: `test result: ok. 2 passed`.
