@@ -30,6 +30,12 @@ impl eframe::App for RustroomApp {
         self.pump_full_res(&ctx);
         // Outside the view match: Ctrl+V must reach a selection made in the Library grid,
         // not only one made in the filmstrip.
+        // ⚠ Before the key handling, so a menu activation and a keypress in the same frame
+        // are applied in the order they arrived.
+        #[cfg(target_os = "macos")]
+        for cmd in crate::native_menu::poll() {
+            commands::execute(self, &ctx, cmd);
+        }
         self.handle_clipboard_keys(&ctx);
         // ⚠ After `handle_clipboard_keys`, which owns ⌘C / ⌘V for the reason in
         // `pressed_command`'s doc comment.

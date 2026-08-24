@@ -33,6 +33,8 @@ mod filmstrip;
 mod library;
 mod menu_bar;
 mod modals;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod shell;
 mod theme;
 mod thumb;
@@ -216,6 +218,11 @@ struct RustroomApp {
 
 impl RustroomApp {
     fn new(ctx: &egui::Context) -> Self {
+        // ⚠ Installed here rather than lazily per frame: `init_for_nsapp` must run once, on
+        // the main thread, after NSApplication exists — which it does by the time eframe
+        // builds the app.
+        #[cfg(target_os = "macos")]
+        native_menu::install(ctx);
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();

@@ -31,3 +31,8 @@ dirs = { workspace = true }
 
 [dev-dependencies]
 image = { workspace = true }
+
+# ⚠ macOS only, on purpose: muda's Linux backend needs GTK, which eframe/winit does not
+# provide. Linux CI therefore never builds it — see `native_menu.rs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.19"
