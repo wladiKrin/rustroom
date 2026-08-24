@@ -105,15 +105,19 @@ mod tests {
 
     #[test]
     fn every_rail_glyph_is_renderable() {
-        // ⚠⚠ The test that makes glyphs safe at all, and it is not hypothetical: the design
-        // spec's own candidates — ▦ ⧉ ◐ ≡ — are ALL absent from egui's bundled fonts and
-        // would have shipped as tofu boxes. egui bundles Hack, Ubuntu-Light, NotoEmoji and
-        // emoji-icon-font; nothing guarantees an arbitrary Geometric-Shapes character is in
-        // any of them, and a missing glyph is invisible to every other test in this suite.
+        // ⚠⚠ Still the guard that makes icons safe, now against the bundled font rather than
+        // egui's defaults. It began life catching the design spec's own candidates — ▦ ⧉ ◐ ≡ —
+        // which are all absent from egui's stack and would have shipped as tofu boxes. With a
+        // real icon font the same test catches a font that failed to embed, or a codepoint that
+        // moved in a version bump.
         //
         // ⚠ A frame must run before the fonts exist — `Context::default()` has not built its
         // atlas yet, so asking a fresh context would answer about nothing.
         let ctx = egui::Context::default();
+        // ⚠ Without this the test asks egui's *default* stack, which production no longer uses —
+        // it would fail on every icon while the app renders them perfectly. The test is only
+        // meaningful against the fonts that ship.
+        crate::theme::install_fonts(&ctx);
         let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         let id = egui::FontId::proportional(14.0);
         for t in Tool::ALL {

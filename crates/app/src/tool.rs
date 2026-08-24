@@ -35,16 +35,17 @@ impl Tool {
 
     /// The rail's glyph.
     ///
-    /// ⚠ **Every one of these is verified present in egui's bundled fonts** by
-    /// `every_rail_glyph_is_renderable` in `develop/rail.rs`. The obvious choices — ▦ for a
-    /// grid, ⧉ for a crop, ◐ for a half-covered disc, ≡ for a list — are all **absent** and
-    /// render as tofu boxes. Do not substitute one without re-running that test.
+    /// ⚠ These are **bundled Phosphor icons**, not Unicode characters that egui's own fonts
+    /// happen to contain. The previous set — ☰ ▣ ◑ ★ — was picked from the roughly twenty
+    /// renderable characters in egui's default stack, which is why they were approximations.
+    /// `every_rail_glyph_is_renderable` still guards them, and now guards them against the font
+    /// that actually ships.
     pub fn glyph(self) -> char {
         match self {
-            Self::Edit => '☰',
-            Self::Crop => '▣',
-            Self::Masks => '◑',
-            Self::Presets => '★',
+            Self::Edit => crate::icons::EDIT,
+            Self::Crop => crate::icons::CROP,
+            Self::Masks => crate::icons::MASKS,
+            Self::Presets => crate::icons::PRESETS,
         }
     }
 
