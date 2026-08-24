@@ -3,9 +3,10 @@
 //! ⚠ This is a **trait impl moved to another module of the same crate**, which Rust allows —
 //! so unlike every other move in this refactor, `self` stays `self` and the body is verbatim.
 
-use crate::{develop, library, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
+use crate::{commands, develop, library, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
 use eframe::egui;
 use rustroom_app::histogram::histogram_rgba;
+use rustroom_app::menu::{self, Command};
 use rustroom_app::render_engine::RegionRect;
 use rustroom_app::{format_filter, view_region};
 
@@ -30,6 +31,11 @@ impl eframe::App for RustroomApp {
         // Outside the view match: Ctrl+V must reach a selection made in the Library grid,
         // not only one made in the filmstrip.
         self.handle_clipboard_keys(&ctx);
+        // ⚠ After `handle_clipboard_keys`, which owns ⌘C / ⌘V for the reason in
+        // `pressed_command`'s doc comment.
+        if let Some(cmd) = pressed_command(&ctx) {
+            commands::execute(self, &ctx, cmd);
+        }
         self.pump_export(&ctx);
 
         // Pull any finished preview frame into a texture.
@@ -147,5 +153,105 @@ impl eframe::App for RustroomApp {
         }
 
         modals::draw(self, &ctx);
+    }
+}
+
+/// Turn this frame's key presses into a command, using the menu model as the single source of
+/// truth for which chord means what.
+///
+/// ⚠ Gated on nothing having keyboard focus — the rule arrow navigation and the rail already
+/// follow. Without it, typing "d" into the Save-preset name field jumps to Develop.
+///
+/// ⚠ **Not used for ⌘C / ⌘V.** `egui-winit` matches the clipboard chords first and pushes
+/// `Event::Copy` / `Event::Paste` *instead of* a `Key` event, so `key_pressed(Key::C)` can
+/// never fire — a trap this codebase has already paid for once. Those stay in
+/// `handle_clipboard_keys`, which reads the semantic events.
+fn pressed_command(ctx: &egui::Context) -> Option<Command> {
+    if ctx.memory(|m| m.focused()).is_some() {
+        return None;
+    }
+    for section in menu::model() {
+        for item in section.items {
+            let menu::Item::Action {
+                command,
+                shortcut: Some(sc),
+                ..
+            } = item
+            else {
+                continue;
+            };
+            if sc.cmd && matches!(sc.key, 'C' | 'V') {
+                continue;
+            }
+            let Some(key) = egui_key(sc.key) else {
+                continue;
+            };
+            let hit = ctx.input(|i| {
+                i.key_pressed(key) && i.modifiers.command == sc.cmd && i.modifiers.shift == sc.shift
+            });
+            if hit {
+                return Some(command);
+            }
+        }
+    }
+    None
+}
+
+/// The model's key character as an egui key.
+///
+/// ⚠ Returns `Option` rather than panicking: an unmappable chord should make its menu item
+/// mouse-only, not take the app down. `every_shortcut_maps_to_an_egui_key` makes sure none of
+/// the shipped ones actually do that.
+fn egui_key(c: char) -> Option<egui::Key> {
+    Some(match c {
+        'O' => egui::Key::O,
+        'E' => egui::Key::E,
+        'Z' => egui::Key::Z,
+        // ⚠ Mapped even though `pressed_command` skips ⌘C / ⌘V. This table is a *total*
+        // mapping from the model's key characters to egui keys; whether a given chord is
+        // consulted is a separate decision, made there and documented there. A hole here
+        // would make the completeness test unable to say what it means.
+        'C' => egui::Key::C,
+        'V' => egui::Key::V,
+        'G' => egui::Key::G,
+        'D' => egui::Key::D,
+        '0' => egui::Key::Num0,
+        '1' => egui::Key::Num1,
+        '2' => egui::Key::Num2,
+        '3' => egui::Key::Num3,
+        '4' => egui::Key::Num4,
+        ',' => egui::Key::Comma,
+        '[' => egui::Key::OpenBracket,
+        ']' => egui::Key::CloseBracket,
+        '\\' => egui::Key::Backslash,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_shortcut_maps_to_an_egui_key() {
+        // ⚠ A chord in the model with no egui key is a menu item whose shortcut silently does
+        // nothing on Windows and Linux — and invisible on macOS, where the native menu handles
+        // the safe ones anyway.
+        for section in menu::model() {
+            for item in section.items {
+                if let menu::Item::Action {
+                    label,
+                    shortcut: Some(sc),
+                    ..
+                } = item
+                {
+                    assert!(
+                        egui_key(sc.key).is_some(),
+                        "{label}'s shortcut key {:?} has no egui mapping",
+                        sc.key
+                    );
+                }
+            }
+        }
     }
 }

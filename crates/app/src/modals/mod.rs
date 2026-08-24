@@ -95,6 +95,10 @@ pub enum Modal {
         dont_ask_again: bool,
     },
     Settings,
+    /// The shortcut reference, generated from the menu model.
+    KeyboardShortcuts,
+    /// The about box.
+    About,
 }
 
 /// Draw whichever dialog is open.
@@ -117,6 +121,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDeleteExport,
         ConfirmDelete,
         Settings,
+        Shortcuts,
+        About,
     }
     let which = match &app.modal {
         Modal::None => Which::None,
@@ -128,6 +134,8 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::Settings => Which::Settings,
+        Modal::KeyboardShortcuts => Which::Shortcuts,
+        Modal::About => Which::About,
     };
     // Independent of `app.modal`: a collision arrives while no dialog is open.
     if app.export_collision.is_some() {
@@ -143,5 +151,63 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
         Which::Settings => settings::show(app, ctx),
+        Which::Shortcuts => shortcuts(app, ctx),
+        Which::About => about(app, ctx),
+    }
+}
+
+/// The keyboard reference.
+///
+/// ⚠ **Generated from `menu::model()`, never hand-written.** A shortcuts dialog listing a
+/// chord the app does not have is worse than no dialog at all, and a hand-written one drifts
+/// the first time a shortcut moves.
+fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
+    let mut close = false;
+    egui::Modal::new(egui::Id::new("shortcuts")).show(ctx, |ui| {
+        ui.heading("Keyboard shortcuts");
+        egui::ScrollArea::vertical()
+            .max_height(420.0)
+            .show(ui, |ui| {
+                for section in rustroom_app::menu::model() {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(section.title).strong());
+                    for item in section.items {
+                        if let rustroom_app::menu::Item::Action {
+                            label,
+                            shortcut: Some(sc),
+                            ..
+                        } = item
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label(label);
+                                crate::theme::hint(ui, &sc.label());
+                            });
+                        }
+                    }
+                }
+            });
+        ui.separator();
+        if ui.button("Close").clicked() {
+            close = true;
+        }
+    });
+    if close {
+        app.modal = Modal::None;
+    }
+}
+
+/// The about box.
+fn about(app: &mut RustroomApp, ctx: &egui::Context) {
+    let mut close = false;
+    egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
+        ui.heading("Rustroom");
+        crate::theme::hint(ui, "An open-source RAW photo editor.");
+        ui.separator();
+        if ui.button("Close").clicked() {
+            close = true;
+        }
+    });
+    if close {
+        app.modal = Modal::None;
     }
 }

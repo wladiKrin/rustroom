@@ -4,11 +4,12 @@ pub mod canvas;
 pub mod panel;
 pub mod rail;
 
-use crate::{filmstrip, preview_edits, theme, Modal, RustroomApp};
+use crate::commands;
+use crate::{filmstrip, theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::edit_clipboard;
-use rustroom_app::tool::Tool;
+use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
 ///
@@ -23,49 +24,14 @@ use rustroom_app::tool::Tool;
 pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     app.handle_develop_arrows(ctx);
     let mut photo_edited = false;
-    // ⚠ A before/after comparison, not a return value from `rail::show`: the 1-4 keyboard
-    // shortcuts also set `app.tool`, and a click-only signal would leave those switching tools
-    // *without* re-rendering. One mechanism covers both inputs.
-    let before = app.tool;
-    // ⚠ Gated on nothing having keyboard focus, the same rule arrow navigation follows — or
-    // typing "2" into the Save-preset name field would jump to the Crop tool.
-    // ⚠ Step 3 of this rework routes these through the menu's `Command` dispatcher; until
-    // then they are handled here.
-    // ⚠ Set *before* `rail::show`, so the rail paints the new selection on the same frame and
-    // the comparison below sees the change and requests a render.
-    if app.session.is_some() && ctx.memory(|m| m.focused().is_none()) {
-        let digit = ctx.input(|i| {
-            [
-                egui::Key::Num1,
-                egui::Key::Num2,
-                egui::Key::Num3,
-                egui::Key::Num4,
-            ]
-            .iter()
-            .position(|k| i.key_pressed(*k))
-            .map(|p| p as u32 + 1)
-        });
-        if let Some(t) = digit.and_then(Tool::from_digit) {
-            app.tool = t;
-        }
-    }
+    // ⚠ The rail writes into a local, which is then applied through `select_tool` — the one
+    // place that owns the re-render. The 1–4 keys and the Photo menu arrive through the same
+    // method, so none of the three can switch tools without re-rendering.
+    let mut picked = app.tool;
     if app.session.is_some() {
-        rail::show(ui, &mut app.tool);
+        rail::show(ui, &mut picked);
     }
-    // ⚠ `preview_edits` strips the crop in geometry mode, so entering or leaving Crop must
-    // re-render. Without this the crop overlay draws over a *cropped* preview until some
-    // unrelated edit happens to request a frame — structurally the same bug as
-    // `draw_mask_overlay` not calling `s.request`, found in real use in M3.1a.
-    if app.tool != before {
-        let tool = app.tool;
-        if let Some(s) = &mut app.session {
-            s.request(
-                preview_edits(&s.edits, tool),
-                s.render_max_dim(),
-                s.requested_region,
-            );
-        }
-    }
+    app.select_tool(picked);
     photo_edited |= panel::show(app, ui);
     if app.show_filmstrip && app.library.is_some() {
         filmstrip::show(app, ui, ctx);
@@ -108,15 +74,13 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             egui::Button::new("Redo"),
         )
         .clicked();
-    let (kundo, kredo) = ctx.input(|i| {
-        let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
-        (z && !i.modifiers.shift, z && i.modifiers.shift)
-    });
-    if undo_click || kundo {
-        app.undo_action();
+    // ⚠ The ⌘Z / ⇧⌘Z handling has moved to `shell::pressed_command`, which reads them from
+    // the menu model. These buttons only dispatch.
+    if undo_click {
+        commands::execute(app, ctx, Command::Undo);
     }
-    if redo_click || kredo {
-        app.redo_action();
+    if redo_click {
+        commands::execute(app, ctx, Command::Redo);
     }
     if let Some(s) = &mut app.session {
         if ui.button("Fit").clicked() {

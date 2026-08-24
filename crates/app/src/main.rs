@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod commands;
 mod develop;
 mod filmstrip;
 mod library;
@@ -914,15 +915,8 @@ impl RustroomApp {
             (copy, pasted)
         });
 
-        if copy && self.session.is_some() {
-            // `self.session.as_ref().map(..)` rather than `if let Some(s) = &self.session`:
-            // the latter holds an immutable borrow of `self` across the assignment to
-            // `self.clipboard` and does not compile.
-            self.clipboard = self.session.as_ref().map(|s| s.edits.clone());
-            if let Some(edits) = &self.clipboard {
-                ctx.copy_text(edit_clipboard::encode(edits));
-            }
-            self.status = "Settings copied".to_string();
+        if copy {
+            self.copy_settings(ctx);
         }
 
         if let Some(text) = pasted {
@@ -935,6 +929,113 @@ impl RustroomApp {
                 // button opens the chooser. Either way it targets the whole selection.
                 let (n, failed) = self.apply_to_selection(&src, self.paste_groups);
                 self.status = paste_status(n, failed);
+            }
+        }
+    }
+
+    /// Copy the open photo's edits to the clipboard, in memory and on the system clipboard.
+    ///
+    /// ⚠ One implementation for the menu item, the toolbar button and Ctrl+C. They used to be
+    /// two, which is how a button and its shortcut drift apart.
+    ///
+    /// ⚠ `self.session.as_ref().map(..)` rather than `if let Some(s) = &self.session`: the
+    /// latter holds an immutable borrow of `self` across the assignment and does not compile.
+    fn copy_settings(&mut self, ctx: &egui::Context) {
+        if self.session.is_none() {
+            return;
+        }
+        self.clipboard = self.session.as_ref().map(|s| s.edits.clone());
+        if let Some(edits) = &self.clipboard {
+            ctx.copy_text(edit_clipboard::encode(edits));
+        }
+        self.status = "Settings copied".to_string();
+    }
+
+    /// Apply the in-memory clipboard to the selection with the last-used groups, no dialog.
+    fn paste_last_groups(&mut self) {
+        let Some(src) = self.clipboard.clone() else {
+            return;
+        };
+        let (n, failed) = self.apply_to_selection(&src, self.paste_groups);
+        self.status = paste_status(n, failed);
+    }
+
+    /// Reset the five adjustment groups the Edit tool shows, leaving geometry and masks alone.
+    ///
+    /// ⚠ Scoped, for the reason the button's own comment gives: under an exclusive panel each
+    /// tool resets its own domain and must not discard a crop or a mask the user cannot see.
+    fn reset_adjustments(&mut self) {
+        let tool = self.tool;
+        let Some(s) = &mut self.session else { return };
+        s.edits.merge_from(
+            &Edits::default(),
+            develop::panel::adjustments::edit_groups(),
+        );
+        s.request(
+            preview_edits(&s.edits, tool),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+        if s.history.push(s.edits.clone()) {
+            if let Some(path) = self.open_photo() {
+                self.actions.push(
+                    ActionKind::PhotoEdit { path: path.clone() },
+                    Some(path.as_path()),
+                );
+            }
+        }
+    }
+
+    /// Select a rail tool, re-rendering when it actually changed.
+    ///
+    /// ⚠ The re-render is not optional and it lives here rather than at each call site:
+    /// `preview_edits` strips the crop in geometry mode, so entering or leaving Crop without a
+    /// request leaves the overlay drawn over a *cropped* preview — the M3.1a
+    /// `draw_mask_overlay` bug. The rail, the 1–4 keys and the Photo menu all come through
+    /// here, so none of them can forget it.
+    fn select_tool(&mut self, t: Tool) {
+        if self.tool == t {
+            return;
+        }
+        self.tool = t;
+        let tool = self.tool;
+        if let Some(s) = &mut self.session {
+            s.request(
+                preview_edits(&s.edits, tool),
+                s.render_max_dim(),
+                s.requested_region,
+            );
+        }
+    }
+
+    /// Turn the photo a quarter turn, moving the crop with it.
+    ///
+    /// ⚠ The `CropRect` transform stays in the same function as the orientation change. They
+    /// are one act: separating them is exactly how a rotated crop lands on different pixels.
+    fn rotate(&mut self, clockwise: bool) {
+        let tool = self.tool;
+        let Some(s) = &mut self.session else { return };
+        let g = &mut s.edits.geometry;
+        if clockwise {
+            g.orientation.rotate_cw();
+            g.crop = g.crop.rotated_cw();
+        } else {
+            g.orientation.rotate_ccw();
+            for _ in 0..3 {
+                g.crop = g.crop.rotated_cw();
+            }
+        }
+        s.request(
+            preview_edits(&s.edits, tool),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+        if s.history.push(s.edits.clone()) {
+            if let Some(path) = self.open_photo() {
+                self.actions.push(
+                    ActionKind::PhotoEdit { path: path.clone() },
+                    Some(path.as_path()),
+                );
             }
         }
     }
