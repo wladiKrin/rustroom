@@ -120,6 +120,7 @@ pub fn icc_for(space: color::OutputSpace) -> &'static [u8] {
                 D65,
                 [(0.680, 0.320), (0.265, 0.690), (0.150, 0.060)],
                 srgb_curve(),
+                "Display P3",
             )
         }),
         S::AdobeRgb => ADOBE.get_or_init(|| {
@@ -127,6 +128,7 @@ pub fn icc_for(space: color::OutputSpace) -> &'static [u8] {
                 D65,
                 [(0.640, 0.330), (0.210, 0.710), (0.150, 0.060)],
                 lcms2::ToneCurve::new(563.0 / 256.0),
+                "Adobe RGB (1998) compatible",
             )
         }),
         S::ProPhoto => PROPHOTO.get_or_init(|| {
@@ -140,6 +142,7 @@ pub fn icc_for(space: color::OutputSpace) -> &'static [u8] {
                     (0.036598, 0.000105),
                 ],
                 prophoto_curve(),
+                "ProPhoto RGB compatible",
             )
         }),
     }
@@ -163,16 +166,36 @@ fn prophoto_curve() -> lcms2::ToneCurve {
         .expect("ProPhoto parametric curve")
 }
 
-fn build_icc(white: (f64, f64), primaries: [(f64, f64); 3], curve: lcms2::ToneCurve) -> Vec<u8> {
+/// ⚠ `name` is not decoration. Without a description tag every constructed profile reports as
+/// "RGB built-in" — macOS `sips`, Preview and Photoshop all show that — so the three would be
+/// indistinguishable to anyone inspecting an exported file, and unverifiable by hand. Found by
+/// checking a real export rather than by a test.
+///
+/// The names say "compatible" because these are profiles built from the same primaries and
+/// curve, not Adobe's or Apple's own redistributed files.
+fn build_icc(
+    white: (f64, f64),
+    primaries: [(f64, f64); 3],
+    curve: lcms2::ToneCurve,
+    name: &str,
+) -> Vec<u8> {
     let xy = |(x, y): (f64, f64)| lcms2::CIExyY { x, y, Y: 1.0 };
     let prim = lcms2::CIExyYTRIPLE {
         Red: xy(primaries[0]),
         Green: xy(primaries[1]),
         Blue: xy(primaries[2]),
     };
-    lcms2::Profile::new_rgb(&xy(white), &prim, &[&curve, &curve, &curve])
-        .and_then(|p| p.icc())
-        .unwrap_or_default()
+    let Ok(mut profile) = lcms2::Profile::new_rgb(&xy(white), &prim, &[&curve, &curve, &curve])
+    else {
+        return Vec::new();
+    };
+    let mut mlu = lcms2::MLU::new(1);
+    mlu.set_text_ascii(name, lcms2::Locale::none());
+    profile.write_tag(
+        lcms2::TagSignature::ProfileDescriptionTag,
+        lcms2::Tag::MLU(&mlu),
+    );
+    profile.icc().unwrap_or_default()
 }
 
 /// Encode a display-referred image. `quality` is ignored unless the format is lossy.
@@ -462,6 +485,26 @@ mod tests {
                     want_srgb[i]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_profile_names_itself() {
+        // ⚠ Without this an exported file reports its profile as "RGB built-in" in every viewer,
+        // so P3, Adobe RGB and ProPhoto are indistinguishable to anyone checking a file by hand.
+        // The bytes differ either way — this is about the file being legible, and it was found by
+        // inspecting a real export, not by a test.
+        for s in color::OutputSpace::ALL {
+            let p = lcms2::Profile::new_icc(icc_for(s)).expect("profile should parse");
+            let desc = p
+                .info(lcms2::InfoType::Description, lcms2::Locale::none())
+                .unwrap_or_default();
+            assert!(!desc.is_empty(), "{} has no description", s.label());
+            assert!(
+                desc != "RGB built-in",
+                "{} kept lcms2's placeholder description",
+                s.label()
+            );
         }
     }
 }

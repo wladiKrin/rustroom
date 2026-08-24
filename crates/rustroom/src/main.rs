@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod format_arg;
+mod space_arg;
 
 /// What `--quality` means when it is not given. Only JPEG reads it.
 const DEFAULT_JPEG_QUALITY: u8 = 92;
@@ -43,6 +44,9 @@ enum Command {
         /// to 11 s per photo on a 26 Mpx RAW.
         #[arg(long, default_value = "fast")]
         demosaic: String,
+        /// Output colour space: srgb, p3, adobergb, prophoto. Omitted = srgb.
+        #[arg(long)]
+        space: Option<String>,
     },
 }
 
@@ -57,6 +61,7 @@ fn main() -> Result<()> {
             format,
             quality,
             demosaic,
+            space,
         } => render(
             &input,
             &output,
@@ -64,6 +69,7 @@ fn main() -> Result<()> {
             format.as_deref(),
             quality,
             &demosaic,
+            space.as_deref(),
         ),
     }
 }
@@ -102,10 +108,28 @@ fn render(
     format: Option<&str>,
     quality: Option<u8>,
     demosaic: &str,
+    space: Option<&str>,
 ) -> Result<()> {
     // Resolved before the decode, so a bad --format fails in milliseconds rather than after
     // a multi-second decode and render.
     let format = format_arg::resolve(output, format)?;
+    let space = match space {
+        Some(s) => space_arg::parse(s)?,
+        None => color::OutputSpace::Srgb,
+    };
+    // ⚠ Warn, never block. Banding in 8-bit is a real hazard for ProPhoto and ordinary practice
+    // for the other spaces — see `OutputSpace::warns_in_8_bit`.
+    if space.warns_in_8_bit()
+        && !matches!(
+            format,
+            export::ExportFormat::Png16 | export::ExportFormat::Tiff16
+        )
+    {
+        eprintln!(
+            "warning: {} in 8-bit will band on smooth gradients — use png16 or tiff16",
+            space.label()
+        );
+    }
     let quality = match quality {
         Some(q) if !format.is_lossy() => {
             eprintln!(
@@ -143,9 +167,10 @@ fn render(
             .with_context(|| format!("loading edits {}", p.display()))?,
         None => edit_model::Edits::default(),
     };
-    let rendered = pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(decoded.image);
+    let rendered =
+        pipeline::build_pipeline_to(&edits, pipeline::RenderScale::FULL, space).run(decoded.image);
 
-    export::save(&rendered, output, format, quality, color::OutputSpace::Srgb)
+    export::save(&rendered, output, format, quality, space)
         .with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Wrote {}", output.display());
     Ok(())
