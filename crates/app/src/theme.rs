@@ -41,6 +41,43 @@ fn accent_color(accent: Accent, dark: bool) -> egui::Color32 {
     egui::Color32::from_rgb(r, g, b)
 }
 
+/// The bundled icon font.
+///
+/// ⚠ Pinned to Phosphor 2.1.2, whose licence sits beside it. See `rustroom_app::icons`.
+const ICON_FONT: &[u8] = include_bytes!("../assets/Phosphor.ttf");
+
+/// Install the icon font as a fallback on every family. Call once, at startup.
+///
+/// ⚠ **A fallback, not a primary and not a named family.** `FontPriority::Lowest` means the font
+/// is consulted only for glyphs no earlier font has — and since Phosphor's codepoints are all in
+/// the Private Use Area, nothing else can ever reach it. The payoff is that call sites stay
+/// ordinary text: `ui.button(icons::UNDO)` needs no `FontId`, and `Tool::glyph` keeps returning a
+/// plain `char`.
+///
+/// ⚠ **`Context::add_font`, never a hand-built `FontDefinitions`.** Building one from scratch
+/// replaces the whole stack, which would discard egui's own fonts and leave every ordinary label
+/// unrenderable. `add_font` inserts into the existing stack.
+///
+/// ⚠ Registered on **both** `Proportional` and `Monospace`. Only Proportional is used today, but a
+/// monospace label that happened to contain an icon would otherwise silently show tofu.
+pub fn install_fonts(ctx: &egui::Context) {
+    use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    ctx.add_font(FontInsert::new(
+        "phosphor",
+        egui::FontData::from_static(ICON_FONT),
+        vec![
+            InsertFontFamily {
+                family: egui::FontFamily::Proportional,
+                priority: FontPriority::Lowest,
+            },
+            InsertFontFamily {
+                family: egui::FontFamily::Monospace,
+                priority: FontPriority::Lowest,
+            },
+        ],
+    ));
+}
+
 /// Apply Rustroom's style, at startup and whenever the appearance settings change.
 ///
 /// ⚠ **egui 0.35 keeps a separate `Style` per theme** — dark and light — so there is no single
@@ -274,5 +311,34 @@ mod tests {
         tune(&mut s);
         assert!(s.spacing.item_spacing.y < before.0);
         assert!(s.spacing.interact_size.y < before.1);
+    }
+
+    #[test]
+    fn the_icon_font_is_registered() {
+        // ⚠ Without this, a font that failed to embed — a truncated download, a woff2 that
+        // `ab_glyph` cannot parse — would ship as tofu boxes with nothing failing at build time.
+        // ⚠ A frame must run before the atlas exists; a fresh `Context` has not built one.
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        assert!(
+            ctx.fonts_mut(|f| f.has_glyph(&id, rustroom_app::icons::ZOOM_IN)),
+            "the icon font is not in the stack"
+        );
+    }
+
+    #[test]
+    fn installing_the_icon_font_keeps_the_ordinary_ones() {
+        // ⚠ The failure mode of getting this wrong is total: replacing the font stack rather than
+        // adding to it leaves every label in the app unrenderable, which no icon test would catch.
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        assert!(
+            ctx.fonts_mut(|f| f.has_glyph(&id, 'A')),
+            "lost the Latin font"
+        );
     }
 }

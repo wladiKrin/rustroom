@@ -238,6 +238,10 @@ impl RustroomApp {
         let export_preset_list = export_preset_store.list();
         let settings_store = SettingsStore::user_default();
         let settings = settings_store.load();
+        // ⚠ Before any UI runs: `add_font` rebuilds the glyph atlas, so installing later would
+        // throw away the first frame's cache for nothing. Unlike `apply`, this does not depend
+        // on the settings, so it does not have to wait for the load.
+        theme::install_fonts(ctx);
         // ⚠ After the load, not before: the style now depends on the persisted theme and
         // accent, so applying it earlier would style the app from the defaults and then
         // silently disagree with what the user chose.
