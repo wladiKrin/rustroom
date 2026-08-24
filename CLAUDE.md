@@ -118,7 +118,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **State at handoff (2026-08-24):** 702 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean.
 >
-> ⚠⚠ **`main` is 52 commits AHEAD OF `origin/main` and NOT PUSHED.** The whole layout/IA rework, its in-use fixes and the icon font were merged into `main` by fast-forward (matching this project's linear history) — **the user pushes**. Do not push, and do not assume this is still true: run `git log origin/main..main --oneline`.
+> As of 2026-08-24 everything is merged **and pushed**: `main == origin/main` at `4415370`, no feature branches, working tree clean. The layout/IA rework, its in-use fixes and the icon font all landed on `main` by fast-forward, matching this project's linear history. ⚠ This block goes stale the moment the user pushes again — run `git log origin/main..main --oneline` rather than trusting it, and **never push either way**.
 >
 > ⚠ **The GUI binary is now `Rustroom`, not `rustroom-gui`** — `cargo test -p app --bin Rustroom`. The name is what macOS shows as the application menu's title.
 
@@ -154,7 +154,7 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **The session before (2026-08-12/13) landed seven features.** In order: per-stage prefix checkpoints; the 10× RGBA8 pack; parallel `downscale_to`; the full-resolution editing buffer *and* its trigger rework to eager-on-settle; the Library format filter; rotate/flip with the Crop→Geometry rename; and the fit-view clamp fix. Five bugs were found in real use and fixed along the way — the two sections below on **"Three bugs from the first hour"** and **"The fit view now fills the window"** are the ones worth reading before touching the canvas, because both are about the same failure mode: two quantities that agree in the common case and diverge in the interesting one.
 
-**Push state: `main` holds everything and is 52 commits ahead of `origin/main`, unpushed** (2026-08-24). The `layout-ia-rework` branch was fast-forward merged into `main`; the branch pointer still exists and can be deleted, since `main` points at the same commit. ⚠ **Run `git log origin/main..main` rather than trusting this.**
+**Push state: everything is merged and pushed** — `main == origin/main` at `4415370`, 2026-08-24. The `layout-ia-rework` branch was fast-forward merged and deleted. ⚠ **Run `git log origin/main..main` rather than trusting this.**
 
 ⚠ **Branch-per-feature is the established default now** — three in a row (`m3.1b-radial-mask`, `canvas-navigation`, `m3.1c-a-brush-headless`), each merged and pushed by the user. Branch without asking; never push.
 
