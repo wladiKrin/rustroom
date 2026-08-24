@@ -192,7 +192,7 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **🎯 M3.1 IS CLOSED.** All three mask primitives — linear, radial, brush — are authorable on the canvas.
 
-**▶ NEXT ACTION: none chosen.** The layout/IA rework is **complete** — all four confirmed problems are fixed. Branch `layout-ia-rework` is unmerged; ask before starting anything on top of it. Open follow-ups worth considering, none urgent: colour management (lcms2 emits one static sRGB profile and nothing else — a hidden prerequisite for M3.3 grading), M3.2 lens corrections via lensfun, M3.4 virtual copies, and per-tool resets for anything a future rail tool adds.
+**▶ NEXT ACTION: none chosen — ask.** The layout/IA rework is **complete, merged and pushed**, all four confirmed problems fixed, and the icon font landed with it. ⚠ **The roadmap file in the Obsidian vault is stale**: it still marks **M3.1 ⬜** though masking closed 2026-08-18, and its "defer layout/IA until after M3.1" note is now satisfied. Open candidates: colour management (lcms2 emits one static sRGB profile and nothing else — a hidden prerequisite for M3.3 grading), M3.2 lens corrections via lensfun, M3.4 virtual copies, and per-tool resets for anything a future rail tool adds.
 
 1. **The toolbar is thirteen controls on one level** — view (Fit, Before/After), a mode (Geometry), edit transfer (Copy, Paste, Sync, Presets), output (Export), app (Settings) and panel toggles (Presets, Filmstrip), with a single divider. Nothing distinguishes modes from actions from panel toggles.
 2. **The right panel stacks two organising principles** — thirteen always-open ungrouped sliders (Temp…Vibrance, with *no header at all*), then seven `CollapsingHeader` sections. The top half cannot be collapsed.
