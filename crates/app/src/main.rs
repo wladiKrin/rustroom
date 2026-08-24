@@ -144,6 +144,10 @@ struct RustroomApp {
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
+    /// Which Develop tool the rail has selected.
+    ///
+    /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
+    tool: rustroom_app::tool::Tool,
     /// This session's copied edits. A copy *also* writes a tagged payload to the system
     /// clipboard (see [`edit_clipboard`]), so pasting works between two running instances;
     /// this field is what the "Paste…" button uses, because egui can only hand us the
@@ -235,6 +239,7 @@ impl RustroomApp {
             // completely invisible, which is a poor first five minutes.
             show_mask_tint: true,
             hsl_channel: Default::default(),
+            tool: Default::default(),
             clipboard: None,
             paste_groups: EditGroups::default(),
             sync_groups: EditGroups::default(),

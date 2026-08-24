@@ -2,6 +2,7 @@
 
 pub mod canvas;
 pub mod panel;
+pub mod rail;
 
 use crate::{filmstrip, preview_edits, theme, Modal, RustroomApp};
 use edit_model::EditGroups;
@@ -16,11 +17,15 @@ use rustroom_app::edit_clipboard;
 /// so neither can touch the action log itself — which is why they return a `bool` instead.
 ///
 /// ⚠ **Panel order is load-bearing.** egui allocates side panels in call order and the central
-/// panel takes what is left, so preset (left) → adjustments (right) → filmstrip (bottom) →
-/// canvas (central) must be preserved exactly.
+/// panel takes what is left, so rail (right, outermost) → adjustments (right) → filmstrip
+/// (bottom) → canvas (central) must be preserved exactly. The rail coming *first* is what puts
+/// it against the window edge rather than between the panel and the image.
 pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     app.handle_develop_arrows(ctx);
     let mut photo_edited = false;
+    if app.session.is_some() {
+        rail::show(ui, &mut app.tool);
+    }
     if app.show_presets && app.session.is_some() {
         preset_panel(app, ui);
     }
