@@ -1,7 +1,8 @@
 //! Decode non-RAW images (JPEG/PNG/TIFF) into the develop pipeline's working space.
 //!
 //! An image file is display-referred sRGB; we decode it, normalize to f32 (preserving
-//! 8- or 16-bit precision via `to_rgb32f`), and linearize with the sRGB EOTF so the
+//! 8- or 16-bit precision via `to_rgb32f`), linearize with the sRGB EOTF, and convert into
+//! the pipeline's linear ProPhoto working space so the
 //! result lives in the same linear-light space as a decoded RAW.
 
 use core_image::{ImageBuf, Thumbnail};
@@ -58,8 +59,14 @@ pub fn decode(path: &Path) -> Result<DecodedImage, ImageDecodeError> {
         .into_iter()
         .map(color::srgb_to_linear)
         .collect();
+    // ⚠⚠ Convert into the pipeline's **ProPhoto** working space. Non-RAW input is sRGB by
+    // assumption (ICC handling is deferred), and without this the pipeline would read those
+    // linear-sRGB values as ProPhoto — every JPEG rendering heavily oversaturated. It is the
+    // largest bug this crate can produce and the least visible from inside it, because nothing
+    // here looks at colour.
+    let image = ImageBuf::from_vec(w, h, data).map_pixels(color::srgb_to_prophoto);
     Ok(DecodedImage {
-        image: ImageBuf::from_vec(w, h, data),
+        image,
         width: w,
         height: h,
     })

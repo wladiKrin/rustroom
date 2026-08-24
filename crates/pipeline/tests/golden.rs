@@ -14,6 +14,24 @@ const W: usize = 64;
 const H: usize = 16;
 const TOL: i32 = 2; // per-channel tolerance (float pow differs slightly across platforms)
 
+/// Write an **sRGB** colour into a working-space chart.
+///
+/// ⚠ The charts are authored in sRGB and converted here, rather than having their literals
+/// reinterpreted as ProPhoto. Two reasons, and the second is the important one.
+///
+/// The literals mean something: `[1.0, 0.0, 0.0]` is written to say "pure red", and read as
+/// ProPhoto it silently becomes a far more saturated colour than any camera produces — the chart
+/// would stop resembling the thing it was built to exercise.
+///
+/// ⚠ And it restores the check this change otherwise destroys. All 38 references move at once, so
+/// the usual proof — *"the others stayed byte-identical, therefore the change was scoped"* — is
+/// unavailable. Authoring in sRGB means **the `neutral` golden must come back within `TOL`**,
+/// because sRGB → ProPhoto → sRGB is a round trip. That single property is the strongest evidence
+/// available that the colour maths is right.
+fn set_srgb(img: &mut ImageBuf, x: usize, y: usize, srgb: [f32; 3]) {
+    img.set_pixel(x, y, color::srgb_to_prophoto(srgb));
+}
+
 /// Deterministic linear test chart: 4 horizontal bands (gray, R, G, B), each a 0..1 ramp.
 fn chart() -> ImageBuf {
     let mut img = ImageBuf::new(W, H);
@@ -27,7 +45,7 @@ fn chart() -> ImageBuf {
                 2 => [0.0, v, 0.0],
                 _ => [0.0, 0.0, v],
             };
-            img.set_pixel(x, y, px);
+            set_srgb(&mut img, x, y, px);
         }
     }
     img
@@ -48,7 +66,7 @@ fn muted_chart() -> ImageBuf {
         };
         for x in 0..W {
             let v = x as f32 / (W - 1) as f32;
-            img.set_pixel(x, y, [v * tint[0], v * tint[1], v * tint[2]]);
+            set_srgb(&mut img, x, y, [v * tint[0], v * tint[1], v * tint[2]]);
         }
     }
     img
@@ -79,7 +97,8 @@ fn hue_sweep_chart() -> ImageBuf {
         for x in 0..W {
             let hue = x as f32 / W as f32 * 360.0;
             let srgb = hsv_to_srgb(hue, 0.9, 0.8);
-            img.set_pixel(
+            set_srgb(
+                &mut img,
                 x,
                 y,
                 [
@@ -125,7 +144,8 @@ fn noise_chart() -> ImageBuf {
             } else {
                 [0.75, 0.75, 0.75]
             };
-            img.set_pixel(
+            set_srgb(
+                &mut img,
                 x,
                 y,
                 [
@@ -157,7 +177,7 @@ fn local_contrast_chart() -> ImageBuf {
             let fine = 0.03 * (x as f32 / 6.0 * std::f32::consts::TAU).sin();
             let step = if y >= 3 * S / 4 { 0.25 } else { 0.0 };
             let v = (coarse + fine + step).clamp(0.0, 1.0);
-            img.set_pixel(x, y, [v, v * 0.85, v * 0.7]);
+            set_srgb(&mut img, x, y, [v, v * 0.85, v * 0.7]);
         }
     }
     img
@@ -190,7 +210,8 @@ fn hazy_chart() -> ImageBuf {
                 ]
             };
             let t = 0.95 - 0.9 * u;
-            img.set_pixel(
+            set_srgb(
+                &mut img,
                 x,
                 y,
                 [

@@ -1,11 +1,6 @@
 use crate::PipelineStage;
 use core_image::ImageBuf;
 
-/// Rec.709 luma weights, applied to linear RGB.
-const LUMA_R: f32 = 0.2126;
-const LUMA_G: f32 = 0.7152;
-const LUMA_B: f32 = 0.0722;
-
 /// Guards the chroma ratio against division by zero on black pixels.
 const EPS: f32 = 1e-6;
 
@@ -38,7 +33,8 @@ impl PipelineStage for SaturationStage {
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         let (f_sat, vib) = (self.f_sat, self.vib);
         image.map_pixels(|[r, g, b]| {
-            let luma = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+            // ⚠ The pivot chroma is scaled around: real luminance in the working space.
+            let luma = color::luminance([r, g, b]);
             let max = r.max(g).max(b);
             let min = r.min(g).min(b);
             // Current chroma in [0, 1]; 0 for neutrals, 1 for a fully saturated color.
@@ -57,9 +53,15 @@ impl PipelineStage for SaturationStage {
 mod tests {
     use super::*;
 
-    /// Rec.709 luma of a linear RGB triple — the value chroma is scaled around.
+    /// Luminance of a linear **ProPhoto** triple — the value chroma is scaled around.
+    ///
+    /// ⚠ A private copy of the working space's weights, deliberately **not** a call to
+    /// `color::luminance`. A test that computes its expectation through production code cannot
+    /// witness a change to production code — the same reason the golden harness keeps its own
+    /// quantiser. It was Rec.709 until the working space changed, and measuring ProPhoto data
+    /// with sRGB weights is what made this test fail.
     fn luma(px: [f32; 3]) -> f32 {
-        0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2]
+        0.2880402 * px[0] + 0.7118741 * px[1] + 0.0000857 * px[2]
     }
 
     fn chroma(px: [f32; 3]) -> f32 {

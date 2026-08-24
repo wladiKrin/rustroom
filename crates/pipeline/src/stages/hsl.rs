@@ -1,5 +1,8 @@
 use crate::PipelineStage;
-use color::{linear_srgb_to_oklab, oklab_to_linear_srgb};
+// ⚠ The **ProPhoto** pair, not the sRGB one: this stage converts the working space in
+// and out again, and mixing the two directions produces a smooth, plausible colour shift
+// that is very hard to attribute later.
+use color::oklab::{oklab_to_prophoto, prophoto_to_oklab};
 use core_image::ImageBuf;
 use edit_model::{Hsl, HslBand};
 
@@ -66,7 +69,7 @@ impl PipelineStage for HslStage {
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         let bands = self.bands;
         image.map_pixels(|rgb| {
-            let [l, a, b] = linear_srgb_to_oklab(rgb);
+            let [l, a, b] = prophoto_to_oklab(rgb);
             let chroma = a.hypot(b);
             if chroma < EPS {
                 return rgb; // neutral — nothing to band-match
@@ -99,7 +102,7 @@ impl PipelineStage for HslStage {
             let chroma2 = (chroma * (1.0 + sat / 100.0)).max(0.0);
             let l2 = (l * (1.0 + lum / 200.0)).max(0.0);
 
-            let out = oklab_to_linear_srgb([l2, chroma2 * hue2.cos(), chroma2 * hue2.sin()]);
+            let out = oklab_to_prophoto([l2, chroma2 * hue2.cos(), chroma2 * hue2.sin()]);
             [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
         })
     }
@@ -111,7 +114,7 @@ mod tests {
 
     /// Oklab hue (degrees) of a linear RGB triple.
     fn hue_of(rgb: [f32; 3]) -> f32 {
-        let [_, a, b] = linear_srgb_to_oklab(rgb);
+        let [_, a, b] = prophoto_to_oklab(rgb);
         let d = b.atan2(a).to_degrees();
         if d < 0.0 {
             d + 360.0
@@ -122,7 +125,7 @@ mod tests {
 
     /// Oklab chroma of a linear RGB triple.
     fn chroma_of(rgb: [f32; 3]) -> f32 {
-        let [_, a, b] = linear_srgb_to_oklab(rgb);
+        let [_, a, b] = prophoto_to_oklab(rgb);
         a.hypot(b)
     }
 
@@ -133,8 +136,15 @@ mod tests {
     }
 
     /// A moderately saturated color that stays in gamut under the test adjustments.
-    const RED_ISH: [f32; 3] = [0.30, 0.06, 0.05];
-    const BLUE_ISH: [f32; 3] = [0.05, 0.07, 0.30];
+    /// A reddish test pixel, **in the working space**.
+    ///
+    /// ⚠ Authored as the sRGB colour `[0.30, 0.06, 0.05]` and converted, the way the golden
+    /// charts are. Written straight in, these numbers would be read as ProPhoto — a more
+    /// saturated colour whose Oklab chroma sits differently against `CHROMA_FADE`, which is
+    /// what made the hue-rotation test read 22° instead of 30°.
+    const RED_ISH: [f32; 3] = [0.185_624, 0.083_325, 0.055_396];
+    /// A bluish test pixel, in the working space. sRGB source: `[0.05, 0.07, 0.30]`.
+    const BLUE_ISH: [f32; 3] = [0.091_750, 0.074_512, 0.268_719];
 
     fn all_bands(f: impl Fn(&mut HslBand)) -> Hsl {
         let mut hsl = Hsl::default();
@@ -183,7 +193,16 @@ mod tests {
             [1.0, 0.0, 1.0],                                  // Magenta  #FF00FF
         ];
         for (i, rgb) in canonical.iter().enumerate() {
-            let expected = hue_of(*rgb);
+            // ⚠ The canonical colours are **sRGB** (#FF0000 and friends), so they have to be
+            // converted into the working space before the hue is measured — exactly as the
+            // golden charts are. Feeding sRGB numbers to a ProPhoto conversion measures a
+            // different, more saturated colour.
+            //
+            // ⚠ `BAND_HUES` is unchanged by the working-space switch, and that is the point:
+            // Oklab hue is absolute, so the hue of sRGB red is the hue of sRGB red however it
+            // is expressed. If this table ever has to move, something is wrong with the
+            // matrices rather than with the table.
+            let expected = hue_of(color::srgb_to_prophoto(*rgb));
             assert!(
                 (BAND_HUES[i] - expected).abs() < 1.0,
                 "band {i} ({}): table {} vs computed {expected}",
@@ -254,7 +273,7 @@ mod tests {
         up.bands[5].luminance = 100.0; // Blue
         let mut down = Hsl::default();
         down.bands[5].luminance = -100.0;
-        let l = |rgb: [f32; 3]| linear_srgb_to_oklab(rgb)[0];
+        let l = |rgb: [f32; 3]| prophoto_to_oklab(rgb)[0];
         assert!(l(apply_one(&up, BLUE_ISH)) > l(BLUE_ISH) * 1.2);
         assert!(l(apply_one(&down, BLUE_ISH)) < l(BLUE_ISH) * 0.8);
     }

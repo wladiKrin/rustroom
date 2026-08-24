@@ -1,7 +1,6 @@
 use crate::PipelineStage;
 use core_image::ImageBuf;
 
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 const STRENGTH: f32 = 0.5; // scales all four amounts
 
 /// Highlights/shadows/whites/blacks as a single luminance-region-weighted gain.
@@ -44,7 +43,7 @@ impl PipelineStage for ToneRegionsStage {
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         image.map_pixels(|[r, g, b]| {
-            let l = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+            let l = color::luminance([r, g, b]);
             let gain = self.gain_for_luma(l).max(0.0);
             [r * gain, g * gain, b * gain]
         })

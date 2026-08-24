@@ -2,8 +2,6 @@ use crate::PipelineStage;
 use core_image::ImageBuf;
 use edit_model::WhiteBalance;
 
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722]; // Rec.709 luma weights
-
 /// Creative white balance: temp/tint -> luminance-normalized per-channel gains.
 pub struct WhiteBalanceStage {
     gains: [f32; 3],
@@ -16,7 +14,10 @@ impl WhiteBalanceStage {
         // Raw gains: warmer -> more R, less B; magenta(+tint) -> less G.
         let mut gains = [1.0 + 0.4 * t, 1.0 - 0.3 * g, 1.0 - 0.4 * t];
         // Normalize so a neutral gray keeps its luminance (WB shifts color, not brightness).
-        let lum = LUMA[0] * gains[0] + LUMA[1] * gains[1] + LUMA[2] * gains[2];
+        // ⚠ The luminance of white *after* the gains — i.e. of the pixel [1,1,1] scaled by
+        // them — used to renormalise so a white-balance change does not alter brightness. It is
+        // a pixel, not a coefficient list, which is why `luminance` is the right call here.
+        let lum = color::luminance(gains);
         if lum > 1e-6 {
             for c in &mut gains {
                 *c /= lum;
@@ -67,8 +68,13 @@ mod tests {
             tint: -20.0,
         });
         let gray = [0.5, 0.5, 0.5];
-        let out_lum: f32 = (0..3).map(|i| LUMA[i] * gray[i] * s.gains[i]).sum();
-        let in_lum: f32 = (0..3).map(|i| LUMA[i] * gray[i]).sum();
+        let scaled = [
+            gray[0] * s.gains[0],
+            gray[1] * s.gains[1],
+            gray[2] * s.gains[2],
+        ];
+        let out_lum: f32 = color::luminance(scaled);
+        let in_lum: f32 = color::luminance(gray);
         assert!((out_lum - in_lum).abs() < 1e-4);
     }
 }

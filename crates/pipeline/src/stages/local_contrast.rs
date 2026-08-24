@@ -22,7 +22,10 @@ const GAIN_MAX: f32 = 4.0;
 
 /// Rec.709 luma, in linear light. Same as `stages/sharpening.rs`.
 fn luma(px: &[f32]) -> f32 {
-    0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2]
+    // ⚠ Delegates to `color::luminance`, which carries the **working space's** weights. This
+    // used to be a local copy of the Rec.709 triple — one of six, all of which became wrong the
+    // day the working space stopped being sRGB.
+    color::luminance([px[0], px[1], px[2]])
 }
 
 /// Midtone weight for Clarity: 1 at mid-gray, falling smoothly to 0 at black and at white.

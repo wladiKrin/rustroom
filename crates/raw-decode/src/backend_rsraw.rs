@@ -66,7 +66,13 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     {
         // Poke libraw output params directly (rsraw's high-level API doesn't expose these).
         let params = &mut raw.as_mut().params;
-        params.output_color = 1; // sRGB (Rec.709) primaries
+        // ⚠ 4 = ProPhoto (ROMM), the pipeline's working space. libraw applies the camera
+        // matrix straight into it, so the widest transform in the chain is one we do not have
+        // to write. sRGB (1) clipped saturated colour here, before any slider was touched.
+        //
+        // ⚠ This number decides what every downstream stage is looking at. Changing it changes
+        // every rendered pixel and every golden — it is not a tuning knob.
+        params.output_color = 4;
         params.no_auto_bright = i32::from(opts.no_auto_bright);
         // ⚠ Without this libraw uses its own default of 3 (AHD), its slowest — which is what
         // every decode silently inherited before this existed.

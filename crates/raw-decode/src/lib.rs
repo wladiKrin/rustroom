@@ -5,7 +5,8 @@
 //! without touching downstream code.
 //!
 //! NOTE (Phase 0 / M0.2 spike): [`decode_raw`] currently returns libraw's *default-
-//! processed* output — demosaiced, camera white balance applied, and sRGB-gamma
+//! processed* output — demosaiced, camera white balance applied, in ProPhoto primaries for
+//! the editing path (sRGB-gamma
 //! encoded (display-referred). That is exactly what we want to prove decoding works
 //! and to write a viewable image. Phase 1 / M1.1 replaces this with a linear,
 //! scene-referred extraction feeding the develop pipeline.
@@ -183,7 +184,11 @@ impl Default for DecodeOptions {
 
 /// Decode a RAW file to an [`ImageBuf`] (f32 RGB) + metadata, per `opts`.
 ///
-/// With [`DecodeOptions::linear_scene`] the samples are linear light in sRGB primaries.
+/// With [`DecodeOptions::linear_scene`] the samples are linear light in **ProPhoto (ROMM)
+/// primaries** — the pipeline's working space.
+///
+/// ⚠ [`DecodeOptions::display`] still asks libraw for sRGB, because it feeds `rustroom decode`'s
+/// viewable dump rather than the pipeline. The two paths differ deliberately.
 /// With [`DecodeOptions::display`] they are sRGB-encoded (display-referred).
 pub fn decode_raw(path: &Path, opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
     let bytes = std::fs::read(path)?;

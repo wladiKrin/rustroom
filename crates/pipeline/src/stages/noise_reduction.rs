@@ -1,6 +1,9 @@
 use crate::spatial::{box_blur, guided_filter};
 use crate::{PipelineStage, RenderScale};
-use color::{linear_srgb_to_oklab, oklab_to_linear_srgb};
+// ⚠ The **ProPhoto** pair, not the sRGB one: this stage converts the working space in
+// and out again, and mixing the two directions produces a smooth, plausible colour shift
+// that is very hard to attribute later.
+use color::oklab::{oklab_to_prophoto, prophoto_to_oklab};
 use core_image::ImageBuf;
 use edit_model::NoiseReduction;
 use rayon::prelude::*;
@@ -81,7 +84,7 @@ impl PipelineStage for NoiseReductionStage {
             .zip(cb.par_iter_mut())
             .zip(image.data().par_chunks_exact(3))
             .for_each(|(((l, a), b), px)| {
-                let lab = linear_srgb_to_oklab([px[0], px[1], px[2]]);
+                let lab = prophoto_to_oklab([px[0], px[1], px[2]]);
                 *l = lab[0];
                 *a = lab[1];
                 *b = lab[2];
@@ -115,7 +118,7 @@ impl PipelineStage for NoiseReductionStage {
         data.par_chunks_exact_mut(3)
             .zip(lum.par_iter().zip(ca.par_iter()).zip(cb.par_iter()))
             .for_each(|(px, ((&l, &a), &b))| {
-                let rgb = oklab_to_linear_srgb([l, a, b]);
+                let rgb = oklab_to_prophoto([l, a, b]);
                 // Strong smoothing can push a pixel out of gamut; clamp at 0, the same
                 // convention HslStage uses.
                 px[0] = rgb[0].max(0.0);
@@ -153,14 +156,18 @@ mod tests {
         let mut img = ImageBuf::new(64, 64);
         for y in 0..64 {
             for x in 0..64 {
+                // ⚠ The patch is authored in **sRGB** and converted into the working space,
+                // exactly as the golden charts are. Writing these numbers straight in would
+                // have them read as ProPhoto — a different, more saturated colour, whose
+                // chroma noise this stage then handles differently.
                 img.set_pixel(
                     x,
                     y,
-                    [
+                    color::srgb_to_prophoto([
                         base[0] + amp * rng.next_signed(),
                         base[1] + amp * rng.next_signed(),
                         base[2] + amp * rng.next_signed(),
-                    ],
+                    ]),
                 );
             }
         }
@@ -176,7 +183,7 @@ mod tests {
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|p| linear_srgb_to_oklab([p[0], p[1], p[2]])[0])
+            .map(|p| prophoto_to_oklab([p[0], p[1], p[2]])[0])
             .collect();
         let mean = ls.iter().sum::<f32>() / ls.len() as f32;
         (ls.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / ls.len() as f32).sqrt()
@@ -190,7 +197,7 @@ mod tests {
             .0
             .iter()
             .flat_map(|p| {
-                let lab = linear_srgb_to_oklab([p[0], p[1], p[2]]);
+                let lab = prophoto_to_oklab([p[0], p[1], p[2]]);
                 [lab[1], lab[2]]
             })
             .collect();
@@ -203,7 +210,7 @@ mod tests {
         let n = (img.width() * img.height()) as f32;
         let (mut sa, mut sb) = (0.0, 0.0);
         for p in img.data().as_chunks::<3>().0 {
-            let lab = linear_srgb_to_oklab([p[0], p[1], p[2]]);
+            let lab = prophoto_to_oklab([p[0], p[1], p[2]]);
             sa += lab[1];
             sb += lab[2];
         }
