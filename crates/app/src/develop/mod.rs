@@ -8,6 +8,7 @@ use crate::commands;
 use crate::{filmstrip, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
+use rustroom_app::icons;
 use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
@@ -66,8 +67,18 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         Some(ActionKind::PresetDelete { name }) => format!("Undo delete “{name}”"),
         _ => "Undo".to_string(),
     };
-    let undo_click = icon(ui, "⟲", &undo_hint, app.actions.can_undo(open.as_deref()));
-    let redo_click = icon(ui, "⟳", "Redo", app.actions.can_redo(open.as_deref()));
+    let undo_click = icon(
+        ui,
+        icons::UNDO,
+        &undo_hint,
+        app.actions.can_undo(open.as_deref()),
+    );
+    let redo_click = icon(
+        ui,
+        icons::REDO,
+        "Redo",
+        app.actions.can_redo(open.as_deref()),
+    );
     if undo_click {
         commands::execute(app, ctx, Command::Undo);
     }
@@ -77,15 +88,14 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     if app.session.is_some() {
         ui.separator();
-        // ⚠ No magnifying glass exists in egui's bundled fonts — 🔍, 🔎 and ⌕ are all absent
-        // and would ship as tofu boxes, the same trap the rail's glyphs fell into. `⊞`/`⊟`
-        // (plus/minus in a box) and `⛶` (frame corners) do render; 1:1 has no glyph at all in
-        // those fonts, so it keeps its conventional text label. `every_toolbar_glyph_is_renderable`
-        // is the guard.
-        let zoom_out = icon(ui, "⊟", "Zoom out", true);
-        let zoom_in = icon(ui, "⊞", "Zoom in", true);
-        let zoom_fit = icon(ui, "⛶", "Zoom to fit", true);
-        let zoom_actual = icon(ui, "1:1", "Zoom to 1:1", true);
+        // ⚠ Real magnifying glasses, from the bundled font. These were `⊞`/`⊟` and a text
+        // "1:1" until the icon font landed, because egui's own fonts contain no magnifying
+        // glass at all. ⚠ `ZOOM_FIT` is a frame rather than a fourth glass — Phosphor has
+        // exactly three glass variants, and a frame is the conventional fit symbol anyway.
+        let zoom_out = icon(ui, icons::ZOOM_OUT, "Zoom out", true);
+        let zoom_in = icon(ui, icons::ZOOM_IN, "Zoom in", true);
+        let zoom_fit = icon(ui, icons::ZOOM_FIT, "Zoom to fit", true);
+        let zoom_actual = icon(ui, icons::ZOOM_ACTUAL, "Zoom to 1:1", true);
         if zoom_out {
             commands::execute(app, ctx, Command::ZoomOut);
         }
@@ -104,7 +114,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // button and the View-menu item are one implementation.
         let mut before_after = app.session.as_ref().is_some_and(|s| s.show_before);
         if ui
-            .toggle_value(&mut before_after, "◑")
+            .toggle_value(&mut before_after, icons::BEFORE_AFTER.to_string())
             .on_hover_text("Before / After")
             .clicked()
         {
@@ -120,15 +130,11 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 ///
 /// ⚠ The tooltip is not decoration: it is the only thing naming the action once the label is a
 /// glyph, so every caller must supply a real one.
-fn icon(ui: &mut egui::Ui, glyph: &str, hint: &str, enabled: bool) -> bool {
-    ui.add_enabled(enabled, egui::Button::new(glyph))
+fn icon(ui: &mut egui::Ui, glyph: char, hint: &str, enabled: bool) -> bool {
+    ui.add_enabled(enabled, egui::Button::new(glyph.to_string()))
         .on_hover_text(hint)
         .clicked()
 }
-
-/// Every glyph the toolbar paints, for the coverage test.
-#[cfg(test)]
-const TOOLBAR_GLYPHS: [&str; 5] = ["⟲", "⟳", "⊟", "⊞", "⛶"];
 
 #[cfg(test)]
 mod tests {
@@ -136,32 +142,22 @@ mod tests {
 
     #[test]
     fn every_toolbar_glyph_is_renderable() {
-        // ⚠ The same guard the rail carries, for the same reason: the obvious icons for these
-        // actions — 🔍 for zoom, ↩/↪ for undo, ◧ for a before/after split — are ALL absent
-        // from egui's bundled fonts and would ship as tofu boxes. A missing glyph is invisible
-        // to every other test here.
+        // ⚠ Sweeps `icons::ALL` rather than a table local to this file. A second list would
+        // drift from the first, and the drift would be invisible: an icon dropped from the
+        // local table is simply one that nothing checks.
         //
-        // ⚠ A frame must run first: a fresh `Context` has not built its font atlas.
+        // ⚠ Installs the real font stack, because production no longer uses egui's default one.
+        // Without it this fails on every icon while the app renders them perfectly.
         let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
         let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         let id = egui::FontId::proportional(14.0);
-        for g in TOOLBAR_GLYPHS {
-            for c in g.chars() {
-                assert!(
-                    ctx.fonts_mut(|f| f.has_glyph(&id, c)),
-                    "toolbar glyph {c} (U+{:04X}) is not in any bundled font",
-                    c as u32
-                );
-            }
+        for c in icons::ALL {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyph(&id, c)),
+                "icon U+{:04X} is not in the bundled font",
+                c as u32
+            );
         }
-    }
-
-    #[test]
-    fn the_before_after_glyph_is_renderable() {
-        // Separate from the button table because it lives on a `toggle_value`, not on `icon`.
-        let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
-        let id = egui::FontId::proportional(14.0);
-        assert!(ctx.fonts_mut(|f| f.has_glyph(&id, '◑')));
     }
 }
