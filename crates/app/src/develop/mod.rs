@@ -9,6 +9,13 @@ use crate::{filmstrip, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::icons;
+
+/// The toolbar icons' point size.
+///
+/// ⚠ Larger than body text on purpose — see [`icon_text`]. Still smaller than the rail's 22 pt,
+/// because a toolbar icon sits in a row of its own height while a rail entry has a label under
+/// it and a whole 88 pt column to fill.
+const ICON_SIZE: f32 = 17.0;
 use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
@@ -114,7 +121,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // button and the View-menu item are one implementation.
         let mut before_after = app.session.as_ref().is_some_and(|s| s.show_before);
         if ui
-            .toggle_value(&mut before_after, icons::BEFORE_AFTER.to_string())
+            .toggle_value(&mut before_after, icon_text(icons::BEFORE_AFTER))
             .on_hover_text("Before / After")
             .clicked()
         {
@@ -131,9 +138,19 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 /// ⚠ The tooltip is not decoration: it is the only thing naming the action once the label is a
 /// glyph, so every caller must supply a real one.
 fn icon(ui: &mut egui::Ui, glyph: char, hint: &str, enabled: bool) -> bool {
-    ui.add_enabled(enabled, egui::Button::new(glyph.to_string()))
+    ui.add_enabled(enabled, egui::Button::new(icon_text(glyph)))
         .on_hover_text(hint)
         .clicked()
+}
+
+/// One toolbar icon at [`ICON_SIZE`].
+///
+/// ⚠ Sized explicitly rather than inheriting the body text size. `theme::tune` deliberately
+/// makes body text compact, because the panel stacks twenty-odd sliders — but an icon carries
+/// the *whole* meaning of its button, where a word has letters to be recognised by, so the same
+/// size reads as too small. One helper, so the toolbar cannot end up with two icon sizes.
+fn icon_text(glyph: char) -> egui::RichText {
+    egui::RichText::new(glyph).size(ICON_SIZE)
 }
 
 #[cfg(test)]
