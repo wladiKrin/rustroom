@@ -116,7 +116,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ A visual-companion server may still be running** from the layout brainstorm at `http://localhost:51282`, with content in `.superpowers/brainstorm/` (gitignored). It auto-exits after 30 minutes idle; restart it from the brainstorming skill's `scripts/start-server.sh` if the layout work resumes and it is gone.
 >
-> **State at handoff (2026-08-24):** 678 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green. Branch **`layout-ia-rework`** holds steps 1 (the panel) and 2 (the rail) of the layout rework; step 3 (the menu bar) is specced and not yet planned.
+> **State at handoff (2026-08-24):** 688 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green. Branch **`layout-ia-rework`** holds steps 1 (the panel) and 2 (the rail) of the layout rework; step 3 (the menu bar) is specced and not yet planned.
 
 **Most recent work (2026-08-24). The tool rail — step 2 of 3 of the layout/IA rework.** **678 tests, 38 goldens byte-identical.** Its section is **"The tool rail"** below. Step 1 (the panel) is the section after it.
 
@@ -239,6 +239,16 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
 **Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
 
 **The user wants the GUI launched after every big update so they can cross-check it themselves** — start it in the background without being asked, and say what to look at. Skip it for small follow-up tweaks in a tuning loop.
+
+**Per-tool resets and a lockable crop aspect (2026-08-24).** Follow-ups to the rail, found by using it. **688 tests.**
+
+- **Each tool resets its own edit group and nothing else** — "Reset adjustments" (Edit), "Reset crop" (Crop), "Remove all masks" (Masks). That is what an exclusive panel implies: a tool must not discard a crop or a painted mask the user cannot see from where they are standing. ⚠ The Edit reset's group set is **derived from `SECTIONS`**, and the other two go through named `GEOMETRY_GROUP` / `MASKS_GROUP` constants rather than literal `5` / `6` — a wrong index still compiles and still resets *something*.
+- **⚠⚠ The crop aspect is now a lock, and the drive-axis rule took two wrong answers before the right one.** Picking 1:1/3:2/4:3/16:9 locks the ratio; every corner and edge drag preserves it. `crop_tool::apply_drag` gained an `aspect: Option<f32>`. **The bug a test caught:** a corner must drive its size from whichever axis *changed most*, not from width (a straight-down drag then does nothing) and **not from `fw.max(fh * a)`** — that only ever *grows*, so it ignores the drag entirely whenever you are shrinking, which is the common case. `a_locked_corner_follows_a_purely_vertical_drag` is the discriminating test, and it failed against the first implementation.
+- **⚠ The lock stores the PIXEL ratio, not the normalized one.** Normalized aspect is `pixel / image_aspect`, so it differs per photo — storing that would silently change the crop's shape the moment you switched to a photo with different dimensions. Converted at the point of use, from `s.baseline`'s aspect, which is the same source the Crop panel's presets use so the two cannot disagree.
+- **⚠ An edge drag holds the perpendicular *centre* fixed**, or the rect creeps up the frame as you widen it. A corner holds the opposite corner. Sabotaging the centre anchoring fails `a_locked_edge_drag_keeps_the_ratio_and_the_perpendicular_centre`.
+- **⚠ "Free" no longer resets the crop**, it only unlocks. It used to reset to the full frame, which made unlocking destructive; resetting is now "Reset crop"'s job. The presets are `selectable_label`s, because a lock with no shown selection is **invisible state** — you would only discover it by dragging a handle and finding it refuse.
+- **⚠ A degenerate aspect is guarded at the door.** `w / a` with `a = 0` is infinity, and the subtraction that follows is NaN; a NaN rect then compares false against every clamp, so the crop would quietly stop responding rather than fail loudly.
+- The four pre-existing `crop_tool` tests kept their assertions **verbatim** through a `dragged` helper — the same routing `mask_tool::apply_drag` used when it changed shape — so their passing is the evidence the free path did not move. This closes the M1.4b simplification "aspect presets *snap* the rect (no fully aspect-locked interactive drag)".
 
 **The tool rail — step 2 of 3 of the layout/IA rework.** A four-entry rail (Edit · Crop · Masks · Presets) on the **right edge, outermost**, whose selection **replaces** the panel's contents. 672 → **678 tests**; no golden moved.
 
