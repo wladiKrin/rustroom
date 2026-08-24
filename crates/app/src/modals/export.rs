@@ -7,7 +7,9 @@
 use super::dialog;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::batch_export::{destination_ready, Collision, Decision, ExportOptions};
+use rustroom_app::batch_export::{
+    banding_warning, destination_ready, Collision, Decision, ExportOptions,
+};
 use rustroom_app::export_presets::ExportPreset;
 use rustroom_app::settings::ConfirmOutcome;
 
@@ -80,6 +82,22 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                     }
                 });
         });
+        ui.horizontal(|ui| {
+            ui.label("Colour space");
+            egui::ComboBox::from_id_salt("space_pick")
+                .selected_text(opts.space.label())
+                .show_ui(ui, |ui| {
+                    for s in color::OutputSpace::ALL {
+                        ui.selectable_value(&mut opts.space, s, s.label());
+                    }
+                });
+        });
+        // ⚠ Warn, never block — see `banding_warning`. Placed under the two controls it is
+        // about, so the fix ("use 16-bit") is one glance from the Format dropdown.
+        if let Some(msg) = banding_warning(opts.space, opts.format) {
+            theme::hint(ui, msg);
+        }
+
         // Greyed out rather than hidden for the non-lossy formats: the value is still
         // there and returns when JPEG is reselected — the same treatment NR's Detail and
         // Sharpening's Masking get for being inert.

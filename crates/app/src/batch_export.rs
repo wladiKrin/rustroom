@@ -36,6 +36,29 @@ pub struct ExportOptions {
     pub demosaic: raw_decode::Demosaic,
     /// The output format and bit depth.
     pub format: ExportFormat,
+    /// The colour space the file is written in.
+    ///
+    /// ⚠ Export-only. The preview stays sRGB, because the display is assumed sRGB until a
+    /// display profile exists — see `pipeline::OutputTransform`.
+    ///
+    /// ⚠ **No field-level `#[serde(default)]` here, and that is not an omission.** The struct
+    /// carries a *container-level* one, so a missing field already falls back to this struct's
+    /// `Default` — adding it per field implies a guarantee it is not the source of.
+    pub space: color::OutputSpace,
+}
+
+/// The banding warning for a space/format pair, or `None` when there is nothing to say.
+///
+/// ⚠ **Warn, never block.** A blocked combination reads as "the thing I didn't click went dark",
+/// which this project has already shipped once and taken back out. The state this warns about is
+/// one click from being fixed.
+pub fn banding_warning(space: color::OutputSpace, format: ExportFormat) -> Option<&'static str> {
+    let eight_bit = matches!(
+        format,
+        ExportFormat::Jpeg | ExportFormat::Png8 | ExportFormat::Tiff8
+    );
+    (space.warns_in_8_bit() && eight_bit)
+        .then_some("ProPhoto in 8-bit will band on smooth gradients — use 16-bit TIFF or PNG.")
 }
 
 impl Default for ExportOptions {
@@ -53,6 +76,7 @@ impl Default for ExportOptions {
             max_edge: None,
             demosaic: raw_decode::Demosaic::default(),
             format: ExportFormat::default(),
+            space: color::OutputSpace::default(),
         }
     }
 }
@@ -170,15 +194,8 @@ pub fn export_one(
         None => image,
     };
     let scale = scale_for(source_long, opts.max_edge);
-    let rendered = pipeline::build_pipeline(edits, scale).run(scaled);
-    export::save(
-        &rendered,
-        dest,
-        opts.format,
-        opts.quality,
-        color::OutputSpace::Srgb,
-    )
-    .map_err(|e| e.to_string())
+    let rendered = pipeline::build_pipeline_to(edits, scale, opts.space).run(scaled);
+    export::save(&rendered, dest, opts.format, opts.quality, opts.space).map_err(|e| e.to_string())
 }
 
 /// A running batch export.
@@ -843,5 +860,44 @@ mod tests {
         let got = dest_for(&dir, Path::new("/in/.."), 0, ExportFormat::Jpeg);
         assert!(got.starts_with("/out"));
         assert_eq!(got.extension().and_then(|e| e.to_str()), Some("jpg"));
+    }
+
+    #[test]
+    fn an_options_file_from_before_the_space_still_loads() {
+        // ⚠ `SettingsStore::load()` is infallible, so a field that fails to parse silently
+        // reverts *every* setting. The struct's **container-level** `#[serde(default)]` is what
+        // prevents that — verified: removing a field-level attribute changes nothing here.
+        //
+        // ⚠ So what this test actually discriminates is the **value**: the default must be sRGB.
+        // A wide space arriving by default would quietly change what every existing user's next
+        // export contains, which is the failure worth guarding.
+        let json = r#"{"dest_dir":"/tmp","quality":90,"max_edge":null,
+                       "demosaic":"Fast","format":"Jpeg"}"#;
+        let opts: ExportOptions = serde_json::from_str(json).expect("older options should load");
+        assert_eq!(opts.space, color::OutputSpace::Srgb);
+        assert_eq!(opts.quality, 90);
+    }
+
+    #[test]
+    fn the_banding_hint_appears_only_for_prophoto_in_eight_bit() {
+        // ⚠ The condition is a pure function so it is testable without a dialog. It fires on
+        // ProPhoto alone — see `OutputSpace::warns_in_8_bit` for why widening it would be wrong.
+        use color::OutputSpace as S;
+        use export::ExportFormat as F;
+        assert!(banding_warning(S::ProPhoto, F::Jpeg).is_some());
+        assert!(banding_warning(S::ProPhoto, F::Png8).is_some());
+        assert!(banding_warning(S::ProPhoto, F::Tiff8).is_some());
+        assert!(banding_warning(S::ProPhoto, F::Tiff16).is_none());
+        assert!(banding_warning(S::ProPhoto, F::Png16).is_none());
+        for f in F::ALL {
+            for s in [S::Srgb, S::DisplayP3, S::AdobeRgb] {
+                assert!(
+                    banding_warning(s, f).is_none(),
+                    "{} + {:?} should not warn",
+                    s.label(),
+                    f
+                );
+            }
+        }
     }
 }
