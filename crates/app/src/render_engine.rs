@@ -539,8 +539,15 @@ fn render_cached(
     // slow.
     let clip = rect.map(|r| (r.x, r.y, r.w, r.h));
     let coverage = brush_cache.get_or_build(edits, pw, ph, clip);
-    let (_, tail) =
-        pipeline::build_pipeline_split_in_region_with_brush(edits, scale, region, Some(&coverage));
+    let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        edits,
+        scale,
+        region,
+        Some(&coverage),
+        // The preview is always sRGB — the display is assumed sRGB until a display
+        // profile exists. See `pipeline::OutputTransform`.
+        color::OutputSpace::Srgb,
+    );
     (pack(tail.run(input), region, max_dim), ran)
 }
 

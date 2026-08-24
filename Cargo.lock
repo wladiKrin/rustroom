@@ -261,6 +261,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "catalog",
+ "color 0.1.0",
  "core-image",
  "dirs",
  "edit-model",
@@ -867,6 +868,9 @@ dependencies = [
 [[package]]
 name = "color"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "color"

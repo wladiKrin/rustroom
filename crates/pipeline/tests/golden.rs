@@ -243,7 +243,21 @@ fn check_golden(name: &str, edits: &Edits) {
 }
 
 fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
-    let rendered = build_pipeline(edits, RenderScale::FULL).run(input);
+    compare_or_update(name, build_pipeline(edits, RenderScale::FULL).run(input));
+}
+
+/// As [`check_golden`], rendering to a non-sRGB output space.
+///
+/// ⚠ The non-default output path has no reference otherwise: every other golden goes through
+/// sRGB, so a mistake in the P3 matrix or in the space parameter's plumbing would be invisible.
+fn check_golden_in_space(name: &str, edits: &Edits, space: color::OutputSpace) {
+    compare_or_update(
+        name,
+        pipeline::build_pipeline_to(edits, RenderScale::FULL, space).run(chart()),
+    );
+}
+
+fn compare_or_update(name: &str, rendered: ImageBuf) {
     let (rw, rh) = (rendered.width() as u32, rendered.height() as u32);
     let bytes = to_rgb8(&rendered);
     let path = golden_path(name);
@@ -895,5 +909,14 @@ fn golden_mask_brush_flow_buildup() {
             }],
             ..Edits::default()
         },
+    );
+}
+
+#[test]
+fn golden_output_p3() {
+    check_golden_in_space(
+        "output_p3",
+        &Edits::default(),
+        color::OutputSpace::DisplayP3,
     );
 }

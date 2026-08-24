@@ -11,4 +11,5 @@ edit-model = { path = "../edit-model" }
 rayon.workspace = true
 
 [dev-dependencies]
+color = { path = "../color" }
 image = { workspace = true }

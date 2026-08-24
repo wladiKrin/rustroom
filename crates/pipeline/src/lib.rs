@@ -32,7 +32,7 @@ pub use stages::hsl::HslStage;
 pub use stages::local_contrast::LocalContrastStage;
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
-pub use stages::output_transform::OutputTransformSrgb;
+pub use stages::output_transform::OutputTransform;
 pub use stages::saturation::SaturationStage;
 pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
 pub use stages::tone_curve::ToneCurveStage;
@@ -275,7 +275,7 @@ pub fn build_pipeline_split_in_region(
     scale: RenderScale,
     region: Option<Region>,
 ) -> (Pipeline, Pipeline) {
-    build_pipeline_split_in_region_with_brush(edits, scale, region, None)
+    build_pipeline_split_in_region_with_brush(edits, scale, region, None, color::OutputSpace::Srgb)
 }
 
 /// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
@@ -287,6 +287,7 @@ pub fn build_pipeline_split_in_region_with_brush(
     scale: RenderScale,
     region: Option<Region>,
     brush: Option<&BrushCoverage>,
+    space: color::OutputSpace,
 ) -> (Pipeline, Pipeline) {
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
@@ -378,7 +379,7 @@ pub fn build_pipeline_split_in_region_with_brush(
         tail.push(Box::new(SharpenStage::new(&edits.sharpening, scale)));
     }
 
-    tail.push(Box::new(OutputTransformSrgb));
+    tail.push(Box::new(OutputTransform::new(space)));
 
     (Pipeline::new(prefix), Pipeline::new(tail))
 }
@@ -393,6 +394,19 @@ pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pip
 /// output transform is always last.
 pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
     let (prefix, tail) = build_pipeline_split(edits, scale);
+    let mut stages = prefix.into_stages();
+    stages.extend(tail.into_stages());
+    Pipeline::new(stages)
+}
+
+/// As [`build_pipeline`], writing to `space` rather than sRGB.
+///
+/// ⚠ Additive with a delegating wrapper — the `Region` precedent, which gave that work zero
+/// call-site churn. Only export and `rustroom render` call this; the preview goes through
+/// [`build_pipeline`] and stays sRGB, because the display is assumed sRGB until a display
+/// profile exists.
+pub fn build_pipeline_to(edits: &Edits, scale: RenderScale, space: color::OutputSpace) -> Pipeline {
+    let (prefix, tail) = build_pipeline_split_in_region_with_brush(edits, scale, None, None, space);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
@@ -726,7 +740,7 @@ mod tests {
                 "prefix stage {name} leaked into the tail"
             );
         }
-        assert_eq!(tail.stage_names().last(), Some(&"output_transform_srgb"));
+        assert_eq!(tail.stage_names().last(), Some(&"output_transform"));
     }
 
     #[test]
@@ -863,7 +877,7 @@ mod tests {
         };
         assert_eq!(
             build_pipeline(&edits, RenderScale::FULL).stage_names(),
-            vec!["exposure", "saturation", "output_transform_srgb"]
+            vec!["exposure", "saturation", "output_transform"]
         );
     }
 
@@ -972,7 +986,7 @@ mod tests {
                 "noise_reduction",
                 "white_balance",
                 "exposure",
-                "output_transform_srgb"
+                "output_transform"
             ]
         );
     }
@@ -1005,12 +1019,7 @@ mod tests {
         };
         assert_eq!(
             build_pipeline(&edits, RenderScale::FULL).stage_names(),
-            vec![
-                "exposure",
-                "saturation",
-                "vignette",
-                "output_transform_srgb"
-            ]
+            vec!["exposure", "saturation", "vignette", "output_transform"]
         );
     }
 
@@ -1046,12 +1055,7 @@ mod tests {
         };
         assert_eq!(
             build_pipeline(&edits, RenderScale::FULL).stage_names(),
-            vec![
-                "exposure",
-                "vignette",
-                "sharpening",
-                "output_transform_srgb"
-            ]
+            vec!["exposure", "vignette", "sharpening", "output_transform"]
         );
     }
 
@@ -1093,7 +1097,7 @@ mod tests {
                 "tone_curve",
                 "local_contrast",
                 "saturation",
-                "output_transform_srgb"
+                "output_transform"
             ]
         );
     }

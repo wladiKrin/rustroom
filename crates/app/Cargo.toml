@@ -16,6 +16,7 @@ name = "Rustroom"
 path = "src/main.rs"
 
 [dependencies]
+color = { path = "../color" }
 core-image = { path = "../core-image" }
 raw-decode = { path = "../raw-decode" }
 edit-model = { path = "../edit-model" }
