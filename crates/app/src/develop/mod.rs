@@ -5,10 +5,9 @@ pub mod panel;
 pub mod rail;
 
 use crate::commands;
-use crate::{filmstrip, theme, Modal, RustroomApp};
+use crate::{filmstrip, theme, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
-use rustroom_app::edit_clipboard;
 use rustroom_app::menu::Command;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
@@ -82,72 +81,25 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if redo_click {
         commands::execute(app, ctx, Command::Redo);
     }
-    if let Some(s) = &mut app.session {
-        if ui.button("Fit").clicked() {
-            s.zoom = 1.0;
-            s.pan = egui::Vec2::ZERO;
-        }
-        ui.toggle_value(&mut s.show_before, "Before/After");
-    }
     if app.session.is_some() {
-        ui.separator();
-        if ui.button("Copy").clicked() {
-            // Same borrow reason as in `handle_clipboard_keys`, and the same system
-            // clipboard write, so the button and the shortcut cannot disagree.
-            app.clipboard = app.session.as_ref().map(|s| s.edits.clone());
-            if let Some(edits) = &app.clipboard {
-                ui.ctx().copy_text(edit_clipboard::encode(edits));
+        if ui.button("Fit").clicked() {
+            commands::execute(app, ctx, Command::FitView);
+        }
+        // ⚠ `toggle_value` needs the live flag, so this reads it and dispatches on a change
+        // rather than writing it directly — the menu item and the button must not be two
+        // implementations of the same toggle.
+        let mut before_after = app.session.as_ref().is_some_and(|s| s.show_before);
+        if ui.toggle_value(&mut before_after, "Before/After").clicked() {
+            commands::execute(app, ctx, Command::ToggleBeforeAfter);
+        }
+        // ⚠ The filename, right-aligned. The row that used to hold fourteen controls now
+        // carries the one piece of context worth always seeing.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(s) = &app.session {
+                if let Some(name) = s.path.file_name() {
+                    theme::caption(ui, &name.to_string_lossy());
+                }
             }
-            app.status = "Settings copied".to_string();
-        }
-        if ui
-            .add_enabled(app.clipboard.is_some(), egui::Button::new("Paste…"))
-            .clicked()
-        {
-            app.modal = Modal::PasteSettings;
-        }
-        let selected = app.library.as_ref().map_or(0, |l| l.selection.len());
-        if ui
-            .add_enabled(
-                selected > 1,
-                egui::Button::new(format!("Sync {}…", selected.saturating_sub(1))),
-            )
-            .clicked()
-        {
-            app.modal = Modal::SyncSettings;
-        }
-        // One button for both: the count decides whether it exports the open photo or
-        // the whole selection. There is no second code path — a single export is a
-        // batch of one, through the same worker.
-        let to_export = app.export_jobs().len();
-        let label = if to_export > 1 {
-            format!("Export {to_export}…")
-        } else {
-            "Export…".to_string()
-        };
-        if ui
-            .add_enabled(to_export > 0, egui::Button::new(label))
-            .clicked()
-        {
-            // Reset the working copy from the committed value, so a previously
-            // cancelled edit does not linger.
-            app.export_draft = app.settings.export.clone();
-            app.modal = Modal::ExportSettings;
-        }
-        if ui.button("Settings…").clicked() {
-            app.modal = Modal::Settings;
-        }
-        // ⚠ The binding is named from the setting through `PanDrag::label()` rather than
-        // hardcoded as "middle-drag", which would become a lie the moment someone changed it.
-        theme::hint(
-            ui,
-            &format!(
-                "Scroll or {} to pan · pinch or Ctrl+scroll to zoom",
-                app.settings.pan_drag.label()
-            ),
-        );
-    }
-    if app.library.is_some() {
-        ui.toggle_value(&mut app.show_filmstrip, "Filmstrip");
+        });
     }
 }
