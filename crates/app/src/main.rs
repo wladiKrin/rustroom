@@ -385,6 +385,41 @@ fn preview_edits(edits: &Edits, tool: Tool) -> Edits {
     e
 }
 
+impl Session {
+    /// The edits to render for the current view.
+    ///
+    /// ⚠ **Every render request goes through this**, so nothing can forget the before/after
+    /// state. That is the point: `show_before` used to be handled by swapping in a texture the
+    /// decode worker had rendered once, at preview resolution, which looked correct at fit and
+    /// visibly pixelated at any zoom.
+    ///
+    /// ⚠ **"Before" keeps the geometry and drops the adjustments**, rather than being fully
+    /// neutral. A fully neutral render is *uncropped*, so it has different dimensions from the
+    /// edited one — the region and placement maths would describe different content, and
+    /// toggling while zoomed would jump to somewhere else in the photo. Holding the framing
+    /// fixed is what makes a zoomed comparison mean anything.
+    fn view_edits(&self, tool: Tool) -> Edits {
+        let edits = if self.show_before {
+            before_edits(&self.edits)
+        } else {
+            self.edits.clone()
+        };
+        preview_edits(&edits, tool)
+    }
+}
+
+/// The photo as it was before any adjustment, at the **current framing**.
+///
+/// ⚠ Geometry survives on purpose — see [`Session::view_edits`]. A free function rather than a
+/// method so it can be tested without building a `Session`, which needs a decoded buffer and a
+/// texture.
+fn before_edits(edits: &Edits) -> Edits {
+    Edits {
+        geometry: edits.geometry,
+        ..Default::default()
+    }
+}
+
 /// Decode a file for editing (half-size for RAW; full decode for images) into a linear
 /// `ImageBuf`, a display label, and the buffer's size relative to a full-resolution
 /// decode. Dispatches by file kind.
@@ -522,11 +557,7 @@ impl RustroomApp {
         };
         s.edits.merge_from(src, groups);
         let pushed = s.history.push(s.edits.clone());
-        s.request(
-            preview_edits(&s.edits, tool),
-            s.render_max_dim(),
-            s.requested_region,
-        );
+        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         pushed
     }
 
@@ -777,11 +808,7 @@ impl RustroomApp {
             s.edits = edits;
             // The old history described a state that is no longer on disk.
             s.history = History::new(s.edits.clone());
-            s.request(
-                preview_edits(&s.edits, tool),
-                s.render_max_dim(),
-                s.requested_region,
-            );
+            s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         }
         // That photo's history was just replaced, so its entries point at steps it no longer
         // holds. Every other photo's stack is untouched and stays.
@@ -793,11 +820,7 @@ impl RustroomApp {
         let tool = self.tool;
         let Some(s) = &mut self.session else { return };
         s.edits = s.history.get().clone();
-        s.request(
-            preview_edits(&s.edits, tool),
-            s.render_max_dim(),
-            s.requested_region,
-        );
+        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
     }
 
     /// Undo the most recent action, whichever kind it was.
@@ -985,11 +1008,7 @@ impl RustroomApp {
             &Edits::default(),
             develop::panel::adjustments::edit_groups(),
         );
-        s.request(
-            preview_edits(&s.edits, tool),
-            s.render_max_dim(),
-            s.requested_region,
-        );
+        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         if s.history.push(s.edits.clone()) {
             if let Some(path) = self.open_photo() {
                 self.actions.push(
@@ -1014,11 +1033,7 @@ impl RustroomApp {
         self.tool = t;
         let tool = self.tool;
         if let Some(s) = &mut self.session {
-            s.request(
-                preview_edits(&s.edits, tool),
-                s.render_max_dim(),
-                s.requested_region,
-            );
+            s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         }
     }
 
@@ -1039,11 +1054,7 @@ impl RustroomApp {
                 g.crop = g.crop.rotated_cw();
             }
         }
-        s.request(
-            preview_edits(&s.edits, tool),
-            s.render_max_dim(),
-            s.requested_region,
-        );
+        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         if s.history.push(s.edits.clone()) {
             if let Some(path) = self.open_photo() {
                 self.actions.push(
@@ -1226,7 +1237,7 @@ impl RustroomApp {
                     // see an unchanged rung and a covered region and request nothing at all —
                     // leaving the old buffer's texture on screen, so the upgrade would be
                     // invisible until something else happened to trigger a render.
-                    s.request(preview_edits(&s.edits, tool), s.fit_cap(), None);
+                    s.request(s.view_edits(tool), s.fit_cap(), None);
                     self.status = "Full resolution ready".to_string();
                 }
                 Err(e) => {
@@ -1495,6 +1506,28 @@ fn edit_group_checkboxes(ui: &mut egui::Ui, groups: &mut EditGroups) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_before_view_keeps_the_geometry_and_drops_the_adjustments() {
+        // ⚠⚠ The property the whole before/after rework rests on. A *fully* neutral render is
+        // uncropped, so it has different dimensions from the edited one — the region and
+        // placement maths would then describe different content and toggling while zoomed
+        // would jump elsewhere in the photo. Keeping the framing is what makes the comparison
+        // a comparison.
+        let mut edits = Edits {
+            exposure: 1.5,
+            ..Default::default()
+        };
+        edits.geometry.crop.left = 0.25;
+        edits.geometry.angle = 3.0;
+        edits.vignette.amount = -40.0;
+
+        let before = super::before_edits(&edits);
+        assert_eq!(before.geometry.crop.left, 0.25, "the crop must survive");
+        assert_eq!(before.geometry.angle, 3.0, "the straighten must survive");
+        assert_eq!(before.exposure, 0.0, "the adjustments must not");
+        assert_eq!(before.vignette.amount, 0.0);
+    }
 
     #[test]
     fn every_demosaic_tier_has_a_cost_hint() {

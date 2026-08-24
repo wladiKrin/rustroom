@@ -79,8 +79,13 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ToggleBeforeAfter => {
+            // ⚠ Must re-render: before/after now changes *what is rendered*, not which of two
+            // textures is shown. Without this the toggle would appear to do nothing until some
+            // other edit happened to request a frame — the M3.1a `draw_mask_overlay` bug.
+            let tool = app.tool;
             if let Some(s) = &mut app.session {
                 s.show_before = !s.show_before;
+                s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
             }
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,

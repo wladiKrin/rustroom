@@ -1,6 +1,6 @@
 //! The central image canvas: the rendered photo, zoom and pan, and the crop overlay.
 
-use crate::{preview_edits, rects_around, PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
+use crate::{rects_around, PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
 use eframe::egui;
 use rustroom_app::tool::Tool;
 use rustroom_app::{brush_tool, crop_tool, mask_tool, settings::PanDrag, view_region};
@@ -97,7 +97,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
         match &mut app.session {
             Some(s) => {
                 if let Some(tex) = &s.texture {
-                    let shown = if s.show_before { &s.baseline } else { tex };
+                    // ⚠ Always the rendered frame, never `s.baseline`. Before/after is a
+                    // property of *what is rendered* now — see `Session::view_edits` — so the
+                    // before image arrives at the current rung and region like any other, and
+                    // is sharp at 1:1 instead of a magnified preview-resolution texture.
+                    let shown = tex;
                     let avail = ui.available_size();
 
                     // fit/zoom are expressed against the post-geometry image at *fit*
@@ -171,18 +175,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     if (!covered && s.requested_region != want) || max_dim != s.render_rung {
                         s.requested_region = want;
                         s.render_rung = max_dim;
-                        s.request(preview_edits(&s.edits, tool), max_dim, want);
+                        s.request(s.view_edits(tool), max_dim, want);
                     }
 
                     // Place using the *texture's* own render resolution, not the current
                     // mode's: a frame from the other mode may still be on screen while a
                     // new one is in flight.
-                    let (place_region, place_long) = if s.show_before {
-                        // The baseline is always the whole image at fit resolution.
-                        (None, full_long)
-                    } else {
-                        (s.rendered_region, s.rendered_long.max(1.0))
-                    };
+                    // ⚠ No before/after special case any more: the before frame is rendered
+                    // with the *same* geometry, rung and region as the after frame, so it
+                    // places identically. Holding the framing fixed is what lets the toggle be
+                    // a comparison rather than a jump.
+                    let (place_region, place_long) = (s.rendered_region, s.rendered_long.max(1.0));
                     let pk = place_long / full_long;
                     let pscale = fit * s.zoom / pk;
 
@@ -580,11 +583,7 @@ fn draw_mask_overlay(
                 );
             }
         }
-        s.request(
-            preview_edits(&s.edits, tool),
-            s.render_max_dim(),
-            s.requested_region,
-        );
+        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         s.history.push(s.edits.clone());
         return true;
     }
@@ -608,11 +607,7 @@ fn draw_mask_overlay(
     // happened to request a frame. Unlike `draw_crop_overlay`, which needs no request because
     // `preview_edits` strips the crop in geometry mode and the overlay *is* the feedback.
     if moved {
-        s.request(
-            preview_edits(&s.edits, tool),
-            s.render_max_dim(),
-            s.requested_region,
-        );
+        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
     }
     false
 }

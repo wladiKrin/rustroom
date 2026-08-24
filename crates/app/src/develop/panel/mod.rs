@@ -5,7 +5,7 @@ pub mod geometry;
 pub mod masks;
 pub mod presets;
 
-use crate::{preview_edits, theme, RustroomApp};
+use crate::{theme, RustroomApp};
 use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::tool::Tool;
@@ -148,7 +148,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
 
                     if ed.changed {
                         s.request(
-                            preview_edits(&s.edits, tool),
+                            s.view_edits(tool),
                             s.render_max_dim(),
                             s.requested_region,
                         );
