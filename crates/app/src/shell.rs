@@ -118,13 +118,9 @@ impl eframe::App for RustroomApp {
                 }
             }
             ui.horizontal(|ui| {
-                if ui.button("Open file…").clicked() {
-                    self.open_dialog(&ctx);
-                }
-                if ui.button("Open folder…").clicked() {
-                    self.open_folder(&ctx);
-                }
-                ui.separator();
+                // ⚠ Open file / Open folder are File-menu items now. They were the last
+                // duplicated commands in this row: everything here is either a mode switch or
+                // a Library-only filter.
                 ui.selectable_value(&mut self.view, AppView::Library, "Library");
                 ui.selectable_value(&mut self.view, AppView::Develop, "Develop");
                 ui.separator();

@@ -9,6 +9,9 @@ use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use rustroom_app::menu::{self, Command, Item};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::mpsc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 thread_local! {
     /// The live menu and its id → command map.
@@ -25,10 +28,52 @@ struct Installed {
     by_id: HashMap<MenuId, Command>,
 }
 
+/// Our own channel, fed by the event handler.
+///
+/// ⚠⚠ **`MenuEvent::receiver()` is dead once `set_event_handler(Some(..))` is called.** muda's
+/// `send` calls the handler *instead of* pushing to its channel — so the first version of this
+/// module polled a channel that could never receive anything, and every menu item silently did
+/// nothing. The handler must therefore forward the event itself.
+///
+/// ⚠ A `Mutex` because muda requires the handler to be `Send + Sync`, even though it only ever
+/// fires on the main thread.
+struct Events {
+    tx: Mutex<mpsc::Sender<MenuId>>,
+    rx: Mutex<mpsc::Receiver<MenuId>>,
+}
+
+static EVENTS: OnceLock<Events> = OnceLock::new();
+
+fn events() -> &'static Events {
+    EVENTS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        Events {
+            tx: Mutex::new(tx),
+            rx: Mutex::new(rx),
+        }
+    })
+}
+
 /// Build and install the menu. Call once, from the app's constructor.
 pub fn install(ctx: &egui::Context) {
     let menu = Menu::new();
     let mut by_id = HashMap::new();
+
+    // ⚠⚠ **The application menu must come first, or macOS eats the first real menu.** AppKit
+    // always treats the *first* submenu of the main menu as the app menu and relabels it with
+    // the app name, whatever its own title says. Without this, "File" was absorbed — Open
+    // file, Open folder and Export appeared under "Rustroom" and there was no File menu at all.
+    let app_menu = Submenu::new("Rustroom", true);
+    let about = MenuItem::new("About Rustroom", true, None);
+    by_id.insert(about.id().clone(), Command::About);
+    let _ = app_menu.append(&about);
+    let _ = app_menu.append(&PredefinedMenuItem::separator());
+    let _ = app_menu.append(&PredefinedMenuItem::hide(None));
+    let _ = app_menu.append(&PredefinedMenuItem::hide_others(None));
+    let _ = app_menu.append(&PredefinedMenuItem::show_all(None));
+    let _ = app_menu.append(&PredefinedMenuItem::separator());
+    let _ = app_menu.append(&PredefinedMenuItem::quit(None));
+    let _ = menu.append(&app_menu);
 
     for section in menu::model() {
         let sub = Submenu::new(section.title, true);
@@ -37,6 +82,13 @@ pub fn install(ctx: &egui::Context) {
                 Item::Separator => {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                 }
+                // ⚠ About lives in the application menu on macOS, where users look for it —
+                // so it is skipped here rather than shown twice. The model keeps it under Help
+                // for the in-window bar, which has no app menu.
+                Item::Action {
+                    command: Command::About,
+                    ..
+                } => {}
                 Item::Action {
                     label,
                     command,
@@ -69,11 +121,19 @@ pub fn install(ctx: &egui::Context) {
     // to move the mouse. Same class of bug as the full-resolution trigger needing
     // `request_repaint_after`.
     //
-    // ⚠ The handler only wakes the frame loop; `poll` below still drains the channel. Do not
-    // move the dispatch in here — it would need `&mut RustroomApp` from inside a `'static`
-    // closure.
+    // ⚠ The handler does two things and needs both. It **forwards the event to our own
+    // channel**, because setting a handler at all stops muda's own `receiver()` from ever
+    // seeing it; and it **requests a repaint**, because egui does not redraw an idle window and
+    // a menu click generates no winit event, so the command would otherwise sit unread until
+    // the mouse moved.
+    //
+    // ⚠ The dispatch itself stays in `poll` — a `'static` closure cannot hold
+    // `&mut RustroomApp`.
     let ctx = ctx.clone();
-    MenuEvent::set_event_handler(Some(move |_event: MenuEvent| {
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        if let Ok(tx) = events().tx.lock() {
+            let _ = tx.send(event.id().clone());
+        }
         ctx.request_repaint();
     }));
 
@@ -83,10 +143,13 @@ pub fn install(ctx: &egui::Context) {
 /// Drain any menu activations since the last frame.
 pub fn poll() -> Vec<Command> {
     let mut out = Vec::new();
-    while let Ok(event) = MenuEvent::receiver().try_recv() {
+    let Ok(rx) = events().rx.lock() else {
+        return out;
+    };
+    while let Ok(id) = rx.try_recv() {
         MENU.with(|m| {
             if let Some(installed) = m.borrow().as_ref() {
-                if let Some(cmd) = installed.by_id.get(&event.id) {
+                if let Some(cmd) = installed.by_id.get(&id) {
                     out.push(*cmd);
                 }
             }
