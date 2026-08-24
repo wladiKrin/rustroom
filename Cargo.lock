@@ -1363,6 +1363,7 @@ dependencies = [
 name = "export"
 version = "0.1.0"
 dependencies = [
+ "color 0.1.0",
  "core-image",
  "image",
  "lcms2",
@@ -3611,6 +3612,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "color 0.1.0",
  "core-image",
  "edit-model",
  "export",

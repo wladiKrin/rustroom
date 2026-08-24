@@ -93,17 +93,86 @@ fn rgb16_ne_bytes(image: &ImageBuf) -> Vec<u8> {
         .collect()
 }
 
-/// The sRGB profile every export is tagged with, serialized once.
+/// The ICC profile for an output space, serialized once per space.
 ///
-/// ⚠ lcms2 is used here for **exactly one thing**: emitting a static sRGB profile. Input
-/// profiles, conversions and a working-space policy remain deferred — this does not un-defer
-/// colour management, it only stops us shipping untagged files.
+/// ⚠ sRGB uses lcms2's own built-in profile, which is canonical; the other three are constructed
+/// from primaries, a white point and a transfer curve.
 ///
-/// Falls back to an empty slice if lcms2 ever fails to serialize, because an export that
-/// writes an untagged file is far better than one that refuses to write at all.
-pub fn srgb_icc() -> &'static [u8] {
-    static ICC: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-    ICC.get_or_init(|| lcms2::Profile::new_srgb().icc().unwrap_or_default())
+/// ⚠⚠ **An ICC tone curve runs device→linear**, which is the *inverse* of what
+/// `OutputSpace::encode` applies. Getting this backwards produces a self-consistently wrong
+/// file: right primaries, opens fine, washed out in a way easily mistaken for a rendering
+/// preference. `the_profile_agrees_with_our_own_maths` is the guard, and it is the only test
+/// here that can see it.
+///
+/// Falls back to an empty slice if lcms2 ever fails, because an export that writes an untagged
+/// file is far better than one that refuses to write at all.
+pub fn icc_for(space: color::OutputSpace) -> &'static [u8] {
+    use color::OutputSpace as S;
+    static SRGB: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    static P3: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    static ADOBE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    static PROPHOTO: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+    match space {
+        S::Srgb => SRGB.get_or_init(|| lcms2::Profile::new_srgb().icc().unwrap_or_default()),
+        S::DisplayP3 => P3.get_or_init(|| {
+            build_icc(
+                D65,
+                [(0.680, 0.320), (0.265, 0.690), (0.150, 0.060)],
+                srgb_curve(),
+            )
+        }),
+        S::AdobeRgb => ADOBE.get_or_init(|| {
+            build_icc(
+                D65,
+                [(0.640, 0.330), (0.210, 0.710), (0.150, 0.060)],
+                lcms2::ToneCurve::new(563.0 / 256.0),
+            )
+        }),
+        S::ProPhoto => PROPHOTO.get_or_init(|| {
+            build_icc(
+                // ⚠ ProPhoto is a **D50** space. The other three are D65; this is not an
+                // inconsistency to unify.
+                (0.3457, 0.3585),
+                [
+                    (0.734699, 0.265301),
+                    (0.159597, 0.840403),
+                    (0.036598, 0.000105),
+                ],
+                prophoto_curve(),
+            )
+        }),
+    }
+    .as_slice()
+}
+
+const D65: (f64, f64) = (0.3127, 0.3290);
+
+/// The sRGB transfer curve, in ICC's device→linear direction.
+///
+/// ICC parametric type 4 is `Y = (aX + b)^g` for `X >= d`, `Y = cX` below.
+fn srgb_curve() -> lcms2::ToneCurve {
+    lcms2::ToneCurve::new_parametric(4, &[2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045])
+        .expect("sRGB parametric curve")
+}
+
+/// ROMM's transfer curve — gamma 1.8 with a linear toe — in ICC's device→linear direction.
+fn prophoto_curve() -> lcms2::ToneCurve {
+    // The encoded threshold is 16 x (1/512) = 0.03125, and the toe's device->linear slope is 1/16.
+    lcms2::ToneCurve::new_parametric(4, &[1.8, 1.0, 0.0, 1.0 / 16.0, 0.03125])
+        .expect("ProPhoto parametric curve")
+}
+
+fn build_icc(white: (f64, f64), primaries: [(f64, f64); 3], curve: lcms2::ToneCurve) -> Vec<u8> {
+    let xy = |(x, y): (f64, f64)| lcms2::CIExyY { x, y, Y: 1.0 };
+    let prim = lcms2::CIExyYTRIPLE {
+        Red: xy(primaries[0]),
+        Green: xy(primaries[1]),
+        Blue: xy(primaries[2]),
+    };
+    lcms2::Profile::new_rgb(&xy(white), &prim, &[&curve, &curve, &curve])
+        .and_then(|p| p.icc())
+        .unwrap_or_default()
 }
 
 /// Encode a display-referred image. `quality` is ignored unless the format is lossy.
@@ -115,6 +184,7 @@ pub fn save(
     path: &Path,
     format: ExportFormat,
     quality: u8,
+    space: color::OutputSpace,
 ) -> Result<(), ExportError> {
     let (w, h) = (image.width() as u32, image.height() as u32);
     let file =
@@ -123,31 +193,31 @@ pub fn save(
     match format {
         ExportFormat::Jpeg => {
             let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);
-            enc.set_icc_profile(srgb_icc().to_vec())
+            enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Png8 => {
             let mut enc = image::codecs::png::PngEncoder::new(file);
-            enc.set_icc_profile(srgb_icc().to_vec())
+            enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Png16 => {
             let mut enc = image::codecs::png::PngEncoder::new(file);
-            enc.set_icc_profile(srgb_icc().to_vec())
+            enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
         }
         ExportFormat::Tiff8 => {
             let mut enc = image::codecs::tiff::TiffEncoder::new(file);
-            enc.set_icc_profile(srgb_icc().to_vec())
+            enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&to_rgb8(image), w, h, ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff16 => {
             let mut enc = image::codecs::tiff::TiffEncoder::new(file);
-            enc.set_icc_profile(srgb_icc().to_vec())
+            enc.set_icc_profile(icc_for(space).to_vec())
                 .map_err(image::ImageError::Unsupported)?;
             enc.write_image(&rgb16_ne_bytes(image), w, h, ExtendedColorType::Rgb16)?;
         }
@@ -214,7 +284,8 @@ mod tests {
         let img = ramp(8, 4);
         for f in ExportFormat::ALL {
             let path = tmp(&format!("all.{}", f.extension()));
-            save(&img, &path, f, 90).unwrap_or_else(|e| panic!("{f:?}: {e}"));
+            save(&img, &path, f, 90, color::OutputSpace::Srgb)
+                .unwrap_or_else(|e| panic!("{f:?}: {e}"));
             let back = image::open(&path).unwrap_or_else(|e| panic!("{f:?} reopen: {e}"));
             assert_eq!((back.width(), back.height()), (8, 4), "{f:?}");
             let _ = std::fs::remove_file(&path);
@@ -233,7 +304,7 @@ mod tests {
 
         for f in [ExportFormat::Png16, ExportFormat::Tiff16] {
             let path = tmp(&format!("deep.{}", f.extension()));
-            save(&img, &path, f, 90).unwrap();
+            save(&img, &path, f, 90, color::OutputSpace::Srgb).unwrap();
             let back = image::open(&path).unwrap().to_rgb16();
             assert_eq!(back.get_pixel(0, 0)[0], 128, "{f:?} lost precision");
             let _ = std::fs::remove_file(&path);
@@ -242,7 +313,7 @@ mod tests {
         // And the 8-bit formats genuinely cannot: the same value rounds to 0.
         for f in [ExportFormat::Png8, ExportFormat::Tiff8] {
             let path = tmp(&format!("shallow.{}", f.extension()));
-            save(&img, &path, f, 90).unwrap();
+            save(&img, &path, f, 90, color::OutputSpace::Srgb).unwrap();
             let back = image::open(&path).unwrap().to_rgb8();
             assert_eq!(back.get_pixel(0, 0)[0], 0, "{f:?}");
             let _ = std::fs::remove_file(&path);
@@ -276,10 +347,12 @@ mod tests {
                     .unwrap();
                 dec.icc_profile()
                     .unwrap()
-                    .is_some_and(|p| p.as_slice() == srgb_icc())
+                    .is_some_and(|p| p.as_slice() == icc_for(color::OutputSpace::Srgb))
             }
             // 'acsp' is the signature every ICC profile carries at offset 36.
-            _ => bytes.windows(srgb_icc().len()).any(|w| w == srgb_icc()),
+            _ => bytes
+                .windows(icc_for(color::OutputSpace::Srgb).len())
+                .any(|w| w == icc_for(color::OutputSpace::Srgb)),
         }
     }
 
@@ -288,9 +361,12 @@ mod tests {
         // ⚠ A 16-bit TIFF is an archival format; shipping it untagged means the consumer
         // guesses. JPEG is included because it had been shipping untagged all along, and an
         // inconsistency nobody can explain is worse than either choice.
-        assert!(!srgb_icc().is_empty(), "the profile should not be empty");
+        assert!(
+            !icc_for(color::OutputSpace::Srgb).is_empty(),
+            "the profile should not be empty"
+        );
         assert_eq!(
-            &srgb_icc()[36..40],
+            &icc_for(color::OutputSpace::Srgb)[36..40],
             b"acsp",
             "lcms2 did not return a well-formed ICC profile"
         );
@@ -298,7 +374,7 @@ mod tests {
         let img = ramp(8, 4);
         for f in ExportFormat::ALL {
             let path = tmp(&format!("icc.{}", f.extension()));
-            save(&img, &path, f, 90).unwrap();
+            save(&img, &path, f, 90, color::OutputSpace::Srgb).unwrap();
             assert!(carries_profile(&path, f), "{f:?} carries no ICC profile");
             let _ = std::fs::remove_file(&path);
         }
@@ -316,5 +392,76 @@ mod tests {
             serde_json::to_string(&ExportFormat::Tiff16).unwrap(),
             "\"Tiff16\""
         );
+    }
+
+    #[test]
+    fn every_space_produces_a_distinct_non_empty_profile() {
+        // ⚠ `icc_for` falls back to an empty slice if lcms2 fails, so "non-empty" is a real check
+        // rather than a formality — a silent failure would ship untagged files that look fine
+        // until someone opens them on a wide-gamut display.
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        for s in color::OutputSpace::ALL {
+            let icc = icc_for(s);
+            assert!(!icc.is_empty(), "{} produced no profile", s.label());
+            assert!(
+                !seen.contains(&icc.to_vec()),
+                "{} produced a duplicate profile",
+                s.label()
+            );
+            seen.push(icc.to_vec());
+        }
+    }
+
+    #[test]
+    fn the_profile_agrees_with_our_own_maths() {
+        // ⚠⚠ The load-bearing test of this module. It transforms a colour through **lcms2**, from
+        // the profile we emit to lcms2's own sRGB, and compares against the result of our own
+        // matrix and curve. Two independent implementations of the same transform must agree.
+        //
+        // This is what catches an inverted parametric tone curve — the trap here, because an ICC
+        // curve describes device→linear, the inverse of what `encode` applies. Get it backwards
+        // and the file opens, has the right primaries, and is washed out in a way easily mistaken
+        // for a rendering preference. No other test here can see it.
+        let srgb_profile = lcms2::Profile::new_srgb();
+        // A mid-tone with real chroma: a neutral would pass under a wrong matrix, since every
+        // sane matrix preserves grey.
+        let working = color::srgb_to_prophoto([0.35, 0.55, 0.20]);
+
+        let want_srgb = {
+            let lin = color::OutputSpace::Srgb.from_working(working);
+            [
+                color::linear_to_srgb(lin[0]),
+                color::linear_to_srgb(lin[1]),
+                color::linear_to_srgb(lin[2]),
+            ]
+        };
+
+        for s in color::OutputSpace::ALL {
+            let ours: [f32; 3] = {
+                let lin = s.from_working(working);
+                [s.encode(lin[0]), s.encode(lin[1]), s.encode(lin[2])]
+            };
+            let profile = lcms2::Profile::new_icc(icc_for(s)).expect("our profile should parse");
+            let t: lcms2::Transform<[f32; 3], [f32; 3]> = lcms2::Transform::new(
+                &profile,
+                lcms2::PixelFormat::RGB_FLT,
+                &srgb_profile,
+                lcms2::PixelFormat::RGB_FLT,
+                lcms2::Intent::RelativeColorimetric,
+            )
+            .expect("transform should build");
+            let mut through_lcms = [[0.0f32; 3]];
+            t.transform_pixels(&[ours], &mut through_lcms);
+
+            for i in 0..3 {
+                assert!(
+                    (through_lcms[0][i] - want_srgb[i]).abs() < 5e-3,
+                    "{}: lcms gave {} for channel {i}, our own maths gives {}",
+                    s.label(),
+                    through_lcms[0][i],
+                    want_srgb[i]
+                );
+            }
+        }
     }
 }

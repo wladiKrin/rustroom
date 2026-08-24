@@ -171,7 +171,14 @@ pub fn export_one(
     };
     let scale = scale_for(source_long, opts.max_edge);
     let rendered = pipeline::build_pipeline(edits, scale).run(scaled);
-    export::save(&rendered, dest, opts.format, opts.quality).map_err(|e| e.to_string())
+    export::save(
+        &rendered,
+        dest,
+        opts.format,
+        opts.quality,
+        color::OutputSpace::Srgb,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// A running batch export.

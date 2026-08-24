@@ -145,7 +145,7 @@ fn render(
     };
     let rendered = pipeline::build_pipeline(&edits, pipeline::RenderScale::FULL).run(decoded.image);
 
-    export::save(&rendered, output, format, quality)
+    export::save(&rendered, output, format, quality, color::OutputSpace::Srgb)
         .with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Wrote {}", output.display());
     Ok(())
