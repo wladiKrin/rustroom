@@ -129,15 +129,11 @@ impl eframe::App for RustroomApp {
                 // filename itself and then the status label was added after it — which meant
                 // the status was pushed into a row that had no space left.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    match self.view {
-                        AppView::Library => format_bullets(self, ui),
-                        AppView::Develop => {
-                            if let Some(s) = &self.session {
-                                if let Some(name) = s.path.file_name() {
-                                    crate::theme::caption(ui, &name.to_string_lossy());
-                                }
-                            }
-                        }
+                    // ⚠ Library only. The filename is **not** shown here: the Develop panel's
+                    // footer already carries it, and the same name in two places at once is
+                    // noise rather than reassurance.
+                    if self.view == AppView::Library {
+                        format_bullets(self, ui);
                     }
                     if !self.export_progress.is_empty() {
                         if ui.button("Cancel").clicked() {
@@ -252,18 +248,18 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
     });
 }
 
-/// The Library's format filter, as a single choice: All, or one format.
+/// The Library's format filter: which file formats the grid and filmstrip show.
 ///
-/// ⚠ **Library only.** The filter decides what the grid and the filmstrip contain, which is a
-/// browsing decision — it has no meaning while a single photo is open, and it sat in the
-/// Develop toolbar for no better reason than living in a shared row.
+/// ⚠ **Library only.** The filter decides what the browser contains, which is a browsing
+/// decision — it has no meaning while a single photo is open, and it sat in the Develop
+/// toolbar for no better reason than living in a shared row.
 ///
-/// ⚠ Shown only at two or more formats, as the chips were: a lone control here could only ever
-/// blank the grid, which is a footgun with no upside.
+/// ⚠ Shown only at two or more formats: a lone control here could only ever blank the grid,
+/// which is a footgun with no upside.
 ///
-/// ⚠ Radios rather than the previous per-format toggles, so the selection is legible at a
-/// glance. The cost, stated: two of three formats can no longer be shown together — "All" or
-/// one. The underlying hidden-set still supports it, so restoring that is a UI change only.
+/// ⚠ **Multi-select, so there is no "All" entry** — showing everything is simply every box
+/// ticked, which is both the default and self-evident. An "All" radio alongside per-format
+/// radios would additionally make "RAF and JPG but not PNG" unreachable.
 fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let formats = app
         .library
@@ -275,24 +271,26 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
     let present: Vec<String> = formats.iter().map(|(e, _)| e.clone()).collect();
     let Some(lib) = &mut app.library else { return };
+    let shown_count = present.iter().filter(|e| !lib.filter.is_hidden(e)).count();
+
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
-    // is what puts All on the left of the group, where a reader starts.
-    let mut pick: Option<Option<String>> = None;
+    // is what keeps the on-screen order the same as `formats_present` returns.
+    let mut toggled: Option<String> = None;
     for (ext, count) in formats.iter().rev() {
-        let selected = lib.filter.only_shown(&present) == Some(ext.as_str());
+        let mut shown = !lib.filter.is_hidden(ext);
+        // ⚠ The last visible format cannot be unticked. Every box clear means an empty grid
+        // with no hint as to why, and the way out is not obvious once nothing is on screen.
+        let last_one = shown && shown_count == 1;
         let label = format!("{} ({count})", ext.to_uppercase());
-        if ui.radio(selected, label).clicked() {
-            pick = Some(Some(ext.clone()));
+        if ui
+            .add_enabled(!last_one, egui::Checkbox::new(&mut shown, label))
+            .changed()
+        {
+            toggled = Some(ext.clone());
         }
     }
-    if ui
-        .radio(lib.filter.only_shown(&present).is_none(), "All")
-        .clicked()
-    {
-        pick = Some(None);
-    }
-    if let Some(choice) = pick {
-        lib.filter.show_only(choice.as_deref(), &present);
+    if let Some(ext) = toggled {
+        lib.filter.toggle(&ext);
         lib.refilter();
     }
 }

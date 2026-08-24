@@ -45,36 +45,6 @@ impl FormatFilter {
         self.hidden.contains(ext)
     }
 
-    /// Show only `ext`, or every format when `None`.
-    ///
-    /// ⚠ Drives the same hidden-set the toggle API uses rather than introducing a second
-    /// representation. `Library::refilter` and every test around it are untouched — only the
-    /// *control* changed from per-format chips to a single choice.
-    pub fn show_only(&mut self, ext: Option<&str>, present: &[String]) {
-        self.hidden.clear();
-        if let Some(keep) = ext {
-            for e in present {
-                if e != keep {
-                    self.hidden.insert(e.clone());
-                }
-            }
-        }
-    }
-
-    /// The single format currently shown, or `None` when more than one is.
-    ///
-    /// ⚠ Derived from the hidden set, not stored beside it — two facts that could disagree
-    /// would let the radio show a selection the grid does not have.
-    pub fn only_shown<'a>(&self, present: &'a [String]) -> Option<&'a str> {
-        let mut visible = present.iter().filter(|e| !self.is_hidden(e));
-        let first = visible.next()?;
-        if visible.next().is_none() {
-            Some(first.as_str())
-        } else {
-            None
-        }
-    }
-
     pub fn toggle(&mut self, ext: &str) {
         if !self.hidden.remove(ext) {
             self.hidden.insert(ext.to_string());
@@ -207,40 +177,5 @@ mod tests {
         assert_eq!(step(&visible, 2, false), Some(1), "previous below");
         assert_eq!(step(&visible, 0, false), Some(1), "clamped at the start");
         assert_eq!(step(&visible, 9, true), Some(5), "clamped at the end");
-    }
-
-    #[test]
-    fn showing_only_one_format_hides_the_rest() {
-        let present: Vec<String> = ["raf", "jpg", "png"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let mut f = FormatFilter::default();
-        f.show_only(Some("raf"), &present);
-        assert!(!f.is_hidden("raf"));
-        assert!(f.is_hidden("jpg") && f.is_hidden("png"));
-        assert_eq!(f.only_shown(&present), Some("raf"));
-    }
-
-    #[test]
-    fn showing_all_clears_every_exception() {
-        // ⚠ "All" must clear, not toggle: reaching it from any state has to land on the same
-        // place, or the radio's selected bullet would lie about what the grid shows.
-        let present: Vec<String> = ["raf", "jpg"].iter().map(|s| s.to_string()).collect();
-        let mut f = FormatFilter::default();
-        f.show_only(Some("jpg"), &present);
-        f.show_only(None, &present);
-        assert!(!f.is_hidden("raf") && !f.is_hidden("jpg"));
-        assert_eq!(f.only_shown(&present), None, "no single format is selected");
-    }
-
-    #[test]
-    fn only_shown_ignores_formats_that_are_not_present() {
-        // The set is per folder; a format hidden in a previous folder must not make a
-        // different folder look filtered.
-        let present: Vec<String> = ["raf"].iter().map(|s| s.to_string()).collect();
-        let mut f = FormatFilter::default();
-        f.toggle("jpg");
-        assert_eq!(f.only_shown(&present), Some("raf"));
     }
 }
