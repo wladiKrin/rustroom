@@ -8,6 +8,7 @@ use crate::{filmstrip, preview_edits, theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::edit_clipboard;
+use rustroom_app::tool::Tool;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
 ///
@@ -26,6 +27,28 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // shortcuts also set `app.tool`, and a click-only signal would leave those switching tools
     // *without* re-rendering. One mechanism covers both inputs.
     let before = app.tool;
+    // ⚠ Gated on nothing having keyboard focus, the same rule arrow navigation follows — or
+    // typing "2" into the Save-preset name field would jump to the Crop tool.
+    // ⚠ Step 3 of this rework routes these through the menu's `Command` dispatcher; until
+    // then they are handled here.
+    // ⚠ Set *before* `rail::show`, so the rail paints the new selection on the same frame and
+    // the comparison below sees the change and requests a render.
+    if app.session.is_some() && ctx.memory(|m| m.focused().is_none()) {
+        let digit = ctx.input(|i| {
+            [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+            ]
+            .iter()
+            .position(|k| i.key_pressed(*k))
+            .map(|p| p as u32 + 1)
+        });
+        if let Some(t) = digit.and_then(Tool::from_digit) {
+            app.tool = t;
+        }
+    }
     if app.session.is_some() {
         rail::show(ui, &mut app.tool);
     }

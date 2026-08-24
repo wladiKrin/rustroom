@@ -215,24 +215,41 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                     egui::Image::new(shown).paint_at(ui, resp.rect);
 
-                    if tool.is_geometry() {
-                        photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
-                    } else {
-                        photo_edited |= draw_mask_overlay(
-                            ui,
-                            s,
-                            &resp,
-                            img_rect,
-                            frame_rect,
-                            BrushTool {
-                                size: app_brush_size,
-                                hardness: app_brush_hardness,
-                                flow: app.brush_flow,
-                                erase: app_brush_erase,
-                                show_tint: app.show_mask_tint,
-                            },
-                            tool,
-                        );
+                    // ⚠ A behaviour change, and an intended one: mask handles and brush
+                    // painting now belong to the Masks tool rather than to "any mode that is
+                    // not Geometry". A stray drag in Edit can no longer paint a stroke.
+                    //
+                    // ⚠ An exhaustive match, not `_ => {}`: a fifth tool must force a
+                    // decision about what the canvas does under it.
+                    match tool {
+                        Tool::Crop => {
+                            photo_edited |= draw_crop_overlay(ui, s, &resp, img_rect);
+                        }
+                        Tool::Masks => {
+                            photo_edited |= draw_mask_overlay(
+                                ui,
+                                s,
+                                &resp,
+                                img_rect,
+                                frame_rect,
+                                BrushTool {
+                                    size: app_brush_size,
+                                    hardness: app_brush_hardness,
+                                    flow: app.brush_flow,
+                                    erase: app_brush_erase,
+                                    show_tint: app.show_mask_tint,
+                                },
+                                tool,
+                            );
+                        }
+                        Tool::Edit | Tool::Presets => {}
+                    }
+                    // ⚠ Not in geometry mode. The crop overlay is drawn against the whole
+                    // image and placed by the fit-mode maths (see the rung pin above), so
+                    // zooming or panning underneath it would misplace it. This gate was
+                    // previously the `else` of the geometry branch; it must survive the
+                    // change to a per-tool match.
+                    if !tool.is_geometry() {
                         // Zoom first, then pan: the anchor correction below depends on the
                         // new zoom, and the other order would anchor against a stale factor.
                         //
