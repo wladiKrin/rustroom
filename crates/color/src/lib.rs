@@ -5,8 +5,10 @@
 //! display output profiles are needed; see the Phase 1 plan's Scope note.)
 
 pub mod oklab;
+pub mod output_space;
 pub mod spaces;
 pub use oklab::{linear_srgb_to_oklab, oklab_to_linear_srgb};
+pub use output_space::OutputSpace;
 pub use spaces::{prophoto_to_srgb, srgb_to_prophoto};
 
 /// Encode a linear-light sample to sRGB (the sRGB OETF). Input is clamped to `[0, 1]`.

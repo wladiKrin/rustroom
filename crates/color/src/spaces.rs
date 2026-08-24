@@ -27,6 +27,23 @@ pub const SRGB_TO_PROPHOTO: [[f32; 3]; 3] = [
     [0.0168761198, 0.1176587379, 0.8654651424],
 ];
 
+/// Linear ProPhoto (ROMM, D50) → linear Display P3 (D65), Bradford-adapted.
+///
+/// ⚠ Display P3 differs from sRGB **only in its primaries**. Its transfer curve is the sRGB
+/// one — see `OutputSpace::encode`.
+pub const PROPHOTO_TO_DISPLAY_P3: [[f32; 3]; 3] = [
+    [1.6325756087, -0.3797716185, -0.2528039902],
+    [-0.1537004023, 1.1667025472, -0.0130021449],
+    [0.0103931953, -0.0628073126, 1.0524141174],
+];
+
+/// Linear ProPhoto (ROMM, D50) → linear Adobe RGB (1998) (D65), Bradford-adapted.
+pub const PROPHOTO_TO_ADOBE_RGB: [[f32; 3]; 3] = [
+    [1.3896512482, -0.1694590769, -0.2201921712],
+    [-0.2288257316, 1.2317425412, -0.0029168096],
+    [-0.0176254437, -0.0962570231, 1.1138824667],
+];
+
 /// Apply a 3×3 matrix to a pixel.
 #[inline]
 pub fn apply(m: &[[f32; 3]; 3], c: [f32; 3]) -> [f32; 3] {
