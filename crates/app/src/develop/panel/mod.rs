@@ -7,6 +7,7 @@ pub mod masks;
 use crate::{preview_edits, theme, RustroomApp};
 use edit_model::Edits;
 use eframe::egui;
+use rustroom_app::tool::Tool;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
 /// settled into a history entry.
@@ -75,29 +76,41 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     ui.separator();
 
                     let mut ed = Edited::default();
-                    masks::show(
-                        ui,
-                        s,
-                        masks::BrushTool {
-                            size: &mut app.brush_size,
-                            hardness: &mut app.brush_hardness,
-                            flow: &mut app.brush_flow,
-                            erase: &mut app.brush_erase,
-                            show_tint: &mut app.show_mask_tint,
-                        },
-                        &mut ed,
-                    );
+                    // The tool's drawer, above the permanent adjustment stack — the global
+                    // sliders stay reachable while a mask is being painted. ⚠ `Tool::Edit`
+                    // opens nothing, which is what makes the panel at rest exactly the five
+                    // adjustment sections.
+                    if let Some(title) = tool.drawer_label() {
+                        egui::CollapsingHeader::new(title)
+                            .default_open(true)
+                            .show(ui, |ui| match tool {
+                                Tool::Crop => geometry::show(ui, s, &mut ed),
+                                Tool::Masks => masks::show(
+                                    ui,
+                                    s,
+                                    masks::BrushTool {
+                                        size: &mut app.brush_size,
+                                        hardness: &mut app.brush_hardness,
+                                        flow: &mut app.brush_flow,
+                                        erase: &mut app.brush_erase,
+                                        show_tint: &mut app.show_mask_tint,
+                                    },
+                                    &mut ed,
+                                ),
+                                // Drawn above, outside the session borrow — see the comment
+                                // there. ⚠ A match arm, not a wildcard: a fifth tool must
+                                // force a decision here.
+                                Tool::Presets => {}
+                                Tool::Edit => {}
+                            });
+                        ui.separator();
+                    }
                     adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
 
                     ui.separator();
                     if ui.button("Reset all").clicked() {
                         s.edits = Edits::default();
                         ed.discrete();
-                    }
-
-                    if tool.is_geometry() {
-                        ui.separator();
-                        geometry::show(ui, s, &mut ed);
                     }
 
                     if ed.changed {

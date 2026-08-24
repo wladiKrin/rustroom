@@ -9,7 +9,6 @@ use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::edit_clipboard;
-use rustroom_app::tool::Tool;
 
 /// The Develop editor body: preset panel, adjustments panel, filmstrip, canvas.
 ///
@@ -24,8 +23,26 @@ use rustroom_app::tool::Tool;
 pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     app.handle_develop_arrows(ctx);
     let mut photo_edited = false;
+    // ⚠ A before/after comparison, not a return value from `rail::show`: the 1-4 keyboard
+    // shortcuts also set `app.tool`, and a click-only signal would leave those switching tools
+    // *without* re-rendering. One mechanism covers both inputs.
+    let before = app.tool;
     if app.session.is_some() {
         rail::show(ui, &mut app.tool);
+    }
+    // ⚠ `preview_edits` strips the crop in geometry mode, so entering or leaving Crop must
+    // re-render. Without this the crop overlay draws over a *cropped* preview until some
+    // unrelated edit happens to request a frame — structurally the same bug as
+    // `draw_mask_overlay` not calling `s.request`, found in real use in M3.1a.
+    if app.tool != before {
+        let tool = app.tool;
+        if let Some(s) = &mut app.session {
+            s.request(
+                preview_edits(&s.edits, tool),
+                s.render_max_dim(),
+                s.requested_region,
+            );
+        }
     }
     if app.show_presets && app.session.is_some() {
         preset_panel(app, ui);
@@ -88,22 +105,6 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             s.pan = egui::Vec2::ZERO;
         }
         ui.toggle_value(&mut s.show_before, "Before/After");
-    }
-    if app.session.is_some() {
-        // ⚠ Temporary shim: the rail owns this from the next commit. It exists only so this
-        // commit never leaves geometry mode unreachable.
-        let mut geo = app.tool.is_geometry();
-        if ui.toggle_value(&mut geo, "Geometry").clicked() {
-            app.tool = if geo { Tool::Crop } else { Tool::Edit };
-            let tool = app.tool;
-            if let Some(s) = &mut app.session {
-                s.request(
-                    preview_edits(&s.edits, tool),
-                    s.render_max_dim(),
-                    s.requested_region,
-                );
-            }
-        }
     }
     if app.session.is_some() {
         ui.separator();
