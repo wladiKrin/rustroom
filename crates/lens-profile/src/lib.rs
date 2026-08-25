@@ -23,7 +23,21 @@ pub struct LensProfile {
     crop_factor: f32,
 }
 
+/// The bundled database, parsed once for the process.
+///
+/// ⚠ `Catalogue::bundled()` decompresses 56 XML files, so it must not be built per photo — let
+/// alone per frame. Same reasoning as `srgb_icc()`'s `OnceLock`.
+static SHARED: std::sync::OnceLock<Option<Catalogue>> = std::sync::OnceLock::new();
+
 impl Catalogue {
+    /// The bundled database, loaded once per process.
+    ///
+    /// `None` if it could not be parsed at all, which would be a bug in the crate rather than
+    /// anything a caller can act on — so it degrades to "no lens ever matches".
+    pub fn shared() -> Option<&'static Catalogue> {
+        SHARED.get_or_init(|| Catalogue::bundled().ok()).as_ref()
+    }
+
     /// The database bundled with the `lensfun` crate. No filesystem access.
     pub fn bundled() -> Result<Self, lensfun::Error> {
         Ok(Self {

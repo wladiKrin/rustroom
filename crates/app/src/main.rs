@@ -6,7 +6,7 @@ use rustroom_app::action_log::{ActionKind, ActionLog, SyncAction};
 use rustroom_app::batch_export::{ExportEvent, ExportOptions, ExportReport, ExportWorker};
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
-use rustroom_app::decode_worker::{DecodeWorker, Decoded};
+use rustroom_app::decode_worker::{DecodeWorker, Decoded, LensFacts};
 use rustroom_app::edit_clipboard;
 use rustroom_app::edit_history::HistoryStash;
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
@@ -339,6 +339,12 @@ struct Session {
     baseline: egui::TextureHandle,
     hist: [[u32; 256]; 3],
     make_model: String,
+    /// The lens the shot was taken with, and the profile matched to it.
+    ///
+    /// ⚠ Kept on the session so the panel can name a lens it could *not* match. A miss is the
+    /// commonest reason the controls do nothing, and the only way to act on it is to be told
+    /// which name failed.
+    lens: LensFacts,
     zoom: f32,
     /// The scale that fits `fit_image_size` into the canvas, as of the last frame.
     ///
@@ -490,7 +496,7 @@ fn before_edits(edits: &Edits) -> Edits {
 fn decode_for_edit(
     path: &std::path::Path,
     profile: Option<std::path::PathBuf>,
-) -> Result<(core_image::ImageBuf, String, f32), String> {
+) -> Result<(core_image::ImageBuf, String, f32, LensFacts), String> {
     if catalog::is_raw(path) {
         let opts = raw_decode::DecodeOptions {
             camera_profile: profile,
@@ -498,7 +504,8 @@ fn decode_for_edit(
         };
         let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
         let label = format!("{} {}", d.metadata.make, d.metadata.model);
-        Ok((d.image, label, opts.source_scale()))
+        let lens = resolve_lens(&d.metadata);
+        Ok((d.image, label, opts.source_scale(), lens))
     } else {
         let d = image_decode::decode(path).map_err(|e| e.to_string())?;
         let ext = path
@@ -506,8 +513,37 @@ fn decode_for_edit(
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_uppercase();
-        // Non-RAW formats are decoded at full size.
-        Ok((d.image, format!("{ext} {}×{}", d.width, d.height), 1.0))
+        // Non-RAW formats are decoded at full size, and carry no lens metadata.
+        Ok((
+            d.image,
+            format!("{ext} {}×{}", d.width, d.height),
+            1.0,
+            LensFacts::default(),
+        ))
+    }
+}
+
+/// Match the decoded file's lens against the bundled LensFun database.
+///
+/// ⚠ Called on the **decode thread**. `Catalogue::shared()` parses the database once per process,
+/// but that first parse decompresses 56 XML files and has no business on the UI thread — and a
+/// database load in a panel body would be the `apply_view_demosaic` mistake in a new costume.
+fn resolve_lens(m: &raw_decode::RawMetadata) -> LensFacts {
+    let Some(l) = m.lens.as_ref() else {
+        return LensFacts::default();
+    };
+    let shot = lens_profile::Catalogue::shared()
+        .and_then(|db| db.find(&m.make, &m.model, &l.name))
+        .map(|profile| lens_profile::LensShot {
+            profile,
+            shot: lens_profile::Shot {
+                focal: l.focal,
+                aperture: l.aperture,
+            },
+        });
+    LensFacts {
+        name: Some(l.name.clone()),
+        shot,
     }
 }
 
@@ -541,7 +577,7 @@ fn decode_full_res(
     path: &std::path::Path,
     tier: raw_decode::Demosaic,
     profile: Option<std::path::PathBuf>,
-) -> Result<(core_image::ImageBuf, String, f32), String> {
+) -> Result<(core_image::ImageBuf, String, f32, LensFacts), String> {
     let opts = raw_decode::DecodeOptions {
         demosaic: tier,
         camera_profile: profile,
@@ -549,7 +585,8 @@ fn decode_full_res(
     };
     let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
     let label = format!("{} {}", d.metadata.make, d.metadata.model);
-    Ok((d.image, label, opts.source_scale()))
+    let lens = resolve_lens(&d.metadata);
+    Ok((d.image, label, opts.source_scale(), lens))
 }
 
 /// Build the full-resolution decode worker for `tier`.
@@ -1200,7 +1237,13 @@ impl RustroomApp {
         )
         .list_for(&decoded.label);
 
-        let edits = sidecar::load(&path).unwrap_or_default();
+        // ⚠ The preference applies only to a photo with **no sidecar**. A photo already edited
+        // keeps exactly what it had, which is what lets `Edits::default()` stay strictly neutral
+        // while fresh photos still open corrected — see `Settings::initial_lens_correction`.
+        let stored = sidecar::load(&path);
+        let mut edits = stored.clone().unwrap_or_default();
+        edits.lens_correction = self.settings.initial_lens_correction(stored.is_some());
+        let edits = edits;
         let history = match self.histories.take_matching(&path, &edits) {
             Some(h) => h,
             None => {
@@ -1220,9 +1263,12 @@ impl RustroomApp {
         );
 
         let ctx2 = ctx.clone();
-        let engine = RenderEngine::new(decoded.buffer.clone(), decoded.source_scale, move || {
-            ctx2.request_repaint()
-        });
+        let engine = RenderEngine::new(
+            decoded.buffer.clone(),
+            decoded.source_scale,
+            decoded.lens.shot.clone(),
+            move || ctx2.request_repaint(),
+        );
         let buffer_long = decoded.buffer.width().max(decoded.buffer.height());
         // `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the cap, and
         // the canvas only accepts a frame as the fit size when its `max_dim` matches.
@@ -1256,6 +1302,7 @@ impl RustroomApp {
             baseline,
             hist: [[0; 256]; 3],
             make_model: decoded.label.clone(),
+            lens: decoded.lens.clone(),
             zoom: 1.0,
             fit_scale: 1.0,
             pan: egui::Vec2::ZERO,
@@ -1333,6 +1380,9 @@ impl RustroomApp {
                     s.engine = RenderEngine::new(
                         decoded.buffer.clone(),
                         decoded.source_scale,
+                        // ⚠ The profile must be carried across the full-resolution handover, or
+                        // corrections would silently switch off the moment the upgrade lands.
+                        s.lens.shot.clone(),
                         move || ctx2.request_repaint(),
                     );
                     s.buffer_is_full_res = true;

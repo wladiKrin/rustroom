@@ -105,9 +105,17 @@ impl RenderEngine {
     /// `source_scale` is the size of `buffer` relative to a full-resolution decode of the
     /// same file (0.5 for a half-size RAW decode, 1.0 for JPEG/PNG/TIFF).
     /// `on_done` is called after each render completes (e.g. `ctx.request_repaint`).
+    /// `lens` is the resolved profile for this photo, or `None` when the file records no lens or
+    /// none matched.
+    ///
+    /// ⚠ **Captured here rather than passed per request.** The engine is rebuilt per photo, so a
+    /// profile cannot vary within one engine's life — the same shape `DecodeWorker` uses for the
+    /// camera profile, and for the same reason: a per-request parameter would impose a choice on
+    /// callers that have no business making it.
     pub fn new(
         buffer: Arc<ImageBuf>,
         source_scale: f32,
+        lens: Option<lens_profile::LensShot>,
         on_done: impl Fn() + Send + 'static,
     ) -> Self {
         let (req_tx, req_rx) = channel::<Request>();
@@ -132,6 +140,7 @@ impl RenderEngine {
                     &req.edits,
                     req.spec,
                     source_scale,
+                    lens.clone(),
                     &mut cache,
                     &mut brush_cache,
                 );
@@ -522,11 +531,13 @@ impl BrushCache {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_cached(
     buffer: &Arc<ImageBuf>,
     edits: &Edits,
     spec: FrameSpec,
     source_scale: f32,
+    lens: Option<lens_profile::LensShot>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, usize) {
@@ -545,9 +556,9 @@ fn render_cached(
 
     // The prefix never depends on the region, so the whole chain is built and cached without
     // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
-    // ⚠ `None` until the GUI resolves a lens profile — plan 2 of M3.2. The stage is then
-    // skipped, which is exactly what an unlisted lens does, so nothing special-cases it.
-    let steps = build_prefix_steps(edits, scale, None);
+    // A missing profile — an unlisted lens, or a JPEG — skips the stage silently, which is the
+    // ordinary case and needs no special-casing anywhere else.
+    let steps = build_prefix_steps(edits, scale, lens);
     let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
     let tier_at = |n: usize| {
         if n == steps.len() {
@@ -1215,7 +1226,7 @@ mod tests {
             );
         }
 
-        let engine = RenderEngine::new(buf.clone(), 1.0, || {});
+        let engine = RenderEngine::new(buf.clone(), 1.0, None, || {});
         for (i, ed) in [&a, &a, &b, &c, &a, &d, &e, &a, &c].iter().enumerate() {
             engine.request((*ed).clone(), FrameSpec::fit(8));
             let got = wait_for_frame(&engine);
@@ -1254,7 +1265,7 @@ mod tests {
 
     #[test]
     fn produces_rgba_frame_of_expected_size() {
-        let engine = RenderEngine::new(tiny(), 1.0, || {});
+        let engine = RenderEngine::new(tiny(), 1.0, None, || {});
         engine.request(Edits::default(), FrameSpec::fit(4)); // downscale 8 -> 4
         let f = wait_for_frame(&engine);
         assert_eq!((f.width, f.height), (4, 4));
@@ -1266,7 +1277,7 @@ mod tests {
 
     #[test]
     fn exposure_brightens() {
-        let engine = RenderEngine::new(tiny(), 1.0, || {});
+        let engine = RenderEngine::new(tiny(), 1.0, None, || {});
         engine.request(
             Edits {
                 exposure: 2.0,

@@ -14,6 +14,18 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 /// A decoded photo, ready to become an editing session.
+/// What the file said about its lens, and what we could match it to.
+///
+/// ⚠ Resolved on the **decode thread**, not the UI thread: matching needs the bundled LensFun
+/// database, and even behind a `OnceLock` the first parse decompresses 56 XML files.
+#[derive(Default, Clone)]
+pub struct LensFacts {
+    /// The lens name the file recorded, if any.
+    pub name: Option<String>,
+    /// The matched profile plus this shot's focal length and aperture, if one was found.
+    pub shot: Option<lens_profile::LensShot>,
+}
+
 pub struct Decoded {
     /// The linear working buffer (shared with the render engine and the cache).
     pub buffer: Arc<ImageBuf>,
@@ -24,6 +36,8 @@ pub struct Decoded {
     /// Size of `buffer` relative to a full-resolution decode — 0.5 for a half-size RAW
     /// decode. The render engine needs it to scale the spatial stages' radii.
     pub source_scale: f32,
+    /// The lens, and whether a profile matched it.
+    pub lens: LensFacts,
 }
 
 /// The outcome of one decode request.
@@ -36,7 +50,8 @@ pub struct DecodeResult {
 
 /// Decodes a file into a linear editing buffer, a display label, and the buffer's size
 /// relative to a full-resolution decode of the same file (0.5 for half-size RAW).
-type DecodeFn = Arc<dyn Fn(&Path) -> Result<(ImageBuf, String, f32), String> + Send + Sync>;
+type DecodeFn =
+    Arc<dyn Fn(&Path) -> Result<(ImageBuf, String, f32, LensFacts), String> + Send + Sync>;
 
 struct Request {
     seq: u64,
@@ -61,7 +76,10 @@ impl DecodeWorker {
     /// `decode` is injected so tests can drive the worker without libraw. `on_done` runs on
     /// the worker thread after each result (e.g. `ctx.request_repaint`).
     pub fn new(
-        decode: impl Fn(&Path) -> Result<(ImageBuf, String, f32), String> + Send + Sync + 'static,
+        decode: impl Fn(&Path) -> Result<(ImageBuf, String, f32, LensFacts), String>
+            + Send
+            + Sync
+            + 'static,
         max_concurrent: usize,
         on_done: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -119,7 +137,7 @@ impl DecodeWorker {
         let tx = self.res_tx.clone();
         self.in_flight += 1;
         std::thread::spawn(move || {
-            let outcome = decode(&req.path).map(|(image, label, source_scale)| {
+            let outcome = decode(&req.path).map(|(image, label, source_scale, lens)| {
                 let buffer = Arc::new(image);
                 // ⚠ `Srgb` regardless of the display setting: this baseline texture is never drawn.
                 // `show_before` is an ordinary render now, and the baseline survives only for
@@ -136,6 +154,7 @@ impl DecodeWorker {
                     label,
                     baseline,
                     source_scale,
+                    lens,
                 })
             });
             let _ = tx.send(DecodeResult {
@@ -154,14 +173,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    fn tiny_decode(_path: &Path) -> Result<(ImageBuf, String, f32), String> {
+    fn tiny_decode(_path: &Path) -> Result<(ImageBuf, String, f32, LensFacts), String> {
         let mut img = ImageBuf::new(8, 8);
         for y in 0..8 {
             for x in 0..8 {
                 img.set_pixel(x, y, [0.5, 0.5, 0.5]);
             }
         }
-        Ok((img, "FAKE".to_string(), 1.0))
+        Ok((img, "FAKE".to_string(), 1.0, LensFacts::default()))
     }
 
     /// Poll until `n` results have arrived (or 5 s elapse).

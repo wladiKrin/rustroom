@@ -23,6 +23,7 @@ core-image = { path = "../core-image" }
 raw-decode = { path = "../raw-decode" }
 edit-model = { path = "../edit-model" }
 pipeline = { path = "../pipeline" }
+lens-profile = { path = "../lens-profile" }
 export = { path = "../export" }
 catalog = { path = "../catalog" }
 image-decode = { path = "../image-decode" }
