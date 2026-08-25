@@ -3,6 +3,7 @@
 use crate::{DecodeError, DecodeOptions, DecodedRaw, RawMetadata, Thumbnail};
 use core_image::ImageBuf;
 use rsraw::{RawImage, ThumbFormat, BIT_DEPTH_16};
+use std::path::Path;
 
 const U16_MAX_F: f32 = u16::MAX as f32;
 
@@ -53,6 +54,32 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
         height: scaled.height() as usize,
         rgba: scaled.into_raw(),
     })
+}
+
+/// Derive camera → ProPhoto from a `.dcp`, following the DNG spec's dual-illuminant rule.
+///
+/// ⚠ Returns `None` on any failure — a missing, malformed, or ForwardMatrix-less profile falls
+/// back to libraw's matrix rather than failing the decode. A photo that renders slightly
+/// differently beats a photo that does not open, and the fallback is the well-tested C1 path.
+fn profile_matrix(path: &Path, cam_mul: [f32; 3]) -> Option<[[f32; 3]; 3]> {
+    let p = camera_profile::CameraProfile::from_file(path).ok()?;
+    let forward1 = p.forward1?;
+    let forward2 = p.forward2?;
+    let t1 = color::camera::illuminant_temperature(p.illuminant1);
+    let t2 = color::camera::illuminant_temperature(p.illuminant2);
+    // ⚠ The camera neutral is the **reciprocal** of the white-balance multipliers: `cam_mul`
+    // scales the channels up to make a neutral object neutral, so the neutral object's own camera
+    // reading is 1/cam_mul. Getting this the right way round is the difference between solving
+    // for the scene's temperature and solving for its inverse.
+    if cam_mul.iter().any(|v| *v <= 0.0) {
+        return None;
+    }
+    let neutral = [1.0 / cam_mul[0], 1.0 / cam_mul[1], 1.0 / cam_mul[2]];
+    let temp = color::camera::neutral_temperature(neutral, p.color1, p.color2, t1, t2);
+    let g = color::camera::illuminant_weight(temp, t1, t2);
+    Some(color::camera::forward_to_prophoto(color::camera::blend(
+        forward1, forward2, g,
+    )))
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
@@ -125,11 +152,17 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     let image = if opts.camera_native {
         let m = {
             let c = &raw.as_mut().color;
-            let mut m = [[0.0f32; 3]; 3];
-            for (i, row) in m.iter_mut().enumerate() {
+            let mut rgb_cam = [[0.0f32; 3]; 3];
+            for (i, row) in rgb_cam.iter_mut().enumerate() {
                 row.copy_from_slice(&c.rgb_cam[i][..3]);
             }
-            color::camera::camera_to_prophoto(m)
+            // ⚠ `cam_mul` is the white balance libraw actually applied, which is what the DNG
+            // interpolation is defined against — not a temperature anyone typed.
+            let cam_mul = [c.cam_mul[0], c.cam_mul[1], c.cam_mul[2]];
+            opts.camera_profile
+                .as_deref()
+                .and_then(|p| profile_matrix(p, cam_mul))
+                .unwrap_or_else(|| color::camera::camera_to_prophoto(rgb_cam))
         };
         ImageBuf::from_vec(width, height, data).map_pixels(|p| color::spaces::apply(&m, p))
     } else {

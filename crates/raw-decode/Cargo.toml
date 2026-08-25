@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+camera-profile = { path = "../camera-profile" }
 color = { path = "../color" }
 core-image = { path = "../core-image" }
 rsraw = "0.1.1"

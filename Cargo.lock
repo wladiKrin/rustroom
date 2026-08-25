@@ -3393,6 +3393,7 @@ checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 name = "raw-decode"
 version = "0.1.0"
 dependencies = [
+ "camera-profile",
  "color 0.1.0",
  "core-image",
  "image",

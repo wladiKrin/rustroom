@@ -112,7 +112,9 @@ impl Demosaic {
 }
 
 /// How libraw should render the RAW.
-#[derive(Debug, Clone, Copy)]
+/// ⚠ `Clone` but **not `Copy`** — `camera_profile` is a `PathBuf`. Options are constructed once
+/// per decode and moved, so the loss costs nothing; the same trade `Mask` made for the brush.
+#[derive(Debug, Clone)]
 pub struct DecodeOptions {
     /// Use the camera's own white balance (falls back to auto-WB).
     pub camera_wb: bool,
@@ -132,6 +134,12 @@ pub struct DecodeOptions {
     /// thing under test does is worth far more than the few lines it costs. It is the same role
     /// the golden harness plays for `pipeline`.
     pub camera_native: bool,
+    /// A `.dcp` camera profile to use instead of libraw's matrix.
+    ///
+    /// ⚠ `None` — the default — keeps C1's libraw path exactly. That is what makes this opt-in
+    /// change unable to regress anything, and it keeps the C1 oracle live for comparison.
+    /// Discovery and the UI are C4.
+    pub camera_profile: Option<std::path::PathBuf>,
 }
 
 impl DecodeOptions {
@@ -144,6 +152,7 @@ impl DecodeOptions {
             half_size: false,
             demosaic: Demosaic::Fast,
             camera_native: true,
+            camera_profile: None,
         }
     }
 
@@ -158,6 +167,7 @@ impl DecodeOptions {
             // ⚠ Deliberately libraw's own conversion. This is a debug dump, not an export path,
             // and it wants a baked sRGB image rather than the pipeline's working space.
             camera_native: false,
+            camera_profile: None,
         }
     }
 
@@ -170,6 +180,7 @@ impl DecodeOptions {
             half_size: true,
             demosaic: Demosaic::Fast,
             camera_native: true,
+            camera_profile: None,
         }
     }
 
