@@ -72,7 +72,14 @@ pub struct FrameSpec {
 }
 
 impl FrameSpec {
-    /// A whole-frame render in sRGB — the shape the tests and the reference paths use.
+    /// A whole-frame render in sRGB.
+    ///
+    /// ⚠⚠ **`#[cfg(test)]` on purpose — do not make this available to production.** It bakes in
+    /// `Srgb`, and a production call site that reached for it is exactly how the display setting
+    /// came to do nothing: the render issued when a photo opened used this, so every photo
+    /// opened uncorrected and stayed that way until some unrelated edit forced a re-render.
+    /// Gating it makes that bug a compile error rather than something to remember.
+    #[cfg(test)]
     pub fn fit(max_dim: usize) -> Self {
         Self {
             max_dim,
@@ -201,6 +208,19 @@ fn pack(
     // the other is the bug this ordering exists to prevent.
     let srgb8 = out.to_rgba8();
     let hist = crate::histogram::histogram_rgba(&srgb8);
+
+    // Env-gated, like `RUSTROOM_DEBUG_BRUSH`: instrumentation beat reasoning twice on the brush
+    // canvas, and it did again here — the setting reaching `pack` is not something the code
+    // reads wrong, it is something a call site can quietly bypass.
+    if std::env::var_os("RUSTROOM_DEBUG_DISPLAY").is_some() {
+        eprintln!(
+            "pack: {}x{} space={:?} region={}",
+            width,
+            height,
+            display_space,
+            region.is_some()
+        );
+    }
 
     let rgba = if display_space == color::OutputSpace::Srgb {
         srgb8

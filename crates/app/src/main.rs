@@ -1160,7 +1160,19 @@ impl RustroomApp {
         // `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the cap, and
         // the canvas only accepts a frame as the fit size when its `max_dim` matches.
         let fit_cap = view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM);
-        engine.request(edits.clone(), FrameSpec::fit(fit_cap));
+        // ⚠ The display space must be passed here too. This call used `FrameSpec::fit`, which
+        // hardcodes sRGB, so **every photo opened uncorrected** and stayed that way until some
+        // unrelated edit forced a re-render — which made the whole setting look inert. Found by
+        // instrumenting `pack`, not by reading the code, which looks right at every call site.
+        // `FrameSpec::fit` is now `#[cfg(test)]` so this cannot recur.
+        engine.request(
+            edits.clone(),
+            FrameSpec {
+                max_dim: fit_cap,
+                region: None,
+                display_space: self.settings.display_space,
+            },
+        );
         // Non-RAW formats are decoded at full size, so their buffer is already the real thing.
         let buffer_is_full_res = !catalog::is_raw(&path);
 
