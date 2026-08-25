@@ -6,9 +6,10 @@ pub mod geometry;
 pub mod masks;
 pub mod presets;
 
-use crate::{theme, RustroomApp};
+use crate::{theme, RustroomApp, Session};
 use edit_model::Edits;
 use eframe::egui;
+use rustroom_app::action_log::ActionKind;
 use rustroom_app::tool::Tool;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
@@ -63,8 +64,60 @@ impl Edited {
 /// ⚠ One history entry per *settled* drag, not per changed frame: the `slider` closure records
 /// `r.drag_stopped()` separately from `r.changed()`, so dragging Exposure across its range is
 /// one Ctrl+Z rather than two hundred.
+/// The inline copy-name field.
+///
+/// ⚠ Edits a **scratch** draft, not the session's name. Writing straight through would push one
+/// undo entry per keystroke and would commit a half-typed name the moment focus moved — the same
+/// reason the export dialog keeps an `export_draft`.
+///
+/// Returns `Some((from, to))` when the name was committed and actually changed.
+fn copy_name_field(
+    ui: &mut egui::Ui,
+    s: &Session,
+    draft: &mut Option<String>,
+) -> Option<(Option<String>, Option<String>)> {
+    let text = draft.get_or_insert_with(|| s.name.clone().unwrap_or_default());
+    let r = ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text("Name this copy")
+            .desired_width(f32::INFINITY),
+    );
+    // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the
+    // context lock internally, and holding one across `ui.input(..)` panics inside epaint's
+    // mutex — the re-entrant lock the canvas-navigation work already paid for.
+    let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+    if r.gained_focus() {
+        // Clicking in selects the whole name, so typing replaces it.
+        if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id) {
+            let end = text.chars().count();
+            st.cursor
+                .set_char_range(Some(egui::text_selection::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(end),
+                )));
+            st.store(ui.ctx(), r.id);
+        }
+    }
+
+    if r.lost_focus() || (r.has_focus() && entered) {
+        // ⚠ An empty field means "no name", not a name of "". Otherwise a copy could be given a
+        // blank label that reads as a bug.
+        let to = Some(text.trim().to_string()).filter(|t| !t.is_empty());
+        let from = s.name.clone();
+        *draft = None;
+        // ⚠ Unchanged is not an edit: committing anyway would put a no-op step on the undo
+        // stack, so Ctrl+Z would appear to do nothing.
+        if to != from {
+            return Some((from, to));
+        }
+    }
+    None
+}
+
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
+    let mut rename: Option<(Option<String>, Option<String>)> = None;
     egui::Panel::right("panel")
         .default_size(240.0)
         .show(ui, |ui| {
@@ -189,16 +242,32 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     if let Some(file) = s.path.file_name() {
                         ui.label(egui::RichText::new(file.to_string_lossy()).strong());
                     }
-                    // ⚠ Which *copy* this is, shown only when it is one — an original would
-                    // otherwise carry a redundant "/ 0" on every photo.
+                    // ⚠ The name field appears only on a *copy* — an original cannot be named,
+                    // and offering a field for it would be a control that does nothing.
                     if s.copy != 0 {
-                        let which = s.name.clone().unwrap_or_else(|| s.copy.to_string());
-                        theme::caption(ui, &format!("Copy {which}"));
+                        rename = copy_name_field(ui, s, &mut app.rename_draft);
                     }
                     theme::caption(ui, &s.make_model);
                 }
             });
         });
+
+    // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
+    // rebuilds the Library, both of which need `&mut app` while the closure still holds
+    // `&mut app.session`. The same shape `photo_edited` uses, and for the same reason.
+    if let Some((from, to)) = rename {
+        if let Some(id) = app.open_photo() {
+            app.apply_rename(&id, from.clone(), to.clone());
+            app.actions.push(
+                ActionKind::Rename {
+                    id: id.clone(),
+                    from,
+                    to,
+                },
+                Some(&id),
+            );
+        }
+    }
     photo_edited
 }
 

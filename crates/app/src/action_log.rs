@@ -24,6 +24,16 @@ pub enum ActionKind {
     /// — which after a switch is a *different photo's*. That is the sole reason every such
     /// entry had to be destroyed whenever the session changed.
     PhotoEdit { id: PhotoId },
+    /// A copy renamed. `from`/`to` are `None` for "no name".
+    ///
+    /// ⚠ Its own entry rather than part of `PhotoEdit`, because the name is **not** in `Edits` —
+    /// it is envelope metadata, so `History<Edits>` cannot undo it. Scoped to its own copy by the
+    /// same rule `PhotoEdit` uses.
+    Rename {
+        id: PhotoId,
+        from: Option<String>,
+        to: Option<String>,
+    },
     /// A deleted virtual copy, held so undo can put it back.
     ///
     /// ⚠ Carries the whole `CopyEntry` because nothing else holds it — unlike `PhotoEdit`, whose
@@ -95,7 +105,7 @@ struct Entry {
 /// waits, intact, until you return to the photo it touched.
 fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
     match kind {
-        ActionKind::PhotoEdit { id } => open == Some(id),
+        ActionKind::PhotoEdit { id } | ActionKind::Rename { id, .. } => open == Some(id),
         // ⚠ A deleted copy has no `PhotoId` left to be reachable *from*, so it is global like a
         // preset deletion rather than scoped like an edit.
         ActionKind::PresetDelete { .. } | ActionKind::Sync(_) | ActionKind::CopyDelete { .. } => {
@@ -534,5 +544,28 @@ mod tests {
             "the original must not reach a copy's edit"
         );
         assert!(log.undo(Some(&copy)).is_some(), "its own copy must");
+    }
+
+    #[test]
+    fn a_rename_is_undoable_only_from_its_own_copy() {
+        // ⚠ Scoped like a photo edit: renaming copy 1 must not be undoable while copy 2 is open,
+        // or Ctrl+Z would rename a version the user is not looking at.
+        let path = PathBuf::from("/a.RAF");
+        let one = PhotoId::new(path.clone(), 1);
+        let two = PhotoId::new(path, 2);
+        let mut log = ActionLog::default();
+        log.push(
+            ActionKind::Rename {
+                id: one.clone(),
+                from: None,
+                to: Some("B&W".into()),
+            },
+            Some(&one),
+        );
+        assert!(
+            log.undo(Some(&two)).is_none(),
+            "a sibling copy must not reach it"
+        );
+        assert!(log.undo(Some(&one)).is_some());
     }
 }

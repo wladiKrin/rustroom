@@ -177,6 +177,11 @@ struct RustroomApp {
     hsl_channel: develop::panel::adjustments::HslChannel,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
+    /// Scratch text for the copy-name field, `None` when it is not being edited.
+    ///
+    /// ⚠ A draft rather than writing through to the session, so a half-typed name is never
+    /// committed and a rename is one undo step rather than one per keystroke.
+    rename_draft: Option<String>,
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
@@ -314,6 +319,7 @@ impl RustroomApp {
             show_mask_tint: true,
             hsl_channel: Default::default(),
             grade_range: Default::default(),
+            rename_draft: None,
             tool: Default::default(),
             crop_aspect: None,
             clipboard: None,
@@ -338,7 +344,7 @@ impl RustroomApp {
     }
 }
 
-struct Session {
+pub struct Session {
     path: PathBuf,
     /// Which copy of `path` this session is editing. `0` is the original.
     ///
@@ -1000,6 +1006,11 @@ impl RustroomApp {
 
     fn undo_one(&mut self, kind: ActionKind) {
         match kind {
+            ActionKind::Rename { id, from, to } => {
+                // ⚠ Undo writes `from` back; redo writes `to`. Both go through the same helper
+                // so the two directions cannot drift.
+                self.apply_rename(&id, from.clone(), to.clone());
+            }
             ActionKind::CopyDelete { path, entry } => {
                 // ⚠ Read-modify-write: other copies of this file are in the same sidecar and
                 // must survive the restore.
@@ -1058,6 +1069,9 @@ impl RustroomApp {
 
     fn redo_one(&mut self, kind: ActionKind) {
         match kind {
+            ActionKind::Rename { id, from, to } => {
+                self.apply_rename(&id, to.clone(), from.clone());
+            }
             ActionKind::CopyDelete { path, entry } => {
                 let mut sidecar = sidecar::load_all(&path);
                 sidecar.copies.retain(|c| c.copy != entry.copy);
@@ -1668,6 +1682,28 @@ impl RustroomApp {
         // no longer exists.
         self.session = None;
         self.open_path(ctx, PhotoId::original(path));
+    }
+
+    /// Write `to` as `id`'s name, replacing `_expected`.
+    ///
+    /// ⚠ Undo passes `(to, from)` and redo passes `(from, to)` into the same function, so the two
+    /// directions cannot drift apart — the mistake a pair of hand-written inverse arms invites.
+    fn apply_rename(&mut self, id: &PhotoId, _expected: Option<String>, to: Option<String>) {
+        let mut sidecar = sidecar::load_all(&id.path);
+        if let Some(c) = sidecar.copies.iter_mut().find(|c| c.copy == id.copy) {
+            c.name = to.clone();
+        }
+        if let Err(e) = sidecar::persist_all(&id.path, &sidecar) {
+            self.status = format!("Could not rename: {e}");
+            return;
+        }
+        if let Some(s) = self.session.as_mut() {
+            if s.path == id.path && s.copy == id.copy {
+                s.name = to;
+            }
+        }
+        self.rename_draft = None;
+        self.rebuild_entries();
     }
 
     /// Re-expand the Library's rows after a copy was added or removed.
