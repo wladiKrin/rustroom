@@ -29,6 +29,8 @@ use std::time::{Duration, Instant};
 
 mod commands;
 mod develop;
+#[cfg(target_os = "macos")]
+mod display_colorspace;
 mod filmstrip;
 mod library;
 mod menu_bar;
@@ -62,7 +64,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Rustroom",
         native_options,
-        Box::new(|cc| Ok(Box::new(RustroomApp::new(&cc.egui_ctx)))),
+        Box::new(|cc| Ok(Box::new(RustroomApp::new(cc)))),
     )
 }
 
@@ -112,6 +114,11 @@ struct PendingOpen {
 }
 
 struct RustroomApp {
+    /// Whether the OS is colour-matching the window for us, so we must not also convert.
+    ///
+    /// ⚠ Runtime, not `#[cfg]`: a macOS build where tagging failed has to take the manual path,
+    /// and keeping it a value means both branches compile on every platform.
+    os_manages_colour: bool,
     view: AppView,
     /// The view as of the previous frame, so a switch can be noticed.
     ///
@@ -225,12 +232,28 @@ struct RustroomApp {
 }
 
 impl RustroomApp {
-    fn new(ctx: &egui::Context) -> Self {
+    /// ⚠ Takes the whole `CreationContext`, not just the egui one, because the window handle is
+    /// needed to reach the `CAMetalLayer` — see `display_colorspace`.
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let ctx = &cc.egui_ctx;
         // ⚠ Installed here rather than lazily per frame: `init_for_nsapp` must run once, on
         // the main thread, after NSApplication exists — which it does by the time eframe
         // builds the app.
         #[cfg(target_os = "macos")]
         native_menu::install(ctx);
+        // ⚠ Once is enough: `wgpu_hal`'s `configure()` never touches `colorspace`, so the value
+        // survives every resize and surface rebuild. The result decides whether *we* convert or
+        // the OS does — never both, which would double-convert.
+        #[cfg(target_os = "macos")]
+        let os_manages_colour = {
+            use raw_window_handle::HasWindowHandle;
+            cc.window_handle()
+                .ok()
+                .map(|h| display_colorspace::tag_as_srgb(h.as_raw()))
+                .unwrap_or(false)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let os_manages_colour = false;
         let ctx2 = ctx.clone();
         let preset_store = PresetStore::user_default();
         let preset_list = preset_store.list();
@@ -247,6 +270,7 @@ impl RustroomApp {
         // silently disagree with what the user chose.
         theme::apply(ctx, &settings);
         Self {
+            os_manages_colour,
             view: AppView::default(),
             last_view: AppView::default(),
             library: None,
@@ -1170,14 +1194,18 @@ impl RustroomApp {
             FrameSpec {
                 max_dim: fit_cap,
                 region: None,
-                display_space: self.settings.display_space,
+                display_space: self
+                    .settings
+                    .effective_display_space(self.os_manages_colour),
             },
         );
         // Non-RAW formats are decoded at full size, so their buffer is already the real thing.
         let buffer_is_full_res = !catalog::is_raw(&path);
 
         self.session = Some(Session {
-            display_space: self.settings.display_space,
+            display_space: self
+                .settings
+                .effective_display_space(self.os_manages_colour),
             path,
             engine,
             edits,
@@ -1357,7 +1385,9 @@ impl RustroomApp {
                 let n = entries.len();
                 let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
                 let ctx2 = ctx.clone();
-                let space = self.settings.display_space;
+                let space = self
+                    .settings
+                    .effective_display_space(self.os_manages_colour);
                 let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
                 self.library = Some(Library {
                     entries,
@@ -1445,6 +1475,11 @@ impl RustroomApp {
     fn apply_display_space(&mut self, space: color::OutputSpace, ctx: &egui::Context) {
         self.settings.display_space = space;
         self.save_settings();
+        // ⚠ The *effective* value from here on: if the OS is managing colour this is `Srgb`
+        // whatever the dropdown said, so the two can never both convert.
+        let space = self
+            .settings
+            .effective_display_space(self.os_manages_colour);
         if let Some(lib) = self.library.as_mut() {
             let paths: Vec<_> = lib.entries.iter().map(|e| e.path.clone()).collect();
             let n = paths.len();
