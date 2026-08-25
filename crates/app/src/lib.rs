@@ -16,6 +16,7 @@ pub mod history;
 pub mod icons;
 pub mod mask_tool;
 pub mod menu;
+pub mod photo_id;
 pub mod presets;
 pub mod render_engine;
 pub mod safe_name;
