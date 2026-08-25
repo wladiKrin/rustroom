@@ -192,17 +192,18 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **🎯 M3.3's GRADING HALF IS DONE (2026-08-25).** Three-way wheels plus Global, Blending and Balance. Its section is **"Colour grading (M3.3)"** below.
 
-⚠⚠ **M3.3 IS NOT FULLY CLOSED, AND SAYING SO WOULD BE OVERCLAIMING.** The roadmap's M3.3 is *"colour grading **& profiles**"* and its "Done when" reads *"colour grading + a LUT profile export correctly"*. Two of its three parts are done — the wheels (this), and **camera profiles**, which landed separately as colour-management C1–C4. **Creative LUT support — importing a 3-D `.cube` as a look — is not built**, and is the only outstanding part. ⚠ It is deferred for a *design* reason rather than effort, the same one that excluded `ProfileToneCurve`: most creative LUTs are authored against a **display-referred** image while this pipeline is scene-referred, so *"where in the chain does a LUT run"* has to be answered first.
+⚠⚠ **M3.3 IS NOT FULLY CLOSED, AND SAYING SO WOULD BE OVERCLAIMING.** The roadmap's M3.3 is *"colour grading **& profiles**"* and its "Done when" reads *"colour grading + a LUT profile export correctly"*. Two of its three parts are done — the wheels (this), and **camera profiles**, which landed separately as colour-management C1–C4. **Creative LUT support — importing a 3-D `.cube` as a look — is not built.** ⚠ **Parked in `docs/BACKLOG.md` (user's call, 2026-08-25), not queued as a next action**, because it is blocked on a *design* question rather than effort — the same one that excluded `ProfileToneCurve`. The backlog entry carries the full reasoning; ⚠ **read it before treating this as a parser job**, which is the easy half.
 
-**▶ NEXT ACTION: pick between M3.4, M3.2, and finishing M3.3's LUT half.** None blocks another:
+**▶ NEXT ACTION: pick between M3.4 and M3.2.** Neither blocks the other:
 
 - **M3.4 virtual copies** — the smallest and most independent piece left, and pure app/edit-model work with no new dependency. The natural next one.
 - **M3.2 lens corrections via lensfun** — ⚠ a **new C dependency**, carrying the same build risk libraw did, and the only remaining item that can go wrong outside our own code. Worth doing while there is appetite for a build fight, not at the end of a session.
-- **M3.3's creative-LUT half** — closes the milestone properly, but ⚠ **start with the scene-referred-versus-display-referred question above**, not with a `.cube` parser; the parser is the easy part and answering it wrong puts the LUT in the wrong space.
 
 ⚠ **The hidden prerequisite that once blocked M3.3 is gone for good** and does not apply to either of these: colour management is complete — A (linear ProPhoto working space), B (output profile at export), C1–C4 (camera input profiles) and D (display profile plus its macOS follow-up).
 
-**Remaining in Phase 3:** **M3.2** lens corrections via lensfun (⚠ a new C dependency, with the build risk libraw carried), **M3.4** virtual copies (smallest and most independent), and **M3.3's creative-LUT half**. **M3.1 is closed**; M3.3 is two-thirds done.
+**Remaining in Phase 3:** **M3.2** lens corrections via lensfun (⚠ a new C dependency, with the build risk libraw carried) and **M3.4** virtual copies (smallest and most independent). **M3.1 is closed**; M3.3 is two-thirds done, with its creative-LUT half parked in the backlog.
+
+📋 **Deferred work now has one home: `docs/BACKLOG.md`.** It records *why* each item was deferred, and separates things blocked on a **design question** (creative LUTs, `ProfileToneCurve`) from things merely awaiting effort — mixing those up is how a hard question gets picked up as though it were a small job. ⚠ When deferring something, add it there **and** leave the detail in its section here.
 
 ⚠ **Recorded follow-ups from the colour-management work, none urgent, each detailed in its own section below:** **C2/C3 shipped without their intended oracle** — `rawtherapee-cli` crashes on this machine (exit 133) — so the dual-illuminant interpolation is *bounded but not independently verified*; **per-photo camera profile** (C4 is per camera; the work is the buffer-cache key and `Edits`); **soft-proofing** (the preview cannot show P3 even when exporting it); **gamut mapping / rendering intents** at export (currently a hard per-channel clip); **`ProfileToneCurve` and `ProfileLookTable`**, both deliberately excluded — ⚠ the tone curve needs an answer to *"where does a display rendering live in a scene-referred pipeline"*, which is a design question rather than effort.
 
