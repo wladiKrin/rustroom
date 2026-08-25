@@ -1806,8 +1806,8 @@ mod tests {
             return;
         };
         let p = std::path::Path::new(&path);
-        let (half, _, half_scale) = decode_for_edit(p, None).expect("half decode");
-        let (full, _, full_scale) =
+        let (half, _, half_scale, _) = decode_for_edit(p, None).expect("half decode");
+        let (full, _, full_scale, _) =
             decode_full_res(p, raw_decode::Demosaic::default(), None).expect("full decode");
         assert_eq!(half_scale, 0.5);
         assert_eq!(full_scale, 1.0);

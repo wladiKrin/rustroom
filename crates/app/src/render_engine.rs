@@ -761,10 +761,26 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
 
-        let (_, cold) = render_cached(&buf, &base, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        let (_, cold) = render_cached(
+            &buf,
+            &base,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(cold, 3, "a cold render runs every prefix stage");
 
-        let (_, hit) = render_cached(&buf, &base, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        let (_, hit) = render_cached(
+            &buf,
+            &base,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(hit, 0, "an unchanged prefix runs nothing");
 
         // A tail-only change still runs nothing: it resumes at the final checkpoint.
@@ -777,6 +793,7 @@ mod tests {
             &tail_only,
             FrameSpec::fit(8),
             1.0,
+            None,
             &mut cache,
             &mut bc,
         );
@@ -787,7 +804,15 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 85.0 },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &dehaze, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        let (_, ran) = render_cached(
+            &buf,
+            &dehaze,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(ran, 1, "a dehaze change must resume after noise reduction");
 
         // Noise reduction is second, so NR and dehaze re-run but geometry does not.
@@ -799,7 +824,7 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &nr, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        let (_, ran) = render_cached(&buf, &nr, FrameSpec::fit(8), 1.0, None, &mut cache, &mut bc);
         assert_eq!(ran, 2, "an NR change must resume after geometry");
 
         // Geometry is first, so everything re-runs — but the downscale is still reused.
@@ -810,7 +835,15 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &geo, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        let (_, ran) = render_cached(
+            &buf,
+            &geo,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(ran, 3, "a geometry change invalidates the whole prefix");
     }
 
@@ -824,7 +857,15 @@ mod tests {
         let mut bc = BrushCache::default();
 
         let mut native = PrefixCache::default();
-        render_cached(&buf, &base, FrameSpec::fit(16), 1.0, &mut native, &mut bc);
+        render_cached(
+            &buf,
+            &base,
+            FrameSpec::fit(16),
+            1.0,
+            None,
+            &mut native,
+            &mut bc,
+        );
         assert_eq!(
             native.mid_len(),
             2,
@@ -832,7 +873,7 @@ mod tests {
         );
 
         let mut fit = PrefixCache::default();
-        render_cached(&buf, &base, FrameSpec::fit(8), 1.0, &mut fit, &mut bc);
+        render_cached(&buf, &base, FrameSpec::fit(8), 1.0, None, &mut fit, &mut bc);
         assert_eq!(
             fit.mid_len(),
             3,
@@ -849,13 +890,29 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
         let with = full_prefix();
-        render_cached(&buf, &with, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        render_cached(
+            &buf,
+            &with,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
 
         let without = Edits {
             dehaze: edit_model::Dehaze::default(),
             ..with.clone()
         };
-        let (got, ran) = render_cached(&buf, &without, FrameSpec::fit(8), 1.0, &mut cache, &mut bc);
+        let (got, ran) = render_cached(
+            &buf,
+            &without,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(ran, 0, "the post-NR checkpoint is now the final one");
         assert_eq!(
             got.rgba,
@@ -1058,6 +1115,7 @@ mod tests {
             &edits,
             FrameSpec::fit(n),
             1.0,
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1073,6 +1131,7 @@ mod tests {
             },
             FrameSpec::fit(n),
             1.0,
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1099,6 +1158,7 @@ mod tests {
                 display_space: color::OutputSpace::Srgb,
             },
             1.0,
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1136,8 +1196,8 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
 
-        render_cached(&buf, &e, FrameSpec::fit(8), 1.0, &mut cache, &mut bc); // "fit"
-        render_cached(&buf, &e, FrameSpec::fit(16), 1.0, &mut cache, &mut bc); // "native"
+        render_cached(&buf, &e, FrameSpec::fit(8), 1.0, None, &mut cache, &mut bc); // "fit"
+        render_cached(&buf, &e, FrameSpec::fit(16), 1.0, None, &mut cache, &mut bc); // "native"
         assert_eq!(cache.final_len(), 2, "both modes should stay cached");
 
         for max_dim in [8usize, 16] {
@@ -1156,7 +1216,15 @@ mod tests {
             },
             ..e.clone()
         };
-        render_cached(&buf, &e2, FrameSpec::fit(16), 1.0, &mut cache, &mut bc);
+        render_cached(
+            &buf,
+            &e2,
+            FrameSpec::fit(16),
+            1.0,
+            None,
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(cache.final_len(), 2);
     }
 
@@ -1178,6 +1246,7 @@ mod tests {
                 display_space: color::OutputSpace::Srgb,
             },
             1.0,
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );

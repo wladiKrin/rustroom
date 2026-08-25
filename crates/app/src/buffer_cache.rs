@@ -69,6 +69,7 @@ mod tests {
 
     fn decoded(label: &str) -> Arc<Decoded> {
         Arc::new(Decoded {
+            lens: crate::decode_worker::LensFacts::default(),
             buffer: Arc::new(ImageBuf::new(2, 2)),
             label: label.to_string(),
             baseline: RenderedFrame {
