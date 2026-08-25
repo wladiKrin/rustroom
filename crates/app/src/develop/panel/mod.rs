@@ -10,6 +10,7 @@ use crate::{theme, RustroomApp, Session};
 use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
+use rustroom_app::file_rename;
 use rustroom_app::tool::Tool;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
@@ -64,22 +65,28 @@ impl Edited {
 /// ⚠ One history entry per *settled* drag, not per changed frame: the `slider` closure records
 /// `r.drag_stopped()` separately from `r.changed()`, so dragging Exposure across its range is
 /// one Ctrl+Z rather than two hundred.
-/// The inline copy-name field.
+/// The photo's filename, editable in place.
 ///
-/// ⚠ Edits a **scratch** draft, not the session's name. Writing straight through would push one
-/// undo entry per keystroke and would commit a half-typed name the moment focus moved — the same
-/// reason the export dialog keeps an `export_draft`.
+/// ⚠ **This *is* the name shown on screen, not a second field beside it.** It was a separate
+/// "copy name" below the filename at first, and that was reported as broken for exactly the right
+/// reason: two names for one photo, only one of them editable, and typing in the editable one
+/// changed nothing visible.
 ///
-/// Returns `Some((from, to))` when the name was committed and actually changed.
-fn copy_name_field(
+/// ⚠ Edits a **scratch** draft, not the path. Writing through would rename the file on every
+/// keystroke — creating a file per character — and would commit a half-typed name the moment
+/// focus moved. Same shape the export dialog's `export_draft` uses.
+///
+/// Returns `Some(new_path)` when a rename was committed and actually changes something.
+fn filename_field(
     ui: &mut egui::Ui,
     s: &Session,
     draft: &mut Option<String>,
-) -> Option<(Option<String>, Option<String>)> {
-    let text = draft.get_or_insert_with(|| s.name.clone().unwrap_or_default());
+) -> Option<std::path::PathBuf> {
+    let current = file_rename::field_text(&s.path);
+    let text = draft.get_or_insert_with(|| current.clone());
     let r = ui.add(
         egui::TextEdit::singleline(text)
-            .hint_text("Name this copy")
+            .font(egui::TextStyle::Body)
             .desired_width(f32::INFINITY),
     );
     // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the
@@ -101,15 +108,14 @@ fn copy_name_field(
     }
 
     if r.lost_focus() || (r.has_focus() && entered) {
-        // ⚠ An empty field means "no name", not a name of "". Otherwise a copy could be given a
-        // blank label that reads as a bug.
-        let to = Some(text.trim().to_string()).filter(|t| !t.is_empty());
-        let from = s.name.clone();
+        let typed = text.clone();
         *draft = None;
-        // ⚠ Unchanged is not an edit: committing anyway would put a no-op step on the undo
-        // stack, so Ctrl+Z would appear to do nothing.
-        if to != from {
-            return Some((from, to));
+        // ⚠ A refusal leaves the file alone and the field resets to the real name, so an empty
+        // or unusable entry can never look like it worked.
+        if let Ok(to) = file_rename::target(&s.path, &typed) {
+            if to != s.path {
+                return Some(to);
+            }
         }
     }
     None
@@ -117,7 +123,7 @@ fn copy_name_field(
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
-    let mut rename: Option<(Option<String>, Option<String>)> = None;
+    let mut rename: Option<std::path::PathBuf> = None;
     egui::Panel::right("panel")
         .default_size(240.0)
         .show(ui, |ui| {
@@ -237,15 +243,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     }
 
                     ui.separator();
-                    // The filename first: which photo this is matters more than what
-                    // shot it, and the panel scrolls, so it belongs above the metadata.
-                    if let Some(file) = s.path.file_name() {
-                        ui.label(egui::RichText::new(file.to_string_lossy()).strong());
-                    }
-                    // ⚠ The name field appears only on a *copy* — an original cannot be named,
-                    // and offering a field for it would be a control that does nothing.
+                    // The filename first: which photo this is matters more than what shot it,
+                    // and the panel scrolls, so it belongs above the metadata. ⚠ It is a field,
+                    // not a label — this is where a photo is renamed.
+                    rename = filename_field(ui, s, &mut app.rename_draft);
+                    // ⚠ Which copy this is, when it is one. Copies share the filename above, so
+                    // without this two rows would read identically.
                     if s.copy != 0 {
-                        rename = copy_name_field(ui, s, &mut app.rename_draft);
+                        theme::caption(ui, &format!("Copy {}", s.copy));
                     }
                     theme::caption(ui, &s.make_model);
                 }
@@ -255,17 +260,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
     // rebuilds the Library, both of which need `&mut app` while the closure still holds
     // `&mut app.session`. The same shape `photo_edited` uses, and for the same reason.
-    if let Some((from, to)) = rename {
-        if let Some(id) = app.open_photo() {
-            app.apply_rename(&id, from.clone(), to.clone());
-            app.actions.push(
-                ActionKind::Rename {
-                    id: id.clone(),
-                    from,
-                    to,
-                },
-                Some(&id),
-            );
+    if let Some(to) = rename {
+        let from = app.session.as_ref().map(|s| s.path.clone());
+        if let Some(from) = from {
+            let ctx = ui.ctx().clone();
+            if app.rename_file(&ctx, &from, &to) {
+                // ⚠ Pushed only when the rename actually happened — a refused one (name taken,
+                // empty) must not leave an undo step that would move a file nobody moved.
+                app.actions.push(ActionKind::Rename { from, to }, None);
+            }
         }
     }
     photo_edited

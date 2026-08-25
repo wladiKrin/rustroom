@@ -52,6 +52,18 @@ impl BufferCache {
     /// ⚠ Used when the camera profile changes: every cached buffer was decoded with the old
     /// profile, so serving any of them would look exactly like the setting not working. Clearing
     /// all rather than one entry because a folder of the same camera's files is the normal case.
+    /// Move an entry to a new path, keeping the decode.
+    ///
+    /// ⚠ Used when a photo is renamed. Dropping the entry instead would be correct but would
+    /// throw away a 2.9 s decode and up to 313 MB of work for a metadata change.
+    pub fn rekey(&mut self, from: &Path, to: &Path) {
+        for (p, _) in self.entries.iter_mut() {
+            if p == from {
+                *p = to.to_path_buf();
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.entries.clear();
     }

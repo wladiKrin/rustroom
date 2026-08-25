@@ -57,13 +57,6 @@ pub fn remove(photo: &Path) -> std::io::Result<()> {
 pub struct CopyEntry {
     /// `0` is the original; copies are numbered from 1 and never reused.
     pub copy: u32,
-    /// The user's label for this copy.
-    ///
-    /// ⚠ Deliberately **not** an `Edits` field. In `Edits` it would need an edit group and would
-    /// then travel with a paste, a preset or a sync — pasting a B&W recipe onto another photo
-    /// would rename it "B&W" — and "Reset adjustments" would wipe it.
-    #[serde(default)]
-    pub name: Option<String>,
     #[serde(default)]
     pub edits: Edits,
 }
@@ -105,11 +98,7 @@ impl Sidecar {
     pub fn set_edits(&mut self, copy: u32, edits: Edits) {
         match self.copies.iter_mut().find(|c| c.copy == copy) {
             Some(c) => c.edits = edits,
-            None => self.copies.push(CopyEntry {
-                copy,
-                name: None,
-                edits,
-            }),
+            None => self.copies.push(CopyEntry { copy, edits }),
         }
         self.copies.sort_by_key(|c| c.copy);
     }
@@ -122,7 +111,7 @@ impl Sidecar {
     pub fn is_neutral(&self) -> bool {
         match self.copies.as_slice() {
             [] => true,
-            [only] => only.copy == 0 && only.name.is_none() && only.edits == Edits::default(),
+            [only] => only.copy == 0 && only.edits == Edits::default(),
             _ => false,
         }
     }
@@ -157,11 +146,7 @@ pub fn load_all(photo: &Path) -> Sidecar {
         // Legacy: the whole file is one bare `Edits`, which is copy 0.
         match serde_json::from_value::<Edits>(value) {
             Ok(edits) => Sidecar {
-                copies: vec![CopyEntry {
-                    copy: 0,
-                    name: None,
-                    edits,
-                }],
+                copies: vec![CopyEntry { copy: 0, edits }],
             },
             Err(_) => Sidecar::default(),
         }
@@ -335,7 +320,6 @@ mod tests {
         let s = load_all(&photo);
         assert_eq!(s.copies.len(), 1, "a legacy sidecar is exactly one copy");
         assert_eq!(s.copies[0].copy, 0);
-        assert_eq!(s.copies[0].name, None);
         assert_eq!(s.copies[0].edits.exposure, 1.25, "exposure was lost");
         assert_eq!(s.copies[0].edits.contrast, 40.0, "contrast was lost");
         assert_eq!(s.copies[0].edits.vibrance, -15.0, "vibrance was lost");
@@ -349,7 +333,6 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
-                    name: None,
                     edits: Edits {
                         exposure: 0.5,
                         ..Edits::default()
@@ -357,7 +340,6 @@ mod tests {
                 },
                 CopyEntry {
                     copy: 3,
-                    name: Some("B&W".to_string()),
                     edits: Edits {
                         saturation: -100.0,
                         ..Edits::default()
@@ -395,7 +377,6 @@ mod tests {
         for n in 0..=2 {
             s.copies.push(CopyEntry {
                 copy: n,
-                name: None,
                 edits: Edits::default(),
             });
         }
@@ -411,46 +392,32 @@ mod tests {
         assert!(s.is_neutral(), "empty");
         s.copies.push(CopyEntry {
             copy: 0,
-            name: None,
             edits: Edits::default(),
         });
         assert!(s.is_neutral(), "a neutral, unnamed original only");
-
-        let named = Sidecar {
-            copies: vec![CopyEntry {
-                copy: 0,
-                name: Some("Hero".to_string()),
-                edits: Edits::default(),
-            }],
-        };
-        assert!(!named.is_neutral(), "a name is worth keeping the file for");
 
         let two = Sidecar {
             copies: vec![
                 CopyEntry {
                     copy: 0,
-                    name: None,
                     edits: Edits::default(),
                 },
                 CopyEntry {
                     copy: 1,
-                    name: None,
                     edits: Edits::default(),
                 },
             ],
         };
         assert!(!two.is_neutral(), "a copy is worth keeping the file for");
     }
-
-    /// A sidecar with copy 0 at `e0` and copy 1 named `n1` at `e1`.
-    fn two_copies(photo: &Path, e0: f32, n1: Option<&str>, e1: f32) {
+    /// A sidecar with copy 0 at `e0` and copy 1 at `e1`.
+    fn two_copies(photo: &Path, e0: f32, e1: f32) {
         save_all(
             photo,
             &Sidecar {
                 copies: vec![
                     CopyEntry {
                         copy: 0,
-                        name: None,
                         edits: Edits {
                             exposure: e0,
                             ..Edits::default()
@@ -458,7 +425,6 @@ mod tests {
                     },
                     CopyEntry {
                         copy: 1,
-                        name: n1.map(str::to_string),
                         edits: Edits {
                             exposure: e1,
                             ..Edits::default()
@@ -476,7 +442,7 @@ mod tests {
         // saving one must not drop the other.
         let dir = TempDir::new("persist_one");
         let photo = dir.0.join("a.RAF");
-        two_copies(&photo, 1.0, Some("B&W"), 5.0);
+        two_copies(&photo, 1.0, 5.0);
 
         persist_copy(
             &photo,
@@ -491,32 +457,6 @@ mod tests {
         let s = load_all(&photo);
         assert_eq!(s.get(0).unwrap().edits.exposure, 2.0, "copy 0 not updated");
         assert_eq!(s.get(1).unwrap().edits.exposure, 5.0, "copy 1 lost");
-        assert_eq!(
-            s.get(1).unwrap().name.as_deref(),
-            Some("B&W"),
-            "copy 1's name lost"
-        );
-    }
-
-    #[test]
-    fn persisting_a_copy_never_touches_its_name() {
-        // ⚠ The name is not an edit. Saving edits must leave it exactly alone — this is what
-        // keeps a paste or a sync from renaming its target.
-        let dir = TempDir::new("persist_name");
-        let photo = dir.0.join("a.RAF");
-        two_copies(&photo, 0.0, Some("Punchy"), 0.0);
-        persist_copy(
-            &photo,
-            1,
-            &Edits {
-                contrast: 30.0,
-                ..Edits::default()
-            },
-        )
-        .unwrap();
-        let s = load_all(&photo);
-        assert_eq!(s.get(1).unwrap().name.as_deref(), Some("Punchy"));
-        assert_eq!(s.get(1).unwrap().edits.contrast, 30.0);
     }
 
     #[test]
@@ -546,7 +486,7 @@ mod tests {
         // throw away the *other* copy.
         let dir = TempDir::new("neutral_two");
         let photo = dir.0.join("a.RAF");
-        two_copies(&photo, 1.0, None, 2.0);
+        two_copies(&photo, 1.0, 2.0);
         persist_copy(&photo, 0, &Edits::default()).unwrap();
         assert!(path(&photo).exists(), "copy 1 must survive");
         assert_eq!(load_all(&photo).get(1).unwrap().edits.exposure, 2.0);
@@ -556,7 +496,7 @@ mod tests {
     fn loading_one_copy_returns_only_that_copys_edits() {
         let dir = TempDir::new("load_one");
         let photo = dir.0.join("a.RAF");
-        two_copies(&photo, 1.0, None, 2.0);
+        two_copies(&photo, 1.0, 2.0);
         assert_eq!(load_copy(&photo, 0).unwrap().exposure, 1.0);
         assert_eq!(load_copy(&photo, 1).unwrap().exposure, 2.0);
         assert!(load_copy(&photo, 9).is_none(), "an absent copy is None");

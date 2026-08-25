@@ -10,6 +10,7 @@ pub mod edit_clipboard;
 pub mod edit_history;
 pub mod entries;
 pub mod export_presets;
+pub mod file_rename;
 pub mod format_filter;
 pub mod full_res;
 pub mod histogram;

@@ -10,6 +10,7 @@ use rustroom_app::edit_clipboard;
 use rustroom_app::edit_history::HistoryStash;
 use rustroom_app::entries::{self, PhotoEntry};
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
+use rustroom_app::file_rename;
 use rustroom_app::format_filter::{self, FormatFilter};
 use rustroom_app::full_res;
 use rustroom_app::history::History;
@@ -24,7 +25,7 @@ use rustroom_app::sync;
 use rustroom_app::thumb_loader::ThumbLoader;
 use rustroom_app::tool::Tool;
 use rustroom_app::view_region;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -352,8 +353,6 @@ pub struct Session {
     /// sites that genuinely want the **file** — the decode, the buffer cache, the thumbnail.
     /// Only the sidecar, the undo scope and the label want the version.
     copy: u32,
-    /// This copy's user-given name, shown in the Develop footer and editable there.
-    name: Option<String>,
     engine: RenderEngine,
     edits: Edits,
     texture: Option<egui::TextureHandle>,
@@ -1008,10 +1007,10 @@ impl RustroomApp {
     // in the sidecar — see the `CopyDelete` arm.
     fn undo_one(&mut self, ctx: &egui::Context, kind: ActionKind) {
         match kind {
-            ActionKind::Rename { id, from, to } => {
-                // ⚠ Undo writes `from` back; redo writes `to`. Both go through the same helper
-                // so the two directions cannot drift.
-                self.apply_rename(&id, from.clone(), to.clone());
+            ActionKind::Rename { from, to } => {
+                // ⚠ Undo moves it back; redo moves it forward. One function, arguments swapped,
+                // so the two directions cannot drift apart.
+                self.rename_file(ctx, &to, &from);
             }
             ActionKind::CopyDelete { path, entry } => {
                 // ⚠ Read-modify-write: other copies of this file are in the same sidecar and
@@ -1077,8 +1076,8 @@ impl RustroomApp {
 
     fn redo_one(&mut self, ctx: &egui::Context, kind: ActionKind) {
         match kind {
-            ActionKind::Rename { id, from, to } => {
-                self.apply_rename(&id, to.clone(), from.clone());
+            ActionKind::Rename { from, to } => {
+                self.rename_file(ctx, &from, &to);
             }
             ActionKind::CopyDelete { path, entry } => {
                 let mut sidecar = sidecar::load_all(&path);
@@ -1390,9 +1389,6 @@ impl RustroomApp {
                 .effective_display_space(self.os_manages_colour),
             path,
             copy: id.copy,
-            name: sidecar::load_all(&id.path)
-                .get(id.copy)
-                .and_then(|c| c.name.clone()),
             engine,
             edits,
             texture: None,
@@ -1697,26 +1693,60 @@ impl RustroomApp {
         self.open_path(ctx, PhotoId::original(path));
     }
 
-    /// Write `to` as `id`'s name, replacing `_expected`.
+    /// Rename a photo **on disk**, moving its sidecar with it.
     ///
-    /// ⚠ Undo passes `(to, from)` and redo passes `(from, to)` into the same function, so the two
-    /// directions cannot drift apart — the mistake a pair of hand-written inverse arms invites.
-    fn apply_rename(&mut self, id: &PhotoId, _expected: Option<String>, to: Option<String>) {
-        let mut sidecar = sidecar::load_all(&id.path);
-        if let Some(c) = sidecar.copies.iter_mut().find(|c| c.copy == id.copy) {
-            c.name = to.clone();
+    /// ⚠ Every copy of the file follows, because copies are versions *of* that file — there is
+    /// one name, shared. That is the whole reason per-copy names were removed: two names for one
+    /// photo, only one of them editable.
+    fn rename_file(&mut self, ctx: &egui::Context, from: &Path, to: &Path) -> bool {
+        if from == to {
+            return false;
         }
-        if let Err(e) = sidecar::persist_all(&id.path, &sidecar) {
+        // ⚠ Never overwrite. A photo lost this way is not recoverable by undo.
+        if to.exists() {
+            self.status = format!(
+                "There is already a {} here",
+                to.file_name().unwrap_or_default().to_string_lossy()
+            );
+            return false;
+        }
+        // ⚠ Write the open photo's edits *before* moving the file, or they would be persisted to
+        // the old path afterwards and orphaned.
+        self.persist_current_session();
+
+        if let Err(e) = std::fs::rename(from, to) {
             self.status = format!("Could not rename: {e}");
-            return;
+            return false;
         }
-        if let Some(s) = self.session.as_mut() {
-            if s.path == id.path && s.copy == id.copy {
-                s.name = to;
+        // ⚠ The sidecar carries every edit ever made to this photo and all its copies. Leaving
+        // it behind would make the file reopen neutral, with the old sidecar lingering as litter.
+        let (sc_from, sc_to) = (file_rename::sidecar_of(from), file_rename::sidecar_of(to));
+        if sc_from.exists() {
+            let _ = std::fs::rename(&sc_from, &sc_to);
+        }
+
+        // ⚠ Every path-keyed cache now holds a path that no longer exists. The decode is
+        // expensive, so it is re-keyed rather than dropped.
+        self.cache.rekey(from, to);
+        if let Some(lib) = self.library.as_mut() {
+            for e in lib.scan.iter_mut() {
+                if e.path == from {
+                    e.path = to.to_path_buf();
+                    e.file_name = file_rename::field_text(to);
+                }
             }
         }
+        let reopen = self
+            .session
+            .as_ref()
+            .and_then(|s| (s.path == from).then(|| PhotoId::new(to.to_path_buf(), s.copy)));
         self.rename_draft = None;
-        self.rebuild_entries(Some(id));
+        self.rebuild_entries(reopen.as_ref());
+        if let Some(id) = reopen {
+            self.open_path(ctx, id);
+        }
+        self.status = format!("Renamed to {}", file_rename::field_text(to));
+        true
     }
 
     /// Re-expand the Library's rows after a copy was added or removed.

@@ -207,7 +207,6 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
-                    name: None,
                     edits: Edits {
                         exposure: 1.0,
                         ..Edits::default()
@@ -215,7 +214,6 @@ mod tests {
                 },
                 CopyEntry {
                     copy: 1,
-                    name: Some("B&W".into()),
                     edits: Edits {
                         exposure: 2.0,
                         ..Edits::default()
@@ -253,11 +251,6 @@ mod tests {
             back.get(1).unwrap().edits.exposure,
             2.0,
             "copy 1 not restored — the per-file snapshot is what makes this work"
-        );
-        assert_eq!(
-            back.get(1).unwrap().name.as_deref(),
-            Some("B&W"),
-            "the name must survive a sync and its undo"
         );
     }
 }

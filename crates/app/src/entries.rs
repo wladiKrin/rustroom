@@ -15,20 +15,20 @@ pub struct PhotoEntry {
     pub id: PhotoId,
     /// The file's own name, shared by every copy of it.
     pub file_name: String,
-    /// This copy's user-given name, if it has one.
-    pub name: Option<String>,
 }
 
 impl PhotoEntry {
     /// What the grid, filmstrip and Develop footer show.
     ///
-    /// ⚠ A named copy shows its name *instead of* its number, not as well as it. Two labels for
-    /// one thing is how a display value drifts from the identity it is meant to describe.
+    /// ⚠ The copy **number**, not a separate name. Copies used to carry their own label; it was
+    /// removed because it made two names for one photo — the file's and the copy's — and only
+    /// one of them was editable, which is exactly how it was reported as broken. The filename is
+    /// now the editable name, and it is shared by every copy of a file.
     pub fn label(&self) -> String {
-        match (&self.name, self.id.copy) {
-            (_, 0) => self.file_name.clone(),
-            (Some(n), _) => format!("{} / {n}", self.file_name),
-            (None, c) => format!("{} / {c}", self.file_name),
+        if self.id.copy == 0 {
+            self.file_name.clone()
+        } else {
+            format!("{} / {}", self.file_name, self.id.copy)
         }
     }
 }
@@ -54,7 +54,6 @@ pub fn build(scan: &[CatalogEntry], load: impl Fn(&Path) -> Sidecar) -> Vec<Phot
             out.push(PhotoEntry {
                 id: PhotoId::new(e.path.clone(), n),
                 file_name: e.file_name.clone(),
-                name: s.get(n).and_then(|c| c.name.clone()),
             });
         }
     }
@@ -78,10 +77,9 @@ mod tests {
             .collect()
     }
 
-    fn copy(n: u32, name: Option<&str>) -> CopyEntry {
+    fn copy(n: u32) -> CopyEntry {
         CopyEntry {
             copy: n,
-            name: name.map(str::to_string),
             edits: Edits::default(),
         }
     }
@@ -92,7 +90,6 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].id.copy, 0);
         assert_eq!(got[0].file_name, "a.RAF");
-        assert_eq!(got[0].name, None);
     }
 
     #[test]
@@ -102,7 +99,7 @@ mod tests {
         // whether or not anything is stored for it, and omitting it would make a photo vanish
         // from the browser after making a copy of it.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(1, Some("B&W"))],
+            copies: vec![copy(1)],
         });
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].id.copy, 0, "the original comes first");
@@ -114,7 +111,7 @@ mod tests {
         let got = build(&scan(&["a.RAF", "b.RAF"]), |p| {
             if p.ends_with("a.RAF") {
                 Sidecar {
-                    copies: vec![copy(3, None), copy(0, None), copy(1, None)],
+                    copies: vec![copy(3), copy(0), copy(1)],
                 }
             } else {
                 Sidecar::default()
@@ -136,23 +133,14 @@ mod tests {
     }
 
     #[test]
-    fn a_copys_name_comes_from_the_sidecar() {
-        let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(0, None), copy(1, Some("B&W"))],
-        });
-        assert_eq!(got[0].name, None);
-        assert_eq!(got[1].name.as_deref(), Some("B&W"));
-    }
-
-    #[test]
-    fn the_label_falls_back_to_the_copy_number_when_unnamed() {
+    fn the_label_is_the_filename_plus_the_copy_number() {
         // ⚠ One number used everywhere: the identity, the label and the export suffix are the
-        // same value. A named copy shows its name *instead of* the number, not as well as.
+        // same value. The original shows no suffix at all.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(0, None), copy(1, None), copy(2, Some("B&W"))],
+            copies: vec![copy(0), copy(1), copy(2)],
         });
         assert_eq!(got[0].label(), "a.RAF");
         assert_eq!(got[1].label(), "a.RAF / 1");
-        assert_eq!(got[2].label(), "a.RAF / B&W");
+        assert_eq!(got[2].label(), "a.RAF / 2");
     }
 }
