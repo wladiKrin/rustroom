@@ -168,6 +168,29 @@ pub fn save_all(photo: &Path, s: &Sidecar) -> Result<(), EditLoadError> {
     Ok(())
 }
 
+/// One copy's stored edits, or `None` when that copy has none.
+pub fn load_copy(photo: &Path, copy: u32) -> Option<Edits> {
+    load_all(photo).get(copy).map(|c| c.edits.clone())
+}
+
+/// Persist one copy's edits, leaving every other copy — and this copy's name — untouched.
+///
+/// ⚠ Read-modify-write, because several versions share one file. An overwrite would drop the
+/// other copies, and it would drop this copy's name, which is not an edit.
+pub fn persist_copy(photo: &Path, copy: u32, edits: &Edits) -> Result<(), EditLoadError> {
+    let mut s = load_all(photo);
+    s.set_edits(copy, edits.clone());
+    persist_all(photo, &s)
+}
+
+/// Write every version, or delete the file when there is nothing worth keeping.
+pub fn persist_all(photo: &Path, s: &Sidecar) -> Result<(), EditLoadError> {
+    if s.is_neutral() {
+        return remove(photo).map_err(EditLoadError::from);
+    }
+    save_all(photo, s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +433,125 @@ mod tests {
             ],
         };
         assert!(!two.is_neutral(), "a copy is worth keeping the file for");
+    }
+
+    /// A sidecar with copy 0 at `e0` and copy 1 named `n1` at `e1`.
+    fn two_copies(photo: &Path, e0: f32, n1: Option<&str>, e1: f32) {
+        save_all(
+            photo,
+            &Sidecar {
+                copies: vec![
+                    CopyEntry {
+                        copy: 0,
+                        name: None,
+                        edits: Edits {
+                            exposure: e0,
+                            ..Edits::default()
+                        },
+                    },
+                    CopyEntry {
+                        copy: 1,
+                        name: n1.map(str::to_string),
+                        edits: Edits {
+                            exposure: e1,
+                            ..Edits::default()
+                        },
+                    },
+                ],
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn persisting_one_copy_leaves_the_others_alone() {
+        // ⚠ Read-modify-write, not overwrite. Two copies of one file live in one file, so
+        // saving one must not drop the other.
+        let dir = TempDir::new("persist_one");
+        let photo = dir.0.join("a.RAF");
+        two_copies(&photo, 1.0, Some("B&W"), 5.0);
+
+        persist_copy(
+            &photo,
+            0,
+            &Edits {
+                exposure: 2.0,
+                ..Edits::default()
+            },
+        )
+        .unwrap();
+
+        let s = load_all(&photo);
+        assert_eq!(s.get(0).unwrap().edits.exposure, 2.0, "copy 0 not updated");
+        assert_eq!(s.get(1).unwrap().edits.exposure, 5.0, "copy 1 lost");
+        assert_eq!(
+            s.get(1).unwrap().name.as_deref(),
+            Some("B&W"),
+            "copy 1's name lost"
+        );
+    }
+
+    #[test]
+    fn persisting_a_copy_never_touches_its_name() {
+        // ⚠ The name is not an edit. Saving edits must leave it exactly alone — this is what
+        // keeps a paste or a sync from renaming its target.
+        let dir = TempDir::new("persist_name");
+        let photo = dir.0.join("a.RAF");
+        two_copies(&photo, 0.0, Some("Punchy"), 0.0);
+        persist_copy(
+            &photo,
+            1,
+            &Edits {
+                contrast: 30.0,
+                ..Edits::default()
+            },
+        )
+        .unwrap();
+        let s = load_all(&photo);
+        assert_eq!(s.get(1).unwrap().name.as_deref(), Some("Punchy"));
+        assert_eq!(s.get(1).unwrap().edits.contrast, 30.0);
+    }
+
+    #[test]
+    fn resetting_the_only_copy_to_neutral_deletes_the_sidecar() {
+        // The behaviour `persist` already had, preserved through the envelope: skipping the
+        // write instead would leave a stale file to be loaded straight back — which is exactly
+        // what "Reset all, switch away, switch back" used to do.
+        let dir = TempDir::new("neutral_delete");
+        let photo = dir.0.join("a.RAF");
+        persist_copy(
+            &photo,
+            0,
+            &Edits {
+                exposure: 1.0,
+                ..Edits::default()
+            },
+        )
+        .unwrap();
+        assert!(path(&photo).exists());
+        persist_copy(&photo, 0, &Edits::default()).unwrap();
+        assert!(!path(&photo).exists(), "a neutral original leaves no file");
+    }
+
+    #[test]
+    fn resetting_one_of_two_copies_keeps_the_sidecar() {
+        // ⚠ The case the naive rule gets wrong: "edits are neutral, so delete the file" would
+        // throw away the *other* copy.
+        let dir = TempDir::new("neutral_two");
+        let photo = dir.0.join("a.RAF");
+        two_copies(&photo, 1.0, None, 2.0);
+        persist_copy(&photo, 0, &Edits::default()).unwrap();
+        assert!(path(&photo).exists(), "copy 1 must survive");
+        assert_eq!(load_all(&photo).get(1).unwrap().edits.exposure, 2.0);
+    }
+
+    #[test]
+    fn loading_one_copy_returns_only_that_copys_edits() {
+        let dir = TempDir::new("load_one");
+        let photo = dir.0.join("a.RAF");
+        two_copies(&photo, 1.0, None, 2.0);
+        assert_eq!(load_copy(&photo, 0).unwrap().exposure, 1.0);
+        assert_eq!(load_copy(&photo, 1).unwrap().exposure, 2.0);
+        assert!(load_copy(&photo, 9).is_none(), "an absent copy is None");
     }
 }
