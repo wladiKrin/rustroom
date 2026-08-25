@@ -4,6 +4,7 @@ pub mod dehaze;
 pub mod exposure;
 pub mod geometry;
 pub mod hsl;
+pub mod lens_correction;
 pub mod local_contrast;
 pub mod mask;
 pub mod noise_reduction;

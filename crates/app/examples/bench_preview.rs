@@ -302,7 +302,7 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&heavy, sc);
+        let steps = build_prefix_steps(&heavy, sc, None);
         let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
         println!("\n  prefix steps: {}", steps.len());
 

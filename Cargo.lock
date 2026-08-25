@@ -3195,6 +3195,7 @@ dependencies = [
  "core-image",
  "edit-model",
  "image",
+ "lens-profile",
  "rayon",
 ]
 

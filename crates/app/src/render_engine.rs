@@ -545,7 +545,9 @@ fn render_cached(
 
     // The prefix never depends on the region, so the whole chain is built and cached without
     // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
-    let steps = build_prefix_steps(edits, scale);
+    // ⚠ `None` until the GUI resolves a lens profile — plan 2 of M3.2. The stage is then
+    // skipped, which is exactly what an unlisted lens does, so nothing special-cases it.
+    let steps = build_prefix_steps(edits, scale, None);
     let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
     let tier_at = |n: usize| {
         if n == steps.len() {
@@ -637,6 +639,9 @@ fn render_cached(
         // ⚠ The **pipeline** is always sRGB. The display transform is a post-step in `pack`,
         // deliberately outside the pipeline so the histogram stays image-referred.
         color::OutputSpace::Srgb,
+        // Lens correction lives in the *prefix*, which this call discards — only the tail is
+        // wanted here. `None` is therefore correct rather than provisional.
+        None,
     );
     (pack(tail.run(input), region, max_dim, display_space), ran)
 }

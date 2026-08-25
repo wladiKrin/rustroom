@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 core-image = { path = "../core-image" }
 color = { path = "../color" }
+lens-profile = { path = "../lens-profile" }
 edit-model = { path = "../edit-model" }
 rayon.workspace = true
 

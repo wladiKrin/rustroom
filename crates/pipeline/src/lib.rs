@@ -30,6 +30,7 @@ pub use stages::dehaze::DehazeStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
+pub use stages::lens_correction::LensCorrectionStage;
 pub use stages::local_contrast::LocalContrastStage;
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
@@ -137,6 +138,7 @@ pub struct Region {
 /// caught by a test.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PrefixStepKey {
+    LensCorrection(edit_model::LensCorrection),
     Geometry(edit_model::Geometry),
     NoiseReduction(edit_model::NoiseReduction),
     Dehaze(edit_model::Dehaze),
@@ -154,10 +156,26 @@ pub struct PrefixStep {
 /// An inactive stage produces no step — exactly as it produces no stage in the pipeline today.
 /// That is what makes the checkpoint after an inactive stage *be* the checkpoint before it:
 /// the cumulative keys are equal, so nothing extra is stored.
-pub fn build_prefix_steps(edits: &Edits, scale: RenderScale) -> Vec<PrefixStep> {
+pub fn build_prefix_steps(
+    edits: &Edits,
+    scale: RenderScale,
+    lens: Option<lens_profile::Corrector>,
+) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
-    // Geometry runs first, so all adjustments operate on the final cropped pixels.
+    // ⚠ First, ahead of geometry: the calibration is defined in the uncropped, unrotated sensor
+    // frame, so it must precede both the crop and the straighten. A missing corrector — an
+    // unlisted lens, or a JPEG — skips the step silently, which is the ordinary case.
+    if edits.lens_correction.is_active() {
+        if let Some(c) = lens {
+            steps.push(PrefixStep {
+                key: PrefixStepKey::LensCorrection(edits.lens_correction),
+                stage: Box::new(LensCorrectionStage::new(c)),
+            });
+        }
+    }
+
+    // Geometry runs next, so all adjustments operate on the final cropped pixels.
     if edits.geometry != edit_model::Geometry::default() {
         steps.push(PrefixStep {
             key: PrefixStepKey::Geometry(edits.geometry),
@@ -212,7 +230,12 @@ pub struct PrefixKey {
 impl PrefixKey {
     /// The key for the output of the *whole* prefix.
     pub fn new(edits: &Edits, scale: RenderScale) -> Self {
-        let steps = build_prefix_steps(edits, scale);
+        // ⚠ `None` is correct and must not be "fixed": the key is derived from the *edits*, and
+        // `PrefixStepKey::LensCorrection` carries them. A corrector is needed to build the stage,
+        // never to key it. Consequence, stated rather than discovered: with no corrector the step
+        // is skipped, so this key can be one entry longer than the real prefix — harmless,
+        // because whether a corrector exists is constant for a photo and the engine is per photo.
+        let steps = build_prefix_steps(edits, scale, None);
         Self::upto(&steps, steps.len(), scale)
     }
 
@@ -276,7 +299,14 @@ pub fn build_pipeline_split_in_region(
     scale: RenderScale,
     region: Option<Region>,
 ) -> (Pipeline, Pipeline) {
-    build_pipeline_split_in_region_with_brush(edits, scale, region, None, color::OutputSpace::Srgb)
+    build_pipeline_split_in_region_with_brush(
+        edits,
+        scale,
+        region,
+        None,
+        color::OutputSpace::Srgb,
+        None,
+    )
 }
 
 /// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
@@ -289,10 +319,11 @@ pub fn build_pipeline_split_in_region_with_brush(
     region: Option<Region>,
     brush: Option<&BrushCoverage>,
     space: color::OutputSpace,
+    lens: Option<lens_profile::Corrector>,
 ) -> (Pipeline, Pipeline) {
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
-    let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale)
+    let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale, lens)
         .into_iter()
         .map(|s| s.stage)
         .collect();
@@ -419,7 +450,8 @@ pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
 /// [`build_pipeline`] and stays sRGB, because the display is assumed sRGB until a display
 /// profile exists.
 pub fn build_pipeline_to(edits: &Edits, scale: RenderScale, space: color::OutputSpace) -> Pipeline {
-    let (prefix, tail) = build_pipeline_split_in_region_with_brush(edits, scale, None, None, space);
+    let (prefix, tail) =
+        build_pipeline_split_in_region_with_brush(edits, scale, None, None, space, None);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
@@ -717,8 +749,8 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 95.0 },
             ..a.clone()
         };
-        let steps_a = build_prefix_steps(&a, RenderScale::FULL);
-        let steps_b = build_prefix_steps(&b, RenderScale::FULL);
+        let steps_a = build_prefix_steps(&a, RenderScale::FULL, None);
+        let steps_b = build_prefix_steps(&b, RenderScale::FULL, None);
         assert_eq!(steps_a.len(), 3);
 
         // Same up to and including noise reduction...
@@ -795,7 +827,7 @@ mod tests {
         // build_pipeline_split_in_region is defined through build_prefix_steps, so the two
         // cannot drift: a stage added to one appears in the other.
         for edits in [Edits::default(), all_edits()] {
-            let steps = build_prefix_steps(&edits, RenderScale::FULL);
+            let steps = build_prefix_steps(&edits, RenderScale::FULL, None);
             let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
             let from_steps: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
             assert_eq!(from_steps, prefix.stage_names());
@@ -808,7 +840,7 @@ mod tests {
         // stages shared a key, a checkpoint would be reused across a change that altered it.
         let base = all_edits();
         let keys = |e: &Edits| -> Vec<PrefixStepKey> {
-            build_prefix_steps(e, RenderScale::FULL)
+            build_prefix_steps(e, RenderScale::FULL, None)
                 .iter()
                 .map(|s| s.key)
                 .collect()
@@ -1292,5 +1324,79 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+    }
+
+    /// A corrector built from a synthetic profile — no RAW file, no bundled database.
+    fn test_corrector() -> Option<lens_profile::Corrector> {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let p = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
+        lens_profile::Corrector::new(
+            &p,
+            &lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+            64,
+            16,
+            lens_profile::Corrections {
+                distortion: true,
+                tca: false,
+                vignetting: false,
+                scale: 100.0,
+            },
+        )
+    }
+
+    #[test]
+    fn lens_correction_runs_first_in_the_prefix() {
+        // Before geometry, because the calibration is defined in the uncropped sensor frame.
+        let edits = Edits {
+            lens_correction: edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 2.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let steps = build_prefix_steps(&edits, RenderScale::FULL, test_corrector());
+        let names: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
+        assert_eq!(names, vec!["lens_correction", "geometry"]);
+    }
+
+    #[test]
+    fn lens_correction_is_skipped_when_no_profile_matched() {
+        // ⚠ The ordinary case for an unlisted lens, and it must be silent rather than an error.
+        let edits = Edits {
+            lens_correction: edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert!(build_prefix_steps(&edits, RenderScale::FULL, None).is_empty());
+    }
+
+    #[test]
+    fn the_lens_scale_alone_inserts_no_stage() {
+        let edits = Edits {
+            lens_correction: edit_model::LensCorrection {
+                scale: 0.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert!(build_prefix_steps(&edits, RenderScale::FULL, test_corrector()).is_empty());
     }
 }

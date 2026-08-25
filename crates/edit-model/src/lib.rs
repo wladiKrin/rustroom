@@ -829,7 +829,6 @@ pub struct MaskedAdjustment {
     pub adjustments: LocalAdjustments,
 }
 
-
 /// Optical corrections read from a lens profile. Neutral when nothing is enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
