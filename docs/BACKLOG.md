@@ -147,6 +147,11 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
   **forward** distortion map and the `lensfun` crate exposes only the inverse, so it means an
   iterative solve per stroke point. Deferred on the grounds that lens corrections are enabled once,
   early, not toggled mid-edit.
+- **Perspective correction (M3.2's remaining slice).** Keystone and rotation, either from manual
+  sliders or from automatic vertical detection. ⚠ Unlike the three automatic corrections it is
+  **not profile-driven** — it needs user input and canvas interaction, which is the half this
+  project's record says is expensive and defect-prone. The maths is `mod_pc` in the `lensfun`
+  crate and `Modifier::enable_perspective_correction` is already available; the work is the UI.
 - **Colour grading does not reach masks.** `LocalAdjustments` is per-pixel-only and a grade is
   global look. Also **no visual feedback of the grading range boundaries** on canvas or histogram.
 
