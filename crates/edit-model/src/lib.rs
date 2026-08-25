@@ -264,6 +264,70 @@ impl Vignette {
     }
 }
 
+/// One colour-grading wheel: a hue/saturation tint direction plus a lightness offset,
+/// applied to one tonal range.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct GradeWheel {
+    /// Oklab hue angle in degrees, 0..360, measured from the +a axis counterclockwise —
+    /// i.e. exactly `atan2(b, a)`, with no offset to get wrong.
+    ///
+    /// ⚠ This is the **same angle** `BAND_HUES` uses in the HSL stage, so "red" means the
+    /// same thing in both halves of the Color section. It would not if one were an sRGB hue.
+    pub hue: f32,
+    /// Tint strength, 0..100. 0 = no tint, whatever the hue.
+    pub saturation: f32,
+    /// Lightness offset for this range, -100..100.
+    pub luminance: f32,
+}
+
+/// Three-way colour grading: a tint per tonal range, plus one applied everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorGrading {
+    pub shadows: GradeWheel,
+    pub midtones: GradeWheel,
+    pub highlights: GradeWheel,
+    /// Applied uniformly at every lightness, on top of the weighted three.
+    pub global: GradeWheel,
+    /// How far the three ranges overlap, 0..100. At 0 the nearest range wins outright; at
+    /// 100 all three weigh 1/3 everywhere and the grade becomes a uniform tint.
+    pub blending: f32,
+    /// Slides all three range centres, -100..100. Positive lets the highlight tint reach
+    /// further down.
+    pub balance: f32,
+}
+
+impl Default for ColorGrading {
+    /// ⚠ Hand-written, **not** derived: `blending` is 50 at neutral. The container-level
+    /// `#[serde(default)]` fills a missing field from this, so a derived `Default` would give
+    /// every partial sidecar `blending: 0` — hard-edged ranges — with nothing to notice.
+    fn default() -> Self {
+        Self {
+            shadows: GradeWheel::default(),
+            midtones: GradeWheel::default(),
+            highlights: GradeWheel::default(),
+            global: GradeWheel::default(),
+            blending: 50.0,
+            balance: 0.0,
+        }
+    }
+}
+
+impl ColorGrading {
+    /// True when this actually changes pixels.
+    ///
+    /// Wheels only, the rule [`NoiseReduction::is_active`] and [`Vignette::is_active`] follow:
+    /// `blending` and `balance` shape ranges that tint nothing until a wheel is turned up, and
+    /// a `hue` with zero `saturation` is a direction with no magnitude.
+    pub fn is_active(&self) -> bool {
+        [self.shadows, self.midtones, self.highlights, self.global]
+            .iter()
+            .any(|w| w.saturation != 0.0 || w.luminance != 0.0)
+    }
+}
+
+
 /// Unsharp-mask sharpening. `amount` 0 = off; the other three only shape the effect.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -791,6 +855,7 @@ pub struct Edits {
     /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
     pub vibrance: f32,
     pub hsl: Hsl,
+    pub color_grading: ColorGrading,
     pub local_contrast: LocalContrast,
     pub dehaze: Dehaze,
     pub noise_reduction: NoiseReduction,
@@ -839,6 +904,7 @@ impl Edits {
             saturation,
             vibrance,
             hsl,
+            color_grading,
             local_contrast,
             dehaze,
             noise_reduction,
@@ -866,6 +932,7 @@ impl Edits {
             self.saturation = *saturation;
             self.vibrance = *vibrance;
             self.hsl = *hsl;
+            self.color_grading = *color_grading;
         }
         if groups.detail {
             self.noise_reduction = *noise_reduction;
@@ -1542,6 +1609,21 @@ mod tests {
             saturation: 10.0,
             vibrance: 10.0,
             hsl,
+            color_grading: ColorGrading {
+                shadows: GradeWheel {
+                    hue: 220.0,
+                    saturation: 35.0,
+                    luminance: -10.0,
+                },
+                highlights: GradeWheel {
+                    hue: 40.0,
+                    saturation: 30.0,
+                    luminance: 8.0,
+                },
+                blending: 70.0,
+                balance: 20.0,
+                ..ColorGrading::default()
+            },
             local_contrast: LocalContrast {
                 texture: 40.0,
                 clarity: -25.0,
@@ -2132,5 +2214,79 @@ mod tests {
             [1.0, 0.0],
             "the endpoints must survive the round trip"
         );
+    }
+
+    #[test]
+    fn a_sidecar_without_blending_still_gets_fifty() {
+        // ⚠ `blending` defaults to 50, not 0, so `ColorGrading::default` must be hand-written.
+        // A derived `Default` would give every partial sidecar hard-edged ranges, silently —
+        // the same trap `RadialGradient::default` records.
+        let e: Edits =
+            serde_json::from_str(r#"{"color_grading":{"shadows":{"saturation":40.0}}}"#).unwrap();
+        assert_eq!(e.color_grading.blending, 50.0);
+        assert_eq!(e.color_grading.shadows.saturation, 40.0);
+    }
+
+    #[test]
+    fn a_hue_with_no_saturation_is_inert() {
+        // A hue is a direction, not a strength. Rotating the wheel with the saturation at zero
+        // must not insert a stage.
+        let g = ColorGrading {
+            shadows: GradeWheel {
+                hue: 210.0,
+                saturation: 0.0,
+                luminance: 0.0,
+            },
+            ..ColorGrading::default()
+        };
+        assert!(!g.is_active());
+    }
+
+    #[test]
+    fn blending_and_balance_alone_are_inert() {
+        // The rule `NoiseReduction::is_active` and `Vignette::is_active` already follow: a
+        // modifier shapes an effect that is off until a wheel is turned up.
+        let g = ColorGrading {
+            blending: 100.0,
+            balance: -80.0,
+            ..ColorGrading::default()
+        };
+        assert!(!g.is_active());
+    }
+
+    #[test]
+    fn any_wheel_with_saturation_or_luminance_is_active() {
+        for g in [
+            ColorGrading {
+                shadows: GradeWheel {
+                    saturation: 30.0,
+                    ..GradeWheel::default()
+                },
+                ..ColorGrading::default()
+            },
+            ColorGrading {
+                midtones: GradeWheel {
+                    luminance: -20.0,
+                    ..GradeWheel::default()
+                },
+                ..ColorGrading::default()
+            },
+            ColorGrading {
+                highlights: GradeWheel {
+                    saturation: 5.0,
+                    ..GradeWheel::default()
+                },
+                ..ColorGrading::default()
+            },
+            ColorGrading {
+                global: GradeWheel {
+                    luminance: 1.0,
+                    ..GradeWheel::default()
+                },
+                ..ColorGrading::default()
+            },
+        ] {
+            assert!(g.is_active(), "{g:?} should be active");
+        }
     }
 }
