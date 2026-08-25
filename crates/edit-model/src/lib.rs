@@ -419,7 +419,7 @@ pub const EDIT_GROUP_NAMES: [&str; 8] = [
     "Color",
     "Detail",
     "Lens",
-    "Effects",
+    "Vignette",
     "Geometry",
     "Masks",
 ];
@@ -456,8 +456,15 @@ pub struct EditGroups {
     /// together for no reason. Separating them is what lets "copy this photo's lens
     /// corrections" be its own choice in Paste, Sync and Save-preset.
     pub lens: bool,
-    /// Vignette.
-    pub effects: bool,
+    /// The creative, post-crop vignette.
+    ///
+    /// ⚠ `#[serde(alias = "effects")]` because this field was called `effects` and the group
+    /// was displayed as "Effects". `EditGroups` carries a container-level `#[serde(default)]`,
+    /// so without the alias an existing preset storing `"effects": false` would fall back to
+    /// this field's default of **true** — silently starting to carry a vignette the preset was
+    /// deliberately built to exclude. Renaming a serialized field is never just a rename.
+    #[serde(alias = "effects")]
+    pub vignette: bool,
     /// Crop and straighten.
     pub geometry: bool,
     /// Masked local adjustments.
@@ -475,7 +482,7 @@ impl Default for EditGroups {
             color: true,
             detail: true,
             lens: true,
-            effects: true,
+            vignette: true,
             geometry: false,
             masks: false,
         }
@@ -489,7 +496,7 @@ impl EditGroups {
         color: true,
         detail: true,
         lens: true,
-        effects: true,
+        vignette: true,
         geometry: true,
         masks: true,
     };
@@ -500,7 +507,7 @@ impl EditGroups {
         color: false,
         detail: false,
         lens: false,
-        effects: false,
+        vignette: false,
         geometry: false,
         masks: false,
     };
@@ -526,7 +533,7 @@ impl EditGroups {
             2 => self.color,
             3 => self.detail,
             4 => self.lens,
-            5 => self.effects,
+            5 => self.vignette,
             6 => self.geometry,
             7 => self.masks,
             _ => panic!("edit group index {i} out of range"),
@@ -544,7 +551,7 @@ impl EditGroups {
             2 => &mut self.color,
             3 => &mut self.detail,
             4 => &mut self.lens,
-            5 => &mut self.effects,
+            5 => &mut self.vignette,
             6 => &mut self.geometry,
             7 => &mut self.masks,
             _ => panic!("edit group index {i} out of range"),
@@ -998,7 +1005,7 @@ impl Edits {
         if groups.lens {
             self.lens_correction = *lens_correction;
         }
-        if groups.effects {
+        if groups.vignette {
             self.vignette = *vignette;
         }
         if groups.geometry {
@@ -1828,7 +1835,7 @@ mod tests {
         // crop would reshape every photo it touches.
         let g = EditGroups::default();
         assert!(!g.geometry);
-        assert!(g.white_balance && g.tone && g.color && g.detail && g.effects);
+        assert!(g.white_balance && g.tone && g.color && g.detail && g.vignette);
     }
 
     #[test]
@@ -2430,5 +2437,26 @@ mod tests {
             NoiseReduction::default(),
             "the Lens group must not carry anything else"
         );
+    }
+
+    #[test]
+    fn a_preset_that_excluded_effects_still_excludes_the_vignette() {
+        // ⚠ The whole reason `vignette` carries `#[serde(alias = "effects")]`. `EditGroups` has a
+        // container-level `#[serde(default)]`, so without the alias this `false` would be dropped
+        // and the field would fall back to its default of **true** — a preset deliberately built
+        // to leave the vignette alone would silently start applying one. A renamed serialized
+        // field is a migration, not a rename.
+        let g: EditGroups = serde_json::from_str(r#"{"effects":false}"#).unwrap();
+        assert!(!g.vignette, "the old key must still be honoured");
+
+        // And the new name works, so the alias has not replaced the real field.
+        let g: EditGroups = serde_json::from_str(r#"{"vignette":false}"#).unwrap();
+        assert!(!g.vignette);
+    }
+
+    #[test]
+    fn the_vignette_group_is_named_for_what_it_carries() {
+        // It holds exactly one thing, and calling it "Effects" said otherwise.
+        assert_eq!(EDIT_GROUP_NAMES[5], "Vignette");
     }
 }

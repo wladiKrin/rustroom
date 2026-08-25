@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(
             got.vignette,
             edit_model::Vignette::default(),
-            "effects were not selected"
+            "the vignette group was not selected"
         );
     }
 

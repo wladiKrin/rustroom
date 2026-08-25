@@ -99,7 +99,7 @@ pub const SECTIONS: [Section; 6] = [
     Section(2), // Color
     Section(3), // Detail
     Section(4), // Lens
-    Section(5), // Effects
+    Section(5), // Vignette
 ];
 
 /// Draw the five adjustment sections.
@@ -333,7 +333,7 @@ mod tests {
                 "Color",
                 "Detail",
                 "Lens",
-                "Effects"
+                "Vignette"
             ]
         );
     }
