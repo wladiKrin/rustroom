@@ -14,6 +14,7 @@ use rustroom_app::format_filter::{self, FormatFilter};
 use rustroom_app::full_res;
 use rustroom_app::history::History;
 use rustroom_app::mask_tool;
+use rustroom_app::photo_id::PhotoId;
 use rustroom_app::presets::{Preset, PresetStore};
 use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
 use rustroom_app::selection::Selection;
@@ -647,8 +648,14 @@ impl RustroomApp {
     /// ⚠ Returns an owned `PathBuf` rather than a borrow: every caller passes it *into* a
     /// `&mut self.actions` method, and a borrow of `self` living across that call does not
     /// compile. One clone per user gesture is not worth fighting the borrow checker over.
-    fn open_photo(&self) -> Option<PathBuf> {
-        self.session.as_ref().map(|s| s.path.clone())
+    /// Which photo the undo log should scope to.
+    ///
+    /// ⚠ `PhotoId::original` until the Library knows about copies — plan 2 of M3.4. Every site
+    /// that scopes undo goes through here, so that is the one line to change then.
+    fn open_photo(&self) -> Option<PhotoId> {
+        self.session
+            .as_ref()
+            .map(|s| PhotoId::original(s.path.clone()))
     }
 
     fn persist_current_session(&self) {
@@ -721,6 +728,10 @@ impl RustroomApp {
     /// Returns `(photos changed, photos that failed)`. The caller words the status line,
     /// because "pasted" and "applied preset" want different phrasing for the same work.
     fn apply_to_selection(&mut self, src: &Edits, groups: EditGroups) -> (usize, usize) {
+        // ⚠ Two identities in play here, deliberately: `open` is the open photo's **path**,
+        // which is what a sidecar write needs, while `open_id` is its `PhotoId`, which is what
+        // scopes the undo entry. Plan 2 makes the second carry a real copy number.
+        let open_id = self.open_photo();
         let targets = self.sync_targets();
         let into_session = self.open_photo_is_selected();
         let open = self.session.as_ref().map(|s| s.path.clone());
@@ -733,8 +744,8 @@ impl RustroomApp {
             if self.apply_edits_to_session(src, groups) {
                 // `into_session` is only true when a session exists, so this `if let` always
                 // takes its branch — it is here because the compiler cannot know that.
-                if let Some(path) = open.clone() {
-                    parts.push(ActionKind::PhotoEdit { path });
+                if let Some(id) = open_id.clone() {
+                    parts.push(ActionKind::PhotoEdit { id });
                 }
             }
         }
@@ -754,8 +765,10 @@ impl RustroomApp {
         // A lone action does not need a wrapper — keep the log readable.
         match parts.len() {
             0 => {}
-            1 => self.actions.push(parts.remove(0), open.as_deref()),
-            _ => self.actions.push(ActionKind::Batch(parts), open.as_deref()),
+            1 => self.actions.push(parts.remove(0), open_id.as_ref()),
+            _ => self
+                .actions
+                .push(ActionKind::Batch(parts), open_id.as_ref()),
         }
         (touched, failed)
     }
@@ -789,7 +802,7 @@ impl RustroomApp {
                 groups,
                 prior: report.prior,
             })),
-            open.as_deref(),
+            open.as_ref(),
         );
     }
 
@@ -936,7 +949,8 @@ impl RustroomApp {
         }
         // That photo's history was just replaced, so its entries point at steps it no longer
         // holds. Every other photo's stack is untouched and stays.
-        self.actions.forget_edits_of(&open);
+        self.actions
+            .forget_edits_of(&PhotoId::original(open.clone()));
     }
 
     /// Re-render after the session's edits were changed by an undo or a redo.
@@ -950,7 +964,7 @@ impl RustroomApp {
     /// Undo the most recent action, whichever kind it was.
     fn undo_action(&mut self) {
         let open = self.open_photo();
-        if let Some(kind) = self.actions.undo(open.as_deref()) {
+        if let Some(kind) = self.actions.undo(open.as_ref()) {
             self.undo_one(kind);
         }
     }
@@ -995,7 +1009,7 @@ impl RustroomApp {
     /// Redo the most recently undone action.
     fn redo_action(&mut self) {
         let open = self.open_photo();
-        if let Some(kind) = self.actions.redo(open.as_deref()) {
+        if let Some(kind) = self.actions.redo(open.as_ref()) {
             self.redo_one(kind);
         }
     }
@@ -1135,10 +1149,8 @@ impl RustroomApp {
         s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         if s.history.push(s.edits.clone()) {
             if let Some(path) = self.open_photo() {
-                self.actions.push(
-                    ActionKind::PhotoEdit { path: path.clone() },
-                    Some(path.as_path()),
-                );
+                self.actions
+                    .push(ActionKind::PhotoEdit { id: path.clone() }, Some(&path));
             }
         }
     }
@@ -1181,10 +1193,8 @@ impl RustroomApp {
         s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         if s.history.push(s.edits.clone()) {
             if let Some(path) = self.open_photo() {
-                self.actions.push(
-                    ActionKind::PhotoEdit { path: path.clone() },
-                    Some(path.as_path()),
-                );
+                self.actions
+                    .push(ActionKind::PhotoEdit { id: path.clone() }, Some(&path));
             }
         }
     }
@@ -1228,7 +1238,9 @@ impl RustroomApp {
         // stash needs: the outgoing history is put away here whether the switch came from a
         // cache hit or from a finished background decode.
         if let Some(old) = self.session.take() {
-            self.histories.stash(old.path, old.history);
+            // ⚠ `PhotoId::original` until sessions carry a copy number — plan 2 of M3.4.
+            self.histories
+                .stash(PhotoId::original(old.path), old.history);
         }
         // ⚠ Scanned here, once per photo, rather than in the panel body which runs every frame.
         // Cheap enough per photo; ruinous sixty times a second.
@@ -1244,13 +1256,17 @@ impl RustroomApp {
         let mut edits = stored.clone().unwrap_or_default();
         edits.lens_correction = self.settings.initial_lens_correction(stored.is_some());
         let edits = edits;
-        let history = match self.histories.take_matching(&path, &edits) {
+        let history = match self
+            .histories
+            .take_matching(&PhotoId::original(path.clone()), &edits)
+        {
             Some(h) => h,
             None => {
                 // Either this photo has no stack, or the one it had describes a state no
                 // longer on disk — a sync or a paste rewrote its sidecar while it was closed.
                 // Any log entry pointing at that stack would now pop steps it does not hold.
-                self.actions.forget_edits_of(&path);
+                self.actions
+                    .forget_edits_of(&PhotoId::original(path.clone()));
                 History::new(edits.clone())
             }
         };
@@ -1527,7 +1543,7 @@ impl RustroomApp {
                     ActionKind::PresetDelete {
                         name: name.to_string(),
                     },
-                    open.as_deref(),
+                    open.as_ref(),
                 );
             }
             Err(e) => self.status = format!("Could not delete preset: {e}"),

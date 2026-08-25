@@ -28,7 +28,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // discoverable rather than only a keystroke. It is the same action the toolbar's
     // Undo performs — not a second, competing one.
     let open = app.open_photo();
-    let undo_name = match app.actions.peek_undo(open.as_deref()) {
+    let undo_name = match app.actions.peek_undo(open.as_ref()) {
         Some(ActionKind::PresetDelete { name }) => Some(name.clone()),
         _ => None,
     };

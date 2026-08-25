@@ -48,13 +48,9 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // Recorded in the same order as everything else, so "delete a preset, move a slider,
     // Ctrl+Z twice" undoes the slider and then restores the preset.
     if photo_edited {
-        if let Some(path) = app.open_photo() {
-            // ⚠ `Some(path.as_path())`, not `Some(&path)`: the parameter is `Option<&Path>`,
-            // and deref coercion does not reach inside `Some`.
-            app.actions.push(
-                ActionKind::PhotoEdit { path: path.clone() },
-                Some(path.as_path()),
-            );
+        if let Some(id) = app.open_photo() {
+            app.actions
+                .push(ActionKind::PhotoEdit { id: id.clone() }, Some(&id));
         }
     }
 }
@@ -70,7 +66,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // so an icon button never silently does the surprising one — that wording used to be the
     // button's label and must not be lost with it.
     let open = app.open_photo();
-    let undo_hint = match app.actions.peek_undo(open.as_deref()) {
+    let undo_hint = match app.actions.peek_undo(open.as_ref()) {
         Some(ActionKind::PresetDelete { name }) => format!("Undo delete “{name}”"),
         _ => "Undo".to_string(),
     };
@@ -78,14 +74,9 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui,
         icons::UNDO,
         &undo_hint,
-        app.actions.can_undo(open.as_deref()),
+        app.actions.can_undo(open.as_ref()),
     );
-    let redo_click = icon(
-        ui,
-        icons::REDO,
-        "Redo",
-        app.actions.can_redo(open.as_deref()),
-    );
+    let redo_click = icon(ui, icons::REDO, "Redo", app.actions.can_redo(open.as_ref()));
     if undo_click {
         commands::execute(app, ctx, Command::Undo);
     }
