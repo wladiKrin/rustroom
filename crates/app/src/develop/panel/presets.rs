@@ -13,7 +13,7 @@ use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 
-pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ egui borrows `app` through the closure, so a click is recorded here and acted on
     // after the panel closes. Keep this indirection — it is not incidental.
     enum Action {
@@ -78,7 +78,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) {
                 };
             }
         }
-        Action::UndoDelete => app.undo_action(),
+        Action::UndoDelete => app.undo_action(ctx),
         Action::Delete(name) => {
             if app.settings.confirm_preset_delete {
                 app.modal = Modal::ConfirmDeletePreset {

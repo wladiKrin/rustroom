@@ -997,14 +997,16 @@ impl RustroomApp {
     }
 
     /// Undo the most recent action, whichever kind it was.
-    fn undo_action(&mut self) {
+    fn undo_action(&mut self, ctx: &egui::Context) {
         let open = self.open_photo();
         if let Some(kind) = self.actions.undo(open.as_ref()) {
-            self.undo_one(kind);
+            self.undo_one(ctx, kind);
         }
     }
 
-    fn undo_one(&mut self, kind: ActionKind) {
+    // ⚠ Takes `ctx` because restoring a deleted copy has to *reopen* it, not merely put it back
+    // in the sidecar — see the `CopyDelete` arm.
+    fn undo_one(&mut self, ctx: &egui::Context, kind: ActionKind) {
         match kind {
             ActionKind::Rename { id, from, to } => {
                 // ⚠ Undo writes `from` back; redo writes `to`. Both go through the same helper
@@ -1022,12 +1024,18 @@ impl RustroomApp {
                     Ok(()) => self.status = format!("Restored copy {n}"),
                     Err(e) => self.status = format!("Could not restore the copy: {e}"),
                 }
-                self.rebuild_entries();
+                // ⚠ Reopen it, don't merely restore it. Undo of a delete has to put you back
+                // where you were: restoring the sidecar alone left the row in the filmstrip
+                // while the canvas still showed the original, which reads as the undo half
+                // working.
+                let id = PhotoId::new(path, n);
+                self.rebuild_entries(Some(&id));
+                self.open_path(ctx, id);
             }
             ActionKind::Batch(parts) => {
                 // Reverse order: the last effect a gesture had is the first one undone.
                 for part in parts.into_iter().rev() {
-                    self.undo_one(part);
+                    self.undo_one(ctx, part);
                 }
             }
             ActionKind::PhotoEdit { .. } => {
@@ -1060,14 +1068,14 @@ impl RustroomApp {
     }
 
     /// Redo the most recently undone action.
-    fn redo_action(&mut self) {
+    fn redo_action(&mut self, ctx: &egui::Context) {
         let open = self.open_photo();
         if let Some(kind) = self.actions.redo(open.as_ref()) {
-            self.redo_one(kind);
+            self.redo_one(ctx, kind);
         }
     }
 
-    fn redo_one(&mut self, kind: ActionKind) {
+    fn redo_one(&mut self, ctx: &egui::Context, kind: ActionKind) {
         match kind {
             ActionKind::Rename { id, from, to } => {
                 self.apply_rename(&id, to.clone(), from.clone());
@@ -1079,11 +1087,14 @@ impl RustroomApp {
                     Ok(()) => self.status = format!("Deleted copy {}", entry.copy),
                     Err(e) => self.status = format!("Could not delete the copy: {e}"),
                 }
-                self.rebuild_entries();
+                // The copy is gone, so whatever was showing it must move to the original.
+                let id = PhotoId::original(path);
+                self.rebuild_entries(Some(&id));
+                self.open_path(ctx, id);
             }
             ActionKind::Batch(parts) => {
                 for part in parts {
-                    self.redo_one(part);
+                    self.redo_one(ctx, part);
                 }
             }
             ActionKind::PhotoEdit { .. } => {
@@ -1640,9 +1651,10 @@ impl RustroomApp {
             self.status = format!("Could not create a copy: {e}");
             return;
         }
-        self.rebuild_entries();
+        let id = PhotoId::new(path, n);
+        self.rebuild_entries(Some(&id));
         self.status = format!("Created copy {n}");
-        self.open_path(ctx, PhotoId::new(path, n));
+        self.open_path(ctx, id);
     }
 
     /// Delete the open virtual copy. The original cannot be deleted — it *is* the file.
@@ -1676,7 +1688,8 @@ impl RustroomApp {
             },
             None,
         );
-        self.rebuild_entries();
+        let back = PhotoId::original(path.clone());
+        self.rebuild_entries(Some(&back));
         self.status = format!("Deleted copy {copy} — Ctrl+Z to restore");
         // The session is being replaced, so its edits must not be written back to a copy that
         // no longer exists.
@@ -1703,7 +1716,7 @@ impl RustroomApp {
             }
         }
         self.rename_draft = None;
-        self.rebuild_entries();
+        self.rebuild_entries(Some(id));
     }
 
     /// Re-expand the Library's rows after a copy was added or removed.
@@ -1711,13 +1724,38 @@ impl RustroomApp {
     /// ⚠ Rebuilds `thumbs` and the loader too, because both are index-parallel to `entries` and
     /// the indices have just shifted. Reusing them would show one photo's thumbnail under
     /// another's name — the sparse-versus-dense mistake this codebase has made three times.
-    fn rebuild_entries(&mut self) {
+    fn rebuild_entries(&mut self, select: Option<&PhotoId>) {
         let Some(lib) = self.library.as_mut() else {
             return;
         };
+        // ⚠ Carry the loaded thumbnails across, keyed by **path**. Blanking them instead greyed
+        // out the whole folder the moment a copy was created and never refilled it, because
+        // nothing restarts the `ThumbLoader` here — and even with a restart, reloading 830
+        // thumbnails to add one row is work for nothing. Copies share a path with their
+        // original, so a new copy's thumbnail is already in hand.
+        let known: std::collections::HashMap<PathBuf, egui::TextureHandle> = lib
+            .entries
+            .iter()
+            .zip(lib.thumbs.iter())
+            .filter_map(|(e, t)| t.clone().map(|t| (e.id.path.clone(), t)))
+            .collect();
+
         lib.entries = entries::build(&lib.scan, sidecar::load_all);
-        lib.thumbs = (0..lib.entries.len()).map(|_| None).collect();
+        lib.thumbs = lib
+            .entries
+            .iter()
+            .map(|e| known.get(&e.id.path).cloned())
+            .collect();
+
+        // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
+        // from the photo we mean rather than kept. Keeping it would silently select whichever
+        // row happened to land on the old number.
         lib.selection.clear();
+        if let Some(id) = select {
+            if let Some(i) = lib.entries.iter().position(|e| &e.id == id) {
+                lib.selection.click(i);
+            }
+        }
         lib.refilter();
     }
 

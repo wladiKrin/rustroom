@@ -153,7 +153,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 // selection. Inside the `match` below it would need `&mut app` while `s`
                 // already holds `&mut app.session`, which are not disjoint fields.
                 if tool == Tool::Presets {
-                    presets::show(app, ui);
+                    presets::show(app, ui, &ui.ctx().clone());
                 }
 
                 // ⚠ Drawn here, outside the session borrow below, for the same reason
