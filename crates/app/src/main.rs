@@ -168,6 +168,8 @@ struct RustroomApp {
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
+    /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
+    grade_range: develop::panel::color_wheel::GradeRange,
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
@@ -304,6 +306,7 @@ impl RustroomApp {
             // completely invisible, which is a poor first five minutes.
             show_mask_tint: true,
             hsl_channel: Default::default(),
+            grade_range: Default::default(),
             tool: Default::default(),
             crop_aspect: None,
             clipboard: None,

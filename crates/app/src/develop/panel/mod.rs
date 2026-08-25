@@ -1,6 +1,7 @@
 //! The right-hand adjustments panel: histogram, then every Develop control.
 
 pub mod adjustments;
+pub mod color_wheel;
 pub mod geometry;
 pub mod masks;
 pub mod presets;
@@ -115,7 +116,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // decision about what the panel shows under it.
                     match tool {
                         Tool::Edit => {
-                            adjustments::show(ui, &mut s.edits, &mut app.hsl_channel, &mut ed);
+                            adjustments::show(
+                                ui,
+                                &mut s.edits,
+                                &mut app.hsl_channel,
+                                &mut app.grade_range,
+                                &mut ed,
+                            );
                             ui.separator();
                             // ⚠ **Scoped to the five sections above, not to everything.**
                             // Under an exclusive panel each tool owns its own domain, so this

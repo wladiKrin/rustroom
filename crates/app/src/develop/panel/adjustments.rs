@@ -1,5 +1,6 @@
 //! The five edit-group sections of the Develop panel.
 
+use crate::develop::panel::color_wheel;
 use crate::develop::panel::Edited;
 use edit_model::HslBand;
 use eframe::egui;
@@ -95,6 +96,7 @@ pub fn show(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
     hsl_channel: &mut HslChannel,
+    grade_range: &mut color_wheel::GradeRange,
     ed: &mut Edited,
 ) {
     // White Balance and Tone open by default; the rest start collapsed, because a panel
@@ -151,6 +153,31 @@ pub fn show(
                 name,
             );
         }
+
+        // ⚠ A hairline and a plain label, not a nested CollapsingHeader — the idiom already
+        // used for the Presence block inside Tone. Colour grading belongs to the `Color` edit
+        // group, and a header here would put the panel and the Sync dialog out of step.
+        ui.separator();
+        ui.label("Color Grading");
+        ui.horizontal(|ui| {
+            for r in color_wheel::GradeRange::ALL {
+                ui.selectable_value(grade_range, r, r.label());
+            }
+        });
+        let diameter = ui.available_width().min(188.0);
+        {
+            // Scoped so the borrow of `color_grading` ends before Blending and Balance,
+            // which need the struct itself.
+            let w = grade_range.wheel_mut(&mut edits.color_grading);
+            color_wheel::show(ui, w, diameter, ed);
+            ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
+            ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Saturation");
+            ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
+        }
+        ui.separator();
+        let g = &mut edits.color_grading;
+        ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
+        ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
     });
 
     section(ui, SECTIONS[3], false, |ui| {
