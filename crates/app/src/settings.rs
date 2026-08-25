@@ -186,6 +186,25 @@ pub enum ConfirmOutcome {
 }
 
 impl Settings {
+    /// The space the *renderer* should convert into.
+    ///
+    /// ⚠⚠ Every read of `display_space` in the render path must go through here. When the
+    /// operating system is colour-matching the window for us — macOS, once the `CAMetalLayer`
+    /// carries a colorspace — converting as well would be a **double conversion**: we would
+    /// produce P3 and Core Animation would then treat it as sRGB and convert again, leaving the
+    /// preview undersaturated and varying per monitor. Returning `Srgb` here makes that
+    /// unrepresentable rather than something to remember.
+    ///
+    /// ⚠ The stored value is deliberately left alone, so a settings file shared with a Linux
+    /// machine keeps a sensible choice for it.
+    pub fn effective_display_space(&self, os_managed: bool) -> color::OutputSpace {
+        if os_managed {
+            color::OutputSpace::Srgb
+        } else {
+            self.display_space
+        }
+    }
+
     /// Fold a delete-confirm outcome into the settings. Returns whether to actually delete.
     ///
     /// ⚠ `suppress_future` is honoured **only** on `Confirmed`. Ticking "Don't ask again"
@@ -648,5 +667,45 @@ mod tests {
         let s: Settings = serde_json::from_str(json).expect("older settings should load");
         assert_eq!(s.display_space, color::OutputSpace::Srgb);
         assert!(s.confirm_preset_delete);
+    }
+
+    #[test]
+    fn the_os_managing_colour_overrides_the_manual_setting() {
+        // ⚠⚠ The property that makes double conversion unrepresentable. If both were live we
+        // would convert sRGB→P3 ourselves and Core Animation would then treat *that* as sRGB and
+        // convert again — visibly undersaturated, and varying per monitor.
+        let mut s = Settings::default();
+        for space in color::OutputSpace::DISPLAYS {
+            s.display_space = space;
+            assert_eq!(
+                s.effective_display_space(true),
+                color::OutputSpace::Srgb,
+                "{} should be ignored while the OS is managing colour",
+                space.label()
+            );
+        }
+    }
+
+    #[test]
+    fn without_the_os_managing_the_manual_setting_is_used() {
+        // ⚠ The fallback, and it is not a formality: if tagging the layer ever fails, this is
+        // what stops macOS being left *uncorrected* — worse than what piece D shipped.
+        let mut s = Settings::default();
+        for space in color::OutputSpace::DISPLAYS {
+            s.display_space = space;
+            assert_eq!(s.effective_display_space(false), space);
+        }
+    }
+
+    #[test]
+    fn the_stored_setting_survives_the_os_taking_over() {
+        // ⚠ `effective_display_space` must not *write*. A settings file shared between a Mac and
+        // a Linux machine has to keep a sensible value for the latter.
+        let s = Settings {
+            display_space: color::OutputSpace::AdobeRgb,
+            ..Default::default()
+        };
+        let _ = s.effective_display_space(true);
+        assert_eq!(s.display_space, color::OutputSpace::AdobeRgb);
     }
 }
