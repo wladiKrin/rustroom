@@ -106,7 +106,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > git branch --show-current && git log main..HEAD --oneline && git log origin/main..main --oneline
 > ```
 >
-> As of 2026-08-23 everything is merged: `main == origin/main`, working tree clean, no feature branches. If a branch shows up ahead of `main`, do not start the next feature on top of it — ask whether to merge, **and never push either way; the user pushes to `github.com/wladiKrin/rustroom` himself.**
+> Run that command rather than trusting any state written here. If a branch shows up ahead of `main`, do not start the next feature on top of it — ask whether to merge, **and never push either way; the user pushes to `github.com/wladiKrin/rustroom` himself.**
 >
 > **⚠ Conventions that are not negotiable:** commit messages carry **no `Co-Authored-By` trailer**; **branch per feature** without asking; **never push**.
 >
@@ -114,15 +114,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **⚠ A visual-companion server may still be running** from the layout brainstorm at `http://localhost:51282`, with content in `.superpowers/brainstorm/` (gitignored). It auto-exits after 30 minutes idle; restart it from the brainstorming skill's `scripts/start-server.sh` if the layout work resumes and it is gone.
+> **State at handoff (2026-08-25):** **792 tests, 39 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, **no feature branches**. Everything is merged into `main` by fast-forward, matching this project's linear history. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command above.
 >
-> **State at handoff (2026-08-24):** 714 tests, 38 goldens, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean.
->
-> As of 2026-08-24 everything is merged into `main` by fast-forward — the layout/IA rework, the icon font, both colour-management plans and the output profile choice — matching this project's linear history. Working tree clean. ⚠ **Run `git log origin/main..main --oneline`** rather than trusting any count written here — the user pushes themselves and this line goes stale immediately. No feature branches remain. ⚠ This block goes stale the moment the user pushes — run `git log origin/main..main --oneline` rather than trusting it, and **never push either way**.
+> ⚠ **Fixtures this session's tools depend on, none of them in the repo:** `RAW_FIXTURE` (a `.RAF`, e.g. `~/Desktop/fuji/DSCF6509.RAF`) and `DCP_FIXTURE` (a `.dcp`, e.g. RawTherapee's `FUJIFILM X-T4.dcp`). Tests gated on them **skip** without them, so a green run does not mean they ran.
 >
 > ⚠ **The GUI binary is now `Rustroom`, not `rustroom-gui`** — `cargo test -p app --bin Rustroom`. The name is what macOS shows as the application menu's title.
 
-**🎯 THE LAYOUT/IA REWORK IS COMPLETE (2026-08-24)** — all three steps: the panel, the rail, the menu bar, plus a round of fixes found by using it. **699 tests, 38 goldens byte-identical.** The fixes section is next, then the menu bar, the rail and the panel.
+**🎯 COLOUR MANAGEMENT IS COMPLETE (2026-08-25)** — A (wide working space), B (output profile at export), C1–C4 (camera input profiles) and D (display profile, plus its macOS follow-up). Their sections are the eight immediately below. Before them, the layout/IA rework (2026-08-24) — the panel, the rail, the menu bar and a round of in-use fixes.
 
 **Most recent work (2026-08-24). The menu bar — step 3 of 3.** **678 tests, 38 goldens byte-identical.** Its section is **"The tool rail"** below. Step 1 (the panel) is the section after it.
 
