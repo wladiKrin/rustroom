@@ -495,6 +495,21 @@ mod tests {
             saturation: 10.0,
             vibrance: 10.0,
             hsl,
+            color_grading: edit_model::ColorGrading {
+                shadows: edit_model::GradeWheel {
+                    hue: 240.0,
+                    saturation: 40.0,
+                    luminance: -15.0,
+                },
+                highlights: edit_model::GradeWheel {
+                    hue: 45.0,
+                    saturation: 35.0,
+                    luminance: 10.0,
+                },
+                blending: 60.0,
+                balance: 15.0,
+                ..Default::default()
+            },
             local_contrast: edit_model::LocalContrast {
                 texture: 40.0,
                 clarity: -25.0,
