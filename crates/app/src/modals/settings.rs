@@ -13,6 +13,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut accent = app.settings.accent;
     let mut pan_drag = app.settings.pan_drag;
     let mut display_space = app.settings.display_space;
+    // Copied out before the closure borrows `app`.
+    let os_manages_colour = app.os_manages_colour;
     let mut close = false;
 
     let dismissed = dialog(ctx, "settings", "Settings", |ui| {
@@ -46,24 +48,42 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         );
         ui.separator();
 
-        ui.horizontal(|ui| {
-            ui.label("Display");
-            egui::ComboBox::from_id_salt("display_space_pick")
-                .selected_text(display_space.label())
-                .show_ui(ui, |ui| {
-                    // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, so offering it is a
-                    // pure footgun.
-                    for s in color::OutputSpace::DISPLAYS {
-                        ui.selectable_value(&mut display_space, s, s.label());
-                    }
-                });
-        });
-        theme::hint(
-            ui,
-            "The primaries of your monitor. Most are sRGB; recent Apple displays and many \
-             laptops are Display P3. Affects only what you see — never an export, and never \
-             the histogram.",
-        );
+        // ⚠ A **runtime** branch, not `#[cfg]`, so both halves compile on every platform. The
+        // menu-bar work shipped a `#[cfg]`-gated UI branch that the developer never compiled and
+        // Linux CI never exercised, leaving both halves unverified by whoever was looking.
+        if os_manages_colour {
+            // ⚠ A note, not a disabled dropdown. There is nothing to choose: the OS is using the
+            // display's calibrated profile and following the window between monitors, which no
+            // value here could improve on.
+            ui.horizontal(|ui| {
+                ui.label("Display");
+                ui.label("handled by macOS");
+            });
+            theme::hint(
+                ui,
+                "Your display's own colour profile is applied by the system, including any \
+                 calibration, and it follows the window if you move it to another monitor.",
+            );
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Display");
+                egui::ComboBox::from_id_salt("display_space_pick")
+                    .selected_text(display_space.label())
+                    .show_ui(ui, |ui| {
+                        // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, so offering it is
+                        // a pure footgun.
+                        for s in color::OutputSpace::DISPLAYS {
+                            ui.selectable_value(&mut display_space, s, s.label());
+                        }
+                    });
+            });
+            theme::hint(
+                ui,
+                "The primaries of your monitor. Most are sRGB; recent Apple displays and many \
+                 laptops are Display P3. Affects only what you see — never an export, and never \
+                 the histogram.",
+            );
+        }
         ui.separator();
 
         ui.horizontal(|ui| {
