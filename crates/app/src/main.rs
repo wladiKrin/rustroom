@@ -79,6 +79,12 @@ enum AppView {
 
 /// Browsing state for an opened folder.
 struct Library {
+    /// The folder scan this Library was built from.
+    ///
+    /// ⚠ Kept so `entries` can be re-expanded when a copy is created or deleted, without a
+    /// second directory read — and so the rebuild sees exactly the same files, rather than
+    /// whatever the folder happens to hold at that moment.
+    scan: Vec<catalog::CatalogEntry>,
     entries: Vec<PhotoEntry>,
     thumbs: Vec<Option<egui::TextureHandle>>, // parallel to entries; None = still loading
     selection: Selection,
@@ -994,6 +1000,19 @@ impl RustroomApp {
 
     fn undo_one(&mut self, kind: ActionKind) {
         match kind {
+            ActionKind::CopyDelete { path, entry } => {
+                // ⚠ Read-modify-write: other copies of this file are in the same sidecar and
+                // must survive the restore.
+                let mut sidecar = sidecar::load_all(&path);
+                let n = entry.copy;
+                sidecar.copies.push(*entry);
+                sidecar.copies.sort_by_key(|c| c.copy);
+                match sidecar::persist_all(&path, &sidecar) {
+                    Ok(()) => self.status = format!("Restored copy {n}"),
+                    Err(e) => self.status = format!("Could not restore the copy: {e}"),
+                }
+                self.rebuild_entries();
+            }
             ActionKind::Batch(parts) => {
                 // Reverse order: the last effect a gesture had is the first one undone.
                 for part in parts.into_iter().rev() {
@@ -1039,6 +1058,15 @@ impl RustroomApp {
 
     fn redo_one(&mut self, kind: ActionKind) {
         match kind {
+            ActionKind::CopyDelete { path, entry } => {
+                let mut sidecar = sidecar::load_all(&path);
+                sidecar.copies.retain(|c| c.copy != entry.copy);
+                match sidecar::persist_all(&path, &sidecar) {
+                    Ok(()) => self.status = format!("Deleted copy {}", entry.copy),
+                    Err(e) => self.status = format!("Could not delete the copy: {e}"),
+                }
+                self.rebuild_entries();
+            }
             ActionKind::Batch(parts) => {
                 for part in parts {
                     self.redo_one(part);
@@ -1543,6 +1571,7 @@ impl RustroomApp {
                     .effective_display_space(self.os_manages_colour);
                 let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
                 self.library = Some(Library {
+                    scan,
                     entries,
                     thumbs: (0..n).map(|_| None).collect(),
                     selection: Selection::default(),
@@ -1575,6 +1604,85 @@ impl RustroomApp {
         };
         self.open_path(ctx, id);
         self.view = AppView::Develop;
+    }
+
+    /// Duplicate the open photo as a new virtual copy, and open it.
+    ///
+    /// ⚠ Copies the photo's **current** edits rather than starting neutral — "try a variation"
+    /// should be one keystroke, not one keystroke plus redoing your work.
+    fn create_virtual_copy(&mut self, ctx: &egui::Context) {
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        let (path, edits) = (s.path.clone(), s.edits.clone());
+        // ⚠ Persist the *current* copy first, or its unsaved edits are lost when the session is
+        // replaced by the new one below.
+        self.persist_current_session();
+
+        let mut sidecar = sidecar::load_all(&path);
+        let n = sidecar.next_copy();
+        sidecar.set_edits(n, edits);
+        if let Err(e) = sidecar::persist_all(&path, &sidecar) {
+            self.status = format!("Could not create a copy: {e}");
+            return;
+        }
+        self.rebuild_entries();
+        self.status = format!("Created copy {n}");
+        self.open_path(ctx, PhotoId::new(path, n));
+    }
+
+    /// Delete the open virtual copy. The original cannot be deleted — it *is* the file.
+    fn delete_virtual_copy(&mut self, ctx: &egui::Context) {
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        if s.copy == 0 {
+            self.status = "The original cannot be deleted".to_string();
+            return;
+        }
+        let (path, copy) = (s.path.clone(), s.copy);
+
+        let mut sidecar = sidecar::load_all(&path);
+        let Some(entry) = sidecar.get(copy).cloned() else {
+            return;
+        };
+        sidecar.copies.retain(|c| c.copy != copy);
+        if let Err(e) = sidecar::persist_all(&path, &sidecar) {
+            self.status = format!("Could not delete the copy: {e}");
+            return;
+        }
+        // ⚠ Drop this copy's stack *and* its log entries before the session goes: the copy no
+        // longer exists, so an undo reaching it would pop steps for a photo that is not there.
+        self.actions
+            .forget_edits_of(&PhotoId::new(path.clone(), copy));
+        self.actions.push(
+            ActionKind::CopyDelete {
+                path: path.clone(),
+                entry: Box::new(entry),
+            },
+            None,
+        );
+        self.rebuild_entries();
+        self.status = format!("Deleted copy {copy} — Ctrl+Z to restore");
+        // The session is being replaced, so its edits must not be written back to a copy that
+        // no longer exists.
+        self.session = None;
+        self.open_path(ctx, PhotoId::original(path));
+    }
+
+    /// Re-expand the Library's rows after a copy was added or removed.
+    ///
+    /// ⚠ Rebuilds `thumbs` and the loader too, because both are index-parallel to `entries` and
+    /// the indices have just shifted. Reusing them would show one photo's thumbnail under
+    /// another's name — the sparse-versus-dense mistake this codebase has made three times.
+    fn rebuild_entries(&mut self) {
+        let Some(lib) = self.library.as_mut() else {
+            return;
+        };
+        lib.entries = entries::build(&lib.scan, sidecar::load_all);
+        lib.thumbs = (0..lib.entries.len()).map(|_| None).collect();
+        lib.selection.clear();
+        lib.refilter();
     }
 
     /// Move a preset to the trash and refresh the cached list.

@@ -24,6 +24,16 @@ pub enum ActionKind {
     /// — which after a switch is a *different photo's*. That is the sole reason every such
     /// entry had to be destroyed whenever the session changed.
     PhotoEdit { id: PhotoId },
+    /// A deleted virtual copy, held so undo can put it back.
+    ///
+    /// ⚠ Carries the whole `CopyEntry` because nothing else holds it — unlike `PhotoEdit`, whose
+    /// payload lives in `Session::history`, and `PresetDelete`, whose payload is in the trash.
+    /// Boxed for the reason `Sync` is: an inline `Edits` would make *every* entry in the log that
+    /// large, including the zero-sized `PhotoEdit`.
+    CopyDelete {
+        path: PathBuf,
+        entry: Box<crate::sidecar::CopyEntry>,
+    },
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
     PresetDelete { name: String },
@@ -86,7 +96,11 @@ struct Entry {
 fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
     match kind {
         ActionKind::PhotoEdit { id } => open == Some(id),
-        ActionKind::PresetDelete { .. } | ActionKind::Sync(_) => true,
+        // ⚠ A deleted copy has no `PhotoId` left to be reachable *from*, so it is global like a
+        // preset deletion rather than scoped like an edit.
+        ActionKind::PresetDelete { .. } | ActionKind::Sync(_) | ActionKind::CopyDelete { .. } => {
+            true
+        }
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }
 }

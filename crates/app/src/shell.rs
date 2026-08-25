@@ -236,6 +236,7 @@ fn egui_key(c: char) -> Option<egui::Key> {
         ',' => egui::Key::Comma,
         '[' => egui::Key::OpenBracket,
         ']' => egui::Key::CloseBracket,
+        '\'' => egui::Key::Quote,
         '\\' => egui::Key::Backslash,
         _ => return None,
     })

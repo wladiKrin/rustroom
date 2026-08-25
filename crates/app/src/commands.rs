@@ -36,6 +36,8 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::Settings => app.modal = Modal::Settings,
+        Command::CreateVirtualCopy => app.create_virtual_copy(ctx),
+        Command::DeleteVirtualCopy => app.delete_virtual_copy(ctx),
         Command::Undo => app.undo_action(),
         Command::Redo => app.redo_action(),
         Command::CopySettings => app.copy_settings(ctx),

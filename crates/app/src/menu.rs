@@ -18,6 +18,8 @@ pub enum Command {
     Settings,
     Undo,
     Redo,
+    CreateVirtualCopy,
+    DeleteVirtualCopy,
     CopySettings,
     PasteSettings,
     PasteSettingsWith,
@@ -226,6 +228,17 @@ pub fn model() -> Vec<Section> {
                     Command::SelectTool(Tool::Presets),
                     Some(Shortcut::bare('4')),
                 ),
+                Item::Separator,
+                // ⚠ ⌘' **is** safe as a native accelerator, and it is worth knowing why: the
+                // hazard is a **bare** key (stolen from every text field) or a text-editing
+                // chord (⌘Z/C/V/X/A, which break editing inside one). A plain apostrophe typed
+                // into the copy-rename field is not the ⌘' chord, so nothing is swallowed.
+                action(
+                    "Create virtual copy",
+                    Command::CreateVirtualCopy,
+                    Some(Shortcut::cmd('\'')),
+                ),
+                action("Delete virtual copy", Command::DeleteVirtualCopy, None),
                 Item::Separator,
                 action("Rotate left", Command::RotateLeft, Some(Shortcut::cmd('['))),
                 action(
