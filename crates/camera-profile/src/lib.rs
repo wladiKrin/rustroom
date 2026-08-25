@@ -22,6 +22,21 @@ pub enum ProfileError {
     Io(#[from] std::io::Error),
 }
 
+/// A DNG hue/saturation/value mapping table.
+///
+/// ⚠ This is the **visible** half of a camera profile: the X-T4's table carries a mean absolute
+/// hue shift of 11.3° and saturation scales up to 1.95, where its matrices differ from libraw's
+/// by well under a percent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HueSatMap {
+    /// `[hue, saturation, value]` divisions. ⚠ Value is often 1, making the table 2-D.
+    pub dims: [usize; 3],
+    /// `[hue shift in degrees, saturation scale, value scale]` per entry, hue-major.
+    pub data1: Vec<[f32; 3]>,
+    /// The second illuminant's table, when the profile is dual-illuminant.
+    pub data2: Option<Vec<[f32; 3]>>,
+}
+
 /// The matrices from a `.dcp`, and nothing else.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraProfile {
@@ -35,6 +50,8 @@ pub struct CameraProfile {
     /// Camera → XYZ (D50). Optional: older profiles carry only ColorMatrices.
     pub forward1: Option<[[f32; 3]; 3]>,
     pub forward2: Option<[[f32; 3]; 3]>,
+    /// The hue/saturation mapping, when the profile has one.
+    pub hue_sat_map: Option<HueSatMap>,
 }
 
 const COLOR_MATRIX_1: u16 = 50721;
@@ -42,6 +59,9 @@ const COLOR_MATRIX_2: u16 = 50722;
 const ILLUMINANT_1: u16 = 50778;
 const ILLUMINANT_2: u16 = 50779;
 const PROFILE_NAME: u16 = 50936;
+const HUE_SAT_MAP_DIMS: u16 = 50937;
+const HUE_SAT_MAP_DATA_1: u16 = 50938;
+const HUE_SAT_MAP_DATA_2: u16 = 50939;
 const FORWARD_MATRIX_1: u16 = 50964;
 const FORWARD_MATRIX_2: u16 = 50965;
 
@@ -88,6 +108,18 @@ impl CameraProfile {
         let mut name = None;
         let (mut ill1, mut ill2) = (0u16, 0u16);
         let mut mats: [Option<[[f32; 3]; 3]>; 4] = [None; 4];
+        let mut hsm_dims: Option<[usize; 3]> = None;
+        let mut hsm: [Option<Vec<[f32; 3]>>; 2] = [None, None];
+
+        // FLOAT (type 11) triples, as the HueSatMap tables are stored.
+        let f32_at = |o: usize| -> Result<f32, ProfileError> {
+            let b = d.get(o..o + 4).ok_or(ProfileError::Truncated(o))?;
+            Ok(if le {
+                f32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            } else {
+                f32::from_be_bytes([b[0], b[1], b[2], b[3]])
+            })
+        };
 
         for i in 0..count {
             let e = ifd + 2 + i * 12;
@@ -139,9 +171,36 @@ impl CameraProfile {
                     };
                     mats[slot] = Some(m);
                 }
+                HUE_SAT_MAP_DIMS if cnt == 3 => {
+                    let mut v = [0usize; 3];
+                    for (i, slot) in v.iter_mut().enumerate() {
+                        *slot = u32_at(payload + i * 4)? as usize;
+                    }
+                    hsm_dims = Some(v);
+                }
+                HUE_SAT_MAP_DATA_1 | HUE_SAT_MAP_DATA_2 if cnt.is_multiple_of(3) => {
+                    let entries = cnt / 3;
+                    let mut v = Vec::with_capacity(entries);
+                    for i in 0..entries {
+                        let o = payload + i * 12;
+                        v.push([f32_at(o)?, f32_at(o + 4)?, f32_at(o + 8)?]);
+                    }
+                    hsm[usize::from(tag == HUE_SAT_MAP_DATA_2)] = Some(v);
+                }
                 _ => {}
             }
         }
+
+        // ⚠ A table whose length disagrees with its dims is **dropped**, not indexed into. A
+        // short table would read past its end or silently mis-map every colour; rendering
+        // without the map is the safe degradation, and the matrices still apply.
+        let hue_sat_map = match (hsm_dims, hsm[0].take()) {
+            (Some(dims), Some(data1)) if dims[0] * dims[1] * dims[2] == data1.len() => {
+                let data2 = hsm[1].take().filter(|d| d.len() == data1.len());
+                Some(HueSatMap { dims, data1, data2 })
+            }
+            _ => None,
+        };
 
         Ok(Self {
             name,
@@ -155,6 +214,7 @@ impl CameraProfile {
                 .ok_or(ProfileError::MissingTag(COLOR_MATRIX_2))?,
             forward1: mats[2],
             forward2: mats[3].or(mats[2]),
+            hue_sat_map,
         })
     }
 }
@@ -250,5 +310,123 @@ mod tests {
             CameraProfile::parse(&d),
             Err(ProfileError::MissingTag(_))
         ));
+    }
+
+    #[test]
+    fn the_x_t4_hue_sat_map_parses_to_its_known_values() {
+        // ⚠ Values from the independent Python reader, as with the matrices.
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set DCP_FIXTURE=/abs/path/to.dcp");
+            return;
+        };
+        let p = CameraProfile::from_file(&path).expect("parse");
+        let m = p.hue_sat_map.as_ref().expect("hue sat map");
+        assert_eq!(m.dims, [90, 30, 1]);
+        assert_eq!(m.data1.len(), 90 * 30);
+        assert_eq!(m.data2.as_ref().map(|d| d.len()), Some(90 * 30));
+
+        // ⚠ Entry 0 is hue 0 / saturation 0, and it is the identity — a profile that shifted a
+        // *neutral* would be malformed. A meaningful first assertion rather than merely a number
+        // that happens to be there.
+        assert_eq!(m.data1[0], [0.0, 1.0, 1.0]);
+        let e1 = m.data1[1];
+        assert!((e1[0] - -12.117_49).abs() < 1e-4, "hue shift {}", e1[0]);
+        assert!((e1[1] - 1.070_87).abs() < 1e-5, "sat scale {}", e1[1]);
+
+        let mid = m.data1[30 * 30 + 10];
+        assert!((mid[0] - -19.264_47).abs() < 1e-4, "hue shift {}", mid[0]);
+        assert!((mid[1] - 1.586_781).abs() < 1e-5, "sat scale {}", mid[1]);
+
+        let d2 = m.data2.as_ref().unwrap();
+        assert!(
+            (d2[1][0] - -16.583_09).abs() < 1e-4,
+            "illuminant 2's table should differ from illuminant 1's, got {}",
+            d2[1][0]
+        );
+    }
+
+    /// Build a minimal little-endian DCP carrying the given IFD entries.
+    ///
+    /// ⚠ Synthetic because real profiles are always self-consistent — the guards for malformed
+    /// ones can only be reached by constructing one, and an unreachable guard is an untested one.
+    fn synth(entries: &[(u16, u16, u32, Vec<u8>)]) -> Vec<u8> {
+        let mut head = Vec::new();
+        head.extend_from_slice(b"II");
+        head.extend_from_slice(&0x4352u16.to_le_bytes());
+        head.extend_from_slice(&8u32.to_le_bytes());
+        let mut ifd = Vec::new();
+        ifd.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        // Payloads follow the IFD and its terminating next-offset word.
+        let mut payload_at = 8 + 2 + entries.len() * 12 + 4;
+        let mut payloads = Vec::new();
+        for (tag, typ, cnt, bytes) in entries {
+            ifd.extend_from_slice(&tag.to_le_bytes());
+            ifd.extend_from_slice(&typ.to_le_bytes());
+            ifd.extend_from_slice(&cnt.to_le_bytes());
+            if bytes.len() <= 4 {
+                let mut inline = bytes.clone();
+                inline.resize(4, 0);
+                ifd.extend_from_slice(&inline);
+            } else {
+                ifd.extend_from_slice(&(payload_at as u32).to_le_bytes());
+                payloads.extend_from_slice(bytes);
+                payload_at += bytes.len();
+            }
+        }
+        ifd.extend_from_slice(&0u32.to_le_bytes());
+        head.extend_from_slice(&ifd);
+        head.extend_from_slice(&payloads);
+        head
+    }
+
+    fn matrix_bytes(v: f32) -> Vec<u8> {
+        let mut b = Vec::new();
+        for _ in 0..9 {
+            b.extend_from_slice(&((v * 10000.0) as i32).to_le_bytes());
+            b.extend_from_slice(&10000i32.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn a_hue_sat_map_whose_length_disagrees_with_its_dims_is_dropped() {
+        // ⚠⚠ The guard exists because a short table would read past its end or silently mis-map
+        // every colour. Real profiles never trip it, so without a synthetic one the guard is
+        // dead code that looks tested — removing it left every other test green.
+        let dims: Vec<u8> = [4u32, 4, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let short: Vec<u8> = (0..3 * 3)
+            .map(|_| 0.0f32)
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let d = synth(&[
+            (COLOR_MATRIX_1, 10, 9, matrix_bytes(1.0)),
+            (HUE_SAT_MAP_DIMS, 4, 3, dims),
+            (HUE_SAT_MAP_DATA_1, 11, 9, short),
+        ]);
+        let p = CameraProfile::parse(&d).expect("the matrices should still parse");
+        assert!(
+            p.hue_sat_map.is_none(),
+            "a table of 3 entries must not be accepted for dims 4x4x1"
+        );
+    }
+
+    #[test]
+    fn a_consistent_synthetic_hue_sat_map_is_accepted() {
+        // ⚠ The other half: the guard must not reject a *valid* table, or it would silently
+        // disable every profile. Same builder, matching lengths.
+        let dims: Vec<u8> = [2u32, 2, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let data: Vec<u8> = (0..4)
+            .flat_map(|_| [0.0f32, 1.0, 1.0])
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let d = synth(&[
+            (COLOR_MATRIX_1, 10, 9, matrix_bytes(1.0)),
+            (HUE_SAT_MAP_DIMS, 4, 3, dims),
+            (HUE_SAT_MAP_DATA_1, 11, 12, data),
+        ]);
+        let p = CameraProfile::parse(&d).expect("parse");
+        let m = p.hue_sat_map.expect("a consistent table must be accepted");
+        assert_eq!(m.dims, [2, 2, 1]);
+        assert_eq!(m.data1.len(), 4);
     }
 }
