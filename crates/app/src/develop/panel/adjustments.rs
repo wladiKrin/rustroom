@@ -38,6 +38,20 @@ impl HslChannel {
     }
 }
 
+/// What the Detail section's lens line reads.
+///
+/// A free function rather than inline formatting so the wording is pinned by a test — the
+/// no-match case is the one a user will actually hit, and it must not be silent. The commonest
+/// reason the controls do nothing is an unlisted lens, and the only way to act on that is to be
+/// told which name failed to match.
+pub fn lens_status(lens: Option<&str>, profile_found: bool) -> String {
+    match (lens, profile_found) {
+        (None, _) => "No lens recorded in this file".to_string(),
+        (Some(name), false) => format!("No profile for {name}"),
+        (Some(name), true) => name.to_string(),
+    }
+}
+
 /// A panel section, identified by its index into [`edit_model::EDIT_GROUP_NAMES`].
 ///
 /// ⚠ The name is *read from* that table, never written here. The panel and the Paste / Sync
@@ -97,6 +111,8 @@ pub fn show(
     edits: &mut edit_model::Edits,
     hsl_channel: &mut HslChannel,
     grade_range: &mut color_wheel::GradeRange,
+    lens: Option<&str>,
+    lens_profile_found: bool,
     ed: &mut Edited,
 ) {
     // White Balance and Tone open by default; the rest start collapsed, because a panel
@@ -181,6 +197,38 @@ pub fn show(
     });
 
     section(ui, SECTIONS[3], false, |ui| {
+        // ⚠ First in Detail because it is first in the pipeline: a capture correction to get out
+        // of the way before judging noise or sharpening. Detail is this codebase's
+        // capture-specific group — "noise, lens, output size".
+        ui.label("Lens Corrections");
+        ui.label(
+            egui::RichText::new(lens_status(lens, lens_profile_found))
+                .small()
+                .weak(),
+        );
+        // ⚠ Disabled rather than hidden: a greyed row that names the unmatched lens explains
+        // itself, and an absent row does not.
+        ui.add_enabled_ui(lens_profile_found, |ui| {
+            let l = &mut edits.lens_correction;
+            if ui.checkbox(&mut l.distortion, "Distortion").changed() {
+                ed.discrete();
+            }
+            if ui.checkbox(&mut l.tca, "Chromatic aberration").changed() {
+                ed.discrete();
+            }
+            // ⚠ Not the creative Vignette, which stays in Effects. This one is corrective and
+            // pre-crop; that one is creative and post-crop. The enclosing "Lens Corrections"
+            // heading is what keeps them apart.
+            if ui.checkbox(&mut l.vignetting, "Vignetting").changed() {
+                ed.discrete();
+            }
+            // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
+            // correction's autoscale is exactly 1 — so on many photos this slider does nothing
+            // at all, which is correct and would read as a broken crop control.
+            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Scale");
+        });
+        ui.separator();
+
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
@@ -379,5 +427,15 @@ mod tests {
         assert_eq!(e.exposure, 0.0, "the adjustments should be reset");
         assert_eq!(e.geometry.crop.left, 0.25, "the crop must survive");
         assert_eq!(e.masks.len(), 1, "the masks must survive");
+    }
+
+    #[test]
+    fn the_lens_line_names_what_it_could_not_find() {
+        assert_eq!(lens_status(None, false), "No lens recorded in this file");
+        assert_eq!(
+            lens_status(Some("XF8mmF3.5 R WR"), false),
+            "No profile for XF8mmF3.5 R WR"
+        );
+        assert_eq!(lens_status(Some("XF23mmF2 R WR"), true), "XF23mmF2 R WR");
     }
 }

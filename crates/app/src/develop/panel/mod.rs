@@ -121,6 +121,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &mut s.edits,
                                 &mut app.hsl_channel,
                                 &mut app.grade_range,
+                                s.lens.name.as_deref(),
+                                s.lens.shot.is_some(),
                                 &mut ed,
                             );
                             ui.separator();
