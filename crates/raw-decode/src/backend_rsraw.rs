@@ -61,7 +61,7 @@ pub(crate) fn extract_thumbnail(bytes: &[u8]) -> Result<Thumbnail, DecodeError> 
 /// ⚠ Returns `None` on any failure — a missing, malformed, or ForwardMatrix-less profile falls
 /// back to libraw's matrix rather than failing the decode. A photo that renders slightly
 /// differently beats a photo that does not open, and the fallback is the well-tested C1 path.
-fn profile_matrix(path: &Path, cam_mul: [f32; 3]) -> Option<[[f32; 3]; 3]> {
+fn profile_transform(path: &Path, cam_mul: [f32; 3]) -> Option<ProfileTransform> {
     let p = camera_profile::CameraProfile::from_file(path).ok()?;
     let forward1 = p.forward1?;
     let forward2 = p.forward2?;
@@ -77,9 +77,36 @@ fn profile_matrix(path: &Path, cam_mul: [f32; 3]) -> Option<[[f32; 3]; 3]> {
     let neutral = [1.0 / cam_mul[0], 1.0 / cam_mul[1], 1.0 / cam_mul[2]];
     let temp = color::camera::neutral_temperature(neutral, p.color1, p.color2, t1, t2);
     let g = color::camera::illuminant_weight(temp, t1, t2);
-    Some(color::camera::forward_to_prophoto(color::camera::blend(
-        forward1, forward2, g,
-    )))
+    // ⚠ **One weight, two consumers.** The matrices and the hue/saturation table are interpolated
+    // on the same illuminant weight — using two would let the colour transform and the look
+    // disagree about what light the scene was under.
+    let matrix = color::camera::forward_to_prophoto(color::camera::blend(forward1, forward2, g));
+    // ⚠ Blended **once**, here, outside the pixel loop. The X-T4's table is 2700 entries; doing
+    // this per pixel would be 2700 multiplies per pixel for a value that never changes.
+    let hue_sat = p.hue_sat_map.as_ref().map(|m| {
+        let a = color::huesatmap::Table {
+            dims: m.dims,
+            data: m.data1.clone(),
+        };
+        match &m.data2 {
+            Some(d2) => color::huesatmap::Table::blend(
+                &a,
+                &color::huesatmap::Table {
+                    dims: m.dims,
+                    data: d2.clone(),
+                },
+                g,
+            ),
+            None => a,
+        }
+    });
+    Some(ProfileTransform { matrix, hue_sat })
+}
+
+/// What a camera profile contributes to the decode: a matrix, and optionally a look-up table.
+struct ProfileTransform {
+    matrix: [[f32; 3]; 3],
+    hue_sat: Option<color::huesatmap::Table>,
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, DecodeError> {
@@ -150,7 +177,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     // separately as `out_cam = out_rgb[output] × rgb_cam`. `camera_to_prophoto` supplies that
     // second half from our own matrices.
     let image = if opts.camera_native {
-        let m = {
+        let (m, hue_sat) = {
             let c = &raw.as_mut().color;
             let mut rgb_cam = [[0.0f32; 3]; 3];
             for (i, row) in rgb_cam.iter_mut().enumerate() {
@@ -159,12 +186,24 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
             // ⚠ `cam_mul` is the white balance libraw actually applied, which is what the DNG
             // interpolation is defined against — not a temperature anyone typed.
             let cam_mul = [c.cam_mul[0], c.cam_mul[1], c.cam_mul[2]];
-            opts.camera_profile
+            match opts
+                .camera_profile
                 .as_deref()
-                .and_then(|p| profile_matrix(p, cam_mul))
-                .unwrap_or_else(|| color::camera::camera_to_prophoto(rgb_cam))
+                .and_then(|p| profile_transform(p, cam_mul))
+            {
+                Some(t) => (t.matrix, t.hue_sat),
+                None => (color::camera::camera_to_prophoto(rgb_cam), None),
+            }
         };
-        ImageBuf::from_vec(width, height, data).map_pixels(|p| color::spaces::apply(&m, p))
+        // ⚠ **One pass, not two.** A second `map_pixels` over a full-resolution buffer would be a
+        // second traversal of ~313 MB for nothing.
+        ImageBuf::from_vec(width, height, data).map_pixels(|p| {
+            let p = color::spaces::apply(&m, p);
+            match &hue_sat {
+                Some(t) => t.apply(p),
+                None => p,
+            }
+        })
     } else {
         ImageBuf::from_vec(width, height, data)
     };
