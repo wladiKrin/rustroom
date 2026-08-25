@@ -30,10 +30,19 @@ fn main() {
     let (mut max, mut sum, mut n) = (0.0f32, 0.0f64, 0usize);
     // Mean per channel, to show whether the difference is a cast or noise.
     let mut chan = [0.0f64; 3];
+    // ⚠ Split by saturation, because the whole-image mean is a misleading statistic here: a
+    // HueSatMap is the identity at saturation 0, so on a mostly-desaturated frame it moves the
+    // average almost not at all while changing saturated colour a great deal.
+    let (mut sat_sum, mut sat_n) = (0.0f64, 0usize);
     for y in 0..base.image.height() {
         for x in 0..base.image.width() {
             let (p, q) = (base.image.pixel(x, y), prof.image.pixel(x, y));
+            let saturated = color::huesatmap::rgb_to_hsv(q)[1] > 0.5;
             for i in 0..3 {
+                if saturated {
+                    sat_sum += (q[i] - p[i]).abs() as f64;
+                    sat_n += 1;
+                }
                 let d = q[i] - p[i];
                 max = max.max(d.abs());
                 sum += d.abs() as f64;
@@ -53,5 +62,31 @@ fn main() {
         chan[1] / px as f64,
         chan[2] / px as f64
     );
-    println!("  (a small difference is the expected result — see the spec)");
+    // ⚠ Written out because the numbers above cannot answer the question this slice actually
+    // raises: does it look like a plausible camera rendering? That is judged by eye.
+    for (name, img) in [
+        ("/tmp/no_profile.jpg", &base),
+        ("/tmp/with_profile.jpg", &prof),
+    ] {
+        let rendered = pipeline::build_pipeline(
+            &edit_model::Edits::default(),
+            pipeline::RenderScale::new(0.5),
+        )
+        .run(img.image.clone());
+        export::save(
+            &rendered,
+            Path::new(name),
+            export::ExportFormat::Jpeg,
+            92,
+            color::OutputSpace::Srgb,
+        )
+        .expect("write");
+        println!("wrote {name}");
+    }
+
+    println!(
+        "among saturated pixels (s > 0.5, {:.1}% of the frame): mean |diff| {:.6}",
+        100.0 * sat_n as f64 / n as f64,
+        sat_sum / sat_n.max(1) as f64
+    );
 }

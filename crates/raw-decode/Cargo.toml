@@ -14,4 +14,7 @@ serde = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+edit-model = { path = "../edit-model" }
+export = { path = "../export" }
+pipeline = { path = "../pipeline" }
 serde_json = { workspace = true }
