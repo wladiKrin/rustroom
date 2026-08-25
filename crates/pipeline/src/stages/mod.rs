@@ -1,3 +1,4 @@
+pub mod color_grading;
 pub mod contrast;
 pub mod dehaze;
 pub mod exposure;
