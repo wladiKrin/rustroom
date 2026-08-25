@@ -15,14 +15,24 @@ pub fn path(photo: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// A photo's stored edits. `None` when there is no sidecar **or it is malformed** — a
+/// A photo's stored edits — **the original's**, copy 0.
+///
+/// `None` when there is no sidecar, it is malformed, or nothing is stored for copy 0. A
 /// hand-edited file with a typo should read as "no edits", not take anything down.
+///
+/// ⚠⚠ This delegates to the copy-aware API rather than parsing the file itself, and that is not
+/// tidiness. Once the sidecar became an envelope, a reader that parsed it as a bare `Edits`
+/// returned `None` for **every** file written by the new code — which silently reset a synced
+/// photo to neutral. Two readers of one format is the trap; there is now one.
 pub fn load(photo: &Path) -> Option<Edits> {
-    Edits::from_json_file(&path(photo)).ok()
+    load_copy(photo, 0)
 }
 
+/// Write the original's edits, leaving every other copy alone.
 pub fn save(photo: &Path, edits: &Edits) -> Result<(), EditLoadError> {
-    edits.to_json_file(&path(photo))
+    let mut s = load_all(photo);
+    s.set_edits(0, edits.clone());
+    save_all(photo, &s)
 }
 
 /// Persist a photo's edits, **removing** the sidecar when they are neutral.
@@ -31,10 +41,7 @@ pub fn save(photo: &Path, edits: &Edits) -> Result<(), EditLoadError> {
 /// neutral must have its sidecar deleted, or the old edits are loaded straight back the next
 /// time it is opened — which is exactly what "Reset all, switch away, switch back" did.
 pub fn persist(photo: &Path, edits: &Edits) -> Result<(), EditLoadError> {
-    if *edits == Edits::default() {
-        return remove(photo).map_err(EditLoadError::from);
-    }
-    save(photo, edits)
+    persist_copy(photo, 0, edits)
 }
 
 /// Delete a photo's sidecar. Absent is not an error.

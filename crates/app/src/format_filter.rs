@@ -4,14 +4,13 @@
 //! bookkeeping is where an off-by-one hides, and a wrong answer here is a photo that silently
 //! is not there.
 
-use catalog::CatalogEntry;
+use crate::entries::PhotoEntry;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 /// The lowercase extension of an entry, or `None` when it has none.
-fn ext_of(entry: &CatalogEntry) -> Option<String> {
-    entry
-        .path
-        .extension()
+fn ext_of(path: &Path) -> Option<String> {
+    path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
 }
@@ -19,10 +18,13 @@ fn ext_of(entry: &CatalogEntry) -> Option<String> {
 /// Extensions present in a folder, lowercased, each with how many entries it has.
 ///
 /// Sorted by extension, so the toggles do not reorder between scans of the same folder.
-pub fn formats_present(entries: &[CatalogEntry]) -> Vec<(String, usize)> {
+/// ⚠ The count is of **rows**, not files, so a file with two copies counts twice. That is what
+/// the chip label means once copies exist — how many entries the toggle would hide — and counting
+/// files instead would put a number on screen that does not match what disappears.
+pub fn formats_present(entries: &[PhotoEntry]) -> Vec<(String, usize)> {
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
     for e in entries {
-        if let Some(ext) = ext_of(e) {
+        if let Some(ext) = ext_of(&e.id.path) {
             *counts.entry(ext).or_default() += 1;
         }
     }
@@ -53,8 +55,8 @@ impl FormatFilter {
 
     /// An entry with no extension is always visible: it cannot be filtered by a control that
     /// does not exist for it.
-    pub fn is_visible(&self, entry: &CatalogEntry) -> bool {
-        match ext_of(entry) {
+    pub fn is_visible(&self, path: &Path) -> bool {
+        match ext_of(path) {
             Some(ext) => !self.hidden.contains(&ext),
             None => true,
         }
@@ -62,11 +64,15 @@ impl FormatFilter {
 
     /// Indices of the visible entries, ascending — what the grid, the filmstrip and arrow
     /// navigation iterate in place of `0..entries.len()`.
-    pub fn visible_indices(&self, entries: &[CatalogEntry]) -> Vec<usize> {
+    /// ⚠ Every copy of a file shares its path, so a format toggle hides or shows **all** of a
+    /// file's copies together. `hiding_a_format_hides_every_copy_of_those_files` pins that: a copy
+    /// stranded in the grid after its original was hidden would be selectable, and a sync or a
+    /// paste would then write to a photo that is not on screen.
+    pub fn visible_indices(&self, entries: &[PhotoEntry]) -> Vec<usize> {
         entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| self.is_visible(e))
+            .filter(|(_, e)| self.is_visible(&e.id.path))
             .map(|(i, _)| i)
             .collect()
     }
@@ -100,17 +106,22 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn entries(names: &[&str]) -> Vec<CatalogEntry> {
-        names
-            .iter()
-            .map(|n| CatalogEntry {
-                path: PathBuf::from(format!("/f/{n}")),
-                file_name: n.to_string(),
-            })
-            .collect()
+    /// ⚠ One row per name, all originals — the pre-existing tests below keep their exact
+    /// assertions through the widening to `PhotoEntry`, which is the evidence that adding copies
+    /// did not change how the filter behaves for ordinary photos.
+    fn entries(names: &[&str]) -> Vec<PhotoEntry> {
+        names.iter().map(|n| entry(n, 0)).collect()
     }
 
-    fn folder() -> Vec<CatalogEntry> {
+    fn entry(name: &str, copy: u32) -> PhotoEntry {
+        PhotoEntry {
+            id: crate::photo_id::PhotoId::new(PathBuf::from(format!("/f/{name}")), copy),
+            file_name: name.to_string(),
+            name: None,
+        }
+    }
+
+    fn folder() -> Vec<PhotoEntry> {
         entries(&["a.RAF", "a.JPG", "b.raf", "b.jpg", "c.raf", "notes"])
     }
 
@@ -177,5 +188,26 @@ mod tests {
         assert_eq!(step(&visible, 2, false), Some(1), "previous below");
         assert_eq!(step(&visible, 0, false), Some(1), "clamped at the start");
         assert_eq!(step(&visible, 9, true), Some(5), "clamped at the end");
+    }
+
+    #[test]
+    fn hiding_a_format_hides_every_copy_of_those_files() {
+        // ⚠ Copies share a path, so they share a format. A copy left in the grid after its
+        // original was hidden would still be selectable, and a sync or a paste would then write
+        // to a photo that is not on screen — the same hazard `retain_visible` exists for.
+        let entries = vec![entry("a.RAF", 0), entry("a.RAF", 1), entry("b.jpg", 0)];
+        let mut f = FormatFilter::default();
+        f.toggle("raf");
+        assert_eq!(f.visible_indices(&entries), vec![2]);
+    }
+
+    #[test]
+    fn the_format_counts_are_of_rows_not_files() {
+        // The chip says how many entries the toggle would hide; a file with two copies is two.
+        let entries = vec![entry("a.RAF", 0), entry("a.RAF", 1), entry("b.jpg", 0)];
+        assert_eq!(
+            formats_present(&entries),
+            vec![("jpg".to_string(), 1), ("raf".to_string(), 2)]
+        );
     }
 }

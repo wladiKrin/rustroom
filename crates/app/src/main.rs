@@ -1,4 +1,3 @@
-use catalog::CatalogEntry;
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
@@ -9,6 +8,7 @@ use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded, LensFacts};
 use rustroom_app::edit_clipboard;
 use rustroom_app::edit_history::HistoryStash;
+use rustroom_app::entries::{self, PhotoEntry};
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
 use rustroom_app::format_filter::{self, FormatFilter};
 use rustroom_app::full_res;
@@ -79,7 +79,7 @@ enum AppView {
 
 /// Browsing state for an opened folder.
 struct Library {
-    entries: Vec<CatalogEntry>,
+    entries: Vec<PhotoEntry>,
     thumbs: Vec<Option<egui::TextureHandle>>, // parallel to entries; None = still loading
     selection: Selection,
     loader: ThumbLoader,
@@ -105,7 +105,7 @@ impl Library {
 /// A photo whose decode is scheduled or in flight. `Session` still means "fully decoded",
 /// so nothing downstream needs to know about this half-open state.
 struct PendingOpen {
-    path: PathBuf,
+    id: PhotoId,
     /// The filmstrip thumbnail shown while decoding, when the folder is loaded.
     placeholder: Option<egui::TextureHandle>,
     /// Debounce deadline — the decode starts once `Instant::now()` passes this.
@@ -334,6 +334,14 @@ impl RustroomApp {
 
 struct Session {
     path: PathBuf,
+    /// Which copy of `path` this session is editing. `0` is the original.
+    ///
+    /// ⚠ Added beside `path` rather than replacing it with a `PhotoId`: `path` has many call
+    /// sites that genuinely want the **file** — the decode, the buffer cache, the thumbnail.
+    /// Only the sidecar, the undo scope and the label want the version.
+    copy: u32,
+    /// This copy's user-given name, shown in the Develop footer and editable there.
+    name: Option<String>,
     engine: RenderEngine,
     edits: Edits,
     texture: Option<egui::TextureHandle>,
@@ -650,12 +658,12 @@ impl RustroomApp {
     /// compile. One clone per user gesture is not worth fighting the borrow checker over.
     /// Which photo the undo log should scope to.
     ///
-    /// ⚠ `PhotoId::original` until the Library knows about copies — plan 2 of M3.4. Every site
-    /// that scopes undo goes through here, so that is the one line to change then.
+    /// Every site that scopes undo goes through here, which is what keeps "which photo is this?"
+    /// a single answer rather than one per call site.
     fn open_photo(&self) -> Option<PhotoId> {
         self.session
             .as_ref()
-            .map(|s| PhotoId::original(s.path.clone()))
+            .map(|s| PhotoId::new(s.path.clone(), s.copy))
     }
 
     fn persist_current_session(&self) {
@@ -663,7 +671,9 @@ impl RustroomApp {
             // `persist`, not `save`: neutral edits *delete* the sidecar. Skipping the write
             // would leave a stale one behind, so "Reset all" survived only until the next
             // switch away and back.
-            let _ = sidecar::persist(&s.path, &s.edits);
+            // ⚠ `persist_copy`, not `persist`: two copies of one file share a sidecar, and
+            // whole-file writes would make the last-saved copy silently overwrite the other.
+            let _ = sidecar::persist_copy(&s.path, s.copy, &s.edits);
         }
     }
 
@@ -693,15 +703,15 @@ impl RustroomApp {
     /// Keyed on the open *path*, not the active index: in Develop those are the same photo,
     /// but a paste triggered from the Library grid may have a selection that does not
     /// include whatever is open, and then every selected photo needs a sidecar write.
-    fn sync_targets(&self) -> Vec<PathBuf> {
-        let open = self.session.as_ref().map(|s| s.path.clone());
+    fn sync_targets(&self) -> Vec<PhotoId> {
+        let open = self.open_photo();
         let Some(lib) = &self.library else {
             return Vec::new();
         };
         lib.selection
             .iter()
-            .filter_map(|i| lib.entries.get(i).map(|e| e.path.clone()))
-            .filter(|p| Some(p) != open.as_ref())
+            .filter_map(|i| lib.entries.get(i).map(|e| e.id.clone()))
+            .filter(|id| Some(id) != open.as_ref())
             .collect()
     }
 
@@ -713,10 +723,14 @@ impl RustroomApp {
         let Some(lib) = &self.library else {
             return true;
         };
+        // ⚠ The **whole** id, not just the path. Comparing paths would call the open photo
+        // "selected" whenever any *other copy of the same file* was selected, and a paste would
+        // then be applied through the live session to the wrong version.
+        let open = PhotoId::new(s.path.clone(), s.copy);
         lib.selection
             .iter()
             .filter_map(|i| lib.entries.get(i))
-            .any(|e| e.path == s.path)
+            .any(|e| e.id == open)
     }
 
     /// Apply `src` to the whole selection — the open photo through its session, the rest
@@ -755,6 +769,7 @@ impl RustroomApp {
                 parts.push(ActionKind::Sync(Box::new(SyncAction {
                     source: src.clone(),
                     groups,
+                    targets: targets.clone(),
                     prior: report.prior,
                 })));
             }
@@ -798,6 +813,7 @@ impl RustroomApp {
             ActionKind::Sync(Box::new(SyncAction {
                 source,
                 groups,
+                targets,
                 prior: report.prior,
             })),
             open.as_ref(),
@@ -806,22 +822,24 @@ impl RustroomApp {
 
     /// Sources and edits for a batch export: every selected photo, using the open photo's
     /// **in-memory** edits so unsaved changes are exported, and each other photo's sidecar.
-    fn export_jobs(&self) -> Vec<(PathBuf, Edits)> {
+    fn export_jobs(&self) -> Vec<(PhotoId, Edits)> {
         let open = self
             .session
             .as_ref()
-            .map(|s| (s.path.clone(), s.edits.clone()));
+            .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.edits.clone()));
         let Some(lib) = &self.library else {
             return open.into_iter().collect();
         };
         lib.selection
             .iter()
-            .filter_map(|i| lib.entries.get(i).map(|e| e.path.clone()))
-            .map(|p| match &open {
-                Some((op, edits)) if *op == p => (p.clone(), edits.clone()),
+            .filter_map(|i| lib.entries.get(i).map(|e| e.id.clone()))
+            .map(|id| match &open {
+                Some((oid, edits)) if *oid == id => (id.clone(), edits.clone()),
                 _ => {
-                    let edits = sidecar::load(&p).unwrap_or_default();
-                    (p, edits)
+                    // ⚠ `load_copy`, not `load`: two copies of one file have different edits, and
+                    // loading the file would export both of them identically.
+                    let edits = sidecar::load_copy(&id.path, id.copy).unwrap_or_default();
+                    (id, edits)
                 }
             })
             .collect()
@@ -937,7 +955,11 @@ impl RustroomApp {
         if !affected.contains(&open) {
             return;
         }
-        let edits = sidecar::load(&open).unwrap_or_default();
+        // ⚠ `load_copy` with the session's own copy: a sync may have rewritten a *different*
+        // copy of the same file, and reloading copy 0 would replace the open copy's edits with
+        // the original's.
+        let copy = self.session.as_ref().map_or(0, |s| s.copy);
+        let edits = sidecar::load_copy(&open, copy).unwrap_or_default();
         let tool = self.tool;
         if let Some(s) = &mut self.session {
             s.edits = edits;
@@ -947,8 +969,11 @@ impl RustroomApp {
         }
         // That photo's history was just replaced, so its entries point at steps it no longer
         // holds. Every other photo's stack is untouched and stays.
-        self.actions
-            .forget_edits_of(&PhotoId::original(open.clone()));
+        // ⚠ The *copy* whose history was replaced, not the file: another copy of the same file
+        // still holds a perfectly good stack, and sweeping it would be silent data loss.
+        if let Some(id) = self.open_photo() {
+            self.actions.forget_edits_of(&id);
+        }
     }
 
     /// Re-render after the session's edits were changed by an undo or a redo.
@@ -1033,10 +1058,10 @@ impl RustroomApp {
                 self.reload_presets();
             }
             ActionKind::Sync(action) => {
-                let targets: Vec<PathBuf> = action.prior.iter().map(|(p, _)| p.clone()).collect();
-                let report = sync::apply(&targets, &action.source, action.groups);
+                let report = sync::apply(&action.targets, &action.source, action.groups);
                 self.status = format!("Re-synced {} photos", report.prior.len());
-                self.reload_if_affected(&targets);
+                let paths: Vec<PathBuf> = action.targets.iter().map(|t| t.path.clone()).collect();
+                self.reload_if_affected(&paths);
             }
         }
     }
@@ -1199,23 +1224,26 @@ impl RustroomApp {
 
     /// Start opening `path`: instant from the cache, otherwise a debounced background decode
     /// with the filmstrip thumbnail as a placeholder. Never blocks the UI thread.
-    fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
+    fn open_path(&mut self, ctx: &egui::Context, id: PhotoId) {
         self.persist_current_session();
 
-        if let Some(decoded) = self.cache.get(&path) {
+        // ⚠ The cache is keyed by **path**, so opening a copy of an already-decoded file is a
+        // hit — which is exactly M3.4's "no storage cost".
+        if let Some(decoded) = self.cache.get(&id.path) {
             self.pending = None;
-            self.finalize_session(ctx, path, decoded);
+            self.finalize_session(ctx, id, decoded);
             return;
         }
 
-        let placeholder = self.thumbnail_for(&path);
+        let placeholder = self.thumbnail_for(&id.path);
+        let path = id.path.clone();
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         self.status = format!("Decoding {name}…");
         self.pending = Some(PendingOpen {
-            path,
+            id,
             placeholder,
             start_at: Instant::now() + DECODE_DEBOUNCE,
             seq: None,
@@ -1226,19 +1254,21 @@ impl RustroomApp {
     /// already arrived. `TextureHandle` is `Arc`-backed, so cloning it is cheap.
     fn thumbnail_for(&self, path: &std::path::Path) -> Option<egui::TextureHandle> {
         let lib = self.library.as_ref()?;
-        let i = lib.entries.iter().position(|e| e.path == *path)?;
+        // ⚠ By **path**: copies of one file share a thumbnail, so the first matching row is as
+        // good as any. This is the same decision `BufferCache` makes, for the same reason.
+        let i = lib.entries.iter().position(|e| e.id.path == *path)?;
         lib.thumbs.get(i).cloned().flatten()
     }
 
     /// Build the editing `Session` from a decoded photo (cache hit or worker result).
-    fn finalize_session(&mut self, ctx: &egui::Context, path: PathBuf, decoded: Arc<Decoded>) {
+    fn finalize_session(&mut self, ctx: &egui::Context, id: PhotoId, decoded: Arc<Decoded>) {
+        let path = id.path.clone();
         // ⚠ The only place `self.session` is ever assigned, and so the only choke point the
         // stash needs: the outgoing history is put away here whether the switch came from a
         // cache hit or from a finished background decode.
         if let Some(old) = self.session.take() {
-            // ⚠ `PhotoId::original` until sessions carry a copy number — plan 2 of M3.4.
             self.histories
-                .stash(PhotoId::original(old.path), old.history);
+                .stash(PhotoId::new(old.path, old.copy), old.history);
         }
         // ⚠ Scanned here, once per photo, rather than in the panel body which runs every frame.
         // Cheap enough per photo; ruinous sixty times a second.
@@ -1250,21 +1280,17 @@ impl RustroomApp {
         // ⚠ The preference applies only to a photo with **no sidecar**. A photo already edited
         // keeps exactly what it had, which is what lets `Edits::default()` stay strictly neutral
         // while fresh photos still open corrected — see `Settings::initial_lens_correction`.
-        let stored = sidecar::load(&path);
+        let stored = sidecar::load_copy(&path, id.copy);
         let mut edits = stored.clone().unwrap_or_default();
         edits.lens_correction = self.settings.initial_lens_correction(stored.is_some());
         let edits = edits;
-        let history = match self
-            .histories
-            .take_matching(&PhotoId::original(path.clone()), &edits)
-        {
+        let history = match self.histories.take_matching(&id, &edits) {
             Some(h) => h,
             None => {
                 // Either this photo has no stack, or the one it had describes a state no
                 // longer on disk — a sync or a paste rewrote its sidecar while it was closed.
                 // Any log entry pointing at that stack would now pop steps it does not hold.
-                self.actions
-                    .forget_edits_of(&PhotoId::original(path.clone()));
+                self.actions.forget_edits_of(&id);
                 History::new(edits.clone())
             }
         };
@@ -1310,6 +1336,10 @@ impl RustroomApp {
                 .settings
                 .effective_display_space(self.os_manages_colour),
             path,
+            copy: id.copy,
+            name: sidecar::load_all(&id.path)
+                .get(id.copy)
+                .and_then(|c| c.name.clone()),
             engine,
             edits,
             texture: None,
@@ -1434,7 +1464,7 @@ impl RustroomApp {
             if p.seq.is_none() {
                 let now = Instant::now();
                 if now >= p.start_at {
-                    let path = p.path.clone();
+                    let path = p.id.path.clone();
                     // `p` borrows `self.pending`, the call borrows `self.decoder` — disjoint
                     // fields, so the borrow checker allows both at once.
                     p.seq = Some(self.decoder.request(path, PREVIEW_MAX_DIM));
@@ -1451,8 +1481,14 @@ impl RustroomApp {
                     // Cache even superseded decodes — that work is already paid for.
                     self.cache.insert(res.path.clone(), decoded.clone());
                     if is_current {
-                        self.pending = None;
-                        self.finalize_session(ctx, res.path, decoded);
+                        // ⚠ The **pending** id, not `res.path`: the decode is keyed by file, but
+                        // which *copy* was being opened is only known here.
+                        let id = self
+                            .pending
+                            .take()
+                            .map(|p| p.id)
+                            .unwrap_or_else(|| PhotoId::original(res.path.clone()));
+                        self.finalize_session(ctx, id, decoded);
                     }
                 }
                 Err(e) => {
@@ -1478,7 +1514,10 @@ impl RustroomApp {
         else {
             return;
         };
-        self.open_path(ctx, path);
+        // ⚠ Single-file mode has no Library, so no copies are listed — open the original.
+        // Its sidecar may still hold copies; they simply are not browsable until a folder is
+        // opened, which is the same limitation single-file mode already has for the filmstrip.
+        self.open_path(ctx, PhotoId::original(path));
         self.library = None;
         self.view = AppView::Develop;
     }
@@ -1488,9 +1527,16 @@ impl RustroomApp {
             return;
         };
         match catalog::scan_folder(&dir) {
-            Ok(entries) => {
+            Ok(scan) => {
+                // ⚠ One row per (file, copy). Reading every sidecar costs 4.6 ms for 830 files,
+                // measured — small enough to stay inline rather than moving to the loader thread.
+                let entries = entries::build(&scan, sidecar::load_all);
                 let n = entries.len();
-                let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
+                // ⚠ Thumbnails are per *file*, and copies share a path — so this list
+                // deliberately repeats a path once per copy, keeping `thumbs` index-parallel to
+                // `entries`. Copies therefore show identical thumbnails, the accepted limitation
+                // recorded in the spec.
+                let paths: Vec<_> = entries.iter().map(|e| e.id.path.clone()).collect();
                 let ctx2 = ctx.clone();
                 let space = self
                     .settings
@@ -1517,17 +1563,17 @@ impl RustroomApp {
     }
 
     fn open_entry(&mut self, ctx: &egui::Context, index: usize) {
-        let path = match self.library.as_mut() {
+        let id = match self.library.as_mut() {
             Some(lib) => match lib.entries.get(index) {
                 Some(e) => {
                     lib.selection.click(index);
-                    e.path.clone()
+                    e.id.clone()
                 }
                 None => return,
             },
             None => return,
         };
-        self.open_path(ctx, path);
+        self.open_path(ctx, id);
         self.view = AppView::Develop;
     }
 
@@ -1588,7 +1634,7 @@ impl RustroomApp {
             .settings
             .effective_display_space(self.os_manages_colour);
         if let Some(lib) = self.library.as_mut() {
-            let paths: Vec<_> = lib.entries.iter().map(|e| e.path.clone()).collect();
+            let paths: Vec<_> = lib.entries.iter().map(|e| e.id.path.clone()).collect();
             let n = paths.len();
             let ctx2 = ctx.clone();
             lib.loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
@@ -1650,8 +1696,8 @@ impl RustroomApp {
         self.cache.clear();
 
         if let Some(s) = self.session.as_ref() {
-            let path = s.path.clone();
-            self.open_path(ctx, path);
+            let id = PhotoId::new(s.path.clone(), s.copy);
+            self.open_path(ctx, id);
         }
     }
 

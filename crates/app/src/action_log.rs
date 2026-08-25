@@ -50,7 +50,15 @@ pub enum ActionKind {
 pub struct SyncAction {
     pub source: Edits,
     pub groups: EditGroups,
-    pub prior: Vec<(PathBuf, Option<Edits>)>,
+    /// The copies the sync was applied to.
+    ///
+    /// ⚠ Kept explicitly because `prior` is per **file** and cannot say which copies were
+    /// touched — redo would otherwise re-sync copy 0 of every file involved, which is not what
+    /// was done the first time.
+    pub targets: Vec<PhotoId>,
+    /// ⚠ The whole file's `Sidecar` per touched file, not one copy's `Edits` — see
+    /// `sync::SyncReport::prior`. Two copies of one file share a sidecar.
+    pub prior: Vec<(PathBuf, crate::sidecar::Sidecar)>,
 }
 
 /// One entry in the log, plus whether it is currently undone.
@@ -288,7 +296,11 @@ mod tests {
                 ..Default::default()
             },
             groups: EditGroups::default(),
-            prior: vec![(PathBuf::from("/a/b.RAF"), None)],
+            targets: vec![PhotoId::original(PathBuf::from("/a/b.RAF"))],
+            prior: vec![(
+                PathBuf::from("/a/b.RAF"),
+                crate::sidecar::Sidecar::default(),
+            )],
         }))
     }
 

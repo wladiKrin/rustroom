@@ -9,6 +9,7 @@
 //! naming, collisions, cancellation, progress, the failure path — is testable with no image
 //! fixtures at all.
 
+use crate::photo_id::PhotoId;
 use core_image::ImageBuf;
 use edit_model::Edits;
 use export::ExportFormat;
@@ -235,7 +236,7 @@ impl ExportWorker {
     /// *inside* the injected decode fn, which is the only way to exercise the mid-photo
     /// cancel check deterministically.
     pub fn spawn(
-        jobs: Vec<(PathBuf, Edits)>,
+        jobs: Vec<(PhotoId, Edits)>,
         opts: ExportOptions,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
         cancel: Arc<AtomicBool>,
@@ -275,7 +276,7 @@ impl ExportWorker {
 }
 
 fn run(
-    jobs: Vec<(PathBuf, Edits)>,
+    jobs: Vec<(PhotoId, Edits)>,
     opts: ExportOptions,
     decode: impl Fn(&Path) -> Result<ImageBuf, String>,
     events: Sender<ExportEvent>,
@@ -293,14 +294,14 @@ fn run(
         return;
     }
 
-    for (done, (source, edits)) in jobs.into_iter().enumerate() {
+    for (done, (id, edits)) in jobs.into_iter().enumerate() {
+        let source = id.path.clone();
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             break;
         }
 
-        // ⚠ Copy 0 until export jobs carry a `PhotoId` — plan 2 of M3.4.
-        let mut dest = dest_for(&opts.dest_dir, &source, 0, 0, opts.format);
+        let mut dest = dest_for(&opts.dest_dir, &source, id.copy, 0, opts.format);
         if claimed.contains(&dest) || dest.exists() {
             let collision = match remembered {
                 Some(c) => c,
@@ -344,7 +345,7 @@ fn run(
                 Collision::KeepBoth => {
                     let mut i = 1;
                     loop {
-                        let candidate = dest_for(&opts.dest_dir, &source, 0, i, opts.format);
+                        let candidate = dest_for(&opts.dest_dir, &source, id.copy, i, opts.format);
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -526,7 +527,7 @@ mod tests {
     /// Returns the report plus every event, so a test can assert on progress as well as the
     /// outcome. `decode` receives the source path so a test can fail one specific photo.
     fn run_export(
-        jobs: Vec<(PathBuf, Edits)>,
+        jobs: Vec<(PhotoId, Edits)>,
         opts: ExportOptions,
         answer: Vec<Decision>,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
@@ -553,10 +554,13 @@ mod tests {
         (report, events)
     }
 
-    fn jobs(dir: &TempDir, names: &[&str]) -> Vec<(PathBuf, Edits)> {
+    /// ⚠ All originals — the pre-existing export tests below keep their exact assertions
+    /// through the widening to `PhotoId`, which is what shows copies changed nothing for
+    /// ordinary photos.
+    fn jobs(dir: &TempDir, names: &[&str]) -> Vec<(PhotoId, Edits)> {
         names
             .iter()
-            .map(|n| (dir.0.join(n), Edits::default()))
+            .map(|n| (PhotoId::original(dir.0.join(n)), Edits::default()))
             .collect()
     }
 

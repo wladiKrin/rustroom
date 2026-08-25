@@ -186,8 +186,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     ui.separator();
                     // The filename first: which photo this is matters more than what
                     // shot it, and the panel scrolls, so it belongs above the metadata.
-                    if let Some(name) = s.path.file_name() {
-                        ui.label(egui::RichText::new(name.to_string_lossy()).strong());
+                    if let Some(file) = s.path.file_name() {
+                        ui.label(egui::RichText::new(file.to_string_lossy()).strong());
+                    }
+                    // ⚠ Which *copy* this is, shown only when it is one — an original would
+                    // otherwise carry a redundant "/ 0" on every photo.
+                    if s.copy != 0 {
+                        let which = s.name.clone().unwrap_or_else(|| s.copy.to_string());
+                        theme::caption(ui, &format!("Copy {which}"));
                     }
                     theme::caption(ui, &s.make_model);
                 }
