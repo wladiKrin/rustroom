@@ -327,7 +327,6 @@ impl ColorGrading {
     }
 }
 
-
 /// Unsharp-mask sharpening. `amount` 0 = off; the other three only shape the effect.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

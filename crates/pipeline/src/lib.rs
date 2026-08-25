@@ -24,6 +24,7 @@ impl BrushCoverage {
 pub mod spatial;
 mod stages;
 
+pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::ContrastStage;
 pub use stages::dehaze::DehazeStage;
 pub use stages::exposure::ExposureStage;
@@ -339,6 +340,18 @@ pub fn build_pipeline_split_in_region_with_brush(
         tail.push(Box::new(HslStage::new(&edits.hsl)));
     }
 
+    // A look laid over the corrected photograph. After HSL because HSL corrects colours that
+    // are *in* the picture while a grade is applied on top — reversed, an HSL band tweak would
+    // act on the tint just added. After the tone curve and local contrast is forced rather than
+    // chosen: the ranges are selected on lightness, so anything remapping lightness later would
+    // slide pixels between ranges. Before the masks, which act on the global look.
+    //
+    // Per-pixel and position-independent, so it needs no `Region`, no `RenderScale` and no
+    // kernel margin — and being in the tail, no `PrefixStepKey`.
+    if edits.color_grading.is_active() {
+        tail.push(Box::new(ColorGradingStage::new(&edits.color_grading)));
+    }
+
     // ⚠ After the global per-pixel block because a mask is the same kind of operation,
     // localised — it should act on the global look rather than be re-mapped by it. Before the
     // vignette and sharpening because both have earned their end-of-chain positions: the
@@ -610,6 +623,19 @@ mod tests {
             },
             Edits {
                 hsl,
+                ..base.clone()
+            },
+            Edits {
+                color_grading: edit_model::ColorGrading {
+                    highlights: edit_model::GradeWheel {
+                        hue: 30.0,
+                        saturation: 50.0,
+                        luminance: 20.0,
+                    },
+                    blending: 10.0,
+                    balance: 60.0,
+                    ..Default::default()
+                },
                 ..base.clone()
             },
             Edits {
@@ -1200,5 +1226,65 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 3);
+    }
+
+    #[test]
+    fn colour_grading_runs_after_hsl_and_before_the_masks() {
+        // After HSL because HSL *corrects* colours that are in the photograph while a grade is
+        // a look laid over the top — reversed, an HSL band tweak would act on the tint just
+        // added. Before the masks because a mask "should act on the global look rather than be
+        // re-mapped by it", and a grade is global look.
+        let mut hsl = edit_model::Hsl::default();
+        hsl.bands[0].saturation = 20.0;
+        let edits = Edits {
+            hsl,
+            color_grading: edit_model::ColorGrading {
+                shadows: edit_model::GradeWheel {
+                    hue: 240.0,
+                    saturation: 40.0,
+                    luminance: 0.0,
+                },
+                ..Default::default()
+            },
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 1.0],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.75,
+                    ..Default::default()
+                },
+            }],
+            vignette: edit_model::Vignette {
+                amount: -40.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            vec![
+                "hsl",
+                "color_grading",
+                "mask",
+                "vignette",
+                "output_transform"
+            ]
+        );
+    }
+
+    #[test]
+    fn colour_grading_modifiers_alone_add_no_stage() {
+        let edits = Edits {
+            color_grading: edit_model::ColorGrading {
+                blending: 100.0,
+                balance: -60.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
     }
 }

@@ -418,6 +418,9 @@ mod tests {
         };
         let out = apply_one(&g, [1.6, 1.6, 1.6]);
         assert!(out.iter().all(|&v| v >= 0.0), "negative sample in {out:?}");
-        assert!(out.iter().any(|&v| v > 1.0), "headroom was clipped: {out:?}");
+        assert!(
+            out.iter().any(|&v| v > 1.0),
+            "headroom was clipped: {out:?}"
+        );
     }
 }
