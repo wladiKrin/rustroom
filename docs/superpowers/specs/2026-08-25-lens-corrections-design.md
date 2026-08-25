@@ -161,17 +161,31 @@ coordinate remap, following lensfun's own order.
 
 ## The edge policy
 
-Correcting barrel distortion stretches the corners outward, so the corrected frame needs source
-pixels that were never captured — measured at ~3.5% outside the sensor on the XF16-80 at 16 mm.
+⚠⚠ **CORRECTION, established empirically during implementation: it is PINCUSHION, not barrel, that
+empties the frame.** An earlier draft of this design — and the mockup the behaviour was chosen from
+— had the direction backwards. Pinned by test against a synthetic profile, and consistent with the
+real lens:
+
+- **Barrel correction** expands the compressed periphery, so an output pixel reads from *nearer*
+  the centre. The corners therefore always have data; what is lost is content at the frame edge,
+  pushed beyond it. **Autoscale is exactly 1.0 — scaling a barrel-corrected frame discards data for
+  nothing.**
+- **Pincushion correction** does the reverse: the output pixel reads from *further out*, so the
+  corners want source pixels beyond the sensor and come back **empty**. Autoscale exceeds 1.
+
+On the XF16-80 this is barrel at 16 mm (source 3.5% *inside* the frame, no empty corner) and
+pincushion from ~35 mm up (source *outside* — that is where the empty corners actually appear).
+
+⚠ **The decision is unchanged and if anything better supported.** A single fixed autoscale would
+be wrong at *both* ends: it does nothing useful at the wide end while discarding real data there,
+and it is essential at the long end. `barrel_correction_needs_no_scaling` and
+`pincushion_correction_autoscales_above_one` pin both halves.
 
 **A scale slider, defaulting to autoscale (100).** At 0 the empty wedges are left for the user to
 crop; at 100 the image is scaled until they are gone.
 
 ⚠ **The behaviour is not symmetric across the zoom range, which is why the slider is worth its
-place.** The same lens shows *barrel* at 16 mm (corners stretch out, edges go empty) and
-*pincushion* from ~35 mm (the corrected image overflows the frame and loses edge data regardless).
-So a fixed autoscale silently crops at the long end, and a fixed no-scale leaves black wedges at the
-wide end; neither single answer is right across one lens.
+place** — see the correction above for which end does what.
 
 ⚠⚠ **WE MUST COMPUTE THE AUTOSCALE OURSELVES — the crate has no such API.** Verified: no
 `get_auto_scale`, no `enable_scaling`, no `LF_MODIFY_SCALE` equivalent anywhere in the crate. The C
