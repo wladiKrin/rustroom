@@ -167,8 +167,53 @@ fn render(
             .with_context(|| format!("loading edits {}", p.display()))?,
         None => edit_model::Edits::default(),
     };
-    let rendered =
-        pipeline::build_pipeline_to(&edits, pipeline::RenderScale::FULL, space).run(decoded.image);
+    // Resolve a lens profile, if the file names a lens we know and any correction is wanted.
+    // ⚠ `Catalogue::bundled()` decompresses 56 XML files, so it is built once here and never
+    // inside a loop. A miss is an ordinary answer, not an error: the stage is simply skipped.
+    let lens = if edits.lens_correction.is_active() {
+        decoded.metadata.lens.as_ref().and_then(|l| {
+            let db = lens_profile::Catalogue::bundled().ok()?;
+            let p = db.find(&decoded.metadata.make, &decoded.metadata.model, &l.name)?;
+            lens_profile::Corrector::new(
+                &p,
+                &lens_profile::Shot {
+                    focal: l.focal,
+                    aperture: l.aperture,
+                },
+                decoded.image.width(),
+                decoded.image.height(),
+                lens_profile::Corrections {
+                    distortion: edits.lens_correction.distortion,
+                    tca: edits.lens_correction.tca,
+                    vignetting: edits.lens_correction.vignetting,
+                    scale: edits.lens_correction.scale,
+                },
+            )
+        })
+    } else {
+        None
+    };
+    if edits.lens_correction.is_active() {
+        match (&decoded.metadata.lens, &lens) {
+            (Some(l), Some(_)) => {
+                eprintln!("Lens profile: {} ({} mm f/{})", l.name, l.focal, l.aperture)
+            }
+            (Some(l), None) => eprintln!("No lens profile for {:?} — corrections skipped", l.name),
+            (None, _) => eprintln!("No lens recorded in the file — corrections skipped"),
+        }
+    }
+
+    let (prefix, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        &edits,
+        pipeline::RenderScale::FULL,
+        None,
+        None,
+        space,
+        lens,
+    );
+    let mut stages = prefix.into_stages();
+    stages.extend(tail.into_stages());
+    let rendered = pipeline::Pipeline::new(stages).run(decoded.image);
 
     export::save(&rendered, output, format, quality, space)
         .with_context(|| format!("writing {}", output.display()))?;

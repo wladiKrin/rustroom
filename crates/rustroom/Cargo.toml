@@ -13,6 +13,7 @@ color = { path = "../color" }
 core-image = { path = "../core-image" }
 raw-decode = { path = "../raw-decode" }
 pipeline = { path = "../pipeline" }
+lens-profile = { path = "../lens-profile" }
 edit-model = { path = "../edit-model" }
 export = { path = "../export" }
 anyhow.workspace = true

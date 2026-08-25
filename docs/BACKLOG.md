@@ -138,6 +138,15 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 - **Clarity has no halo suppressor**; the midtone weight is the mitigation. A `Detail`-style
   suppressor is a contained follow-up.
 - **No output/print sharpening** for resized exports.
+- **Brush strokes shift when lens corrections are toggled.** Strokes are anchored in
+  "pre-geometry" coordinates, which means *the input to `GeometryStage`* — and lens correction now
+  runs ahead of it, so enabling or disabling it redefines that basis. The shift is up to ~3.5% at
+  the corners and ~0 at the centre. ⚠ The principled fix is to include distortion in `FrameMap` so
+  strokes anchor in raw sensor coordinates and travel *with* the correction — which is what "a
+  stroke must stay on the cat" actually demands, since the correction moves the cat. It needs the
+  **forward** distortion map and the `lensfun` crate exposes only the inverse, so it means an
+  iterative solve per stroke point. Deferred on the grounds that lens corrections are enabled once,
+  early, not toggled mid-edit.
 - **Colour grading does not reach masks.** `LocalAdjustments` is per-pixel-only and a grade is
   global look. Also **no visual feedback of the grading range boundaries** on canvas or histogram.
 
@@ -148,6 +157,14 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 - **Brush: incremental splatting.** Region-scoped coverage brought a paint frame to ~16.6 ms, of
   which ~9 ms is rasterization. ⚠ The remaining cost is **dab area, not frame area** — at 1:1 a dab
   is 125 px across — so incremental splatting is the lever if this ever needs to be faster.
+- **⚠ `LensCorrectionStage` calls the lensfun API one pixel at a time, and it is measured at 7.7×
+  the cost of the comparable stage.** A full-resolution render goes 4.59 s → 6.15 s (+1.56 s on
+  26 Mpx), against `GeometryStage`'s 203 ms for a whole-buffer rotation at the same size. The cause
+  is not the maths: `apply_geometry_distortion`, `apply_subpixel_distortion` and
+  `apply_color_modification_f32` all take `width`/`rows` and are built to fill a **row** at a time,
+  and the stage calls each with a 1×1 grid per pixel. Batching per row is the fix and should
+  recover most of it; parallelising over rows with rayon is a further win, though note the existing
+  `rotate_bilinear` is sequential too, so the stage is at least *consistent* with what is there.
 - **Two Oklab round trips** when HSL and colour grading are both active. Fusing them would break the
   `PipelineStage` seam that exists for the GPU port.
 - **Export is sequential**, deliberately: pipeline stages are already rayon-parallel internally, so
