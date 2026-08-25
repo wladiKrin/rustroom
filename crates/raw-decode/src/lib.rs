@@ -27,6 +27,24 @@ pub enum DecodeError {
     Format(String),
 }
 
+/// What the camera recorded about the lens, when it recorded anything.
+///
+/// ⚠ Deliberately does **not** carry `rsraw::LensInfo`'s `min_focal`/`max_focal` or `mounts`.
+/// Probing showed the focal range reporting `16-16` for a 16-80 zoom and the mount returning the
+/// garbage string `"IL UM"`. The per-shot `focal` below comes from `raw.focal_len()`, which is
+/// correct, and the mount is not needed because matching goes through the camera.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LensMetadata {
+    /// e.g. `"FUJIFILM"`.
+    pub make: String,
+    /// e.g. `"XF16-80mmF4 R OIS WR"` — matches LensFun's `<model>` verbatim for the lenses checked.
+    pub name: String,
+    /// Focal length of *this shot*, in mm.
+    pub focal: f32,
+    /// f-number of this shot.
+    pub aperture: f32,
+}
+
 /// Camera/sensor metadata recovered from the RAW.
 #[derive(Debug, Clone)]
 pub struct RawMetadata {
@@ -34,6 +52,8 @@ pub struct RawMetadata {
     pub height: usize,
     pub make: String,
     pub model: String,
+    /// `None` when the file records no usable lens name.
+    pub lens: Option<LensMetadata>,
 }
 
 /// A fully decoded RAW: demosaiced RGB plus metadata.

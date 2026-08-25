@@ -213,6 +213,22 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
         height,
         make: raw.make().to_string(),
         model: raw.model().to_string(),
+        lens: {
+            let l = raw.lens_info();
+            let name = l.lens_name.trim().to_string();
+            // An empty name is the ordinary case for an adapted or unchipped lens, and must stay
+            // `None` rather than becoming an unmatchable empty string.
+            if name.is_empty() {
+                None
+            } else {
+                Some(crate::LensMetadata {
+                    make: l.lens_make.trim().to_string(),
+                    name,
+                    focal: raw.focal_len(),
+                    aperture: raw.aperture(),
+                })
+            }
+        },
     };
 
     Ok(DecodedRaw { image, metadata })
