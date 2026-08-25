@@ -65,9 +65,10 @@ plausibly wrong. It is validated by rendering, not by inspection.
 C1's acceptance criterion was that the render did not change. C2 deliberately changes it, so the
 oracle has to come from outside:
 
-- **⚠ `rawtherapee-cli` is installed** and implements DCP properly. The acceptance test renders the
-  same `.RAF` with the same profile through RawTherapee and compares. That is a genuinely
-  independent implementation, which is what makes it worth more than any self-consistency check.
+- **⚠⚠ CORRECTED AFTER IMPLEMENTATION: the RawTherapee oracle was NOT available.**
+  `rawtherapee-cli` is installed but **crashes on this machine — exit 133 (SIGTRAP), no output,
+  empty log**. So the independent implementation this plan leaned on could not be run, and C2
+  ships with weaker validation than intended. What replaced it, and its limits, are below.
 - **The ForwardMatrix white-point property** above, as a unit test on the parser.
 - **Parsed values checked against the numbers in this document**, which were extracted by an
   independent Python reader — not by the code under test.
@@ -76,9 +77,21 @@ oracle has to come from outside:
   exactly, and likewise for 2. An interpolation that is wrong in the middle is often still right
   at the ends, so the middle needs the RawTherapee comparison; the ends can be pinned exactly.
 
-⚠ If ours and RawTherapee cannot be brought into agreement, the honest outcome is to say so and
-keep `camera_profile` off by default rather than ship a plausible-looking transform. Nothing
-depends on C2 landing.
+### ⚠ What actually validates the interpolation, absent the oracle
+
+**The magnitude argument.** Both ForwardMatrices have rows summing to D50 white, so they agree on a
+neutral to 1e-4 — an inverted illuminant choice is **completely invisible on greys**. On coloured
+content they differ by **0.020–0.034**. Our render differs from libraw's by a mean of **0.0018**,
+an order of magnitude less. Choosing the wrong matrix would show at ~0.03, so the agreement is
+evidence the daylight matrix was selected correctly.
+
+`the_illuminant_choice_is_invisible_on_neutrals_and_visible_on_colour` records exactly that, so
+nobody concludes from the neutral test alone that the interpolation is verified.
+
+⚠ **This is weaker than an independent implementation and is not presented as equivalent.** The
+sign and magnitude of the choice are constrained; the precise blend in the middle of the calibrated
+range is not. `camera_profile` stays **off by default**, which is what the plan required in exactly
+this situation. Nothing depends on C2 landing.
 
 ## Structure
 

@@ -237,6 +237,36 @@ mod tests {
     }
 
     #[test]
+    fn the_illuminant_choice_is_invisible_on_neutrals_and_visible_on_colour() {
+        // ⚠⚠ **Why a neutral test can never validate the interpolation.** Both ForwardMatrices
+        // have rows summing to D50 white by construction, so they agree on a grey to 1e-4 — an
+        // inverted illuminant choice is completely invisible there. On coloured content they
+        // differ by 0.02–0.03, which is what makes "our render is within 0.002 of libraw's"
+        // evidence that the right matrix was selected rather than a coincidence.
+        //
+        // This test exists to stop anyone concluding from the neutral test alone that the
+        // interpolation is verified. It is not; see the spec's note on the missing oracle.
+        let (m1, m2) = (forward_to_prophoto(FM1), forward_to_prophoto(FM2));
+        let grey = (0..3)
+            .map(|i| (apply(&m1, [0.5, 0.5, 0.5])[i] - apply(&m2, [0.5, 0.5, 0.5])[i]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            grey < 1e-3,
+            "the two matrices should agree on a neutral, got {grey}"
+        );
+
+        for c in [[0.6, 0.45, 0.35], [0.3, 0.45, 0.7]] {
+            let d = (0..3)
+                .map(|i| (apply(&m1, c)[i] - apply(&m2, c)[i]).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                d > 0.01,
+                "the illuminant choice should matter on colour, {c:?} gave {d}"
+            );
+        }
+    }
+
+    #[test]
     fn a_neutral_camera_pixel_is_neutral_through_a_forward_matrix() {
         // ⚠ The point of a ForwardMatrix: its rows sum to D50 white, so a neutral camera reading
         // lands on D50 white in XYZ and therefore neutral in ProPhoto, which is a D50 space.
