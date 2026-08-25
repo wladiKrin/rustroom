@@ -10,7 +10,7 @@
 
 use crate::photo_id::PhotoId;
 use edit_model::{EditGroups, Edits};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A single undoable action, in the order it happened.
 ///

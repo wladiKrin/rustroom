@@ -14,7 +14,6 @@ use crate::history::History;
 use crate::photo_id::PhotoId;
 use edit_model::Edits;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 /// Undo histories for photos that are not currently open, keyed by source path.
 ///
@@ -74,6 +73,7 @@ impl HistoryStash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn edits(exposure: f32) -> Edits {
         Edits {
