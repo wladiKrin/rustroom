@@ -5,7 +5,8 @@
 
 use core_image::ImageBuf;
 use edit_model::{
-    Dehaze, Edits, LocalContrast, NoiseReduction, Sharpening, ToneCurve, Vignette, WhiteBalance,
+    ColorGrading, Dehaze, Edits, GradeWheel, LocalContrast, NoiseReduction, Sharpening, ToneCurve,
+    Vignette, WhiteBalance,
 };
 use pipeline::{build_pipeline, RenderScale};
 use std::path::PathBuf;
@@ -223,6 +224,51 @@ fn hazy_chart() -> ImageBuf {
         }
     }
     img
+}
+
+/// A lightness ramp for the colour-grading goldens: a neutral ramp above a muted warm one, so a
+/// grade can be seen acting on both neutral and chromatic pixels.
+///
+/// ⚠ The ramp runs **0.02..0.68, not 0..1**, and the top was chosen by *measuring*, not by
+/// eye. Adding chroma near white clips, and a clipped golden cannot tell one tint from another
+/// — the failure the exposure golden recorded, where 15 of 64 samples pinned at 255. At a top
+/// of 0.85 `grade_split_tone` pinned 144 samples; at 0.74 `grade_balance_high` still pinned 16.
+/// At 0.68 the brightest sample across all four cases is 243, leaving real headroom.
+/// `the_grading_goldens_do_not_clip` is the guard — if it fails, lower this, do not regenerate
+/// the references.
+fn grade_ramp_chart() -> ImageBuf {
+    const GW: usize = 64;
+    const GH: usize = 16;
+    let mut img = ImageBuf::new(GW, GH);
+    for y in 0..GH {
+        for x in 0..GW {
+            let v = 0.02 + (x as f32 / (GW - 1) as f32) * 0.66;
+            let px = if y < GH / 2 {
+                [v, v, v]
+            } else {
+                [v, v * 0.82, v * 0.66]
+            };
+            set_srgb(&mut img, x, y, px);
+        }
+    }
+    img
+}
+
+/// A blue-shadow / warm-highlight split tone, the canonical grade.
+fn split_tone() -> ColorGrading {
+    ColorGrading {
+        shadows: GradeWheel {
+            hue: 240.0,
+            saturation: 40.0,
+            luminance: 0.0,
+        },
+        highlights: GradeWheel {
+            hue: 45.0,
+            saturation: 40.0,
+            luminance: 0.0,
+        },
+        ..ColorGrading::default()
+    }
 }
 
 fn to_rgb8(img: &ImageBuf) -> Vec<u8> {
@@ -919,4 +965,148 @@ fn golden_output_p3() {
         &Edits::default(),
         color::OutputSpace::DisplayP3,
     );
+}
+
+/// The edits for one grading golden.
+///
+/// ⚠ Looked up from [`grading_cases`] rather than written out again here. Two copies of the
+/// same edit set would let the goldens and `the_grading_goldens_do_not_clip` drift apart, and
+/// the clipping guard would then be measuring an image no reference contains.
+fn grading_case(name: &str) -> Edits {
+    grading_cases()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .unwrap_or_else(|| panic!("no grading case named {name}"))
+        .1
+}
+
+#[test]
+fn golden_grade_split_tone() {
+    check_golden_with(
+        "grade_split_tone",
+        &grading_case("grade_split_tone"),
+        grade_ramp_chart(),
+    );
+}
+
+#[test]
+fn golden_grade_luminance() {
+    check_golden_with(
+        "grade_luminance",
+        &grading_case("grade_luminance"),
+        grade_ramp_chart(),
+    );
+}
+
+#[test]
+fn golden_grade_blending_wide() {
+    check_golden_with(
+        "grade_blending_wide",
+        &grading_case("grade_blending_wide"),
+        grade_ramp_chart(),
+    );
+}
+
+#[test]
+fn golden_grade_balance_high() {
+    check_golden_with(
+        "grade_balance_high",
+        &grading_case("grade_balance_high"),
+        grade_ramp_chart(),
+    );
+}
+
+/// The four grading edit sets, paired with their golden names.
+fn grading_cases() -> Vec<(&'static str, Edits)> {
+    vec![
+        (
+            "grade_split_tone",
+            Edits {
+                color_grading: split_tone(),
+                ..Edits::default()
+            },
+        ),
+        (
+            "grade_luminance",
+            Edits {
+                color_grading: ColorGrading {
+                    shadows: GradeWheel {
+                        hue: 0.0,
+                        saturation: 0.0,
+                        luminance: -70.0,
+                    },
+                    highlights: GradeWheel {
+                        hue: 0.0,
+                        saturation: 0.0,
+                        luminance: 70.0,
+                    },
+                    ..ColorGrading::default()
+                },
+                ..Edits::default()
+            },
+        ),
+        (
+            "grade_blending_wide",
+            Edits {
+                color_grading: ColorGrading {
+                    blending: 100.0,
+                    ..split_tone()
+                },
+                ..Edits::default()
+            },
+        ),
+        (
+            "grade_balance_high",
+            Edits {
+                color_grading: ColorGrading {
+                    balance: 80.0,
+                    ..split_tone()
+                },
+                ..Edits::default()
+            },
+        ),
+    ]
+}
+
+/// ⚠ A golden that clips cannot discriminate one grade from another, and clipping is invisible
+/// to the eye — the exposure golden pinned 15 of 64 samples at 255 and nobody noticed until it
+/// failed to detect a change. This is why `grade_ramp_chart` stops at 0.85 rather than 1.0.
+/// If this fails, lower the ramp's top; do not regenerate the references.
+#[test]
+fn the_grading_goldens_do_not_clip() {
+    for (name, edits) in grading_cases() {
+        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(grade_ramp_chart()));
+        let hi = bytes.iter().filter(|&&c| c >= 255).count();
+        let lo = bytes.iter().filter(|&&c| c == 0).count();
+        let max = bytes.iter().max().copied().unwrap();
+        assert!(
+            hi == 0 && lo == 0,
+            "{name}: {hi} samples clipped high, {lo} clipped low (max {max}) — the golden \
+             cannot discriminate where it is pinned"
+        );
+    }
+}
+
+/// A grade whose parameters did nothing would still produce four valid-looking PNGs. Each case
+/// varies exactly one axis, so any two rendering alike means that axis is inert.
+#[test]
+fn the_four_grading_goldens_differ_from_one_another() {
+    let rendered: Vec<(&str, Vec<u8>)> = grading_cases()
+        .into_iter()
+        .map(|(n, e)| {
+            (
+                n,
+                to_rgb8(&build_pipeline(&e, RenderScale::FULL).run(grade_ramp_chart())),
+            )
+        })
+        .collect();
+    for i in 0..rendered.len() {
+        for j in (i + 1)..rendered.len() {
+            assert_ne!(
+                rendered[i].1, rendered[j].1,
+                "{} and {} render identically",
+                rendered[i].0, rendered[j].0
+            );
+        }
+    }
 }
