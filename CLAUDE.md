@@ -190,7 +190,20 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 **🎯 M3.1 IS CLOSED.** All three mask primitives — linear, radial, brush — are authorable on the canvas.
 
-**▶ NEXT ACTION: none chosen — ask. COLOUR MANAGEMENT IS COMPLETE.** A (wide working space), B (output profile at export), C1–C4 (camera input profiles) and D (display profile, plus its macOS follow-up) are all done. ⚠ Known gaps, each recorded in its own section: **C2/C3 shipped without their intended oracle** (`rawtherapee-cli` crashes here, exit 133); **`ProfileToneCurve` and `ProfileLookTable` are deliberately excluded** for architectural reasons; **per-photo profile choice is a recorded follow-up** (C4 is per camera); **no soft-proofing**; **no gamut mapping** at export. Next features: **M3.2** lens corrections via lensfun, **M3.4** virtual copies.
+**▶ NEXT ACTION: M3.3 — colour grading.** Chosen 2026-08-25, to be started in a fresh session.
+
+⚠⚠ **M3.3 WAS BLOCKED AND IS NOT ANY MORE — that is why it is next.** Phase 3's decomposition recorded a *hidden prerequisite*: "M3.3 colour grading has a hidden prerequisite: real colour management does not exist — lcms2 emits one static sRGB profile and nothing else." **That prerequisite was satisfied on 2026-08-25.** Colour management is complete: A (linear ProPhoto working space), B (output profile at export), C1–C4 (camera input profiles) and D (display profile plus its macOS follow-up). Grading now happens in a wide working space, is judged on a colour-corrected preview, and exports to a chosen profile — none of which was true when M3.3 was parked.
+
+**What M3.3 is:** shadows/midtones/highlights colour wheels — the three-way grade. Pure `pipeline` work: **no new dependency**, and the 39-golden harness already covers the seam it lands in.
+
+⚠ **Things to settle in the brainstorm, not during implementation:**
+- **Where in the pipeline it goes.** `saturation` runs after the tone curve and local contrast; a grade is a *colour* operation and probably belongs near it, but "after the tone curve" is what made the vignette's endpoints defensible and the same argument needs making here.
+- **What space the wheels operate in.** Oklab is already used for chroma work by `hsl`, `noise_reduction`, `sharpening` and `local_contrast`; linear ProPhoto is what the buffer holds. The tonal *ranges* (shadow/mid/highlight) need a luma, and `color::luminance()` is the one definition — ⚠ see the ProPhoto-luminance correction before assuming anything about it.
+- **Whether it is one stage or three.** `local_contrast` computes two bands against one source and sums the deltas *specifically* so Texture and Clarity stay independently predictable; three sequential grade stages would interact the same way that decision avoided.
+
+**Remaining after M3.3:** **M3.2** lens corrections via lensfun (⚠ a new C dependency, with the build risk libraw carried), **M3.4** virtual copies (smallest and most independent).
+
+⚠ **Recorded follow-ups from the colour-management work, none urgent, each detailed in its own section below:** **C2/C3 shipped without their intended oracle** — `rawtherapee-cli` crashes on this machine (exit 133) — so the dual-illuminant interpolation is *bounded but not independently verified*; **per-photo camera profile** (C4 is per camera; the work is the buffer-cache key and `Edits`); **soft-proofing** (the preview cannot show P3 even when exporting it); **gamut mapping / rendering intents** at export (currently a hard per-channel clip); **`ProfileToneCurve` and `ProfileLookTable`**, both deliberately excluded — ⚠ the tone curve needs an answer to *"where does a display rendering live in a scene-referred pipeline"*, which is a design question rather than effort.
 
 1. **The toolbar is thirteen controls on one level** — view (Fit, Before/After), a mode (Geometry), edit transfer (Copy, Paste, Sync, Presets), output (Export), app (Settings) and panel toggles (Presets, Filmstrip), with a single divider. Nothing distinguishes modes from actions from panel toggles.
 2. **The right panel stacks two organising principles** — thirteen always-open ungrouped sliders (Temp…Vibrance, with *no header at all*), then seven `CollapsingHeader` sections. The top half cannot be collapsed.
