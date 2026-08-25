@@ -49,10 +49,17 @@ pub fn selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected:
 /// would swallow the click: both rects are distance 0 from the pointer and egui breaks that
 /// tie by registration order. The grid then responded only on the grey margin around the
 /// image. `clicking_a_library_grid_thumbnail_opens_it` pins it.
+/// `copy` badges the cell when non-zero.
+///
+/// ⚠ Copies of one file show a **pixel-identical** thumbnail — Library thumbnails are the
+/// camera's embedded JPEG, not a render of the edits. The badge and the label are therefore the
+/// *only* things distinguishing them, which is the accepted limitation in the spec and the reason
+/// edit-accurate thumbnails are backlogged.
 pub fn cell(
     ui: &mut egui::Ui,
     box_size: egui::Vec2,
     thumb: Option<&egui::TextureHandle>,
+    copy: u32,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
@@ -74,6 +81,22 @@ pub fn cell(
                 egui::Color32::from_gray(60),
             );
         }
+    }
+    if copy != 0 {
+        let badge =
+            egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), egui::vec2(17.0, 13.0));
+        ui.painter().rect_filled(
+            badge,
+            egui::CornerRadius::same(2),
+            ui.visuals().selection.bg_fill,
+        );
+        ui.painter().text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            copy.to_string(),
+            egui::FontId::proportional(9.0),
+            ui.visuals().extreme_bg_color,
+        );
     }
     resp
 }
@@ -127,7 +150,7 @@ mod tests {
                         .rect
                         .width()
                     } else {
-                        cell(ui, box_size, tex.as_ref()).rect.width()
+                        cell(ui, box_size, tex.as_ref(), 0).rect.width()
                     };
                     widths.push(w);
                 }
@@ -181,7 +204,7 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell(ui, box_size, tex.as_ref());
+                        cell(ui, box_size, tex.as_ref(), 0);
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                     });
                 })
@@ -241,7 +264,7 @@ mod tests {
                     .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                         ui.set_min_size(egui::vec2(CELL, CELL));
                         ui.vertical_centered(|ui| {
-                            cell(ui, box_size, Some(&tex));
+                            cell(ui, box_size, Some(&tex), 0);
                             ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         });
                     })
@@ -305,7 +328,7 @@ mod tests {
             let _ = ctx.run_ui(input, |ui| {
                 ui.horizontal(|ui| {
                     for i in 0..3 {
-                        let resp = cell(ui, box_size, Some(&tex)).interact(egui::Sense::click());
+                        let resp = cell(ui, box_size, Some(&tex), 0).interact(egui::Sense::click());
                         if i == 0 {
                             origin = resp.rect.min;
                             if pass == 2 && resp.clicked() {

@@ -77,7 +77,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             // grid form, where `egui::Grid`'s column alignment hid it.
                             ui.set_min_size(egui::vec2(CELL, CELL));
                             ui.vertical_centered(|ui| {
-                                thumb::cell(ui, box_size, lib.thumbs[i].as_ref());
+                                thumb::cell(
+                                    ui,
+                                    box_size,
+                                    lib.thumbs[i].as_ref(),
+                                    lib.entries[i].id.copy,
+                                );
                                 theme::caption(ui, &lib.entries[i].file_name);
                             });
                         })

@@ -32,8 +32,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     for &i in &visible {
                         // The filmstrip's cell *is* its click target, so it opts in here.
-                        let resp = thumb::cell(ui, box_size, lib.thumbs[i].as_ref())
-                            .interact(egui::Sense::click());
+                        let resp = thumb::cell(
+                            ui,
+                            box_size,
+                            lib.thumbs[i].as_ref(),
+                            lib.entries[i].id.copy,
+                        )
+                        .interact(egui::Sense::click());
                         thumb::selection_border(
                             ui,
                             resp.rect,
