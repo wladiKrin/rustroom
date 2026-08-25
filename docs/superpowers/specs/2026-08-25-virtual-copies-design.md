@@ -82,9 +82,19 @@ Every existing sidecar is a bare `Edits` object. The obvious implementation — 
 > `#[serde(untagged)]` serde reads `LinearGradient` from the whole object, and its container-level
 > `#[serde(default)]` makes the unknown key be **ignored** and every field default.
 
-`Edits` has a container-level `#[serde(default)]`, so an untagged envelope would happily
-deserialize **every existing sidecar as an empty copy list** — silently discarding every edit
-anyone has ever made, with a green test suite.
+⚠⚠ **CORRECTION, established by sabotage during implementation: the danger needs TWO things, not
+one.** This design originally claimed untagged alone would destroy the data. Measured, it does not:
+`Sidecar::copies` is a *required* field, so a legacy bare-`Edits` object fails to match the envelope
+variant and correctly falls through. Untagged alone passed all 15 tests.
+
+It becomes silent data loss only when `#[serde(default)]` is **also** added to `Sidecar` — the
+obvious "forward compatibility" move — at which point every legacy sidecar matches the envelope with
+an empty copy list and every edit is discarded, with a green suite. Verified: that combination fails
+`a_legacy_bare_edits_sidecar_loads_as_copy_zero_with_its_edits_intact`.
+
+So there are two independent guards, and both are kept because either alone suffices and neither is
+obvious to the next reader: **explicit dispatch** in `load_all`, and the deliberate **absence** of
+`#[serde(default)]` on `Sidecar`. Both carry comments saying so.
 
 **Instead: parse to `serde_json::Value`, test explicitly for the `copies` key, and dispatch.** No
 inference. And the test asserts the **payload** — that a legacy sidecar's exposure value arrives
