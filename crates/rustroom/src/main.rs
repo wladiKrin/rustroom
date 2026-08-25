@@ -174,21 +174,13 @@ fn render(
         decoded.metadata.lens.as_ref().and_then(|l| {
             let db = lens_profile::Catalogue::bundled().ok()?;
             let p = db.find(&decoded.metadata.make, &decoded.metadata.model, &l.name)?;
-            lens_profile::Corrector::new(
-                &p,
-                &lens_profile::Shot {
+            Some(lens_profile::LensShot {
+                profile: p,
+                shot: lens_profile::Shot {
                     focal: l.focal,
                     aperture: l.aperture,
                 },
-                decoded.image.width(),
-                decoded.image.height(),
-                lens_profile::Corrections {
-                    distortion: edits.lens_correction.distortion,
-                    tca: edits.lens_correction.tca,
-                    vignetting: edits.lens_correction.vignetting,
-                    scale: edits.lens_correction.scale,
-                },
-            )
+            })
         })
     } else {
         None

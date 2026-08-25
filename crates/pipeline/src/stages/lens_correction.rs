@@ -6,7 +6,7 @@
 
 use crate::PipelineStage;
 use core_image::ImageBuf;
-use lens_profile::Corrector;
+use lens_profile::{Corrections, Corrector, LensShot};
 
 /// Bilinearly sample `src` at fractional `(sx, sy)`, one channel; outside the frame reads black.
 ///
@@ -28,12 +28,24 @@ fn sample_channel(src: &ImageBuf, sx: f32, sy: f32, ch: usize) -> f32 {
 }
 
 pub struct LensCorrectionStage {
-    corrector: Corrector,
+    lens: LensShot,
+    want: Corrections,
 }
 
 impl LensCorrectionStage {
-    pub fn new(corrector: Corrector) -> Self {
-        Self { corrector }
+    pub fn new(lens: LensShot, want: Corrections) -> Self {
+        Self { lens, want }
+    }
+
+    /// The correction for an image of these dimensions.
+    ///
+    /// ⚠ Built here rather than handed in, because a [`Corrector`] is tied to a specific image
+    /// size and this is the only place that knows it — the preview and the 1:1 view render at
+    /// different sizes through the same `Edits`. Handing one in would make a size mismatch
+    /// *representable*, and it would be silently wrong rather than an error. Building it is
+    /// cheap: the database is already parsed, so this is a `Modifier::new` and three `enable_*`.
+    fn corrector(&self, w: usize, h: usize) -> Option<Corrector> {
+        Corrector::new(&self.lens.profile, &self.lens.shot, w, h, self.want)
     }
 }
 
@@ -44,12 +56,16 @@ impl PipelineStage for LensCorrectionStage {
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
+        // Nothing enabled, or nothing this profile can supply: pass the image through untouched.
+        let Some(corrector) = self.corrector(w, h) else {
+            return image;
+        };
         let mut out = ImageBuf::new(w, h);
         for y in 0..h {
             for x in 0..w {
                 let (fx, fy) = (x as f32, y as f32);
-                let src = self.corrector.source(fx, fy);
-                let gain = self.corrector.gain(fx, fy);
+                let src = corrector.source(fx, fy);
+                let gain = corrector.gain(fx, fy);
                 let mut px = [0.0f32; 3];
                 for (ch, p) in px.iter_mut().enumerate() {
                     *p = sample_channel(&image, src[ch][0], src[ch][1], ch) * gain;

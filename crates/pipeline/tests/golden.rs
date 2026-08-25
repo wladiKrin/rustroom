@@ -1137,7 +1137,7 @@ fn grid_chart() -> ImageBuf {
 ///
 /// ⚠ The distortion is **pincushion** (positive `b`), deliberately: it is the direction that
 /// empties the frame, so it is the one whose scale slider has anything to do.
-fn lens_corrector(c: lens_profile::Corrections, w: usize, h: usize) -> lens_profile::Corrector {
+fn lens_shot() -> lens_profile::LensShot {
     let xml = r#"<lensdatabase version="1">
         <camera><maker>TestMaker</maker><model>TestCam</model>
             <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
@@ -1152,22 +1152,17 @@ fn lens_corrector(c: lens_profile::Corrections, w: usize, h: usize) -> lens_prof
     </lensdatabase>"#;
     let db = lens_profile::Catalogue::from_xml(xml).unwrap();
     let p = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
-    lens_profile::Corrector::new(
-        &p,
-        &lens_profile::Shot {
+    lens_profile::LensShot {
+        profile: p,
+        shot: lens_profile::Shot {
             focal: 50.0,
             aperture: 2.8,
         },
-        w,
-        h,
-        c,
-    )
-    .expect("corrector")
+    }
 }
 
 fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
     let chart = grid_chart();
-    let (w, h) = (chart.width(), chart.height());
     let edits = Edits {
         lens_correction: edit_model::LensCorrection {
             distortion: c.distortion,
@@ -1183,7 +1178,7 @@ fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
         None,
         None,
         color::OutputSpace::Srgb,
-        Some(lens_corrector(c, w, h)),
+        Some(lens_shot()),
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

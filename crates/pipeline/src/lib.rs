@@ -159,7 +159,7 @@ pub struct PrefixStep {
 pub fn build_prefix_steps(
     edits: &Edits,
     scale: RenderScale,
-    lens: Option<lens_profile::Corrector>,
+    lens: Option<lens_profile::LensShot>,
 ) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
@@ -170,7 +170,15 @@ pub fn build_prefix_steps(
         if let Some(c) = lens {
             steps.push(PrefixStep {
                 key: PrefixStepKey::LensCorrection(edits.lens_correction),
-                stage: Box::new(LensCorrectionStage::new(c)),
+                stage: Box::new(LensCorrectionStage::new(
+                    c,
+                    lens_profile::Corrections {
+                        distortion: edits.lens_correction.distortion,
+                        tca: edits.lens_correction.tca,
+                        vignetting: edits.lens_correction.vignetting,
+                        scale: edits.lens_correction.scale,
+                    },
+                )),
             });
         }
     }
@@ -319,7 +327,7 @@ pub fn build_pipeline_split_in_region_with_brush(
     region: Option<Region>,
     brush: Option<&BrushCoverage>,
     space: color::OutputSpace,
-    lens: Option<lens_profile::Corrector>,
+    lens: Option<lens_profile::LensShot>,
 ) -> (Pipeline, Pipeline) {
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
@@ -1327,7 +1335,7 @@ mod tests {
     }
 
     /// A corrector built from a synthetic profile — no RAW file, no bundled database.
-    fn test_corrector() -> Option<lens_profile::Corrector> {
+    fn test_corrector() -> Option<lens_profile::LensShot> {
         let xml = r#"<lensdatabase version="1">
             <camera><maker>TestMaker</maker><model>TestCam</model>
                 <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
@@ -1339,21 +1347,13 @@ mod tests {
         </lensdatabase>"#;
         let db = lens_profile::Catalogue::from_xml(xml).unwrap();
         let p = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
-        lens_profile::Corrector::new(
-            &p,
-            &lens_profile::Shot {
+        Some(lens_profile::LensShot {
+            profile: p,
+            shot: lens_profile::Shot {
                 focal: 50.0,
                 aperture: 2.8,
             },
-            64,
-            16,
-            lens_profile::Corrections {
-                distortion: true,
-                tca: false,
-                vignetting: false,
-                scale: 100.0,
-            },
-        )
+        })
     }
 
     #[test]

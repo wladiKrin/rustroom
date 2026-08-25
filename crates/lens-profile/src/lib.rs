@@ -88,6 +88,17 @@ pub struct Shot {
     pub aperture: f32,
 }
 
+/// A resolved profile together with the shot it applies to — everything except the image size.
+///
+/// ⚠ The size is deliberately *not* here. A [`Corrector`] is built for specific dimensions, and
+/// the pipeline stage is the only place that knows what they are; keeping them apart means a
+/// corrector built for one size can never be applied to an image of another.
+#[derive(Debug, Clone)]
+pub struct LensShot {
+    pub profile: LensProfile,
+    pub shot: Shot,
+}
+
 /// A built correction for one profile, one shot and one image size.
 pub struct Corrector {
     modifier: Modifier,
