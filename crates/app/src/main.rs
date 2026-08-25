@@ -114,6 +114,11 @@ struct PendingOpen {
 }
 
 struct RustroomApp {
+    /// The camera profiles found on disk, read when a photo opens.
+    ///
+    /// ⚠ Cached rather than rescanned per frame: the panel body runs sixty times a second, and
+    /// a directory scan there is the `apply_view_demosaic` mistake in a different costume.
+    camera_profiles_cache: Vec<camera_profile::store::ProfileEntry>,
     /// Whether the OS is colour-matching the window for us, so we must not also convert.
     ///
     /// ⚠ Runtime, not `#[cfg]`: a macOS build where tagging failed has to take the manual path,
@@ -270,16 +275,22 @@ impl RustroomApp {
         // silently disagree with what the user chose.
         theme::apply(ctx, &settings);
         Self {
+            camera_profiles_cache: Vec::new(),
             os_manages_colour,
             view: AppView::default(),
             last_view: AppView::default(),
             library: None,
             session: None,
             pending: None,
-            decoder: DecodeWorker::new(decode_for_edit, MAX_CONCURRENT_DECODES, move || {
-                ctx2.request_repaint()
-            }),
-            full_decoder: full_res_worker(settings.view_demosaic, ctx),
+            // ⚠ No profile at startup: nothing is open, so no camera is known. `open_path`
+            // rebuilds this worker once the model is, which is the same rebuild-on-change shape
+            // `apply_view_demosaic` uses.
+            decoder: DecodeWorker::new(
+                move |p| decode_for_edit(p, None),
+                MAX_CONCURRENT_DECODES,
+                move || ctx2.request_repaint(),
+            ),
+            full_decoder: full_res_worker(settings.view_demosaic, None, ctx),
             full_pending: None,
             cache: BufferCache::new(BUFFER_CACHE_CAP),
             histories: HistoryStash::default(),
@@ -473,9 +484,15 @@ fn before_edits(edits: &Edits) -> Edits {
 /// Decode a file for editing (half-size for RAW; full decode for images) into a linear
 /// `ImageBuf`, a display label, and the buffer's size relative to a full-resolution
 /// decode. Dispatches by file kind.
-fn decode_for_edit(path: &std::path::Path) -> Result<(core_image::ImageBuf, String, f32), String> {
+fn decode_for_edit(
+    path: &std::path::Path,
+    profile: Option<std::path::PathBuf>,
+) -> Result<(core_image::ImageBuf, String, f32), String> {
     if catalog::is_raw(path) {
-        let opts = raw_decode::DecodeOptions::preview();
+        let opts = raw_decode::DecodeOptions {
+            camera_profile: profile,
+            ..raw_decode::DecodeOptions::preview()
+        };
         let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
         let label = format!("{} {}", d.metadata.make, d.metadata.model);
         Ok((d.image, label, opts.source_scale()))
@@ -520,9 +537,11 @@ fn view_quality_hint(tier: raw_decode::Demosaic) -> &'static str {
 fn decode_full_res(
     path: &std::path::Path,
     tier: raw_decode::Demosaic,
+    profile: Option<std::path::PathBuf>,
 ) -> Result<(core_image::ImageBuf, String, f32), String> {
     let opts = raw_decode::DecodeOptions {
         demosaic: tier,
+        camera_profile: profile,
         ..raw_decode::DecodeOptions::linear_scene()
     };
     let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
@@ -538,10 +557,18 @@ fn decode_full_res(
 /// on a caller that cannot act on it. Changing the setting therefore rebuilds this worker;
 /// dropping the old one disconnects its channel, so a decode in flight finishes and discards
 /// its own result, the same abandon-don't-abort trade the full-resolution handover makes.
-fn full_res_worker(tier: raw_decode::Demosaic, ctx: &egui::Context) -> DecodeWorker {
+/// ⚠ The tier and the profile are **captured**, not passed per request: `DecodeWorker`'s callers
+/// have no business knowing about either, and rebuilding the worker is what makes a change take
+/// effect. Dropping the old one disconnects its channel, so an in-flight decode discards its own
+/// result — the abandon-don't-abort trade used at handover.
+fn full_res_worker(
+    tier: raw_decode::Demosaic,
+    profile: Option<std::path::PathBuf>,
+    ctx: &egui::Context,
+) -> DecodeWorker {
     let ctx = ctx.clone();
     DecodeWorker::new(
-        move |p| decode_full_res(p, tier),
+        move |p| decode_full_res(p, tier, profile.clone()),
         MAX_CONCURRENT_FULL_DECODES,
         move || ctx.request_repaint(),
     )
@@ -551,12 +578,14 @@ fn full_res_worker(tier: raw_decode::Demosaic, ctx: &egui::Context) -> DecodeWor
 fn decode_for_export(
     path: &std::path::Path,
     demosaic: raw_decode::Demosaic,
+    profile: Option<std::path::PathBuf>,
 ) -> Result<core_image::ImageBuf, String> {
     if catalog::is_raw(path) {
         raw_decode::decode_raw(
             path,
             &raw_decode::DecodeOptions {
                 demosaic,
+                camera_profile: profile,
                 ..raw_decode::DecodeOptions::linear_scene()
             },
         )
@@ -766,6 +795,7 @@ impl RustroomApp {
         }
         let opts = self.export_draft.clone();
         let demosaic = opts.demosaic;
+        let export_profile = self.camera_profile_path();
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
         self.exporter = Some(ExportWorker::spawn(
@@ -773,7 +803,11 @@ impl RustroomApp {
             opts,
             // ⚠ Captured from `opts` — the committed options — not from `export_draft`, so a
             // cancelled edit cannot leak into a running export.
-            move |p: &std::path::Path| decode_for_export(p, demosaic),
+            //
+            // ⚠ The camera profile is captured too, from the *open* photo's camera. A batch
+            // export of one camera's files is the case that matters; a mixed-camera selection
+            // would want per-file lookup, which is noted as a limitation rather than guessed at.
+            move |p: &std::path::Path| decode_for_export(p, demosaic, export_profile.clone()),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ));
     }
@@ -1156,6 +1190,12 @@ impl RustroomApp {
         if let Some(old) = self.session.take() {
             self.histories.stash(old.path, old.history);
         }
+        // ⚠ Scanned here, once per photo, rather than in the panel body which runs every frame.
+        // Cheap enough per photo; ruinous sixty times a second.
+        self.camera_profiles_cache = camera_profile::store::ProfileStore::user_default(
+            &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+        )
+        .list_for(&decoded.label);
 
         let edits = sidecar::load(&path).unwrap_or_default();
         let history = match self.histories.take_matching(&path, &edits) {
@@ -1497,6 +1537,56 @@ impl RustroomApp {
             s.request(edits, max_dim, region);
         }
     }
+    /// The profile chosen for the open photo's camera, if any.
+    ///
+    /// ⚠ Keyed by `Session::make_model` — libraw's make and model joined, e.g. `"Fujifilm X-T4"`.
+    /// That is deliberately the same shape a profile's own `ProfileName` has (`"FUJIFILM X-T4"`),
+    /// so matching compares like with like and the make disambiguates two bodies that share a
+    /// model string.
+    fn camera_profile_path(&self) -> Option<std::path::PathBuf> {
+        let s = self.session.as_ref()?;
+        self.settings.camera_profiles.get(&s.make_model).cloned()
+    }
+
+    /// Adopt a camera profile for the open photo's camera.
+    ///
+    /// Mirrors `apply_view_demosaic`: persist, rebuild both workers, and re-decode.
+    ///
+    /// ⚠ Clearing `full_pending` is load-bearing for the same reason it is there — the sequence
+    /// number belongs to the worker being dropped, and leaving it blocks `maybe_request_full_res`
+    /// forever.
+    ///
+    /// ⚠ **The buffer cache must be cleared too.** Without that, arrowing back to a photo serves
+    /// the buffer decoded with the *old* profile, which looks exactly like the setting not
+    /// working.
+    fn apply_camera_profile(
+        &mut self,
+        make_model: String,
+        profile: Option<std::path::PathBuf>,
+        ctx: &egui::Context,
+    ) {
+        match &profile {
+            Some(p) => self.settings.camera_profiles.insert(make_model, p.clone()),
+            None => self.settings.camera_profiles.remove(&make_model),
+        };
+        self.save_settings();
+
+        let ctx2 = ctx.clone();
+        let for_edit = profile.clone();
+        self.decoder = DecodeWorker::new(
+            move |p| decode_for_edit(p, for_edit.clone()),
+            MAX_CONCURRENT_DECODES,
+            move || ctx2.request_repaint(),
+        );
+        self.full_decoder = full_res_worker(self.settings.view_demosaic, profile, ctx);
+        self.full_pending = None;
+        self.cache.clear();
+
+        if let Some(s) = self.session.as_ref() {
+            let path = s.path.clone();
+            self.open_path(ctx, path);
+        }
+    }
 
     /// Adopt a new 1:1 view demosaic tier: persist it, rebuild the worker, and re-decode the
     /// open photo so the change is visible rather than silently deferred to the next photo.
@@ -1508,7 +1598,7 @@ impl RustroomApp {
     fn apply_view_demosaic(&mut self, tier: raw_decode::Demosaic, ctx: &egui::Context) {
         self.settings.view_demosaic = tier;
         self.save_settings();
-        self.full_decoder = full_res_worker(tier, ctx);
+        self.full_decoder = full_res_worker(tier, self.camera_profile_path(), ctx);
         self.full_pending = None;
         // RAW only. For JPEG/PNG/TIFF the buffer really is the whole file, so clearing this
         // would be a lie — and `maybe_request_full_res` refuses on its own `is_raw` check
@@ -1663,9 +1753,9 @@ mod tests {
             return;
         };
         let p = std::path::Path::new(&path);
-        let (half, _, half_scale) = decode_for_edit(p).expect("half decode");
+        let (half, _, half_scale) = decode_for_edit(p, None).expect("half decode");
         let (full, _, full_scale) =
-            decode_full_res(p, raw_decode::Demosaic::default()).expect("full decode");
+            decode_full_res(p, raw_decode::Demosaic::default(), None).expect("full decode");
         assert_eq!(half_scale, 0.5);
         assert_eq!(full_scale, 1.0);
         // libraw's half-size path halves each dimension, rounding down.

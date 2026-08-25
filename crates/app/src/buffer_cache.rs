@@ -43,6 +43,15 @@ impl BufferCache {
         }
     }
 
+    /// Drop everything.
+    ///
+    /// ⚠ Used when the camera profile changes: every cached buffer was decoded with the old
+    /// profile, so serving any of them would look exactly like the setting not working. Clearing
+    /// all rather than one entry because a folder of the same camera's files is the normal case.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

@@ -16,6 +16,7 @@ name = "Rustroom"
 path = "src/main.rs"
 
 [dependencies]
+camera-profile = { path = "../camera-profile" }
 color = { path = "../color" }
 raw-window-handle = "0.6"
 core-image = { path = "../core-image" }

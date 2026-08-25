@@ -102,6 +102,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     presets::show(app, ui);
                 }
 
+                // ⚠ Drawn here, outside the session borrow below, for the same reason
+                // `presets::show` is: it needs `&mut app` for the settings and the re-decode,
+                // which is not disjoint from `&mut app.session`.
+                if tool == Tool::Edit {
+                    camera_profile_row(app, ui);
+                }
+
                 if let Some(s) = &mut app.session {
                     let mut ed = Edited::default();
                     // ⚠ An exhaustive match, not a wildcard: a fifth tool must force a
@@ -198,6 +205,65 @@ fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
                 egui::Stroke::new(1.0, colors[ci].linear_multiply(0.5)),
             );
         }
+    }
+}
+
+/// The camera-profile dropdown.
+///
+/// ⚠ **RAW only.** A JPEG carries no camera profile, and offering one would imply it did.
+///
+/// ⚠ The profile list is read from `app.camera_profiles_cache`, populated when a photo opens —
+/// **not** rescanned here. This function runs every frame, and scanning a directory sixty times a
+/// second is the `apply_view_demosaic` mistake in a different costume.
+fn camera_profile_row(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    let Some((make_model, is_raw)) = app
+        .session
+        .as_ref()
+        .map(|s| (s.make_model.clone(), catalog::is_raw(&s.path)))
+    else {
+        return;
+    };
+    if !is_raw {
+        return;
+    }
+    let current = app.settings.camera_profiles.get(&make_model).cloned();
+    let mut chosen = current.clone();
+    let label = current
+        .as_ref()
+        .and_then(|p| {
+            app.camera_profiles_cache
+                .iter()
+                .find(|e| &e.path == p)
+                .map(|e| e.name.clone())
+        })
+        .unwrap_or_else(|| "Built-in (libraw)".to_string());
+
+    ui.horizontal(|ui| {
+        ui.label("Camera profile");
+        egui::ComboBox::from_id_salt("camera_profile_pick")
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                // ⚠ "Built-in" is a real choice, not a fallback label: it selects C1's libraw
+                // matrix, the well-tested path and the oracle C2 and C3 are measured against.
+                // Someone who dislikes a profile must be able to get back to it.
+                ui.selectable_value(&mut chosen, None, "Built-in (libraw)");
+                for e in &app.camera_profiles_cache {
+                    ui.selectable_value(&mut chosen, Some(e.path.clone()), &e.name);
+                }
+            });
+    });
+    if app.camera_profiles_cache.is_empty() {
+        theme::hint(
+            ui,
+            "No profiles installed. Rustroom ships none — drop .dcp files into the profiles \
+             folder beside your settings to use them.",
+        );
+    }
+    // ⚠ A change guard like its neighbours: this body runs every frame, and `apply_camera_profile`
+    // rebuilds two decode workers and re-decodes the open photo.
+    if chosen != current {
+        app.apply_camera_profile(make_model, chosen, &ctx);
     }
 }
 

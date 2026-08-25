@@ -260,6 +260,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "camera-profile",
  "catalog",
  "color 0.1.0",
  "core-image",
