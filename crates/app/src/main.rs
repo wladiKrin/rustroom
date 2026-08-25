@@ -728,13 +728,11 @@ impl RustroomApp {
     /// Returns `(photos changed, photos that failed)`. The caller words the status line,
     /// because "pasted" and "applied preset" want different phrasing for the same work.
     fn apply_to_selection(&mut self, src: &Edits, groups: EditGroups) -> (usize, usize) {
-        // ⚠ Two identities in play here, deliberately: `open` is the open photo's **path**,
-        // which is what a sidecar write needs, while `open_id` is its `PhotoId`, which is what
-        // scopes the undo entry. Plan 2 makes the second carry a real copy number.
+        // The open photo, as the undo log scopes it. `sync_targets` already excludes it and
+        // needs no path of its own.
         let open_id = self.open_photo();
         let targets = self.sync_targets();
         let into_session = self.open_photo_is_selected();
-        let open = self.session.as_ref().map(|s| s.path.clone());
         let mut parts: Vec<ActionKind> = Vec::new();
         let mut touched = 0usize;
         let mut failed = 0usize;
