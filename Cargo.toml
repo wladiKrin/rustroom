@@ -9,6 +9,7 @@ members = [
     "crates/export",
     "crates/rustroom",
     "crates/app",
+    "crates/camera-profile",
     "crates/catalog",
     "crates/image-decode",
 ]

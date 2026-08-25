@@ -729,6 +729,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "camera-profile"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "catalog"
 version = "0.1.0"
 
