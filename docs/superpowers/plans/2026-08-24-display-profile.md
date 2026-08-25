@@ -1,12 +1,12 @@
-# Display profile for the preview — Implementation Plan
+# A display profile for the preview — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stop the preview oversaturating on a wide-gamut display, by converting the rendered frame into the display's primaries on its way to the GPU.
+**Goal:** Stop the preview oversaturating on a wide-gamut display by converting sRGB output into the display's primaries on the way to the GPU.
 
-**Architecture:** `color` gains an sRGB→display transform. It is applied in `render_engine::pack`, **after** the pipeline and after nothing else — never as a pipeline stage, because the histogram is computed from the packed bytes and must stay image-referred. Thumbnails get the same treatment through an 8-bit helper. A `Settings` field drives it.
+**Architecture:** A **post-step, never a pipeline stage.** The develop pipeline keeps rendering sRGB, so the histogram stays image-referred and no golden can move. One conversion is applied in `render_engine::pack` (in float, before quantizing) and to thumbnails at texture upload.
 
-**Tech Stack:** Rust, existing `color` crate, egui/eframe.
+**Tech Stack:** Rust, `color`'s existing fused-matrix style, egui/eframe.
 
 **Spec:** `docs/superpowers/specs/2026-08-24-display-profile-design.md`
 
@@ -16,7 +16,11 @@
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-Branch per feature; **never push**.
+**Branch first**, per this project's standing convention. Never push; the user pushes.
+
+```bash
+git checkout -b display-profile
+```
 
 ---
 
@@ -24,34 +28,56 @@ Branch per feature; **never push**.
 
 | file | responsibility |
 |---|---|
-| `crates/color/src/spaces.rs` | *modify* — `SRGB_TO_DISPLAY_P3`, `SRGB_TO_ADOBE_RGB` |
-| `crates/color/src/output_space.rs` | *modify* — `DISPLAYS`, `from_srgb`, `convert_srgb8` |
-| `crates/app/src/render_engine.rs` | *modify* — `FrameSpec`; the transform inside `pack` |
-| `crates/app/src/decode_worker.rs` | *modify* — baseline render call site |
-| `crates/app/src/settings.rs` | *modify* — `display_space` field |
-| `crates/app/src/thumb_loader.rs` | *modify* — convert thumbnails at load |
+| `crates/color/src/spaces.rs` | *modify* — add `SRGB_TO_DISPLAY_P3` and `SRGB_TO_ADOBE_RGB` |
+| `crates/color/src/output_space.rs` | *modify* — `from_srgb`, `DISPLAYS`, and an 8-bit helper |
+| `crates/app/src/render_engine.rs` | *modify* — `pack`, `Request` and `render_once` take a space |
+| `crates/app/src/settings.rs` | *modify* — `Settings.display_space` |
+| `crates/app/src/main.rs` | *modify* — `Session.display_space`; `Session::request` supplies it; `apply_display_space` |
 | `crates/app/src/modals/settings.rs` | *modify* — the dropdown |
-| `crates/app/src/main.rs` | *modify* — pass the setting; re-render and reload on change |
+| `crates/app/src/shell.rs` | *modify* — convert thumbnails at texture upload |
 
-⚠ **`pipeline` is not in this table and must not enter it.** Putting the transform in the pipeline
-is the one wrong turn this design exists to avoid — see Task 2's note.
+### Three facts established by reading the code — do not re-derive them
+
+- **⚠ `Session::request` (`main.rs:382`) is the single choke point** for all seven `s.request(..)`
+  call sites. Putting the space on `Session` means **none of those seven lines change**.
+- **⚠ The `baseline` texture is never drawn.** `show_before` is a normal render now; the baseline
+  survives only for its dimensions (`develop/panel/geometry.rs:52`). So its colour does not matter
+  and `DecodeWorker` needs no plumbing at all.
+- **⚠ `render_once` must still take the space** even though its only production caller ignores
+  colour, because `every_cached_frame_matches_a_cold_render` compares it against `render_cached`.
+  If the two used different spaces that test would fail for the wrong reason.
 
 ---
 
-### Task 1: `color` gains the sRGB → display transform ✅ landed as `34e851f`
+### Task 1: `color` learns sRGB → display
 
-**Files:** `crates/color/src/spaces.rs`, `crates/color/src/output_space.rs`
+**Files:**
+- Modify: `crates/color/src/spaces.rs`
+- Modify: `crates/color/src/output_space.rs`
 
-- [x] **Step 1: Add `SRGB_TO_DISPLAY_P3` and `SRGB_TO_ADOBE_RGB`**, derived from primaries with no
-      chromatic adaptation (all three spaces are D65).
+- [ ] **Step 1: Add the two matrices to `spaces.rs`**
+
+Append after `PROPHOTO_TO_ADOBE_RGB`:
 
 ```rust
+/// Linear sRGB → linear Display P3. Both are D65, so no chromatic adaptation is involved.
+///
+/// ⚠ Every entry is non-negative and no in-range input can produce a negative output, because
+/// sRGB's gamut sits strictly *inside* P3 — the opposite of [`PROPHOTO_TO_SRGB`], which must
+/// produce negatives. Do not copy a clamping decision between the two.
 pub const SRGB_TO_DISPLAY_P3: [[f32; 3]; 3] = [
     [0.8224619687, 0.1775380313, 0.0000000000],
     [0.0331941989, 0.9668058011, 0.0000000000],
     [0.0170826307, 0.0723974407, 0.9105199286],
 ];
 
+/// Linear sRGB → linear Adobe RGB (1998). Both are D65.
+///
+/// ⚠⚠ **The middle row really is `[0, 1, 0]`.** It looks like a copy-paste error and is not:
+/// Adobe RGB shares sRGB's red and blue primaries and differs only in green, and the green
+/// *channel value* comes through unchanged. Cross-checked independently — sRGB green expressed
+/// here is `(0.2849, 1.0, 0.0412)`, whose luminance through Adobe's own Y coefficients
+/// (0.2974 / 0.6273 / 0.0753) is 0.7151, matching sRGB green's known 0.7152.
 pub const SRGB_TO_ADOBE_RGB: [[f32; 3]; 3] = [
     [0.7151256069, 0.2848743931, 0.0000000000],
     [0.0000000000, 1.0000000000, 0.0000000000],
@@ -59,211 +85,673 @@ pub const SRGB_TO_ADOBE_RGB: [[f32; 3]; 3] = [
 ];
 ```
 
-- [x] **Step 2: Add `OutputSpace::DISPLAYS`, `from_srgb`, `convert_srgb8`.** `DISPLAYS` excludes
-      ProPhoto; `from_srgb` is the identity for `Srgb`; `convert_srgb8` is for thumbnails only.
+- [ ] **Step 2: Write the failing tests**
 
-- [x] **Step 3: Tests, then sabotage each one.**
+Append these to the `tests` module in `crates/color/src/output_space.rs` (inside the existing
+closing brace — put them before it):
 
-⚠⚠ **The finding from this task, and it changed the test set.** A **row swap** in
-`SRGB_TO_DISPLAY_P3` passed every test originally written — both rows sum to 1.0, so white still
-maps to white, and "red needs less than full red" is still true of the wrong row. A *within-row*
-swap then survived even a per-channel dominance check. The test that catches both is
-**`the_display_transform_preserves_luminance`**: Y is physical, so expressing a colour in different
-primaries cannot change it. Any permutation moves Y.
+```rust
+    #[test]
+    fn srgb_is_bit_exactly_the_identity_for_the_display_transform() {
+        // ⚠ The default must cost nothing and change nothing. `assert_eq!`, not a tolerance:
+        // routing sRGB through a general matrix path would leave it a ulp off, and a preview
+        // that shifts by a ulp when nobody asked is a regression nobody would find.
+        for c in [[0.18, 0.5, 0.9], [0.0, 1.0, 0.0], [1.0, 1.0, 1.0]] {
+            assert_eq!(OutputSpace::Srgb.from_srgb(c), c);
+        }
+    }
 
-Sabotages verified to fail: sRGB routed through the P3 matrix; P3 rows swapped; a within-row swap;
-Adobe green row `0.9`; `DISPLAYS` containing ProPhoto; `convert_srgb8` skipping the sRGB decode;
-the transform inverted.
+    #[test]
+    fn the_display_transform_maps_white_to_white() {
+        for s in OutputSpace::DISPLAYS {
+            let w = s.from_srgb([1.0, 1.0, 1.0]);
+            for (i, v) in w.iter().enumerate() {
+                assert!(
+                    (v - 1.0).abs() < 1e-4,
+                    "{}: white channel {i} became {v}",
+                    s.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn srgb_fits_inside_every_display_space() {
+        // ⚠ sRGB's gamut is strictly inside both destinations, so no in-range colour can leave
+        // [0, 1]. If this ever fails a matrix is wrong — it is not a case to start clamping.
+        for s in OutputSpace::DISPLAYS {
+            for c in [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
+                [0.2, 0.7, 0.4],
+            ] {
+                let out = s.from_srgb(c);
+                for (i, v) in out.iter().enumerate() {
+                    assert!(
+                        (-1e-6..=1.0 + 1e-6).contains(v),
+                        "{}: {c:?} channel {i} left the range: {v}",
+                        s.label()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_wider_container_needs_smaller_coordinates() {
+        // ⚠ The direction test, and the reason it is not merely "the value changed": an
+        // *inverted* matrix would also change the value, and would oversaturate exactly as the
+        // uncorrected preview does — i.e. it would look like no fix at all while passing.
+        // Red is the channel where sRGB and P3 differ most.
+        let red = OutputSpace::DisplayP3.from_srgb([1.0, 0.0, 0.0]);
+        assert!(
+            red[0] < 0.9,
+            "sRGB red should need less than full red in P3, got {red:?}"
+        );
+        assert!(
+            red[1] > 0.0 && red[2] > 0.0,
+            "sRGB red is less saturated than P3 red, so it needs some green and blue: {red:?}"
+        );
+    }
+
+    #[test]
+    fn the_adobe_green_row_is_what_it_looks_like() {
+        // ⚠ `SRGB_TO_ADOBE_RGB`'s middle row is [0, 1, 0], which reads as a copy-paste error.
+        // It is correct, and this pins it by an independent route: the luminance of sRGB green
+        // expressed in Adobe RGB, through Adobe's own Y coefficients, must come back to sRGB
+        // green's known 0.7152.
+        let g = OutputSpace::AdobeRgb.from_srgb([0.0, 1.0, 0.0]);
+        let y = 0.2974 * g[0] + 0.6273 * g[1] + 0.0753 * g[2];
+        assert!(
+            (y - 0.7152).abs() < 1e-3,
+            "sRGB green in Adobe RGB is {g:?}, luminance {y}, want 0.7152"
+        );
+    }
+
+    #[test]
+    fn prophoto_is_not_offered_as_a_display() {
+        // ⚠ No such monitor exists. Offering it is a pure footgun, and building the list from
+        // `ALL` is exactly how it would creep back in.
+        assert!(!OutputSpace::DISPLAYS.contains(&OutputSpace::ProPhoto));
+        for s in [
+            OutputSpace::Srgb,
+            OutputSpace::DisplayP3,
+            OutputSpace::AdobeRgb,
+        ] {
+            assert!(
+                OutputSpace::DISPLAYS.contains(&s),
+                "{} should be offered as a display",
+                s.label()
+            );
+        }
+    }
+
+    #[test]
+    fn the_eight_bit_helper_agrees_with_the_float_one() {
+        // ⚠ Two implementations of one transform, so they must be pinned to each other. The
+        // 8-bit path exists only for thumbnails, which have no float behind them; anywhere a
+        // float is available the float path is the correct one.
+        for s in OutputSpace::DISPLAYS {
+            for v in [0u8, 1, 64, 128, 200, 255] {
+                let src = [v, 255 - v, 128];
+                let eight = s.convert_srgb8(src);
+                let float = {
+                    let lin = src.map(|c| crate::srgb_to_linear(c as f32 / 255.0));
+                    let out = s.from_srgb(lin);
+                    out.map(|c| (s.encode(c) * 255.0).round() as u8)
+                };
+                for i in 0..3 {
+                    assert!(
+                        eight[i].abs_diff(float[i]) <= 1,
+                        "{}: {src:?} channel {i}: 8-bit {} vs float {}",
+                        s.label(),
+                        eight[i],
+                        float[i]
+                    );
+                }
+            }
+        }
+    }
+```
+
+- [ ] **Step 3: Run them to verify they fail**
+
+Run: `cargo test -p color output_space`
+Expected: FAIL — `no method named from_srgb`, `no associated item named DISPLAYS`.
+
+- [ ] **Step 4: Implement**
+
+In `crates/color/src/output_space.rs`, extend the `use` at the top:
+
+```rust
+use crate::spaces::{
+    apply, PROPHOTO_TO_ADOBE_RGB, PROPHOTO_TO_DISPLAY_P3, PROPHOTO_TO_SRGB, SRGB_TO_ADOBE_RGB,
+    SRGB_TO_DISPLAY_P3,
+};
+```
+
+Add inside `impl OutputSpace`, after `ALL`:
+
+```rust
+    /// The spaces a *display* can plausibly be.
+    ///
+    /// ⚠ Deliberately not `ALL`: no ProPhoto monitor exists, so offering it is a pure footgun.
+    /// Building a display list from `ALL` is exactly how it would creep back in.
+    pub const DISPLAYS: [OutputSpace; 3] = [
+        OutputSpace::Srgb,
+        OutputSpace::DisplayP3,
+        OutputSpace::AdobeRgb,
+    ];
+
+    /// Linear **sRGB** → this space's linear primaries.
+    ///
+    /// ⚠ The sibling of [`Self::from_working`], and a different starting point: that one leaves
+    /// the ProPhoto working space, this one leaves already-rendered sRGB output. The display
+    /// transform uses this because the preview pipeline still renders sRGB — see the spec for
+    /// why that is deliberate and not an oversight.
+    ///
+    /// ⚠ sRGB is the identity, returned without touching a matrix.
+    #[inline]
+    pub fn from_srgb(self, c: [f32; 3]) -> [f32; 3] {
+        match self {
+            OutputSpace::Srgb => c,
+            OutputSpace::DisplayP3 => apply(&SRGB_TO_DISPLAY_P3, c),
+            OutputSpace::AdobeRgb => apply(&SRGB_TO_ADOBE_RGB, c),
+            // Not reachable through `DISPLAYS`; defined so the match is total and a future
+            // caller cannot get silence. ProPhoto's primaries contain sRGB's, so the honest
+            // answer is the ordinary conversion.
+            OutputSpace::ProPhoto => {
+                apply(&crate::spaces::SRGB_TO_PROPHOTO, c)
+            }
+        }
+    }
+
+    /// Convert one **sRGB-encoded 8-bit** pixel into this space, encoded 8-bit.
+    ///
+    /// ⚠ For thumbnails only, which are 8-bit camera JPEGs with no float behind them. Anywhere
+    /// a float is available, use [`Self::from_srgb`] before quantizing instead: an 8-bit → 8-bit
+    /// conversion compresses the range and costs roughly 0.8 bits, which shows as banding on a
+    /// smooth gradient.
+    #[inline]
+    pub fn convert_srgb8(self, c: [u8; 3]) -> [u8; 3] {
+        if self == OutputSpace::Srgb {
+            return c;
+        }
+        let lin = c.map(|v| crate::srgb_to_linear(v as f32 / 255.0));
+        let out = self.from_srgb(lin);
+        [
+            (self.encode(out[0]) * 255.0).round() as u8,
+            (self.encode(out[1]) * 255.0).round() as u8,
+            (self.encode(out[2]) * 255.0).round() as u8,
+        ]
+    }
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `cargo test -p color`
+Expected: PASS — 26 existing plus 7 new.
+
+- [ ] **Step 6: Sabotage each new test and watch it fail**
+
+⚠ Confirm each sabotage **compiles** before believing a pass — an edit that fails to compile looks
+exactly like one that passes when you grep for a test result. Revert after each.
+
+| sabotage | must fail |
+|---|---|
+| `OutputSpace::Srgb => apply(&SRGB_TO_DISPLAY_P3, c)` in `from_srgb` | `srgb_is_bit_exactly_the_identity_for_the_display_transform` |
+| swap `SRGB_TO_DISPLAY_P3`'s first two rows | `the_display_transform_maps_white_to_white` |
+| `SRGB_TO_ADOBE_RGB` middle row → `[0.0, 0.9, 0.0]` | `the_adobe_green_row_is_what_it_looks_like` **and** `the_display_transform_maps_white_to_white` |
+| `DISPLAYS` → `[Srgb, DisplayP3, ProPhoto]` | `prophoto_is_not_offered_as_a_display` |
+| `convert_srgb8` skips the `srgb_to_linear` decode (use `v as f32 / 255.0` directly) | `the_eight_bit_helper_agrees_with_the_float_one` |
+
+⚠ For `a_wider_container_needs_smaller_coordinates`, the discriminating sabotage is **inverting the
+matrix** — replace `SRGB_TO_DISPLAY_P3` with `PROPHOTO_TO_DISPLAY_P3`, whose first entry is 1.63.
+That is the failure mode the test exists for: a preview that is *more* saturated, i.e. exactly the
+bug, while a "the value changed" test would pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings
+git add crates/color
+git commit -m "feat(color): sRGB to display-space conversion"
+```
 
 ---
 
-### Task 2: apply it when packing a frame ✅ landed as `c944998`
+### Task 2: the render path carries a display space
 
-**Files:** `crates/app/src/render_engine.rs`, `crates/app/src/decode_worker.rs`, `crates/app/src/main.rs`, `crates/app/examples/bench_preview.rs`
+⚠ Everything here passes `Srgb`, so **behaviour is unchanged and every golden stays byte-identical**.
+Task 3 makes it a real choice.
 
-- [x] **Step 1: Convert inside `pack`, in float, before quantizing.**
+**Files:**
+- Modify: `crates/app/src/render_engine.rs`
 
-⚠ In float, not on the packed bytes: an 8-bit → 8-bit conversion compresses the range and costs
-roughly 0.8 bits, which shows as banding on a smooth sky.
+- [ ] **Step 1: Write the failing test**
 
-⚠⚠ **In `pack`, not in the pipeline** — and that is necessary but **not sufficient**, which this
-task got wrong on the first pass. `shell.rs` derived the histogram from `frame.rgba`, i.e. from
-`pack`'s *output*, so the transform landing in `pack` made the histogram display-referred anyway.
-Fixed in a follow-up commit: `pack` quantizes to sRGB, takes the histogram from that, and only then
-converts; `RenderedFrame` carries the result. **Anything downstream of the packed bytes has this
-problem** — check what actually consumes them, not just where the transform sits.
+Add to the `tests` module in `crates/app/src/render_engine.rs`:
 
-- [x] **Step 2: `FrameSpec { max_dim, region, display_space }`.**
+```rust
+    #[test]
+    fn the_display_space_changes_the_packed_pixels_and_srgb_does_not() {
+        // ⚠ Two claims. The sRGB half is the regression guard — it is the default, and if it
+        // moved every preview would shift for people who never touched the setting. The P3 half
+        // proves the parameter is actually reaching `pack`; without it the setting would be a
+        // dropdown that does nothing, which is the failure this whole task risks.
+        let mut buf = ImageBuf::new(2, 1);
+        buf.set_pixel(0, 0, color::srgb_to_prophoto([0.9, 0.1, 0.1]));
+        buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
+        let buf = std::sync::Arc::new(buf);
 
-⚠ Threading the three individually pushed `render_cached` to 8 arguments and clippy's
-`too_many_arguments` fired. That was a fair complaint, not a lint to silence. `render_cached`
-destructures the spec on its first line, so both function bodies read exactly as before.
+        let srgb = render_once(&buf, &Edits::default(), 2, 1.0, color::OutputSpace::Srgb);
+        let p3 = render_once(
+            &buf,
+            &Edits::default(),
+            2,
+            1.0,
+            color::OutputSpace::DisplayP3,
+        );
 
-- [x] **Step 3: `the_display_space_changes_the_packed_pixels_and_srgb_does_not`**, sabotaged two
-      ways (pack ignoring the space; the transform inverted) and watched to fail both times.
+        assert_ne!(srgb.rgba, p3.rgba, "the display space did not reach `pack`");
+        // The corrected image must be *less* saturated in red, not more — an inverted transform
+        // would also differ, and would look like no fix at all.
+        assert!(
+            p3.rgba[0] < srgb.rgba[0],
+            "P3 red {} should be below sRGB red {}",
+            p3.rgba[0],
+            srgb.rgba[0]
+        );
+    }
+```
 
-⚠ The test asserts P3 red is **below** sRGB red, not merely different — an inverted transform also
-differs, and would reproduce the very bug this fixes while passing an `assert_ne!`.
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cargo test -p app --lib render_engine`
+Expected: FAIL — `render_once` takes 4 arguments, not 5.
+
+- [ ] **Step 3: Thread the space through**
+
+In `crates/app/src/render_engine.rs`:
+
+Add the field to `Request` (line ~51):
+
+```rust
+struct Request {
+    edits: Edits,
+    max_dim: usize,
+    region: Option<RegionRect>,
+    /// The display's primaries. ⚠ Applied in `pack`, *after* the pipeline — never as a
+    /// pipeline stage, or the histogram becomes display-referred. See the spec.
+    display_space: color::OutputSpace,
+}
+```
+
+Change `RenderEngine::request`:
+
+```rust
+    pub fn request(
+        &self,
+        edits: Edits,
+        max_dim: usize,
+        region: Option<RegionRect>,
+        display_space: color::OutputSpace,
+    ) {
+        let _ = self.req_tx.send(Request {
+            edits,
+            max_dim,
+            region,
+            display_space,
+        });
+    }
+```
+
+Change `pack` (line ~158):
+
+```rust
+/// Quantize a rendered frame for the GPU, converting into the display's primaries on the way.
+///
+/// ⚠ The conversion happens **here, in float, before quantizing** — not on the packed bytes.
+/// An 8-bit → 8-bit conversion compresses the range and costs roughly 0.8 bits, which shows as
+/// banding on a smooth sky. It also happens *after* the pipeline rather than inside it, so the
+/// histogram stays image-referred; see the spec for why that is the whole design.
+fn pack(
+    out: ImageBuf,
+    region: Option<Region>,
+    max_dim: usize,
+    display_space: color::OutputSpace,
+) -> RenderedFrame {
+    let out = if display_space == color::OutputSpace::Srgb {
+        out
+    } else {
+        // The image is sRGB-*encoded* here, so decode, change primaries, re-encode.
+        out.map_pixels(move |c| {
+            let lin = c.map(color::srgb_to_linear);
+            let conv = display_space.from_srgb(lin);
+            [
+                display_space.encode(conv[0]),
+                display_space.encode(conv[1]),
+                display_space.encode(conv[2]),
+            ]
+        })
+    };
+    RenderedFrame {
+        width: out.width(),
+        height: out.height(),
+        rgba: out.to_rgba8(),
+        region,
+        max_dim,
+    }
+}
+```
+
+Update the two `pack` call sites — line ~551 becomes
+`(pack(tail.run(input), region, max_dim, display_space), ran)` and line ~573 becomes
+`pack(build_pipeline(edits, scale).run(preview), None, max_dim, display_space)`. Thread
+`display_space` into whatever functions enclose them (`render_cached` and `render_once`), and pass
+`req.display_space` where the worker loop calls `render_cached`.
+
+`render_once`'s new signature:
+
+```rust
+pub fn render_once(
+    buffer: &ImageBuf,
+    edits: &Edits,
+    max_dim: usize,
+    source_scale: f32,
+    display_space: color::OutputSpace,
+) -> RenderedFrame {
+```
+
+- [ ] **Step 4: Fix the callers**
+
+`crates/app/src/decode_worker.rs:124` — pass `Srgb` with a comment saying why it does not matter:
+
+```rust
+                // ⚠ `Srgb` regardless of the display setting: this baseline texture is never
+                // drawn. `show_before` is an ordinary render now, and the baseline survives only
+                // for its dimensions (`develop/panel/geometry.rs`).
+                let baseline = render_once(
+                    &buffer,
+                    &Edits::default(),
+                    req.max_dim,
+                    source_scale,
+                    color::OutputSpace::Srgb,
+                );
+```
+
+`crates/app/src/main.rs:383` — `Session::request` gains the space in Task 3; for now pass
+`color::OutputSpace::Srgb` so this task compiles on its own:
+
+```rust
+        self.engine.request(edits, max_dim, region, color::OutputSpace::Srgb);
+```
+
+`crates/app/src/main.rs:1150` — `engine.request(edits.clone(), fit_cap, None, color::OutputSpace::Srgb);`
+
+The three `engine.request(..)` calls in `render_engine.rs`'s own tests (lines ~1105, ~1143, ~1155)
+each gain a trailing `color::OutputSpace::Srgb`.
+
+⚠ Every existing assertion in those tests stays **verbatim**. Unchanged assertions still passing is
+the evidence this task changed no behaviour.
+
+- [ ] **Step 5: Run the whole suite**
+
+Run: `cargo test --all`
+Expected: PASS, 734 + 1 new. ⚠ **All 39 goldens byte-identical** — this task touches no pipeline code.
+
+- [ ] **Step 6: Commit**
+
+```bash
+cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings
+git add -A
+git commit -m "feat(app): the render path carries a display space"
+```
 
 ---
 
-### Task 3: the setting, the dropdown, and the thumbnails
+### Task 3: the setting, and the canvas is corrected
 
 **Files:**
 - Modify: `crates/app/src/settings.rs`
-- Modify: `crates/app/src/thumb_loader.rs`
-- Modify: `crates/app/src/modals/settings.rs`
 - Modify: `crates/app/src/main.rs`
+- Modify: `crates/app/src/modals/settings.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing test**
 
-In `crates/app/src/settings.rs`'s test module:
-
-```rust
-#[test]
-fn a_settings_file_from_before_the_display_space_still_loads() {
-    // ⚠ `SettingsStore::load()` is infallible, so a field that fails to parse silently reverts
-    // *every* setting. What this actually discriminates is the **value**: the default must be
-    // sRGB, because a wide space arriving by default would change what every existing user sees
-    // without them asking for it.
-    let json = r#"{"confirm_preset_delete":true}"#;
-    let s: Settings = serde_json::from_str(json).expect("older settings should load");
-    assert_eq!(s.display_space, color::OutputSpace::Srgb);
-}
-```
-
-In `crates/app/src/thumb_loader.rs`'s test module:
+Add to the `tests` module in `crates/app/src/settings.rs`:
 
 ```rust
-#[test]
-fn a_thumbnail_is_converted_into_the_display_space() {
-    // ⚠ Not optional polish: the filmstrip sits directly beside the canvas showing the same
-    // photo, so converting only the canvas leaves a visibly more saturated strip next to a
-    // corrected image — a mismatch more noticeable than the original error.
-    let red = [255u8, 0, 0];
-    let srgb = color::OutputSpace::Srgb.convert_srgb8(red);
-    let p3 = color::OutputSpace::DisplayP3.convert_srgb8(red);
-    assert_eq!(srgb, red, "sRGB must be the identity");
-    assert!(p3[0] < red[0], "P3 red {} should be below sRGB red 255", p3[0]);
-    assert!(p3[1] > 0 && p3[2] > 0, "P3 red needs some green and blue: {p3:?}");
-}
+    #[test]
+    fn a_settings_file_from_before_the_display_space_still_loads() {
+        // ⚠ `SettingsStore::load()` is infallible, so a field that fails to parse silently
+        // reverts *every* setting — worse than an error. This is the guard, and the same one
+        // `view_demosaic` and `export` each needed.
+        //
+        // ⚠ What it discriminates is the **value**: the default must be sRGB. A wide space
+        // arriving by default would change every existing user's preview with no action from
+        // them, which is the opposite of what a colour-correctness feature should do.
+        let json = r#"{"confirm_preset_delete":true}"#;
+        let s: Settings = serde_json::from_str(json).expect("an older settings file should load");
+        assert_eq!(s.display_space, color::OutputSpace::Srgb);
+    }
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [ ] **Step 2: Run it to verify it fails**
 
-Run: `cargo test -p app --lib settings thumb_loader`
-Expected: FAIL — no field `display_space`.
+Run: `cargo test -p app --lib settings`
+Expected: FAIL — no field `display_space` on `Settings`.
 
 - [ ] **Step 3: Add the field**
 
-In `crates/app/src/settings.rs`, add to `Settings` (check whether the struct carries a
-**container-level** `#[serde(default)]` first — if it does, do **not** add a field-level one, which
-would be redundant; that exact redundancy was found and removed in piece B):
+In `crates/app/src/settings.rs`, add to `Settings` after `view_demosaic`:
 
 ```rust
-    /// The primaries of the display Rustroom is being viewed on.
+    /// The primaries of the monitor, so the preview can be converted into them.
     ///
-    /// ⚠ Applied to the preview and to thumbnails only, never to an export, and never inside the
-    /// pipeline — see `render_engine::pack`.
+    /// ⚠ Applied **after** the pipeline, in `render_engine::pack`, never as a pipeline stage —
+    /// putting it in the pipeline would silently make the histogram display-referred.
+    ///
+    /// ⚠ Defaults to `Srgb`, which is the identity, so nobody who ignores this sees any change.
     pub display_space: color::OutputSpace,
 ```
 
-and to its `Default`:
+and to its `Default` impl:
 
 ```rust
             display_space: color::OutputSpace::default(),
 ```
 
-- [ ] **Step 4: Convert thumbnails at load**
+⚠ Check whether `Settings` carries a container-level `#[serde(default)]`. If it does, **do not**
+add a field-level one — it would be redundant and imply a guarantee it is not the source of. If it
+does not, add `#[serde(default)]` to the field.
 
-`ThumbLoader`'s load function produces a `Thumbnail { width, height, rgba }`. Apply the space to
-its RGBA in place, leaving alpha untouched:
+- [ ] **Step 4: Give `Session` the space and supply it from one place**
+
+In `crates/app/src/main.rs`, add to `struct Session` beside `hist`:
 
 ```rust
-/// Convert a thumbnail's pixels into the display's primaries.
-///
-/// ⚠ 8-bit → 8-bit here, unlike the canvas: a thumbnail is a camera JPEG with no float behind
-/// it, so there is no precision to preserve.
-fn convert_thumb(thumb: &mut Thumbnail, space: color::OutputSpace) {
-    if space == color::OutputSpace::Srgb {
-        return;
-    }
-    for px in thumb.rgba.chunks_exact_mut(4) {
-        let out = space.convert_srgb8([px[0], px[1], px[2]]);
-        px[..3].copy_from_slice(&out);
-    }
-}
+    /// The display's primaries, copied from `Settings` when the session opens.
+    ///
+    /// ⚠ Lives here rather than being passed per call so that `Session::request` — the single
+    /// choke point for all seven request sites — can supply it without any of them changing.
+    display_space: color::OutputSpace,
 ```
 
-⚠ Take the space as a parameter on `ThumbLoader::new` (captured like `DecodeWorker`'s decode fn),
-not per request — the caller of a per-thumbnail request has no business knowing about it.
+Change `Session::request` (line ~382):
 
-- [ ] **Step 5: Pass the setting from `main.rs`**
+```rust
+    fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
+        self.engine.request(edits, max_dim, region, self.display_space);
+    }
+```
 
-Every `FrameSpec` built in `main.rs` takes `display_space: self.settings.display_space` instead of
-`color::OutputSpace::Srgb`. `FrameSpec::fit` stays sRGB and is used only by tests and reference
-paths.
+Set it where the `Session` is constructed (`main.rs:~1158`, the `Session { .. }` literal) with
+`display_space: self.settings.display_space,`, and change the nearby
+`engine.request(edits.clone(), fit_cap, None, color::OutputSpace::Srgb);` to pass
+`self.settings.display_space`.
 
-⚠ The before/after baseline in `decode_worker.rs` stays `Srgb` and must not change: it is never
-drawn (`show_before` is an ordinary render), and survives only for its dimensions.
+Add the apply function beside `apply_view_demosaic`:
 
-- [ ] **Step 6: The dropdown**
+```rust
+    /// Adopt a new display space: re-render the open photo, and drop the thumbnail textures so
+    /// they are rebuilt through the new conversion.
+    ///
+    /// ⚠ The caller must compare against the current value first — the Settings dialog body runs
+    /// every frame, so an unguarded call would re-render sixty times a second. Same rule
+    /// `apply_view_demosaic` follows.
+    fn apply_display_space(&mut self, space: color::OutputSpace, ctx: &egui::Context) {
+        self.settings.display_space = space;
+        self.settings_store.save(&self.settings);
+        if let Some(s) = &mut self.session {
+            s.display_space = space;
+            let tool = self.tool;
+            s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+        }
+        // Thumbnails are converted at upload, so the textures have the old space baked in.
+        // Reloading is the only way back; it streams in parallel, so the visible cells refill
+        // quickly rather than the window freezing.
+        if let Some(lib) = &mut self.library {
+            for t in lib.thumbs.iter_mut() {
+                *t = None;
+            }
+            lib.loader = rustroom_app::thumb_loader::ThumbLoader::new(
+                lib.entries.iter().map(|e| e.path.clone()).collect(),
+                {
+                    let ctx = ctx.clone();
+                    move || ctx.request_repaint()
+                },
+            );
+        }
+    }
+```
 
-In `crates/app/src/modals/settings.rs`:
+⚠ Match the surrounding code for `settings_store`'s real name and for how `Library`'s loader was
+originally constructed — read the folder-open path in `main.rs` and mirror it exactly rather than
+inventing a second construction.
+
+- [ ] **Step 5: Add the dropdown**
+
+In `crates/app/src/modals/settings.rs`, mirror the `view_demosaic` pattern. Near the top, beside
+`let mut tier = app.settings.view_demosaic;`:
+
+```rust
+    let mut display_space = app.settings.display_space;
+```
+
+In the body, after the `view_demosaic` row:
 
 ```rust
         ui.horizontal(|ui| {
             ui.label("Display");
             egui::ComboBox::from_id_salt("display_space_pick")
-                .selected_text(app.settings.display_space.label())
+                .selected_text(display_space.label())
                 .show_ui(ui, |ui| {
+                    // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists.
                     for s in color::OutputSpace::DISPLAYS {
-                        ui.selectable_value(&mut app.settings.display_space, s, s.label());
+                        ui.selectable_value(&mut display_space, s, s.label());
                     }
                 });
         });
         theme::hint(
             ui,
-            "The primaries of your monitor. Most monitors are sRGB; recent Apple displays \
-             and many laptops are Display P3. Affects only what you see, never an export.",
+            "The primaries of your monitor. Most are sRGB; Apple laptops and recent phones \
+             are Display P3. Setting this wrong makes the preview disagree with what you \
+             export — it does not change the exported file.",
         );
 ```
 
-- [ ] **Step 7: Re-render and reload thumbnails on a change**
+and beside the existing `if tier != app.settings.view_demosaic { .. }`:
 
-⚠ **Guarded by a change comparison** — the Settings dialog body runs every frame, the rule
-`apply_view_demosaic` already follows. On change: persist, rebuild the `ThumbLoader` with the new
-space, clear loaded thumbnails so they reload, and request a fresh render of the open photo.
-
-- [ ] **Step 8: Run the tests to verify they pass**
-
-Run: `cargo test --all`
-Expected: PASS. ⚠ **All 39 goldens byte-identical** — `pipeline` was not touched, and if a golden
-moved something went into the pipeline that should not have.
-
-- [ ] **Step 9: Sabotage**
-
-| sabotage | must fail |
-|---|---|
-| `Default` gives `DisplayP3` | `a_settings_file_from_before_the_display_space_still_loads` |
-| `convert_thumb` returns early always | `a_thumbnail_is_converted_into_the_display_space` |
-
-Confirm each compiles before believing the result.
-
-- [ ] **Step 10: Commit**
-
-```bash
-cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all
-git add -A
-git commit -m "feat(app): a display-space setting for the preview and thumbnails"
+```rust
+    if display_space != app.settings.display_space {
+        app.apply_display_space(display_space, ctx);
+    }
 ```
 
-⚠ Check clippy's **exit code**, not grep output. A `cargo clippy … | grep` pipeline reports grep's
-status, which let a failing clippy through once in this feature.
+- [ ] **Step 6: Run the suite**
+
+Run: `cargo test --all`
+Expected: PASS. All 39 goldens byte-identical.
+
+- [ ] **Step 7: Commit**
+
+```bash
+cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings
+git add -A
+git commit -m "feat(app): a display-space setting, applied to the canvas"
+```
 
 ---
 
-### Task 4: verify in the app, then update the docs
+### Task 4: thumbnails are converted too
+
+**Files:**
+- Modify: `crates/app/src/shell.rs`
+
+⚠ **Not optional polish.** The filmstrip sits directly beside the canvas showing the same photo, so
+correcting only the canvas leaves a visibly more saturated strip next to a corrected image — a
+mismatch more noticeable than the original error.
+
+- [ ] **Step 1: Convert at the upload site**
+
+In `crates/app/src/shell.rs`, replace the thumbnail upload block (around line 100):
+
+```rust
+        // Pull finished thumbnails into textures.
+        if let Some(lib) = &mut self.library {
+            let space = self.settings.display_space;
+            for res in lib.loader.drain() {
+                if let (Some(t), true) = (res.thumb, res.index < lib.thumbs.len()) {
+                    // ⚠ Converted here rather than in `ThumbLoader`, for two reasons: its
+                    // loader is a bare `fn` pointer that cannot capture the space, and its six
+                    // tests stay untouched this way.
+                    //
+                    // ⚠ 8-bit in, 8-bit out, unlike the canvas — a thumbnail is a camera JPEG
+                    // with no float behind it, so there is no precision to preserve.
+                    let mut rgba = t.rgba;
+                    if space != color::OutputSpace::Srgb {
+                        for px in rgba.chunks_exact_mut(4) {
+                            let out = space.convert_srgb8([px[0], px[1], px[2]]);
+                            px[0] = out[0];
+                            px[1] = out[1];
+                            px[2] = out[2];
+                        }
+                    }
+                    let img =
+                        egui::ColorImage::from_rgba_unmultiplied([t.width, t.height], &rgba);
+                    lib.thumbs[res.index] = Some(ctx.load_texture(
+                        format!("thumb{}", res.index),
+                        img,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+            }
+        }
+```
+
+⚠ If the borrow checker objects to reading `self.settings` while `&mut self.library` is held, hoist
+`let space = self.settings.display_space;` **above** the `if let Some(lib) = &mut self.library`.
+`OutputSpace` is `Copy`, so the hoist is free — the same pattern the tool hoist uses elsewhere in
+this crate.
+
+- [ ] **Step 2: Verify it builds and the suite is green**
+
+Run: `cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all`
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add -A
+git commit -m "feat(app): thumbnails follow the display space too"
+```
+
+---
+
+### Task 5: verify in the app, then update the docs
 
 - [ ] **Step 1: Full green check**
 
@@ -271,31 +759,39 @@ status, which let a failing clippy through once in this feature.
 cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all
 ```
 
-Expected: PASS, 39 goldens byte-identical.
+Expected: PASS. ⚠ **All 39 goldens byte-identical** — this feature touches no pipeline code at all,
+so a moved golden means something went in the wrong place.
 
-- [ ] **Step 2: Launch the GUI and look**
+- [ ] **Step 2: Launch the GUI and check by hand**
 
 ```bash
 cargo run --release -p app
 ```
 
-1. Settings shows a **Display** dropdown with three entries and no ProPhoto.
-2. Switching to **Display P3** visibly desaturates the canvas — on a P3 panel this is the
-   correction; strongly saturated reds and greens move most.
-3. The filmstrip thumbnails move **with** the canvas, not against it.
-4. ⚠ **The histogram does not move at all.** That is the property the whole design protects; if it
-   shifts, the transform has leaked into the pipeline.
-5. Export is unaffected — export a JPEG and confirm it is byte-identical to one exported with the
-   setting on sRGB.
+Check, in order:
+
+1. Settings shows a **Display** dropdown with exactly three entries — no ProPhoto.
+2. Open a photo with a saturated subject. Switch Display to **Display P3**: the canvas should
+   become **less** saturated. ⚠ If it becomes *more* saturated the matrix is inverted — that is
+   the failure `a_wider_container_needs_smaller_coordinates` guards, and it looks like "the
+   setting does nothing helpful" rather than like a bug.
+3. The filmstrip thumbnails should shift the same way, not stay saturated beside a corrected
+   canvas.
+4. **The histogram must not move at all** when the setting changes. This is the property the whole
+   design exists to protect; if it moves, the transform ended up inside the pipeline.
+5. Set Display P3 and compare the canvas against the same photo exported to sRGB and opened in
+   Preview — they should now match. That is the actual acceptance test for this feature.
+6. Restart the app: the setting persists.
 
 - [ ] **Step 3: Update `CLAUDE.md`**
 
-A section in the house style: what landed, the ⚠ findings (the transform being a post-step and
-why; the luminance test and the two permutations that survived weaker tests; `FrameSpec` and the
-clippy limit; ProPhoto excluded from `DISPLAYS`), the test count, and the caveats from the spec —
-no soft-proofing, no calibration, no auto-detection. Update the **▶ NEXT ACTION** block: D is done,
-remaining are **C** (camera input profiles), **M3.2** lens corrections, **M3.4** virtual copies,
-plus the named macOS follow-up.
+Add a section under "Current status" in the house style of those around it: what landed, the ⚠
+findings (wgpu leaving `CAMetalLayer.colorspace` nil and Apple's header saying nil means no colour
+matching; the measured display primaries and the 0.897-vs-1.0 figure; why the transform is a
+post-step and not a pipeline stage, i.e. the histogram; the `[0, 1, 0]` Adobe row; ProPhoto
+excluded from `DISPLAYS`), the test count, and the caveats from the spec's "What this does not do".
+Update the **▶ NEXT ACTION** block: D is done; remaining are the **macOS `CAMetalLayer.colorspace`
+follow-up**, **C** camera input profiles, **M3.2** lens corrections, **M3.4** virtual copies.
 
 - [ ] **Step 4: Commit**
 
@@ -304,18 +800,47 @@ git add CLAUDE.md
 git commit -m "docs: record the display profile for the preview"
 ```
 
-⚠ **Do not push.**
+⚠ **Do not push.** The user pushes.
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** matrices and `from_srgb` (Task 1) ✓; `DISPLAYS` excluding ProPhoto (Task 1) ✓;
-transform in `pack`, in float, outside the pipeline (Task 2) ✓; histogram untouched (Task 2 note,
-Task 4 check) ✓; thumbnails converted (Task 3) ✓; setting with sRGB default (Task 3) ✓; dropdown
-(Task 3) ✓; change-guarded re-render and reload (Task 3) ✓; caveats recorded (Task 4) ✓; the macOS
-follow-up named (Task 4) ✓.
+**Spec coverage:** the two matrices and `from_srgb` (Task 1) ✓; `DISPLAYS` excluding ProPhoto
+(Task 1) ✓; conversion in float inside `pack` (Task 2) ✓; pipeline and histogram untouched
+(Tasks 2, 5 step 2 check 4) ✓; `Settings.display_space` with the serde-default guard (Task 3) ✓;
+the dropdown and the change guard (Task 3) ✓; thumbnails converted at upload with a reload on
+change (Tasks 3, 4) ✓; egui chrome deliberately unconverted (no task — it is the absence of one,
+stated in the spec) ✓; every test the spec names (Task 1 steps 2 and 6, Task 2 step 1) ✓; caveats
+recorded (Task 5) ✓.
 
-**Type consistency:** `OutputSpace::{from_srgb, convert_srgb8, DISPLAYS, label}` are used with
-those names throughout. `FrameSpec { max_dim, region, display_space }` and `FrameSpec::fit` match
-their definition in Task 2 and their uses in Task 3.
+**Type consistency:** `OutputSpace::{from_srgb, convert_srgb8, DISPLAYS, encode, label}` are used
+under those exact names in Tasks 2, 3 and 4. `pack(out, region, max_dim, display_space)` and
+`render_once(buffer, edits, max_dim, source_scale, display_space)` match every call site listed.
+`Session.display_space` is set in Task 3 and read by `Session::request` in the same task.
+`apply_display_space(space, ctx)` is defined in Task 3 step 4 and called in step 5.
+
+---
+
+## What execution actually found
+
+Appended after the fact. The plan above is the original, forward-looking one and is left
+unedited; these are the things it did not anticipate.
+
+- **⚠⚠ A row swap in `SRGB_TO_DISPLAY_P3` passed every test Task 1 originally specified.** Both of
+  its first two rows sum to 1.0, so white still maps to white; the magnitudes stay in range; and
+  "red needs less than full red" is still true of the wrong row. A *within-row* swap then survived
+  even a per-channel dominance check. `the_display_transform_preserves_luminance` is what catches
+  both — Y is physical, so expressing a colour in different primaries cannot change it.
+- **⚠⚠ "Not in the pipeline" was necessary but not sufficient.** The transform went into
+  `render_engine::pack` as planned, but `shell.rs` derived the histogram from `pack`'s *output*,
+  so the histogram became display-referred anyway. `pack` now quantizes to sRGB, takes the
+  histogram from that, and only then converts. **Check what consumes the bytes, not just where the
+  transform sits.**
+- **⚠⚠ The feature shipped looking inert.** The render issued when a photo *opens* used
+  `FrameSpec::fit`, a convenience constructor hardcoding sRGB, so every photo opened uncorrected.
+  Found by one env-gated `eprintln` in `pack`, not by reading the code — every call site reads
+  correctly in isolation. `FrameSpec::fit` is now `#[cfg(test)]` so this cannot recur.
+- **⚠ `FrameSpec` itself was unplanned**: threading `max_dim`/`region`/`display_space`
+  individually pushed `render_cached` past clippy's argument limit, which was a fair complaint
+  rather than a lint to silence.
