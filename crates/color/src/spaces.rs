@@ -68,6 +68,17 @@ pub const SRGB_TO_ADOBE_RGB: [[f32; 3]; 3] = [
     [0.0000000000, 0.0411619485, 0.9588380515],
 ];
 
+/// XYZ (D50) → linear ProPhoto (ROMM).
+///
+/// ⚠ **No chromatic adaptation, and that is not an omission.** ProPhoto *is* a D50 space, so a
+/// D50 XYZ needs none — verified: D50 white `(0.9642, 1.0, 0.8249)` maps to exactly `(1, 1, 1)`.
+/// Inserting a Bradford step here would be a second, wrong adaptation.
+pub const XYZ_D50_TO_PROPHOTO: [[f32; 3]; 3] = [
+    [1.3459461131, -0.2556023263, -0.0511079113],
+    [-0.5446046140, 1.5081754886, 0.0205264640],
+    [0.0000000000, 0.0000000000, 1.2122681537],
+];
+
 /// Apply a 3×3 matrix to a pixel.
 #[inline]
 pub fn apply(m: &[[f32; 3]; 3], c: [f32; 3]) -> [f32; 3] {
