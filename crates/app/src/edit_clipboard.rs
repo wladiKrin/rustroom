@@ -132,6 +132,10 @@ mod tests {
                 amount: 55.0,
                 ..Default::default()
             },
+            lens_correction: edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            },
             vignette: edit_model::Vignette {
                 amount: -25.0,
                 ..Default::default()

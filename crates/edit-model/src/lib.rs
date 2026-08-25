@@ -829,6 +829,50 @@ pub struct MaskedAdjustment {
     pub adjustments: LocalAdjustments,
 }
 
+
+/// Optical corrections read from a lens profile. Neutral when nothing is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LensCorrection {
+    /// Correct geometric distortion (barrel / pincushion).
+    pub distortion: bool,
+    /// Correct transverse chromatic aberration.
+    pub tca: bool,
+    /// Correct light falloff toward the corners.
+    pub vignetting: bool,
+    /// How far to scale the corrected image, 0..100.
+    ///
+    /// ⚠ Only **pincushion** correction empties the frame — it reads from beyond the sensor at
+    /// the corners. Barrel correction reads from *inside*, so it never leaves a gap and scaling
+    /// it discards data for nothing. A single fixed value is therefore wrong at one end or the
+    /// other of any zoom, which is why this is a slider rather than a constant.
+    pub scale: f32,
+}
+
+impl Default for LensCorrection {
+    /// ⚠ Hand-written, **not** derived: `scale` is 100 at neutral, and the container-level
+    /// `#[serde(default)]` fills a missing field from this. A derived `Default` would give every
+    /// partial sidecar `scale: 0`, silently.
+    fn default() -> Self {
+        Self {
+            distortion: false,
+            tca: false,
+            vignetting: false,
+            scale: 100.0,
+        }
+    }
+}
+
+impl LensCorrection {
+    /// True when this actually changes pixels.
+    ///
+    /// The three corrections only; `scale` is a modifier that does nothing until one of them is
+    /// on — the rule [`NoiseReduction::is_active`] and [`Vignette::is_active`] follow.
+    pub fn is_active(&self) -> bool {
+        self.distortion || self.tca || self.vignetting
+    }
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -860,6 +904,7 @@ pub struct Edits {
     pub noise_reduction: NoiseReduction,
     pub vignette: Vignette,
     pub sharpening: Sharpening,
+    pub lens_correction: LensCorrection,
     pub geometry: Geometry,
     /// Local adjustments, each confined to a mask. Applied in order, after the global
     /// per-pixel adjustments and before the vignette.
@@ -908,6 +953,7 @@ impl Edits {
             dehaze,
             noise_reduction,
             sharpening,
+            lens_correction,
             vignette,
             geometry,
             masks,
@@ -936,6 +982,7 @@ impl Edits {
         if groups.detail {
             self.noise_reduction = *noise_reduction;
             self.sharpening = *sharpening;
+            self.lens_correction = *lens_correction;
         }
         if groups.effects {
             self.vignette = *vignette;
@@ -1637,6 +1684,12 @@ mod tests {
                 amount: 60.0,
                 ..Default::default()
             },
+            lens_correction: LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: false,
+                scale: 60.0,
+            },
             vignette: Vignette {
                 amount: -30.0,
                 ..Default::default()
@@ -2287,5 +2340,52 @@ mod tests {
         ] {
             assert!(g.is_active(), "{g:?} should be active");
         }
+    }
+
+    #[test]
+    fn a_sidecar_without_scale_still_gets_a_hundred() {
+        // ⚠ Third instance of this trap, after `RadialGradient` and `ColorGrading`: `scale` is
+        // 100 at neutral, so `Default` must be hand-written. A derived one would give every
+        // partial sidecar zero scale — black edges — silently.
+        let e: Edits = serde_json::from_str(r#"{"lens_correction":{"distortion":true}}"#).unwrap();
+        assert_eq!(e.lens_correction.scale, 100.0);
+        assert!(e.lens_correction.distortion);
+    }
+
+    #[test]
+    fn the_lens_scale_alone_is_inert() {
+        let l = LensCorrection {
+            scale: 0.0,
+            ..LensCorrection::default()
+        };
+        assert!(!l.is_active());
+    }
+
+    #[test]
+    fn any_enabled_lens_correction_is_active() {
+        for l in [
+            LensCorrection {
+                distortion: true,
+                ..LensCorrection::default()
+            },
+            LensCorrection {
+                tca: true,
+                ..LensCorrection::default()
+            },
+            LensCorrection {
+                vignetting: true,
+                ..LensCorrection::default()
+            },
+        ] {
+            assert!(l.is_active(), "{l:?} should be active");
+        }
+    }
+
+    #[test]
+    fn lens_correction_is_neutral_by_default() {
+        // ⚠ Load-bearing. The GUI turns these on by preference for photos with no sidecar; the
+        // op-list default must stay neutral so the CLI, the goldens and every existing sidecar
+        // are untouched.
+        assert!(!LensCorrection::default().is_active());
     }
 }

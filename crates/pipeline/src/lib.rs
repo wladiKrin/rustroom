@@ -542,6 +542,12 @@ mod tests {
                 masking: 40.0,
                 ..Default::default()
             },
+            lens_correction: edit_model::LensCorrection {
+                distortion: true,
+                tca: false,
+                vignetting: true,
+                scale: 80.0,
+            },
             geometry: edit_model::Geometry {
                 angle: 2.0,
                 orientation: edit_model::Orientation {
