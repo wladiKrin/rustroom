@@ -1076,7 +1076,7 @@ fn grading_cases() -> Vec<(&'static str, Edits)> {
 fn the_grading_goldens_do_not_clip() {
     for (name, edits) in grading_cases() {
         let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(grade_ramp_chart()));
-        let hi = bytes.iter().filter(|&&c| c >= 255).count();
+        let hi = bytes.iter().filter(|&&c| c == 255).count();
         let lo = bytes.iter().filter(|&&c| c == 0).count();
         let max = bytes.iter().max().copied().unwrap();
         assert!(
