@@ -135,7 +135,24 @@ the straighten. Consequences, all favourable:
   key: the render engine is rebuilt per photo, so per-photo constants cannot vary within one cache.
 
 **Resampling.** `apply_geometry_distortion` returns an output→source coordinate map; sample the
-source bilinearly, as `GeometryStage` already does for rotation. With TCA enabled,
+source bilinearly, as `GeometryStage` already does for rotation.
+
+⚠⚠ **THERE IS NO COMBINED SUBPIXEL+GEOMETRY CALL IN THIS PORT.** The C library has
+`ApplySubpixelGeometryDistortion`; here `apply_subpixel_distortion` applies **TCA only** — it seeds
+the coordinates from the pixel grid, applies the TCA kernel and un-normalises, with no distortion
+term. So distortion and TCA cannot be obtained as one map from the public API.
+
+**Resolution: sum the displacements, one resample.** Evaluate both maps on the same output grid and
+take `source_c = distortion(x, y) + (tca_c(x, y) - (x, y))`. This is exact to first order and the
+neglected cross term is bounded: TCA is ~0.06% of radius at worst in these profiles and distortion
+~3.5%, so at a 3700 px radius the error is ~0.08 px — an order of magnitude below the resampling
+kernel. The alternative, two sequential resampling passes, would double the cost *and* soften the
+image through double interpolation, which is a far larger error than the one being avoided.
+
+⚠ Guard it with tests that pin the degenerate cases exactly: with TCA off the result must equal
+distortion-only, and with distortion off it must equal TCA-only.
+
+With TCA enabled,
 `apply_subpixel_distortion` gives a per-channel map, so three samples per pixel. Samples outside the
 source frame produce black.
 
@@ -254,3 +271,6 @@ Two, following M3.1a and M3.3:
 8. **The autoscale is our own implementation, not the crate's**, because the crate has none. It
    follows `GetAutoScale`'s approach but is not validated against it; the synthetic-profile tests are
    the evidence.
+9. **Distortion and TCA are composed by summing displacements**, not by lensfun's exact
+   composition, because the port exposes no combined call. Error bounded at ~0.08 px; see *The
+   stage*.
