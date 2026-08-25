@@ -1110,3 +1110,134 @@ fn the_four_grading_goldens_differ_from_one_another() {
         }
     }
 }
+
+/// A grid of straight lines — the only chart on which distortion is legible at all.
+///
+/// ⚠ A ramp or a colour chart cannot show a geometric correction; straight lines bowing is the
+/// whole visible effect. Lines are two pixels wide so a sub-pixel resample cannot erase them.
+fn grid_chart() -> ImageBuf {
+    const GW: usize = 96;
+    const GH: usize = 64;
+    let mut img = ImageBuf::new(GW, GH);
+    for y in 0..GH {
+        for x in 0..GW {
+            let on_line = x % 16 < 2 || y % 16 < 2;
+            let v = if on_line { 0.85 } else { 0.12 };
+            set_srgb(&mut img, x, y, [v, v, v]);
+        }
+    }
+    img
+}
+
+/// A synthetic lens with coefficients chosen here, not read from the bundled database.
+///
+/// ⚠ This is what makes lens-correction goldens possible at all: a real profile needs a real
+/// camera and lens, which a synthetic chart does not have, and a fixture-gated test is no
+/// evidence in CI.
+///
+/// ⚠ The distortion is **pincushion** (positive `b`), deliberately: it is the direction that
+/// empties the frame, so it is the one whose scale slider has anything to do.
+fn lens_corrector(c: lens_profile::Corrections, w: usize, h: usize) -> lens_profile::Corrector {
+    let xml = r#"<lensdatabase version="1">
+        <camera><maker>TestMaker</maker><model>TestCam</model>
+            <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+        <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+            <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+            <calibration>
+                <distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/>
+                <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
+                <vignetting model="pa" focal="50" aperture="2.8" distance="1000"
+                            k1="-0.5" k2="0.0" k3="0.0"/>
+            </calibration></lens>
+    </lensdatabase>"#;
+    let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+    let p = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
+    lens_profile::Corrector::new(
+        &p,
+        &lens_profile::Shot {
+            focal: 50.0,
+            aperture: 2.8,
+        },
+        w,
+        h,
+        c,
+    )
+    .expect("corrector")
+}
+
+fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
+    let chart = grid_chart();
+    let (w, h) = (chart.width(), chart.height());
+    let edits = Edits {
+        lens_correction: edit_model::LensCorrection {
+            distortion: c.distortion,
+            tca: c.tca,
+            vignetting: c.vignetting,
+            scale: c.scale,
+        },
+        ..Edits::default()
+    };
+    let (prefix, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        &edits,
+        RenderScale::FULL,
+        None,
+        None,
+        color::OutputSpace::Srgb,
+        Some(lens_corrector(c, w, h)),
+    );
+    let mut stages = prefix.into_stages();
+    stages.extend(tail.into_stages());
+    compare_or_update(name, pipeline::Pipeline::new(stages).run(chart));
+}
+
+#[test]
+fn golden_lens_distortion() {
+    check_lens_golden(
+        "lens_distortion",
+        lens_profile::Corrections {
+            distortion: true,
+            tca: false,
+            vignetting: false,
+            scale: 0.0,
+        },
+    );
+}
+
+#[test]
+fn golden_lens_distortion_scaled() {
+    check_lens_golden(
+        "lens_distortion_scaled",
+        lens_profile::Corrections {
+            distortion: true,
+            tca: false,
+            vignetting: false,
+            scale: 100.0,
+        },
+    );
+}
+
+#[test]
+fn golden_lens_tca() {
+    check_lens_golden(
+        "lens_tca",
+        lens_profile::Corrections {
+            distortion: false,
+            tca: true,
+            vignetting: false,
+            scale: 0.0,
+        },
+    );
+}
+
+#[test]
+fn golden_lens_vignetting() {
+    check_lens_golden(
+        "lens_vignetting",
+        lens_profile::Corrections {
+            distortion: false,
+            tca: false,
+            vignetting: true,
+            scale: 0.0,
+        },
+    );
+}
