@@ -134,16 +134,35 @@ pub struct ExportReport {
 ///
 /// A source with no file stem falls back to `export`, so a pathological path still yields a
 /// writable name rather than panicking.
-pub fn dest_for(dir: &Path, source: &Path, index: usize, format: ExportFormat) -> PathBuf {
+/// Where one export lands.
+///
+/// ⚠ **Two numbers, two meanings, two separators.** `copy` is which virtual copy this is — a
+/// property of the photo, stable forever, rendered `_N`. `dedup` is how many files already wanted
+/// this name in this folder — a property of the destination, assigned at export time, rendered
+/// `-N`. Merging them into one scheme would make `a-2.jpg` ambiguous between "copy 2" and "the
+/// third file called a", and would silently shift a copy's number whenever its plain name happened
+/// to be taken.
+pub fn dest_for(
+    dir: &Path,
+    source: &Path,
+    copy: u32,
+    dedup: usize,
+    format: ExportFormat,
+) -> PathBuf {
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
     let ext = format.extension();
-    let name = if index == 0 {
-        format!("{stem}.{ext}")
+    let copy_suffix = if copy == 0 {
+        String::new()
     } else {
-        format!("{stem}-{index}.{ext}")
+        format!("_{copy}")
+    };
+    let name = if dedup == 0 {
+        format!("{stem}{copy_suffix}.{ext}")
+    } else {
+        format!("{stem}{copy_suffix}-{dedup}.{ext}")
     };
     dir.join(name)
 }
@@ -280,7 +299,8 @@ fn run(
             break;
         }
 
-        let mut dest = dest_for(&opts.dest_dir, &source, 0, opts.format);
+        // ⚠ Copy 0 until export jobs carry a `PhotoId` — plan 2 of M3.4.
+        let mut dest = dest_for(&opts.dest_dir, &source, 0, 0, opts.format);
         if claimed.contains(&dest) || dest.exists() {
             let collision = match remembered {
                 Some(c) => c,
@@ -324,7 +344,7 @@ fn run(
                 Collision::KeepBoth => {
                     let mut i = 1;
                     loop {
-                        let candidate = dest_for(&opts.dest_dir, &source, i, opts.format);
+                        let candidate = dest_for(&opts.dest_dir, &source, 0, i, opts.format);
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -379,11 +399,23 @@ mod tests {
     fn the_destination_is_the_stem_plus_jpg() {
         let dir = PathBuf::from("/out");
         assert_eq!(
-            dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, ExportFormat::Jpeg),
+            dest_for(
+                &dir,
+                Path::new("/in/DSCF6509.RAF"),
+                0,
+                0,
+                ExportFormat::Jpeg
+            ),
             PathBuf::from("/out/DSCF6509.jpg")
         );
         assert_eq!(
-            dest_for(&dir, Path::new("/in/holiday.jpeg"), 0, ExportFormat::Jpeg),
+            dest_for(
+                &dir,
+                Path::new("/in/holiday.jpeg"),
+                0,
+                0,
+                ExportFormat::Jpeg
+            ),
             PathBuf::from("/out/holiday.jpg")
         );
     }
@@ -393,11 +425,11 @@ mod tests {
         // What "Keep both" uses: the first free name-1, name-2, ...
         let dir = PathBuf::from("/out");
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 1, ExportFormat::Jpeg),
+            dest_for(&dir, Path::new("/in/a.RAF"), 0, 1, ExportFormat::Jpeg),
             PathBuf::from("/out/a-1.jpg")
         );
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 7, ExportFormat::Jpeg),
+            dest_for(&dir, Path::new("/in/a.RAF"), 0, 7, ExportFormat::Jpeg),
             PathBuf::from("/out/a-7.jpg")
         );
     }
@@ -594,12 +626,12 @@ mod tests {
         let dir = PathBuf::from("/out");
         for f in ExportFormat::ALL {
             assert_eq!(
-                dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, f),
+                dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, 0, f),
                 dir.join(format!("DSCF6509.{}", f.extension())),
                 "{f:?}"
             );
             assert_eq!(
-                dest_for(&dir, Path::new("/in/a.RAF"), 3, f),
+                dest_for(&dir, Path::new("/in/a.RAF"), 0, 3, f),
                 dir.join(format!("a-3.{}", f.extension())),
                 "{f:?}"
             );
@@ -857,7 +889,7 @@ mod tests {
     fn a_source_with_no_stem_still_produces_a_name() {
         // Defensive: `file_stem` is an Option, and a path ending in `..` has none.
         let dir = PathBuf::from("/out");
-        let got = dest_for(&dir, Path::new("/in/.."), 0, ExportFormat::Jpeg);
+        let got = dest_for(&dir, Path::new("/in/.."), 0, 0, ExportFormat::Jpeg);
         assert!(got.starts_with("/out"));
         assert_eq!(got.extension().and_then(|e| e.to_str()), Some("jpg"));
     }
@@ -899,5 +931,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_copy_exports_with_an_underscore_suffix() {
+        let dir = std::path::PathBuf::from("/out");
+        assert_eq!(
+            dest_for(
+                &dir,
+                Path::new("/in/DSCF6223.RAF"),
+                0,
+                0,
+                ExportFormat::Jpeg
+            ),
+            dir.join("DSCF6223.jpg"),
+            "the original keeps the plain stem"
+        );
+        assert_eq!(
+            dest_for(
+                &dir,
+                Path::new("/in/DSCF6223.RAF"),
+                2,
+                0,
+                ExportFormat::Jpeg
+            ),
+            dir.join("DSCF6223_2.jpg")
+        );
+    }
+
+    #[test]
+    fn the_two_numbering_schemes_compose_rather_than_collide() {
+        // ⚠ `_N` is **identity** — which virtual copy, stable forever. `-N` is
+        // **de-duplication** — the Nth file wanting this name in this folder, assigned at export
+        // time. Different meanings, so different separators, and both can appear at once.
+        let dir = std::path::PathBuf::from("/out");
+        assert_eq!(
+            dest_for(&dir, Path::new("/in/a.RAF"), 2, 1, ExportFormat::Jpeg),
+            dir.join("a_2-1.jpg")
+        );
+        assert_eq!(
+            dest_for(&dir, Path::new("/in/a.RAF"), 0, 3, ExportFormat::Jpeg),
+            dir.join("a-3.jpg"),
+            "an original that collides is unchanged from before this feature"
+        );
     }
 }
