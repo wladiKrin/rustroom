@@ -169,6 +169,17 @@ pub struct Settings {
     pub accent: Accent,
     /// Which drag gesture pans the canvas. Scroll and two-finger swipe always pan.
     pub pan_drag: PanDrag,
+    /// Turn lens corrections on for photos that have no sidecar yet.
+    ///
+    /// ⚠ A **preference**, not an op-list default. `Edits::default()` stays strictly neutral so
+    /// the CLI, the goldens and every existing sidecar are untouched; this only decides what a
+    /// *fresh* photo starts with. Defaulting the op-list instead would dent that invariant in a
+    /// way the golden harness structurally cannot see, because the goldens are synthetic buffers
+    /// with no lens metadata and the stage stays inert there.
+    ///
+    /// ⚠ Consequence, accepted and documented rather than discovered: the GUI and the CLI then
+    /// disagree on a fresh photo — the CLI renders neutral, the GUI renders corrected.
+    pub auto_lens_correction: bool,
 }
 
 impl Default for Settings {
@@ -183,6 +194,7 @@ impl Default for Settings {
             theme: ThemeChoice::default(),
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
+            auto_lens_correction: true,
         }
     }
 }
@@ -197,6 +209,23 @@ pub enum ConfirmOutcome {
 }
 
 impl Settings {
+    /// What a newly-opened photo's lens corrections should start as.
+    ///
+    /// Extracted as a pure function so the rule is testable without a window — the decision is
+    /// the part worth testing, and the egui glue is not.
+    pub fn initial_lens_correction(&self, has_sidecar: bool) -> edit_model::LensCorrection {
+        if self.auto_lens_correction && !has_sidecar {
+            edit_model::LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: true,
+                ..Default::default()
+            }
+        } else {
+            edit_model::LensCorrection::default()
+        }
+    }
+
     /// The space the *renderer* should convert into.
     ///
     /// ⚠⚠ Every read of `display_space` in the render path must go through here. When the
@@ -426,6 +455,9 @@ mod tests {
             // A non-default value on purpose: it proves the field is actually persisted
             // rather than being re-defaulted on load.
             pan_drag: PanDrag::Secondary,
+            // Likewise non-default: the preference defaults to *on*, so persisting `false` is
+            // what proves it round-trips rather than being re-defaulted.
+            auto_lens_correction: false,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -738,5 +770,52 @@ mod tests {
             back.camera_profiles.get("X-T4").and_then(|p| p.to_str()),
             Some("/p/x-t4.dcp")
         );
+    }
+
+    #[test]
+    fn a_settings_file_from_before_auto_lens_correction_still_loads() {
+        // ⚠ `SettingsStore::load()` is infallible, so a field that fails to parse silently
+        // reverts *every* setting. `#[serde(default)]` is what stands in the way.
+        let s: Settings = serde_json::from_str(r#"{"confirm_preset_delete":false}"#).unwrap();
+        assert!(!s.confirm_preset_delete);
+        assert!(
+            s.auto_lens_correction,
+            "the new field must default to on, not to false"
+        );
+    }
+
+    #[test]
+    fn corrections_are_applied_only_to_a_photo_with_no_sidecar() {
+        // ⚠ The whole point of the preference living here rather than in `Edits`: a photo you
+        // have already edited keeps exactly what it had, so nothing in the catalog re-renders.
+        let on = Settings {
+            auto_lens_correction: true,
+            ..Settings::default()
+        };
+        assert!(on.initial_lens_correction(false).is_active(), "fresh photo");
+        assert!(
+            !on.initial_lens_correction(true).is_active(),
+            "a photo with a sidecar must be left alone"
+        );
+    }
+
+    #[test]
+    fn the_preference_off_leaves_even_a_fresh_photo_neutral() {
+        let off = Settings {
+            auto_lens_correction: false,
+            ..Settings::default()
+        };
+        assert!(!off.initial_lens_correction(false).is_active());
+    }
+
+    #[test]
+    fn the_applied_default_enables_all_three_corrections() {
+        let s = Settings {
+            auto_lens_correction: true,
+            ..Settings::default()
+        };
+        let l = s.initial_lens_correction(false);
+        assert!(l.distortion && l.tca && l.vignetting, "{l:?}");
+        assert_eq!(l.scale, 100.0, "and autoscale by default");
     }
 }
