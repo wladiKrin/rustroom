@@ -151,6 +151,25 @@ fn main() {
                 ..Edits::default()
             },
         ),
+        (
+            "colour grading (split tone)",
+            Edits {
+                color_grading: edit_model::ColorGrading {
+                    shadows: edit_model::GradeWheel {
+                        hue: 240.0,
+                        saturation: 70.0,
+                        luminance: -20.0,
+                    },
+                    highlights: edit_model::GradeWheel {
+                        hue: 45.0,
+                        saturation: 70.0,
+                        luminance: 15.0,
+                    },
+                    ..Default::default()
+                },
+                ..Edits::default()
+            },
+        ),
     ];
 
     for (label, edits) in cases {
