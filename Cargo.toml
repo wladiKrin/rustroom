@@ -12,6 +12,7 @@ members = [
     "crates/camera-profile",
     "crates/catalog",
     "crates/image-decode",
+    "crates/lens-profile",
 ]
 
 [workspace.package]
