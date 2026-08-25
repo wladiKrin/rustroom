@@ -143,6 +143,16 @@ pub struct Settings {
     /// Defaults to `Fast`, which is what `DecodeOptions::linear_scene()` already hardcodes, so
     /// nobody who ignores this setting sees any change.
     pub view_demosaic: Demosaic,
+    /// Camera model → the `.dcp` profile chosen for it.
+    ///
+    /// ⚠ Keyed by **model**, not by photo: a profile is a calibration of the body. Per-photo is a
+    /// recorded follow-up — it is what Lightroom does, in its Calibration panel — but it would put
+    /// a *decode* parameter into `Edits`, which would then have to travel through the sidecar,
+    /// presets, copy/paste, sync and the buffer-cache key. See the C4 spec.
+    ///
+    /// ⚠ `BTreeMap` rather than `HashMap` so the settings file has a stable order and a diff of it
+    /// is readable.
+    pub camera_profiles: std::collections::BTreeMap<String, std::path::PathBuf>,
     /// The primaries of the display Rustroom is being viewed on.
     ///
     /// ⚠ Applied to the preview and to thumbnails only — **never to an export**, and never
@@ -168,6 +178,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
+            camera_profiles: std::collections::BTreeMap::new(),
             display_space: color::OutputSpace::default(),
             theme: ThemeChoice::default(),
             accent: Accent::default(),
@@ -409,6 +420,7 @@ mod tests {
             // a decision about whether the round trip should carry it.
             view_demosaic: Demosaic::Better,
             display_space: color::OutputSpace::DisplayP3,
+            camera_profiles: std::collections::BTreeMap::new(),
             theme: ThemeChoice::System,
             accent: Accent::Teal,
             // A non-default value on purpose: it proves the field is actually persisted
@@ -707,5 +719,24 @@ mod tests {
         };
         let _ = s.effective_display_space(true);
         assert_eq!(s.display_space, color::OutputSpace::AdobeRgb);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_camera_profiles_still_loads() {
+        let json = r#"{"confirm_preset_delete":true}"#;
+        let s: Settings = serde_json::from_str(json).expect("older settings should load");
+        assert!(s.camera_profiles.is_empty());
+    }
+
+    #[test]
+    fn the_camera_profile_mapping_round_trips() {
+        let mut s = Settings::default();
+        s.camera_profiles
+            .insert("X-T4".into(), std::path::PathBuf::from("/p/x-t4.dcp"));
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(
+            back.camera_profiles.get("X-T4").and_then(|p| p.to_str()),
+            Some("/p/x-t4.dcp")
+        );
     }
 }
