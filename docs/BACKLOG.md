@@ -75,6 +75,19 @@ encodings added when there is something to validate them against.
 
 ⚠ **Start the brainstorm with the space question, not with a parser.** The parser is the easy half.
 
+### Snapshots (M3.4's remaining slice)
+
+*Deferred 2026-08-25, when virtual copies landed.*
+
+Named saved states **within** one photo — switch between "before the crop" and "the final" without
+creating a second Library row. ⚠ Different from a virtual copy, which *is* a row.
+
+The blocker is not storage — the sidecar envelope built for copies would hold them almost as-is.
+It is **how they relate to `History<Edits>`**: a snapshot is a saved point in the same edit
+history the undo stack already models, and the two need one story rather than two. Does taking a
+snapshot push an undo entry? Does undoing past a snapshot delete it? Does a snapshot survive the
+per-photo history stash? Answer that first; the storage is the easy half.
+
 ### `ProfileToneCurve` (DCP)
 
 *Deferred during colour management C3, 2026-08-25.*
