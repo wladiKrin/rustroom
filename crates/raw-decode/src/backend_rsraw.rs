@@ -72,7 +72,10 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
         //
         // ⚠ This number decides what every downstream stage is looking at. Changing it changes
         // every rendered pixel and every golden — it is not a tuning knob.
-        params.output_color = 4;
+        // ⚠ 0 = camera-native, 4 = ProPhoto. At 0 libraw still demosaics and still applies the
+        // camera white balance; only the colour-space conversion is skipped, which is the step
+        // we take over — see `DecodeOptions::camera_native`.
+        params.output_color = if opts.camera_native { 0 } else { 4 };
         params.no_auto_bright = i32::from(opts.no_auto_bright);
         // ⚠ Without this libraw uses its own default of 3 (AHD), its slowest — which is what
         // every decode silently inherited before this existed.
@@ -110,7 +113,28 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     }
 
     let data: Vec<f32> = samples.iter().map(|&s| s as f32 / U16_MAX_F).collect();
-    let image = ImageBuf::from_vec(width, height, data);
+    drop(processed);
+
+    // ⚠ Read **after** `dcraw_process`: `rgb_cam` is computed there, so asking earlier returns
+    // nothing useful. Probed rather than assumed — see `examples/color_probe.rs`.
+    //
+    // ⚠ `rgb_cam` is camera → linear **sRGB**, not camera → the requested output space: it comes
+    // out identical whatever `output_color` is set to, because dcraw applies the output space
+    // separately as `out_cam = out_rgb[output] × rgb_cam`. `camera_to_prophoto` supplies that
+    // second half from our own matrices.
+    let image = if opts.camera_native {
+        let m = {
+            let c = &raw.as_mut().color;
+            let mut m = [[0.0f32; 3]; 3];
+            for (i, row) in m.iter_mut().enumerate() {
+                row.copy_from_slice(&c.rgb_cam[i][..3]);
+            }
+            color::camera::camera_to_prophoto(m)
+        };
+        ImageBuf::from_vec(width, height, data).map_pixels(|p| color::spaces::apply(&m, p))
+    } else {
+        ImageBuf::from_vec(width, height, data)
+    };
 
     let metadata = RawMetadata {
         width,

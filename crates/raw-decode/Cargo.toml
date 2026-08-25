@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+color = { path = "../color" }
 core-image = { path = "../core-image" }
 rsraw = "0.1.1"
 thiserror.workspace = true

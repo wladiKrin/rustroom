@@ -125,6 +125,13 @@ pub struct DecodeOptions {
     /// Demosaic quality. ⚠ Inert when `half_size` is true — libraw skips demosaic entirely
     /// for a half-size decode, so the editing preview cannot show this setting.
     pub demosaic: Demosaic,
+    /// Apply the camera → working-space matrix ourselves rather than letting libraw do it.
+    ///
+    /// ⚠ `false` selects libraw's own conversion, and it stays reachable **permanently** as an
+    /// oracle: C2 and C3 each change this matrix, and a reference that does not move when the
+    /// thing under test does is worth far more than the few lines it costs. It is the same role
+    /// the golden harness plays for `pipeline`.
+    pub camera_native: bool,
 }
 
 impl DecodeOptions {
@@ -136,6 +143,7 @@ impl DecodeOptions {
             no_auto_bright: true,
             half_size: false,
             demosaic: Demosaic::Fast,
+            camera_native: true,
         }
     }
 
@@ -147,6 +155,9 @@ impl DecodeOptions {
             no_auto_bright: false,
             half_size: false,
             demosaic: Demosaic::Fast,
+            // ⚠ Deliberately libraw's own conversion. This is a debug dump, not an export path,
+            // and it wants a baked sRGB image rather than the pipeline's working space.
+            camera_native: false,
         }
     }
 
@@ -158,6 +169,7 @@ impl DecodeOptions {
             no_auto_bright: true,
             half_size: true,
             demosaic: Demosaic::Fast,
+            camera_native: true,
         }
     }
 
@@ -337,5 +349,81 @@ mod tests {
         );
         assert_eq!(t.rgba.len(), t.width * t.height * 4);
         assert!(t.rgba.iter().any(|&b| b > 0));
+    }
+
+    #[test]
+    fn our_camera_matrix_reproduces_libraws() {
+        // ⚠⚠ **The acceptance test for this whole slice.** C1 moves a well-tested transform out
+        // of libraw and into our code for zero user-visible gain, so the only claim it makes is
+        // "the render is unchanged" — and this is the only test that can check it.
+        //
+        // ⚠ Gated on `RAW_FIXTURE`, so it cannot run in CI without a file. Stated as a
+        // limitation rather than hidden: run it locally before trusting this slice.
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let ours = decode_raw(
+            &path,
+            &DecodeOptions {
+                camera_native: true,
+                half_size: true,
+                ..DecodeOptions::linear_scene()
+            },
+        )
+        .expect("ours");
+        let libraw = decode_raw(
+            &path,
+            &DecodeOptions {
+                camera_native: false,
+                half_size: true,
+                ..DecodeOptions::linear_scene()
+            },
+        )
+        .expect("libraw");
+
+        assert_eq!(ours.image.width(), libraw.image.width());
+        assert_eq!(ours.image.height(), libraw.image.height());
+
+        // ⚠⚠ Compared **clamped**, and that is the whole subtlety of this test. libraw works in
+        // 16-bit and clamps to [0, 1]; we apply the matrix in f32 and keep what falls outside.
+        // Those differences are not errors — a scene-referred ProPhoto pipeline exists precisely
+        // to carry highlights above 1.0 and out-of-gamut negatives, and clipping belongs in the
+        // output transform and nowhere else. Measured on an X-T4 frame: only 0.0085% of samples
+        // differ at all, and the worst is ours 1.2543 against libraw's clamped 1.0.
+        //
+        // So there are two assertions. Clamped agreement proves the matrix is right — a wrong one
+        // would show as a cast across the whole frame. And every *unclamped* disagreement must be
+        // explained by libraw having clipped, which is what stops "we differ everywhere" from
+        // hiding behind the clamp.
+        let clamp = |v: f32| v.clamp(0.0, 1.0);
+        let (mut max, mut sum, mut n) = (0.0f32, 0.0f64, 0usize);
+        let mut unexplained = 0usize;
+        for y in 0..ours.image.height() {
+            for x in 0..ours.image.width() {
+                let (a, b) = (ours.image.pixel(x, y), libraw.image.pixel(x, y));
+                for i in 0..3 {
+                    let d = (clamp(a[i]) - clamp(b[i])).abs();
+                    max = max.max(d);
+                    sum += d as f64;
+                    n += 1;
+                    // Raw disagreement not accounted for by libraw sitting on a clamp boundary.
+                    if (a[i] - b[i]).abs() > 2.0 / 255.0 && b[i] > 0.0 && b[i] < 1.0 {
+                        unexplained += 1;
+                    }
+                }
+            }
+        }
+        let mean = sum / n as f64;
+        eprintln!("camera matrix vs libraw (clamped): max {max:.5}, mean {mean:.6}");
+        eprintln!("unexplained disagreements: {unexplained}");
+        assert_eq!(
+            unexplained, 0,
+            "differences that libraw's clamping does not explain — the matrix is wrong"
+        );
+        assert!(
+            max < 2.0 / 255.0,
+            "max clamped per-channel difference {max} exceeds the tolerance — the matrix is wrong"
+        );
     }
 }
