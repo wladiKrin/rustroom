@@ -137,7 +137,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             // zero angle; a mask by deleting it.
                             if ui
                                 .button("Reset adjustments")
-                                .on_hover_text("Resets White Balance, Tone, Color, Detail and Effects. Leaves the crop and any masks alone.")
+                                // ⚠ Derived from `SECTIONS`, not written out: this string said
+                                // "White Balance, Tone, Color, Detail and Effects" and went stale
+                                // the moment a section was added. The button's group set is
+                                // already derived; its description now is too.
+                                .on_hover_text(format!(
+                                    "Resets {}. Leaves the crop and any masks alone.",
+                                    adjustments::SECTIONS
+                                        .iter()
+                                        .map(|s| s.name())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ))
                                 .clicked()
                             {
                                 s.edits
@@ -145,7 +156,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 ed.discrete();
                             }
                         }
-                        Tool::Crop => geometry::show(ui, s, &mut app.crop_aspect, &mut ed),
+                        Tool::Crop => {
+                            let found = s.lens.shot.is_some();
+                            geometry::show(ui, s, &mut app.crop_aspect, found, &mut ed)
+                        }
                         Tool::Masks => masks::show(
                             ui,
                             s,
@@ -163,11 +177,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     }
 
                     if ed.changed {
-                        s.request(
-                            s.view_edits(tool),
-                            s.render_max_dim(),
-                            s.requested_region,
-                        );
+                        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
                     }
                     if ed.settled {
                         photo_edited |= s.history.push(s.edits.clone());

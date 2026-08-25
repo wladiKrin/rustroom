@@ -413,11 +413,12 @@ impl Dehaze {
 
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
-pub const EDIT_GROUP_NAMES: [&str; 7] = [
+pub const EDIT_GROUP_NAMES: [&str; 8] = [
     "White Balance",
     "Tone",
     "Color",
     "Detail",
+    "Lens",
     "Effects",
     "Geometry",
     "Masks",
@@ -428,10 +429,10 @@ pub const EDIT_GROUP_NAMES: [&str; 7] = [
 /// ⚠ Named rather than written as `5` at call sites: the Crop tool's own reset targets exactly
 /// this group, and a magic index would silently reset the wrong one if the table ever changed
 /// order. `the_named_group_indices_match_the_table` is the guard.
-pub const GEOMETRY_GROUP: usize = 5;
+pub const GEOMETRY_GROUP: usize = 6;
 
 /// The `Masks` group's index into [`EDIT_GROUP_NAMES`]. See [`GEOMETRY_GROUP`].
-pub const MASKS_GROUP: usize = 6;
+pub const MASKS_GROUP: usize = 7;
 
 /// Which groups of settings a paste or a preset carries.
 ///
@@ -448,6 +449,13 @@ pub struct EditGroups {
     pub color: bool,
     /// Noise reduction and sharpening.
     pub detail: bool,
+    /// Optical corrections read from a lens profile.
+    ///
+    /// ⚠ Its own group rather than part of `detail`. They were bundled at first, which meant
+    /// syncing noise reduction also synced lens corrections — two unrelated things travelling
+    /// together for no reason. Separating them is what lets "copy this photo's lens
+    /// corrections" be its own choice in Paste, Sync and Save-preset.
+    pub lens: bool,
     /// Vignette.
     pub effects: bool,
     /// Crop and straighten.
@@ -466,6 +474,7 @@ impl Default for EditGroups {
             tone: true,
             color: true,
             detail: true,
+            lens: true,
             effects: true,
             geometry: false,
             masks: false,
@@ -479,6 +488,7 @@ impl EditGroups {
         tone: true,
         color: true,
         detail: true,
+        lens: true,
         effects: true,
         geometry: true,
         masks: true,
@@ -489,6 +499,7 @@ impl EditGroups {
         tone: false,
         color: false,
         detail: false,
+        lens: false,
         effects: false,
         geometry: false,
         masks: false,
@@ -514,9 +525,10 @@ impl EditGroups {
             1 => self.tone,
             2 => self.color,
             3 => self.detail,
-            4 => self.effects,
-            5 => self.geometry,
-            6 => self.masks,
+            4 => self.lens,
+            5 => self.effects,
+            6 => self.geometry,
+            7 => self.masks,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -531,9 +543,10 @@ impl EditGroups {
             1 => &mut self.tone,
             2 => &mut self.color,
             3 => &mut self.detail,
-            4 => &mut self.effects,
-            5 => &mut self.geometry,
-            6 => &mut self.masks,
+            4 => &mut self.lens,
+            5 => &mut self.effects,
+            6 => &mut self.geometry,
+            7 => &mut self.masks,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -981,6 +994,8 @@ impl Edits {
         if groups.detail {
             self.noise_reduction = *noise_reduction;
             self.sharpening = *sharpening;
+        }
+        if groups.lens {
             self.lens_correction = *lens_correction;
         }
         if groups.effects {
@@ -1908,7 +1923,9 @@ mod tests {
     fn the_masks_group_transfers_masks_and_nothing_else() {
         let src = all_nonneutral();
         let mut dst = Edits::default();
-        dst.merge_from(&src, EditGroups::only(6));
+        // ⚠ The named constant, not a literal — this test hardcoded `6` and broke the moment a
+        // group was inserted before Masks, which is exactly what `MASKS_GROUP` exists to prevent.
+        dst.merge_from(&src, EditGroups::only(MASKS_GROUP));
         assert_eq!(dst.masks, src.masks);
         assert_eq!(dst.exposure, 0.0, "only the masks group was selected");
     }
@@ -2386,5 +2403,32 @@ mod tests {
         // op-list default must stay neutral so the CLI, the goldens and every existing sidecar
         // are untouched.
         assert!(!LensCorrection::default().is_active());
+    }
+
+    #[test]
+    fn lens_corrections_travel_on_their_own_group_not_with_detail() {
+        // ⚠ The reason `lens` was split out of `detail`. They were bundled at first, which meant
+        // syncing noise reduction to another photo also switched its lens corrections on or off —
+        // two unrelated things travelling together. This pins both halves of the separation.
+        let src = all_nonneutral();
+        let lens_group = EDIT_GROUP_NAMES.iter().position(|n| *n == "Lens").unwrap();
+
+        let mut only_detail = Edits::default();
+        only_detail.merge_from(&src, EditGroups::only(3));
+        assert_eq!(
+            only_detail.lens_correction,
+            LensCorrection::default(),
+            "the Detail group must not carry lens corrections"
+        );
+        assert_eq!(only_detail.noise_reduction, src.noise_reduction);
+
+        let mut only_lens = Edits::default();
+        only_lens.merge_from(&src, EditGroups::only(lens_group));
+        assert_eq!(only_lens.lens_correction, src.lens_correction);
+        assert_eq!(
+            only_lens.noise_reduction,
+            NoiseReduction::default(),
+            "the Lens group must not carry anything else"
+        );
     }
 }

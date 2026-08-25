@@ -91,13 +91,15 @@ pub fn edit_groups() -> edit_model::EditGroups {
 /// at 1:1, once the tone is settled. The panel follows the workflow. Do not "fix" the
 /// mismatch — Lightroom's panels diverge from its pipeline for the same reason.
 ///
-/// Geometry (index 5) and Masks (index 6) are absent because they are rail tools.
-pub const SECTIONS: [Section; 5] = [
+/// Geometry and Masks are absent because they are rail tools — see `GEOMETRY_GROUP` and
+/// `MASKS_GROUP` for their indices rather than writing numbers here.
+pub const SECTIONS: [Section; 6] = [
     Section(0), // White Balance
     Section(1), // Tone
     Section(2), // Color
     Section(3), // Detail
-    Section(4), // Effects
+    Section(4), // Lens
+    Section(5), // Effects
 ];
 
 /// Draw the five adjustment sections.
@@ -197,38 +199,6 @@ pub fn show(
     });
 
     section(ui, SECTIONS[3], false, |ui| {
-        // ⚠ First in Detail because it is first in the pipeline: a capture correction to get out
-        // of the way before judging noise or sharpening. Detail is this codebase's
-        // capture-specific group — "noise, lens, output size".
-        ui.label("Lens Corrections");
-        ui.label(
-            egui::RichText::new(lens_status(lens, lens_profile_found))
-                .small()
-                .weak(),
-        );
-        // ⚠ Disabled rather than hidden: a greyed row that names the unmatched lens explains
-        // itself, and an absent row does not.
-        ui.add_enabled_ui(lens_profile_found, |ui| {
-            let l = &mut edits.lens_correction;
-            if ui.checkbox(&mut l.distortion, "Distortion").changed() {
-                ed.discrete();
-            }
-            if ui.checkbox(&mut l.tca, "Chromatic aberration").changed() {
-                ed.discrete();
-            }
-            // ⚠ Not the creative Vignette, which stays in Effects. This one is corrective and
-            // pre-crop; that one is creative and post-crop. The enclosing "Lens Corrections"
-            // heading is what keeps them apart.
-            if ui.checkbox(&mut l.vignetting, "Vignetting").changed() {
-                ed.discrete();
-            }
-            // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
-            // correction's autoscale is exactly 1 — so on many photos this slider does nothing
-            // at all, which is correct and would read as a broken crop control.
-            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Scale");
-        });
-        ui.separator();
-
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
@@ -249,7 +219,47 @@ pub fn show(
         ed.slider(ui, &mut sh.masking, 0.0..=100.0, "Masking");
     });
 
+    // ⚠ Its own section rather than a block inside Detail, and its own edit group with it. They
+    // were bundled at first on the grounds that Detail is the capture-specific group — true, but
+    // it meant syncing noise reduction also synced lens corrections. Separating them makes
+    // "copy this photo's lens corrections" its own choice everywhere `EditGroups` is offered.
+    //
+    // ⚠ Placed after Detail, not first, despite running first in the pipeline: it is on by
+    // default and visited only to turn something *off*, so depth costs nothing. Panel follows
+    // workflow, pipeline follows maths — the rule `SECTIONS`' own doc comment states.
     section(ui, SECTIONS[4], false, |ui| {
+        ui.label(
+            egui::RichText::new(lens_status(lens, lens_profile_found))
+                .small()
+                .weak(),
+        );
+        // ⚠ Disabled rather than hidden: a greyed row that names the unmatched lens explains
+        // itself, and an absent row does not.
+        ui.add_enabled_ui(lens_profile_found, |ui| {
+            let l = &mut edits.lens_correction;
+            if ui.checkbox(&mut l.distortion, "Distortion").changed() {
+                ed.discrete();
+            }
+            if ui.checkbox(&mut l.tca, "Chromatic aberration").changed() {
+                ed.discrete();
+            }
+            // ⚠ Not the creative Vignette, which stays in Effects. This one is corrective and
+            // pre-crop; that one is creative and post-crop. The section heading keeps them apart.
+            if ui.checkbox(&mut l.vignetting, "Vignetting").changed() {
+                ed.discrete();
+            }
+            // ⚠ Also surfaced in the **Crop** tool, and that is not duplication for its own sake:
+            // Scale is only *judgeable* against the uncropped frame, which is what crop mode
+            // shows. Here it is often invisible — if you have cropped at all, the empty corners
+            // it removes are already outside your crop.
+            //
+            // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
+            // correction's autoscale is exactly 1, so on many photos this does nothing at all.
+            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Scale");
+        });
+    });
+
+    section(ui, SECTIONS[5], false, |ui| {
         let v = &mut edits.vignette;
         ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
         ed.slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
@@ -317,7 +327,14 @@ mod tests {
         let names: Vec<&str> = SECTIONS.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
-            vec!["White Balance", "Tone", "Color", "Detail", "Effects"]
+            vec![
+                "White Balance",
+                "Tone",
+                "Color",
+                "Detail",
+                "Lens",
+                "Effects"
+            ]
         );
     }
 

@@ -10,7 +10,28 @@ use eframe::egui;
 use rustroom_app::crop_tool;
 
 /// Draw the geometry controls. The caller decides whether geometry mode is on.
-pub fn show(ui: &mut egui::Ui, s: &mut Session, crop_aspect: &mut Option<f32>, ed: &mut Edited) {
+pub fn show(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    crop_aspect: &mut Option<f32>,
+    lens_profile_found: bool,
+    ed: &mut Edited,
+) {
+    // ⚠ The lens **Scale** appears here as well as in the Lens section, and this is the one place
+    // it can actually be judged: crop mode previews the *uncropped* frame, which is where the
+    // empty corners that pincushion correction leaves are visible at all. In the Edit panel the
+    // crop is applied, so if you have cropped even slightly the gaps are already outside it and
+    // the slider looks inert.
+    //
+    // ⚠ Not a second *feature* with two homes — the Presets panel was removed for being that.
+    // It is one field, relevant to two different decisions, edited from whichever view can see
+    // its effect.
+    if lens_profile_found && s.edits.lens_correction.distortion {
+        ui.label("Lens");
+        ed.slider(ui, &mut s.edits.lens_correction.scale, 0.0..=100.0, "Scale");
+        ui.separator();
+    }
+
     ui.label("Geometry");
     // Quarter turns and mirroring. ⚠ Each button moves the crop by the
     // *same* transform, or the crop lands on different content — see
