@@ -224,3 +224,37 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 ⚠ **This file was seeded from the follow-ups already recorded in `CLAUDE.md` and is not a complete
 sweep of that document.** When something is deferred, add it here *and* leave the detail in its
 CLAUDE.md section.
+
+## EXIF/IPTC metadata editing (deferred 2026-08-26 — blocked on a DESIGN question)
+
+**Status:** ⛔ blocked on a decision, not on effort. Split out of M4.2 before designing it.
+
+**What is wanted:** displaying EXIF and IPTC properly (we surface almost nothing today — camera,
+lens, focal length, orientation), and *editing* IPTC fields like caption, copyright and creator.
+
+**Display is easy. Edit is the problem, and it is a conflict with this project's core value.**
+Writing metadata has only two destinations:
+
+1. **Into the RAW file itself** — which violates "originals are never modified", a cross-cutting
+   attribute in `01-lightroom-capabilities` and the reason the sidecar model exists at all. This
+   is not a trade worth making for a caption field.
+2. **Into an XMP sidecar** — what Lightroom does. But Rustroom already has a JSON sidecar, so this
+   means **two sidecars per photo with overlapping purposes**, and it reopens the XMP-interop
+   question `02-architecture-and-tech` deliberately parked ("JSON now; consider XMP compatibility
+   later for interop with Lightroom/darktable").
+
+**The three candidate answers, none obviously right:**
+
+- **Extend the existing JSON sidecar** with a metadata block. One file, no new dependency —
+  but nothing else on earth reads it, so the interop that makes IPTC worth having is lost.
+- **Adopt XMP as a second sidecar**, alongside the JSON one. Real interop; two files per photo,
+  and a rule for which wins when they disagree.
+- **Migrate the whole sidecar to XMP.** Cleanest end state, largest change, and it would mean
+  re-encoding the entire `Edits` op-list into XMP's model.
+
+⚠ **Whichever is chosen, editing needs a metadata-writing library** — `rexiv2` (C, gexiv2) or
+`little-exif` (pure Rust, narrower). ⚠ `02-architecture-and-tech` lists `rexiv2`/`kamadak-exif` in
+its stack table; **neither has ever been added**, and that table now records so.
+
+**Do not treat this as a parsing job.** The parsing is the easy half.
+
