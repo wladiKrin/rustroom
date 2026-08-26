@@ -118,6 +118,8 @@ pub fn for_test() -> RustroomApp {
         preset_list: Vec::new(),
         settings_store: SettingsStore::new(dir.0.join("settings.json")),
         settings: Settings::default(),
+        // ⚠ In memory, so tests never touch the user's real catalog.
+        catalog: catalog::db::Catalog::open_in_memory().ok(),
         modal: Modal::None,
         actions: ActionLog::default(),
     }

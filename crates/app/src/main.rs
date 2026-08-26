@@ -266,6 +266,15 @@ struct RustroomApp {
     preset_list: Vec<Preset>,
     settings_store: SettingsStore,
     settings: Settings,
+    /// The one catalog. `None` when it could not be opened.
+    ///
+    /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
+    /// — and later ratings and search — have somewhere to live. If you can tell it shipped,
+    /// something is wrong.
+    ///
+    /// ⚠ `Option` rather than a hard failure: a catalog that will not open must not stop you
+    /// editing photographs, because edits live in the sidecars and do not need it.
+    catalog: Option<catalog::db::Catalog>,
     modal: Modal,
     /// One chronological order over photo edits *and* preset deletions, so Ctrl+Z walks
     /// back through both. The payloads stay where they are — photo snapshots in
@@ -312,6 +321,14 @@ impl RustroomApp {
         // accent, so applying it earlier would style the app from the defaults and then
         // silently disagree with what the user chose.
         theme::apply(ctx, &settings);
+        // ⚠ Opened once, at startup. A failure is reported and then ignored — see the field.
+        let catalog = match catalog::db::Catalog::open(&catalog::db::Catalog::user_default_path()) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("catalog unavailable: {e}");
+                None
+            }
+        };
         Self {
             camera_profiles_cache: Vec::new(),
             os_manages_colour,
@@ -363,6 +380,7 @@ impl RustroomApp {
             preset_list,
             settings_store,
             settings,
+            catalog,
             modal: Modal::None,
             actions: ActionLog::default(),
         }
@@ -1637,6 +1655,13 @@ impl RustroomApp {
                     }
                 }
                 catalog::sort(&mut scan, self.settings.library_sort);
+                // ⚠ The catalog records the *files*; copies are added when they are created
+                // rather than scanned, because they live in the sidecar and not on disk.
+                if let Some(cat) = &self.catalog {
+                    if let Err(e) = cat.sync_folder(&dir, &scan) {
+                        eprintln!("catalog: {e}");
+                    }
+                }
                 // ⚠ One row per (file, copy). Reading every sidecar costs 4.6 ms for 830 files,
                 // measured — small enough to stay inline rather than moving to the loader thread.
                 let entries = entries::build(&scan, sidecar::load_all);
@@ -1707,6 +1732,11 @@ impl RustroomApp {
         if let Err(e) = sidecar::persist_all(&path, &sidecar) {
             self.status = format!("Could not create a copy: {e}");
             return;
+        }
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = cat.add_copy(&path, n) {
+                eprintln!("catalog: {e}");
+            }
         }
         let id = PhotoId::new(path, n);
         self.rebuild_entries(Some(&id));
@@ -1785,6 +1815,15 @@ impl RustroomApp {
         let (sc_from, sc_to) = (file_rename::sidecar_of(from), file_rename::sidecar_of(to));
         if sc_from.exists() {
             let _ = std::fs::rename(&sc_from, &sc_to);
+        }
+
+        // ⚠⚠ In the same operation as the file move. A catalog row and the file it names are two
+        // facts that must move as one — the rule the history stash and the action log needed
+        // twice. A failure is reported, never fatal: the file has already moved.
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = cat.rename_photo(from, to) {
+                eprintln!("catalog: {e}");
+            }
         }
 
         // ⚠ Every path-keyed cache now holds a path that no longer exists. The decode is
@@ -1947,10 +1986,17 @@ impl RustroomApp {
             // is concerned. Both the stash and the log have to let go, together — a stash kept
             // without its log entries is unreachable, and log entries kept without their stash
             // pop nothing.
-            for (from, _) in moves {
+            for (from, to) in moves {
                 let old = PhotoId::new(e.path.clone(), from);
                 self.histories.forget(&old);
                 self.actions.forget_edits_of(&old);
+                // ⚠ The catalog follows the same renumbering, or its row for the old number
+                // becomes unreachable while the new one looks empty.
+                if let Some(cat) = &self.catalog {
+                    if let Err(err) = cat.renumber_copy(&e.path, from, to) {
+                        eprintln!("catalog: {err}");
+                    }
+                }
             }
         }
 
