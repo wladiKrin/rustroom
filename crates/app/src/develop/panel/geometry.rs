@@ -118,3 +118,136 @@ pub fn show(
         ed.discrete();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui;
+
+    fn session() -> Session {
+        let ctx = test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.session.take().unwrap()
+    }
+
+    /// An off-centre, non-square crop — so every rigid transform of it is distinguishable.
+    ///
+    /// ⚠ A centred or full-frame crop is invariant under most of these, which would make the
+    /// tests below pass with the crop left alone entirely.
+    fn asymmetric() -> edit_model::CropRect {
+        edit_model::CropRect {
+            left: 0.1,
+            top: 0.2,
+            right: 0.6,
+            bottom: 0.5,
+        }
+    }
+
+    /// ⚠ Approximate, always. `1.0 - (1.0 - 0.1)` is `0.100000024`, so a crop put through any
+    /// rigid transform and back does not compare exactly — an earlier version of
+    /// `flipping_twice_is_the_identity` demanded `assert_eq!` and failed against correct code. A
+    /// millionth of the frame is sub-pixel on any image.
+    fn assert_crop_close(a: edit_model::CropRect, b: edit_model::CropRect) {
+        for (x, y) in [
+            (a.left, b.left),
+            (a.top, b.top),
+            (a.right, b.right),
+            (a.bottom, b.bottom),
+        ] {
+            assert!((x - y).abs() < 1e-6, "crop drifted: {a:?} vs {b:?}");
+        }
+    }
+
+    fn click_in_panel(label: &str, s: &mut Session, lens: bool) -> Edited {
+        let ctx = test_ui::ctx();
+        let mut ed = Edited::default();
+        let mut aspect = None;
+        test_ui::click(&ctx, label, |ui| {
+            ed = Edited::default();
+            show(ui, s, &mut aspect, lens, &mut ed);
+        });
+        ed
+    }
+
+    #[test]
+    fn every_orientation_button_moves_the_crop_with_it() {
+        // ⚠⚠ The invariant this panel's own comment names: each button must move the crop by the
+        // *same* transform it applies to the orientation, or the crop lands on different content.
+        // A button that turns the image and leaves the crop behind looks right on an uncropped
+        // photo and is silently wrong on every cropped one — the same shape as the crop-factor
+        // bug that was invisible on 400 files and total on the one that was cropped.
+        for label in ["⟲", "⟳", "⬌", "⬍"] {
+            let mut s = session();
+            s.edits.geometry.crop = asymmetric();
+            let before = s.edits.geometry;
+
+            click_in_panel(label, &mut s, false);
+
+            let after = s.edits.geometry;
+            assert_ne!(
+                before.orientation, after.orientation,
+                "{label} did not change the orientation"
+            );
+            assert_ne!(
+                before.crop, after.crop,
+                "{label} changed the orientation but left the crop behind"
+            );
+        }
+    }
+
+    #[test]
+    fn turning_left_then_right_returns_both_to_where_they_started() {
+        // ⚠ Rotating left is implemented as *three* clockwise crop turns, which is the fiddly
+        // half. A wrong count leaves the crop somewhere else while the orientation is back.
+        let mut s = session();
+        s.edits.geometry.crop = asymmetric();
+        let before = s.edits.geometry;
+
+        click_in_panel("⟳", &mut s, false);
+        click_in_panel("⟲", &mut s, false);
+
+        assert_eq!(before.orientation, s.edits.geometry.orientation);
+        assert_crop_close(before.crop, s.edits.geometry.crop);
+    }
+
+    #[test]
+    fn flipping_twice_is_the_identity() {
+        for label in ["⬌", "⬍"] {
+            let mut s = session();
+            s.edits.geometry.crop = asymmetric();
+            let before = s.edits.geometry;
+            click_in_panel(label, &mut s, false);
+            click_in_panel(label, &mut s, false);
+            assert_eq!(
+                before.orientation, s.edits.geometry.orientation,
+                "{label} twice should undo itself"
+            );
+            assert_crop_close(before.crop, s.edits.geometry.crop);
+        }
+    }
+
+    #[test]
+    fn the_lens_scale_appears_only_when_a_profile_matched_and_distortion_is_on() {
+        // ⚠ The slider is here *as well as* in the Lens section because this is the one view
+        // where its effect is visible — crop mode previews the uncropped frame. Showing it with
+        // no profile would offer a control that cannot do anything.
+        let ctx = test_ui::ctx();
+        let seen = |lens: bool, distortion: bool| {
+            let mut s = session();
+            s.edits.lens_correction.distortion = distortion;
+            let mut aspect = None;
+            let mut ed = Edited::default();
+            test_ui::find(&ctx, "Scale", |ui| {
+                show(ui, &mut s, &mut aspect, lens, &mut ed);
+            })
+            .is_some()
+        };
+        assert!(
+            seen(true, true),
+            "a matched profile with distortion on shows it"
+        );
+        assert!(!seen(false, true), "no profile, no slider");
+        assert!(!seen(true, false), "distortion off, no slider");
+    }
+}

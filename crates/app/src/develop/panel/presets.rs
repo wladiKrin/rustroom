@@ -91,3 +91,131 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui;
+
+    fn app_with(presets: &[&str]) -> RustroomApp {
+        let mut app = crate::test_app::for_test();
+        app.preset_list = presets
+            .iter()
+            .map(|n| rustroom_app::presets::Preset {
+                name: n.to_string(),
+                groups: EditGroups::default(),
+                edits: edit_model::Edits::default(),
+            })
+            .collect();
+        app
+    }
+
+    fn click_in_panel(label: &str, app: &mut RustroomApp) {
+        let ctx = test_ui::ctx();
+        let c = ctx.clone();
+        test_ui::click(&ctx, label, |ui| show(app, ui, &c));
+    }
+
+    #[test]
+    fn saving_opens_the_naming_dialog_rather_than_writing_straight_away() {
+        // ⚠ A preset needs a name and a group choice before it can be written, so the button
+        // opens a modal. One that saved immediately would produce unnamed presets carrying
+        // every group — the two decisions the dialog exists to ask.
+        let mut app = app_with(&[]);
+        assert!(matches!(app.modal, Modal::None));
+        click_in_panel("Save current as preset…", &mut app);
+        assert!(
+            matches!(app.modal, Modal::SavePreset { .. }),
+            "expected the save dialog, got {:?}",
+            std::mem::discriminant(&app.modal)
+        );
+    }
+
+    #[test]
+    fn deleting_asks_first_while_the_guard_is_armed() {
+        // ⚠⚠ Deleting a preset is the *recoverable* one — it goes to a trash and Ctrl+Z restores
+        // it — and it still confirms while the setting says to. The guard and the deletion are
+        // separate flags on purpose: disarming the confirm on this one must not disarm it on the
+        // irrecoverable export-preset deletion.
+        let mut app = app_with(&["Warm"]);
+        app.settings.confirm_preset_delete = true;
+        click_in_panel("×", &mut app);
+        assert!(
+            matches!(app.modal, Modal::ConfirmDeletePreset { .. }),
+            "expected the confirm dialog"
+        );
+        assert_eq!(app.preset_list.len(), 1, "and nothing deleted yet");
+    }
+
+    #[test]
+    fn deleting_with_the_guard_disarmed_does_not_ask() {
+        let mut app = app_with(&["Warm"]);
+        app.settings.confirm_preset_delete = false;
+        click_in_panel("×", &mut app);
+        assert!(
+            matches!(app.modal, Modal::None),
+            "no dialog when the guard is off"
+        );
+    }
+
+    #[test]
+    fn applying_a_preset_with_nothing_selected_says_so() {
+        // ⚠ A preset applies to the *selection*, exactly as a paste does. With nothing selected
+        // the honest outcome is a status line, not a silent no-op.
+        let mut app = app_with(&["Warm"]);
+        click_in_panel("Warm", &mut app);
+        assert_eq!(app.status, "Nothing selected");
+    }
+
+    #[test]
+    fn an_empty_list_offers_nothing_to_delete_or_apply() {
+        // ⚠ Asserted on the *absence* of the row buttons, not on the "No presets yet." label:
+        // plain `ui.label` text produces no AccessKit node, so `test_ui` cannot see it. Only
+        // interactive widgets are findable — the module's stated limit, and the point at which
+        // `egui_kittest` would be the thing to adopt.
+        let ctx = test_ui::ctx();
+        let mut app = app_with(&[]);
+        let c = ctx.clone();
+        let labels: Vec<String> =
+            test_ui::labelled_centres(&ctx, Vec::new(), |ui| show(&mut app, ui, &c))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect();
+        assert!(
+            !labels.iter().any(|l| l == "×"),
+            "an empty list must offer nothing to delete, got {labels:?}"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Save current as preset…"),
+            "but saving must still be offered, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn the_undo_delete_button_appears_only_when_that_is_what_undo_would_do() {
+        // ⚠ It is the *same* action the toolbar's Undo performs, surfaced so the restore is
+        // discoverable rather than only a keystroke — not a second, competing one. Showing it
+        // when undo would do something else would make it lie about what it does.
+        let ctx = test_ui::ctx();
+        let shown = |app: &mut RustroomApp| {
+            let c = ctx.clone();
+            test_ui::labelled_centres(&ctx, Vec::new(), |ui| show(app, ui, &c))
+                .into_iter()
+                .any(|(l, _)| l.starts_with("↩ Undo delete"))
+        };
+
+        let mut app = app_with(&["Warm"]);
+        assert!(!shown(&mut app), "nothing deleted yet");
+
+        app.actions.push(
+            ActionKind::PresetDelete {
+                name: "Warm".to_string(),
+            },
+            None,
+        );
+        assert!(
+            shown(&mut app),
+            "a preset deletion should surface the restore"
+        );
+    }
+}
