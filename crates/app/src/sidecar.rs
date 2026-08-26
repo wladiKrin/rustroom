@@ -57,6 +57,17 @@ pub fn remove(photo: &Path) -> std::io::Result<()> {
 pub struct CopyEntry {
     /// `0` is the original; copies are numbered from 1 and never reused.
     pub copy: u32,
+    /// What this copy is called, when it has been given a name.
+    ///
+    /// ⚠⚠ **Envelope metadata, never an `Edits` field, and that is load-bearing.** In `Edits` it
+    /// would need an edit group and would then **travel with a paste, a preset or a sync** —
+    /// pasting a B&W recipe onto another photo would rename it "B&W" — and "Reset adjustments"
+    /// would wipe it. The cost is that `History<Edits>` cannot undo it, which is why renaming
+    /// gets its own `ActionKind`.
+    ///
+    /// ⚠ Only copies carry one. Copy 0 *is* the file, so its name is the filename on disk.
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub edits: Edits,
 }
@@ -98,9 +109,30 @@ impl Sidecar {
     pub fn set_edits(&mut self, copy: u32, edits: Edits) {
         match self.copies.iter_mut().find(|c| c.copy == copy) {
             Some(c) => c.edits = edits,
-            None => self.copies.push(CopyEntry { copy, edits }),
+            None => self.copies.push(CopyEntry {
+                copy,
+                name: None,
+                edits,
+            }),
         }
         self.copies.sort_by_key(|c| c.copy);
+    }
+
+    /// Replace (or add) one copy's name, leaving its edits alone.
+    pub fn set_name(&mut self, copy: u32, name: Option<String>) {
+        match self.copies.iter_mut().find(|c| c.copy == copy) {
+            Some(c) => c.name = name,
+            None => self.copies.push(CopyEntry {
+                copy,
+                name,
+                edits: Edits::default(),
+            }),
+        }
+        self.copies.sort_by_key(|c| c.copy);
+    }
+
+    pub fn name_of(&self, copy: u32) -> Option<&str> {
+        self.get(copy).and_then(|c| c.name.as_deref())
     }
 
     /// Whether this sidecar is worth writing at all.
@@ -111,7 +143,7 @@ impl Sidecar {
     pub fn is_neutral(&self) -> bool {
         match self.copies.as_slice() {
             [] => true,
-            [only] => only.copy == 0 && only.edits == Edits::default(),
+            [only] => only.copy == 0 && only.name.is_none() && only.edits == Edits::default(),
             _ => false,
         }
     }
@@ -146,7 +178,11 @@ pub fn load_all(photo: &Path) -> Sidecar {
         // Legacy: the whole file is one bare `Edits`, which is copy 0.
         match serde_json::from_value::<Edits>(value) {
             Ok(edits) => Sidecar {
-                copies: vec![CopyEntry { copy: 0, edits }],
+                copies: vec![CopyEntry {
+                    copy: 0,
+                    name: None,
+                    edits,
+                }],
             },
             Err(_) => Sidecar::default(),
         }
@@ -333,6 +369,7 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
+                    name: None,
                     edits: Edits {
                         exposure: 0.5,
                         ..Edits::default()
@@ -340,6 +377,7 @@ mod tests {
                 },
                 CopyEntry {
                     copy: 3,
+                    name: None,
                     edits: Edits {
                         saturation: -100.0,
                         ..Edits::default()
@@ -377,6 +415,7 @@ mod tests {
         for n in 0..=2 {
             s.copies.push(CopyEntry {
                 copy: n,
+                name: None,
                 edits: Edits::default(),
             });
         }
@@ -392,6 +431,7 @@ mod tests {
         assert!(s.is_neutral(), "empty");
         s.copies.push(CopyEntry {
             copy: 0,
+            name: None,
             edits: Edits::default(),
         });
         assert!(s.is_neutral(), "a neutral, unnamed original only");
@@ -400,10 +440,12 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
+                    name: None,
                     edits: Edits::default(),
                 },
                 CopyEntry {
                     copy: 1,
+                    name: None,
                     edits: Edits::default(),
                 },
             ],
@@ -418,6 +460,7 @@ mod tests {
                 copies: vec![
                     CopyEntry {
                         copy: 0,
+                        name: None,
                         edits: Edits {
                             exposure: e0,
                             ..Edits::default()
@@ -425,6 +468,7 @@ mod tests {
                     },
                     CopyEntry {
                         copy: 1,
+                        name: None,
                         edits: Edits {
                             exposure: e1,
                             ..Edits::default()
@@ -500,5 +544,77 @@ mod tests {
         assert_eq!(load_copy(&photo, 0).unwrap().exposure, 1.0);
         assert_eq!(load_copy(&photo, 1).unwrap().exposure, 2.0);
         assert!(load_copy(&photo, 9).is_none(), "an absent copy is None");
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    fn edited(v: f32) -> Edits {
+        Edits {
+            exposure: v,
+            ..Edits::default()
+        }
+    }
+
+    #[test]
+    fn naming_a_copy_leaves_every_edit_and_the_other_copies_alone() {
+        // ⚠⚠ This is the guard for what was reported: renaming a copy used to rename the *file*,
+        // which every sibling copy shares. A name now touches exactly one copy's `name` and
+        // nothing else — not the edits, not the siblings, not the file.
+        let mut s = Sidecar::default();
+        s.set_edits(0, edited(1.0));
+        s.set_edits(1, edited(2.0));
+        s.set_edits(2, edited(3.0));
+
+        s.set_name(1, Some("Warm".into()));
+
+        assert_eq!(s.name_of(1), Some("Warm"));
+        assert_eq!(s.name_of(0), None, "the original is untouched");
+        assert_eq!(s.name_of(2), None, "so is the sibling");
+        assert_eq!(s.get(0).unwrap().edits, edited(1.0));
+        assert_eq!(
+            s.get(1).unwrap().edits,
+            edited(2.0),
+            "its own edits survive"
+        );
+        assert_eq!(s.get(2).unwrap().edits, edited(3.0));
+    }
+
+    #[test]
+    fn clearing_a_name_puts_the_copy_back_to_its_number() {
+        let mut s = Sidecar::default();
+        s.set_edits(1, edited(2.0));
+        s.set_name(1, Some("Warm".into()));
+        s.set_name(1, None);
+        assert_eq!(s.name_of(1), None);
+        assert_eq!(
+            s.get(1).unwrap().edits,
+            edited(2.0),
+            "undo must not reset edits"
+        );
+    }
+
+    #[test]
+    fn a_named_copy_keeps_the_sidecar_alive_even_when_neutral() {
+        // ⚠ Otherwise naming a copy and then resetting it would delete the copy, because
+        // `persist_all` removes a sidecar it considers neutral.
+        let mut s = Sidecar::default();
+        s.set_name(0, Some("named".into()));
+        assert!(
+            !s.is_neutral(),
+            "a name is worth a file even with neutral edits"
+        );
+    }
+
+    #[test]
+    fn setting_edits_does_not_clear_a_name() {
+        // ⚠ Every slider drag calls `set_edits`. Clearing the name there would erase it on the
+        // next keystroke after renaming — invisible until the export came out wrong.
+        let mut s = Sidecar::default();
+        s.set_name(1, Some("Warm".into()));
+        s.set_edits(1, edited(2.0));
+        assert_eq!(s.name_of(1), Some("Warm"));
     }
 }

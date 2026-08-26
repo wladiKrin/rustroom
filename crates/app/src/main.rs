@@ -2,7 +2,9 @@ use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::action_log::{ActionKind, ActionLog, SyncAction};
-use rustroom_app::batch_export::{ExportEvent, ExportOptions, ExportReport, ExportWorker};
+use rustroom_app::batch_export::{
+    ExportEvent, ExportJob, ExportOptions, ExportReport, ExportWorker,
+};
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
 use rustroom_app::decode_worker::{DecodeWorker, Decoded, LensFacts};
@@ -358,6 +360,9 @@ pub struct Session {
     /// sites that genuinely want the **file** — the decode, the buffer cache, the thumbnail.
     /// Only the sidecar, the undo scope and the label want the version.
     copy: u32,
+    /// This copy's own name, when it has one. Always `None` on the original, whose name is the
+    /// filename on disk.
+    name: Option<String>,
     engine: RenderEngine,
     edits: Edits,
     texture: Option<egui::TextureHandle>,
@@ -838,25 +843,38 @@ impl RustroomApp {
 
     /// Sources and edits for a batch export: every selected photo, using the open photo's
     /// **in-memory** edits so unsaved changes are exported, and each other photo's sidecar.
-    fn export_jobs(&self) -> Vec<(PhotoId, Edits)> {
+    fn export_jobs(&self) -> Vec<ExportJob> {
         let open = self
             .session
             .as_ref()
             .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.edits.clone()));
         let Some(lib) = &self.library else {
-            return open.into_iter().collect();
+            // ⚠ Single-file mode has no Library, hence no entry to read a name from — and no way
+            // to make a copy either, so the open photo is always the original.
+            return open
+                .into_iter()
+                .map(|(id, edits)| ExportJob {
+                    id,
+                    name: None,
+                    edits,
+                })
+                .collect();
         };
         lib.selection
             .iter()
-            .filter_map(|i| lib.entries.get(i).map(|e| e.id.clone()))
-            .map(|id| match &open {
-                Some((oid, edits)) if *oid == id => (id.clone(), edits.clone()),
-                _ => {
+            .filter_map(|i| lib.entries.get(i))
+            .map(|e| {
+                let id = e.id.clone();
+                // ⚠ The name comes from the *entry*, so it is whatever the Library is showing —
+                // including a rename made this session that has not been re-scanned.
+                let name = e.name.clone();
+                let edits = match &open {
+                    Some((oid, edits)) if *oid == id => edits.clone(),
                     // ⚠ `load_copy`, not `load`: two copies of one file have different edits, and
                     // loading the file would export both of them identically.
-                    let edits = sidecar::load_copy(&id.path, id.copy).unwrap_or_default();
-                    (id, edits)
-                }
+                    _ => sidecar::load_copy(&id.path, id.copy).unwrap_or_default(),
+                };
+                ExportJob { id, name, edits }
             })
             .collect()
     }
@@ -1017,6 +1035,9 @@ impl RustroomApp {
                 // so the two directions cannot drift apart.
                 self.rename_file(ctx, &to, &from);
             }
+            ActionKind::CopyRename { id, from, to: _ } => {
+                self.set_copy_name(&id, from);
+            }
             ActionKind::CopyDelete { path, entry } => {
                 // ⚠ Read-modify-write: other copies of this file are in the same sidecar and
                 // must survive the restore.
@@ -1083,6 +1104,9 @@ impl RustroomApp {
         match kind {
             ActionKind::Rename { from, to } => {
                 self.rename_file(ctx, &from, &to);
+            }
+            ActionKind::CopyRename { id, from: _, to } => {
+                self.set_copy_name(&id, to);
             }
             ActionKind::CopyDelete { path, entry } => {
                 let mut sidecar = sidecar::load_all(&path);
@@ -1394,6 +1418,11 @@ impl RustroomApp {
                 .effective_display_space(self.os_manages_colour),
             path,
             copy: id.copy,
+            // ⚠ Read from the sidecar rather than carried from the Library entry, so a session
+            // opened without a Library (single-file mode) still knows its own name.
+            name: sidecar::load_all(&id.path)
+                .name_of(id.copy)
+                .map(str::to_string),
             engine,
             edits,
             texture: None,
@@ -1700,9 +1729,10 @@ impl RustroomApp {
 
     /// Rename a photo **on disk**, moving its sidecar with it.
     ///
-    /// ⚠ Every copy of the file follows, because copies are versions *of* that file — there is
-    /// one name, shared. That is the whole reason per-copy names were removed: two names for one
-    /// photo, only one of them editable.
+    /// ⚠ Every copy of the file follows, because copies are versions *of* that file and it has
+    /// one name. That is exactly why this is reachable **only from the original**: renaming from
+    /// a copy would drag every sibling copy along with it, which is how it was first built and
+    /// was reported as surprising. A copy renames itself instead — `set_copy_name`.
     fn rename_file(&mut self, ctx: &egui::Context, from: &Path, to: &Path) -> bool {
         if from == to {
             return false;
@@ -1761,6 +1791,47 @@ impl RustroomApp {
             self.open_path(ctx, id);
         }
         self.status = format!("Renamed to {}", file_rename::field_text(to));
+        true
+    }
+
+    /// Rename a **virtual copy** — its own label, which is not a file.
+    ///
+    /// ⚠ Writes only this copy's `name`; the file, the other copies and every `Edits` are left
+    /// alone. Undo and redo both come through here with the two names swapped, so the directions
+    /// cannot drift apart — the same shape `rename_file` uses.
+    fn set_copy_name(&mut self, id: &PhotoId, name: Option<String>) -> bool {
+        // ⚠ Copy 0 *is* the file; its name is the filename, and storing a second one beside it
+        // would be two names for one photo.
+        if id.is_original() {
+            return false;
+        }
+        // ⚠ Read-modify-write of the whole envelope: the file's other copies live in the same
+        // sidecar and must survive.
+        let mut sidecar = sidecar::load_all(&id.path);
+        sidecar.set_name(id.copy, name.clone());
+        if let Err(e) = sidecar::persist_all(&id.path, &sidecar) {
+            self.status = format!("Could not rename the copy: {e}");
+            return false;
+        }
+        if let Some(s) = self.session.as_mut() {
+            if s.path == id.path && s.copy == id.copy {
+                s.name = name.clone();
+            }
+        }
+        // ⚠ The draft is dropped whatever happens: undo writes a name the field is not showing,
+        // and a stale draft would paint over it.
+        self.rename_draft = None;
+        if let Some(lib) = self.library.as_mut() {
+            for e in lib.entries.iter_mut() {
+                if e.id == *id {
+                    e.name = name.clone();
+                }
+            }
+        }
+        self.status = match &name {
+            Some(n) => format!("Renamed copy {} to {n}", id.copy),
+            None => format!("Cleared the name of copy {}", id.copy),
+        };
         true
     }
 

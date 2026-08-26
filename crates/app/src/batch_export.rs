@@ -20,6 +20,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
+/// One photo to export: which version of which file, what it is called, and its edits.
+///
+/// ⚠ The name is carried *here* rather than looked up in the sidecar by the worker, because the
+/// worker runs on its own thread and must not race the UI writing that file — the same reason the
+/// edits travel with the job instead of being re-read.
+#[derive(Debug, Clone)]
+pub struct ExportJob {
+    pub id: PhotoId,
+    /// This copy's name, when it has one. `None` on an original, which has no such name.
+    pub name: Option<String>,
+    pub edits: Edits,
+}
+
 /// What to export, and how.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -147,6 +160,7 @@ pub fn dest_for(
     dir: &Path,
     source: &Path,
     copy: u32,
+    copy_name: Option<&str>,
     dedup: usize,
     format: ExportFormat,
 ) -> PathBuf {
@@ -155,11 +169,9 @@ pub fn dest_for(
         .and_then(|s| s.to_str())
         .unwrap_or("export");
     let ext = format.extension();
-    let copy_suffix = if copy == 0 {
-        String::new()
-    } else {
-        format!("_{copy}")
-    };
+    // ⚠ A named copy exports under its name rather than its number — that is what naming a copy
+    // is *for*. The number stays the identity; the name is an explicit override on top of it.
+    let copy_suffix = PhotoId::export_suffix(copy, copy_name);
     let name = if dedup == 0 {
         format!("{stem}{copy_suffix}.{ext}")
     } else {
@@ -230,13 +242,13 @@ pub struct ExportWorker {
 }
 
 impl ExportWorker {
-    /// Start exporting `jobs` — `(source path, that photo's edits)` — into `opts.dest_dir`.
+    /// Start exporting `jobs` into `opts.dest_dir`.
     ///
     /// `cancel` is an input rather than something built here so that a test can flip it from
     /// *inside* the injected decode fn, which is the only way to exercise the mid-photo
     /// cancel check deterministically.
     pub fn spawn(
-        jobs: Vec<(PhotoId, Edits)>,
+        jobs: Vec<ExportJob>,
         opts: ExportOptions,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
         cancel: Arc<AtomicBool>,
@@ -276,7 +288,7 @@ impl ExportWorker {
 }
 
 fn run(
-    jobs: Vec<(PhotoId, Edits)>,
+    jobs: Vec<ExportJob>,
     opts: ExportOptions,
     decode: impl Fn(&Path) -> Result<ImageBuf, String>,
     events: Sender<ExportEvent>,
@@ -294,14 +306,21 @@ fn run(
         return;
     }
 
-    for (done, (id, edits)) in jobs.into_iter().enumerate() {
+    for (done, ExportJob { id, name, edits }) in jobs.into_iter().enumerate() {
         let source = id.path.clone();
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             break;
         }
 
-        let mut dest = dest_for(&opts.dest_dir, &source, id.copy, 0, opts.format);
+        let mut dest = dest_for(
+            &opts.dest_dir,
+            &source,
+            id.copy,
+            name.as_deref(),
+            0,
+            opts.format,
+        );
         if claimed.contains(&dest) || dest.exists() {
             let collision = match remembered {
                 Some(c) => c,
@@ -345,7 +364,14 @@ fn run(
                 Collision::KeepBoth => {
                     let mut i = 1;
                     loop {
-                        let candidate = dest_for(&opts.dest_dir, &source, id.copy, i, opts.format);
+                        let candidate = dest_for(
+                            &opts.dest_dir,
+                            &source,
+                            id.copy,
+                            name.as_deref(),
+                            i,
+                            opts.format,
+                        );
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -404,6 +430,7 @@ mod tests {
                 &dir,
                 Path::new("/in/DSCF6509.RAF"),
                 0,
+                None,
                 0,
                 ExportFormat::Jpeg
             ),
@@ -414,6 +441,7 @@ mod tests {
                 &dir,
                 Path::new("/in/holiday.jpeg"),
                 0,
+                None,
                 0,
                 ExportFormat::Jpeg
             ),
@@ -426,11 +454,11 @@ mod tests {
         // What "Keep both" uses: the first free name-1, name-2, ...
         let dir = PathBuf::from("/out");
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 0, 1, ExportFormat::Jpeg),
+            dest_for(&dir, Path::new("/in/a.RAF"), 0, None, 1, ExportFormat::Jpeg),
             PathBuf::from("/out/a-1.jpg")
         );
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 0, 7, ExportFormat::Jpeg),
+            dest_for(&dir, Path::new("/in/a.RAF"), 0, None, 7, ExportFormat::Jpeg),
             PathBuf::from("/out/a-7.jpg")
         );
     }
@@ -527,7 +555,7 @@ mod tests {
     /// Returns the report plus every event, so a test can assert on progress as well as the
     /// outcome. `decode` receives the source path so a test can fail one specific photo.
     fn run_export(
-        jobs: Vec<(PhotoId, Edits)>,
+        jobs: Vec<ExportJob>,
         opts: ExportOptions,
         answer: Vec<Decision>,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
@@ -557,10 +585,14 @@ mod tests {
     /// ⚠ All originals — the pre-existing export tests below keep their exact assertions
     /// through the widening to `PhotoId`, which is what shows copies changed nothing for
     /// ordinary photos.
-    fn jobs(dir: &TempDir, names: &[&str]) -> Vec<(PhotoId, Edits)> {
+    fn jobs(dir: &TempDir, names: &[&str]) -> Vec<ExportJob> {
         names
             .iter()
-            .map(|n| (PhotoId::original(dir.0.join(n)), Edits::default()))
+            .map(|n| ExportJob {
+                id: PhotoId::original(dir.0.join(n)),
+                name: None,
+                edits: Edits::default(),
+            })
             .collect()
     }
 
@@ -630,12 +662,12 @@ mod tests {
         let dir = PathBuf::from("/out");
         for f in ExportFormat::ALL {
             assert_eq!(
-                dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, 0, f),
+                dest_for(&dir, Path::new("/in/DSCF6509.RAF"), 0, None, 0, f),
                 dir.join(format!("DSCF6509.{}", f.extension())),
                 "{f:?}"
             );
             assert_eq!(
-                dest_for(&dir, Path::new("/in/a.RAF"), 0, 3, f),
+                dest_for(&dir, Path::new("/in/a.RAF"), 0, None, 3, f),
                 dir.join(format!("a-3.{}", f.extension())),
                 "{f:?}"
             );
@@ -893,7 +925,7 @@ mod tests {
     fn a_source_with_no_stem_still_produces_a_name() {
         // Defensive: `file_stem` is an Option, and a path ending in `..` has none.
         let dir = PathBuf::from("/out");
-        let got = dest_for(&dir, Path::new("/in/.."), 0, 0, ExportFormat::Jpeg);
+        let got = dest_for(&dir, Path::new("/in/.."), 0, None, 0, ExportFormat::Jpeg);
         assert!(got.starts_with("/out"));
         assert_eq!(got.extension().and_then(|e| e.to_str()), Some("jpg"));
     }
@@ -945,6 +977,7 @@ mod tests {
                 &dir,
                 Path::new("/in/DSCF6223.RAF"),
                 0,
+                None,
                 0,
                 ExportFormat::Jpeg
             ),
@@ -956,11 +989,75 @@ mod tests {
                 &dir,
                 Path::new("/in/DSCF6223.RAF"),
                 2,
+                None,
                 0,
                 ExportFormat::Jpeg
             ),
             dir.join("DSCF6223_2.jpg")
         );
+    }
+
+    #[test]
+    fn a_named_copy_exports_under_its_name_not_its_number() {
+        // ⚠ Controlling the export filename is what naming a copy is *for*. The number stays the
+        // identity; the name is an explicit override on top of it.
+        let dir = std::path::PathBuf::from("/out");
+        assert_eq!(
+            dest_for(
+                &dir,
+                Path::new("/in/DSCF6223.RAF"),
+                2,
+                Some("Warm"),
+                0,
+                ExportFormat::Jpeg
+            ),
+            dir.join("DSCF6223_Warm.jpg")
+        );
+    }
+
+    #[test]
+    fn a_name_on_the_original_is_ignored_by_export_naming() {
+        // ⚠ Copy 0 *is* the file, so its name is the filename. A name stored against it — which a
+        // hand-edited sidecar can hold — must never suffix the export.
+        let dir = std::path::PathBuf::from("/out");
+        assert_eq!(
+            dest_for(
+                &dir,
+                Path::new("/in/a.RAF"),
+                0,
+                Some("nonsense"),
+                0,
+                ExportFormat::Jpeg
+            ),
+            dir.join("a.jpg")
+        );
+    }
+
+    #[test]
+    fn two_copies_sharing_a_name_still_get_distinct_files() {
+        // ⚠ Nothing stops two copies being called the same thing, so the name alone cannot be
+        // relied on to be unique. The pre-existing `-N` de-duplication is what catches it, which
+        // is the reason the two schemes were kept separate rather than merged.
+        let dir = std::path::PathBuf::from("/out");
+        let first = dest_for(
+            &dir,
+            Path::new("/in/a.RAF"),
+            1,
+            Some("Warm"),
+            0,
+            ExportFormat::Jpeg,
+        );
+        let second = dest_for(
+            &dir,
+            Path::new("/in/a.RAF"),
+            2,
+            Some("Warm"),
+            1,
+            ExportFormat::Jpeg,
+        );
+        assert_eq!(first, dir.join("a_Warm.jpg"));
+        assert_eq!(second, dir.join("a_Warm-1.jpg"));
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -970,11 +1067,11 @@ mod tests {
         // time. Different meanings, so different separators, and both can appear at once.
         let dir = std::path::PathBuf::from("/out");
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 2, 1, ExportFormat::Jpeg),
+            dest_for(&dir, Path::new("/in/a.RAF"), 2, None, 1, ExportFormat::Jpeg),
             dir.join("a_2-1.jpg")
         );
         assert_eq!(
-            dest_for(&dir, Path::new("/in/a.RAF"), 0, 3, ExportFormat::Jpeg),
+            dest_for(&dir, Path::new("/in/a.RAF"), 0, None, 3, ExportFormat::Jpeg),
             dir.join("a-3.jpg"),
             "an original that collides is unchanged from before this feature"
         );

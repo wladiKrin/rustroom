@@ -73,29 +73,41 @@ impl Edited {
 /// reason: two names for one photo, only one of them editable, and typing in the editable one
 /// changed nothing visible.
 ///
-/// ⚠ Edits a **scratch** draft, not the path. Writing through would rename the file on every
-/// keystroke — creating a file per character — and would commit a half-typed name the moment
-/// focus moved. Same shape the export dialog's `export_draft` uses.
+/// ⚠⚠ **Which name it edits depends on the photo, and that asymmetry is the feature.** On the
+/// original it is the filename on disk; on a virtual copy it is that copy's own label. A copy has
+/// no file of its own, so editing the filename from one renamed the shared file and dragged every
+/// sibling copy along with it — reported as surprising, and the reason the copy name came back.
 ///
-/// Returns `Some(new_path)` when a rename was committed and actually changes something.
-fn filename_field(
+/// ⚠ Edits a **scratch** draft, not the stored value. Writing through would rename the file on
+/// every keystroke — creating a file per character — and would commit a half-typed name the moment
+/// focus moved. Same shape the export dialog's `export_draft` uses.
+fn name_field(
     ui: &mut egui::Ui,
     s: &Session,
     draft: &mut Option<(PhotoId, String)>,
-) -> Option<std::path::PathBuf> {
+) -> Option<Rename> {
     let id = PhotoId::new(s.path.clone(), s.copy);
-    let current = file_rename::field_text(&s.path);
+    let on_copy = !id.is_original();
+    let current = if on_copy {
+        s.name.clone().unwrap_or_default()
+    } else {
+        file_rename::field_text(&s.path)
+    };
     // ⚠ A draft belonging to a *different* photo is discarded, not shown. Without this the last
     // name typed followed you to every photo you opened afterwards.
     if draft.as_ref().is_some_and(|(d, _)| *d != id) {
         *draft = None;
     }
     let (_, text) = draft.get_or_insert_with(|| (id.clone(), current.clone()));
-    let r = ui.add(
-        egui::TextEdit::singleline(text)
-            .font(egui::TextStyle::Body)
-            .desired_width(f32::INFINITY),
-    );
+    let mut edit = egui::TextEdit::singleline(text)
+        .font(egui::TextStyle::Body)
+        .desired_width(f32::INFINITY);
+    if on_copy {
+        // ⚠ A hint rather than the number as real text: typing over "1" and stopping halfway
+        // would store a name that merely looks like a copy number.
+        edit = edit.hint_text(format!("Copy {}", s.copy));
+    }
+    let r = ui.add(edit);
     // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the
     // context lock internally, and holding one across `ui.input(..)` panics inside epaint's
     // mutex — the re-entrant lock the canvas-navigation work already paid for.
@@ -117,20 +129,37 @@ fn filename_field(
     if r.lost_focus() || (r.has_focus() && entered) {
         let typed = text.clone();
         *draft = None;
+        if typed == current {
+            // ⚠ Nothing typed, nothing recorded — or Ctrl+Z would appear to do nothing.
+            return None;
+        }
+        if on_copy {
+            // ⚠ Empty *clears* the name rather than being refused: a copy without one is a
+            // legitimate state that shows its number, so there is nothing to protect against.
+            let trimmed = typed.trim();
+            let to = (!trimmed.is_empty()).then(|| trimmed.to_string());
+            return (to != s.name).then_some(Rename::Copy(to));
+        }
         // ⚠ A refusal leaves the file alone and the field resets to the real name, so an empty
         // or unusable entry can never look like it worked.
         if let Ok(to) = file_rename::target(&s.path, &typed) {
             if to != s.path {
-                return Some(to);
+                return Some(Rename::File(to));
             }
         }
     }
     None
 }
 
+/// What the name field committed: a file on disk, or one copy's label.
+enum Rename {
+    File(std::path::PathBuf),
+    Copy(Option<String>),
+}
+
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
-    let mut rename: Option<std::path::PathBuf> = None;
+    let mut rename: Option<Rename> = None;
     egui::Panel::right("panel")
         .default_size(240.0)
         .show(ui, |ui| {
@@ -253,11 +282,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // The filename first: which photo this is matters more than what shot it,
                     // and the panel scrolls, so it belongs above the metadata. ⚠ It is a field,
                     // not a label — this is where a photo is renamed.
-                    rename = filename_field(ui, s, &mut app.rename_draft);
-                    // ⚠ Which copy this is, when it is one. Copies share the filename above, so
-                    // without this two rows would read identically.
+                    rename = name_field(ui, s, &mut app.rename_draft);
+                    // ⚠ On a copy the field above holds the *copy's* name, so the file it belongs
+                    // to has to be said somewhere — without it two copies of different files
+                    // called "Warm" would read identically.
                     if s.copy != 0 {
-                        theme::caption(ui, &format!("Copy {}", s.copy));
+                        theme::caption(
+                            ui,
+                            &format!("Copy {} of {}", s.copy, file_rename::field_text(&s.path)),
+                        );
                     }
                     theme::caption(ui, &s.make_model);
                 }
@@ -267,16 +300,35 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
     // rebuilds the Library, both of which need `&mut app` while the closure still holds
     // `&mut app.session`. The same shape `photo_edited` uses, and for the same reason.
-    if let Some(to) = rename {
-        let from = app.session.as_ref().map(|s| s.path.clone());
-        if let Some(from) = from {
-            let ctx = ui.ctx().clone();
-            if app.rename_file(&ctx, &from, &to) {
-                // ⚠ Pushed only when the rename actually happened — a refused one (name taken,
-                // empty) must not leave an undo step that would move a file nobody moved.
-                app.actions.push(ActionKind::Rename { from, to }, None);
+    match rename {
+        Some(Rename::File(to)) => {
+            let from = app.session.as_ref().map(|s| s.path.clone());
+            if let Some(from) = from {
+                let ctx = ui.ctx().clone();
+                if app.rename_file(&ctx, &from, &to) {
+                    // ⚠ Pushed only when the rename actually happened — a refused one (name
+                    // taken, empty) must not leave an undo step that would move a file nobody
+                    // moved.
+                    app.actions.push(ActionKind::Rename { from, to }, None);
+                }
             }
         }
+        Some(Rename::Copy(to)) => {
+            let was = app
+                .session
+                .as_ref()
+                .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.name.clone()));
+            if let Some((id, from)) = was {
+                if app.set_copy_name(&id, to.clone()) {
+                    // ⚠ Scoped to its copy, unlike a file rename: the photo still exists at the
+                    // same path, so `reachable` can compare against it.
+                    let open = id.clone();
+                    app.actions
+                        .push(ActionKind::CopyRename { id, from, to }, Some(&open));
+                }
+            }
+        }
+        None => {}
     }
     photo_edited
 }

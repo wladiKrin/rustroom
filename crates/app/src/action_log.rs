@@ -31,6 +31,20 @@ pub enum ActionKind {
     /// photo it names no longer exists at the old path, so there is nothing for `reachable` to
     /// compare against.
     Rename { from: PathBuf, to: PathBuf },
+    /// A virtual **copy** renamed — its own label, not the file's.
+    ///
+    /// ⚠ Distinct from `Rename` because they change different things and are reachable from
+    /// different places. A file rename is global (the photo no longer exists at the old path);
+    /// a copy rename is scoped to its copy by the same rule `PhotoEdit` uses, so Ctrl+Z on
+    /// another photo cannot reach it.
+    ///
+    /// ⚠ Not a `PhotoEdit`: the name lives in the sidecar envelope rather than in `Edits`, so
+    /// `History<Edits>` has nothing to pop for it.
+    CopyRename {
+        id: PhotoId,
+        from: Option<String>,
+        to: Option<String>,
+    },
     /// A deleted virtual copy, held so undo can put it back.
     ///
     /// ⚠ Carries the whole `CopyEntry` because nothing else holds it — unlike `PhotoEdit`, whose
@@ -102,7 +116,7 @@ struct Entry {
 /// waits, intact, until you return to the photo it touched.
 fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
     match kind {
-        ActionKind::PhotoEdit { id } => open == Some(id),
+        ActionKind::PhotoEdit { id } | ActionKind::CopyRename { id, .. } => open == Some(id),
         // ⚠ A deleted copy has no `PhotoId` left to be reachable *from*, so it is global like a
         // preset deletion rather than scoped like an edit.
         ActionKind::PresetDelete { .. }
@@ -542,6 +556,39 @@ mod tests {
             "the original must not reach a copy's edit"
         );
         assert!(log.undo(Some(&copy)).is_some(), "its own copy must");
+    }
+
+    #[test]
+    fn a_copy_rename_is_scoped_to_its_copy_unlike_a_file_rename() {
+        // ⚠ The two renames differ deliberately. A **file** rename is global: after it the photo
+        // is at a different path, so scoping it to the old one would make it unreachable the
+        // moment it took effect. A **copy** rename leaves the file where it is, so it scopes to
+        // its copy like any other per-photo action — and must *not* be reachable from the
+        // original, or Ctrl+Z there would rename a copy the user is not looking at.
+        use crate::photo_id::PhotoId;
+        let path = std::path::PathBuf::from("/a.RAF");
+        let original = PhotoId::original(path.clone());
+        let one = PhotoId::new(path.clone(), 1);
+        let two = PhotoId::new(path, 2);
+
+        let mut log = ActionLog::default();
+        log.push(
+            ActionKind::CopyRename {
+                id: one.clone(),
+                from: None,
+                to: Some("Warm".into()),
+            },
+            Some(&one),
+        );
+        assert!(
+            log.undo(Some(&original)).is_none(),
+            "the original must not reach a copy's rename"
+        );
+        assert!(
+            log.undo(Some(&two)).is_none(),
+            "nor must a sibling copy of the same file"
+        );
+        assert!(log.undo(Some(&one)).is_some(), "its own copy must");
     }
 
     #[test]

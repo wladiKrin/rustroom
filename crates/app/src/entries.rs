@@ -15,20 +15,26 @@ pub struct PhotoEntry {
     pub id: PhotoId,
     /// The file's own name, shared by every copy of it.
     pub file_name: String,
+    /// This copy's own name, when it has one. Always `None` on the original, whose name *is*
+    /// `file_name`.
+    pub name: Option<String>,
 }
 
 impl PhotoEntry {
     /// What the grid, filmstrip and Develop footer show.
     ///
-    /// ⚠ The copy **number**, not a separate name. Copies used to carry their own label; it was
-    /// removed because it made two names for one photo — the file's and the copy's — and only
-    /// one of them was editable, which is exactly how it was reported as broken. The filename is
-    /// now the editable name, and it is shared by every copy of a file.
+    /// ⚠⚠ **A copy shows its name *instead of* its number, never as well as it.** Two labels for
+    /// one thing is how a display value drifts from the identity it describes.
+    ///
+    /// ⚠ There is exactly one editable name per row, and *which* name it is depends on the row:
+    /// the original's is the filename on disk, a copy's is this. That asymmetry is the feature —
+    /// a copy has no file of its own, so renaming one used to rename the shared file and drag
+    /// every other copy along with it.
     pub fn label(&self) -> String {
-        if self.id.copy == 0 {
-            self.file_name.clone()
-        } else {
-            format!("{} / {}", self.file_name, self.id.copy)
+        match (self.id.copy, self.name.as_deref()) {
+            (0, _) => self.file_name.clone(),
+            (_, Some(n)) => format!("{} / {n}", self.file_name),
+            (c, None) => format!("{} / {c}", self.file_name),
         }
     }
 }
@@ -54,6 +60,9 @@ pub fn build(scan: &[CatalogEntry], load: impl Fn(&Path) -> Sidecar) -> Vec<Phot
             out.push(PhotoEntry {
                 id: PhotoId::new(e.path.clone(), n),
                 file_name: e.file_name.clone(),
+                // ⚠ Never on the original: copy 0's name is the file's, and holding a second one
+                // beside it would be two names for one thing.
+                name: (n != 0).then(|| s.name_of(n).map(str::to_string)).flatten(),
             });
         }
     }
@@ -77,9 +86,10 @@ mod tests {
             .collect()
     }
 
-    fn copy(n: u32) -> CopyEntry {
+    fn copy(n: u32, name: Option<&str>) -> CopyEntry {
         CopyEntry {
             copy: n,
+            name: name.map(str::to_string),
             edits: Edits::default(),
         }
     }
@@ -99,7 +109,7 @@ mod tests {
         // whether or not anything is stored for it, and omitting it would make a photo vanish
         // from the browser after making a copy of it.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(1)],
+            copies: vec![copy(1, None)],
         });
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].id.copy, 0, "the original comes first");
@@ -111,7 +121,7 @@ mod tests {
         let got = build(&scan(&["a.RAF", "b.RAF"]), |p| {
             if p.ends_with("a.RAF") {
                 Sidecar {
-                    copies: vec![copy(3), copy(0), copy(1)],
+                    copies: vec![copy(3, None), copy(0, None), copy(1, None)],
                 }
             } else {
                 Sidecar::default()
@@ -137,10 +147,39 @@ mod tests {
         // ⚠ One number used everywhere: the identity, the label and the export suffix are the
         // same value. The original shows no suffix at all.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(0), copy(1), copy(2)],
+            copies: vec![copy(0, None), copy(1, None), copy(2, None)],
         });
         assert_eq!(got[0].label(), "a.RAF");
         assert_eq!(got[1].label(), "a.RAF / 1");
         assert_eq!(got[2].label(), "a.RAF / 2");
+    }
+
+    #[test]
+    fn a_named_copy_shows_its_name_instead_of_its_number() {
+        let got = build(&scan(&["a.RAF"]), |_| Sidecar {
+            copies: vec![copy(0, None), copy(1, None), copy(2, Some("B&W"))],
+        });
+        assert_eq!(
+            got[1].label(),
+            "a.RAF / 1",
+            "unnamed falls back to the number"
+        );
+        assert_eq!(got[2].label(), "a.RAF / B&W");
+        assert!(
+            !got[2].label().contains('2'),
+            "the name replaces the number, it does not join it"
+        );
+    }
+
+    #[test]
+    fn the_original_never_carries_a_copy_name() {
+        // ⚠ Copy 0 *is* the file, so its name is the filename. A name stored against it — which a
+        // hand-edited sidecar can hold — must not become a second name shown beside the first.
+        let got = build(&scan(&["a.RAF"]), |_| Sidecar {
+            copies: vec![copy(0, Some("nonsense")), copy(1, Some("B&W"))],
+        });
+        assert_eq!(got[0].name, None);
+        assert_eq!(got[0].label(), "a.RAF");
+        assert_eq!(got[1].name.as_deref(), Some("B&W"));
     }
 }

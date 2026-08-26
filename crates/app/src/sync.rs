@@ -207,6 +207,7 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
+                    name: None,
                     edits: Edits {
                         exposure: 1.0,
                         ..Edits::default()
@@ -214,6 +215,7 @@ mod tests {
                 },
                 CopyEntry {
                     copy: 1,
+                    name: None,
                     edits: Edits {
                         exposure: 2.0,
                         ..Edits::default()

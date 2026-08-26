@@ -43,6 +43,26 @@ impl PhotoId {
         }
     }
 
+    /// What an export filename appends for a **named** copy: the name, sanitized for a filename.
+    ///
+    /// ⚠⚠ **The name overrides the number here, and that is the whole point of naming a copy.**
+    /// Controlling the export filename is what the name is *for* — `DSCF6223_B&W.jpg` rather than
+    /// `DSCF6223_2.jpg`. The number remains the identity; the name is an explicit, user-chosen
+    /// label on top of it, not a second derived fact that could silently disagree.
+    ///
+    /// ⚠ Sanitized through `safe_name`, the single guard that stops a typed name escaping its
+    /// directory — the name reaches the filesystem here exactly as a preset's does. A name that
+    /// sanitizes to nothing falls back to the number rather than producing a bare `_`.
+    pub fn export_suffix(copy: u32, name: Option<&str>) -> String {
+        if copy == 0 {
+            return String::new();
+        }
+        match name.map(crate::safe_name::sanitize) {
+            Some(n) if !n.is_empty() => format!("_{n}"),
+            _ => format!("_{copy}"),
+        }
+    }
+
     /// What the UI shows: the file name, plus ` / N` for a copy.
     pub fn label(&self) -> String {
         let name = self
@@ -99,6 +119,40 @@ mod tests {
         assert_eq!(PhotoId::original(PathBuf::from("/x/a.RAF")).suffix(), "");
         assert_eq!(PhotoId::new(PathBuf::from("/x/a.RAF"), 1).suffix(), "_1");
         assert_eq!(PhotoId::new(PathBuf::from("/x/a.RAF"), 12).suffix(), "_12");
+    }
+
+    #[test]
+    fn a_named_copy_exports_under_its_name() {
+        assert_eq!(
+            PhotoId::export_suffix(0, Some("B&W")),
+            "",
+            "copy 0 is the file"
+        );
+        assert_eq!(PhotoId::export_suffix(2, None), "_2");
+        assert_eq!(
+            PhotoId::export_suffix(2, Some("Black and White")),
+            "_Black and White"
+        );
+        // ⚠ The *shown* name keeps what you typed; only the filename is sanitized, so "B&W" is
+        // still labelled "B&W" in the Library while exporting as `_B_W`.
+        assert_eq!(PhotoId::export_suffix(2, Some("B&W")), "_B_W");
+    }
+
+    #[test]
+    fn an_export_name_cannot_escape_its_directory() {
+        // ⚠ The one security-relevant line in this feature: the name is free text that becomes a
+        // path. Same guard, and the same reason, as a preset's filename.
+        let got = PhotoId::export_suffix(2, Some("../../evil"));
+        assert!(!got.contains('/') && !got.contains('.'), "got {got}");
+        assert!(!PhotoId::export_suffix(2, Some("a/b")).contains('/'));
+    }
+
+    #[test]
+    fn a_name_that_sanitizes_to_nothing_falls_back_to_the_number() {
+        // ⚠ Otherwise the suffix would be a bare `_`, which reads as a broken filename rather
+        // than as a copy.
+        assert_eq!(PhotoId::export_suffix(2, Some("   ")), "_2");
+        assert_eq!(PhotoId::export_suffix(2, Some("")), "_2");
     }
 
     #[test]
