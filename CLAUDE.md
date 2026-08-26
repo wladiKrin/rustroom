@@ -214,7 +214,13 @@ Every one has a section below. ⚠ **The two most instructive are the mask bugs 
 
 ⚠ **Three slices are parked in `docs/BACKLOG.md`, each for a stated reason rather than for lack of time:** **perspective correction** (not profile-driven — needs manual sliders and canvas interaction, the half this project's record says is expensive); **creative 3-D LUTs** (blocked on *"where does a display-referred look run in a scene-referred pipeline"*); **snapshots** (needs an answer to how they relate to `History<Edits>`).
 
-**▶ NEXT ACTION: Phase 4 — the Library / DAM half**, or any of the three parked slices. ⚠ Note that M3.4's follow-up (2026-08-26) has already pulled some browser work forward — sorting, grid sizing, in-place renaming and `Reindex` all live in the Library now, so Phase 4 starts from a better place than the roadmap assumes. ⚠ Read the backlog entry before picking one of those three: each is blocked on a design question, not on effort, and treating one as a small job is how it goes wrong.
+**▶ AGREED ORDER OF WORK (user's call, 2026-08-26) — do these in sequence:**
+> 1. **Headless tests for canvas and panel code** ← *in progress*. The gap this file has recorded eleven times: every GUI defect was found by using the app, none by a test. Done first deliberately, so Phase 4's UI work lands on covered ground instead of widening the gap.
+> 2. **Phase 4 — the catalog half.** M4.1 SQLite first and alone (it is a migration of the sidecar model, and this project's one near-miss with data loss was exactly a sidecar format change), then ratings/flags/keywords, then search and collections. ⚠ Smaller than the roadmap assumes — browsing, sorting, renaming and `Reindex` already landed.
+> 3. **Persist undo history.** Session-only today; closing the app loses every stack.
+> 4. **The three parked slices** in `docs/BACKLOG.md` — perspective correction, creative 3-D LUTs, snapshots. ⚠ Each is blocked on a *design question*, so each needs a brainstorm before a plan.
+
+**Original next-action note, superseded by the order above: Phase 4 — the Library / DAM half**, or any of the three parked slices. ⚠ Note that M3.4's follow-up (2026-08-26) has already pulled some browser work forward — sorting, grid sizing, in-place renaming and `Reindex` all live in the Library now, so Phase 4 starts from a better place than the roadmap assumes. ⚠ Read the backlog entry before picking one of those three: each is blocked on a design question, not on effort, and treating one as a small job is how it goes wrong.
 
 ⚠ **Nothing in Phase 3 needs a C library any more.** The "new C dependency" warning M3.2 carried for months was dissolved by the pure-Rust `lensfun` crate.
 
