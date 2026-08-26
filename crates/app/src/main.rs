@@ -95,6 +95,7 @@ enum AppView {
 enum LibrarySource {
     Folder(PathBuf),
     Collection { id: i64, name: String },
+    Keyword { id: i64, name: String },
 }
 
 struct Library {
@@ -228,6 +229,10 @@ struct RustroomApp {
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
     new_collection: String,
+    /// Scratch text for the new-keyword field.
+    new_keyword: String,
+    /// The keyword a new one will be created under. `None` makes a root.
+    new_keyword_parent: Option<i64>,
     /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
     /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a
@@ -398,6 +403,8 @@ impl RustroomApp {
             hsl_channel: Default::default(),
             grade_range: Default::default(),
             new_collection: String::new(),
+            new_keyword: String::new(),
+            new_keyword_parent: None,
             rename_draft: None,
             cell_zoom_pending: false,
             tool: Default::default(),
@@ -2113,6 +2120,93 @@ impl RustroomApp {
         } else {
             format!("“{name}” — {n} photos")
         };
+    }
+
+    /// Show every photo carrying a keyword or any of its descendants.
+    ///
+    /// ⚠ The same shape as `open_collection`, deliberately: both are "a set of photos from
+    /// anywhere", and giving them two different loaders is how two idioms grow for one concept.
+    fn open_keyword(&mut self, ctx: &egui::Context, id: i64, name: &str) {
+        let Some(cat) = &self.catalog else {
+            self.status = "No catalog".into();
+            return;
+        };
+        let members = match cat.keyword_members(id) {
+            Ok(m) => m,
+            Err(e) => {
+                self.status = format!("Could not read the keyword: {e}");
+                return;
+            }
+        };
+        let mut scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at);
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let entries = entries::build(&scan, sidecar::load_all);
+        let n = entries.len();
+        let paths: Vec<_> = entries.iter().map(|e| e.id.path.clone()).collect();
+        let ctx2 = ctx.clone();
+        let space = self
+            .settings
+            .effective_display_space(self.os_manages_colour);
+        let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
+        self.library = Some(Library {
+            source: LibrarySource::Keyword {
+                id,
+                name: name.to_string(),
+            },
+            scan,
+            entries,
+            thumbs: (0..n).map(|_| None).collect(),
+            selection: Selection::default(),
+            loader,
+            filter: FormatFilter::default(),
+            visible: (0..n).collect(),
+            marks: std::collections::HashMap::new(),
+            min_stars: 0,
+        });
+        self.reload_marks();
+        self.view = AppView::Library;
+        self.status = if n == 0 {
+            format!("Nothing tagged “{name}”")
+        } else {
+            format!("“{name}” — {n} photos")
+        };
+    }
+
+    /// Which keyword the Library is showing, if it is showing one.
+    fn selected_keyword(&self) -> Option<i64> {
+        match self.library.as_ref().map(|l| &l.source) {
+            Some(LibrarySource::Keyword { id, .. }) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// Tag every selected photo's **file** with a keyword.
+    ///
+    /// ⚠ De-duplicated by path: two copies of one file are one file. Assigning twice is a no-op
+    /// anyway, but the status count would otherwise lie about how much was tagged.
+    fn assign_keyword_to_selection(&mut self, keyword: i64) {
+        let mut files: Vec<PathBuf> = Vec::new();
+        if let Some(lib) = self.library.as_ref() {
+            for i in lib.selection.iter() {
+                if let Some(e) = lib.entries.get(i) {
+                    if !files.contains(&e.id.path) {
+                        files.push(e.id.path.clone());
+                    }
+                }
+            }
+        }
+        if files.is_empty() {
+            return;
+        }
+        let mut n = 0;
+        if let Some(cat) = &self.catalog {
+            for f in &files {
+                if cat.assign_keyword(keyword, f).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        self.status = format!("Tagged {n} photos");
     }
 
     /// Which collection the Library is showing, if it is showing one.

@@ -1,7 +1,11 @@
-//! The Library's collections list.
+//! The Library's left panel: collections and keywords.
+//!
+//! ⚠ **One panel, two sections — not two panels.** Both are "a named set of photos from
+//! anywhere", so they share an idiom: a list with counts, `+` to apply to the selection, click to
+//! browse. Two files would invite two different idioms for one concept.
 //!
 //! ⚠ A **left** panel, in the Library view only — Lightroom's placement, and it competes with
-//! nothing. The Presets panel was removed for having two homes; this has one.
+//! nothing. The Presets panel was removed for having two homes; these have one.
 
 use crate::RustroomApp;
 use eframe::egui;
@@ -15,6 +19,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         Open(i64, String),
         Delete(i64),
         AddSelection(i64),
+        OpenKeyword(i64, String),
+        DeleteKeyword(i64),
+        TagSelection(i64),
+        CreateKeyword,
     }
     let mut action = Action::None;
 
@@ -72,6 +80,81 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     });
                 }
             });
+
+            ui.separator();
+            ui.heading("Keywords");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.new_keyword)
+                        .hint_text("New keyword")
+                        .desired_width(110.0),
+                );
+                let named = !app.new_keyword.trim().is_empty();
+                if ui.add_enabled(named, egui::Button::new("+")).clicked() {
+                    action = Action::CreateKeyword;
+                }
+            });
+            let kws = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.keywords().ok())
+                .unwrap_or_default();
+            // ⚠ The parent is chosen *before* creating, because there is no drag-and-drop and no
+            // re-parenting: this is the only moment a keyword's place in the tree is decided.
+            let parent_name = app
+                .new_keyword_parent
+                .and_then(|id| kws.iter().find(|k| k.id == id))
+                .map(|k| k.name.clone())
+                .unwrap_or_else(|| "(top level)".to_string());
+            egui::ComboBox::from_id_salt("kw_parent")
+                .selected_text(format!("under {parent_name}"))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut app.new_keyword_parent, None, "(top level)");
+                    for k in &kws {
+                        ui.selectable_value(
+                            &mut app.new_keyword_parent,
+                            Some(k.id),
+                            format!("{}{}", "  ".repeat(k.depth), k.name),
+                        );
+                    }
+                });
+
+            if kws.is_empty() {
+                crate::theme::hint(ui, "No keywords yet.");
+            }
+            let picked_kw = app.selected_keyword();
+            egui::ScrollArea::vertical()
+                .id_salt("keywords")
+                .show(ui, |ui| {
+                    for k in &kws {
+                        ui.horizontal(|ui| {
+                            // ⚠ Indented by depth — the only thing that makes the tree readable,
+                            // since the rows are a flat depth-first list.
+                            ui.add_space(k.depth as f32 * 12.0);
+                            if ui
+                                .button("×")
+                                .on_hover_text("Delete, with everything under it")
+                                .clicked()
+                            {
+                                action = Action::DeleteKeyword(k.id);
+                            }
+                            if ui
+                                .add_enabled(picked > 0, egui::Button::new("+"))
+                                .on_hover_text(format!("Tag {picked} selected"))
+                                .clicked()
+                            {
+                                action = Action::TagSelection(k.id);
+                            }
+                            let label = format!("{} ({})", k.name, k.count);
+                            if ui
+                                .selectable_label(picked_kw == Some(k.id), label)
+                                .clicked()
+                            {
+                                action = Action::OpenKeyword(k.id, k.name.clone());
+                            }
+                        });
+                    }
+                });
         });
 
     match action {
@@ -109,5 +192,24 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
             app.status = format!("Added {n} to the collection");
         }
+        Action::CreateKeyword => {
+            if let Some(cat) = &app.catalog {
+                let _ = cat.create_keyword(app.new_keyword.trim(), app.new_keyword_parent);
+            }
+            app.new_keyword.clear();
+        }
+        Action::OpenKeyword(id, name) => app.open_keyword(ctx, id, &name),
+        Action::DeleteKeyword(id) => {
+            if let Some(cat) = &app.catalog {
+                let _ = cat.delete_keyword(id);
+            }
+            // ⚠ If the deleted keyword was on screen there is nothing left to show — and its
+            // children went with it, so a child cannot be showing either.
+            if app.selected_keyword() == Some(id) {
+                app.library = None;
+                app.status = "Keyword deleted".into();
+            }
+        }
+        Action::TagSelection(id) => app.assign_keyword_to_selection(id),
     }
 }

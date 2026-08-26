@@ -99,6 +99,8 @@ pub fn for_test() -> RustroomApp {
         hsl_channel: Default::default(),
         grade_range: Default::default(),
         new_collection: String::new(),
+        new_keyword: String::new(),
+        new_keyword_parent: None,
         rename_draft: None,
         cell_zoom_pending: false,
         tool: Default::default(),
