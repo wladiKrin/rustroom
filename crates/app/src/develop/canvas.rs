@@ -1194,4 +1194,27 @@ mod tests {
             "above fit the pan must survive"
         );
     }
+
+    #[test]
+    fn the_fixture_opens_a_photo_and_the_canvas_draws_it() {
+        // ⚠ The smoke test that makes the fixture worth having: it proves `show` can be driven
+        // headlessly at all. Everything else in this module builds on it.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        assert!(app.session.is_some());
+
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                super::show(&mut app, ui, &ctx.clone());
+            },
+        );
+    }
 }

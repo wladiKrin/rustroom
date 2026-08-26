@@ -43,6 +43,8 @@ mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod shell;
+#[cfg(test)]
+mod test_app;
 mod theme;
 mod thumb;
 
