@@ -1,6 +1,6 @@
 //! The Library grid: a page of thumbnails, filtered by format, with selection.
 
-use crate::{apply_click, name_edit, theme, thumb, RustroomApp};
+use crate::{apply_click, name_edit, thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::format_filter;
 use rustroom_app::photo_id::PhotoId;
@@ -37,7 +37,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         const CELL: f32 = 168.0;
 
         // Keyboard: arrows move the selection, Enter opens it.
+        //
+        // ⚠⚠ **Suppressed while anything has keyboard focus.** With a name being edited, arrow
+        // keys must move the cursor inside the field and Enter must commit — not step to the next
+        // photo and open it. This is the same gate the filmstrip's arrow navigation already uses,
+        // and it was simply missing here.
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
         ui.input(|i| {
+            if typing {
+                return;
+            }
             // Steps through the *visible* list, so arrows skip a hidden format rather
             // than landing on gaps.
             let cur = lib.selection.active().unwrap_or(0);
@@ -99,19 +108,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 // cell would fight the click that selects a photo, and would put
                                 // hundreds of them on screen at once; requiring the photo to be
                                 // selected first is the gesture people already make.
-                                if lib.selection.active() == Some(i) {
-                                    if let Some(r) = name_edit::field(
-                                        ui,
-                                        &e.id,
-                                        &e.file_name,
-                                        e.name.as_deref(),
-                                        rename_draft,
-                                        egui::TextStyle::Small,
-                                    ) {
-                                        rename = Some((e.id.clone(), r));
-                                    }
-                                } else {
-                                    theme::caption(ui, &e.label());
+                                if let Some(r) = name_edit::caption_or_field(
+                                    ui,
+                                    &e.id,
+                                    &e.file_name,
+                                    e.name.as_deref(),
+                                    rename_draft,
+                                ) {
+                                    rename = Some((e.id.clone(), r));
                                 }
                             });
                         })

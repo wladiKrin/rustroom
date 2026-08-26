@@ -200,6 +200,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         s.name.as_deref(),
                         &mut app.rename_draft,
                         egui::TextStyle::Body,
+                        // ⚠ Never autofocus: this field is on screen the whole time, so grabbing
+                        // focus would hand it every keystroke the moment a photo opened.
+                        false,
                     );
                     // ⚠ On a copy the field above holds the *copy's* name, so the file it belongs
                     // to has to be said somewhere — without it two copies of different files
