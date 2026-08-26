@@ -1,6 +1,7 @@
 //! The Develop view: toolbar, preset panel, adjustments panel, canvas.
 
 pub mod canvas;
+pub mod canvas_geom;
 pub mod panel;
 pub mod rail;
 

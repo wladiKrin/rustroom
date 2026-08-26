@@ -1,5 +1,6 @@
 //! The central image canvas: the rendered photo, zoom and pan, and the crop overlay.
 
+use crate::develop::canvas_geom;
 use crate::{rects_around, PendingOpen, RustroomApp, Session, PREVIEW_MAX_DIM};
 use eframe::egui;
 use rustroom_app::tool::Tool;
@@ -213,9 +214,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // appearing to follow the view as you pan, which is exactly how the bug
                     // showed up. `origin` is the same whole-image corner the region placement
                     // above derives from, so the two agree by construction.
-                    let frame_size = egui::vec2(full.x * pk, full.y * pk) * pscale;
                     let frame_rect =
-                        egui::Rect::from_center_size(ui.max_rect().center() + s.pan, frame_size);
+                        canvas_geom::frame_rect(ui.max_rect().center(), s.pan, full, pk, pscale);
 
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                     egui::Image::new(shown).paint_at(ui, resp.rect);
@@ -472,11 +472,10 @@ fn draw_mask_overlay(
         brush.show_tint,
     );
 
-    let aspect = frame_rect.width() / frame_rect.height();
+    let aspect = canvas_geom::frame_aspect(frame_rect);
     let mut moved = false;
     if let Some(p) = resp.interact_pointer_pos() {
-        let nx = ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0);
-        let ny = ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0);
+        let (nx, ny) = canvas_geom::normalized_point(p, frame_rect);
         if matches!(mask, edit_model::Mask::Brush(_)) {
             // ⚠ No paint mode. Left-drag is free because the navigation rework moved panning onto
             // scroll and a drag button, which is the whole reason that landed first.
