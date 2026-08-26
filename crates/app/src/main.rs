@@ -1617,7 +1617,11 @@ impl RustroomApp {
             return;
         };
         match catalog::scan_folder(&dir) {
-            Ok(scan) => {
+            Ok(mut scan) => {
+                // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a
+                // file's copies adjacent to it and ascending under every ordering — sorting
+                // `entries` instead would scatter them.
+                catalog::sort(&mut scan, self.settings.library_sort);
                 // ⚠ One row per (file, copy). Reading every sidecar costs 4.6 ms for 830 files,
                 // measured — small enough to stay inline rather than moving to the loader thread.
                 let entries = entries::build(&scan, sidecar::load_all);
@@ -1858,6 +1862,29 @@ impl RustroomApp {
         true
     }
 
+    /// Change how the browser orders a folder, keeping the photo you were looking at selected.
+    ///
+    /// ⚠ Guarded on an actual change, because the combo's body runs every frame — the
+    /// `apply_view_demosaic` rule. Without it a folder of hundreds would be re-sorted and its
+    /// entries rebuilt sixty times a second.
+    fn apply_sort(&mut self, order: catalog::SortOrder) {
+        if self.settings.library_sort == order {
+            return;
+        }
+        self.settings.library_sort = order;
+        self.save_settings();
+        // ⚠ Sorting renumbers every index, and `Selection` holds indices. `rebuild_entries`
+        // re-derives the selection from a `PhotoId`, which survives a reorder; keeping the old
+        // indices would leave a different photo selected.
+        let keep = self.open_photo().or_else(|| {
+            let lib = self.library.as_ref()?;
+            lib.entries
+                .get(lib.selection.active()?)
+                .map(|e| e.id.clone())
+        });
+        self.rebuild_entries(keep.as_ref());
+    }
+
     /// Re-read the folder from disk, restore alphabetical order, and close gaps in the copy
     /// numbering.
     ///
@@ -1883,8 +1910,8 @@ impl RustroomApp {
         // unsaved change would otherwise be lost or land on a renumbered copy.
         self.persist_current_session();
 
-        // ⚠ `scan_folder` sorts, so re-scanning *is* the alphabetical reorder — and it is also
-        // what picks up files added or removed outside the app.
+        // ⚠ Re-scanning is what picks up files added or removed outside the app; the ordering
+        // itself is re-applied by `rebuild_entries`, from the chosen sort order.
         let Ok(scan) = catalog::scan_folder(&dir) else {
             self.status = "Could not read the folder".into();
             return;
@@ -1938,6 +1965,9 @@ impl RustroomApp {
     /// the indices have just shifted. Reusing them would show one photo's thumbnail under
     /// another's name — the sparse-versus-dense mistake this codebase has made three times.
     fn rebuild_entries(&mut self, select: Option<&PhotoId>) {
+        // ⚠ Read before the borrow: `self.settings` and `self.library` are disjoint fields, but
+        // the compiler only sees that when the read happens first.
+        let sort = self.settings.library_sort;
         let Some(lib) = self.library.as_mut() else {
             return;
         };
@@ -1953,6 +1983,9 @@ impl RustroomApp {
             .filter_map(|(e, t)| t.clone().map(|t| (e.id.path.clone(), t)))
             .collect();
 
+        // ⚠ Re-sorted every rebuild rather than only when the order changes: a rename moves a
+        // photo's place in a name ordering, and a rebuild is exactly when that has to be seen.
+        catalog::sort(&mut lib.scan, sort);
         lib.entries = entries::build(&lib.scan, sidecar::load_all);
         lib.thumbs = lib
             .entries

@@ -1,6 +1,8 @@
 //! The thin catalog: scan a folder for RAW files. In-memory only (no DB yet).
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// Known RAW file extensions (lowercase, without the dot).
 pub const RAW_EXTENSIONS: &[&str] = &["cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2"];
@@ -13,6 +15,47 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff"];
 pub struct CatalogEntry {
     pub path: PathBuf,
     pub file_name: String,
+    /// When the file was last written, read once at scan time.
+    ///
+    /// ⚠ Captured during the scan rather than asked for while sorting: a sort touching the
+    /// filesystem once per comparison is O(n log n) stat calls on a folder of hundreds.
+    ///
+    /// ⚠ `UNIX_EPOCH` when the metadata cannot be read, so an unreadable file sorts to the
+    /// oldest end rather than failing the whole scan.
+    pub modified: SystemTime,
+}
+
+/// How the browser orders a folder.
+///
+/// ⚠ Lives here, beside the comparator, for the reason `Demosaic` lives in `raw-decode`: the
+/// ordering rule then exists **once**. A mirror enum in `app` would mean a second copy of it, and
+/// a rule that exists twice is one that will disagree. The cost is `serde` as this crate's first
+/// dependency, so the choice can be persisted in `Settings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SortOrder {
+    #[default]
+    NameAsc,
+    NameDesc,
+    ModifiedDesc,
+    ModifiedAsc,
+}
+
+impl SortOrder {
+    pub const ALL: [SortOrder; 4] = [
+        SortOrder::NameAsc,
+        SortOrder::NameDesc,
+        SortOrder::ModifiedDesc,
+        SortOrder::ModifiedAsc,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SortOrder::NameAsc => "Name (A–Z)",
+            SortOrder::NameDesc => "Name (Z–A)",
+            SortOrder::ModifiedDesc => "Newest first",
+            SortOrder::ModifiedAsc => "Oldest first",
+        }
+    }
 }
 
 fn has_ext(path: &Path, exts: &[&str]) -> bool {
@@ -52,27 +95,45 @@ pub fn scan_folder(dir: &Path) -> std::io::Result<Vec<CatalogEntry>> {
                 .and_then(|n| n.to_str())
                 .unwrap_or_default()
                 .to_string();
-            entries.push(CatalogEntry { path, file_name });
+            let modified = dirent
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            entries.push(CatalogEntry {
+                path,
+                file_name,
+                modified,
+            });
         }
     }
-    sort_by_name(&mut entries);
+    sort(&mut entries, SortOrder::default());
     Ok(entries)
 }
 
-/// Order a scan by file name, case-insensitively.
+/// Order a scan.
 ///
-/// ⚠ Separated from `scan_folder` so the rule is testable **without a filesystem**, which here is
-/// not merely convenient: macOS is case-insensitive, so a test that writes `a.RAF` and `A.RAF`
+/// ⚠ Separated from `scan_folder` so the rules are testable **without a filesystem**, which here
+/// is not merely convenient: macOS is case-insensitive, so a test that writes `a.RAF` and `A.RAF`
 /// gets *one* file and cannot say anything about how two such names order.
-pub fn sort_by_name(entries: &mut [CatalogEntry]) {
+///
+/// ⚠⚠ **Every order ends in the same name tie-break, and that is what makes the grid stable.**
+/// Two files written in the same second are common — a burst, a copy, an unzip — and without it
+/// they would swap places between one folder open and the next, for no visible reason.
+pub fn sort(entries: &mut [CatalogEntry], order: SortOrder) {
     entries.sort_by(|a, b| {
-        a.file_name
+        let by_name = a
+            .file_name
             .to_lowercase()
             .cmp(&b.file_name.to_lowercase())
-            // ⚠ Ties break on the exact name: case-insensitive comparison alone is not a total
-            // order, so without this two names differing only in case would sort by whatever
-            // order they arrived in.
-            .then_with(|| a.file_name.cmp(&b.file_name))
+            // ⚠ Case-insensitive comparison alone is not a total order, so two names differing
+            // only in case would otherwise keep whatever order they arrived in.
+            .then_with(|| a.file_name.cmp(&b.file_name));
+        match order {
+            SortOrder::NameAsc => by_name,
+            SortOrder::NameDesc => by_name.reverse(),
+            SortOrder::ModifiedDesc => b.modified.cmp(&a.modified).then(by_name),
+            SortOrder::ModifiedAsc => a.modified.cmp(&b.modified).then(by_name),
+        }
     });
 }
 
@@ -155,15 +216,24 @@ mod tests {
         assert!(!is_supported(Path::new("x.txt")));
     }
 
+    fn entry(name: &str, secs: u64) -> CatalogEntry {
+        CatalogEntry {
+            path: PathBuf::from(format!("/x/{name}")),
+            file_name: name.to_string(),
+            modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+        }
+    }
+
     fn sorted(names: &[&str]) -> Vec<String> {
-        let mut v: Vec<CatalogEntry> = names
-            .iter()
-            .map(|n| CatalogEntry {
-                path: PathBuf::from(format!("/x/{n}")),
-                file_name: n.to_string(),
-            })
-            .collect();
-        sort_by_name(&mut v);
+        ordered(
+            &names.iter().map(|n| (*n, 0)).collect::<Vec<_>>(),
+            SortOrder::NameAsc,
+        )
+    }
+
+    fn ordered(files: &[(&str, u64)], order: SortOrder) -> Vec<String> {
+        let mut v: Vec<CatalogEntry> = files.iter().map(|(n, t)| entry(n, *t)).collect();
+        sort(&mut v, order);
         v.into_iter().map(|e| e.file_name).collect()
     }
 
@@ -189,5 +259,63 @@ mod tests {
         // not defined. Both input orders must give the same output.
         assert_eq!(sorted(&["a.RAF", "A.RAF"]), ["A.RAF", "a.RAF"]);
         assert_eq!(sorted(&["A.RAF", "a.RAF"]), ["A.RAF", "a.RAF"]);
+    }
+
+    #[test]
+    fn every_order_reaches_a_different_arrangement() {
+        // ⚠ Four options that quietly produce the same list would look like a working control
+        // and do nothing. Each is checked against the others, not merely against itself.
+        let files = [("b.RAF", 30), ("a.RAF", 10), ("c.RAF", 20)];
+        let got: Vec<Vec<String>> = SortOrder::ALL.iter().map(|&o| ordered(&files, o)).collect();
+        assert_eq!(got[0], ["a.RAF", "b.RAF", "c.RAF"], "name ascending");
+        assert_eq!(got[1], ["c.RAF", "b.RAF", "a.RAF"], "name descending");
+        assert_eq!(got[2], ["b.RAF", "c.RAF", "a.RAF"], "newest first");
+        assert_eq!(got[3], ["a.RAF", "c.RAF", "b.RAF"], "oldest first");
+        for (i, a) in got.iter().enumerate() {
+            for b in got.iter().skip(i + 1) {
+                assert_ne!(a, b, "two orders produced the same list");
+            }
+        }
+    }
+
+    #[test]
+    fn files_written_at_the_same_time_keep_a_stable_order() {
+        // ⚠⚠ Two files sharing an mtime is ordinary — a burst, a copy, an unzip. Without the name
+        // tie-break their order would depend on however the directory read returned them, so the
+        // grid would reshuffle between one folder open and the next for no visible reason.
+        let one = [("b.RAF", 5), ("a.RAF", 5), ("c.RAF", 5)];
+        let other = [("c.RAF", 5), ("b.RAF", 5), ("a.RAF", 5)];
+        for order in [SortOrder::ModifiedAsc, SortOrder::ModifiedDesc] {
+            assert_eq!(
+                ordered(&one, order),
+                ordered(&other, order),
+                "{} depends on the input order",
+                order.label()
+            );
+        }
+    }
+
+    #[test]
+    fn every_order_has_its_own_label() {
+        let mut seen: Vec<&str> = Vec::new();
+        for o in SortOrder::ALL {
+            assert!(!o.label().is_empty(), "{o:?} has no label");
+            assert!(!seen.contains(&o.label()), "duplicate label {}", o.label());
+            seen.push(o.label());
+        }
+    }
+
+    #[test]
+    fn a_scan_reads_the_modification_time() {
+        // ⚠ Without a real timestamp every file would sort as `UNIX_EPOCH` and the two date
+        // orders would silently degrade into the name tie-break — a control that appears to work.
+        let dir = temp_dir("mtime");
+        std::fs::write(dir.join("a.RAF"), b"x").unwrap();
+        let got = scan_folder(&dir).unwrap();
+        assert!(
+            got[0].modified > SystemTime::UNIX_EPOCH,
+            "the scan did not read a modification time"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

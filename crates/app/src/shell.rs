@@ -5,6 +5,7 @@
 
 use crate::{commands, develop, library, menu_bar, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
 use eframe::egui;
+use rustroom_app::icons;
 use rustroom_app::menu::{self, Command};
 use rustroom_app::render_engine::RegionRect;
 use rustroom_app::{format_filter, view_region};
@@ -142,6 +143,8 @@ impl eframe::App for RustroomApp {
                     if self.view == AppView::Library {
                         format_bullets(self, ui);
                         if self.library.is_some() {
+                            grid_size_buttons(self, ui);
+                            sort_combo(self, ui);
                             let r = ui.button("Reindex").on_hover_text(
                                 "Re-read the folder, sort it alphabetically, and close any gaps \
                                  in the copy numbering.",
@@ -271,6 +274,59 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
 /// decision — it has no meaning while a single photo is open, and it sat in the Develop
 /// toolbar for no better reason than living in a shared row.
 ///
+/// Bigger / smaller Library cells.
+///
+/// ⚠ Buttons rather than a slider: this row is right-aligned and already carries the sort combo,
+/// the format bullets and the status line, and a slider needs a fixed width there whether or not
+/// the space exists. Two icons cost one line each.
+///
+/// ⚠ Built rightmost-first, because the enclosing layout runs right to left.
+fn grid_size_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let now = app.settings.clamped_cell() as u32;
+    let mut next = None;
+    if ui
+        .add_enabled(
+            now < rustroom_app::settings::CELL_RANGE.1,
+            egui::Button::new(icons::ZOOM_IN.to_string()),
+        )
+        .on_hover_text("Bigger thumbnails")
+        .clicked()
+    {
+        next = Some(app.settings.stepped_cell(true));
+    }
+    if ui
+        .add_enabled(
+            now > rustroom_app::settings::CELL_RANGE.0,
+            egui::Button::new(icons::ZOOM_OUT.to_string()),
+        )
+        .on_hover_text("Smaller thumbnails")
+        .clicked()
+    {
+        next = Some(app.settings.stepped_cell(false));
+    }
+    // ⚠ Saved only on an actual press. This body runs every frame, so writing unconditionally
+    // would rewrite the settings file sixty times a second — the `apply_view_demosaic` rule.
+    if let Some(cell) = next {
+        app.settings.library_cell = cell;
+        app.save_settings();
+    }
+}
+
+/// How the folder is ordered. Drives the filmstrip too — both read one `entries` list.
+fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let mut order = app.settings.library_sort;
+    egui::ComboBox::from_id_salt("library_sort")
+        .selected_text(order.label())
+        .show_ui(ui, |ui| {
+            for o in catalog::SortOrder::ALL {
+                ui.selectable_value(&mut order, o, o.label());
+            }
+        });
+    // ⚠ `apply_sort` guards on an actual change itself, since this body runs every frame and
+    // re-sorting a folder of hundreds per frame is not free.
+    app.apply_sort(order);
+}
+
 /// ⚠ Shown only at two or more formats: a lone control here could only ever blank the grid,
 /// which is a footgun with no upside.
 ///

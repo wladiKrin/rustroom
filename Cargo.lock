@@ -740,6 +740,9 @@ dependencies = [
 [[package]]
 name = "catalog"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cc"

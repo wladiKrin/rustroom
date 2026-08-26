@@ -180,6 +180,48 @@ pub struct Settings {
     /// ⚠ Consequence, accepted and documented rather than discovered: the GUI and the CLI then
     /// disagree on a fresh photo — the CLI renders neutral, the GUI renders corrected.
     pub auto_lens_correction: bool,
+    /// How the Library and the filmstrip order a folder.
+    ///
+    /// ⚠ Applied to the **scan**, not to `entries`, which is what keeps a file's copies adjacent
+    /// to it and in ascending copy order under every ordering. See `RustroomApp::rebuild_entries`.
+    pub library_sort: catalog::SortOrder,
+    /// The Library grid's cell size in whole points — thumbnails and their names scale with it.
+    ///
+    /// ⚠ `u32`, not `f32`, for two reasons: `Settings` derives `Eq`, which no float can satisfy;
+    /// and it makes a NaN cell size **unrepresentable** rather than something to guard against —
+    /// NaN defeats `clamp` entirely, since it fails every comparison and comes back unchanged.
+    ///
+    /// ⚠ Still clamped by [`Settings::clamped_cell`] rather than trusted: this is read from a
+    /// file a user can edit, and a zero cell divides by zero when the column count is worked out.
+    pub library_cell: u32,
+}
+
+/// The Library grid's default cell size, and the size its type scale is relative to.
+pub const DEFAULT_CELL: u32 = 168;
+/// The smallest and largest cell the buttons will reach.
+pub const CELL_RANGE: (u32, u32) = (108, 320);
+/// How much one press of the grid-size buttons moves the cell.
+pub const CELL_STEP: u32 = 28;
+
+impl Settings {
+    /// The grid cell size in points, guaranteed usable.
+    pub fn clamped_cell(&self) -> f32 {
+        self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
+    }
+
+    /// The cell size one press of the bigger/smaller buttons would give.
+    ///
+    /// ⚠ Stepped from the *clamped* value, so a nonsense stored size is corrected by the first
+    /// press rather than needing several to climb back into range.
+    pub fn stepped_cell(&self, bigger: bool) -> u32 {
+        let now = self.clamped_cell() as u32;
+        let next = if bigger {
+            now.saturating_add(CELL_STEP)
+        } else {
+            now.saturating_sub(CELL_STEP)
+        };
+        next.clamp(CELL_RANGE.0, CELL_RANGE.1)
+    }
 }
 
 impl Default for Settings {
@@ -195,6 +237,8 @@ impl Default for Settings {
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
             auto_lens_correction: true,
+            library_sort: catalog::SortOrder::default(),
+            library_cell: DEFAULT_CELL,
         }
     }
 }
@@ -455,6 +499,10 @@ mod tests {
             // A non-default value on purpose: it proves the field is actually persisted
             // rather than being re-defaulted on load.
             pan_drag: PanDrag::Secondary,
+            // Both non-default, for the same reason: a field re-defaulted on load would look
+            // like it round-tripped.
+            library_sort: catalog::SortOrder::ModifiedDesc,
+            library_cell: DEFAULT_CELL + CELL_STEP,
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is
             // what proves it round-trips rather than being re-defaulted.
             auto_lens_correction: false,
@@ -817,5 +865,61 @@ mod tests {
         let l = s.initial_lens_correction(false);
         assert!(l.distortion && l.tca && l.vignetting, "{l:?}");
         assert_eq!(l.scale, 100.0, "and autoscale by default");
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_library_view_options_still_loads() {
+        // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
+        // *every* setting. The container-level `#[serde(default)]` is what stops that; this pins
+        // it for the two fields added here.
+        let f = TempFile::new("libview_old");
+        std::fs::write(
+            &f.0,
+            r#"{"confirm_preset_delete":false,"auto_lens_correction":false}"#,
+        )
+        .unwrap();
+        let got = SettingsStore::new(f.0.clone()).load();
+        assert!(!got.confirm_preset_delete, "the stored settings survived");
+        assert!(!got.auto_lens_correction);
+        assert_eq!(got.library_sort, catalog::SortOrder::NameAsc);
+        assert_eq!(got.library_cell, DEFAULT_CELL);
+    }
+
+    #[test]
+    fn an_unusable_cell_size_never_reaches_the_grid() {
+        // ⚠ The settings file is hand-editable, and a zero cell divides by zero when the column
+        // count is worked out.
+        let with = |v: u32| Settings {
+            library_cell: v,
+            ..Settings::default()
+        };
+        assert_eq!(with(0).clamped_cell(), CELL_RANGE.0 as f32);
+        assert_eq!(with(9999).clamped_cell(), CELL_RANGE.1 as f32);
+        assert_eq!(with(200).clamped_cell(), 200.0, "a sane value is untouched");
+    }
+
+    #[test]
+    fn the_grid_size_buttons_stop_at_the_ends() {
+        // ⚠ Both directions, because a step that saturated only upward would let the cell walk
+        // below the range and take the column count to zero.
+        let with = |v: u32| Settings {
+            library_cell: v,
+            ..Settings::default()
+        };
+        assert_eq!(with(CELL_RANGE.1).stepped_cell(true), CELL_RANGE.1);
+        assert_eq!(with(CELL_RANGE.0).stepped_cell(false), CELL_RANGE.0);
+        assert_eq!(
+            with(DEFAULT_CELL).stepped_cell(true),
+            DEFAULT_CELL + CELL_STEP
+        );
+        assert_eq!(
+            with(DEFAULT_CELL).stepped_cell(false),
+            DEFAULT_CELL - CELL_STEP
+        );
+        assert_eq!(
+            with(0).stepped_cell(true),
+            CELL_RANGE.0 + CELL_STEP,
+            "a nonsense stored size is corrected by the first press"
+        );
     }
 }

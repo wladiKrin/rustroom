@@ -14,6 +14,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
     // and the two are disjoint fields — which the borrow checker only accepts when it can see so.
     let rename_draft = &mut app.rename_draft;
+    // ⚠ From the settings, not a constant. Everything below is expressed as a fraction of it so
+    // the thumbnail, the cell and the name all grow together — a fixed caption beside a scaling
+    // thumbnail is what makes a size control look broken at the extremes.
+    let cell = app.settings.clamped_cell();
     egui::CentralPanel::default().show(ui, |ui| {
         let Some(lib) = &mut app.library else {
             ui.centered_and_justified(|ui| {
@@ -34,7 +38,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             });
             return;
         }
-        const CELL: f32 = 168.0;
 
         // Keyboard: arrows move the selection, Enter opens it.
         //
@@ -74,24 +77,28 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let cols = grid_columns(ui.available_width(), CELL, ui.spacing().item_spacing.x);
+            let cols = grid_columns(ui.available_width(), cell, ui.spacing().item_spacing.x);
             // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
             // per frame is nothing against the thumbnails being drawn.
             let visible = lib.visible.clone();
+            // ⚠ The caption scales *relative to the theme's own* Small size rather than from a
+            // literal, so a later change to the type scale carries through here for free.
+            let name_size = ui.style().text_styles[&egui::TextStyle::Small].size * cell
+                / rustroom_app::settings::DEFAULT_CELL as f32;
             egui::Grid::new("thumb_grid").show(ui, |ui| {
                 // ⚠ `pos` is the cell's place in the grid; `i` indexes `entries`. The row
                 // break must use `pos`: once a filter is on, `i` is *sparse*, so counting
                 // rows by it breaks after the wrong cells — gaps where a break was skipped
                 // and overflowing rows where several were.
                 for (pos, &i) in visible.iter().enumerate() {
-                    let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
+                    let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
                     let resp = ui
-                        .allocate_ui(egui::vec2(CELL, CELL), |ui| {
+                        .allocate_ui(egui::vec2(cell, cell), |ui| {
                             // Pin the cell to its full size. Without this `allocate_ui`
                             // reports only the space the content used, so cells varied
                             // with their thumbnail — the filmstrip's reflow bug in its
                             // grid form, where `egui::Grid`'s column alignment hid it.
-                            ui.set_min_size(egui::vec2(CELL, CELL));
+                            ui.set_min_size(egui::vec2(cell, cell));
                             ui.vertical_centered(|ui| {
                                 thumb::cell(
                                     ui,
@@ -114,6 +121,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     &e.file_name,
                                     e.name.as_deref(),
                                     rename_draft,
+                                    name_size,
                                 ) {
                                     rename = Some((e.id.clone(), r));
                                 }

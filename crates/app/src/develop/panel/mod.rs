@@ -199,7 +199,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         &file_rename::field_text(&s.path),
                         s.name.as_deref(),
                         &mut app.rename_draft,
-                        egui::TextStyle::Body,
+                        egui::TextStyle::Body.resolve(ui.style()),
                         // ⚠ Never autofocus: this field is on screen the whole time, so grabbing
                         // focus would hand it every keystroke the moment a photo opened.
                         false,

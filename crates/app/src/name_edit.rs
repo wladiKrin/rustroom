@@ -39,12 +39,17 @@ pub fn caption_or_field(
     file_name: &str,
     name: Option<&str>,
     draft: &mut Option<(PhotoId, String)>,
+    size: f32,
 ) -> Option<Rename> {
+    // ⚠ An explicit size, not a `TextStyle`: the Library's cells are resizable and the name has
+    // to grow with the thumbnail. A fixed caption beside a scaling thumbnail is what makes a size
+    // control look broken at the extremes.
+    let font = egui::FontId::proportional(size);
     let editing = draft.as_ref().is_some_and(|(d, _)| d == id);
     if !editing {
         let shown = entries::shown_name(file_name, id.copy, name);
         let r = ui.add(
-            egui::Label::new(egui::RichText::new(shown.clone()).small())
+            egui::Label::new(egui::RichText::new(shown.clone()).font(font))
                 .sense(egui::Sense::click()),
         );
         if r.clicked() {
@@ -52,7 +57,7 @@ pub fn caption_or_field(
         }
         return None;
     }
-    field(ui, id, file_name, name, draft, egui::TextStyle::Small, true)
+    field(ui, id, file_name, name, draft, font, true)
 }
 
 /// An editable name, drawn as a text field.
@@ -66,7 +71,7 @@ pub fn field(
     file_name: &str,
     name: Option<&str>,
     draft: &mut Option<(PhotoId, String)>,
-    font: egui::TextStyle,
+    font: egui::FontId,
     autofocus: bool,
 ) -> Option<Rename> {
     let on_copy = !id.is_original();
@@ -218,7 +223,7 @@ mod tests {
             };
             let _ = ctx.run_ui(input, |ui| {
                 let before = ui.next_widget_position();
-                caption_or_field(ui, &photo(), "a.RAF", None, draft);
+                caption_or_field(ui, &photo(), "a.RAF", None, draft, 11.0);
                 if pass == 0 {
                     target = before + egui::vec2(20.0, 6.0);
                 }

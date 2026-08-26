@@ -95,6 +95,7 @@ mod tests {
             .map(|n| CatalogEntry {
                 path: PathBuf::from(format!("/x/{n}")),
                 file_name: n.to_string(),
+                modified: std::time::SystemTime::UNIX_EPOCH,
             })
             .collect()
     }
