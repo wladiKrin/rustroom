@@ -39,6 +39,7 @@ mod filmstrip;
 mod library;
 mod menu_bar;
 mod modals;
+mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod shell;
@@ -82,6 +83,12 @@ enum AppView {
 
 /// Browsing state for an opened folder.
 struct Library {
+    /// The folder this Library is showing.
+    ///
+    /// ⚠ Kept rather than derived from `scan[0].path.parent()`, which says nothing at all about
+    /// an *empty* folder — and Reindex on an empty folder is exactly when you would want it,
+    /// because the files may have arrived since.
+    dir: PathBuf,
     /// The folder scan this Library was built from.
     ///
     /// ⚠ Kept so `entries` can be re-expanded when a copy is created or deleted, without a
@@ -1626,6 +1633,7 @@ impl RustroomApp {
                     .effective_display_space(self.os_manages_colour);
                 let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
                 self.library = Some(Library {
+                    dir,
                     scan,
                     entries,
                     thumbs: (0..n).map(|_| None).collect(),
@@ -1794,6 +1802,21 @@ impl RustroomApp {
         true
     }
 
+    /// What a copy is currently called, or `None` if it has never been named.
+    ///
+    /// ⚠ From the Library entry when there is one, so a rename made this session is seen without
+    /// re-reading the file — and from the sidecar otherwise, which is the single-file case.
+    fn copy_name_of(&self, id: &PhotoId) -> Option<String> {
+        if let Some(lib) = &self.library {
+            if let Some(e) = lib.entries.iter().find(|e| e.id == *id) {
+                return e.name.clone();
+            }
+        }
+        sidecar::load_all(&id.path)
+            .name_of(id.copy)
+            .map(str::to_string)
+    }
+
     /// Rename a **virtual copy** — its own label, which is not a file.
     ///
     /// ⚠ Writes only this copy's `name`; the file, the other copies and every `Edits` are left
@@ -1833,6 +1856,80 @@ impl RustroomApp {
             None => format!("Cleared the name of copy {}", id.copy),
         };
         true
+    }
+
+    /// Re-read the folder from disk, restore alphabetical order, and close gaps in the copy
+    /// numbering.
+    ///
+    /// ⚠⚠ **This is the one thing allowed to renumber copies, and it is a button for that
+    /// reason.** Numbers are stable everywhere else precisely so a copy's export filename and its
+    /// undo stack cannot shift under it. The price of that stability is `_1, _3, _7` after some
+    /// deleting — which is the mess this exists to tidy, on request rather than behind the user's
+    /// back.
+    ///
+    /// ⚠ Three consequences, all deliberate:
+    /// - **Unnamed copies get new export filenames**, because their name is derived from the
+    ///   number. A *named* copy keeps its name, so its export filename does not move.
+    /// - **Undo stacks for renumbered copies are dropped.** They are keyed by `PhotoId`, and a
+    ///   renumbered copy is a different `PhotoId`; keeping them would hand old copy 1's stack to
+    ///   whatever becomes the new copy 1, which is worse than losing it.
+    /// - It re-reads every sidecar and re-scans the directory, so files added or deleted outside
+    ///   Rustroom appear here.
+    fn reindex(&mut self, ctx: &egui::Context) {
+        let Some(dir) = self.library.as_ref().map(|l| l.dir.clone()) else {
+            return;
+        };
+        // ⚠ Written first: a compaction rewrites the sidecar this photo's edits belong in, so an
+        // unsaved change would otherwise be lost or land on a renumbered copy.
+        self.persist_current_session();
+
+        // ⚠ `scan_folder` sorts, so re-scanning *is* the alphabetical reorder — and it is also
+        // what picks up files added or removed outside the app.
+        let Ok(scan) = catalog::scan_folder(&dir) else {
+            self.status = "Could not read the folder".into();
+            return;
+        };
+
+        let mut renumbered = 0usize;
+        for e in &scan {
+            let mut sidecar = sidecar::load_all(&e.path);
+            let moves = sidecar.compact();
+            if moves.is_empty() {
+                continue;
+            }
+            if sidecar::persist_all(&e.path, &sidecar).is_err() {
+                continue;
+            }
+            renumbered += moves.len();
+            // ⚠ Every `PhotoId` that moved is now a different photo as far as the undo machinery
+            // is concerned. Both the stash and the log have to let go, together — a stash kept
+            // without its log entries is unreachable, and log entries kept without their stash
+            // pop nothing.
+            for (from, _) in moves {
+                let old = PhotoId::new(e.path.clone(), from);
+                self.histories.forget(&old);
+                self.actions.forget_edits_of(&old);
+            }
+        }
+
+        // ⚠ The open photo may itself have been renumbered, so it is reopened by *path* at copy
+        // 0 rather than by an id that might no longer exist.
+        let reopen = self.session.as_ref().map(|s| s.path.clone());
+        if let Some(lib) = self.library.as_mut() {
+            lib.scan = scan;
+        }
+        self.rename_draft = None;
+        let select = reopen.map(PhotoId::original);
+        self.rebuild_entries(select.as_ref());
+        if let Some(id) = select {
+            self.session = None;
+            self.open_path(ctx, id);
+        }
+        self.status = if renumbered == 0 {
+            "Reindexed — the copy numbering was already tidy".to_string()
+        } else {
+            format!("Reindexed — renumbered {renumbered} copies")
+        };
     }
 
     /// Re-expand the Library's rows after a copy was added or removed.

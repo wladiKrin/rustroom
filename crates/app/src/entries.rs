@@ -33,11 +33,22 @@ impl PhotoEntry {
     /// a copy has no file of its own, so renaming one used to rename the shared file and drag
     /// every other copy along with it.
     pub fn label(&self) -> String {
-        match (self.id.copy, self.name.as_deref()) {
-            (0, _) => self.file_name.clone(),
-            (_, Some(n)) => n.to_string(),
-            (c, None) => crate::file_rename::default_copy_name(&self.file_name, c),
-        }
+        shown_name(&self.file_name, self.id.copy, self.name.as_deref())
+    }
+}
+
+/// What a photo is called, from its file's name, its copy number and its own name.
+///
+/// ⚠ **One implementation, three consumers**: the Library caption, the editable field in both
+/// views, and the export filename's default all come from here. They had briefly grown two
+/// copies of this rule, which is precisely how the grid ended up showing a file's name where a
+/// copy's name belonged.
+pub fn shown_name(file_name: &str, copy: u32, name: Option<&str>) -> String {
+    match (copy, name) {
+        // ⚠ Copy 0 *is* the file, so its name is the filename and a stored one is ignored.
+        (0, _) => file_name.to_string(),
+        (_, Some(n)) => n.to_string(),
+        (c, None) => crate::file_rename::default_copy_name(file_name, c),
     }
 }
 
@@ -154,6 +165,36 @@ mod tests {
         assert_eq!(got[0].label(), "a.RAF");
         assert_eq!(got[1].label(), "a_1.RAF");
         assert_eq!(got[2].label(), "a_2.RAF");
+    }
+
+    #[test]
+    fn renaming_the_file_moves_every_unnamed_copy_with_it() {
+        // ⚠⚠ The bug this pins: after renaming the original, only *some* copies appeared to
+        // follow. Every unnamed copy derives its name from the file's, so they must all move
+        // together — and a named one must not, because its name is its own.
+        let before = build(&scan(&["a.RAF"]), |_| Sidecar {
+            copies: vec![
+                copy(0, None),
+                copy(1, None),
+                copy(2, None),
+                copy(3, Some("Warm")),
+            ],
+        });
+        let after = build(&scan(&["b.RAF"]), |_| Sidecar {
+            copies: vec![
+                copy(0, None),
+                copy(1, None),
+                copy(2, None),
+                copy(3, Some("Warm")),
+            ],
+        });
+        let labels = |v: &[PhotoEntry]| v.iter().map(|e| e.label()).collect::<Vec<_>>();
+        assert_eq!(labels(&before), ["a.RAF", "a_1.RAF", "a_2.RAF", "Warm"]);
+        assert_eq!(
+            labels(&after),
+            ["b.RAF", "b_1.RAF", "b_2.RAF", "Warm"],
+            "every unnamed copy follows the file; the named one keeps its own name"
+        );
     }
 
     #[test]

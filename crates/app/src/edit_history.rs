@@ -61,6 +61,22 @@ impl HistoryStash {
         (history.get() == on_disk).then_some(history)
     }
 
+    /// Drop one photo's stashed history.
+    ///
+    /// ⚠ For when a `PhotoId` stops meaning what it did — a copy renumbered by Reindex, above
+    /// all. Keeping the stash would hand old copy 1's undo stack to whatever becomes the new
+    /// copy 1, which is worse than losing it. **`ActionLog::forget_edits_of` must be called for
+    /// the same id**: a stash without its log entries is unreachable, and log entries without
+    /// their stash pop nothing.
+    pub fn forget(&mut self, id: &PhotoId) {
+        self.map.remove(id);
+    }
+
+    #[cfg(test)]
+    fn holds(&self, id: &PhotoId) -> bool {
+        self.map.contains_key(id)
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -210,5 +226,38 @@ mod tests {
             )
             .expect("copy 1's stack");
         assert_eq!(got.get().exposure, 2.0);
+    }
+
+    #[test]
+    fn forgetting_one_photo_leaves_the_others_alone() {
+        // ⚠ Reindex renumbers copies, so their `PhotoId`s change meaning. Dropping the stash for
+        // a renumbered copy is what stops old copy 1's undo stack attaching to whatever becomes
+        // the new copy 1 — but it must drop *only* that one.
+        let path = std::path::PathBuf::from("/a.RAF");
+        let one = PhotoId::new(path.clone(), 1);
+        let two = PhotoId::new(path.clone(), 2);
+        let other = PhotoId::original(path);
+
+        // ⚠ Each history needs a real step: `stash` drops one with nothing to undo, so three
+        // empty histories would store nothing at all and the test would pass vacuously.
+        let stepped = |v: f32| {
+            let mut h = History::new(Edits::default());
+            h.push(Edits {
+                exposure: v,
+                ..Edits::default()
+            });
+            h
+        };
+        let mut stash = HistoryStash::default();
+        stash.stash(one.clone(), stepped(1.0));
+        stash.stash(two.clone(), stepped(2.0));
+        stash.stash(other.clone(), stepped(3.0));
+        assert!(stash.holds(&one), "the fixture really did store something");
+
+        stash.forget(&one);
+
+        assert!(!stash.holds(&one));
+        assert!(stash.holds(&two), "a sibling copy keeps its stack");
+        assert!(stash.holds(&other), "and so does the original");
     }
 }

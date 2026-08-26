@@ -1,12 +1,19 @@
 //! The Library grid: a page of thumbnails, filtered by format, with selection.
 
-use crate::{apply_click, theme, thumb, RustroomApp};
+use crate::{apply_click, name_edit, theme, thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::format_filter;
+use rustroom_app::photo_id::PhotoId;
 
 /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut open_index: Option<usize> = None;
+    // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
+    // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
+    let mut rename: Option<(PhotoId, name_edit::Rename)> = None;
+    // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
+    // and the two are disjoint fields — which the borrow checker only accepts when it can see so.
+    let rename_draft = &mut app.rename_draft;
     egui::CentralPanel::default().show(ui, |ui| {
         let Some(lib) = &mut app.library else {
             ui.centered_and_justified(|ui| {
@@ -83,7 +90,29 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     lib.thumbs[i].as_ref(),
                                     lib.entries[i].id.copy,
                                 );
-                                theme::caption(ui, &lib.entries[i].file_name);
+                                let e = &lib.entries[i];
+                                // ⚠⚠ `label()`, not `file_name`. Every copy of a file has the
+                                // same `file_name`, so the grid showed three identical captions
+                                // and a copy's own name could never appear in it at all.
+                                //
+                                // ⚠ Only the **active** row is editable. A text field in every
+                                // cell would fight the click that selects a photo, and would put
+                                // hundreds of them on screen at once; requiring the photo to be
+                                // selected first is the gesture people already make.
+                                if lib.selection.active() == Some(i) {
+                                    if let Some(r) = name_edit::field(
+                                        ui,
+                                        &e.id,
+                                        &e.file_name,
+                                        e.name.as_deref(),
+                                        rename_draft,
+                                        egui::TextStyle::Small,
+                                    ) {
+                                        rename = Some((e.id.clone(), r));
+                                    }
+                                } else {
+                                    theme::caption(ui, &e.label());
+                                }
                             });
                         })
                         .response
@@ -110,6 +139,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
     });
 
+    if let Some((id, r)) = rename {
+        name_edit::commit(app, ctx, &id, r);
+    }
     if let Some(i) = open_index {
         app.open_entry(ctx, i);
     }

@@ -141,6 +141,15 @@ impl eframe::App for RustroomApp {
                     // noise rather than reassurance.
                     if self.view == AppView::Library {
                         format_bullets(self, ui);
+                        if self.library.is_some() {
+                            let r = ui.button("Reindex").on_hover_text(
+                                "Re-read the folder, sort it alphabetically, and close any gaps \
+                                 in the copy numbering.",
+                            );
+                            if r.clicked() {
+                                self.reindex(&ctx);
+                            }
+                        }
                     }
                     if !self.export_progress.is_empty() {
                         if ui.button("Cancel").clicked() {

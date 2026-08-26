@@ -131,6 +131,38 @@ impl Sidecar {
         self.copies.sort_by_key(|c| c.copy);
     }
 
+    /// Renumber the copies so they run 1, 2, 3… with no gaps, and report what moved.
+    ///
+    /// ⚠⚠ **This deliberately breaks the "copy numbers are never reused" invariant, and that is
+    /// why it is a button rather than something that happens on its own.** Numbers are stable
+    /// precisely so a copy's export filename and its undo stack cannot shift under it; the cost
+    /// of that is `_1, _3, _7` after some deleting, which is the mess Reindex exists to tidy. An
+    /// explicit action the user asked for is a different thing from a silent renumber.
+    ///
+    /// ⚠ A **named** copy keeps its name, so its export filename does not move — only unnamed
+    /// copies, whose name is derived from the number, are renamed by this.
+    ///
+    /// ⚠ The caller must re-key or drop anything keyed on `PhotoId`, above all the history
+    /// stash: without that, old copy 1's undo stack would attach to whatever becomes the new
+    /// copy 1.
+    pub fn compact(&mut self) -> Vec<(u32, u32)> {
+        self.copies.sort_by_key(|c| c.copy);
+        let mut moves = Vec::new();
+        let mut next = 1;
+        for c in self.copies.iter_mut() {
+            // ⚠ Copy 0 *is* the file and is never renumbered — there is nothing else it could be.
+            if c.copy == 0 {
+                continue;
+            }
+            if c.copy != next {
+                moves.push((c.copy, next));
+                c.copy = next;
+            }
+            next += 1;
+        }
+        moves
+    }
+
     pub fn name_of(&self, copy: u32) -> Option<&str> {
         self.get(copy).and_then(|c| c.name.as_deref())
     }
@@ -616,5 +648,99 @@ mod naming_tests {
         s.set_name(1, Some("Warm".into()));
         s.set_edits(1, edited(2.0));
         assert_eq!(s.name_of(1), Some("Warm"));
+    }
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+
+    fn edited(v: f32) -> Edits {
+        Edits {
+            exposure: v,
+            ..Edits::default()
+        }
+    }
+
+    #[test]
+    fn deleting_the_first_copy_makes_the_second_copy_one_again() {
+        // ⚠ The case this exists for: two copies, delete the first, and `_2` is left with no
+        // `_1` beside it.
+        let mut s = Sidecar::default();
+        s.set_edits(0, edited(1.0));
+        s.set_edits(2, edited(3.0));
+
+        let moves = s.compact();
+
+        assert_eq!(moves, vec![(2, 1)]);
+        assert_eq!(
+            s.get(1).unwrap().edits,
+            edited(3.0),
+            "it kept its own edits"
+        );
+        assert!(s.get(2).is_none(), "and vacated its old number");
+        assert_eq!(
+            s.get(0).unwrap().edits,
+            edited(1.0),
+            "the original is untouched"
+        );
+    }
+
+    #[test]
+    fn already_contiguous_copies_do_not_move() {
+        // ⚠ An empty move list is what lets the caller skip writing the file and dropping undo
+        // stacks for nothing.
+        let mut s = Sidecar::default();
+        s.set_edits(0, edited(1.0));
+        s.set_edits(1, edited(2.0));
+        s.set_edits(2, edited(3.0));
+        assert!(s.compact().is_empty());
+        assert_eq!(s.get(1).unwrap().edits, edited(2.0));
+        assert_eq!(s.get(2).unwrap().edits, edited(3.0));
+    }
+
+    #[test]
+    fn copies_keep_their_order_and_their_names() {
+        // ⚠ Ascending by old number, so the *order* people see never changes — only the gaps
+        // close. Renumbering that also reordered would move photos around the grid.
+        let mut s = Sidecar::default();
+        s.set_edits(3, edited(3.0));
+        s.set_edits(7, edited(7.0));
+        s.set_name(7, Some("Warm".into()));
+        s.set_edits(5, edited(5.0));
+
+        assert_eq!(s.compact(), vec![(3, 1), (5, 2), (7, 3)]);
+
+        assert_eq!(s.get(1).unwrap().edits, edited(3.0));
+        assert_eq!(s.get(2).unwrap().edits, edited(5.0));
+        assert_eq!(s.get(3).unwrap().edits, edited(7.0));
+        assert_eq!(
+            s.name_of(3),
+            Some("Warm"),
+            "a named copy keeps its name, so its export filename does not move"
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_stored_original_still_numbers_its_copies_from_one() {
+        // ⚠ A sidecar can hold copies and no copy 0 — `persist_copy(.., 1, ..)` on an unedited
+        // photo does exactly that. Numbering from 0 here would make a copy claim to be the file.
+        let mut s = Sidecar::default();
+        s.set_edits(4, edited(4.0));
+        assert_eq!(s.compact(), vec![(4, 1)]);
+        assert!(s.get(0).is_none());
+        assert_eq!(s.get(1).unwrap().edits, edited(4.0));
+    }
+
+    #[test]
+    fn the_next_copy_number_follows_a_compaction() {
+        // ⚠ `next_copy` is `max + 1`; after compacting it must not hand out a number that is
+        // already taken, or a new copy would overwrite an existing one.
+        let mut s = Sidecar::default();
+        s.set_edits(3, edited(3.0));
+        s.set_edits(9, edited(9.0));
+        s.compact();
+        assert_eq!(s.next_copy(), 3);
+        assert!(s.get(3).is_none(), "and that number really is free");
     }
 }
