@@ -11,6 +11,7 @@ use edit_model::Edits;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::file_rename;
+use rustroom_app::photo_id::PhotoId;
 use rustroom_app::tool::Tool;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
@@ -80,10 +81,16 @@ impl Edited {
 fn filename_field(
     ui: &mut egui::Ui,
     s: &Session,
-    draft: &mut Option<String>,
+    draft: &mut Option<(PhotoId, String)>,
 ) -> Option<std::path::PathBuf> {
+    let id = PhotoId::new(s.path.clone(), s.copy);
     let current = file_rename::field_text(&s.path);
-    let text = draft.get_or_insert_with(|| current.clone());
+    // ⚠ A draft belonging to a *different* photo is discarded, not shown. Without this the last
+    // name typed followed you to every photo you opened afterwards.
+    if draft.as_ref().is_some_and(|(d, _)| *d != id) {
+        *draft = None;
+    }
+    let (_, text) = draft.get_or_insert_with(|| (id.clone(), current.clone()));
     let r = ui.add(
         egui::TextEdit::singleline(text)
             .font(egui::TextStyle::Body)

@@ -178,11 +178,16 @@ struct RustroomApp {
     hsl_channel: develop::panel::adjustments::HslChannel,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
-    /// Scratch text for the copy-name field, `None` when it is not being edited.
+    /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
-    /// ⚠ A draft rather than writing through to the session, so a half-typed name is never
-    /// committed and a rename is one undo step rather than one per keystroke.
-    rename_draft: Option<String>,
+    /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a
+    /// rename is one undo step rather than one per keystroke.
+    ///
+    /// ⚠⚠ The `PhotoId` is not decoration. As a bare `String` this draft outlived the photo it
+    /// was typed for, so **every** photo switched to afterwards showed the last name typed —
+    /// reported as "now every photo shows the name I changed". Pairing the text with its photo
+    /// makes that unrepresentable rather than something to remember to clear.
+    rename_draft: Option<(PhotoId, String)>,
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
@@ -1732,6 +1737,16 @@ impl RustroomApp {
             for e in lib.scan.iter_mut() {
                 if e.path == from {
                     e.path = to.to_path_buf();
+                    e.file_name = file_rename::field_text(to);
+                }
+            }
+            // ⚠ The *entries* must move too, not just the scan. `rebuild_entries` carries
+            // thumbnails across keyed by path, reading the keys from the entries it is
+            // replacing — so leaving them on the old path made the lookup miss and greyed out
+            // exactly the renamed photo and its copies, while the rest of the folder stayed.
+            for e in lib.entries.iter_mut() {
+                if e.id.path == from {
+                    e.id.path = to.to_path_buf();
                     e.file_name = file_rename::field_text(to);
                 }
             }
