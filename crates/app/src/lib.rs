@@ -4,6 +4,7 @@ pub mod action_log;
 pub mod batch_export;
 pub mod brush_tool;
 pub mod buffer_cache;
+pub mod collections;
 pub mod crop_tool;
 pub mod decode_worker;
 pub mod edit_clipboard;
