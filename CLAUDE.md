@@ -19,7 +19,17 @@ Project-specific guidance for Claude Code working in this repository.
 The detailed spec lives in the user's Obsidian vault at
 `~/Documents/obsidian/private/opensource_lightroom/`.
 
-⚠⚠ **THAT PATH IS UNREADABLE FROM CLAUDE CODE ON THIS MACHINE — verified 2026-08-26, `EPERM` on both `Read` and a sandbox-disabled `grep`.** macOS TCC denies this process access to `~/Documents` outright, so **every roadmap update has to be handed to the user as text to paste.** Do not plan work that depends on reading or writing those files, and do not report a roadmap edit as done. Granting Claude Code Full Disk Access in System Settings → Privacy & Security would lift it.
+⚠⚠ **THAT PATH IS UNREADABLE FROM CLAUDE CODE ON THIS MACHINE — verified 2026-08-26.** So **every roadmap update has to be handed to the user as text to paste.** Do not plan work that depends on reading or writing those files, and do not report a roadmap edit as done.
+
+⚠ **TWO restrictions are stacked, and clearing one is not enough — do not conclude from a successful folder grant that the file is now readable.**
+1. **The harness's directory scoping.** `mcp__ccd_directory__request_directory` grants it and reports *"Folder access granted"* — which looks like success and is not.
+2. **macOS TCC**, which still denies it afterwards. `/bin/ls ~/Documents` returns `Operation not permitted` even with the shell sandbox disabled, and the directory is `drwx------` on the user's own account. Only **Full Disk Access** (System Settings → Privacy & Security), granted to the app Claude Code is launched from and followed by a full quit-and-reopen, lifts this one.
+
+⚠ The quick check that settles it in one call, without a permission prompt:
+```
+/bin/ls ~/Documents 2>&1 | head -3
+```
+If that says `Operation not permitted`, the vault is out of reach whatever the harness says.
 
 - `01-lightroom-capabilities.md` — target feature set + prioritized P0–P4 scope table.
 - `02-architecture-and-tech.md` — stack rationale, pipeline design, crate layout, best practices.
