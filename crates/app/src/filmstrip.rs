@@ -37,6 +37,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             box_size,
                             lib.thumbs[i].as_ref(),
                             lib.entries[i].id.copy,
+                            lib.marks
+                                .get(&lib.entries[i].id)
+                                .copied()
+                                .unwrap_or_default(),
                         )
                         .interact(egui::Sense::click());
                         thumb::selection_border(

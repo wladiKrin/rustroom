@@ -11,6 +11,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
     let mut rename: Option<(PhotoId, name_edit::Rename)> = None;
+    // ⚠ Declared out here, like `open_index` and `rename`: applying it needs `&mut RustroomApp`
+    // while the closure below still holds `&mut app.library`.
+    let mut mark: Option<rustroom_app::marks::MarkAction> = None;
     // Pinch on a trackpad, or ctrl/cmd+scroll, resizes the grid — the same gesture the develop
     // canvas uses to zoom the photo.
     //
@@ -91,6 +94,31 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             if i.key_pressed(egui::Key::Escape) {
                 lib.selection.clear();
             }
+            // Culling. ⚠⚠ Behind the **same** `typing` gate as the arrows above, and that is not
+            // optional: the Library has an editable filename field and a new-collection field,
+            // and a bare `5` typed into either must not rate a photo. This project has recorded
+            // that hazard twice.
+            for (c, key) in [
+                ('0', egui::Key::Num0),
+                ('1', egui::Key::Num1),
+                ('2', egui::Key::Num2),
+                ('3', egui::Key::Num3),
+                ('4', egui::Key::Num4),
+                ('5', egui::Key::Num5),
+                ('6', egui::Key::Num6),
+                ('7', egui::Key::Num7),
+                ('8', egui::Key::Num8),
+                ('9', egui::Key::Num9),
+                ('p', egui::Key::P),
+                ('x', egui::Key::X),
+                ('u', egui::Key::U),
+            ] {
+                // ⚠ No modifier: ⌘X is cut and ⌘A is select-all. A culling key is bare or it is
+                // not a culling key.
+                if i.key_pressed(key) && !i.modifiers.any() {
+                    mark = rustroom_app::marks::action_for(c);
+                }
+            }
         });
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -122,6 +150,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     box_size,
                                     lib.thumbs[i].as_ref(),
                                     lib.entries[i].id.copy,
+                                    lib.marks
+                                        .get(&lib.entries[i].id)
+                                        .copied()
+                                        .unwrap_or_default(),
                                 );
                                 let e = &lib.entries[i];
                                 // ⚠⚠ `label()`, not `file_name`. Every copy of a file has the
@@ -168,6 +200,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
     });
 
+    if let Some(a) = mark {
+        app.apply_mark(a);
+    }
     if let Some((id, r)) = rename {
         name_edit::commit(app, ctx, &id, r);
     }

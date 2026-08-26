@@ -119,6 +119,15 @@ struct Library {
     /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
     /// `refilter`, never edited directly.
     visible: Vec<usize>,
+    /// Marks for every marked photo on show, keyed by identity.
+    ///
+    /// ⚠⚠ Read **once per rebuild**, not per frame and never per cell. The grid draws sixty
+    /// times a second over hundreds of thumbnails; a query per cell would be a database round
+    /// trip per photo per frame. Only marked photos are in here, so an unmarked folder costs
+    /// nothing.
+    marks: std::collections::HashMap<PhotoId, catalog::db::Marks>,
+    /// Minimum star rating shown. 0 shows everything.
+    min_stars: u8,
 }
 
 impl Library {
@@ -128,7 +137,22 @@ impl Library {
     /// selection holding photos that are not on screen, which a sync or a paste would then
     /// write to.
     fn refilter(&mut self) {
-        self.visible = self.filter.visible_indices(&self.entries);
+        // ⚠ One derived `visible` list, composed from both filters — **not** a second filtering
+        // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
+        // bug, and `visible` staying the single derived list is the mitigation that has held.
+        let by_format = self.filter.visible_indices(&self.entries);
+        let min = self.min_stars;
+        self.visible = by_format
+            .into_iter()
+            .filter(|&i| {
+                let m = self
+                    .marks
+                    .get(&self.entries[i].id)
+                    .copied()
+                    .unwrap_or_default();
+                rustroom_app::marks::passes(m, min)
+            })
+            .collect();
         self.selection.retain_visible(&self.visible);
     }
 }
@@ -1700,7 +1724,10 @@ impl RustroomApp {
                     // A fresh `Library` per folder load, so the filter resets by construction.
                     filter: FormatFilter::default(),
                     visible: (0..n).collect(),
+                    marks: std::collections::HashMap::new(),
+                    min_stars: 0,
                 });
+                self.reload_marks();
                 self.view = AppView::Library;
                 self.status = if n == 0 {
                     "No supported images in this folder.".into()
@@ -2076,7 +2103,10 @@ impl RustroomApp {
             loader,
             filter: FormatFilter::default(),
             visible: (0..n).collect(),
+            marks: std::collections::HashMap::new(),
+            min_stars: 0,
         });
+        self.reload_marks();
         self.view = AppView::Library;
         self.status = if n == 0 {
             format!("“{name}” is empty")
@@ -2091,6 +2121,68 @@ impl RustroomApp {
             Some(LibrarySource::Collection { id, .. }) => Some(*id),
             _ => None,
         }
+    }
+
+    /// Re-read the marks for whatever the Library is showing.
+    ///
+    /// ⚠ Reads the marks of every *folder* represented, because a collection spans folders. One
+    /// query per folder, never per photo.
+    fn reload_marks(&mut self) {
+        let Some(cat) = &self.catalog else { return };
+        let Some(lib) = self.library.as_ref() else {
+            return;
+        };
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for e in &lib.entries {
+            if let Some(dir) = e.id.path.parent() {
+                if !folders.iter().any(|f| f == dir) {
+                    folders.push(dir.to_path_buf());
+                }
+            }
+        }
+        let mut map = std::collections::HashMap::new();
+        for dir in &folders {
+            if let Ok(rows) = cat.marks_in(dir) {
+                for (path, copy, m) in rows {
+                    map.insert(PhotoId::new(path, copy), m);
+                }
+            }
+        }
+        if let Some(lib) = self.library.as_mut() {
+            lib.marks = map;
+            // ⚠ Refilter here, or a newly-rated photo would not appear or disappear under an
+            // active star filter until some unrelated action happened to rebuild.
+            lib.refilter();
+        }
+    }
+
+    /// Apply a culling action to every selected photo.
+    ///
+    /// ⚠ The **selection**, not the active photo — the rule a paste, a preset and a sync already
+    /// follow, and culling is where it matters most: select a run of frames and press `X`.
+    fn apply_mark(&mut self, action: rustroom_app::marks::MarkAction) {
+        let chosen: Vec<PhotoId> = self
+            .library
+            .as_ref()
+            .map(|l| {
+                l.selection
+                    .iter()
+                    .filter_map(|i| l.entries.get(i))
+                    .map(|e| e.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if chosen.is_empty() {
+            return;
+        }
+        if let Some(cat) = &self.catalog {
+            for id in &chosen {
+                let now = cat.marks(&id.path, id.copy).unwrap_or_default();
+                let next = rustroom_app::marks::apply(now, action);
+                let _ = cat.set_marks(&id.path, id.copy, next);
+            }
+        }
+        self.reload_marks();
     }
 
     /// Re-expand the Library's rows after a copy was added or removed.
@@ -2145,6 +2237,9 @@ impl RustroomApp {
             }
         }
         lib.refilter();
+        // ⚠ The indices have just shifted, so the marks map must be re-read against the new
+        // entries — and `reload_marks` refilters, which the rebuild needs anyway.
+        self.reload_marks();
     }
 
     /// Move a preset to the trash and refresh the cached list.

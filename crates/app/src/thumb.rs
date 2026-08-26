@@ -60,6 +60,7 @@ pub fn cell(
     box_size: egui::Vec2,
     thumb: Option<&egui::TextureHandle>,
     copy: u32,
+    marks: catalog::db::Marks,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
@@ -98,6 +99,64 @@ pub fn cell(
             ui.visuals().extreme_bg_color,
         );
     }
+    // ⚠ Painted into the **allocated** rect rather than allocating more: the cell's geometry must
+    // not depend on whether a photo happens to be marked, or marked photos would resize their
+    // cells — the reflow bug the filmstrip already paid for.
+    if !marks.is_empty() {
+        let p = ui.painter_at(rect);
+        let pad = 3.0;
+        let size = (box_size.y * 0.09).clamp(7.0, 13.0);
+        let mut x = rect.left() + pad;
+        let y = rect.bottom() - pad - size;
+        for _ in 0..marks.rating {
+            p.text(
+                egui::pos2(x, y),
+                egui::Align2::LEFT_TOP,
+                "★",
+                egui::FontId::proportional(size),
+                egui::Color32::from_rgb(240, 200, 90),
+            );
+            x += size * 0.8;
+        }
+        let flag_glyph = match marks.flag {
+            // ⚠⚠ `⚑` and `×`, chosen by **probing**, not by taste. `✓` and `✕` are absent from
+            // every bundled font and would have shipped as tofu boxes — caught by the guard
+            // below, which is the same finding the rail's four glyphs produced.
+            //
+            // ⚠ The flag is also the better symbol: Lightroom's "pick" *is* a flag.
+            catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120))),
+            catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110))),
+            catalog::db::Flag::None => None,
+        };
+        if let Some((glyph, colour)) = flag_glyph {
+            p.text(
+                egui::pos2(rect.right() - pad, y),
+                egui::Align2::RIGHT_TOP,
+                glyph,
+                egui::FontId::proportional(size),
+                colour,
+            );
+        }
+        if marks.label > 0 {
+            let colours = [
+                egui::Color32::from_rgb(220, 90, 90),
+                egui::Color32::from_rgb(230, 170, 70),
+                egui::Color32::from_rgb(220, 210, 90),
+                egui::Color32::from_rgb(110, 200, 110),
+                egui::Color32::from_rgb(110, 150, 230),
+            ];
+            let c = colours[(marks.label as usize - 1).min(colours.len() - 1)];
+            p.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + pad, rect.top() + pad),
+                    egui::vec2(size, size),
+                ),
+                egui::CornerRadius::ZERO,
+                c,
+            );
+        }
+    }
+
     resp
 }
 
@@ -150,7 +209,9 @@ mod tests {
                         .rect
                         .width()
                     } else {
-                        cell(ui, box_size, tex.as_ref(), 0).rect.width()
+                        cell(ui, box_size, tex.as_ref(), 0, catalog::db::Marks::default())
+                            .rect
+                            .width()
                     };
                     widths.push(w);
                 }
@@ -204,7 +265,7 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell(ui, box_size, tex.as_ref(), 0);
+                        cell(ui, box_size, tex.as_ref(), 0, catalog::db::Marks::default());
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                     });
                 })
@@ -264,7 +325,7 @@ mod tests {
                     .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                         ui.set_min_size(egui::vec2(CELL, CELL));
                         ui.vertical_centered(|ui| {
-                            cell(ui, box_size, Some(&tex), 0);
+                            cell(ui, box_size, Some(&tex), 0, catalog::db::Marks::default());
                             ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         });
                     })
@@ -328,7 +389,8 @@ mod tests {
             let _ = ctx.run_ui(input, |ui| {
                 ui.horizontal(|ui| {
                     for i in 0..3 {
-                        let resp = cell(ui, box_size, Some(&tex), 0).interact(egui::Sense::click());
+                        let resp = cell(ui, box_size, Some(&tex), 0, catalog::db::Marks::default())
+                            .interact(egui::Sense::click());
                         if i == 0 {
                             origin = resp.rect.min;
                             if pass == 2 && resp.clicked() {
@@ -360,5 +422,25 @@ mod tests {
         // but assert the spacing too, since that is what accumulates over 800 cells.
         let w = cell_widths(Some(PORTRAIT), false);
         assert!(w.windows(2).all(|p| p[0] == p[1]), "{w:?}");
+    }
+
+    #[test]
+    fn every_mark_glyph_is_renderable() {
+        // ⚠⚠ egui's bundled fonts hold about twenty usable symbols, and a missing one ships as a
+        // tofu box that no other test can see. The rail's four glyphs were **all** absent when
+        // that was last checked; this is the same guard.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        // ⚠ `has_glyph` needs a frame to have run: a fresh context has not built its atlas, so
+        // asking one answers about nothing.
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        for g in ['★', '⚑', '×'] {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyph(&id, g)),
+                "{g} (U+{:04X}) is not in any bundled font and would render as a tofu box",
+                g as u32
+            );
+        }
     }
 }

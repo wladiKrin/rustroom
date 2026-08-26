@@ -143,6 +143,7 @@ impl eframe::App for RustroomApp {
                     if self.view == AppView::Library {
                         format_bullets(self, ui);
                         if self.library.is_some() {
+                            star_filter(self, ui);
                             grid_size_buttons(self, ui);
                             sort_combo(self, ui);
                             let r = ui.button("Reindex").on_hover_text(
@@ -280,6 +281,36 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
 /// decision — it has no meaning while a single photo is open, and it sat in the Develop
 /// toolbar for no better reason than living in a shared row.
 ///
+/// Show only photos rated at least this many stars.
+///
+/// ⚠ Composes with the format filter through `Library::refilter`, the single derived `visible`
+/// list every consumer iterates — not a second filtering mechanism.
+fn star_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let mut min = app.library.as_ref().map(|l| l.min_stars).unwrap_or(0);
+    let text = |v: u8| {
+        if v == 0 {
+            "All".to_string()
+        } else {
+            format!("{v}★+")
+        }
+    };
+    egui::ComboBox::from_id_salt("min_stars")
+        .selected_text(text(min))
+        .show_ui(ui, |ui| {
+            for v in 0..=5u8 {
+                ui.selectable_value(&mut min, v, text(v));
+            }
+        });
+    // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
+    // hundreds per frame is the `apply_view_demosaic` mistake in another costume.
+    if let Some(lib) = app.library.as_mut() {
+        if lib.min_stars != min {
+            lib.min_stars = min;
+            lib.refilter();
+        }
+    }
+}
+
 /// Bigger / smaller Library cells.
 ///
 /// ⚠ Buttons rather than a slider: this row is right-aligned and already carries the sort combo,
