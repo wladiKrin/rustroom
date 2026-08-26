@@ -1206,10 +1206,7 @@ mod tests {
 
         let _ = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(400.0, 300.0),
-                )),
+                screen_rect: Some(screen()),
                 ..Default::default()
             },
             |ui| {
@@ -1260,10 +1257,7 @@ mod tests {
             let c = ctx.clone();
             let _ = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(400.0, 300.0),
-                    )),
+                    screen_rect: Some(screen()),
                     events,
                     ..Default::default()
                 },
@@ -1304,9 +1298,34 @@ mod tests {
         s.selected_mask = Some(0);
     }
 
-    /// The viewport centre for the 400×300 screen rect `drag_through` uses — and, with no pan,
-    /// the screen position of a mask handle at the normalised frame centre.
-    const CENTRE: egui::Pos2 = egui::pos2(200.0, 150.0);
+    /// The screen rect every harness pass uses.
+    fn screen() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))
+    }
+
+    /// The centre of the area the canvas is drawn into — and, with no pan, the screen position
+    /// of both a mask handle at the normalised frame centre and the middle of the image.
+    ///
+    /// ⚠⚠ **Measured, not hardcoded.** An earlier version wrote `(200, 150)`, obtained by
+    /// instrumenting the layout once. That is brittle in the worst way: a layout change moves the
+    /// target silently, and the failure mode is a test that still passes while grabbing nothing —
+    /// which is exactly the fault this file hit twice while it was being written. Running one
+    /// pass and reading `ui.max_rect()` costs a frame and cannot go stale.
+    fn canvas_centre(app: &mut RustroomApp, ctx: &egui::Context) -> egui::Pos2 {
+        let mut centre = egui::Pos2::ZERO;
+        let c = ctx.clone();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen()),
+                ..Default::default()
+            },
+            |ui| {
+                centre = ui.max_rect().center();
+                super::show(app, ui, &c);
+            },
+        );
+        centre
+    }
 
     #[test]
     fn dragging_a_mask_handle_asks_for_a_render() {
@@ -1329,7 +1348,8 @@ mod tests {
         // verified by sabotage. In the real app that later frame never comes, because egui idles
         // after the drag; that is precisely why the bug was visible as "the image does not update
         // until you touch a slider".
-        let counts = drag_through(&mut app, &ctx, CENTRE, CENTRE + egui::vec2(40.0, 0.0));
+        let centre = canvas_centre(&mut app, &ctx);
+        let counts = drag_through(&mut app, &ctx, centre, centre + egui::vec2(40.0, 0.0));
         assert!(
             counts[DRAG_PASS] > counts[DRAG_PASS - 1],
             "the drag frame itself must ask for a render; counts={counts:?}"
@@ -1391,7 +1411,8 @@ mod tests {
             "nothing to undo before the drag"
         );
 
-        let _ = drag_through(&mut app, &ctx, CENTRE, CENTRE + egui::vec2(60.0, 10.0));
+        let centre = canvas_centre(&mut app, &ctx);
+        let _ = drag_through(&mut app, &ctx, centre, centre + egui::vec2(60.0, 10.0));
 
         let s = app.session.as_ref().unwrap();
         assert!(
@@ -1414,14 +1435,120 @@ mod tests {
         // ⚠ Asserted through `canvas_geom::frame_rect` rather than by reading pixels: the frame's
         // *size* must not change with the pan, which is precisely what `img_rect` would do.
         let full = egui::vec2(80.0, 40.0);
-        let unpanned = super::canvas_geom::frame_rect(CENTRE, egui::Vec2::ZERO, full, 1.0, 2.0);
-        let panned =
-            super::canvas_geom::frame_rect(CENTRE, egui::vec2(50.0, -20.0), full, 1.0, 2.0);
+        let at = egui::pos2(200.0, 150.0);
+        let unpanned = super::canvas_geom::frame_rect(at, egui::Vec2::ZERO, full, 1.0, 2.0);
+        let panned = super::canvas_geom::frame_rect(at, egui::vec2(50.0, -20.0), full, 1.0, 2.0);
         assert_eq!(
             unpanned.size(),
             panned.size(),
             "panning must not resize the frame the mask is placed against"
         );
         assert_eq!(panned.center() - unpanned.center(), egui::vec2(50.0, -20.0));
+    }
+
+    /// A session in Crop mode with an inset crop, so a drag from the centre has room to move it.
+    ///
+    /// ⚠ Inset deliberately. On a full-frame crop `Handle::Inside` is clamped at every edge, so
+    /// the drag would be a no-op and the test would assert nothing.
+    fn with_inset_crop(app: &mut RustroomApp) {
+        app.tool = rustroom_app::tool::Tool::Crop;
+        let s = app.session.as_mut().unwrap();
+        s.edits.geometry.crop = edit_model::CropRect {
+            left: 0.2,
+            top: 0.2,
+            right: 0.8,
+            bottom: 0.8,
+        };
+    }
+
+    #[test]
+    fn dragging_inside_the_crop_moves_it() {
+        // ⚠ The crop overlay is the same shape as the mask overlay — drag lifecycle, handle
+        // hit-test, commit on release — so it inherits the same three failure modes. This is the
+        // guard that it actually responds to a drag at all.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_inset_crop(&mut app);
+        let before = app.session.as_ref().unwrap().edits.geometry.crop;
+
+        let centre = canvas_centre(&mut app, &ctx);
+        let _ = drag_through(&mut app, &ctx, centre, centre + egui::vec2(20.0, 0.0));
+
+        let after = app.session.as_ref().unwrap().edits.geometry.crop;
+        assert_ne!(before, after, "a drag inside the crop must move it");
+        assert!(
+            after.left > before.left,
+            "and it must move the way the pointer went; before={before:?} after={after:?}"
+        );
+    }
+
+    #[test]
+    fn a_crop_drag_commits_one_undo_step_on_release() {
+        // ⚠⚠ The crop's version of the `drag_stopped` bug. Asserted on the **history**, not on
+        // the crop rect: the rect changes during the *drag*, so comparing it would pass with the
+        // release handler disabled — the same trap the mask test fell into first.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_inset_crop(&mut app);
+        assert!(!app.session.as_ref().unwrap().history.can_undo());
+
+        let centre = canvas_centre(&mut app, &ctx);
+        let _ = drag_through(&mut app, &ctx, centre, centre + egui::vec2(20.0, 8.0));
+
+        assert!(
+            app.session.as_ref().unwrap().history.can_undo(),
+            "the release must have committed one undo step"
+        );
+    }
+
+    #[test]
+    fn a_crop_drag_that_grabs_nothing_leaves_the_crop_alone() {
+        // ⚠ The guard on the guard, as for masks. A drag well outside the crop rect hits no
+        // handle, so the crop must not move — otherwise "the crop changed" says nothing about
+        // whether the hit-test works.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_inset_crop(&mut app);
+        let before = app.session.as_ref().unwrap().edits.geometry.crop;
+
+        // The frame's top-left corner: outside a crop inset to 0.2..0.8.
+        let _ = drag_through(
+            &mut app,
+            &ctx,
+            egui::pos2(12.0, 58.0),
+            egui::pos2(30.0, 62.0),
+        );
+
+        assert_eq!(
+            before,
+            app.session.as_ref().unwrap().edits.geometry.crop,
+            "a drag outside the crop must not move it"
+        );
+    }
+
+    #[test]
+    fn the_crop_overlay_does_not_ask_for_a_render() {
+        // ⚠⚠ **The asymmetry with masks, pinned so nobody "fixes" it.** A crop drag deliberately
+        // issues *no* render: `preview_edits` strips the crop in geometry mode, so the overlay
+        // itself is the feedback and the pixels underneath do not change. Copying the mask
+        // overlay's `s.request` here would re-render the whole frame on every drag frame for no
+        // visible difference — and the reverse mistake, assuming masks needed no request either,
+        // is exactly the bug that shipped.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_inset_crop(&mut app);
+
+        let centre = canvas_centre(&mut app, &ctx);
+        let counts = drag_through(&mut app, &ctx, centre, centre + egui::vec2(20.0, 0.0));
+
+        assert_eq!(
+            counts[DRAG_PASS],
+            counts[DRAG_PASS - 1],
+            "a crop drag must not ask for a render; counts={counts:?}"
+        );
     }
 }
