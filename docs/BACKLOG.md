@@ -306,3 +306,77 @@ settles it; do not assume.
   Linux first". A network dependency is a genuine change of character — not wrong, but worth
   deciding deliberately rather than sliding into.
 
+## Film negative inversion (recorded 2026-08-26 — a FEATURE, not a plugin)
+
+**Status:** 🟡 wanted, not blocked. A `PipelineStage` like any other.
+
+The user wants Lightroom's negative-inversion capability (the Negative Lab Pro workflow) for
+scanned analogue film. ⚠⚠ **It arrived as a request for a plugin *system*, and it is not one.**
+
+**What it actually is:** invert the channels, derive white balance from the **film base** colour,
+apply a tone curve. **Every one of those already exists in this pipeline.** What it needs beyond
+presets is a *per-photo measurement* — sampling the unexposed film base — and therefore an
+eyedropper on the canvas.
+
+So it is **a stage plus an eyedropper**, not an extension mechanism. Building a plugin system to
+obtain it would be solving the wrong problem at roughly twenty times the cost.
+
+⚠ **Why it is worth doing on its own merits:** no open-source RAW editor does film inversion well,
+so it is genuinely differentiating — and the scene-referred linear pipeline is a *better* place to
+do it than Lightroom's, because inversion is a radiometric operation.
+
+⚠ **The one new piece of machinery:** an eyedropper. Nothing in Rustroom samples a pixel from the
+canvas yet. It would also serve the white-balance eyedropper that `01-lightroom-capabilities`
+already lists as missing — so build it once, for both.
+
+## A plugin system (recorded 2026-08-26 — DELIBERATELY not now)
+
+**Status:** ⛔ deferred on judgement, revisit **after Phase 5**.
+
+Wanted to encourage outside contributions once the project is public. Three reasons not yet:
+
+1. **⚠⚠ A plugin API is a public contract, and this one is not ready to freeze.** In a single week
+   `Edits` gained `lens_correction` and an eighth edit group, the prefix/tail split changed,
+   `Library.dir` became `LibrarySource` and then gained a third variant, and `PhotoId` replaced
+   `PathBuf` in six places. Freezing on top of that gives one of two bad outcomes: break plugins
+   constantly, or stop changing the core. **At Phase 4 of 6, stopping changing the core is the
+   expensive one.** ⚠ The GPU port will change `PipelineStage` again, which is why the revisit
+   point is *after* Phase 5.
+2. **It is probably not what attracts early contributors.** They want to change the *core* — that
+   is where the interesting problems are. A plugin boundary is a barrier ("where does this go? is
+   this allowed?"), not an invitation.
+3. **The concrete want behind the request — film inversion — does not need one.** See above.
+
+### The trade, recorded so the eventual decision is informed
+
+| approach | verdict |
+|---|---|
+| **Dynamic libraries** | Rust has **no stable ABI**, so it needs a C API or `abi_stable`. And a plugin crash takes the whole app down. |
+| **WASM** (wasmtime / extism) | Sandboxed, cross-platform, no ABI problem. ⚠ The real question is data movement: a 26 Mpx f32 buffer is **313 MB**, so a per-stage copy across the boundary is prohibitive. Shared linear memory makes it tractable — that is the design work. |
+| **Scripting** (Lua / Rhai) | Easy to write, far too slow per-pixel at 26 Mpx — **unless** the plugin only *describes* an op-list rather than touching pixels, which covers more cases than it sounds. |
+| **Declarative** | A plugin as a recipe over existing stages. Cheapest by far, and honestly covers most of what people call plugins. |
+
+⚠⚠ **GPL-3.0 makes this a licensing question too, not only a technical one.** A dynamically-linked
+plugin is plausibly a derived work, which constrains who may write closed-source ones. Decide that
+deliberately *before* publishing any API.
+
+⚠ **`PipelineStage` is already the extension seam**, and a good one — "add a stage" is a
+well-shaped contribution with a golden-image test to prove it. That is what to point contributors
+at meanwhile.
+
+## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source")
+
+**Status:** 🟡 wanted, small, and the highest-value thing for attracting contributions.
+
+⚠⚠ **`CLAUDE.md` is already an extraordinary architecture document** — the reasoning, the rejected
+alternatives, the mistakes and what they cost. Very few projects have that. **But it is addressed
+to an AI assistant, not to a contributor**, and it is enormous.
+
+1. **`ARCHITECTURE.md`** — reframe the load-bearing parts of `CLAUDE.md` for a human arriving cold:
+   the staged pipeline, the prefix/tail split, `RenderScale` and `Region`, the sidecar/catalog
+   split, and the crate layout. **Mostly editing, not writing.**
+2. **`CONTRIBUTING.md`** — how to build (⚠ the `PKG_CONFIG_PATH` line alone is a barrier nobody can
+   guess), how to run and regenerate the goldens, and the sabotage-testing discipline, which is
+   this project's most distinctive practice and completely invisible from outside.
+3. **Small labelled issues.** Several already exist in this file.
+
