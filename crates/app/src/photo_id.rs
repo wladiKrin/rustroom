@@ -30,50 +30,31 @@ impl PhotoId {
         self.copy == 0
     }
 
-    /// What an export filename appends: nothing for the original, `_N` for copy N.
+    /// The filename stem a photo exports under, before any de-duplication suffix.
     ///
-    /// ⚠ Underscore, not hyphen. `batch_export::dest_for` already uses `-N` for a *different*
-    /// meaning — "the Nth file wanting this name in this folder", assigned at export time. This
-    /// one is a property of the photo and stable forever. One separator per meaning.
-    pub fn suffix(&self) -> String {
-        if self.is_original() {
-            String::new()
-        } else {
-            format!("_{}", self.copy)
-        }
-    }
-
-    /// What an export filename appends for a **named** copy: the name, sanitized for a filename.
+    /// ⚠⚠ **A copy's name *is* the export name — it is not appended to the file's.** Naming
+    /// copy 2 "Warm" gives `Warm.jpg`, not `DSCF6223_Warm.jpg`. That is what the name is for, and
+    /// it is why the field shows a whole filename rather than a bare label: what you type is what
+    /// you get. Only an *unnamed* copy falls back to `{stem}_{copy}`, which is also exactly what
+    /// its field shows, so the default and the export cannot disagree.
     ///
-    /// ⚠⚠ **The name overrides the number here, and that is the whole point of naming a copy.**
-    /// Controlling the export filename is what the name is *for* — `DSCF6223_B&W.jpg` rather than
-    /// `DSCF6223_2.jpg`. The number remains the identity; the name is an explicit, user-chosen
-    /// label on top of it, not a second derived fact that could silently disagree.
+    /// ⚠ Any extension on the name is dropped — the export format decides that, and
+    /// `Warm.RAF` exported as JPEG must not become `Warm.RAF.jpg`.
     ///
     /// ⚠ Sanitized through `safe_name`, the single guard that stops a typed name escaping its
     /// directory — the name reaches the filesystem here exactly as a preset's does. A name that
-    /// sanitizes to nothing falls back to the number rather than producing a bare `_`.
-    pub fn export_suffix(copy: u32, name: Option<&str>) -> String {
+    /// sanitizes to nothing falls back to the number rather than producing an empty filename.
+    pub fn export_stem(file_stem: &str, copy: u32, name: Option<&str>) -> String {
         if copy == 0 {
-            return String::new();
+            // ⚠ Copy 0 *is* the file, so its name is the filename and a stored one is ignored.
+            return file_stem.to_string();
         }
-        match name.map(crate::safe_name::sanitize) {
-            Some(n) if !n.is_empty() => format!("_{n}"),
-            _ => format!("_{copy}"),
-        }
-    }
-
-    /// What the UI shows: the file name, plus ` / N` for a copy.
-    pub fn label(&self) -> String {
-        let name = self
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("(unnamed)");
-        if self.is_original() {
-            name.to_string()
-        } else {
-            format!("{name} / {}", self.copy)
+        let typed = name
+            .map(|n| n.rsplit_once('.').map_or(n, |(before, _)| before))
+            .map(crate::safe_name::sanitize);
+        match typed {
+            Some(n) if !n.is_empty() => n,
+            _ => format!("{file_stem}_{copy}"),
         }
     }
 
@@ -111,59 +92,52 @@ mod tests {
     }
 
     #[test]
-    fn the_suffix_is_empty_for_the_original_and_numbered_otherwise() {
-        // ⚠ **One number used everywhere**: this same value is the identity, the label and the
-        // export filename suffix. A display number offset from the identity number is two facts
-        // that can disagree — the failure `render_max_dim` and `fit_image_size` were both fixed
-        // for. Deliberately *not* Lightroom's labelling, where the original is "Copy 1".
-        assert_eq!(PhotoId::original(PathBuf::from("/x/a.RAF")).suffix(), "");
-        assert_eq!(PhotoId::new(PathBuf::from("/x/a.RAF"), 1).suffix(), "_1");
-        assert_eq!(PhotoId::new(PathBuf::from("/x/a.RAF"), 12).suffix(), "_12");
+    fn a_copys_name_replaces_the_filename_rather_than_extending_it() {
+        // ⚠⚠ The name *is* the export name. Appending it to the file's stem — which is what this
+        // did first — means a copy called "Warm" comes out as `DSCF6223_Warm`, and there is then
+        // no way to give a copy a name of its own at all.
+        assert_eq!(PhotoId::export_stem("DSCF6223", 2, Some("Warm")), "Warm");
+        assert!(!PhotoId::export_stem("DSCF6223", 2, Some("Warm")).contains("DSCF6223"));
     }
 
     #[test]
-    fn a_named_copy_exports_under_its_name() {
+    fn an_unnamed_copy_falls_back_to_stem_and_number() {
+        // ⚠ The same string `file_rename::default_copy_name` shows in the field, so the default
+        // shown and the default exported cannot disagree.
+        assert_eq!(PhotoId::export_stem("DSCF6223", 2, None), "DSCF6223_2");
         assert_eq!(
-            PhotoId::export_suffix(0, Some("B&W")),
-            "",
-            "copy 0 is the file"
+            PhotoId::export_stem("DSCF6223", 0, Some("ignored")),
+            "DSCF6223",
+            "copy 0 is the file, so a stored name is not its name"
         );
-        assert_eq!(PhotoId::export_suffix(2, None), "_2");
+    }
+
+    #[test]
+    fn an_extension_on_the_name_is_dropped() {
+        // ⚠ The field shows a whole filename, so the name usually carries one — and the *export
+        // format* decides the extension. Without this, a JPEG export of "Warm.RAF" would be
+        // `Warm.RAF.jpg`.
         assert_eq!(
-            PhotoId::export_suffix(2, Some("Black and White")),
-            "_Black and White"
+            PhotoId::export_stem("a", 1, Some("DSCF6223_1.RAF")),
+            "DSCF6223_1"
         );
-        // ⚠ The *shown* name keeps what you typed; only the filename is sanitized, so "B&W" is
-        // still labelled "B&W" in the Library while exporting as `_B_W`.
-        assert_eq!(PhotoId::export_suffix(2, Some("B&W")), "_B_W");
+        assert_eq!(PhotoId::export_stem("a", 1, Some("Warm.jpg")), "Warm");
     }
 
     #[test]
     fn an_export_name_cannot_escape_its_directory() {
         // ⚠ The one security-relevant line in this feature: the name is free text that becomes a
         // path. Same guard, and the same reason, as a preset's filename.
-        let got = PhotoId::export_suffix(2, Some("../../evil"));
+        let got = PhotoId::export_stem("a", 2, Some("../../evil"));
         assert!(!got.contains('/') && !got.contains('.'), "got {got}");
-        assert!(!PhotoId::export_suffix(2, Some("a/b")).contains('/'));
+        assert!(!PhotoId::export_stem("a", 2, Some("a/b")).contains('/'));
     }
 
     #[test]
     fn a_name_that_sanitizes_to_nothing_falls_back_to_the_number() {
-        // ⚠ Otherwise the suffix would be a bare `_`, which reads as a broken filename rather
-        // than as a copy.
-        assert_eq!(PhotoId::export_suffix(2, Some("   ")), "_2");
-        assert_eq!(PhotoId::export_suffix(2, Some("")), "_2");
-    }
-
-    #[test]
-    fn the_label_names_the_file_and_the_copy() {
-        assert_eq!(
-            PhotoId::original(PathBuf::from("/x/DSCF6223.RAF")).label(),
-            "DSCF6223.RAF"
-        );
-        assert_eq!(
-            PhotoId::new(PathBuf::from("/x/DSCF6223.RAF"), 1).label(),
-            "DSCF6223.RAF / 1"
-        );
+        // ⚠ Otherwise the export would have an empty filename.
+        assert_eq!(PhotoId::export_stem("a", 2, Some("   ")), "a_2");
+        assert_eq!(PhotoId::export_stem("a", 2, Some("")), "a_2");
+        assert_eq!(PhotoId::export_stem("a", 2, Some(".RAF")), "a_2");
     }
 }

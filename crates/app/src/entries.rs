@@ -23,8 +23,10 @@ pub struct PhotoEntry {
 impl PhotoEntry {
     /// What the grid, filmstrip and Develop footer show.
     ///
-    /// ⚠⚠ **A copy shows its name *instead of* its number, never as well as it.** Two labels for
-    /// one thing is how a display value drifts from the identity it describes.
+    /// ⚠⚠ **A copy shows its own name, not the file's name plus a marker.** An unnamed copy's
+    /// name is `{stem}_{copy}.{ext}` — a whole filename, derived rather than stored, and exactly
+    /// what it will export as. So the label, the editable field and the export filename are one
+    /// string, and cannot drift apart.
     ///
     /// ⚠ There is exactly one editable name per row, and *which* name it is depends on the row:
     /// the original's is the filename on disk, a copy's is this. That asymmetry is the feature —
@@ -33,8 +35,8 @@ impl PhotoEntry {
     pub fn label(&self) -> String {
         match (self.id.copy, self.name.as_deref()) {
             (0, _) => self.file_name.clone(),
-            (_, Some(n)) => format!("{} / {n}", self.file_name),
-            (c, None) => format!("{} / {c}", self.file_name),
+            (_, Some(n)) => n.to_string(),
+            (c, None) => crate::file_rename::default_copy_name(&self.file_name, c),
         }
     }
 }
@@ -144,14 +146,24 @@ mod tests {
 
     #[test]
     fn the_label_is_the_filename_plus_the_copy_number() {
-        // ⚠ One number used everywhere: the identity, the label and the export suffix are the
-        // same value. The original shows no suffix at all.
+        // ⚠ One number used everywhere: the identity, the default label and the default export
+        // name are the same value. The original carries no number at all.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, None), copy(1, None), copy(2, None)],
         });
         assert_eq!(got[0].label(), "a.RAF");
-        assert_eq!(got[1].label(), "a.RAF / 1");
-        assert_eq!(got[2].label(), "a.RAF / 2");
+        assert_eq!(got[1].label(), "a_1.RAF");
+        assert_eq!(got[2].label(), "a_2.RAF");
+    }
+
+    #[test]
+    fn an_unnamed_copy_is_labelled_like_a_filename() {
+        // ⚠ Not "a.RAF / 1". The label *is* what the copy exports as, so it reads as a filename.
+        let got = build(&scan(&["a.RAF"]), |_| Sidecar {
+            copies: vec![copy(0, None), copy(1, None)],
+        });
+        assert_eq!(got[0].label(), "a.RAF");
+        assert_eq!(got[1].label(), "a_1.RAF");
     }
 
     #[test]
@@ -161,13 +173,13 @@ mod tests {
         });
         assert_eq!(
             got[1].label(),
-            "a.RAF / 1",
+            "a_1.RAF",
             "unnamed falls back to the number"
         );
-        assert_eq!(got[2].label(), "a.RAF / B&W");
+        assert_eq!(got[2].label(), "B&W");
         assert!(
-            !got[2].label().contains('2'),
-            "the name replaces the number, it does not join it"
+            !got[2].label().contains("a.RAF"),
+            "the name replaces the filename, it does not extend it"
         );
     }
 

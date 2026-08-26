@@ -150,12 +150,15 @@ pub struct ExportReport {
 /// writable name rather than panicking.
 /// Where one export lands.
 ///
-/// ⚠ **Two numbers, two meanings, two separators.** `copy` is which virtual copy this is — a
-/// property of the photo, stable forever, rendered `_N`. `dedup` is how many files already wanted
-/// this name in this folder — a property of the destination, assigned at export time, rendered
-/// `-N`. Merging them into one scheme would make `a-2.jpg` ambiguous between "copy 2" and "the
-/// third file called a", and would silently shift a copy's number whenever its plain name happened
-/// to be taken.
+/// ⚠ **Two numbers, two meanings, two separators.** `_N` is which virtual copy this is — a
+/// property of the photo, stable forever, and only the *default* for an unnamed copy. `-N` is how
+/// many files already wanted this name in this folder — a property of the destination, assigned at
+/// export time. Merging them into one scheme would make `a-2.jpg` ambiguous between "copy 2" and
+/// "the third file called a", and would silently shift a copy's number whenever its plain name
+/// happened to be taken.
+///
+/// ⚠ Two copies can be given the *same* name; nothing prevents it, and `-N` is what stops them
+/// overwriting each other. That is the second reason the schemes stay separate.
 pub fn dest_for(
     dir: &Path,
     source: &Path,
@@ -169,13 +172,13 @@ pub fn dest_for(
         .and_then(|s| s.to_str())
         .unwrap_or("export");
     let ext = format.extension();
-    // ⚠ A named copy exports under its name rather than its number — that is what naming a copy
-    // is *for*. The number stays the identity; the name is an explicit override on top of it.
-    let copy_suffix = PhotoId::export_suffix(copy, copy_name);
+    // ⚠ A named copy exports under its **own** name, which replaces the file's stem rather than
+    // extending it. The copy number stays the identity; the name is an explicit override.
+    let stem = PhotoId::export_stem(stem, copy, copy_name);
     let name = if dedup == 0 {
-        format!("{stem}{copy_suffix}.{ext}")
+        format!("{stem}.{ext}")
     } else {
-        format!("{stem}{copy_suffix}-{dedup}.{ext}")
+        format!("{stem}-{dedup}.{ext}")
     };
     dir.join(name)
 }
@@ -999,8 +1002,9 @@ mod tests {
 
     #[test]
     fn a_named_copy_exports_under_its_name_not_its_number() {
-        // ⚠ Controlling the export filename is what naming a copy is *for*. The number stays the
-        // identity; the name is an explicit override on top of it.
+        // ⚠⚠ The name *replaces* the file's stem; it is not appended to it. Controlling the
+        // export filename is what naming a copy is for, and `DSCF6223_Warm.jpg` would mean a copy
+        // could never have a name of its own.
         let dir = std::path::PathBuf::from("/out");
         assert_eq!(
             dest_for(
@@ -1011,7 +1015,7 @@ mod tests {
                 0,
                 ExportFormat::Jpeg
             ),
-            dir.join("DSCF6223_Warm.jpg")
+            dir.join("Warm.jpg")
         );
     }
 
@@ -1055,8 +1059,8 @@ mod tests {
             1,
             ExportFormat::Jpeg,
         );
-        assert_eq!(first, dir.join("a_Warm.jpg"));
-        assert_eq!(second, dir.join("a_Warm-1.jpg"));
+        assert_eq!(first, dir.join("Warm.jpg"));
+        assert_eq!(second, dir.join("Warm-1.jpg"));
         assert_ne!(first, second);
     }
 

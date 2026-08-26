@@ -26,14 +26,7 @@ pub enum Refusal {
 pub fn target(photo: &Path, typed: &str) -> Result<PathBuf, Refusal> {
     let stem = typed.trim();
     // Strip an extension the user left on, so "DSCF1.RAF" does not become "DSCF1.RAF.RAF".
-    //
-    // ⚠ Split at the **last dot** rather than using `Path::file_stem`, which follows the dotfile
-    // rule and reports `".RAF"` as its own stem — so deleting the name and leaving the extension
-    // produced the nonsense `_RAF.RAF` instead of being refused.
-    let stem = match stem.rsplit_once('.') {
-        Some((before, _)) => before,
-        None => stem,
-    };
+    let stem = strip_typed_extension(stem);
     // ⚠ Through `safe_name`, the same guard the preset store uses: this string comes from a text
     // field and becomes a path, so `../../evil` must not escape the folder.
     let stem = safe_name::sanitize(stem);
@@ -47,6 +40,36 @@ pub fn target(photo: &Path, typed: &str) -> Result<PathBuf, Refusal> {
         name.push_str(ext);
     }
     Ok(photo.with_file_name(name))
+}
+
+/// Strip a trailing extension the user left on a typed name.
+///
+/// ⚠ Splits at the **last dot** rather than using `Path::file_stem`, which follows the dotfile
+/// rule and reports `".RAF"` as its own stem — so deleting the name and leaving the extension
+/// produced the nonsense `_RAF.RAF` instead of being refused.
+///
+/// ⚠ The split is unconditional, so `".RAF"` yields `""` and the caller refuses it. That is
+/// deliberately *not* what `default_copy_name` does with the same input — a name someone typed
+/// and a name derived from a real file are different problems, and sharing the rule made a blank
+/// entry silently acceptable.
+fn strip_typed_extension(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((before, _)) => before,
+        None => name,
+    }
+}
+
+/// What a copy is called when it has not been given a name of its own.
+///
+/// ⚠ **Derived, never stored.** Leaving an unnamed copy's name as `None` is what makes it follow
+/// the file: rename `a.RAF` to `b.RAF` and its copies become `b_1.RAF` on their own. Storing the
+/// default at creation would freeze them on the old stem, silently, and the export filenames with
+/// them.
+pub fn default_copy_name(file_name: &str, copy: u32) -> String {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => format!("{stem}_{copy}.{ext}"),
+        _ => format!("{file_name}_{copy}"),
+    }
 }
 
 /// The sidecar that must move with `photo`.
@@ -124,5 +147,30 @@ mod tests {
         // ⚠ Not renaming it orphans every edit: the photo would reopen neutral and the old
         // sidecar would linger.
         assert_eq!(sidecar_of(&p("/x/a.RAF")), p("/x/a.RAF.json"));
+    }
+}
+
+#[cfg(test)]
+mod copy_name_tests {
+    use super::*;
+
+    #[test]
+    fn an_unnamed_copy_is_the_stem_the_number_and_the_extension() {
+        // ⚠ It is a whole filename, not a bare label, because it is what the copy exports as —
+        // the field shows exactly what you will get.
+        assert_eq!(default_copy_name("DSCF6223.RAF", 1), "DSCF6223_1.RAF");
+        assert_eq!(default_copy_name("DSCF6223.RAF", 12), "DSCF6223_12.RAF");
+    }
+
+    #[test]
+    fn a_file_with_no_extension_still_gets_a_copy_name() {
+        assert_eq!(default_copy_name("photo", 2), "photo_2");
+    }
+
+    #[test]
+    fn a_dotfile_keeps_its_leading_dot() {
+        // ⚠ `.RAF` has no stem before the dot, so treating the dot as a separator would give
+        // `_1.RAF` — a name with nothing left of the original in it.
+        assert_eq!(default_copy_name(".RAF", 1), ".RAF_1");
     }
 }

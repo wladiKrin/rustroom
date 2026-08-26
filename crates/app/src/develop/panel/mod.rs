@@ -88,10 +88,15 @@ fn name_field(
 ) -> Option<Rename> {
     let id = PhotoId::new(s.path.clone(), s.copy);
     let on_copy = !id.is_original();
+    // ⚠ An unnamed copy shows its **derived** name rather than an empty box: `DSCF6223_1.RAF`,
+    // which is exactly what it will export as. An empty field said nothing about what the copy is
+    // called or what it produces, and left the number visible only in the caption below.
+    let file_name = file_rename::field_text(&s.path);
+    let default = file_rename::default_copy_name(&file_name, s.copy);
     let current = if on_copy {
-        s.name.clone().unwrap_or_default()
+        s.name.clone().unwrap_or_else(|| default.clone())
     } else {
-        file_rename::field_text(&s.path)
+        file_name.clone()
     };
     // ⚠ A draft belonging to a *different* photo is discarded, not shown. Without this the last
     // name typed followed you to every photo you opened afterwards.
@@ -99,14 +104,9 @@ fn name_field(
         *draft = None;
     }
     let (_, text) = draft.get_or_insert_with(|| (id.clone(), current.clone()));
-    let mut edit = egui::TextEdit::singleline(text)
+    let edit = egui::TextEdit::singleline(text)
         .font(egui::TextStyle::Body)
         .desired_width(f32::INFINITY);
-    if on_copy {
-        // ⚠ A hint rather than the number as real text: typing over "1" and stopping halfway
-        // would store a name that merely looks like a copy number.
-        edit = edit.hint_text(format!("Copy {}", s.copy));
-    }
     let r = ui.add(edit);
     // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the
     // context lock internally, and holding one across `ui.input(..)` panics inside epaint's
@@ -134,10 +134,11 @@ fn name_field(
             return None;
         }
         if on_copy {
-            // ⚠ Empty *clears* the name rather than being refused: a copy without one is a
-            // legitimate state that shows its number, so there is nothing to protect against.
             let trimmed = typed.trim();
-            let to = (!trimmed.is_empty()).then(|| trimmed.to_string());
+            // ⚠ Typing the default back, or clearing the field, stores `None` rather than that
+            // literal string. `None` is what makes an unnamed copy *follow* a later rename of its
+            // file; freezing the derived name would silently strand it on the old stem.
+            let to = (!trimmed.is_empty() && trimmed != default).then(|| trimmed.to_string());
             return (to != s.name).then_some(Rename::Copy(to));
         }
         // ⚠ A refusal leaves the file alone and the field resets to the real name, so an empty
