@@ -19,17 +19,15 @@ Project-specific guidance for Claude Code working in this repository.
 The detailed spec lives in the user's Obsidian vault at
 `~/Documents/obsidian/private/opensource_lightroom/`.
 
-⚠⚠ **THAT PATH IS UNREADABLE FROM CLAUDE CODE ON THIS MACHINE — verified 2026-08-26.** So **every roadmap update has to be handed to the user as text to paste.** Do not plan work that depends on reading or writing those files, and do not report a roadmap edit as done.
+⚠ **Reaching it needs TWO permissions, and they are separate — 2026-08-26.**
+1. **The harness's directory scoping** — `mcp__ccd_directory__request_directory` with the vault path grants it; the user approves in-session.
+2. **macOS TCC** — Full Disk Access for the app Claude Code launches from, System Settings → Privacy & Security, then a full quit-and-reopen. **Granted on this machine as of 2026-08-26.**
 
-⚠ **TWO restrictions are stacked, and clearing one is not enough — do not conclude from a successful folder grant that the file is now readable.**
-1. **The harness's directory scoping.** `mcp__ccd_directory__request_directory` grants it and reports *"Folder access granted"* — which looks like success and is not.
-2. **macOS TCC**, which still denies it afterwards. `/bin/ls ~/Documents` returns `Operation not permitted` even with the shell sandbox disabled, and the directory is `drwx------` on the user's own account. Only **Full Disk Access** (System Settings → Privacy & Security), granted to the app Claude Code is launched from and followed by a full quit-and-reopen, lifts this one.
-
-⚠ The quick check that settles it in one call, without a permission prompt:
+⚠ The one-call check, no permission prompt, that tells you which (if either) is missing:
 ```
 /bin/ls ~/Documents 2>&1 | head -3
 ```
-If that says `Operation not permitted`, the vault is out of reach whatever the harness says.
+`Operation not permitted` means TCC; a harness refusal names the path instead. ⚠ Do not conclude from a successful folder grant that the file is readable — the grant reports success while TCC still denies it, which cost a wrong diagnosis here.
 
 - `01-lightroom-capabilities.md` — target feature set + prioritized P0–P4 scope table.
 - `02-architecture-and-tech.md` — stack rationale, pipeline design, crate layout, best practices.
@@ -274,9 +272,7 @@ Run it through **brainstorm → spec → plan → executing-plans, all inline** 
 
 **Standing perf items:** none. `downscale_to`, the full-resolution 1:1 buffer, the RGBA8 pack, the per-stage prefix checkpoints and libraw's `user_qual` are all **done** — see their sections below. Docs live in `docs/superpowers/`.
 
-**⚠ ROADMAP EDITS OWED, 2026-08-26 (the vault is unreadable — see the note at the top):** mark **M3.4 🟡** *"virtual copies done; snapshots parked"*, and note under emergent work that the Library gained **in-place renaming, `Reindex`, six sort orders and a resizable grid**, which pulls part of Phase 4 forward.
-
-**Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
+**Roadmap status** lives in the user's Obsidian vault at `~/Documents/obsidian/private/opensource_lightroom/03-plan-of-action.md` — **updated 2026-08-26 and accurate**: Phase 3 🟡 substantially complete, M3.4 🟡 with its naming/`Reindex` follow-up recorded, colour management logged under emergent work, and the stale lcms2 and `main.rs`-size gaps corrected. Superseded 2026-08-11 note follows: **updated 2026-08-11 and now accurate**: M2.3 ✅, M2.4 ✅, Phase 2 ✅, with the demosaic/PNG-TIFF/filmstrip work recorded under "Emergent work" and the `user_qual` and lcms2 entries in "Known gaps" revised. ⚠ Its lcms2 line now says explicitly that **lcms2 being in the build does not mean colour management is solved** — it emits one static sRGB profile and nothing else. We are **past Phase 2**; Phase 3 has not started.
 
 **The user wants the GUI launched after every big update so they can cross-check it themselves** — start it in the background without being asked, and say what to look at. Skip it for small follow-up tweaks in a tuning loop.
 
