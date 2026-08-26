@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -103,6 +103,18 @@ impl Marks {
             label: self.label.min(Self::MAX_LABEL),
         }
     }
+}
+
+/// A keyword in the tree, flattened for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeywordRow {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    /// How deep in the tree, for indenting. Roots are 0.
+    pub depth: usize,
+    /// How many *files* carry this keyword directly — **not** counting children.
+    pub count: i64,
 }
 
 /// A collection, with how many photos are in it.
@@ -215,6 +227,37 @@ impl Catalog {
                  ALTER TABLE photos ADD COLUMN flag   INTEGER NOT NULL DEFAULT 0;
                  ALTER TABLE photos ADD COLUMN label  INTEGER NOT NULL DEFAULT 0;
                  PRAGMA user_version = 2;
+                 COMMIT;",
+            )?;
+        }
+        if from < 3 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1 or 2. Second time this rule applies
+            // to a database holding real user data.
+            //
+            // ⚠⚠ The `COALESCE` index is load-bearing. A plain `UNIQUE(parent_id, name)` would
+            // allow **two root-level "Paris" keywords**, because SQLite treats NULLs as distinct
+            // in a unique constraint — silent duplicates that look identical in the tree.
+            //
+            // ⚠⚠ `photo_keywords` is keyed on the **file**, not on `photos.id` as
+            // `collection_photos` is. That is not an inconsistency: a keyword describes what is
+            // *in* the picture, which every copy of a file shares, while a collection membership
+            // and a rating describe a particular version. **Do not unify them.**
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE keywords (
+                     id        INTEGER PRIMARY KEY,
+                     name      TEXT NOT NULL,
+                     parent_id INTEGER REFERENCES keywords(id) ON DELETE CASCADE
+                 );
+                 CREATE UNIQUE INDEX keywords_unique
+                     ON keywords(COALESCE(parent_id, 0), name);
+                 CREATE TABLE photo_keywords (
+                     folder_id  INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name  TEXT NOT NULL,
+                     keyword_id INTEGER NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
+                     PRIMARY KEY (folder_id, file_name, keyword_id)
+                 );
+                 PRAGMA user_version = 3;
                  COMMIT;",
             )?;
         }
@@ -350,7 +393,16 @@ impl Catalog {
             "UPDATE photos SET file_name = ?3
              WHERE file_name = ?2
                AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
-            rusqlite::params![from_folder, from_name, to_name],
+            rusqlite::params![&from_folder, &from_name, &to_name],
+        )?;
+        // ⚠⚠ `photo_keywords` is keyed by file name, so it must move in the same operation — the
+        // third instance of this integration, after `photos` itself and collection membership via
+        // row id. A rename that forgot would silently strip a file's keywords.
+        self.conn.execute(
+            "UPDATE photo_keywords SET file_name = ?3
+             WHERE file_name = ?2
+               AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
+            rusqlite::params![&from_folder, &from_name, &to_name],
         )?;
         Ok(())
     }
@@ -413,6 +465,119 @@ impl Catalog {
                     label: label.clamp(0, Marks::MAX_LABEL as i64) as u8,
                 },
             ))
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Create a keyword under `parent`, or return the existing one of that name and parent.
+    ///
+    /// ⚠ A duplicate is not an error, for the reason `create_collection` gives: the name is the
+    /// identity a user thinks in.
+    pub fn create_keyword(&self, name: &str, parent: Option<i64>) -> Result<i64, CatalogError> {
+        self.conn.execute(
+            "INSERT INTO keywords (name, parent_id) VALUES (?1, ?2)
+             ON CONFLICT DO NOTHING",
+            rusqlite::params![name, parent],
+        )?;
+        Ok(self.conn.query_row(
+            "SELECT id FROM keywords WHERE name = ?1 AND COALESCE(parent_id, 0) = COALESCE(?2, 0)",
+            rusqlite::params![name, parent],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The whole tree, depth-first and name-ordered within each level.
+    ///
+    /// ⚠ Ordered in SQL so the tree does not reshuffle between frames.
+    pub fn keywords(&self) -> Result<Vec<KeywordRow>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE tree(id, name, parent_id, depth, path) AS (
+                 SELECT id, name, parent_id, 0, lower(name)
+                 FROM keywords WHERE parent_id IS NULL
+                 UNION ALL
+                 SELECT k.id, k.name, k.parent_id, t.depth + 1, t.path || '/' || lower(k.name)
+                 FROM keywords k JOIN tree t ON k.parent_id = t.id
+             )
+             SELECT t.id, t.name, t.parent_id, t.depth,
+                    (SELECT count(*) FROM photo_keywords pk WHERE pk.keyword_id = t.id)
+             FROM tree t ORDER BY t.path",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(KeywordRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                parent_id: r.get(2)?,
+                depth: r.get::<_, i64>(3)? as usize,
+                count: r.get(4)?,
+            })
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Remove a keyword. ⚠ Its **children go with it**, and every assignment of any of them.
+    pub fn delete_keyword(&self, id: i64) -> Result<(), CatalogError> {
+        self.conn
+            .execute("DELETE FROM keywords WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Tag a **file** — every copy of it, now and in future.
+    ///
+    /// ⚠ Keyed on `(folder, file_name)` rather than on a photo row, which is what makes that true
+    /// with no inheritance rule to maintain.
+    pub fn assign_keyword(&self, keyword: i64, photo: &Path) -> Result<(), CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "INSERT INTO photo_keywords (folder_id, file_name, keyword_id)
+             SELECT f.id, ?2, ?3 FROM folders f WHERE f.path = ?1
+             ON CONFLICT DO NOTHING",
+            rusqlite::params![folder, name, keyword],
+        )?;
+        Ok(())
+    }
+
+    pub fn unassign_keyword(&self, keyword: i64, photo: &Path) -> Result<(), CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "DELETE FROM photo_keywords
+             WHERE keyword_id = ?3 AND file_name = ?2
+               AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
+            rusqlite::params![folder, name, keyword],
+        )?;
+        Ok(())
+    }
+
+    /// Every photo carrying `keyword` **or any of its descendants**, as `(path, copy)`.
+    ///
+    /// ⚠⚠ The subtree is resolved by a recursive CTE at query time, never stored. Storing the
+    /// implication would mean rewriting every affected row whenever a keyword is re-parented —
+    /// two facts that can disagree, which this project has been bitten by twice.
+    ///
+    /// ⚠ Joins back to `photos` on `(folder, file_name)`, so **every copy of a tagged file**
+    /// comes back. That is the point of keying on the file.
+    pub fn keyword_members(&self, keyword: i64) -> Result<Vec<(PathBuf, u32)>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE sub(id) AS (
+                 SELECT ?1
+                 UNION ALL
+                 SELECT k.id FROM keywords k JOIN sub ON k.parent_id = sub.id
+             )
+             SELECT DISTINCT f.path, p.file_name, p.copy
+             FROM photo_keywords pk
+             JOIN sub       ON sub.id = pk.keyword_id
+             JOIN folders f ON f.id = pk.folder_id
+             JOIN photos  p ON p.folder_id = pk.folder_id AND p.file_name = pk.file_name
+             ORDER BY lower(f.path), lower(p.file_name), p.copy",
+        )?;
+        let rows = stmt.query_map([keyword], |r| {
+            let folder: String = r.get(0)?;
+            let name: String = r.get(1)?;
+            let copy: u32 = r.get(2)?;
+            Ok((PathBuf::from(folder).join(name), copy))
         })?;
         Ok(rows.filter_map(Result::ok).collect())
     }
@@ -949,10 +1114,17 @@ mod tests {
             cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
             let c = cat.create_collection("Portfolio").unwrap();
             cat.add_to_collection(c, Path::new("/x/a.RAF"), 0).unwrap();
-            // Pretend this catalog was written by the previous build.
+            // Pretend this catalog was written by the build that shipped v1.
+            //
+            // ⚠⚠ **Every new migration makes this simulation incomplete.** It must undo
+            // *everything* later versions added, or `migrate` re-runs a step whose objects still
+            // exist and fails with "table already exists". Adding v3's tables to the drop list
+            // was exactly that — the failure is loud, but only if this test exists.
             cat.conn
                 .execute_batch(
-                    "ALTER TABLE photos DROP COLUMN rating;
+                    "DROP TABLE photo_keywords;
+                     DROP TABLE keywords;
+                     ALTER TABLE photos DROP COLUMN rating;
                      ALTER TABLE photos DROP COLUMN flag;
                      ALTER TABLE photos DROP COLUMN label;
                      PRAGMA user_version = 1;",
@@ -1106,5 +1278,216 @@ mod tests {
             },
         )
         .expect("must not error");
+    }
+
+    #[test]
+    fn a_version_two_catalog_upgrades_and_keeps_everything() {
+        // ⚠⚠ The second migration to meet real user data — folders, photos, collections *and*
+        // marks now. Upgrading must add tables and touch nothing else.
+        let db = TempDb::new("v2v3");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+            let c = cat.create_collection("Portfolio").unwrap();
+            cat.add_to_collection(c, Path::new("/x/a.RAF"), 0).unwrap();
+            cat.set_marks(
+                Path::new("/x/a.RAF"),
+                0,
+                Marks {
+                    rating: 4,
+                    ..Marks::default()
+                },
+            )
+            .unwrap();
+            cat.conn
+                .execute_batch(
+                    "DROP TABLE photo_keywords;
+                     DROP TABLE keywords;
+                     PRAGMA user_version = 2;",
+                )
+                .unwrap();
+        }
+
+        let cat = Catalog::open(&db.0).expect("a v2 catalog must upgrade");
+
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(cat.photo_count().unwrap(), 1);
+        assert_eq!(cat.collections().unwrap()[0].count, 1, "collection kept");
+        assert_eq!(
+            cat.marks(Path::new("/x/a.RAF"), 0).unwrap().rating,
+            4,
+            "marks kept"
+        );
+        assert!(cat.keywords().unwrap().is_empty());
+    }
+
+    #[test]
+    fn two_root_keywords_of_the_same_name_are_refused() {
+        // ⚠⚠ **The `COALESCE` index is the only thing preventing this.** A plain
+        // `UNIQUE(parent_id, name)` lets both through, because SQLite treats NULLs as *distinct*
+        // in a unique constraint — you would get two identical-looking roots in the tree with no
+        // way to tell them apart.
+        let cat = Catalog::open_in_memory().unwrap();
+        let a = cat.create_keyword("Paris", None).unwrap();
+        let b = cat.create_keyword("Paris", None).unwrap();
+        assert_eq!(a, b, "the second must return the existing one");
+        assert_eq!(cat.keywords().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_same_name_under_different_parents_is_allowed() {
+        // ⚠ The discriminating other half. "Paris" under both France and Texas is legitimate, and
+        // an over-broad unique constraint would refuse it.
+        let cat = Catalog::open_in_memory().unwrap();
+        let fr = cat.create_keyword("France", None).unwrap();
+        let tx = cat.create_keyword("Texas", None).unwrap();
+        let a = cat.create_keyword("Paris", Some(fr)).unwrap();
+        let b = cat.create_keyword("Paris", Some(tx)).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(cat.keywords().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_keyword_applies_to_every_copy_of_its_file() {
+        // ⚠⚠ The decision the schema shape exists for. A keyword describes what is *in* the
+        // picture, which is identical across copies — so it is keyed on the file, and no
+        // inheritance rule is needed because there is only one fact.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        cat.add_copy(Path::new("/x/a.RAF"), 1).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        let mut members = cat.keyword_members(k).unwrap();
+        members.sort();
+        assert_eq!(
+            members,
+            vec![
+                (PathBuf::from("/x/a.RAF"), 0),
+                (PathBuf::from("/x/a.RAF"), 1)
+            ],
+            "both copies must match a keyword assigned once"
+        );
+    }
+
+    #[test]
+    fn a_copy_created_after_tagging_still_matches() {
+        // ⚠ The exact case that would need an "inherit on create" rule under per-copy storage.
+        // Keyed on the file, it needs nothing at all.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        cat.add_copy(Path::new("/x/a.RAF"), 1).unwrap();
+
+        assert_eq!(cat.keyword_members(k).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_parent_keyword_finds_its_childrens_photos() {
+        // ⚠⚠ The payoff, and the reason hierarchy was chosen over flat: searching Europe finds
+        // photos tagged Paris. Derived by a recursive query, never stored.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
+            .unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        let france = cat.create_keyword("France", Some(europe)).unwrap();
+        let paris = cat.create_keyword("Paris", Some(france)).unwrap();
+
+        cat.assign_keyword(paris, Path::new("/x/a.RAF")).unwrap();
+        cat.assign_keyword(europe, Path::new("/x/b.RAF")).unwrap();
+
+        let mut from_parent = cat.keyword_members(europe).unwrap();
+        from_parent.sort();
+        assert_eq!(
+            from_parent,
+            vec![
+                (PathBuf::from("/x/a.RAF"), 0),
+                (PathBuf::from("/x/b.RAF"), 0)
+            ],
+            "Europe must find the photo tagged only Paris"
+        );
+        assert_eq!(
+            cat.keyword_members(paris).unwrap().len(),
+            1,
+            "but Paris must not find Europe's"
+        );
+    }
+
+    #[test]
+    fn deleting_a_parent_removes_its_children_and_their_assignments() {
+        // ⚠ Destructive and deliberate. Re-parenting orphans to the root would silently flatten a
+        // taxonomy you built, which is worse than an obvious deletion.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        let paris = cat.create_keyword("Paris", Some(europe)).unwrap();
+        cat.assign_keyword(paris, Path::new("/x/a.RAF")).unwrap();
+
+        cat.delete_keyword(europe).unwrap();
+
+        assert!(cat.keywords().unwrap().is_empty(), "both are gone");
+        assert_eq!(cat.photo_count().unwrap(), 1, "the photo is untouched");
+    }
+
+    #[test]
+    fn a_renamed_file_keeps_its_keywords() {
+        // ⚠⚠ `photo_keywords` is keyed by **file name**, so `rename_photo` must update it in the
+        // same operation — the third instance of that integration.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        cat.rename_photo(Path::new("/x/a.RAF"), Path::new("/x/b.RAF"))
+            .unwrap();
+
+        assert_eq!(
+            cat.keyword_members(k).unwrap(),
+            vec![(PathBuf::from("/x/b.RAF"), 0)]
+        );
+    }
+
+    #[test]
+    fn unassigning_leaves_the_keyword_and_the_photo() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        let k = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        cat.unassign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+
+        assert!(cat.keyword_members(k).unwrap().is_empty());
+        assert_eq!(cat.keywords().unwrap().len(), 1, "the keyword survives");
+        assert_eq!(cat.photo_count().unwrap(), 1, "and so does the photo");
+    }
+
+    #[test]
+    fn keywords_come_back_depth_first_in_name_order() {
+        // ⚠ Ordered in SQL, so the tree does not reshuffle between frames — the sparse-index
+        // class of bug this project has hit three times in the Library.
+        let cat = Catalog::open_in_memory().unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        cat.create_keyword("Spain", Some(europe)).unwrap();
+        cat.create_keyword("France", Some(europe)).unwrap();
+        cat.create_keyword("Asia", None).unwrap();
+
+        let got: Vec<(String, usize)> = cat
+            .keywords()
+            .unwrap()
+            .into_iter()
+            .map(|k| (k.name, k.depth))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Asia".to_string(), 0),
+                ("Europe".to_string(), 0),
+                ("France".to_string(), 1),
+                ("Spain".to_string(), 1),
+            ]
+        );
     }
 }
