@@ -85,7 +85,9 @@ pub struct Marks {
 
 impl Marks {
     pub const MAX_RATING: u8 = 5;
-    pub const MAX_LABEL: u8 = 5;
+    /// ⚠ Four, not five: keys `6`–`9` are what set a label, so a fifth colour would be
+    /// unreachable — and an unreachable value is a bug nobody can see.
+    pub const MAX_LABEL: u8 = 4;
 
     /// Whether anything is set.
     pub fn is_empty(self) -> bool {

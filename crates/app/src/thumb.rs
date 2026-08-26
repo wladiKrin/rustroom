@@ -138,12 +138,17 @@ pub fn cell(
             );
         }
         if marks.label > 0 {
+            // ⚠ Red, blue, yellow, green — **not** the obvious red/orange/yellow/green.
+            // Orange and yellow are barely distinguishable at badge size, which defeats the whole
+            // point of a colour label; blue is unmistakable against all three.
+            //
+            // ⚠ Exactly four, matching the four keys that can reach them. A fifth colour existed
+            // briefly with no key bound to it — unreachable, and invisible as a bug.
             let colours = [
                 egui::Color32::from_rgb(220, 90, 90),
-                egui::Color32::from_rgb(230, 170, 70),
+                egui::Color32::from_rgb(110, 150, 230),
                 egui::Color32::from_rgb(220, 210, 90),
                 egui::Color32::from_rgb(110, 200, 110),
-                egui::Color32::from_rgb(110, 150, 230),
             ];
             let c = colours[(marks.label as usize - 1).min(colours.len() - 1)];
             p.rect_filled(
