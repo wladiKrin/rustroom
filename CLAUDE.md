@@ -29,8 +29,8 @@ The detailed spec lives in the user's Obsidian vault at
 ```
 `Operation not permitted` means TCC; a harness refusal names the path instead. ⚠ Do not conclude from a successful folder grant that the file is readable — the grant reports success while TCC still denies it, which cost a wrong diagnosis here.
 
-- `01-lightroom-capabilities.md` — target feature set + prioritized P0–P4 scope table.
-- `02-architecture-and-tech.md` — stack rationale, pipeline design, crate layout, best practices.
+- `01-lightroom-capabilities.md` — target feature set + prioritized P0–P4 scope table. **Annotated 2026-08-26** with ✅/🟡/⬜/⛔ per capability, plus a **"deliberate divergences from Lightroom"** section (copy numbering from 0, radial mask affects the inside, no Smart Previews, post-crop vignette by stage order, panel grouped by edit group).
+- `02-architecture-and-tech.md` — stack rationale, pipeline design, crate layout, best practices. **Corrected 2026-08-26** — ⚠ four things it got wrong are struck through in place: the **pipeline order** (geometry runs *first*), the **working space** (linear ProPhoto), the **stage trait** (consuming, params baked in at construction), and the **crate layout** (12, not 8). Its §8 lists what the note did not anticipate at all.
 - `03-plan-of-action.md` — phased, step-by-step build order with "Done when" criteria.
 
 ## Stack
