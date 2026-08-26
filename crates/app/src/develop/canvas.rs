@@ -1217,4 +1217,211 @@ mod tests {
             },
         );
     }
+
+    /// Drive `show` through a full press → move → release drag.
+    ///
+    /// ⚠⚠ **Five passes, and every one is load-bearing.** Move to `from`; press *while still
+    /// there*; move to `to`, which is the drag; release; settle. `Response` state is per-frame,
+    /// so a shorter harness reads zeros — that is what made `a_left_drag_does_not_pan` pass
+    /// vacuously once already — and a release is only *known* on its own pass, so anything it
+    /// triggers cannot be observed until the frame after.
+    /// Returns the engine's request count after each pass, so a test can sample the *drag frame*
+    /// rather than the whole gesture.
+    fn drag_through(
+        app: &mut RustroomApp,
+        ctx: &egui::Context,
+        from: egui::Pos2,
+        to: egui::Pos2,
+    ) -> Vec<usize> {
+        let mut counts = Vec::new();
+        for pass in 0..5 {
+            // ⚠⚠ The pointer must still be at `from` on the pass that presses. An earlier
+            // version moved it to `to` on the same pass, so the press landed away from the
+            // handle — and `dragging_a_mask_handle_asks_for_a_render` **passed anyway**, because
+            // `show` issues renders for other reasons. Its failing sibling is what exposed it.
+            let pos = if pass <= 1 { from } else { to };
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if pass == 1 {
+                events.push(egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+            }
+            if pass == 3 {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                });
+            }
+            let c = ctx.clone();
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::show(app, ui, &c);
+                },
+            );
+            counts.push(
+                app.session
+                    .as_ref()
+                    .map(|s| s.engine.requests_issued())
+                    .unwrap_or(0),
+            );
+        }
+        counts
+    }
+
+    /// The pass on which the pointer moves with the button down — i.e. the drag itself.
+    const DRAG_PASS: usize = 2;
+
+    /// A session with one linear-gradient mask selected and the Masks tool active.
+    ///
+    /// ⚠ The endpoints are set explicitly. `LinearGradient::default()` puts *both* at `[0,0]`,
+    /// which is a degenerate mask whose handles coincide — a drag on it would be testing nothing
+    /// in particular. `from` sits at the frame centre so its screen position is the viewport
+    /// centre, which is what makes the drag points below deterministic.
+    fn with_selected_mask(app: &mut RustroomApp) {
+        app.tool = rustroom_app::tool::Tool::Masks;
+        let s = app.session.as_mut().unwrap();
+        s.edits.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                from: [0.5, 0.5],
+                to: [0.5, 0.9],
+                invert: false,
+            }),
+            adjustments: Default::default(),
+        });
+        s.selected_mask = Some(0);
+    }
+
+    /// The viewport centre for the 400×300 screen rect `drag_through` uses — and, with no pan,
+    /// the screen position of a mask handle at the normalised frame centre.
+    const CENTRE: egui::Pos2 = egui::pos2(200.0, 150.0);
+
+    #[test]
+    fn dragging_a_mask_handle_asks_for_a_render() {
+        // ⚠⚠ The regression guard for a bug that shipped: `draw_mask_overlay` mutated `Edits` but
+        // never called `s.request`, so the image kept showing the mask's previous position until
+        // some *unrelated* edit happened to request a frame. That is why moving a slider appeared
+        // to "fix" it.
+        //
+        // ⚠ The cause was an inherited false analogy — it was modelled on `draw_crop_overlay`,
+        // which needs no request *because* `preview_edits` strips the crop in geometry mode, so
+        // the overlay itself is the feedback. Masks are not stripped.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_mask(&mut app);
+
+        // ⚠⚠ **Sampled on the drag frame itself, not after the gesture.** Measuring at the end
+        // does not discriminate: a *later* frame issues a request of its own once `Edits` has
+        // changed, so the count rises either way and the test passes with `s.request` deleted —
+        // verified by sabotage. In the real app that later frame never comes, because egui idles
+        // after the drag; that is precisely why the bug was visible as "the image does not update
+        // until you touch a slider".
+        let counts = drag_through(&mut app, &ctx, CENTRE, CENTRE + egui::vec2(40.0, 0.0));
+        assert!(
+            counts[DRAG_PASS] > counts[DRAG_PASS - 1],
+            "the drag frame itself must ask for a render; counts={counts:?}"
+        );
+    }
+
+    #[test]
+    fn a_drag_that_misses_every_handle_asks_for_nothing() {
+        // ⚠⚠ **The guard on the guard, and it is not optional.** `show` issues renders for
+        // reasons of its own, so "the count went up after a drag" only means something if it
+        // *stays put* when the drag grabs nothing. An earlier version of the harness pressed
+        // after the pointer had already moved, so every drag missed — and the sibling test
+        // passed anyway. This is what would have caught that.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_mask(&mut app);
+
+        // Warm up: let the first frames issue whatever they issue, then measure.
+        drag_through(
+            &mut app,
+            &ctx,
+            egui::pos2(12.0, 58.0),
+            egui::pos2(14.0, 60.0),
+        );
+        let before = app.session.as_ref().unwrap().engine.requests_issued();
+        // Far from `from` [0.5,0.5] and `to` [0.5,0.9], in the frame's top-left corner.
+        drag_through(
+            &mut app,
+            &ctx,
+            egui::pos2(12.0, 58.0),
+            egui::pos2(30.0, 60.0),
+        );
+        let after = app.session.as_ref().unwrap().engine.requests_issued();
+
+        assert_eq!(
+            before, after,
+            "a drag grabbing no handle must not ask for a render; before={before} after={after}"
+        );
+    }
+
+    #[test]
+    fn a_mask_drag_commits_one_undo_step_on_release() {
+        // ⚠⚠ The regression guard for the third bug shape: `drag_stopped` was nested inside
+        // `if let Some(p) = resp.interact_pointer_pos()`, and on the frame a drag ends egui often
+        // reports **no** interact position — so the commit was silently skipped.
+        //
+        // ⚠ Asserted on the **history**, not on `Edits`. The edits change during the *drag*, from
+        // `apply_drag`; only the undo push happens on release. An earlier version of this test
+        // compared edits and passed with the release handler disabled entirely — caught by
+        // sabotage, and exactly the "a test names a bug it cannot detect" trap this project has
+        // now hit a dozen times.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_mask(&mut app);
+        assert!(
+            !app.session.as_ref().unwrap().history.can_undo(),
+            "nothing to undo before the drag"
+        );
+
+        let _ = drag_through(&mut app, &ctx, CENTRE, CENTRE + egui::vec2(60.0, 10.0));
+
+        let s = app.session.as_ref().unwrap();
+        assert!(
+            s.history.can_undo(),
+            "the release must have committed one undo step"
+        );
+        assert_ne!(
+            s.edits,
+            edit_model::Edits::default(),
+            "and the mask must actually have moved"
+        );
+    }
+
+    #[test]
+    fn the_mask_overlay_is_placed_against_the_frame_not_the_view() {
+        // ⚠⚠ The regression guard for the drift bug: the overlay was placed against `img_rect`,
+        // which once a region render is on covers only the *rendered slice*. The mask then
+        // followed the visible part of the image as you panned.
+        //
+        // ⚠ Asserted through `canvas_geom::frame_rect` rather than by reading pixels: the frame's
+        // *size* must not change with the pan, which is precisely what `img_rect` would do.
+        let full = egui::vec2(80.0, 40.0);
+        let unpanned = super::canvas_geom::frame_rect(CENTRE, egui::Vec2::ZERO, full, 1.0, 2.0);
+        let panned =
+            super::canvas_geom::frame_rect(CENTRE, egui::vec2(50.0, -20.0), full, 1.0, 2.0);
+        assert_eq!(
+            unpanned.size(),
+            panned.size(),
+            "panning must not resize the frame the mask is placed against"
+        );
+        assert_eq!(panned.center() - unpanned.center(), egui::vec2(50.0, -20.0));
+    }
 }
