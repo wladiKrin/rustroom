@@ -45,6 +45,8 @@ mod native_menu;
 mod shell;
 #[cfg(test)]
 mod test_app;
+#[cfg(test)]
+mod test_ui;
 mod theme;
 mod thumb;
 

@@ -172,3 +172,121 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
         ed.discrete();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui;
+
+    /// Drive the real `masks::show` against a scratch session, clicking a widget by label.
+    ///
+    /// ⚠ The panel is driven **as it ships** — no re-declared widgets. A harness that redraws its
+    /// own buttons tests the harness; this project already has two such tests (`cell_widths`,
+    /// `grid_columns`) and they are documented as pinning a *rule*, not a call site.
+    fn click_in_panel(label: &str, s: &mut Session) -> Edited {
+        let ctx = test_ui::ctx();
+        let mut ed = Edited::default();
+        let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
+        let (mut erase, mut tint) = (false, true);
+        test_ui::click(&ctx, label, |ui| {
+            ed = Edited::default();
+            show(
+                ui,
+                s,
+                BrushTool {
+                    size: &mut size,
+                    hardness: &mut hardness,
+                    flow: &mut flow,
+                    erase: &mut erase,
+                    show_tint: &mut tint,
+                },
+                &mut ed,
+            );
+        });
+        ed
+    }
+
+    fn session() -> Session {
+        let ctx = test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.session.take().unwrap()
+    }
+
+    #[test]
+    fn each_add_button_adds_its_own_kind_of_mask() {
+        // ⚠ All three, not just one. Three buttons wired to the same constructor would pass a
+        // test that only ever clicked "Add graduated filter".
+        for (label, want) in [
+            ("Add graduated filter", "Linear"),
+            ("Add brush", "Brush"),
+            ("Add radial filter", "Radial"),
+        ] {
+            let mut s = session();
+            click_in_panel(label, &mut s);
+            assert_eq!(s.edits.masks.len(), 1, "{label} added no mask");
+            let got = match s.edits.masks[0].mask {
+                edit_model::Mask::Linear(_) => "Linear",
+                edit_model::Mask::Radial(_) => "Radial",
+                edit_model::Mask::Brush(_) => "Brush",
+            };
+            assert_eq!(got, want, "{label} added the wrong kind");
+        }
+    }
+
+    #[test]
+    fn adding_a_mask_selects_it_and_counts_as_an_edit() {
+        // ⚠ Selecting it is what puts its handles on the canvas. A mask added without being
+        // selected is invisible and unmovable, which reads as "the button did nothing".
+        let mut s = session();
+        let ed = click_in_panel("Add graduated filter", &mut s);
+        assert_eq!(s.selected_mask, Some(0));
+        assert!(ed.changed, "the preview must be re-requested");
+        assert!(ed.settled, "and it must be one undo step");
+    }
+
+    #[test]
+    fn a_second_mask_is_selected_over_the_first() {
+        let mut s = session();
+        click_in_panel("Add graduated filter", &mut s);
+        click_in_panel("Add radial filter", &mut s);
+        assert_eq!(s.edits.masks.len(), 2);
+        assert_eq!(
+            s.selected_mask,
+            Some(1),
+            "the newest mask is the selected one"
+        );
+    }
+
+    #[test]
+    fn deleting_the_selected_mask_clears_the_selection_and_the_drag_handle() {
+        // ⚠⚠ Two things at once, and both were bugs waiting to happen. Deleting the selected
+        // mask must **clear** the selection rather than move it to a neighbour — silently
+        // selecting a different mask means the next slider drag edits something the user never
+        // chose, the rule `Selection::clamp` already follows. And a stale `active_mask_handle`
+        // leaves the canvas returning early with panning dead.
+        let mut s = session();
+        click_in_panel("Add graduated filter", &mut s);
+        s.active_mask_handle = Some(crate::mask_tool::Handle::From);
+        assert_eq!(s.selected_mask, Some(0));
+
+        click_in_panel("×", &mut s);
+
+        assert!(s.edits.masks.is_empty(), "the mask should be gone");
+        assert_eq!(s.selected_mask, None, "and nothing should be selected");
+        assert!(
+            s.active_mask_handle.is_none(),
+            "and no drag handle left behind"
+        );
+    }
+
+    #[test]
+    fn clicking_the_selected_mask_deselects_it() {
+        let mut s = session();
+        click_in_panel("Add graduated filter", &mut s);
+        let name = format!("{} 1", s.edits.masks[0].mask.label());
+        click_in_panel(&name, &mut s);
+        assert_eq!(s.selected_mask, None);
+        assert_eq!(s.edits.masks.len(), 1, "deselecting must not delete it");
+    }
+}
