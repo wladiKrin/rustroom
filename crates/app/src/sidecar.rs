@@ -181,6 +181,18 @@ impl Sidecar {
     }
 }
 
+/// When `photo`'s edits were last written, or `None` if it has never been edited.
+///
+/// ⚠ The sidecar's modification time is what "last edited" means here — there is no edit
+/// timestamp stored inside it, and adding one would be a format change for something the
+/// filesystem already records.
+///
+/// ⚠ A `stat` per photo, not a read: the sidecar's *contents* cost 4.6 ms for 830 files, and
+/// asking for the timestamp alone is far less than that.
+pub fn edited_at(photo: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path(photo)).ok()?.modified().ok()
+}
+
 /// Every version stored for `photo`.
 ///
 /// ⚠⚠ **The dispatch is explicit rather than `#[serde(untagged)]`, and the reason is narrower

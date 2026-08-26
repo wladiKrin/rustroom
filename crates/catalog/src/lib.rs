@@ -23,6 +23,16 @@ pub struct CatalogEntry {
     /// ⚠ `UNIX_EPOCH` when the metadata cannot be read, so an unreadable file sorts to the
     /// oldest end rather than failing the whole scan.
     pub modified: SystemTime,
+    /// When this photo's edits were last written, or `None` if it has never been edited.
+    ///
+    /// ⚠⚠ **Filled in by the caller, never by `scan_folder`.** What counts as "edited" is the
+    /// sidecar's modification time, and the sidecar naming convention belongs to `app` — this
+    /// crate would have to learn it to read this itself. Carrying the field while staying
+    /// ignorant of where it comes from is what keeps the layering intact.
+    ///
+    /// ⚠ `None` sorts as the oldest possible time, so a never-edited photo lands at the far end
+    /// of "Last edited first" rather than jumbled in among the edited ones.
+    pub edited: Option<SystemTime>,
 }
 
 /// How the browser orders a folder.
@@ -38,15 +48,26 @@ pub enum SortOrder {
     NameDesc,
     ModifiedDesc,
     ModifiedAsc,
+    EditedDesc,
+    EditedAsc,
 }
 
 impl SortOrder {
-    pub const ALL: [SortOrder; 4] = [
+    pub const ALL: [SortOrder; 6] = [
         SortOrder::NameAsc,
         SortOrder::NameDesc,
         SortOrder::ModifiedDesc,
         SortOrder::ModifiedAsc,
+        SortOrder::EditedDesc,
+        SortOrder::EditedAsc,
     ];
+
+    /// Whether this order needs [`CatalogEntry::edited`] filled in.
+    ///
+    /// ⚠ Lets the caller skip a stat per file for the four orders that cannot use it.
+    pub fn needs_edited(self) -> bool {
+        matches!(self, SortOrder::EditedDesc | SortOrder::EditedAsc)
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -54,6 +75,8 @@ impl SortOrder {
             SortOrder::NameDesc => "Name (Z–A)",
             SortOrder::ModifiedDesc => "Newest first",
             SortOrder::ModifiedAsc => "Oldest first",
+            SortOrder::EditedDesc => "Last edited first",
+            SortOrder::EditedAsc => "Least recently edited",
         }
     }
 }
@@ -103,6 +126,8 @@ pub fn scan_folder(dir: &Path) -> std::io::Result<Vec<CatalogEntry>> {
                 path,
                 file_name,
                 modified,
+                // ⚠ Left for the caller — see the field's doc comment.
+                edited: None,
             });
         }
     }
@@ -120,6 +145,9 @@ pub fn scan_folder(dir: &Path) -> std::io::Result<Vec<CatalogEntry>> {
 /// Two files written in the same second are common — a burst, a copy, an unzip — and without it
 /// they would swap places between one folder open and the next, for no visible reason.
 pub fn sort(entries: &mut [CatalogEntry], order: SortOrder) {
+    fn edited(e: &CatalogEntry) -> SystemTime {
+        e.edited.unwrap_or(SystemTime::UNIX_EPOCH)
+    }
     entries.sort_by(|a, b| {
         let by_name = a
             .file_name
@@ -133,6 +161,11 @@ pub fn sort(entries: &mut [CatalogEntry], order: SortOrder) {
             SortOrder::NameDesc => by_name.reverse(),
             SortOrder::ModifiedDesc => b.modified.cmp(&a.modified).then(by_name),
             SortOrder::ModifiedAsc => a.modified.cmp(&b.modified).then(by_name),
+            // ⚠ `None` is treated as the oldest possible time rather than skipped, so a photo
+            // that has never been edited sorts to the far end instead of jumbling in among the
+            // edited ones.
+            SortOrder::EditedDesc => edited(b).cmp(&edited(a)).then(by_name),
+            SortOrder::EditedAsc => edited(a).cmp(&edited(b)).then(by_name),
         }
     });
 }
@@ -221,6 +254,14 @@ mod tests {
             path: PathBuf::from(format!("/x/{name}")),
             file_name: name.to_string(),
             modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            edited: None,
+        }
+    }
+
+    fn edited_entry(name: &str, edited: Option<u64>) -> CatalogEntry {
+        CatalogEntry {
+            edited: edited.map(|s| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s)),
+            ..entry(name, 0)
         }
     }
 
@@ -263,14 +304,39 @@ mod tests {
 
     #[test]
     fn every_order_reaches_a_different_arrangement() {
-        // ⚠ Four options that quietly produce the same list would look like a working control
-        // and do nothing. Each is checked against the others, not merely against itself.
-        let files = [("b.RAF", 30), ("a.RAF", 10), ("c.RAF", 20)];
-        let got: Vec<Vec<String>> = SortOrder::ALL.iter().map(|&o| ordered(&files, o)).collect();
+        // ⚠ Options that quietly produce the same list would look like working controls and do
+        // nothing. Each is checked against every other, not merely against itself.
+        //
+        // ⚠⚠ The timestamps are chosen so all six orders land on six *different* permutations.
+        // Three files have exactly six permutations, in three reverse-pairs — and each
+        // ascending/descending pair of orders is one such pair — so the fixture must hand a
+        // different pair to name, to modified and to edited. A first attempt let name-ascending
+        // and last-edited-first coincide, and the pairwise check below is what caught it: two
+        // orders indistinguishable on the data means the test cannot tell them apart, however
+        // right the code is.
+        let files = [
+            ("a.RAF", 30, Some(20)),
+            ("b.RAF", 10, Some(30)),
+            ("c.RAF", 20, Some(10)),
+        ];
+        let build = |o| {
+            let mut v: Vec<CatalogEntry> = files
+                .iter()
+                .map(|(n, m, e)| CatalogEntry {
+                    edited: e.map(|s| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s)),
+                    ..entry(n, *m)
+                })
+                .collect();
+            sort(&mut v, o);
+            v.into_iter().map(|e| e.file_name).collect::<Vec<_>>()
+        };
+        let got: Vec<Vec<String>> = SortOrder::ALL.iter().map(|&o| build(o)).collect();
         assert_eq!(got[0], ["a.RAF", "b.RAF", "c.RAF"], "name ascending");
         assert_eq!(got[1], ["c.RAF", "b.RAF", "a.RAF"], "name descending");
-        assert_eq!(got[2], ["b.RAF", "c.RAF", "a.RAF"], "newest first");
-        assert_eq!(got[3], ["a.RAF", "c.RAF", "b.RAF"], "oldest first");
+        assert_eq!(got[2], ["a.RAF", "c.RAF", "b.RAF"], "newest first");
+        assert_eq!(got[3], ["b.RAF", "c.RAF", "a.RAF"], "oldest first");
+        assert_eq!(got[4], ["b.RAF", "a.RAF", "c.RAF"], "last edited first");
+        assert_eq!(got[5], ["c.RAF", "a.RAF", "b.RAF"], "least recently edited");
         for (i, a) in got.iter().enumerate() {
             for b in got.iter().skip(i + 1) {
                 assert_ne!(a, b, "two orders produced the same list");
@@ -317,5 +383,32 @@ mod tests {
             "the scan did not read a modification time"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_never_edited_photo_sorts_to_the_far_end() {
+        // ⚠ `None` means "never edited", not "unknown, put it anywhere". Under *last edited
+        // first* it belongs last; under *least recently edited* it belongs first.
+        let files = [("b.RAF", Some(20)), ("a.RAF", None), ("c.RAF", Some(10))];
+        let build = |o| {
+            let mut v: Vec<CatalogEntry> = files.iter().map(|(n, e)| edited_entry(n, *e)).collect();
+            sort(&mut v, o);
+            v.into_iter().map(|e| e.file_name).collect::<Vec<_>>()
+        };
+        assert_eq!(build(SortOrder::EditedDesc), ["b.RAF", "c.RAF", "a.RAF"]);
+        assert_eq!(build(SortOrder::EditedAsc), ["a.RAF", "c.RAF", "b.RAF"]);
+    }
+
+    #[test]
+    fn only_the_edited_orders_need_the_edited_time() {
+        // ⚠ This is what lets the caller skip a stat per file for the other four.
+        for o in SortOrder::ALL {
+            assert_eq!(
+                o.needs_edited(),
+                matches!(o, SortOrder::EditedDesc | SortOrder::EditedAsc),
+                "{} disagrees about needing the edited time",
+                o.label()
+            );
+        }
     }
 }

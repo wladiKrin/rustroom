@@ -209,6 +209,35 @@ impl Settings {
         self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
     }
 
+    /// The cell size after a pinch or ctrl+scroll of `factor`.
+    ///
+    /// ⚠⚠ **A step of at least one point is forced whenever a gesture is under way**, and that is
+    /// the whole reason this is not a plain multiply. A trackpad pinch reports about 1.01 per
+    /// frame; against a whole-point cell that rounds straight back to the same integer, so the
+    /// grid would sit still until you pinched hard — indistinguishable from the gesture not being
+    /// wired up at all.
+    ///
+    /// ⚠ egui's `zoom_delta` is a **multiplicative factor that is 1.0 when idle**, not a delta.
+    /// Treating it as a delta collapses the size to nothing on every idle frame; this project has
+    /// already paid for that once, in the canvas navigation work.
+    pub fn zoomed_cell(&self, factor: f32) -> u32 {
+        let now = self.clamped_cell() as u32;
+        // ⚠ A non-finite or non-positive factor would otherwise produce a nonsense size through
+        // the `as u32` cast, which saturates rather than erroring.
+        if !factor.is_finite() || factor <= 0.0 {
+            return now;
+        }
+        let mut next = (now as f32 * factor).round() as u32;
+        if next == now {
+            match factor.partial_cmp(&1.0) {
+                Some(std::cmp::Ordering::Greater) => next = now.saturating_add(1),
+                Some(std::cmp::Ordering::Less) => next = now.saturating_sub(1),
+                _ => {}
+            }
+        }
+        next.clamp(CELL_RANGE.0, CELL_RANGE.1)
+    }
+
     /// The cell size one press of the bigger/smaller buttons would give.
     ///
     /// ⚠ Stepped from the *clamped* value, so a nonsense stored size is corrected by the first
@@ -921,5 +950,46 @@ mod tests {
             CELL_RANGE.0 + CELL_STEP,
             "a nonsense stored size is corrected by the first press"
         );
+    }
+
+    #[test]
+    fn an_idle_gesture_leaves_the_grid_size_alone() {
+        // ⚠ `zoom_delta` is a *factor* that is exactly 1.0 when nothing is happening, not a
+        // delta. Anything that moved the size at 1.0 would shrink the grid on every idle frame.
+        let s = Settings::default();
+        assert_eq!(s.zoomed_cell(1.0), DEFAULT_CELL);
+    }
+
+    #[test]
+    fn a_gentle_pinch_still_moves_the_grid() {
+        // ⚠⚠ The failure this guards is silence, not wrongness. A trackpad reports ~1.01 per
+        // frame; `168 * 1.01 = 169.68`, which rounds to 170 — but at 108 a 1.001 factor rounds
+        // straight back to 108, and the control would appear dead until pinched hard.
+        let small = Settings {
+            library_cell: CELL_RANGE.0,
+            ..Settings::default()
+        };
+        assert_eq!(small.zoomed_cell(1.001), CELL_RANGE.0 + 1);
+        let big = Settings {
+            library_cell: CELL_RANGE.1,
+            ..Settings::default()
+        };
+        assert_eq!(big.zoomed_cell(0.999), CELL_RANGE.1 - 1);
+    }
+
+    #[test]
+    fn zooming_stops_at_the_ends_and_survives_nonsense() {
+        let with = |v: u32| Settings {
+            library_cell: v,
+            ..Settings::default()
+        };
+        assert_eq!(with(CELL_RANGE.1).zoomed_cell(4.0), CELL_RANGE.1);
+        assert_eq!(with(CELL_RANGE.0).zoomed_cell(0.25), CELL_RANGE.0);
+        // ⚠ `as u32` saturates rather than erroring, so a non-finite factor would otherwise
+        // produce a silently absurd size.
+        assert_eq!(with(200).zoomed_cell(f32::NAN), 200);
+        assert_eq!(with(200).zoomed_cell(f32::INFINITY), 200);
+        assert_eq!(with(200).zoomed_cell(0.0), 200);
+        assert_eq!(with(200).zoomed_cell(-2.0), 200);
     }
 }

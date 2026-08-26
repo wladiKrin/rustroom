@@ -11,6 +11,23 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
     let mut rename: Option<(PhotoId, name_edit::Rename)> = None;
+    // Pinch on a trackpad, or ctrl/cmd+scroll, resizes the grid — the same gesture the develop
+    // canvas uses to zoom the photo.
+    //
+    // ⚠ `zoom_delta` folds trackpad pinch *and* ctrl+scroll into one **multiplicative factor
+    // that is 1.0 when idle**, which is why plain scrolling still scrolls the grid rather than
+    // resizing it.
+    let zoom = ui.ctx().input(|i| i.zoom_delta());
+    if zoom != 1.0 {
+        app.settings.library_cell = app.settings.zoomed_cell(zoom);
+        app.cell_zoom_pending = true;
+    } else if app.cell_zoom_pending {
+        // ⚠ Saved when the gesture *settles*, not per frame: a pinch runs at 60 Hz and writing
+        // the settings file that often is the `apply_view_demosaic` mistake in a new costume.
+        app.cell_zoom_pending = false;
+        app.save_settings();
+    }
+
     // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
     // and the two are disjoint fields — which the borrow checker only accepts when it can see so.
     let rename_draft = &mut app.rename_draft;

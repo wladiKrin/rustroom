@@ -197,6 +197,11 @@ struct RustroomApp {
     /// reported as "now every photo shows the name I changed". Pairing the text with its photo
     /// makes that unrepresentable rather than something to remember to clear.
     rename_draft: Option<(PhotoId, String)>,
+    /// A grid-size pinch is under way and its result has not been written to disk yet.
+    ///
+    /// ⚠ Exists so the settings file is written once when the gesture settles rather than sixty
+    /// times a second while it runs.
+    cell_zoom_pending: bool,
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
@@ -335,6 +340,7 @@ impl RustroomApp {
             hsl_channel: Default::default(),
             grade_range: Default::default(),
             rename_draft: None,
+            cell_zoom_pending: false,
             tool: Default::default(),
             crop_aspect: None,
             clipboard: None,
@@ -1621,6 +1627,11 @@ impl RustroomApp {
                 // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a
                 // file's copies adjacent to it and ascending under every ordering — sorting
                 // `entries` instead would scatter them.
+                if self.settings.library_sort.needs_edited() {
+                    for e in scan.iter_mut() {
+                        e.edited = sidecar::edited_at(&e.path);
+                    }
+                }
                 catalog::sort(&mut scan, self.settings.library_sort);
                 // ⚠ One row per (file, copy). Reading every sidecar costs 4.6 ms for 830 files,
                 // measured — small enough to stay inline rather than moving to the loader thread.
@@ -1985,6 +1996,14 @@ impl RustroomApp {
 
         // ⚠ Re-sorted every rebuild rather than only when the order changes: a rename moves a
         // photo's place in a name ordering, and a rebuild is exactly when that has to be seen.
+        //
+        // ⚠ The edit times are refreshed here too, and **only for the orders that use them** —
+        // the other four would be paying a stat per file for nothing.
+        if sort.needs_edited() {
+            for e in lib.scan.iter_mut() {
+                e.edited = sidecar::edited_at(&e.path);
+            }
+        }
         catalog::sort(&mut lib.scan, sort);
         lib.entries = entries::build(&lib.scan, sidecar::load_all);
         lib.thumbs = lib
