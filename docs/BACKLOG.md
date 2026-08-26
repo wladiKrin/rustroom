@@ -258,3 +258,51 @@ its stack table; **neither has ever been added**, and that table now records so.
 
 **Do not treat this as a parsing job.** The parsing is the easy half.
 
+## Immich integration (recorded 2026-08-26 — wanted, likely its own milestone)
+
+**Status:** 🟡 wanted, not blocked. Slices 1 and 2 are the agreed start; slice 3 is a follow-up.
+
+The user self-hosts an **Immich** server holding all their photos, and wants to open them in
+Rustroom by giving a URL and credentials.
+
+### ⚠⚠ The insight that makes this tractable: the catalog changed the answer
+
+Rustroom's model assumes *a local file with a sidecar beside it* — `PathBuf` is a photo's identity,
+`BufferCache` keys on it, sidecars live next to the file. An Immich asset has no local path, so on
+the face of it this fights the architecture everywhere.
+
+**But if assets are downloaded into a local cache directory, an Immich library is just a folder.**
+`catalog`, `entries::build`, `ThumbLoader`, sidecars, marks, keywords, collections and export then
+all work **unchanged**. It maps onto the model rather than fighting it. Immich also serves
+thumbnails separately from originals, which maps cleanly onto `ThumbLoader` — so browsing does not
+mean pulling tens of gigabytes of RAW.
+
+### Three slices, agreed order
+
+1. **"Open this one photo from Immich."** Authenticate, browse, pull one original into a cache,
+   edit, export locally. ⚠ **Genuinely small** — the download is one HTTP call and everything after
+   it already exists. It is also the workflow that plays to both tools' strengths: Immich stores
+   and shares, Rustroom edits.
+2. **"Browse my Immich library."** Lazy thumbnails, originals fetched on open, the catalog holding
+   asset ids. Read-only. Designed to fall out of slice 1.
+3. **Two-way sync** — push edited results back as new assets, reconcile Immich albums with
+   collections, keep marks in step with favourites. **Much larger**, and where the design questions
+   live: what is authoritative, what happens on conflict, what happens offline.
+
+### ⚠ Verify this FIRST, before designing anything
+
+**Does Immich's API serve the true original for RAW files, or only a converted preview?** If it
+only returns a JPEG, slice 1 loses most of its point and the whole shape changes. One probe
+settles it; do not assume.
+
+### ⚠ Three honest costs
+
+- **Credentials are a new kind of surface for this project.** Rustroom has never stored a secret.
+  An API key in `settings.json` in plaintext is the easy path and probably not the right one; the
+  OS keychain is right and is platform-specific work.
+- **Duplicated storage.** A cached RAW is a second copy — fine for a working set, needs an eviction
+  policy if it becomes a library. `BufferCache`'s LRU is the precedent.
+- **It expands what Rustroom is.** Every planning note says "local files, originals never modified,
+  Linux first". A network dependency is a genuine change of character — not wrong, but worth
+  deciding deliberately rather than sliding into.
+
