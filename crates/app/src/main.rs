@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod collections_panel;
 mod commands;
 mod develop;
 #[cfg(target_os = "macos")]
@@ -86,13 +87,23 @@ enum AppView {
 }
 
 /// Browsing state for an opened folder.
+/// What the Library is currently showing.
+///
+/// ⚠ A collection is a *source*, not a filter, so the format filter and the six sort orders
+/// compose with it unchanged — they operate on whatever scan is loaded.
+#[derive(Debug, Clone, PartialEq)]
+enum LibrarySource {
+    Folder(PathBuf),
+    Collection { id: i64, name: String },
+}
+
 struct Library {
-    /// The folder this Library is showing.
+    /// Where these photos came from.
     ///
     /// ⚠ Kept rather than derived from `scan[0].path.parent()`, which says nothing at all about
     /// an *empty* folder — and Reindex on an empty folder is exactly when you would want it,
     /// because the files may have arrived since.
-    dir: PathBuf,
+    source: LibrarySource,
     /// The folder scan this Library was built from.
     ///
     /// ⚠ Kept so `entries` can be re-expanded when a copy is created or deleted, without a
@@ -191,6 +202,8 @@ struct RustroomApp {
     hsl_channel: develop::panel::adjustments::HslChannel,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
+    /// Scratch text for the new-collection field.
+    new_collection: String,
     /// Scratch text for the filename field, with **the photo it belongs to**.
     ///
     /// ⚠ A draft rather than writing through, so a half-typed name is never committed and a
@@ -360,6 +373,7 @@ impl RustroomApp {
             show_mask_tint: true,
             hsl_channel: Default::default(),
             grade_range: Default::default(),
+            new_collection: String::new(),
             rename_draft: None,
             cell_zoom_pending: false,
             tool: Default::default(),
@@ -1677,7 +1691,7 @@ impl RustroomApp {
                     .effective_display_space(self.os_manages_colour);
                 let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
                 self.library = Some(Library {
-                    dir,
+                    source: LibrarySource::Folder(dir.clone()),
                     scan,
                     entries,
                     thumbs: (0..n).map(|_| None).collect(),
@@ -1957,7 +1971,11 @@ impl RustroomApp {
     /// - It re-reads every sidecar and re-scans the directory, so files added or deleted outside
     ///   Rustroom appear here.
     fn reindex(&mut self, ctx: &egui::Context) {
-        let Some(dir) = self.library.as_ref().map(|l| l.dir.clone()) else {
+        let Some(LibrarySource::Folder(dir)) = self.library.as_ref().map(|l| l.source.clone())
+        else {
+            // ⚠ Reindex renumbers copies in a *folder*. A collection has no single folder to
+            // re-read, and renumbering photos you are merely viewing would be surprising.
+            self.status = "Reindex works on a folder, not a collection".into();
             return;
         };
         // ⚠ Written first: a compaction rewrites the sidecar this photo's edits belong in, so an
@@ -2018,6 +2036,61 @@ impl RustroomApp {
         } else {
             format!("Reindexed — renumbered {renumbered} copies")
         };
+    }
+
+    /// Show a collection's photos, from wherever they live.
+    ///
+    /// ⚠⚠ The members are re-read from the catalog every time rather than cached: a photo added
+    /// from another view must appear here without a restart.
+    fn open_collection(&mut self, ctx: &egui::Context, id: i64, name: &str) {
+        let Some(cat) = &self.catalog else {
+            self.status = "No catalog".into();
+            return;
+        };
+        let members = match cat.collection_members(id) {
+            Ok(m) => m,
+            Err(e) => {
+                self.status = format!("Could not read the collection: {e}");
+                return;
+            }
+        };
+        let mut scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at);
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let entries = entries::build(&scan, sidecar::load_all);
+        let n = entries.len();
+        let paths: Vec<_> = entries.iter().map(|e| e.id.path.clone()).collect();
+        let ctx2 = ctx.clone();
+        let space = self
+            .settings
+            .effective_display_space(self.os_manages_colour);
+        let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
+        self.library = Some(Library {
+            source: LibrarySource::Collection {
+                id,
+                name: name.to_string(),
+            },
+            scan,
+            entries,
+            thumbs: (0..n).map(|_| None).collect(),
+            selection: Selection::default(),
+            loader,
+            filter: FormatFilter::default(),
+            visible: (0..n).collect(),
+        });
+        self.view = AppView::Library;
+        self.status = if n == 0 {
+            format!("“{name}” is empty")
+        } else {
+            format!("“{name}” — {n} photos")
+        };
+    }
+
+    /// Which collection the Library is showing, if it is showing one.
+    fn selected_collection(&self) -> Option<i64> {
+        match self.library.as_ref().map(|l| &l.source) {
+            Some(LibrarySource::Collection { id, .. }) => Some(*id),
+            _ => None,
+        }
     }
 
     /// Re-expand the Library's rows after a copy was added or removed.

@@ -172,7 +172,13 @@ impl eframe::App for RustroomApp {
 
         match self.view {
             AppView::Develop => develop::body(self, ui, &ctx),
-            AppView::Library => library::show(self, ui, &ctx),
+            AppView::Library => {
+                // ⚠ Panel order is load-bearing: egui allocates side panels in call order and
+                // the central panel takes what is left, so the collections panel must be drawn
+                // *before* the grid.
+                crate::collections_panel::show(self, ui, &ctx);
+                library::show(self, ui, &ctx);
+            }
         }
 
         modals::draw(self, &ctx);
