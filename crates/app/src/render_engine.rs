@@ -99,6 +99,18 @@ pub struct RenderEngine {
     req_tx: Sender<Request>,
     res_rx: Receiver<RenderedFrame>,
     _handle: JoinHandle<()>,
+    /// How many renders have been asked for over this engine's life.
+    ///
+    /// ⚠⚠ **Unconditional, not `#[cfg(test)]`, and that is forced rather than sloppy.** This type
+    /// lives in the **lib**; its only test-time consumer (`develop/canvas.rs`) lives in the
+    /// **bin**, and when the bin's test target builds, the lib is a dependency compiled *without*
+    /// `cfg(test)` — so a gated field would simply not exist where it is needed.
+    ///
+    /// It earns two `usize` of production surface because the alternative is untestable: "a drag
+    /// mutated `Edits` but never asked for a render" leaves no trace anywhere else, and that bug
+    /// has shipped — the mask overlay kept showing its previous position until some unrelated
+    /// edit happened to request a frame.
+    requests: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl RenderEngine {
@@ -154,12 +166,24 @@ impl RenderEngine {
             req_tx,
             res_rx,
             _handle: handle,
+            requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
     /// Queue a render at the given working resolution, optionally cropped to `region`.
     pub fn request(&self, edits: Edits, spec: FrameSpec) {
+        // ⚠ Bumped before the send, and unconditionally: a send to a dropped receiver returns
+        // `Err`, but a request that could not be delivered is still one that was *asked for*,
+        // which is what the tests assert about.
+        self.requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let _ = self.req_tx.send(Request { edits, spec });
+    }
+
+    /// How many renders have been asked for. See the field's doc comment for why this is not
+    /// `#[cfg(test)]`.
+    pub fn requests_issued(&self) -> usize {
+        self.requests.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Return the newest finished frame, if any (drops older ones).
@@ -1539,5 +1563,29 @@ mod tests {
             srgb.hist, p3.hist,
             "the histogram must describe the image, not the monitor"
         );
+    }
+
+    #[test]
+    fn requests_are_counted() {
+        // ⚠⚠ This counter exists because "a drag mutated `Edits` but never asked for a render"
+        // is invisible from outside — the request goes into a channel and vanishes. That bug
+        // shipped: the mask overlay kept showing its previous position until some *unrelated*
+        // edit happened to request a frame, which is why moving a slider appeared to fix it.
+        //
+        // ⚠ The alternative was asserting on `Session::requested_region`, which is a *proxy*
+        // that misses exactly the whole-image fit case where the bug actually occurred.
+        let spec = || FrameSpec {
+            max_dim: 64,
+            region: None,
+            display_space: color::OutputSpace::Srgb,
+        };
+        let engine = RenderEngine::new(Arc::new(ImageBuf::new(4, 2)), 1.0, None, || {});
+        assert_eq!(engine.requests_issued(), 0, "nothing asked for yet");
+
+        engine.request(Edits::default(), spec());
+        assert_eq!(engine.requests_issued(), 1);
+
+        engine.request(Edits::default(), spec());
+        assert_eq!(engine.requests_issued(), 2, "each request counts");
     }
 }
