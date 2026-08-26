@@ -17,6 +17,7 @@ pub mod full_res;
 pub mod histogram;
 pub mod history;
 pub mod icons;
+pub mod marks;
 pub mod mask_tool;
 pub mod menu;
 pub mod photo_id;
