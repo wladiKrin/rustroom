@@ -122,90 +122,117 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         });
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let cols = grid_columns(ui.available_width(), cell, ui.spacing().item_spacing.x);
-            // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
-            // per frame is nothing against the thumbnails being drawn.
-            let visible = lib.visible.clone();
-            // ⚠ The caption scales *relative to the theme's own* Small size rather than from a
-            // literal, so a later change to the type scale carries through here for free.
-            let name_size = ui.style().text_styles[&egui::TextStyle::Small].size * cell
-                / rustroom_app::settings::DEFAULT_CELL as f32;
-            egui::Grid::new("thumb_grid").show(ui, |ui| {
-                // ⚠ `pos` is the cell's place in the grid; `i` indexes `entries`. The row
-                // break must use `pos`: once a filter is on, `i` is *sparse*, so counting
-                // rows by it breaks after the wrong cells — gaps where a break was skipped
-                // and overflowing rows where several were.
-                for (pos, &i) in visible.iter().enumerate() {
-                    let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
-                    let resp = ui
-                        .allocate_ui(egui::vec2(cell, cell), |ui| {
-                            // Pin the cell to its full size. Without this `allocate_ui`
-                            // reports only the space the content used, so cells varied
-                            // with their thumbnail — the filmstrip's reflow bug in its
-                            // grid form, where `egui::Grid`'s column alignment hid it.
-                            ui.set_min_size(egui::vec2(cell, cell));
-                            ui.vertical_centered(|ui| {
-                                thumb::cell(
+        // ⚠ How many rows of prefetch to keep resident beyond the drawn ones. Latency, not
+        // correctness: at 0 the grid is still right, it just shows grey while you scroll. No test
+        // covers this number for that reason.
+        const MARGIN_ROWS: usize = 2;
+
+        let cols = grid_columns(ui.available_width(), cell, ui.spacing().item_spacing.x);
+        // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
+        // per frame is nothing against the thumbnails being drawn.
+        let visible = lib.visible.clone();
+        let rows = visible.len().div_ceil(cols);
+        // ⚠ The caption scales *relative to the theme's own* Small size rather than from a
+        // literal, so a later change to the type scale carries through here for free.
+        let name_size = ui.style().text_styles[&egui::TextStyle::Small].size * cell
+            / rustroom_app::settings::DEFAULT_CELL as f32;
+
+        // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell.
+        let drawn = egui::ScrollArea::vertical()
+            .show_rows(ui, cell, rows, |ui, row_range| {
+                for row in row_range.clone() {
+                    ui.horizontal(|ui| {
+                        for pos in cells_in_row(row, cols, visible.len()) {
+                            let i = visible[pos];
+                            // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
+                            // `show_rows` that counter shifts with the scroll position — it skips
+                            // `min_row` ids while each row holds `cols` widgets — which silently
+                            // kills the rename field's focus: the stale id keeps focus, so
+                            // `autofocus`'s `focused().is_none()` guard never fires and the box
+                            // goes dead. Keyed by `PhotoId`, so it is also stable across sorting
+                            // and filtering.
+                            ui.push_id(&lib.entries[i].id, |ui| {
+                                let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
+                                let resp = ui
+                                    .allocate_ui(egui::vec2(cell, cell), |ui| {
+                                        // Pin the cell to its full size. Without this
+                                        // `allocate_ui` reports only the space the content used,
+                                        // so cells varied with their thumbnail — the filmstrip's
+                                        // reflow bug in its grid form.
+                                        ui.set_min_size(egui::vec2(cell, cell));
+                                        ui.vertical_centered(|ui| {
+                                            thumb::cell(
+                                                ui,
+                                                box_size,
+                                                lib.cache.get(&lib.entries[i].id.path),
+                                                lib.entries[i].id.copy,
+                                                lib.marks
+                                                    .get(&lib.entries[i].id)
+                                                    .copied()
+                                                    .unwrap_or_default(),
+                                            );
+                                            let e = &lib.entries[i];
+                                            // ⚠⚠ `label()`, not `file_name`. Every copy of a file
+                                            // has the same `file_name`, so the grid showed
+                                            // identical captions and a copy's own name could
+                                            // never appear in it at all.
+                                            //
+                                            // ⚠ Only the **active** row is editable. A text field
+                                            // in every cell would fight the click that selects a
+                                            // photo, and would put hundreds of them on screen.
+                                            if let Some(r) = name_edit::caption_or_field(
+                                                ui,
+                                                &e.id,
+                                                &e.file_name,
+                                                e.name.as_deref(),
+                                                rename_draft,
+                                                name_size,
+                                            ) {
+                                                rename = Some((e.id.clone(), r));
+                                            }
+                                        });
+                                    })
+                                    .response
+                                    .interact(egui::Sense::click());
+
+                                thumb::selection_border(
                                     ui,
-                                    box_size,
-                                    lib.cache.get(&lib.entries[i].id.path),
-                                    lib.entries[i].id.copy,
-                                    lib.marks
-                                        .get(&lib.entries[i].id)
-                                        .copied()
-                                        .unwrap_or_default(),
+                                    resp.rect,
+                                    lib.selection.active() == Some(i),
+                                    lib.selection.contains(i),
                                 );
-                                let e = &lib.entries[i];
-                                // ⚠⚠ `label()`, not `file_name`. Every copy of a file has the
-                                // same `file_name`, so the grid showed three identical captions
-                                // and a copy's own name could never appear in it at all.
-                                //
-                                // ⚠ Only the **active** row is editable. A text field in every
-                                // cell would fight the click that selects a photo, and would put
-                                // hundreds of them on screen at once; requiring the photo to be
-                                // selected first is the gesture people already make.
-                                if let Some(r) = name_edit::caption_or_field(
-                                    ui,
-                                    &e.id,
-                                    &e.file_name,
-                                    e.name.as_deref(),
-                                    rename_draft,
-                                    name_size,
-                                ) {
-                                    rename = Some((e.id.clone(), r));
+                                if resp.clicked() {
+                                    let mods = ui.input(|inp| inp.modifiers);
+                                    apply_click(&mut lib.selection, i, mods);
+                                }
+                                if resp.double_clicked() {
+                                    open_index = Some(i);
                                 }
                             });
-                        })
-                        .response
-                        .interact(egui::Sense::click());
-
-                    thumb::selection_border(
-                        ui,
-                        resp.rect,
-                        lib.selection.active() == Some(i),
-                        lib.selection.contains(i),
-                    );
-                    if resp.clicked() {
-                        let mods = ui.input(|inp| inp.modifiers);
-                        apply_click(&mut lib.selection, i, mods);
-                    }
-                    if resp.double_clicked() {
-                        open_index = Some(i);
-                    }
-                    if (pos + 1) % cols == 0 {
-                        ui.end_row();
-                    }
+                        }
+                    });
                 }
-            });
-            // ⚠ In this task the window is everything visible, so behaviour is unchanged.
-            // Task 5 narrows it to the drawn rows plus a margin.
-            let window: Vec<PathBuf> = visible
-                .iter()
-                .map(|&i| lib.entries[i].id.path.clone())
-                .collect();
-            lib.sync_thumb_window(&window);
-        });
+                row_range
+            })
+            .inner;
+
+        // ⚠ The window is the drawn rows widened by the prefetch margin, mapped through
+        // positions to entry indices to paths. Built after drawing so it reflects what egui
+        // actually laid out this frame.
+        let first = drawn.start.saturating_sub(MARGIN_ROWS);
+        let last = drawn.end.saturating_add(MARGIN_ROWS).min(rows);
+        let mut window: Vec<PathBuf> = Vec::new();
+        for row in first..last {
+            for pos in cells_in_row(row, cols, visible.len()) {
+                let path = &lib.entries[visible[pos]].id.path;
+                // ⚠ De-duplicated: a file's copies are separate rows sharing one path, and the
+                // cache holds one entry per path.
+                if !window.iter().any(|p| p == path) {
+                    window.push(path.clone());
+                }
+            }
+        }
+        lib.sync_thumb_window(&window);
     });
 
     if let Some(a) = mark {
@@ -228,6 +255,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 /// likely as the window widens, because the gap total grows with the column count while the
 /// leftover stays uniform in `[0, cell)`. Which is exactly why it showed on a large monitor and
 /// not a small one: at 14 columns the gaps want 104 px of slack, at 7 only 48.
+/// The positions in `visible` that belong to grid row `row`.
+///
+/// ⚠ Positions, never entry indices. Once a format or star filter is on, `visible` is *sparse*;
+/// the grid's geometry is a function of the *position* in that list, and conflating the two is
+/// the bug this project has now made three times.
+fn cells_in_row(row: usize, cols: usize, n_visible: usize) -> std::ops::Range<usize> {
+    let start = row.saturating_mul(cols).min(n_visible);
+    let end = start.saturating_add(cols).min(n_visible);
+    start..end
+}
+
 fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
     if cell <= 0.0 {
         return 1;
@@ -238,32 +276,6 @@ fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Lay out `visible` cells in a grid of `cols` columns, breaking rows the way the Library
-    /// grid does, and return how many distinct rows the cells landed on.
-    ///
-    /// `by_index` reproduces the bug: counting rows by the *entry* index rather than the
-    /// cell's position in the grid.
-    fn grid_rows(visible: &[usize], cols: usize, by_index: bool) -> usize {
-        let ctx = egui::Context::default();
-        let mut tops: Vec<i32> = Vec::new();
-        let _ = ctx.run_ui(Default::default(), |ui| {
-            egui::Grid::new("t").show(ui, |ui| {
-                for (pos, &i) in visible.iter().enumerate() {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-                    tops.push(rect.top() as i32);
-                    let counter = if by_index { i } else { pos };
-                    if (counter + 1) % cols == 0 {
-                        ui.end_row();
-                    }
-                }
-            });
-        });
-        tops.sort_unstable();
-        tops.dedup();
-        tops.len()
-    }
 
     #[test]
     fn grid_columns_leaves_room_for_the_gaps() {
@@ -301,24 +313,31 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_breaks_rows_by_position_not_by_entry_index() {
-        // ⚠ Once a format is filtered out the visible indices are *sparse*, so counting rows
-        // by the entry index breaks after the wrong cells — gaps where a break was skipped,
-        // overflowing rows where several were. Six cells in three columns is two rows.
-        let sparse = vec![0usize, 2, 4, 6, 8, 10];
-        assert_eq!(grid_rows(&sparse, 3, false), 2);
+    fn rows_consume_the_visible_positions_densely_and_in_order() {
+        // ⚠ Replaces `the_grid_breaks_rows_by_position_not_by_entry_index`. That bug — counting
+        // rows by a *sparse* entry index — is now structurally impossible, because a row is
+        // computed from the position directly. What still has to hold is that the rows together
+        // cover every position exactly once, in order, with only the last one partial.
+        const COLS: usize = 4;
+        for n in [0usize, 1, 3, 4, 5, 11, 12] {
+            let rows = n.div_ceil(COLS);
+            let mut seen = Vec::new();
+            for row in 0..rows {
+                let span = cells_in_row(row, COLS, n);
+                assert!(
+                    span.len() <= COLS,
+                    "row {row} of {n} holds {} cells",
+                    span.len()
+                );
+                seen.extend(span);
+            }
+            assert_eq!(seen, (0..n).collect::<Vec<_>>(), "n = {n}");
+        }
+    }
 
-        // The bug, reproduced: every index here is even, so `(i + 1) % 3 == 0` fires only on
-        // i = 2 and i = 8 — three rows of wildly uneven length instead of two.
-        assert_ne!(
-            grid_rows(&sparse, 3, true),
-            2,
-            "the index-counted version should not lay out correctly"
-        );
-
-        // Dense indices are the case that always worked, and must keep working.
-        let dense: Vec<usize> = (0..6).collect();
-        assert_eq!(grid_rows(&dense, 3, false), 2);
-        assert_eq!(grid_rows(&dense, 3, true), 2);
+    #[test]
+    fn a_row_past_the_end_is_empty() {
+        // A stale scroll offset can name a row that no longer exists after a filter change.
+        assert!(cells_in_row(99, 4, 10).is_empty());
     }
 }
