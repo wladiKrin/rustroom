@@ -27,6 +27,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         OpenFolder(std::path::PathBuf),
         ForgetFolder(i64, std::path::PathBuf, i64),
         OpenPeriod(i32, Option<u32>, Option<u32>, String),
+        OpenSmart(i64, String),
+        DeleteSmart(i64),
+        SaveSmart,
     }
     let mut action = Action::None;
 
@@ -211,6 +214,54 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 });
 
             ui.separator();
+            ui.heading("Smart");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.new_smart)
+                        .hint_text("Save this view")
+                        .desired_width(110.0),
+                );
+                // ⚠ Enabled only with a name *and* a Library open: the rule is built from what is
+                // on screen, so there has to be something on screen.
+                let ready = !app.new_smart.trim().is_empty() && app.library.is_some();
+                if ui
+                    .add_enabled(ready, egui::Button::new("+"))
+                    .on_hover_text("Save the current source and filter as a rule")
+                    .clicked()
+                {
+                    action = Action::SaveSmart;
+                }
+            });
+            let smarts = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.smart_collections().ok())
+                .unwrap_or_default();
+            if smarts.is_empty() {
+                crate::theme::hint(ui, "No smart collections yet.");
+            }
+            for sc in &smarts {
+                ui.horizontal(|ui| {
+                    // ⚠ No confirmation: a smart collection is a **query** with nothing behind it,
+                    // so it follows `delete_collection`'s precedent rather than `forget_folder`'s,
+                    // which takes ratings and keywords with it.
+                    if ui.button("×").on_hover_text("Delete").clicked() {
+                        action = Action::DeleteSmart(sc.id);
+                    }
+                    let selected = matches!(
+                        app.library.as_ref().map(|l| &l.source),
+                        Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
+                    );
+                    // ⚠⚠ **No count, unlike Collections and Keywords.** Computing one means
+                    // evaluating the rule over every photo, every frame. The row does not pretend
+                    // to know something it would be expensive to know.
+                    if ui.selectable_label(selected, &sc.name).clicked() {
+                        action = Action::OpenSmart(sc.id, sc.name.clone());
+                    }
+                });
+            }
+
+            ui.separator();
             ui.heading("Dates");
             // ⚠ A tree built from a `GROUP BY` over what is actually in the catalog — which is
             // what makes this need **no date picker**, since egui has none. It shows the days you
@@ -329,6 +380,37 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.new_keyword.clear();
         }
         Action::OpenAllPhotos => app.open_all_photos(ctx),
+        Action::OpenSmart(id, name) => app.open_smart(ctx, id, &name),
+        Action::DeleteSmart(id) => {
+            if let Some(cat) = &app.catalog {
+                let _ = cat.delete_smart(id);
+            }
+            // ⚠ If the deleted rule was the one on screen there is nothing left to show — the
+            // rule the collection and keyword deletions already follow.
+            let showing = matches!(
+                app.library.as_ref().map(|l| &l.source),
+                Some(crate::LibrarySource::Smart { id: open, .. }) if *open == id
+            );
+            if showing {
+                app.library = None;
+            }
+        }
+        Action::SaveSmart => {
+            let rule = app.rule_from_current();
+            let name = app.new_smart.trim().to_string();
+            match serde_json::to_string(&rule) {
+                Ok(json) => {
+                    if let Some(cat) = &app.catalog {
+                        match cat.create_smart(&name, &json) {
+                            Ok(_) => app.status = format!("Saved “{name}”"),
+                            Err(e) => app.status = format!("Could not save: {e}"),
+                        }
+                    }
+                    app.new_smart.clear();
+                }
+                Err(e) => app.status = format!("Could not build the rule: {e}"),
+            }
+        }
         Action::OpenPeriod(y, m, d, label) => app.open_period(ctx, y, m, d, &label),
         Action::OpenFolder(path) => app.open_catalog_folder(ctx, &path),
         Action::ForgetFolder(id, path, count) => {

@@ -96,6 +96,11 @@ enum LibrarySource {
     Folder(PathBuf),
     /// Every photo the catalog knows, from every folder ever opened.
     AllPhotos,
+    /// The photos a saved rule matches, re-evaluated every time it is opened.
+    Smart {
+        id: i64,
+        name: String,
+    },
     /// Photos taken in a calendar period — a year, a month, or a day.
     Period {
         year: i32,
@@ -295,6 +300,8 @@ struct RustroomApp {
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
     new_collection: String,
+    /// Scratch name for the smart collection about to be saved.
+    new_smart: String,
     /// Scratch text for the new-keyword field.
     new_keyword: String,
     /// The keyword a new one will be created under. `None` makes a root.
@@ -491,6 +498,7 @@ impl RustroomApp {
             hsl_channel: Default::default(),
             grade_range: Default::default(),
             new_collection: String::new(),
+            new_smart: String::new(),
             new_keyword: String::new(),
             new_keyword_parent: None,
             rename_draft: None,
@@ -1901,6 +1909,271 @@ impl RustroomApp {
             format!("Nothing taken in {label}")
         } else {
             format!("{label} — {n} photos")
+        };
+    }
+
+    /// The rule that reproduces what is on screen right now.
+    ///
+    /// ⚠⚠ This is what makes smart collections usable **with no editor at all**: browse, filter,
+    /// save. Its limit is equally structural — the UI can only be in *one* source at a time, so
+    /// the rule it captures has at most one source criterion. Composing two ("Portfolio ∩ July")
+    /// needs the editor, which is plan 2 and the actual point of the milestone.
+    fn rule_from_current(&self) -> rustroom_app::rule::Expr {
+        use rustroom_app::rule::{Cmp, Criterion, Expr};
+        let mut parts: Vec<Expr> = Vec::new();
+
+        match self.library.as_ref().map(|l| &l.source) {
+            Some(LibrarySource::Folder(p)) => {
+                parts.push(Expr::Is(Criterion::Folder(p.clone())));
+            }
+            Some(LibrarySource::Collection { id, .. }) => {
+                parts.push(Expr::Is(Criterion::Collection(*id)));
+            }
+            Some(LibrarySource::Keyword { id, .. }) => {
+                parts.push(Expr::Is(Criterion::Keyword(*id)));
+            }
+            Some(LibrarySource::Period {
+                year, month, day, ..
+            }) => {
+                parts.push(Expr::Is(Criterion::Period {
+                    year: *year,
+                    month: *month,
+                    day: *day,
+                }));
+            }
+            // ⚠ All Photos contributes no source criterion — it *is* the universe.
+            //
+            // ⚠⚠ And neither does a smart collection: saving one's own view would nest a rule
+            // inside itself **by id**, which a later delete would leave dangling. Saving from a
+            // smart collection therefore captures only the filter, which is the honest answer.
+            _ => {}
+        }
+
+        let f = &self.filter;
+        if !f.text.is_empty() {
+            parts.push(Expr::Is(Criterion::Text(f.text.clone())));
+        }
+        // ⚠ The mark filters are **sets**, so each becomes an `Any([...])` — which is precisely
+        // why the rule needed `Any`, and why the checkbox model maps onto it cleanly.
+        if !f.stars.is_empty() {
+            parts.push(Expr::Any(
+                f.stars
+                    .ratings()
+                    .into_iter()
+                    .map(|v| {
+                        Expr::Is(Criterion::Rating {
+                            op: Cmp::Exactly,
+                            value: v,
+                        })
+                    })
+                    .collect(),
+            ));
+        }
+        if !f.flags.is_empty() {
+            parts.push(Expr::Any(
+                f.flags
+                    .flags()
+                    .into_iter()
+                    .map(|v| Expr::Is(Criterion::Flag(v)))
+                    .collect(),
+            ));
+        }
+        if !f.labels.is_empty() {
+            parts.push(Expr::Any(
+                f.labels
+                    .labels()
+                    .into_iter()
+                    .map(|v| Expr::Is(Criterion::Label(v)))
+                    .collect(),
+            ));
+        }
+        if !f.cameras.is_empty() {
+            parts.push(Expr::Any(
+                f.cameras
+                    .iter()
+                    .map(|c| Expr::Is(Criterion::Camera(c.clone())))
+                    .collect(),
+            ));
+        }
+        if !f.lenses.is_empty() {
+            parts.push(Expr::Any(
+                f.lenses
+                    .iter()
+                    .map(|l| Expr::Is(Criterion::Lens(l.clone())))
+                    .collect(),
+            ));
+        }
+        Expr::All(parts)
+    }
+
+    /// Collection ids per photo, and keyword ids per **file**.
+    ///
+    /// ⚠ One query per collection and per keyword, never one per photo: a catalog has a handful
+    /// of each and may have ten thousand photos.
+    ///
+    /// ⚠⚠ Two maps keyed differently, and that is M4.2b's asymmetry rather than an oversight:
+    /// **collections are per (file, copy)** — a rating describes the image you made — while
+    /// **keywords are per file**, because a keyword describes what is *in* the picture, which
+    /// every copy shares. **Do not unify them.**
+    ///
+    /// ⚠ `keyword_members` already expands *descendants* through its recursive CTE, so inserting
+    /// the queried keyword's own id for each member is exactly the "matches an ancestor"
+    /// semantics `Criterion::Keyword` documents.
+    #[allow(clippy::type_complexity)]
+    fn memberships(
+        &self,
+    ) -> (
+        std::collections::HashMap<PhotoId, Vec<i64>>,
+        std::collections::HashMap<PathBuf, Vec<i64>>,
+    ) {
+        let mut colls: std::collections::HashMap<PhotoId, Vec<i64>> = Default::default();
+        let mut keys: std::collections::HashMap<PathBuf, Vec<i64>> = Default::default();
+        let Some(cat) = &self.catalog else {
+            return (colls, keys);
+        };
+        for c in cat.collections().unwrap_or_default() {
+            for (path, copy) in cat.collection_members(c.id).unwrap_or_default() {
+                colls
+                    .entry(PhotoId::new(path, copy))
+                    .or_default()
+                    .push(c.id);
+            }
+        }
+        for k in cat.keywords().unwrap_or_default() {
+            for (path, _copy) in cat.keyword_members(k.id).unwrap_or_default() {
+                let e = keys.entry(path).or_default();
+                if !e.contains(&k.id) {
+                    e.push(k.id);
+                }
+            }
+        }
+        (colls, keys)
+    }
+
+    /// Show the photos a saved rule matches.
+    ///
+    /// ⚠⚠ **Re-evaluated on every open, never cached as a member list.** A photo rated *into* the
+    /// rule must appear without a restart — the same reason `open_collection` re-reads its members
+    /// rather than caching them.
+    ///
+    /// ⚠ Evaluated in memory over every photo the catalog knows, which is what the `Text`
+    /// criterion forces: it reads a copy's own name from the **sidecar**, which SQL cannot see.
+    /// Measured at 4.6 ms per 830 sidecars, so ~60 ms at 10,000.
+    fn open_smart(&mut self, ctx: &egui::Context, id: i64, name: &str) {
+        let Some(cat) = &self.catalog else {
+            self.status = "No catalog".into();
+            return;
+        };
+        let Some(row) = cat
+            .smart_collections()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|r| r.id == id)
+        else {
+            self.status = format!("“{name}” is gone");
+            return;
+        };
+        // ⚠ A rule that will not parse yields an **empty** collection and a message, never a
+        // panic: the text is user-editable, in a file, by hand.
+        let rule: rustroom_app::rule::Expr = match serde_json::from_str(&row.rule) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status = format!("“{name}” has an unreadable rule: {e}");
+                return;
+            }
+        };
+
+        let rows = cat.all_photos().unwrap_or_default();
+        let mtimes: std::collections::HashMap<PathBuf, std::time::SystemTime> = rows
+            .iter()
+            .filter_map(|r| {
+                r.mtime.map(|s| {
+                    (
+                        r.path.clone(),
+                        std::time::SystemTime::UNIX_EPOCH
+                            + std::time::Duration::from_secs(s.max(0) as u64),
+                    )
+                })
+            })
+            .collect();
+        let sizes: std::collections::HashMap<PathBuf, i64> = Default::default();
+        let members: Vec<(PathBuf, u32)> = rows.into_iter().map(|r| (r.path, r.copy)).collect();
+        let scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at, |p| {
+            mtimes
+                .get(p)
+                .copied()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        let all = entries::build(&scan, sidecar::load_all);
+
+        // Facts the evaluator needs, gathered once rather than per entry.
+        let (colls, keys) = self.memberships();
+        let Some(cat) = &self.catalog else { return };
+        let mut marks: std::collections::HashMap<PhotoId, catalog::db::Marks> = Default::default();
+        let mut captures: std::collections::HashMap<PathBuf, core_image::Capture> =
+            Default::default();
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for e in &all {
+            if let Some(dir) = e.id.path.parent() {
+                if !folders.iter().any(|f| f == dir) {
+                    folders.push(dir.to_path_buf());
+                }
+            }
+        }
+        for dir in &folders {
+            for (path, copy, m) in cat.marks_in(dir).unwrap_or_default() {
+                marks.insert(PhotoId::new(path, copy), m);
+            }
+            for (path, c) in cat.captures_in(dir).unwrap_or_default() {
+                captures.insert(path, c);
+            }
+        }
+
+        let empty: Vec<i64> = Vec::new();
+        let keep: Vec<PathBuf> = all
+            .iter()
+            .filter(|e| {
+                let capture = captures.get(&e.id.path).cloned().unwrap_or_default();
+                let facts = rustroom_app::rule::Facts {
+                    entry: e,
+                    marks: marks.get(&e.id).copied().unwrap_or_default(),
+                    capture: &capture,
+                    collections: colls.get(&e.id).unwrap_or(&empty),
+                    keywords: keys.get(&e.id.path).unwrap_or(&empty),
+                    size: sizes.get(&e.id.path).copied(),
+                };
+                rule.matches(&facts)
+            })
+            .map(|e| e.id.path.clone())
+            .collect();
+
+        // ⚠ One entry per **file**: `entries::build` expands copies itself, so passing copies
+        // through `scan_of` would double every one of them.
+        let mut kept: Vec<(PathBuf, u32)> = Vec::new();
+        for p in keep {
+            if !kept.iter().any(|(q, _)| q == &p) {
+                kept.push((p, 0));
+            }
+        }
+        let mut scan = rustroom_app::collections::scan_of(&kept, sidecar::edited_at, |p| {
+            mtimes
+                .get(p)
+                .copied()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::Smart {
+                id,
+                name: name.to_string(),
+            },
+            scan,
+        );
+        self.status = if n == 0 {
+            format!("“{name}” matches nothing")
+        } else {
+            format!("“{name}” — {n} photos")
         };
     }
 
