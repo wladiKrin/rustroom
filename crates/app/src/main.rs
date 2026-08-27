@@ -145,6 +145,15 @@ struct Library {
     /// trip per photo per frame. Only marked photos are in here, so an unmarked folder costs
     /// nothing.
     marks: std::collections::HashMap<PhotoId, catalog::db::Marks>,
+    /// Capture metadata for everything on show, keyed by **path**.
+    ///
+    /// ⚠ By path, not `PhotoId`: capture is per *file* and every copy shares it, while `marks` is
+    /// keyed by `PhotoId` for the opposite reason. Both carry a comment saying so, because it
+    /// looks like an inconsistency and is not.
+    ///
+    /// ⚠⚠ Read **once per rebuild**, never per frame and never per cell — the rule `marks`
+    /// already follows, and for the same reason: the grid draws sixty times a second.
+    captures: std::collections::HashMap<PathBuf, core_image::Capture>,
 }
 
 impl Library {
@@ -163,7 +172,8 @@ impl Library {
             .enumerate()
             .filter(|(_, e)| {
                 let m = self.marks.get(&e.id).copied().unwrap_or_default();
-                self.filter.matches(e, m)
+                let c = self.captures.get(&e.id.path).cloned().unwrap_or_default();
+                self.filter.matches(e, m, &c)
             })
             .map(|(i, _)| i)
             .collect();
@@ -1924,8 +1934,10 @@ impl RustroomApp {
             },
             visible: (0..n).collect(),
             marks: std::collections::HashMap::new(),
+            captures: std::collections::HashMap::new(),
         });
         self.reload_marks();
+        self.reload_captures();
         self.queue_metadata();
         self.view = AppView::Library;
         n
@@ -2429,6 +2441,41 @@ impl RustroomApp {
             lib.marks = map;
             // ⚠ Refilter here, or a newly-rated photo would not appear or disappear under an
             // active star filter until some unrelated action happened to rebuild.
+            lib.refilter();
+        }
+    }
+
+    /// Re-read the capture metadata for whatever the Library is showing.
+    ///
+    /// ⚠ One query per **folder** represented, never one per photo — the shape `reload_marks`
+    /// uses, and for the same reason.
+    ///
+    /// ⚠⚠ Must run after the metadata scanner drains as well as wherever `reload_marks` does, or
+    /// a newly-scanned folder does not become filterable until something unrelated rebuilds. The
+    /// `reload_marks` refilter rule, one layer along.
+    fn reload_captures(&mut self) {
+        let Some(cat) = &self.catalog else { return };
+        let Some(lib) = self.library.as_ref() else {
+            return;
+        };
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for e in &lib.entries {
+            if let Some(dir) = e.id.path.parent() {
+                if !folders.iter().any(|f| f == dir) {
+                    folders.push(dir.to_path_buf());
+                }
+            }
+        }
+        let mut map = std::collections::HashMap::new();
+        for dir in &folders {
+            if let Ok(rows) = cat.captures_in(dir) {
+                for (path, c) in rows {
+                    map.insert(path, c);
+                }
+            }
+        }
+        if let Some(lib) = self.library.as_mut() {
+            lib.captures = map;
             lib.refilter();
         }
     }

@@ -12,6 +12,8 @@
 use crate::entries::{self, PhotoEntry};
 use crate::format_filter::FormatFilter;
 use catalog::db::{Flag, Marks};
+use core_image::Capture;
+use std::collections::BTreeSet;
 
 /// Which star ratings to show, as a bitmask over 0..=5.
 ///
@@ -128,6 +130,13 @@ pub struct LibraryFilter {
     pub flags: FlagSet,
     /// Which colour labels to show. Empty matches everything; 0 means *unlabelled*.
     pub labels: LabelSet,
+    /// Which cameras to show. Empty matches everything.
+    ///
+    /// ⚠ A `BTreeSet<String>` rather than a bitmask, unlike the mark filters: these values are
+    /// open-ended strings discovered from the catalog, not a fixed small enum.
+    pub cameras: BTreeSet<String>,
+    /// Which lenses to show. Empty matches everything.
+    pub lenses: BTreeSet<String>,
 }
 
 impl LibraryFilter {
@@ -136,7 +145,7 @@ impl LibraryFilter {
     /// ⚠ A conjunction: every criterion must pass. `marks` is the row's marks, or the default
     /// when it has none — "unrated, unflagged, unlabelled" is a real value, not a missing one,
     /// which is why `Marks` defaults to zero and no special case is needed here.
-    pub fn matches(&self, entry: &PhotoEntry, marks: Marks) -> bool {
+    pub fn matches(&self, entry: &PhotoEntry, marks: Marks, capture: &Capture) -> bool {
         if !self.format.is_visible(&entry.id.path) {
             return false;
         }
@@ -147,6 +156,25 @@ impl LibraryFilter {
             return false;
         }
         if !self.labels.is_empty() && !self.labels.contains(marks.label) {
+            return false;
+        }
+        // ⚠ A photo with **no camera recorded fails a non-empty camera filter**, and that is
+        // right: "show me the X-T4 shots" must not include a file whose camera is unknown.
+        // `is_some_and` says exactly that.
+        if !self.cameras.is_empty()
+            && !capture
+                .camera
+                .as_deref()
+                .is_some_and(|c| self.cameras.contains(c))
+        {
+            return false;
+        }
+        if !self.lenses.is_empty()
+            && !capture
+                .lens
+                .as_deref()
+                .is_some_and(|l| self.lenses.contains(l))
+        {
             return false;
         }
         if !self.text.is_empty() {
@@ -169,6 +197,8 @@ impl LibraryFilter {
             || !self.stars.is_empty()
             || !self.flags.is_empty()
             || !self.labels.is_empty()
+            || !self.cameras.is_empty()
+            || !self.lenses.is_empty()
     }
 
     /// Clear the marks and the text, leaving the format filter alone.
@@ -180,6 +210,8 @@ impl LibraryFilter {
         self.stars = RatingSet::default();
         self.flags = FlagSet::default();
         self.labels = LabelSet::default();
+        self.cameras.clear();
+        self.lenses.clear();
     }
 }
 
@@ -208,7 +240,11 @@ mod tests {
     #[test]
     fn an_empty_filter_matches_everything() {
         let f = LibraryFilter::default();
-        assert!(f.matches(&entry("a.RAF", 0, None), Marks::default()));
+        assert!(f.matches(
+            &entry("a.RAF", 0, None),
+            Marks::default(),
+            &Capture::default()
+        ));
         assert!(!f.is_active());
     }
 
@@ -218,10 +254,22 @@ mod tests {
             text: "dscf".into(),
             ..Default::default()
         };
-        assert!(f.matches(&entry("DSCF6223.RAF", 0, None), Marks::default()));
-        assert!(!f.matches(&entry("IMG_0001.JPG", 0, None), Marks::default()));
+        assert!(f.matches(
+            &entry("DSCF6223.RAF", 0, None),
+            Marks::default(),
+            &Capture::default()
+        ));
+        assert!(!f.matches(
+            &entry("IMG_0001.JPG", 0, None),
+            Marks::default(),
+            &Capture::default()
+        ));
         f.text = "6223".into();
-        assert!(f.matches(&entry("DSCF6223.RAF", 0, None), Marks::default()));
+        assert!(f.matches(
+            &entry("DSCF6223.RAF", 0, None),
+            Marks::default(),
+            &Capture::default()
+        ));
     }
 
     #[test]
@@ -235,7 +283,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            f.matches(&warm, Marks::default()),
+            f.matches(&warm, Marks::default(), &Capture::default()),
             "a copy's own name must match"
         );
 
@@ -244,7 +292,7 @@ mod tests {
             text: "dscf".into(),
             ..Default::default()
         };
-        assert!(!g.matches(&warm, Marks::default()));
+        assert!(!g.matches(&warm, Marks::default(), &Capture::default()));
     }
 
     #[test]
@@ -254,7 +302,11 @@ mod tests {
             text: "_1".into(),
             ..Default::default()
         };
-        assert!(f.matches(&entry("DSCF6223.RAF", 1, None), Marks::default()));
+        assert!(f.matches(
+            &entry("DSCF6223.RAF", 1, None),
+            Marks::default(),
+            &Capture::default()
+        ));
     }
 
     fn stars(list: &[u8]) -> RatingSet {
@@ -275,9 +327,12 @@ mod tests {
             ..Default::default()
         };
         let e = entry("a.RAF", 0, None);
-        assert!(f.matches(&e, marks(1, Flag::None, 0)));
-        assert!(!f.matches(&e, marks(2, Flag::None, 0)), "2★ is not 1★");
-        assert!(!f.matches(&e, marks(0, Flag::None, 0)));
+        assert!(f.matches(&e, marks(1, Flag::None, 0), &Capture::default()));
+        assert!(
+            !f.matches(&e, marks(2, Flag::None, 0), &Capture::default()),
+            "2★ is not 1★"
+        );
+        assert!(!f.matches(&e, marks(0, Flag::None, 0), &Capture::default()));
     }
 
     #[test]
@@ -288,9 +343,12 @@ mod tests {
             ..Default::default()
         };
         let e = entry("a.RAF", 0, None);
-        assert!(!f.matches(&e, marks(2, Flag::None, 0)));
+        assert!(!f.matches(&e, marks(2, Flag::None, 0), &Capture::default()));
         for r in [3, 4, 5] {
-            assert!(f.matches(&e, marks(r, Flag::None, 0)), "{r}★ should match");
+            assert!(
+                f.matches(&e, marks(r, Flag::None, 0), &Capture::default()),
+                "{r}★ should match"
+            );
         }
     }
 
@@ -300,7 +358,7 @@ mod tests {
         let f = LibraryFilter::default();
         let e = entry("a.RAF", 0, None);
         for r in 0..=5 {
-            assert!(f.matches(&e, marks(r, Flag::None, 0)));
+            assert!(f.matches(&e, marks(r, Flag::None, 0), &Capture::default()));
         }
     }
 
@@ -313,8 +371,8 @@ mod tests {
             ..Default::default()
         };
         let e = entry("a.RAF", 0, None);
-        assert!(f.matches(&e, marks(0, Flag::None, 0)));
-        assert!(!f.matches(&e, marks(1, Flag::None, 0)));
+        assert!(f.matches(&e, marks(0, Flag::None, 0), &Capture::default()));
+        assert!(!f.matches(&e, marks(1, Flag::None, 0), &Capture::default()));
     }
 
     #[test]
@@ -362,12 +420,12 @@ mod tests {
             flags: flags(&[Flag::None]),
             ..Default::default()
         };
-        assert!(unflagged.matches(&e, marks(0, Flag::None, 0)));
-        assert!(!unflagged.matches(&e, marks(0, Flag::Pick, 0)));
+        assert!(unflagged.matches(&e, marks(0, Flag::None, 0), &Capture::default()));
+        assert!(!unflagged.matches(&e, marks(0, Flag::Pick, 0), &Capture::default()));
 
         let any = LibraryFilter::default();
-        assert!(any.matches(&e, marks(0, Flag::Pick, 0)));
-        assert!(any.matches(&e, marks(0, Flag::None, 0)));
+        assert!(any.matches(&e, marks(0, Flag::Pick, 0), &Capture::default()));
+        assert!(any.matches(&e, marks(0, Flag::None, 0), &Capture::default()));
     }
 
     #[test]
@@ -378,9 +436,9 @@ mod tests {
             flags: flags(&[Flag::Pick, Flag::Reject]),
             ..Default::default()
         };
-        assert!(f.matches(&e, marks(0, Flag::Pick, 0)));
-        assert!(f.matches(&e, marks(0, Flag::Reject, 0)));
-        assert!(!f.matches(&e, marks(0, Flag::None, 0)));
+        assert!(f.matches(&e, marks(0, Flag::Pick, 0), &Capture::default()));
+        assert!(f.matches(&e, marks(0, Flag::Reject, 0), &Capture::default()));
+        assert!(!f.matches(&e, marks(0, Flag::None, 0), &Capture::default()));
     }
 
     #[test]
@@ -390,15 +448,15 @@ mod tests {
             labels: labels(&[0]),
             ..Default::default()
         };
-        assert!(unlabelled.matches(&e, marks(0, Flag::None, 0)));
-        assert!(!unlabelled.matches(&e, marks(0, Flag::None, 2)));
+        assert!(unlabelled.matches(&e, marks(0, Flag::None, 0), &Capture::default()));
+        assert!(!unlabelled.matches(&e, marks(0, Flag::None, 2), &Capture::default()));
 
         let red = LibraryFilter {
             labels: labels(&[1]),
             ..Default::default()
         };
-        assert!(red.matches(&e, marks(0, Flag::None, 1)));
-        assert!(!red.matches(&e, marks(0, Flag::None, 2)));
+        assert!(red.matches(&e, marks(0, Flag::None, 1), &Capture::default()));
+        assert!(!red.matches(&e, marks(0, Flag::None, 2), &Capture::default()));
     }
 
     #[test]
@@ -408,9 +466,9 @@ mod tests {
             labels: labels(&[1, 3]),
             ..Default::default()
         };
-        assert!(f.matches(&e, marks(0, Flag::None, 1)));
-        assert!(f.matches(&e, marks(0, Flag::None, 3)));
-        assert!(!f.matches(&e, marks(0, Flag::None, 2)));
+        assert!(f.matches(&e, marks(0, Flag::None, 1), &Capture::default()));
+        assert!(f.matches(&e, marks(0, Flag::None, 3), &Capture::default()));
+        assert!(!f.matches(&e, marks(0, Flag::None, 2), &Capture::default()));
     }
 
     #[test]
@@ -442,8 +500,16 @@ mod tests {
         // ⚠ Contained, not absorbed — its hidden-by-exception rule is unchanged.
         let mut f = LibraryFilter::default();
         f.format.toggle("jpg");
-        assert!(f.matches(&entry("a.RAF", 0, None), Marks::default()));
-        assert!(!f.matches(&entry("a.jpg", 0, None), Marks::default()));
+        assert!(f.matches(
+            &entry("a.RAF", 0, None),
+            Marks::default(),
+            &Capture::default()
+        ));
+        assert!(!f.matches(
+            &entry("a.jpg", 0, None),
+            Marks::default(),
+            &Capture::default()
+        ));
         assert!(f.is_active());
     }
 
@@ -461,7 +527,10 @@ mod tests {
             labels: labels(&[2]),
             ..Default::default()
         };
-        assert!(pass.matches(&e, m), "the fully-matching case must pass");
+        assert!(
+            pass.matches(&e, m, &Capture::default()),
+            "the fully-matching case must pass"
+        );
 
         for (label, f) in [
             (
@@ -493,7 +562,10 @@ mod tests {
                 },
             ),
         ] {
-            assert!(!f.matches(&e, m), "{label} did not narrow");
+            assert!(
+                !f.matches(&e, m, &Capture::default()),
+                "{label} did not narrow"
+            );
         }
     }
 
@@ -540,5 +612,94 @@ mod tests {
             "the format filter was cleared too"
         );
         assert!(f.text.is_empty() && f.stars.is_empty());
+    }
+
+    fn cap(camera: &str, lens: &str) -> Capture {
+        Capture {
+            camera: (!camera.is_empty()).then(|| camera.to_string()),
+            lens: (!lens.is_empty()).then(|| lens.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn names(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_camera_set_narrows_and_an_empty_one_does_not() {
+        let e = entry("a.RAF", 0, None);
+        let f = LibraryFilter {
+            cameras: names(&["FUJIFILM X-T4"]),
+            ..Default::default()
+        };
+        assert!(f.matches(&e, Marks::default(), &cap("FUJIFILM X-T4", "")));
+        assert!(!f.matches(&e, Marks::default(), &cap("CANON EOS R5", "")));
+        assert!(LibraryFilter::default().matches(&e, Marks::default(), &cap("CANON EOS R5", "")));
+    }
+
+    #[test]
+    fn several_cameras_can_be_selected_at_once() {
+        let e = entry("a.RAF", 0, None);
+        let f = LibraryFilter {
+            cameras: names(&["FUJIFILM X-T4", "CANON EOS R5"]),
+            ..Default::default()
+        };
+        assert!(f.matches(&e, Marks::default(), &cap("FUJIFILM X-T4", "")));
+        assert!(f.matches(&e, Marks::default(), &cap("CANON EOS R5", "")));
+        assert!(!f.matches(&e, Marks::default(), &cap("NIKON Z8", "")));
+    }
+
+    #[test]
+    fn a_photo_with_no_camera_fails_a_camera_filter() {
+        // ⚠ "Show me the X-T4 shots" must not include a file whose camera is unknown.
+        let e = entry("a.RAF", 0, None);
+        let f = LibraryFilter {
+            cameras: names(&["FUJIFILM X-T4"]),
+            ..Default::default()
+        };
+        assert!(!f.matches(&e, Marks::default(), &Capture::default()));
+        // …but with no camera filter it is shown like anything else.
+        assert!(LibraryFilter::default().matches(&e, Marks::default(), &Capture::default()));
+    }
+
+    #[test]
+    fn the_lens_set_narrows_independently_of_the_camera_set() {
+        let e = entry("a.RAF", 0, None);
+        let f = LibraryFilter {
+            lenses: names(&["XF23mmF2 R WR"]),
+            ..Default::default()
+        };
+        assert!(f.matches(&e, Marks::default(), &cap("FUJIFILM X-T4", "XF23mmF2 R WR")));
+        assert!(!f.matches(
+            &e,
+            Marks::default(),
+            &cap("FUJIFILM X-T4", "XF16-80mmF4 R OIS WR")
+        ));
+    }
+
+    #[test]
+    fn is_active_reports_the_capture_sets_too() {
+        assert!(LibraryFilter {
+            cameras: names(&["X"]),
+            ..Default::default()
+        }
+        .is_active());
+        assert!(LibraryFilter {
+            lenses: names(&["Y"]),
+            ..Default::default()
+        }
+        .is_active());
+    }
+
+    #[test]
+    fn clearing_empties_the_capture_sets() {
+        let mut f = LibraryFilter {
+            cameras: names(&["X"]),
+            lenses: names(&["Y"]),
+            ..Default::default()
+        };
+        f.clear_marks_and_text();
+        assert!(f.cameras.is_empty() && f.lenses.is_empty());
     }
 }

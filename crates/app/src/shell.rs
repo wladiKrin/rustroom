@@ -130,6 +130,16 @@ impl eframe::App for RustroomApp {
                     }
                 }
             }
+            // ⚠⚠ Refresh the Library's capture map, or a folder that has just been scanned stays
+            // unfilterable until something unrelated rebuilds — the `reload_marks` refilter rule,
+            // one layer along.
+            //
+            // ⚠ Guarded on there being results: this runs every frame, and re-querying every
+            // folder sixty times a second is the `apply_view_demosaic` mistake in yet another
+            // costume.
+            if !done.is_empty() {
+                self.reload_captures();
+            }
         }
 
         // ⚠ Applied after the panel closure closes: `commands::execute` takes `&mut self`

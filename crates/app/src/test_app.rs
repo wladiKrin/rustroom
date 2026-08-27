@@ -197,6 +197,7 @@ pub fn library_of(n: usize) -> Library {
         filter: Default::default(),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
+        captures: std::collections::HashMap::new(),
     };
     lib.refilter();
     lib
