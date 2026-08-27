@@ -216,3 +216,85 @@ fn apply(app: &mut RustroomApp, ctx: &egui::Context, action: Action) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{test_app, test_ui};
+    use rustroom_app::tool::Tool;
+
+    /// ⚠⚠ **The requirement the strip exists to meet, and the only test that can see it.**
+    /// "Always active" is otherwise a visual claim: a strip drawn under `Tool::Edit` alone looks
+    /// perfectly correct in any screenshot of the Edit panel.
+    #[test]
+    fn the_strip_is_present_under_every_tool() {
+        for tool in Tool::ALL {
+            let ctx = test_ui::ctx();
+            let mut app = test_app::for_test();
+            test_app::open_test_photo(&mut app, &ctx, 8, 4);
+            app.tool = tool;
+
+            let labels = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                crate::develop::panel::show(&mut app, ui);
+            });
+            assert!(
+                labels.iter().any(|(l, _)| l == "+"),
+                "the Take-snapshot button must be reachable under {tool:?}, got {:?}",
+                labels.iter().map(|(l, _)| l).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The strip draws nothing when no photo is open — the panel says "No image open." instead.
+    #[test]
+    fn the_strip_draws_nothing_without_a_session() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        let labels = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            crate::develop::panel::show(&mut app, ui);
+        });
+        assert!(!labels.iter().any(|(l, _)| l == "+"));
+    }
+
+    /// A row is labelled by `Snapshot::label`, so a named one shows its name rather than its
+    /// number — the one rule every consumer of a snapshot's name goes through.
+    #[test]
+    fn a_named_snapshot_shows_its_name_in_the_strip() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        app.session
+            .as_mut()
+            .unwrap()
+            .snapshots
+            .push(rustroom_app::sidecar::Snapshot {
+                n: 1,
+                name: Some("Before the crop".to_string()),
+                taken: 0,
+                edits: Default::default(),
+            });
+
+        let labels = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            crate::develop::panel::show(&mut app, ui);
+        });
+        assert!(
+            labels.iter().any(|(l, _)| l == "Before the crop"),
+            "got {:?}",
+            labels.iter().map(|(l, _)| l).collect::<Vec<_>>()
+        );
+    }
+
+    /// ⚠ The height is app-wide, not per photo — it lives in `Settings`, not on `Session`. Stated
+    /// as a property so a future move onto `Session` breaks a test rather than a habit.
+    #[test]
+    fn the_strip_height_is_app_wide_not_per_photo() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.settings.snapshot_strip_height = 200;
+        test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        test_app::open_test_photo(&mut app, &ctx, 16, 8);
+        assert_eq!(
+            app.settings.snapshot_strip_height, 200,
+            "opening another photo must not reset the strip"
+        );
+    }
+}
