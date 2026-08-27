@@ -231,7 +231,16 @@ impl Sidecar {
     pub fn is_neutral(&self) -> bool {
         match self.copies.as_slice() {
             [] => true,
-            [only] => only.copy == 0 && only.name.is_none() && only.edits == Edits::default(),
+            // ⚠ `snapshots.is_empty()` is the third clause of a rule this comment already
+            // states: a copy holding saved states is worth a file however neutral its *current*
+            // edits are. Without it, "take a snapshot, then Reset adjustments" deletes the
+            // sidecar and every snapshot in it.
+            [only] => {
+                only.copy == 0
+                    && only.name.is_none()
+                    && only.edits == Edits::default()
+                    && only.snapshots.is_empty()
+            }
             _ => false,
         }
     }
@@ -920,5 +929,33 @@ mod snapshot_tests {
             s,
             "the whole envelope must survive the round trip"
         );
+    }
+
+    /// ⚠⚠ Take a snapshot, then press "Reset adjustments": `persist_all` must **not** delete the
+    /// sidecar. `is_neutral` already documents this hazard for names — "a name or a second copy
+    /// is worth a file even with neutral edits" — and snapshots are the third case of that rule.
+    #[test]
+    fn resetting_a_photo_does_not_delete_its_snapshots() {
+        let dir = Dir::new("neutral");
+        let photo = dir.0.join("a.RAF");
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.copies[0].snapshots.push(snap(1, 2.0));
+
+        assert!(
+            !s.is_neutral(),
+            "a copy holding snapshots is worth a file however neutral its own edits are"
+        );
+        persist_all(&photo, &s).unwrap();
+        assert!(path(&photo).exists(), "the sidecar must still be on disk");
+        assert_eq!(load_all(&photo).copies[0].snapshots.len(), 1);
+    }
+
+    /// The other half: nothing stored at all is still worth deleting.
+    #[test]
+    fn a_neutral_photo_with_no_snapshots_is_still_neutral() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        assert!(s.is_neutral());
     }
 }
