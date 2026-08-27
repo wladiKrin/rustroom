@@ -144,6 +144,10 @@ impl eframe::App for RustroomApp {
                 if self.view == AppView::Library && self.library.is_some() {
                     ui.separator();
                     search_field(self, ui);
+                    // ⚠ Beside the search field, not in the right-aligned cluster. They are one
+                    // idea — "narrow what I am looking at" — and splitting them across the row put
+                    // half of it next to the sort order and the grid size, which are not.
+                    mark_filter(self, ui);
                 }
                 // ⚠ One right-aligned cluster for everything that belongs at the far end, laid
                 // out **rightmost first**. Previously the develop toolbar right-aligned the
@@ -156,7 +160,6 @@ impl eframe::App for RustroomApp {
                     if self.view == AppView::Library {
                         format_bullets(self, ui);
                         if self.library.is_some() {
-                            mark_filter(self, ui);
                             grid_size_buttons(self, ui);
                             sort_combo(self, ui);
                             let r = ui.button("Reindex").on_hover_text(
@@ -313,14 +316,19 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let mut f = before.clone();
 
     ui.menu_button(mark_filter_label(&f), |ui| {
+        // ⚠ Multi-select toggles, not one exclusive value. A minimum could not express "only the
+        // one-star ones", and exact matching is what flag and label already do.
         ui.label("Rating");
-        for v in 0..=5u8 {
+        for v in 0..=rustroom_app::library_filter::RatingSet::MAX {
             let text = if v == 0 {
-                "All".to_string()
+                "Unrated".to_string()
             } else {
-                format!("{v}★+")
+                format!("{v}★")
             };
-            ui.selectable_value(&mut f.min_stars, v, text);
+            let mut on = f.stars.contains(v);
+            if ui.checkbox(&mut on, text).changed() {
+                f.stars.toggle(v);
+            }
         }
         ui.separator();
         ui.label("Flag");
@@ -356,8 +364,14 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
 /// ⚠ Pure, so "an active filter is visible" is testable without a window.
 fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if f.min_stars > 0 {
-        parts.push(format!("{}★+", f.min_stars));
+    if !f.stars.is_empty() {
+        let list: Vec<String> = f
+            .stars
+            .ratings()
+            .into_iter()
+            .map(|r| if r == 0 { "0".into() } else { r.to_string() })
+            .collect();
+        parts.push(format!("{}★", list.join(",")));
     }
     match f.flag {
         Some(catalog::db::Flag::Pick) => parts.push("⚑".into()),
@@ -372,10 +386,13 @@ fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter) -> String 
             format!("colour {n}")
         });
     }
+    // ⚠⚠ **Always prefixed.** It read as `3★+` alone when active, so the button stopped naming
+    // itself and looked like a different control depending on what was set — reported in use.
+    // The prefix is what keeps it recognisably the same button.
     if parts.is_empty() {
         "Filter".to_string()
     } else {
-        parts.join(" ")
+        format!("Filter: {}", parts.join(" "))
     }
 }
 
@@ -515,9 +532,11 @@ mod tests {
         // aspect lock was fixed for. This label is the only thing that says a filter is on.
         use rustroom_app::library_filter::LibraryFilter;
         assert_eq!(mark_filter_label(&LibraryFilter::default()), "Filter");
+        let mut three = rustroom_app::library_filter::RatingSet::default();
+        three.toggle(3);
         for f in [
             LibraryFilter {
-                min_stars: 3,
+                stars: three,
                 ..Default::default()
             },
             LibraryFilter {
@@ -529,10 +548,13 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            assert_ne!(
-                mark_filter_label(&f),
-                "Filter",
-                "an active filter looked idle: {f:?}"
+            let label = mark_filter_label(&f);
+            assert_ne!(label, "Filter", "an active filter looked idle: {f:?}");
+            // ⚠⚠ Always prefixed. It read as `3★+` alone before, so the button stopped naming
+            // itself and looked like a different control depending on what was set.
+            assert!(
+                label.starts_with("Filter: "),
+                "the button stopped calling itself Filter: {label:?}"
             );
         }
     }

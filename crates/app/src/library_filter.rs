@@ -13,13 +13,47 @@ use crate::entries::{self, PhotoEntry};
 use crate::format_filter::FormatFilter;
 use catalog::db::{Flag, Marks};
 
+/// Which star ratings to show, as a bitmask over 0..=5.
+///
+/// ⚠⚠ **Exact ratings, not a minimum — and that is what makes stars consistent with the rest.**
+/// Flag and label already match exactly (`Some(Flag::Pick)` means picked, not "picked or better"),
+/// so a minimum made stars the odd one out *and* made "only the one-star ones" unexpressible.
+/// A set subsumes a minimum: 3-or-more is 3, 4 and 5.
+///
+/// Empty matches everything, the same convention `flag: None` and `label: None` use.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RatingSet(u8);
+
+impl RatingSet {
+    pub const MAX: u8 = 5;
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn contains(self, rating: u8) -> bool {
+        rating <= Self::MAX && self.0 & (1 << rating) != 0
+    }
+
+    pub fn toggle(&mut self, rating: u8) {
+        if rating <= Self::MAX {
+            self.0 ^= 1 << rating;
+        }
+    }
+
+    /// The selected ratings, ascending.
+    pub fn ratings(self) -> Vec<u8> {
+        (0..=Self::MAX).filter(|&r| self.contains(r)).collect()
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LibraryFilter {
     pub format: FormatFilter,
     /// Case-insensitive substring of the row's shown name. Empty matches everything.
     pub text: String,
-    /// Minimum star rating. 0 matches everything.
-    pub min_stars: u8,
+    /// Which star ratings to show. Empty matches everything.
+    pub stars: RatingSet,
     /// `None` matches any flag; `Some(Flag::None)` matches only *unflagged* photos.
     pub flag: Option<Flag>,
     /// `None` matches any label; `Some(0)` matches only *unlabelled* photos.
@@ -36,7 +70,7 @@ impl LibraryFilter {
         if !self.format.is_visible(&entry.id.path) {
             return false;
         }
-        if marks.rating < self.min_stars {
+        if !self.stars.is_empty() && !self.stars.contains(marks.rating) {
             return false;
         }
         if let Some(want) = self.flag {
@@ -66,7 +100,7 @@ impl LibraryFilter {
     pub fn is_active(&self) -> bool {
         self.format.is_active()
             || !self.text.is_empty()
-            || self.min_stars > 0
+            || !self.stars.is_empty()
             || self.flag.is_some()
             || self.label.is_some()
     }
@@ -77,7 +111,7 @@ impl LibraryFilter {
     /// Clear button that silently unhid a format would be doing something nobody asked for.
     pub fn clear_marks_and_text(&mut self) {
         self.text.clear();
-        self.min_stars = 0;
+        self.stars = RatingSet::default();
         self.flag = None;
         self.label = None;
     }
@@ -157,16 +191,84 @@ mod tests {
         assert!(f.matches(&entry("DSCF6223.RAF", 1, None), Marks::default()));
     }
 
+    fn stars(list: &[u8]) -> RatingSet {
+        let mut s = RatingSet::default();
+        for &r in list {
+            s.toggle(r);
+        }
+        s
+    }
+
     #[test]
-    fn stars_filter_on_a_minimum() {
+    fn stars_match_exactly_rather_than_as_a_minimum() {
+        // ⚠⚠ The thing a minimum could not express: *only* the one-star photos. Reported in use —
+        // "what if I want to only see the photos with one star" — and it is also what makes stars
+        // consistent with flag and label, which already match exactly.
         let f = LibraryFilter {
-            min_stars: 3,
+            stars: stars(&[1]),
+            ..Default::default()
+        };
+        let e = entry("a.RAF", 0, None);
+        assert!(f.matches(&e, marks(1, Flag::None, 0)));
+        assert!(!f.matches(&e, marks(2, Flag::None, 0)), "2★ is not 1★");
+        assert!(!f.matches(&e, marks(0, Flag::None, 0)));
+    }
+
+    #[test]
+    fn a_set_of_stars_subsumes_a_minimum() {
+        // "3 or more" is still expressible — it is 3, 4 and 5.
+        let f = LibraryFilter {
+            stars: stars(&[3, 4, 5]),
             ..Default::default()
         };
         let e = entry("a.RAF", 0, None);
         assert!(!f.matches(&e, marks(2, Flag::None, 0)));
-        assert!(f.matches(&e, marks(3, Flag::None, 0)));
-        assert!(f.matches(&e, marks(5, Flag::None, 0)));
+        for r in [3, 4, 5] {
+            assert!(f.matches(&e, marks(r, Flag::None, 0)), "{r}★ should match");
+        }
+    }
+
+    #[test]
+    fn an_empty_star_set_matches_every_rating() {
+        // Empty means "any", the convention `flag: None` and `label: None` already use.
+        let f = LibraryFilter::default();
+        let e = entry("a.RAF", 0, None);
+        for r in 0..=5 {
+            assert!(f.matches(&e, marks(r, Flag::None, 0)));
+        }
+    }
+
+    #[test]
+    fn zero_stars_selects_the_unrated() {
+        // ⚠ 0 is a real value — "show me what I have not rated yet" — exactly as `Some(Flag::None)`
+        // selects the unflagged.
+        let f = LibraryFilter {
+            stars: stars(&[0]),
+            ..Default::default()
+        };
+        let e = entry("a.RAF", 0, None);
+        assert!(f.matches(&e, marks(0, Flag::None, 0)));
+        assert!(!f.matches(&e, marks(1, Flag::None, 0)));
+    }
+
+    #[test]
+    fn toggling_a_rating_twice_clears_it_and_out_of_range_is_ignored() {
+        let mut s = RatingSet::default();
+        s.toggle(3);
+        assert!(s.contains(3));
+        s.toggle(3);
+        assert!(s.is_empty());
+        // ⚠ Out of range is ignored rather than shifting into another rating's bit, which is what
+        // `1 << 9` on a `u8` would do.
+        s.toggle(9);
+        assert!(s.is_empty(), "an out-of-range rating set a bit");
+        assert!(!s.contains(9));
+    }
+
+    #[test]
+    fn ratings_come_back_ascending() {
+        assert_eq!(stars(&[5, 1, 3]).ratings(), vec![1, 3, 5]);
+        assert!(RatingSet::default().ratings().is_empty());
     }
 
     #[test]
@@ -223,7 +325,7 @@ mod tests {
         let m = marks(4, Flag::Pick, 2);
         let pass = LibraryFilter {
             text: "dscf".into(),
-            min_stars: 3,
+            stars: stars(&[4]),
             flag: Some(Flag::Pick),
             label: Some(2),
             ..Default::default()
@@ -241,7 +343,7 @@ mod tests {
             (
                 "stars",
                 LibraryFilter {
-                    min_stars: 5,
+                    stars: stars(&[5]),
                     ..pass.clone()
                 },
             ),
@@ -274,7 +376,7 @@ mod tests {
         }
         .is_active());
         assert!(LibraryFilter {
-            min_stars: 1,
+            stars: stars(&[1]),
             ..Default::default()
         }
         .is_active());
@@ -297,7 +399,7 @@ mod tests {
         // answer different questions and a Clear button must not silently unhide a format.
         let mut f = LibraryFilter {
             text: "a".into(),
-            min_stars: 3,
+            stars: stars(&[3]),
             ..Default::default()
         };
         f.format.toggle("jpg");
@@ -306,6 +408,6 @@ mod tests {
             f.format.is_hidden("jpg"),
             "the format filter was cleared too"
         );
-        assert!(f.text.is_empty() && f.min_stars == 0);
+        assert!(f.text.is_empty() && f.stars.is_empty());
     }
 }
