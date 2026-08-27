@@ -1,7 +1,7 @@
 # Smart collections — M4.3c
 
 **Date:** 2026-08-27
-**Status:** plan 1 built 2026-08-27; plan 2 (the editor, and multi-select dates) outstanding
+**Status:** built 2026-08-27 (both plans) — **M4.3 is closed**
 **Slice of:** M4.3, and the one that **closes** it
 
 ## What this closes
