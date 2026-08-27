@@ -159,6 +159,65 @@ impl Sidecar {
             .map_or(1, |m| m + 1)
     }
 
+    /// One copy's snapshots, oldest first. Empty when that copy has none, or is not there.
+    pub fn snapshots_of(&self, copy: u32) -> &[Snapshot] {
+        self.get(copy).map_or(&[], |c| c.snapshots.as_slice())
+    }
+
+    /// The number a new snapshot of `copy` should take: one past the highest ever used **there**.
+    ///
+    /// ⚠ `max + 1`, never "first free" and never `count + 1`. An unnamed snapshot's label is
+    /// derived from its number, so reusing one silently renames an existing row — the same
+    /// reasoning `next_copy` carries.
+    ///
+    /// ⚠ Per copy: two copies of one file number their snapshots independently, because a
+    /// snapshot belongs to a copy's own editing.
+    pub fn next_snapshot(&self, copy: u32) -> u32 {
+        self.snapshots_of(copy)
+            .iter()
+            .map(|s| s.n)
+            .max()
+            .map_or(1, |m| m + 1)
+    }
+
+    /// Append a snapshot to `copy`, creating the copy's entry if it has none.
+    pub fn add_snapshot(&mut self, copy: u32, snapshot: Snapshot) {
+        match self.copies.iter_mut().find(|c| c.copy == copy) {
+            Some(c) => c.snapshots.push(snapshot),
+            None => self.copies.push(CopyEntry {
+                copy,
+                name: None,
+                edits: Edits::default(),
+                snapshots: vec![snapshot],
+            }),
+        }
+        self.copies.sort_by_key(|c| c.copy);
+    }
+
+    /// Take snapshot `n` out of `copy`, **returning it** so an undo can put it back.
+    ///
+    /// ⚠ Returned rather than discarded because nothing else holds it — `ActionKind::CopyDelete`
+    /// carries a whole `CopyEntry` for exactly this reason.
+    pub fn remove_snapshot(&mut self, copy: u32, n: u32) -> Option<Snapshot> {
+        let c = self.copies.iter_mut().find(|c| c.copy == copy)?;
+        let i = c.snapshots.iter().position(|s| s.n == n)?;
+        Some(c.snapshots.remove(i))
+    }
+
+    /// Rename snapshot `n` of `copy`. Reports whether it was there to rename.
+    pub fn set_snapshot_name(&mut self, copy: u32, n: u32, name: Option<String>) -> bool {
+        let Some(c) = self.copies.iter_mut().find(|c| c.copy == copy) else {
+            return false;
+        };
+        match c.snapshots.iter_mut().find(|s| s.n == n) {
+            Some(s) => {
+                s.name = name;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Replace (or add) one copy's edits, leaving its name alone.
     pub fn set_edits(&mut self, copy: u32, edits: Edits) {
         match self.copies.iter_mut().find(|c| c.copy == copy) {
@@ -957,5 +1016,79 @@ mod snapshot_tests {
         let mut s = Sidecar::default();
         s.set_edits(0, Edits::default());
         assert!(s.is_neutral());
+    }
+
+    /// ⚠ `max + 1`, never `count + 1`. Take three, delete the second, take a fourth: it must be
+    /// `Snapshot 4`. Reusing `3` would point the new row at an existing label.
+    #[test]
+    fn snapshot_numbers_are_never_reused() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        for i in 1..=3 {
+            let n = s.next_snapshot(0);
+            assert_eq!(n, i);
+            s.add_snapshot(0, snap(n, i as f32));
+        }
+        s.remove_snapshot(0, 2);
+        assert_eq!(
+            s.next_snapshot(0),
+            4,
+            "the highest ever used is 3, so the next is 4"
+        );
+    }
+
+    /// Numbering is per copy: copy 1's first snapshot is 1 even when copy 0 has two.
+    #[test]
+    fn snapshot_numbering_is_per_copy() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.set_edits(1, Edits::default());
+        s.add_snapshot(0, snap(1, 1.0));
+        s.add_snapshot(0, snap(2, 2.0));
+        assert_eq!(s.next_snapshot(1), 1);
+    }
+
+    #[test]
+    fn removing_a_snapshot_returns_it_so_undo_can_put_it_back() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.add_snapshot(0, snap(1, 1.0));
+        s.add_snapshot(0, snap(2, 2.0));
+
+        let taken = s.remove_snapshot(0, 1).expect("snapshot 1 exists");
+        assert_eq!(taken.n, 1);
+        assert_eq!(taken.edits.exposure, 1.0);
+        assert_eq!(s.snapshots_of(0).len(), 1);
+        assert!(s.remove_snapshot(0, 1).is_none(), "removing twice is None");
+    }
+
+    #[test]
+    fn a_snapshot_can_be_renamed_and_unnamed() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.add_snapshot(0, snap(1, 1.0));
+
+        assert!(s.set_snapshot_name(0, 1, Some("Warm".to_string())));
+        assert_eq!(s.snapshots_of(0)[0].label(), "Warm");
+        assert!(s.set_snapshot_name(0, 1, None));
+        assert_eq!(s.snapshots_of(0)[0].label(), "Snapshot 1");
+        assert!(
+            !s.set_snapshot_name(0, 9, Some("nope".to_string())),
+            "renaming a snapshot that is not there must report that it did nothing"
+        );
+    }
+
+    /// Adding to a copy with no entry yet creates it — the shape `set_edits` already has.
+    #[test]
+    fn adding_a_snapshot_to_an_absent_copy_creates_it() {
+        let mut s = Sidecar::default();
+        s.add_snapshot(2, snap(1, 1.0));
+        assert_eq!(s.snapshots_of(2).len(), 1);
+        assert_eq!(s.copies[0].copy, 2);
+    }
+
+    #[test]
+    fn snapshots_of_an_absent_copy_is_empty() {
+        assert!(Sidecar::default().snapshots_of(7).is_empty());
     }
 }
