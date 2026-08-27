@@ -75,9 +75,10 @@ encodings added when there is something to validate them against.
 
 ⚠ **Start the brainstorm with the space question, not with a parser.** The parser is the easy half.
 
-### Snapshots (M3.4's remaining slice)
+### Snapshots (M3.4's remaining slice) — ▶ **NEXT ACTION as of 2026-08-27**
 
-*Deferred 2026-08-25, when virtual copies landed.*
+*Deferred 2026-08-25, when virtual copies landed. Promoted to next 2026-08-27, replacing "persist
+undo history", which was dropped — see CLAUDE.md's order of work for why.*
 
 Named saved states **within** one photo — switch between "before the crop" and "the final" without
 creating a second Library row. ⚠ Different from a virtual copy, which *is* a row.
@@ -87,6 +88,16 @@ It is **how they relate to `History<Edits>`**: a snapshot is a saved point in th
 history the undo stack already models, and the two need one story rather than two. Does taking a
 snapshot push an undo entry? Does undoing past a snapshot delete it? Does a snapshot survive the
 per-photo history stash? Answer that first; the storage is the easy half.
+
+⚠⚠ **It now carries a second job, and that raises its value: it is the answer to "persistent undo
+history", which was dropped on 2026-08-27.** A persisted undo *stack* would be unreliable by
+construction — `take_matching` already discards a stashed history when the sidecar no longer
+matches, and across a restart the file could have been touched by anything, so Ctrl+Z would
+silently work sometimes. **A snapshot is explicit and can never silently vanish**, which is what
+makes it the right shape for "get me back to before I went black and white".
+
+⚠ **Prior art to look at before designing:** Lightroom keeps *both* a browsable History panel and
+named Snapshots in its catalog. We are deliberately building only the second — the explicit one.
 
 ### `ProfileToneCurve` (DCP)
 
@@ -366,7 +377,10 @@ at meanwhile.
 
 ## Contributor-facing documentation (recorded 2026-08-26 — the cheap half of "open source")
 
-**Status:** 🟡 wanted, small, and the highest-value thing for attracting contributions.
+**Status:** 🟡 wanted, small — and **deliberately scheduled LAST, at the final alpha** (user's call,
+2026-08-27). ⚠ The reason is not priority: it describes a shape that is still moving weekly, so
+writing it now means writing it twice. It stays the highest-value thing for attracting
+contributions *once the architecture has settled*.
 
 ⚠⚠ **`CLAUDE.md` is already an extraordinary architecture document** — the reasoning, the rejected
 alternatives, the mistakes and what they cost. Very few projects have that. **But it is addressed
