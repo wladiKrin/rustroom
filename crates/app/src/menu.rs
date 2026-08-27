@@ -18,6 +18,7 @@ pub enum Command {
     Settings,
     Undo,
     Redo,
+    TakeSnapshot,
     CreateVirtualCopy,
     DeleteVirtualCopy,
     CopySettings,
@@ -233,6 +234,10 @@ pub fn model() -> Vec<Section> {
                 // hazard is a **bare** key (stolen from every text field) or a text-editing
                 // chord (⌘Z/C/V/X/A, which break editing inside one). A plain apostrophe typed
                 // into the copy-rename field is not the ⌘' chord, so nothing is swallowed.
+                // ⚠ **No shortcut, and that is a decision.** A bare key is stolen from every
+                // text field and a text-editing chord breaks editing inside one — see
+                // `Shortcut::safe_as_native_accelerator`. Lightroom binds none to this either.
+                action("Take snapshot", Command::TakeSnapshot, None),
                 action(
                     "Create virtual copy",
                     Command::CreateVirtualCopy,
