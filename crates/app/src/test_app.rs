@@ -104,6 +104,7 @@ pub fn for_test() -> RustroomApp {
         grade_range: Default::default(),
         new_collection: String::new(),
         new_smart: String::new(),
+        last_period: None,
         new_keyword: String::new(),
         new_keyword_parent: None,
         rename_draft: None,

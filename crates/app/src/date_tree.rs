@@ -78,6 +78,61 @@ pub fn group(days: &[DayRow]) -> Vec<Year> {
     years
 }
 
+/// One clickable node of the tree: a year, a month, or a day.
+pub type Period = (i32, Option<u32>, Option<u32>);
+
+/// Every clickable node, in **display order** — the sequence a Shift-range walks.
+///
+/// ⚠ Built here rather than in the panel so it is testable, and so "everything between" means what
+/// the eye sees: a year, then each of its months, then that month's days.
+pub fn flatten(years: &[Year]) -> Vec<Period> {
+    let mut out = Vec::new();
+    for y in years {
+        out.push((y.year, None, None));
+        for m in &y.months {
+            out.push((y.year, Some(m.month), None));
+            for d in &m.days {
+                out.push((y.year, Some(m.month), Some(d.day)));
+            }
+        }
+    }
+    out
+}
+
+/// The inclusive range between two nodes, in display order.
+///
+/// ⚠ Order-independent: Shift-clicking upwards selects the same set as downwards, which is what
+/// every list in every app does. Either end being absent yields just the other.
+pub fn range(order: &[Period], a: Period, b: Period) -> Vec<Period> {
+    let (Some(i), Some(j)) = (
+        order.iter().position(|p| *p == a),
+        order.iter().position(|p| *p == b),
+    ) else {
+        return vec![b];
+    };
+    let (lo, hi) = if i <= j { (i, j) } else { (j, i) };
+    order[lo..=hi].to_vec()
+}
+
+/// What the status line calls a selection of periods.
+///
+/// ⚠ Names one period in full and counts the rest, rather than listing them: a weekend's worth of
+/// days would otherwise run off the end of the status line.
+pub fn label_for(periods: &[Period]) -> String {
+    let Some(&(y, m, d)) = periods.first() else {
+        return "No dates".to_string();
+    };
+    let one = match (m, d) {
+        (Some(m), Some(d)) => format!("{d} {} {y}", month_name(m)),
+        (Some(m), None) => format!("{} {y}", month_name(m)),
+        _ => y.to_string(),
+    };
+    match periods.len() {
+        1 => one,
+        n => format!("{one} +{}", n - 1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +202,67 @@ mod tests {
         // body is a crash, so it must degrade instead.
         assert!(!month_name(0).is_empty());
         assert!(!month_name(13).is_empty());
+    }
+
+    #[test]
+    fn flatten_walks_a_year_then_its_months_then_their_days() {
+        // ⚠ Display order, so a Shift-range means what the eye sees.
+        let tree = group(&[d(2026, 5, 17, 1), d(2026, 5, 19, 1), d(2026, 7, 9, 1)]);
+        assert_eq!(
+            flatten(&tree),
+            vec![
+                (2026, None, None),
+                (2026, Some(5), None),
+                (2026, Some(5), Some(17)),
+                (2026, Some(5), Some(19)),
+                (2026, Some(7), None),
+                (2026, Some(7), Some(9)),
+            ]
+        );
+    }
+
+    #[test]
+    fn two_years_do_not_interleave() {
+        let tree = group(&[d(2025, 7, 1, 1), d(2026, 7, 1, 1)]);
+        let flat = flatten(&tree);
+        let first_2026 = flat.iter().position(|p| p.0 == 2026).unwrap();
+        assert!(
+            flat[..first_2026].iter().all(|p| p.0 == 2025),
+            "a 2026 node appeared among 2025's: {flat:?}"
+        );
+    }
+
+    #[test]
+    fn a_range_is_the_same_in_both_directions() {
+        // ⚠ Shift-clicking upwards must select what downwards does — what every list does.
+        let tree = group(&[d(2026, 5, 17, 1), d(2026, 5, 19, 1), d(2026, 7, 9, 1)]);
+        let order = flatten(&tree);
+        let down = range(&order, (2026, Some(5), None), (2026, Some(7), None));
+        let up = range(&order, (2026, Some(7), None), (2026, Some(5), None));
+        assert_eq!(down, up);
+        assert_eq!(down.len(), 4, "month, two days, month: {down:?}");
+    }
+
+    #[test]
+    fn a_range_from_an_unknown_anchor_selects_only_the_clicked_node() {
+        // ⚠ The state before anything has been clicked, and after the tree has changed under a
+        // stale anchor — it must not select nothing, and must not panic.
+        let tree = group(&[d(2026, 5, 17, 1)]);
+        let order = flatten(&tree);
+        let target = (2026, Some(5), Some(17));
+        assert_eq!(range(&order, (1999, None, None), target), vec![target]);
+    }
+
+    #[test]
+    fn a_label_names_one_period_and_counts_the_rest() {
+        // ⚠ Listing them all would run off the end of the status line for a weekend's worth.
+        assert_eq!(label_for(&[(2026, Some(5), Some(17))]), "17 May 2026");
+        assert_eq!(label_for(&[(2026, Some(5), None)]), "May 2026");
+        assert_eq!(label_for(&[(2026, None, None)]), "2026");
+        assert_eq!(
+            label_for(&[(2026, Some(5), Some(17)), (2026, Some(7), Some(9))]),
+            "17 May 2026 +1"
+        );
+        assert_eq!(label_for(&[]), "No dates");
     }
 }

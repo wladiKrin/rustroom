@@ -26,7 +26,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         OpenAllPhotos,
         OpenFolder(std::path::PathBuf),
         ForgetFolder(i64, std::path::PathBuf, i64),
-        OpenPeriod(i32, Option<u32>, Option<u32>, String),
+        OpenPeriod(rustroom_app::date_tree::Period, egui::Modifiers),
         OpenSmart(i64, String),
         DeleteSmart(i64),
         SaveSmart,
@@ -274,12 +274,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             if days.is_empty() {
                 crate::theme::hint(ui, "No capture dates yet.");
             }
-            let open_period = match app.library.as_ref().map(|l| &l.source) {
-                Some(crate::LibrarySource::Period {
-                    year, month, day, ..
-                }) => Some((*year, *month, *day)),
-                _ => None,
-            };
+            // ⚠ Every selected period highlights, not just one — the point of multi-select.
+            let open_periods: Vec<rustroom_app::date_tree::Period> =
+                match app.library.as_ref().map(|l| &l.source) {
+                    Some(crate::LibrarySource::Periods { periods, .. }) => periods.clone(),
+                    _ => Vec::new(),
+                };
             egui::ScrollArea::vertical()
                 .id_salt("dates")
                 .max_height(200.0)
@@ -291,43 +291,47 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         egui::CollapsingHeader::new(format!("{} ({})", y.year, y.count))
                             .id_salt(("year", y.year))
                             .show(ui, |ui| {
-                                let sel = open_period == Some((y.year, None, None));
+                                let sel = open_periods.contains(&(y.year, None, None));
                                 if ui
                                     .selectable_label(sel, format!("All of {}", y.year))
                                     .clicked()
                                 {
-                                    action =
-                                        Action::OpenPeriod(y.year, None, None, y.year.to_string());
+                                    action = Action::OpenPeriod(
+                                        (y.year, None, None),
+                                        ui.input(|i| i.modifiers),
+                                    );
                                 }
                                 for m in &y.months {
                                     let name = rustroom_app::date_tree::month_name(m.month);
                                     egui::CollapsingHeader::new(format!("{name} ({})", m.count))
                                         .id_salt(("month", y.year, m.month))
                                         .show(ui, |ui| {
-                                            let sel =
-                                                open_period == Some((y.year, Some(m.month), None));
+                                            let sel = open_periods.contains(&(
+                                                y.year,
+                                                Some(m.month),
+                                                None,
+                                            ));
                                             if ui
                                                 .selectable_label(sel, format!("All of {name}"))
                                                 .clicked()
                                             {
                                                 action = Action::OpenPeriod(
-                                                    y.year,
-                                                    Some(m.month),
-                                                    None,
-                                                    format!("{name} {}", y.year),
+                                                    (y.year, Some(m.month), None),
+                                                    ui.input(|i| i.modifiers),
                                                 );
                                             }
                                             for d in &m.days {
-                                                let sel = open_period
-                                                    == Some((y.year, Some(m.month), Some(d.day)));
+                                                let sel = open_periods.contains(&(
+                                                    y.year,
+                                                    Some(m.month),
+                                                    Some(d.day),
+                                                ));
                                                 let label =
                                                     format!("{} {name} ({})", d.day, d.count);
                                                 if ui.selectable_label(sel, label).clicked() {
                                                     action = Action::OpenPeriod(
-                                                        y.year,
-                                                        Some(m.month),
-                                                        Some(d.day),
-                                                        format!("{} {name} {}", d.day, y.year),
+                                                        (y.year, Some(m.month), Some(d.day)),
+                                                        ui.input(|i| i.modifiers),
                                                     );
                                                 }
                                             }
@@ -411,7 +415,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 Err(e) => app.status = format!("Could not build the rule: {e}"),
             }
         }
-        Action::OpenPeriod(y, m, d, label) => app.open_period(ctx, y, m, d, &label),
+        Action::OpenPeriod(period, mods) => app.click_period(ctx, period, mods),
         Action::OpenFolder(path) => app.open_catalog_folder(ctx, &path),
         Action::ForgetFolder(id, path, count) => {
             app.modal = crate::modals::Modal::ConfirmForgetFolder { path, id, count };

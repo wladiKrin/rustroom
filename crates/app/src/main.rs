@@ -101,11 +101,12 @@ enum LibrarySource {
         id: i64,
         name: String,
     },
-    /// Photos taken in a calendar period — a year, a month, or a day.
-    Period {
-        year: i32,
-        month: Option<u32>,
-        day: Option<u32>,
+    /// Photos taken in any of these calendar periods.
+    ///
+    /// ⚠ A **set**, because ⌘-clicking several days is how a shoot spanning a weekend is browsed.
+    /// A single click is the one-element case, so there is no second code path.
+    Periods {
+        periods: Vec<rustroom_app::date_tree::Period>,
         label: String,
     },
     Collection {
@@ -302,6 +303,8 @@ struct RustroomApp {
     new_collection: String,
     /// Scratch name for the smart collection about to be saved.
     new_smart: String,
+    /// The date row a Shift-range extends from.
+    last_period: Option<rustroom_app::date_tree::Period>,
     /// Scratch text for the new-keyword field.
     new_keyword: String,
     /// The keyword a new one will be created under. `None` makes a root.
@@ -499,6 +502,7 @@ impl RustroomApp {
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),
+            last_period: None,
             new_keyword: String::new(),
             new_keyword_parent: None,
             rename_draft: None,
@@ -1873,19 +1877,76 @@ impl RustroomApp {
     /// ⚠ Browsed rather than filtered, like a keyword — which is what makes it need **no date
     /// picker**: the tree in the panel is a `GROUP BY` over what is actually there. The cost is
     /// that "in this collection, show me July" is not expressible; that is what M4.3c is for.
-    fn open_period(
+    /// Handle a click on a date row, honouring the modifiers.
+    ///
+    /// ⚠⚠ **The same three rules `apply_click` uses for photos**, so the app has *one*
+    /// multi-select idiom rather than two: a plain click replaces, ⌘/Ctrl toggles, Shift extends
+    /// from the last click.
+    ///
+    /// ⚠ Shift extends **in tree order**, which `date_tree::flatten` defines — so "everything
+    /// between" means what the eye sees rather than what a tuple comparison would say.
+    fn click_period(
         &mut self,
         ctx: &egui::Context,
-        year: i32,
-        month: Option<u32>,
-        day: Option<u32>,
+        period: rustroom_app::date_tree::Period,
+        mods: egui::Modifiers,
+    ) {
+        use rustroom_app::date_tree;
+        let current: Vec<date_tree::Period> = match self.library.as_ref().map(|l| &l.source) {
+            Some(LibrarySource::Periods { periods, .. }) => periods.clone(),
+            _ => Vec::new(),
+        };
+        let next = if mods.command {
+            let mut v = current.clone();
+            if let Some(i) = v.iter().position(|p| *p == period) {
+                v.remove(i);
+            } else {
+                v.push(period);
+            }
+            v
+        } else if mods.shift {
+            let days = self
+                .catalog
+                .as_ref()
+                .and_then(|c| c.capture_days().ok())
+                .unwrap_or_default();
+            let order = date_tree::flatten(&date_tree::group(&days));
+            // ⚠ Anchored on the *last* click, which is the previous selection's tail — the same
+            // thing `Selection::extend_to` anchors on.
+            let anchor = self.last_period.unwrap_or(period);
+            date_tree::range(&order, anchor, period)
+        } else {
+            vec![period]
+        };
+
+        // ⚠ Only a plain or ⌘ click moves the anchor; a Shift-click extends from where it was, or
+        // shift-clicking twice would walk the range along instead of growing it.
+        if !mods.shift {
+            self.last_period = Some(period);
+        }
+
+        if next.is_empty() {
+            // ⚠ Deselecting the last date closes the view rather than showing an empty grid with
+            // no way back — `photos_in_periods(&[])` matches nothing by design.
+            self.library = None;
+            self.status = "No dates selected".into();
+            return;
+        }
+        let label = date_tree::label_for(&next);
+        self.open_periods(ctx, &next, &label);
+    }
+
+    fn open_periods(
+        &mut self,
+        ctx: &egui::Context,
+        periods: &[rustroom_app::date_tree::Period],
         label: &str,
     ) {
         let Some(cat) = &self.catalog else {
             self.status = "No catalog".into();
             return;
         };
-        let members = match cat.photos_in_period(year, month, day) {
+        let members = match cat.photos_in_periods(periods) {
             Ok(m) => m,
             Err(e) => {
                 self.status = format!("Could not read the catalog: {e}");
@@ -1897,10 +1958,8 @@ impl RustroomApp {
         catalog::sort(&mut scan, self.settings.library_sort);
         let n = self.open_scan(
             ctx,
-            LibrarySource::Period {
-                year,
-                month,
-                day,
+            LibrarySource::Periods {
+                periods: periods.to_vec(),
                 label: label.to_string(),
             },
             scan,
@@ -1932,14 +1991,15 @@ impl RustroomApp {
             Some(LibrarySource::Keyword { id, .. }) => {
                 parts.push(Expr::Is(Criterion::Keyword(*id)));
             }
-            Some(LibrarySource::Period {
-                year, month, day, ..
-            }) => {
-                parts.push(Expr::Is(Criterion::Period {
-                    year: *year,
-                    month: *month,
-                    day: *day,
-                }));
+            // ⚠ A set of periods becomes `Any([Period, …])` — exactly the shape a multi-value
+            // row takes in the editor, so the two agree by construction.
+            Some(LibrarySource::Periods { periods, .. }) if !periods.is_empty() => {
+                parts.push(Expr::Any(
+                    periods
+                        .iter()
+                        .map(|&(year, month, day)| Expr::Is(Criterion::Period { year, month, day }))
+                        .collect(),
+                ));
             }
             // ⚠ All Photos contributes no source criterion — it *is* the universe.
             //
