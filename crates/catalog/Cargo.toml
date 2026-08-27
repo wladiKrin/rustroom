@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+core-image = { path = "../core-image" }
 serde = { workspace = true }
 rusqlite = { workspace = true }
 dirs = { workspace = true }

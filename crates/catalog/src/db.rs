@@ -10,11 +10,12 @@
 //! is the single thing a DAM exists for.
 
 use crate::CatalogEntry;
+use core_image::Capture;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -282,6 +283,37 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 4 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1–3. A migration that has already run
+            // on someone's machine cannot be changed. Third time this rule applies to a database
+            // holding real user data.
+            //
+            // ⚠⚠ Keyed on the **file**, like `photo_keywords` and unlike marks: capture metadata
+            // describes the *exposure*, which every copy of a file shares, while a rating
+            // describes the image you made, which they do not. **Do not unify them.**
+            //
+            // ⚠ Every column is nullable and a row exists as soon as a file has been *read*, even
+            // if it carried no EXIF at all. The row's presence is what stops the background pass
+            // re-reading that file on every folder open — 11–15 ms each time, forever, for
+            // nothing.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE photo_capture (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     taken     INTEGER,
+                     camera    TEXT,
+                     lens      TEXT,
+                     iso       INTEGER,
+                     shutter   REAL,
+                     aperture  REAL,
+                     focal_len REAL,
+                     PRIMARY KEY (folder_id, file_name)
+                 );
+                 PRAGMA user_version = 4;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 
@@ -544,6 +576,87 @@ impl Catalog {
         self.conn
             .execute("DELETE FROM folders WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// Record what a file's EXIF said.
+    ///
+    /// ⚠⚠ **An all-`None` `Capture` is still stored.** The row's presence is what marks the file
+    /// as read; skipping it would make the background pass re-read that file on every folder open
+    /// forever.
+    pub fn set_capture(&self, photo: &Path, c: &Capture) -> Result<(), CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "INSERT INTO photo_capture
+                 (folder_id, file_name, taken, camera, lens, iso, shutter, aperture, focal_len)
+             SELECT id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 FROM folders WHERE path = ?1
+             ON CONFLICT(folder_id, file_name) DO UPDATE SET
+                 taken = ?3, camera = ?4, lens = ?5, iso = ?6,
+                 shutter = ?7, aperture = ?8, focal_len = ?9",
+            rusqlite::params![
+                folder,
+                name,
+                c.taken,
+                c.camera,
+                c.lens,
+                c.iso,
+                c.shutter,
+                c.aperture,
+                c.focal_len,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// What was recorded for a file, or `None` if it has never been read.
+    ///
+    /// ⚠ `Some(Capture::default())` and `None` mean different things: read-and-had-nothing versus
+    /// never-read.
+    pub fn capture_of(&self, photo: &Path) -> Result<Option<Capture>, CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(None);
+        };
+        let row = self.conn.query_row(
+            "SELECT c.taken, c.camera, c.lens, c.iso, c.shutter, c.aperture, c.focal_len
+             FROM photo_capture c JOIN folders f ON f.id = c.folder_id
+             WHERE f.path = ?1 AND c.file_name = ?2",
+            rusqlite::params![folder, name],
+            |r| {
+                Ok(Capture {
+                    taken: r.get(0)?,
+                    camera: r.get(1)?,
+                    lens: r.get(2)?,
+                    iso: r.get::<_, Option<i64>>(3)?.map(|v| v as u32),
+                    shutter: r.get::<_, Option<f64>>(4)?.map(|v| v as f32),
+                    aperture: r.get::<_, Option<f64>>(5)?.map(|v| v as f32),
+                    focal_len: r.get::<_, Option<f64>>(6)?.map(|v| v as f32),
+                })
+            },
+        );
+        match row {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The file names in `folder` with no capture row yet — the background pass's queue.
+    ///
+    /// ⚠ **DISTINCT on `file_name`**: `photos` has one row per (file, copy) while capture is per
+    /// file, so without it a photo with three copies would be queued and read three times.
+    pub fn files_without_capture(&self, folder: &Path) -> Result<Vec<String>, CatalogError> {
+        let key = folder.to_string_lossy().to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT p.file_name
+             FROM photos p JOIN folders f ON f.id = p.folder_id
+             WHERE f.path = ?1
+               AND NOT EXISTS (SELECT 1 FROM photo_capture c
+                               WHERE c.folder_id = p.folder_id AND c.file_name = p.file_name)
+             ORDER BY p.file_name",
+        )?;
+        let rows = stmt.query_map([&key], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(Result::ok).collect())
     }
 
     /// Create a keyword under `parent`, or return the existing one of that name and parent.
@@ -1216,7 +1329,8 @@ mod tests {
             // was exactly that — the failure is loud, but only if this test exists.
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_keywords;
+                    "DROP TABLE photo_capture;
+                     DROP TABLE photo_keywords;
                      DROP TABLE keywords;
                      ALTER TABLE photos DROP COLUMN rating;
                      ALTER TABLE photos DROP COLUMN flag;
@@ -1395,7 +1509,8 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE photo_keywords;
+                    "DROP TABLE photo_capture;
+                     DROP TABLE photo_keywords;
                      DROP TABLE keywords;
                      PRAGMA user_version = 2;",
                 )
@@ -1752,5 +1867,99 @@ mod tests {
         assert!(photo.exists(), "the photo was deleted");
         assert!(sidecar.exists(), "the sidecar was deleted");
         assert!(cat.all_photos().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_capture_round_trips() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        let c = Capture {
+            taken: Some(1_779_046_001),
+            camera: Some("FUJIFILM X-T4".into()),
+            lens: Some("XF23mmF2 R WR".into()),
+            iso: Some(1600),
+            shutter: Some(0.02),
+            aperture: Some(2.0),
+            focal_len: Some(23.0),
+        };
+        cat.set_capture(Path::new("/a/one.RAF"), &c).unwrap();
+        assert_eq!(cat.capture_of(Path::new("/a/one.RAF")).unwrap(), Some(c));
+    }
+
+    #[test]
+    fn an_empty_capture_is_still_recorded() {
+        // ⚠⚠ A file with no EXIF must be *marked as read*, or the background pass re-reads it on
+        // every folder open forever — 11–15 ms of file reading each time, for nothing.
+        //
+        // ⚠ `Some(default)` and `None` mean different things here: read-and-had-nothing versus
+        // never-read.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF", "two.RAF"]))
+            .unwrap();
+        assert_eq!(cat.capture_of(Path::new("/a/one.RAF")).unwrap(), None);
+        cat.set_capture(Path::new("/a/one.RAF"), &Capture::default())
+            .unwrap();
+        assert_eq!(
+            cat.capture_of(Path::new("/a/one.RAF")).unwrap(),
+            Some(Capture::default())
+        );
+        assert_eq!(
+            cat.files_without_capture(Path::new("/a")).unwrap(),
+            vec!["two.RAF".to_string()],
+            "a file recorded as having no EXIF must not be queued again"
+        );
+    }
+
+    #[test]
+    fn capture_is_per_file_so_every_copy_shares_it() {
+        // ⚠⚠ Per *file*, like `photo_keywords` and unlike marks: capture metadata describes the
+        // **exposure**, which every copy of a file shares. A rating describes the image you made,
+        // which they do not.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.add_copy(Path::new("/a/one.RAF"), 1).unwrap();
+        cat.add_copy(Path::new("/a/one.RAF"), 2).unwrap();
+        // ⚠ Three photo rows, and the queue must name the file **once** — without DISTINCT it
+        // would be read three times.
+        assert_eq!(
+            cat.files_without_capture(Path::new("/a")).unwrap(),
+            vec!["one.RAF".to_string()]
+        );
+        let c = Capture {
+            iso: Some(400),
+            ..Default::default()
+        };
+        cat.set_capture(Path::new("/a/one.RAF"), &c).unwrap();
+        assert_eq!(cat.capture_of(Path::new("/a/one.RAF")).unwrap(), Some(c));
+        assert!(cat
+            .files_without_capture(Path::new("/a"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_folder_cascades_to_its_capture_rows() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.set_capture(
+            Path::new("/a/one.RAF"),
+            &Capture {
+                iso: Some(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let id = cat.folders().unwrap()[0].id;
+        cat.forget_folder(id).unwrap();
+        // ⚠ The **raw** count, not a join — the lesson from `forget_folder`'s own cascade test,
+        // where every join-based assertion passed vacuously with the cascade disabled.
+        let left: i64 = cat
+            .conn
+            .query_row("SELECT count(*) FROM photo_capture", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "orphaned capture rows survived");
     }
 }

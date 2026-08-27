@@ -741,6 +741,7 @@ dependencies = [
 name = "catalog"
 version = "0.1.0"
 dependencies = [
+ "core-image",
  "dirs",
  "rusqlite",
  "serde",
