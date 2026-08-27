@@ -33,6 +33,7 @@ pub mod edits;
 pub mod export;
 pub mod info;
 pub mod presets;
+pub mod rule_edit;
 pub mod settings;
 
 use crate::RustroomApp;
@@ -89,6 +90,18 @@ pub enum Modal {
         name: String,
         dont_ask_again: bool,
     },
+    /// Editing a smart collection's rule.
+    ///
+    /// ⚠ The form and the dropdown lists are loaded **once** when the dialog opens: rebuilding
+    /// them per frame would discard every keystroke and run six catalog queries at 60 Hz.
+    EditRule {
+        id: i64,
+        name: String,
+        form: rustroom_app::rule_form::Form,
+        lists: rule_edit::Lists,
+        /// The stored rule uses nesting the flat form cannot show, so it is shown read-only.
+        unsupported: bool,
+    },
     /// Everything known about one photo.
     ///
     /// ⚠ `dims` is filled on the **first frame** and cached here, because reading them costs a
@@ -141,6 +154,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDelete,
         ConfirmForget,
         PhotoInfo,
+        EditRule,
         Settings,
         Shortcuts,
         About,
@@ -156,6 +170,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
+        Modal::EditRule { .. } => Which::EditRule,
         Modal::Settings => Which::Settings,
         Modal::KeyboardShortcuts => Which::Shortcuts,
         Modal::About => Which::About,
@@ -175,6 +190,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),
+        Which::EditRule => rule_edit::show(app, ctx),
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),
         Which::About => about(app, ctx),

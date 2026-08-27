@@ -1877,6 +1877,40 @@ impl RustroomApp {
     /// ⚠ Browsed rather than filtered, like a keyword — which is what makes it need **no date
     /// picker**: the tree in the panel is a `GROUP BY` over what is actually there. The cost is
     /// that "in this collection, show me July" is not expressible; that is what M4.3c is for.
+    /// Store an edited rule, and refresh the view if it is the one on screen.
+    ///
+    /// ⚠⚠ **Reopening matters**: without it the grid keeps showing the *old* rule's results with
+    /// no sign that anything changed, which reads as Save not having worked.
+    fn save_rule(
+        &mut self,
+        ctx: &egui::Context,
+        id: i64,
+        name: &str,
+        form: &rustroom_app::rule_form::Form,
+    ) {
+        let json = match serde_json::to_string(&form.to_expr()) {
+            Ok(j) => j,
+            Err(e) => {
+                self.status = format!("Could not build the rule: {e}");
+                return;
+            }
+        };
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = cat.set_smart_rule(id, &json) {
+                self.status = format!("Could not save: {e}");
+                return;
+            }
+        }
+        self.status = format!("Saved “{name}”");
+        let showing = matches!(
+            self.library.as_ref().map(|l| &l.source),
+            Some(LibrarySource::Smart { id: open, .. }) if *open == id
+        );
+        if showing {
+            self.open_smart(ctx, id, name);
+        }
+    }
+
     /// Handle a click on a date row, honouring the modifiers.
     ///
     /// ⚠⚠ **The same three rules `apply_click` uses for photos**, so the app has *one*

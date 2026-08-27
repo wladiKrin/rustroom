@@ -29,6 +29,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         OpenPeriod(rustroom_app::date_tree::Period, egui::Modifiers),
         OpenSmart(i64, String),
         DeleteSmart(i64),
+        EditSmart(i64, String, String),
         SaveSmart,
     }
     let mut action = Action::None;
@@ -248,6 +249,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     if ui.button("×").on_hover_text("Delete").clicked() {
                         action = Action::DeleteSmart(sc.id);
                     }
+                    if ui.button("⚙").on_hover_text("Edit the rule").clicked() {
+                        action = Action::EditSmart(sc.id, sc.name.clone(), sc.rule.clone());
+                    }
                     let selected = matches!(
                         app.library.as_ref().map(|l| &l.source),
                         Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
@@ -385,6 +389,23 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::OpenAllPhotos => app.open_all_photos(ctx),
         Action::OpenSmart(id, name) => app.open_smart(ctx, id, &name),
+        Action::EditSmart(id, name, rule) => {
+            // ⚠ The form and the dropdown lists are read **once**, here, not per frame.
+            let parsed: Option<rustroom_app::rule::Expr> = serde_json::from_str(&rule).ok();
+            let form = parsed
+                .as_ref()
+                .and_then(rustroom_app::rule_form::Form::from_expr);
+            // ⚠⚠ A rule the flat form cannot show is opened **read-only**, never as an empty
+            // form: an empty form that replaced a working rule on Save is the data loss the
+            // refusal exists to prevent.
+            app.modal = crate::modals::Modal::EditRule {
+                id,
+                name,
+                unsupported: form.is_none(),
+                form: form.unwrap_or_default(),
+                lists: crate::modals::rule_edit::Lists::read(app),
+            };
+        }
         Action::DeleteSmart(id) => {
             if let Some(cat) = &app.catalog {
                 let _ = cat.delete_smart(id);
