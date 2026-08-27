@@ -385,8 +385,11 @@ mod tests {
         let mut lib = crate::test_app::library_of(4);
         lib.selection.select_indices(&[0, 1, 2, 3]);
         assert_eq!(lib.selection.len(), 4);
-        lib.filter.text = "nothing matches this".into();
-        lib.refilter();
+        let filter = rustroom_app::library_filter::LibraryFilter {
+            text: "nothing matches this".into(),
+            ..Default::default()
+        };
+        lib.refilter(&filter);
         assert!(lib.visible.is_empty(), "the filter did not hide anything");
         assert_eq!(
             lib.selection.len(),
@@ -404,8 +407,11 @@ mod tests {
         // ⚠ "0001" would match eleven rows — 00001 and 00010..00019 — which is *correct* and was
         // the first version of this assertion, wrong about right code. A substring that occurs in
         // exactly one name is what discriminates.
-        lib.filter.text = "00007".into();
-        lib.refilter();
+        let filter = rustroom_app::library_filter::LibraryFilter {
+            text: "00007".into(),
+            ..Default::default()
+        };
+        lib.refilter(&filter);
         assert_eq!(lib.visible.len(), 1, "expected exactly rustroom_00007.RAF");
     }
 }

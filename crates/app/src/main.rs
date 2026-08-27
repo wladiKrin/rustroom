@@ -140,8 +140,6 @@ struct Library {
     last_want: Vec<PathBuf>,
     selection: Selection,
     loader: ThumbLoader,
-    /// Everything that narrows what is shown. Reset when a source is loaded.
-    filter: rustroom_app::library_filter::LibraryFilter,
     /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
     /// `refilter`, never edited directly.
     visible: Vec<usize>,
@@ -169,7 +167,7 @@ impl Library {
     /// ⚠ Both halves, always. Recomputing the visible list without pruning leaves the
     /// selection holding photos that are not on screen, which a sync or a paste would then
     /// write to.
-    fn refilter(&mut self) {
+    fn refilter(&mut self, filter: &rustroom_app::library_filter::LibraryFilter) {
         // ⚠ One derived `visible` list, composed from one filter — **not** a second filtering
         // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
         // bug, and `visible` staying the single derived list is the mitigation that has held.
@@ -180,7 +178,7 @@ impl Library {
             .filter(|(_, e)| {
                 let m = self.marks.get(&e.id).copied().unwrap_or_default();
                 let c = self.captures.get(&e.id.path).cloned().unwrap_or_default();
-                self.filter.matches(e, m, &c)
+                filter.matches(e, m, &c)
             })
             .map(|(i, _)| i)
             .collect();
@@ -384,6 +382,17 @@ struct RustroomApp {
     /// filter by a date that was never read. Built once and kept for the life of the app, so a
     /// source switch never abandons a half-scanned folder.
     metadata: rustroom_app::metadata_scanner::MetadataScanner,
+    /// Everything that narrows what the Library shows.
+    ///
+    /// ⚠⚠ On the **app**, not on `Library`, so it survives a source switch. Browsing *replaces*
+    /// the source, so filter-then-pick-a-date is the only way to compose the two — and rebuilding
+    /// the filter on every switch destroyed exactly that. ⚠ It is safe to persist because the
+    /// Filter button reads `Filter: …` whenever it is active, so a filter that hides everything is
+    /// visible and one click from fixed. That label did not exist when the reset was chosen.
+    ///
+    /// ⚠ Session-only. The *format* half is separately persisted in `Settings`, because a format
+    /// preference is standing where a search string is about the question being asked now.
+    filter: rustroom_app::library_filter::LibraryFilter,
     modal: Modal,
     /// One chronological order over photo edits *and* preset deletions, so Ctrl+Z walks
     /// back through both. The payloads stay where they are — photo snapshots in
@@ -439,6 +448,7 @@ impl RustroomApp {
             }
         };
         Self {
+            filter: rustroom_app::library_filter::LibraryFilter::default(),
             metadata: rustroom_app::metadata_scanner::MetadataScanner::new({
                 let ctx = ctx.clone();
                 move || ctx.request_repaint()
@@ -1973,20 +1983,16 @@ impl RustroomApp {
             last_want: Vec::new(),
             selection: Selection::default(),
             loader,
-            // ⚠ A fresh `Library` per load, so the search text and the mark selections reset by
-            // construction — they are about the question you are asking right now.
-            //
-            // ⚠⚠ **The format filter is the exception and is seeded from `Settings`.** "I shoot
-            // RAW+JPEG and only want to see the RAWs" is true of every folder, so resetting it on
-            // each switch made it something to re-set constantly.
-            filter: rustroom_app::library_filter::LibraryFilter {
-                format: self.settings.hidden_formats.clone(),
-                ..Default::default()
-            },
             visible: (0..n).collect(),
             marks: std::collections::HashMap::new(),
             captures: std::collections::HashMap::new(),
         });
+        // ⚠ Applied explicitly rather than left to `reload_marks`, which early-returns when there
+        // is no catalog — the filter must hold across a source switch whether or not one is open.
+        let filter = self.filter.clone();
+        if let Some(lib) = self.library.as_mut() {
+            lib.refilter(&filter);
+        }
         self.reload_marks();
         self.reload_captures();
         self.queue_metadata();
@@ -2489,11 +2495,12 @@ impl RustroomApp {
                 }
             }
         }
+        let filter = self.filter.clone();
         if let Some(lib) = self.library.as_mut() {
             lib.marks = map;
             // ⚠ Refilter here, or a newly-rated photo would not appear or disappear under an
             // active star filter until some unrelated action happened to rebuild.
-            lib.refilter();
+            lib.refilter(&filter);
         }
     }
 
@@ -2526,9 +2533,10 @@ impl RustroomApp {
                 }
             }
         }
+        let filter = self.filter.clone();
         if let Some(lib) = self.library.as_mut() {
             lib.captures = map;
-            lib.refilter();
+            lib.refilter(&filter);
         }
     }
 
@@ -2570,6 +2578,10 @@ impl RustroomApp {
         // ⚠ Read before the borrow: `self.settings` and `self.library` are disjoint fields, but
         // the compiler only sees that when the read happens first.
         let sort = self.settings.library_sort;
+        // ⚠ Read before the borrow: `self.filter` and `self.library` are disjoint fields, but the
+        // compiler only sees that when the read happens first — the rule this file already states
+        // for `self.settings`.
+        let filter = self.filter.clone();
         let Some(lib) = self.library.as_mut() else {
             return;
         };
@@ -2595,7 +2607,7 @@ impl RustroomApp {
                 lib.selection.click(i);
             }
         }
-        lib.refilter();
+        lib.refilter(&filter);
         // ⚠ The indices have just shifted, so the marks map must be re-read against the new
         // entries — and `reload_marks` refilters, which the rebuild needs anyway.
         self.reload_marks();
@@ -2842,6 +2854,40 @@ fn edit_group_checkboxes(ui: &mut egui::Ui, groups: &mut EditGroups) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_filter_survives_a_source_switch() {
+        // ⚠⚠ Browsing **replaces** the source, so filter-then-pick-a-date is the only way to say
+        // "five-star picks from the 9th". Rebuilding the filter on every switch destroyed exactly
+        // the composition that browse-replaces-source otherwise denies — which is why the original
+        // reset, argued for on the grounds that a stale filter "reads as breakage", was wrong in
+        // use.
+        let dir = test_app::TestDir::new("filterkeep");
+        std::fs::write(dir.0.join("a.RAF"), b"x").unwrap();
+        std::fs::write(dir.0.join("b.RAF"), b"x").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+
+        app.open_catalog_folder(&ctx, &dir.0);
+        assert_eq!(app.library.as_ref().unwrap().visible.len(), 2);
+
+        app.filter.text = "a.RAF".into();
+        let f = app.filter.clone();
+        app.library.as_mut().unwrap().refilter(&f);
+        assert_eq!(app.library.as_ref().unwrap().visible.len(), 1);
+
+        // Re-open the same folder — a source switch by any other name.
+        app.open_catalog_folder(&ctx, &dir.0);
+        assert_eq!(
+            app.filter.text, "a.RAF",
+            "the search text was reset by a source switch"
+        );
+        assert_eq!(
+            app.library.as_ref().unwrap().visible.len(),
+            1,
+            "the filter was not applied to the new source"
+        );
+    }
 
     #[test]
     fn a_catalog_folder_row_rescans_the_directory() {

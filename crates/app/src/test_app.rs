@@ -79,6 +79,7 @@ pub fn for_test() -> RustroomApp {
     RustroomApp {
         // ⚠ A real scanner, with a reader that never runs: nothing queues work in these tests, so
         // its workers park immediately and cost nothing.
+        filter: Default::default(),
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         camera_profiles_cache: Vec::new(),
         os_manages_colour: false,
@@ -194,11 +195,10 @@ pub fn library_of(n: usize) -> Library {
         last_want: Vec::new(),
         selection: Selection::default(),
         loader: ThumbLoader::new(color::OutputSpace::Srgb, || {}),
-        filter: Default::default(),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
         captures: std::collections::HashMap::new(),
     };
-    lib.refilter();
+    lib.refilter(&Default::default());
     lib
 }

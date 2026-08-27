@@ -335,9 +335,10 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
 /// ⚠ Composes with the format filter and the search text through `Library::refilter`, the single
 /// derived `visible` list every consumer iterates — not a second filtering mechanism.
 fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    let Some(before) = app.library.as_ref().map(|l| l.filter.clone()) else {
+    if app.library.is_none() {
         return;
-    };
+    }
+    let before = app.filter.clone();
     let mut f = before.clone();
 
     // ⚠⚠ `CloseOnClickOutside`, not the default `CloseOnClick`. Every row here is a checkbox and
@@ -425,9 +426,12 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
     // hundreds per frame is the `apply_view_demosaic` mistake in another costume.
     if f != before {
+        app.filter = f;
+        // ⚠ The filter lives on the app now, so refiltering is a separate step rather than a
+        // field write — that split is what lets it survive a source switch.
+        let filter = app.filter.clone();
         if let Some(lib) = app.library.as_mut() {
-            lib.filter = f;
-            lib.refilter();
+            lib.refilter(&filter);
         }
     }
 }
@@ -519,9 +523,10 @@ fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter) -> String 
 /// already gated on `memory().focused()`, which is exactly the gate a text field needs. Escape is
 /// added so the keyboard is recoverable without the mouse.
 fn search_field(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    let Some(before) = app.library.as_ref().map(|l| l.filter.text.clone()) else {
+    if app.library.is_none() {
         return;
-    };
+    }
+    let before = app.filter.text.clone();
     let mut text = before.clone();
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
@@ -537,9 +542,10 @@ fn search_field(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
     // ⚠ Guarded on a change: the body runs every frame.
     if text != before {
+        app.filter.text = text;
+        let filter = app.filter.clone();
         if let Some(lib) = app.library.as_mut() {
-            lib.filter.text = text;
-            lib.refilter();
+            lib.refilter(&filter);
         }
     }
 }
@@ -613,8 +619,6 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     if formats.len() < 2 {
         return;
     }
-    let Some(lib) = &mut app.library else { return };
-
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
     // is what keeps the on-screen order the same as `formats_present` returns.
     //
@@ -624,20 +628,22 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // one click because the boxes are still there, so the guard cost more than it bought.
     let mut toggled: Option<String> = None;
     for (ext, count) in formats.iter().rev() {
-        let mut shown = !lib.filter.format.is_hidden(ext);
+        let mut shown = !app.filter.format.is_hidden(ext);
         let label = format!("{} ({count})", ext.to_uppercase());
         if ui.checkbox(&mut shown, label).changed() {
             toggled = Some(ext.clone());
         }
     }
     if let Some(ext) = toggled {
-        lib.filter.format.toggle(&ext);
-        lib.refilter();
-        // ⚠ Persisted, so it survives a source switch and a restart. Written only on an actual
-        // toggle — this body runs every frame, and saving unconditionally would rewrite the
+        app.filter.format.toggle(&ext);
+        let filter = app.filter.clone();
+        if let Some(lib) = app.library.as_mut() {
+            lib.refilter(&filter);
+        }
+        // ⚠ Persisted, so it survives a restart as well as a source switch. Written only on an
+        // actual toggle — this body runs every frame, and saving unconditionally would rewrite the
         // settings file sixty times a second, the `apply_view_demosaic` rule.
-        let hidden = lib.filter.format.clone();
-        app.settings.hidden_formats = hidden;
+        app.settings.hidden_formats = app.filter.format.clone();
         app.save_settings();
     }
 }
