@@ -29,49 +29,91 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let cell_h = (avail_h - 8.0).clamp(48.0, 400.0);
             let box_size = egui::vec2(cell_h * 1.5, cell_h);
             let visible = lib.visible.clone();
-            egui::ScrollArea::horizontal().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for &i in &visible {
-                        // The filmstrip's cell *is* its click target, so it opts in here.
-                        let resp = thumb::cell(
-                            ui,
-                            box_size,
-                            lib.cache.get(&lib.entries[i].id.path),
-                            lib.entries[i].id.copy,
-                            lib.marks
-                                .get(&lib.entries[i].id)
-                                .copied()
-                                .unwrap_or_default(),
-                        )
-                        .interact(egui::Sense::click());
-                        thumb::selection_border(
-                            ui,
-                            resp.rect,
-                            lib.selection.active() == Some(i),
-                            lib.selection.contains(i),
-                        );
-                        if want_scroll && Some(i) == active {
-                            resp.scroll_to_me(Some(egui::Align::Center));
+            // ⚠ Latency, not correctness — see the grid's MARGIN_ROWS.
+            const MARGIN_CELLS: usize = 4;
+
+            let step = box_size.x + ui.spacing().item_spacing.x;
+            let content = visible.len() as f32 * step;
+            let extent = ui.available_width();
+
+            // ⚠ `scroll_to_me` cannot work on a virtualised strip: an off-window cell is never
+            // drawn, so there is no response to scroll to. Computing the offset is also the
+            // correct fix for the M2.2 drift bug — egui computes a `scroll_to_me` target once and
+            // never recomputes it, so the centred photo slid left as thumbnails ahead of it
+            // loaded and reflowed the content.
+            let mut area = egui::ScrollArea::horizontal();
+            if want_scroll {
+                if let Some(pos) = active.and_then(|a| visible.iter().position(|&i| i == a)) {
+                    area = area.horizontal_scroll_offset(
+                        rustroom_app::thumb_window::centre_offset(pos, step, extent, content),
+                    );
+                }
+            }
+
+            let span = area
+                .show_viewport(ui, |ui, viewport| {
+                    let span = rustroom_app::thumb_window::visible_span(
+                        viewport.min.x,
+                        viewport.width(),
+                        step,
+                        visible.len(),
+                        0,
+                    );
+                    ui.horizontal(|ui| {
+                        // Reserve the space the skipped cells would have taken, so the scrollbar
+                        // and the drawn cells agree about where they are.
+                        ui.add_space(span.start as f32 * step);
+                        for &i in &visible[span.clone()] {
+                            // ⚠ A stable id per photo — see the grid's equivalent. The filmstrip
+                            // has no text field, so the failure is milder, but a click resolving
+                            // against a shifted id for one frame is the same hazard and
+                            // `push_id` costs nothing.
+                            ui.push_id(&lib.entries[i].id, |ui| {
+                                // The filmstrip's cell *is* its click target, so it opts in here.
+                                let resp = thumb::cell(
+                                    ui,
+                                    box_size,
+                                    lib.cache.get(&lib.entries[i].id.path),
+                                    lib.entries[i].id.copy,
+                                    lib.marks
+                                        .get(&lib.entries[i].id)
+                                        .copied()
+                                        .unwrap_or_default(),
+                                )
+                                .interact(egui::Sense::click());
+                                thumb::selection_border(
+                                    ui,
+                                    resp.rect,
+                                    lib.selection.active() == Some(i),
+                                    lib.selection.contains(i),
+                                );
+                                if resp.clicked() {
+                                    let mods = ui.input(|inp| inp.modifiers);
+                                    // Only a plain click moves the active photo, so only a
+                                    // plain click opens — a Cmd- or Shift-click builds the
+                                    // target set without triggering a decode.
+                                    if apply_click(&mut lib.selection, i, mods) {
+                                        open_index = Some(i);
+                                    }
+                                }
+                            });
                         }
-                        if resp.clicked() {
-                            let mods = ui.input(|inp| inp.modifiers);
-                            // Only a plain click moves the active photo, so only a
-                            // plain click opens — a Cmd- or Shift-click builds the
-                            // target set without triggering a decode.
-                            if apply_click(&mut lib.selection, i, mods) {
-                                open_index = Some(i);
-                            }
-                        }
-                    }
-                });
-                // ⚠ In this task the window is everything visible, so behaviour is unchanged.
-                // Task 6 narrows it to the drawn cells plus a margin.
-                let window: Vec<PathBuf> = visible
-                    .iter()
-                    .map(|&i| lib.entries[i].id.path.clone())
-                    .collect();
-                lib.sync_thumb_window(&window);
-            });
+                        ui.add_space((visible.len() - span.end) as f32 * step);
+                    });
+                    span
+                })
+                .inner;
+
+            let first = span.start.saturating_sub(MARGIN_CELLS);
+            let last = span.end.saturating_add(MARGIN_CELLS).min(visible.len());
+            let mut window: Vec<PathBuf> = Vec::new();
+            for &i in &visible[first..last] {
+                let path = &lib.entries[i].id.path;
+                if !window.iter().any(|p| p == path) {
+                    window.push(path.clone());
+                }
+            }
+            lib.sync_thumb_window(&window);
         });
     if want_scroll {
         app.filmstrip_scrolled_to = active;
