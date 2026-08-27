@@ -340,4 +340,34 @@ mod tests {
         // A stale scroll offset can name a row that no longer exists after a filter change.
         assert!(cells_in_row(99, 4, 10).is_empty());
     }
+
+    #[test]
+    fn only_the_visible_rows_are_asked_for() {
+        // ⚠⚠ The point of the whole change, asserted where it is observable: with 2,000 entries
+        // and a viewport a few rows tall, the want-list must be a few dozen paths, not 2,000.
+        //
+        // ⚠ Asserted on the *want-list*, not on the drawn cell count: drawing fewer cells is
+        // egui's `show_rows` doing its job, while asking for fewer thumbnails is ours. The
+        // memory and the 34-second fill are both consequences of the ask.
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        app.view = crate::AppView::Library;
+        app.library = Some(crate::test_app::library_of(2000));
+
+        let input = egui::RawInput {
+            screen_rect: Some(crate::test_ui::screen()),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            let ctx = ui.ctx().clone();
+            show(&mut app, ui, &ctx);
+        });
+
+        let asked = app.library.as_ref().unwrap().last_want.len();
+        assert!(asked > 0, "nothing was asked for at all");
+        assert!(
+            asked < 300,
+            "asked for {asked} thumbnails — the grid is not windowed"
+        );
+    }
 }

@@ -167,3 +167,35 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         display_space: color::OutputSpace::Srgb,
     });
 }
+
+/// A `Library` of `n` synthetic entries, with no files behind them.
+///
+/// ⚠ Exhaustive field literal on purpose, following `for_test`: a new field on `Library` is a
+/// compile error here, which forces a decision about what a test should see.
+pub fn library_of(n: usize) -> Library {
+    let scan: Vec<catalog::CatalogEntry> = (0..n)
+        .map(|i| catalog::CatalogEntry {
+            path: std::path::PathBuf::from(format!("/nonexistent/rustroom_{i:05}.RAF")),
+            file_name: format!("rustroom_{i:05}.RAF"),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            edited: None,
+        })
+        .collect();
+    let entries =
+        rustroom_app::entries::build(&scan, |_| rustroom_app::sidecar::Sidecar::default());
+    let mut lib = Library {
+        source: LibrarySource::Folder(std::path::PathBuf::from("/nonexistent")),
+        scan,
+        entries,
+        cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
+        last_want: Vec::new(),
+        selection: Selection::default(),
+        loader: ThumbLoader::new(color::OutputSpace::Srgb, || {}),
+        filter: FormatFilter::default(),
+        visible: Vec::new(),
+        marks: std::collections::HashMap::new(),
+        min_stars: 0,
+    };
+    lib.refilter();
+    lib
+}

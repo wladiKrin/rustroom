@@ -1,7 +1,7 @@
 # Windowed browsing — M4.3a-i
 
 **Date:** 2026-08-27
-**Status:** designed, not built
+**Status:** built 2026-08-27
 **Slice of:** M4.3 (search, smart collections, "all photos")
 
 ## Why this exists, and why it is not about search
@@ -34,6 +34,17 @@ across 6 workers):
 |---|---|---|---|
 | 860 (the author's, today) | ~600 MB | ~34 s | 860 |
 | 10,000 | **~7 GB** | ~68 s | 10,000 |
+
+**Measured afterwards** on that folder (830 entries, `cargo run --release -p app --example
+bench_library_open ~/Desktop/fuji`), which confirmed the estimates and then some:
+
+| | whole folder (the old behaviour) | first screenful (the new one) |
+|---|---|---|
+| time to a usable grid | **42.0 s** | **1.5 s** |
+| resident textures | **552 MB** | **15 MB** |
+
+A 120-thumbnail window — a very large one — costs 6.6 s and 79 MB. The steady state is bounded by
+`THUMB_BUDGET_BYTES` at 256 MB however large the folder, so the 10,000 row above never happens.
 
 ⚠ **The 860 row is the point as much as the 10k row.** That cost is already paid on every folder
 open. This slice is not speculative work for a library nobody has; it is a fix for the browser that
