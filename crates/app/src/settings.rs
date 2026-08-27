@@ -207,6 +207,23 @@ pub struct Settings {
     /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
     /// state does not survive a restart here — see [`PanelSections`].
     pub panel_sections: PanelSections,
+    /// The Develop snapshot strip's outer height in whole points.
+    ///
+    /// ⚠ `u32`, not `f32`, for the two reasons `library_cell` already carries: `Settings` derives
+    /// `Eq`, which no float satisfies; and it makes a NaN height **unrepresentable** rather than
+    /// something to guard against — NaN defeats `clamp` entirely, since it fails every comparison
+    /// and comes back unchanged.
+    ///
+    /// ⚠ Still clamped by [`Settings::clamped_strip_height`] rather than trusted: this is read
+    /// from a file a user can edit.
+    ///
+    /// ⚠ Written when the resize drag **settles**, never per frame — a resize runs at 60 Hz. The
+    /// `apply_view_demosaic` rule.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field already falls back to this struct's `Default`. A field-level one would use
+    /// `u32`'s own default of `0` instead, silently giving every existing user a collapsed strip.
+    pub snapshot_strip_height: u32,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -216,10 +233,25 @@ pub const CELL_RANGE: (u32, u32) = (108, 320);
 /// How much one press of the grid-size buttons moves the cell.
 pub const CELL_STEP: u32 = 28;
 
+/// The snapshot strip's default outer height — about four rows at the compact metrics.
+pub const DEFAULT_STRIP_HEIGHT: u32 = 110;
+/// The smallest and largest the snapshot strip can be dragged to.
+///
+/// ⚠ The minimum is the header row alone, so someone who wants the space back can drag it away
+/// once and have it stay gone. The maximum here is a ceiling on the *stored* value; the panel
+/// additionally caps itself at half the live panel height, so a shrunken window clamps further.
+pub const STRIP_HEIGHT_RANGE: (u32, u32) = (28, 400);
+
 impl Settings {
     /// The grid cell size in points, guaranteed usable.
     pub fn clamped_cell(&self) -> f32 {
         self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
+    }
+
+    /// The snapshot strip's height in points, guaranteed usable.
+    pub fn clamped_strip_height(&self) -> f32 {
+        self.snapshot_strip_height
+            .clamp(STRIP_HEIGHT_RANGE.0, STRIP_HEIGHT_RANGE.1) as f32
     }
 
     /// The cell size after a pinch or ctrl+scroll of `factor`.
@@ -283,6 +315,7 @@ impl Default for Settings {
             library_sort: catalog::SortOrder::default(),
             library_cell: DEFAULT_CELL,
             panel_sections: PanelSections::default(),
+            snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
         }
     }
 }
@@ -658,6 +691,9 @@ mod tests {
             // like it round-tripped.
             library_sort: catalog::SortOrder::ModifiedDesc,
             library_cell: DEFAULT_CELL + CELL_STEP,
+            // Likewise non-default, and inside `STRIP_HEIGHT_RANGE` so `clamped_strip_height`
+            // cannot mask a field that failed to round-trip.
+            snapshot_strip_height: DEFAULT_STRIP_HEIGHT + 20,
             // Non-default in both directions, so a re-defaulted field cannot pass.
             panel_sections: PanelSections {
                 folders: true,
@@ -1122,5 +1158,44 @@ mod tests {
         assert_eq!(with(200).zoomed_cell(f32::INFINITY), 200);
         assert_eq!(with(200).zoomed_cell(0.0), 200);
         assert_eq!(with(200).zoomed_cell(-2.0), 200);
+    }
+
+    /// ⚠ `SettingsStore::load` is infallible, so one unparseable field silently reverts **every**
+    /// setting. The sibling of `a_settings_file_from_before_the_panel_sections_still_loads`.
+    #[test]
+    fn a_settings_file_from_before_the_snapshot_strip_still_loads() {
+        let f = TempFile::new("presnapstrip");
+        std::fs::write(&f.0, r#"{"library_cell":200}"#).unwrap();
+        let got = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(got.library_cell, 200, "the stored field must survive");
+        assert_eq!(
+            got.snapshot_strip_height, DEFAULT_STRIP_HEIGHT,
+            "and an absent one must give the default, not `u32`'s zero"
+        );
+    }
+
+    #[test]
+    fn a_nonsense_stored_strip_height_is_clamped_into_range() {
+        let too_small = Settings {
+            snapshot_strip_height: 0,
+            ..Settings::default()
+        };
+        assert_eq!(
+            too_small.clamped_strip_height(),
+            STRIP_HEIGHT_RANGE.0 as f32
+        );
+        let too_big = Settings {
+            snapshot_strip_height: 99_999,
+            ..Settings::default()
+        };
+        assert_eq!(too_big.clamped_strip_height(), STRIP_HEIGHT_RANGE.1 as f32);
+    }
+
+    /// ⚠ The default must sit inside the range, or the very first frame is clamped to something
+    /// nobody chose.
+    #[test]
+    fn the_default_strip_height_is_within_its_own_range() {
+        assert!(DEFAULT_STRIP_HEIGHT >= STRIP_HEIGHT_RANGE.0);
+        assert!(DEFAULT_STRIP_HEIGHT <= STRIP_HEIGHT_RANGE.1);
     }
 }
