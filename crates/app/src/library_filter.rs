@@ -47,6 +47,76 @@ impl RatingSet {
     }
 }
 
+/// Which colour labels to show, as a bitmask over 0..=`Marks::MAX_LABEL`, where 0 is unlabelled.
+///
+/// ⚠ Same shape and same convention as [`RatingSet`]: empty means "any", and 0 is a real value
+/// meaning *unlabelled*, exactly as 0 stars means *unrated*.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LabelSet(u8);
+
+impl LabelSet {
+    /// ⚠ Four colours, not five — keys `6`–`9` are what set a label, so a fifth would be
+    /// unreachable. Taken from `Marks::MAX_LABEL` so the two cannot drift.
+    pub const MAX: u8 = Marks::MAX_LABEL;
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn contains(self, label: u8) -> bool {
+        label <= Self::MAX && self.0 & (1 << label) != 0
+    }
+
+    pub fn toggle(&mut self, label: u8) {
+        if label <= Self::MAX {
+            self.0 ^= 1 << label;
+        }
+    }
+
+    pub fn labels(self) -> Vec<u8> {
+        (0..=Self::MAX).filter(|&l| self.contains(l)).collect()
+    }
+}
+
+/// Which flags to show. ⚠ Empty means "any"; `Flag::None` is a real value meaning *unflagged*.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FlagSet(u8);
+
+impl FlagSet {
+    /// ⚠ **Unset first, then the values** — the one ordering every section of this filter uses:
+    /// unflagged / unrated / unlabelled leads, then the marks themselves. Two sections ordering
+    /// differently is what prompted this, and the ordering lives here so the UI cannot re-invent
+    /// it.
+    pub const ALL: [Flag; 3] = [Flag::None, Flag::Pick, Flag::Reject];
+
+    fn bit(flag: Flag) -> u8 {
+        match flag {
+            Flag::None => 1,
+            Flag::Pick => 2,
+            Flag::Reject => 4,
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn contains(self, flag: Flag) -> bool {
+        self.0 & Self::bit(flag) != 0
+    }
+
+    pub fn toggle(&mut self, flag: Flag) {
+        self.0 ^= Self::bit(flag);
+    }
+
+    pub fn flags(self) -> Vec<Flag> {
+        Self::ALL
+            .into_iter()
+            .filter(|&f| self.contains(f))
+            .collect()
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LibraryFilter {
     pub format: FormatFilter,
@@ -54,10 +124,10 @@ pub struct LibraryFilter {
     pub text: String,
     /// Which star ratings to show. Empty matches everything.
     pub stars: RatingSet,
-    /// `None` matches any flag; `Some(Flag::None)` matches only *unflagged* photos.
-    pub flag: Option<Flag>,
-    /// `None` matches any label; `Some(0)` matches only *unlabelled* photos.
-    pub label: Option<u8>,
+    /// Which flags to show. Empty matches everything; `Flag::None` means *unflagged*.
+    pub flags: FlagSet,
+    /// Which colour labels to show. Empty matches everything; 0 means *unlabelled*.
+    pub labels: LabelSet,
 }
 
 impl LibraryFilter {
@@ -73,15 +143,11 @@ impl LibraryFilter {
         if !self.stars.is_empty() && !self.stars.contains(marks.rating) {
             return false;
         }
-        if let Some(want) = self.flag {
-            if marks.flag != want {
-                return false;
-            }
+        if !self.flags.is_empty() && !self.flags.contains(marks.flag) {
+            return false;
         }
-        if let Some(want) = self.label {
-            if marks.label != want {
-                return false;
-            }
+        if !self.labels.is_empty() && !self.labels.contains(marks.label) {
+            return false;
         }
         if !self.text.is_empty() {
             // ⚠⚠ `shown_name`, not `file_name`. Every copy of a file shares one `file_name`, so
@@ -101,8 +167,8 @@ impl LibraryFilter {
         self.format.is_active()
             || !self.text.is_empty()
             || !self.stars.is_empty()
-            || self.flag.is_some()
-            || self.label.is_some()
+            || !self.flags.is_empty()
+            || !self.labels.is_empty()
     }
 
     /// Clear the marks and the text, leaving the format filter alone.
@@ -112,8 +178,8 @@ impl LibraryFilter {
     pub fn clear_marks_and_text(&mut self) {
         self.text.clear();
         self.stars = RatingSet::default();
-        self.flag = None;
-        self.label = None;
+        self.flags = FlagSet::default();
+        self.labels = LabelSet::default();
     }
 }
 
@@ -271,13 +337,29 @@ mod tests {
         assert!(RatingSet::default().ratings().is_empty());
     }
 
+    fn flags(list: &[Flag]) -> FlagSet {
+        let mut s = FlagSet::default();
+        for &f in list {
+            s.toggle(f);
+        }
+        s
+    }
+
+    fn labels(list: &[u8]) -> LabelSet {
+        let mut s = LabelSet::default();
+        for &l in list {
+            s.toggle(l);
+        }
+        s
+    }
+
     #[test]
-    fn some_flag_none_means_unflagged_rather_than_any() {
-        // ⚠ `Some(Flag::None)` is meaningful, not degenerate: "show me the ones I have not judged
-        // yet" is a real culling question. `None` is what means "any".
+    fn flag_none_means_unflagged_rather_than_any() {
+        // ⚠ `Flag::None` is meaningful, not degenerate: "show me the ones I have not judged yet"
+        // is a real culling question. An *empty set* is what means "any".
         let e = entry("a.RAF", 0, None);
         let unflagged = LibraryFilter {
-            flag: Some(Flag::None),
+            flags: flags(&[Flag::None]),
             ..Default::default()
         };
         assert!(unflagged.matches(&e, marks(0, Flag::None, 0)));
@@ -289,21 +371,70 @@ mod tests {
     }
 
     #[test]
-    fn some_label_zero_means_unlabelled_rather_than_any() {
+    fn several_flags_can_be_selected_at_once() {
+        // ⚠ The point of a set: "picked or rejected, but not the ones I have not looked at".
+        let e = entry("a.RAF", 0, None);
+        let f = LibraryFilter {
+            flags: flags(&[Flag::Pick, Flag::Reject]),
+            ..Default::default()
+        };
+        assert!(f.matches(&e, marks(0, Flag::Pick, 0)));
+        assert!(f.matches(&e, marks(0, Flag::Reject, 0)));
+        assert!(!f.matches(&e, marks(0, Flag::None, 0)));
+    }
+
+    #[test]
+    fn label_zero_means_unlabelled_rather_than_any() {
         let e = entry("a.RAF", 0, None);
         let unlabelled = LibraryFilter {
-            label: Some(0),
+            labels: labels(&[0]),
             ..Default::default()
         };
         assert!(unlabelled.matches(&e, marks(0, Flag::None, 0)));
         assert!(!unlabelled.matches(&e, marks(0, Flag::None, 2)));
 
         let red = LibraryFilter {
-            label: Some(1),
+            labels: labels(&[1]),
             ..Default::default()
         };
         assert!(red.matches(&e, marks(0, Flag::None, 1)));
         assert!(!red.matches(&e, marks(0, Flag::None, 2)));
+    }
+
+    #[test]
+    fn several_labels_can_be_selected_at_once() {
+        let e = entry("a.RAF", 0, None);
+        let f = LibraryFilter {
+            labels: labels(&[1, 3]),
+            ..Default::default()
+        };
+        assert!(f.matches(&e, marks(0, Flag::None, 1)));
+        assert!(f.matches(&e, marks(0, Flag::None, 3)));
+        assert!(!f.matches(&e, marks(0, Flag::None, 2)));
+    }
+
+    #[test]
+    fn every_set_leads_with_its_unset_value() {
+        // ⚠⚠ **One ordering across every section**, which is the whole reason `FlagSet::ALL`
+        // exists rather than the UI listing the variants itself: unset first, then the values.
+        // Flag listed "Any, picked, rejected, unflagged" while colour listed "Any, unlabelled,
+        // colours" — two orderings for one idea, reported in use.
+        assert_eq!(FlagSet::ALL[0], Flag::None);
+        assert_eq!(RatingSet::default().ratings().first(), None);
+        let all_stars = stars(&[0, 1, 2, 3, 4, 5]);
+        assert_eq!(all_stars.ratings()[0], 0, "unrated must lead");
+        let all_labels = labels(&[0, 1, 2, 3, 4]);
+        assert_eq!(all_labels.labels()[0], 0, "unlabelled must lead");
+    }
+
+    #[test]
+    fn out_of_range_flags_and_labels_are_ignored() {
+        // ⚠ `1 << 9` on a `u8` wraps into another value's bit; the guard is what stops a label of
+        // 9 silently selecting label 1.
+        let mut l = LabelSet::default();
+        l.toggle(9);
+        assert!(l.is_empty(), "an out-of-range label set a bit");
+        assert!(!l.contains(1));
     }
 
     #[test]
@@ -326,8 +457,8 @@ mod tests {
         let pass = LibraryFilter {
             text: "dscf".into(),
             stars: stars(&[4]),
-            flag: Some(Flag::Pick),
-            label: Some(2),
+            flags: flags(&[Flag::Pick]),
+            labels: labels(&[2]),
             ..Default::default()
         };
         assert!(pass.matches(&e, m), "the fully-matching case must pass");
@@ -350,14 +481,14 @@ mod tests {
             (
                 "flag",
                 LibraryFilter {
-                    flag: Some(Flag::Reject),
+                    flags: flags(&[Flag::Reject]),
                     ..pass.clone()
                 },
             ),
             (
                 "label",
                 LibraryFilter {
-                    label: Some(3),
+                    labels: labels(&[3]),
                     ..pass.clone()
                 },
             ),
@@ -381,12 +512,12 @@ mod tests {
         }
         .is_active());
         assert!(LibraryFilter {
-            flag: Some(Flag::None),
+            flags: flags(&[Flag::None]),
             ..Default::default()
         }
         .is_active());
         assert!(LibraryFilter {
-            label: Some(0),
+            labels: labels(&[0]),
             ..Default::default()
         }
         .is_active());

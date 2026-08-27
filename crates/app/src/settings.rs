@@ -120,6 +120,16 @@ impl PanDrag {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Which file formats the Library hides.
+    ///
+    /// ⚠⚠ **A standing preference, not per-folder state — which is why it lives here and not on
+    /// `Library`.** "I shoot RAW+JPEG and only want to see the RAWs" is true of every folder, and
+    /// having it reset on each switch made it something to re-set constantly. Reported in use.
+    ///
+    /// ⚠ The *rest* of `LibraryFilter` deliberately does **not** persist: a search string or a
+    /// star selection is about the question you are asking right now, and a stale one that
+    /// empties a newly opened folder reads as breakage.
+    pub hidden_formats: crate::format_filter::FormatFilter,
     /// Ask before deleting a preset. Cleared by "Don't ask again" in that dialog; restored
     /// from the Settings window.
     pub confirm_preset_delete: bool,
@@ -256,6 +266,7 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            hidden_formats: crate::format_filter::FormatFilter::default(),
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
@@ -434,6 +445,34 @@ mod tests {
     }
 
     #[test]
+    fn the_hidden_formats_survive_a_restart() {
+        // ⚠ A standing preference — "I shoot RAW+JPEG and only want the RAWs" is true of every
+        // folder. Persisting it here is what stops it resetting on each source switch.
+        let f = TempFile::new("hidden_formats_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let mut s = Settings::default();
+        s.hidden_formats.toggle("jpg");
+        store.save(&s).unwrap();
+        let loaded = store.load();
+        assert!(loaded.hidden_formats.is_hidden("jpg"));
+        assert!(!loaded.hidden_formats.is_hidden("raf"));
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_format_filter_still_loads() {
+        // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
+        // *every* setting — which is why each new field needs this.
+        let f = TempFile::new("hidden_formats_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert!(
+            !loaded.hidden_formats.is_active(),
+            "an absent filter must default to hiding nothing"
+        );
+    }
+
+    #[test]
     fn settings_round_trip_carries_the_demosaic_choice() {
         let f = TempFile::new("demosaic_rt");
         let store = SettingsStore::new(f.0.clone());
@@ -515,6 +554,12 @@ mod tests {
         let f = TempFile::new("export_rt");
         let store = SettingsStore::new(f.0.clone());
         let s = Settings {
+            // Not the default, so the round trip actually carries it.
+            hidden_formats: {
+                let mut f = crate::format_filter::FormatFilter::default();
+                f.toggle("png");
+                f
+            },
             confirm_preset_delete: false,
             confirm_export_preset_delete: false,
             // Listed explicitly rather than via `..Default::default()`: this literal being

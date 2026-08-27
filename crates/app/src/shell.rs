@@ -315,39 +315,65 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
     };
     let mut f = before.clone();
 
-    ui.menu_button(mark_filter_label(&f), |ui| {
-        // ⚠ Multi-select toggles, not one exclusive value. A minimum could not express "only the
-        // one-star ones", and exact matching is what flag and label already do.
-        ui.label("Rating");
-        for v in 0..=rustroom_app::library_filter::RatingSet::MAX {
-            let text = if v == 0 {
-                "Unrated".to_string()
-            } else {
-                format!("{v}★")
-            };
-            let mut on = f.stars.contains(v);
-            if ui.checkbox(&mut on, text).changed() {
-                f.stars.toggle(v);
+    // ⚠⚠ `CloseOnClickOutside`, not the default `CloseOnClick`. Every row here is a checkbox and
+    // the whole point is ticking several; a popup that shut on the first tick made setting two
+    // filters a four-click job of reopening it.
+    let cfg = egui::containers::menu::MenuConfig::default()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    egui::containers::menu::MenuButton::new(mark_filter_label(&f))
+        .config(cfg)
+        .ui(ui, |ui| {
+            // ⚠⚠ **One ordering across all three sections: the unset value first, then the
+            // values.** Flag used to read "Any, picked, rejected, unflagged" while colour read
+            // "Any, unlabelled, colours" — two orderings for one idea. There is no "Any" row any
+            // more either: an empty set *is* "any", which is the same convention in all three and
+            // one fewer thing to explain.
+            ui.label("Rating");
+            for v in 0..=rustroom_app::library_filter::RatingSet::MAX {
+                let text = if v == 0 {
+                    "Unrated".to_string()
+                } else {
+                    format!("{v}★")
+                };
+                let mut on = f.stars.contains(v);
+                if ui.checkbox(&mut on, text).changed() {
+                    f.stars.toggle(v);
+                }
             }
-        }
-        ui.separator();
-        ui.label("Flag");
-        ui.selectable_value(&mut f.flag, None, "Any");
-        ui.selectable_value(&mut f.flag, Some(catalog::db::Flag::Pick), "⚑ Picked");
-        ui.selectable_value(&mut f.flag, Some(catalog::db::Flag::Reject), "× Rejected");
-        ui.selectable_value(&mut f.flag, Some(catalog::db::Flag::None), "Unflagged");
-        ui.separator();
-        ui.label("Colour");
-        ui.selectable_value(&mut f.label, None, "Any");
-        ui.selectable_value(&mut f.label, Some(0), "Unlabelled");
-        for (n, name) in [(1u8, "Red"), (2, "Blue"), (3, "Yellow"), (4, "Green")] {
-            ui.selectable_value(&mut f.label, Some(n), name);
-        }
-        ui.separator();
-        if ui.button("Clear").clicked() {
-            f.clear_marks_and_text();
-        }
-    });
+            ui.separator();
+            ui.label("Flag");
+            // ⚠ Driven by `FlagSet::ALL`, so the ordering lives beside the type rather than being
+            // re-invented here — the rule `EDIT_GROUP_NAMES` and `Tool::ALL` already follow.
+            for flag in rustroom_app::library_filter::FlagSet::ALL {
+                let text = match flag {
+                    catalog::db::Flag::None => "Unflagged",
+                    catalog::db::Flag::Pick => "⚑ Picked",
+                    catalog::db::Flag::Reject => "× Rejected",
+                };
+                let mut on = f.flags.contains(flag);
+                if ui.checkbox(&mut on, text).changed() {
+                    f.flags.toggle(flag);
+                }
+            }
+            ui.separator();
+            ui.label("Colour");
+            for (n, name) in [
+                (0u8, "Unlabelled"),
+                (1, "Red"),
+                (2, "Blue"),
+                (3, "Yellow"),
+                (4, "Green"),
+            ] {
+                let mut on = f.labels.contains(n);
+                if ui.checkbox(&mut on, name).changed() {
+                    f.labels.toggle(n);
+                }
+            }
+            ui.separator();
+            if ui.button("Clear").clicked() {
+                f.clear_marks_and_text();
+            }
+        });
 
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
     // hundreds per frame is the `apply_view_demosaic` mistake in another costume.
@@ -373,18 +399,25 @@ fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter) -> String 
             .collect();
         parts.push(format!("{}★", list.join(",")));
     }
-    match f.flag {
-        Some(catalog::db::Flag::Pick) => parts.push("⚑".into()),
-        Some(catalog::db::Flag::Reject) => parts.push("×".into()),
-        Some(catalog::db::Flag::None) => parts.push("unflagged".into()),
-        None => {}
+    for flag in f.flags.flags() {
+        parts.push(
+            match flag {
+                catalog::db::Flag::None => "unflagged",
+                catalog::db::Flag::Pick => "⚑",
+                catalog::db::Flag::Reject => "×",
+            }
+            .to_string(),
+        );
     }
-    if let Some(n) = f.label {
-        parts.push(if n == 0 {
-            "unlabelled".into()
-        } else {
-            format!("colour {n}")
-        });
+    if !f.labels.is_empty() {
+        let names = ["unlabelled", "red", "blue", "yellow", "green"];
+        let list: Vec<&str> = f
+            .labels
+            .labels()
+            .into_iter()
+            .map(|l| names.get(l as usize).copied().unwrap_or("?"))
+            .collect();
+        parts.push(list.join(","));
     }
     // ⚠⚠ **Always prefixed.** It read as `3★+` alone when active, so the button stopped naming
     // itself and looked like a different control depending on what was set — reported in use.
@@ -520,6 +553,12 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     if let Some(ext) = toggled {
         lib.filter.format.toggle(&ext);
         lib.refilter();
+        // ⚠ Persisted, so it survives a source switch and a restart. Written only on an actual
+        // toggle — this body runs every frame, and saving unconditionally would rewrite the
+        // settings file sixty times a second, the `apply_view_demosaic` rule.
+        let hidden = lib.filter.format.clone();
+        app.settings.hidden_formats = hidden;
+        app.save_settings();
     }
 }
 
@@ -534,17 +573,21 @@ mod tests {
         assert_eq!(mark_filter_label(&LibraryFilter::default()), "Filter");
         let mut three = rustroom_app::library_filter::RatingSet::default();
         three.toggle(3);
+        let mut unflagged = rustroom_app::library_filter::FlagSet::default();
+        unflagged.toggle(catalog::db::Flag::None);
+        let mut unlabelled = rustroom_app::library_filter::LabelSet::default();
+        unlabelled.toggle(0);
         for f in [
             LibraryFilter {
                 stars: three,
                 ..Default::default()
             },
             LibraryFilter {
-                flag: Some(catalog::db::Flag::None),
+                flags: unflagged,
                 ..Default::default()
             },
             LibraryFilter {
-                label: Some(0),
+                labels: unlabelled,
                 ..Default::default()
             },
         ] {

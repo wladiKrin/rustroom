@@ -37,7 +37,8 @@ pub fn formats_present(entries: &[PhotoEntry]) -> Vec<(String, usize)> {
 /// after a folder reload — a new file type dropped into the directory — would be absent from
 /// the set and therefore silently invisible. Hidden-by-exception makes "everything is visible"
 /// the default and needs no maintenance when the folder changes.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct FormatFilter {
     hidden: BTreeSet<String>,
 }

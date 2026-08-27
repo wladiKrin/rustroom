@@ -1902,8 +1902,16 @@ impl RustroomApp {
             last_want: Vec::new(),
             selection: Selection::default(),
             loader,
-            // A fresh `Library` per load, so the filter resets by construction.
-            filter: Default::default(),
+            // ⚠ A fresh `Library` per load, so the search text and the mark selections reset by
+            // construction — they are about the question you are asking right now.
+            //
+            // ⚠⚠ **The format filter is the exception and is seeded from `Settings`.** "I shoot
+            // RAW+JPEG and only want to see the RAWs" is true of every folder, so resetting it on
+            // each switch made it something to re-set constantly.
+            filter: rustroom_app::library_filter::LibraryFilter {
+                format: self.settings.hidden_formats.clone(),
+                ..Default::default()
+            },
             visible: (0..n).collect(),
             marks: std::collections::HashMap::new(),
         });
