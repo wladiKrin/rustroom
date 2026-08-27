@@ -380,3 +380,32 @@ to an AI assistant, not to a contributor**, and it is enormous.
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
 
+
+## Dialog sizing and layout (recorded 2026-08-27 — reported from use)
+
+**Status:** 🟡 wanted, awaiting effort rather than a design question. Reported as *"all pop up
+windows in general are very small and cramped."*
+
+Every dialog is an `egui::Modal` laid out with whatever width its content happens to want, and the
+result is uniformly tight: the rule editor's rows wrap, the export dialog's hint text crowds its
+controls, and the Information dialog's `label: value` rows have no column alignment.
+
+⚠ **This is a `theme` job, not a per-dialog one.** Nine dialogs each grown their own spacing is how
+they got here; fixing them one at a time reproduces exactly that. What the theme is missing is a
+**dialog convention** the way `theme::button_row` already encodes the confirm/dismiss one:
+
+1. A **minimum width** per dialog class — a confirmation is narrow, an editor is wide — set once,
+   so no dialog has to remember.
+2. **Padding inside the modal frame.** `egui::Modal`'s default frame is tight against the window
+   edge, which is most of the "cramped" feeling.
+3. **Aligned label columns** where a dialog is a list of `label: value` rows (Information,
+   Settings, Export). `egui::Grid` does this and none of them use it.
+4. A **max height with an inner `ScrollArea`**, so a long rule or a long preset list cannot push a
+   dialog past the bottom of the screen.
+
+⚠ **The compact metrics are not the cause and should not be reverted.** `theme::apply` tightens
+`item_spacing` and `slider_rail_height` deliberately, for the *panel* — a panel of forty sliders is
+where vertical space is scarce. A dialog is the opposite case and wants its own metrics.
+
+⚠ **Appearance is exactly what the headless test harness cannot see** (its own recorded caveat), so
+this is a change to be judged by looking at it, one dialog at a time, with the app running.
