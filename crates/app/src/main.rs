@@ -94,8 +94,16 @@ enum AppView {
 #[derive(Debug, Clone, PartialEq)]
 enum LibrarySource {
     Folder(PathBuf),
-    Collection { id: i64, name: String },
-    Keyword { id: i64, name: String },
+    /// Every photo the catalog knows, from every folder ever opened.
+    AllPhotos,
+    Collection {
+        id: i64,
+        name: String,
+    },
+    Keyword {
+        id: i64,
+        name: String,
+    },
 }
 
 struct Library {
@@ -185,6 +193,18 @@ impl Library {
             self.last_want = missing;
         }
     }
+}
+
+/// The modification time `collections::scan_of` used to read for itself.
+///
+/// ⚠ `UNIX_EPOCH` when the metadata cannot be read, so an unreadable file sorts to the oldest end
+/// rather than failing the whole load — the rule `CatalogEntry::modified` already documents. It
+/// lives here rather than in `scan_of` because **All Photos must not walk the filesystem**, and a
+/// function that stats internally cannot offer that.
+fn fs_modified(path: &std::path::Path) -> std::time::SystemTime {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
 /// A photo whose decode is scheduled or in flight. `Session` still means "fully decoded",
@@ -1717,6 +1737,11 @@ impl RustroomApp {
         let Some(dir) = rfd::FileDialog::new().pick_folder() else {
             return;
         };
+        self.open_folder_at(ctx, dir);
+    }
+
+    /// Scan `dir` and show it. The half of `open_folder` that is not the file dialog.
+    fn open_folder_at(&mut self, ctx: &egui::Context, dir: PathBuf) {
         match catalog::scan_folder(&dir) {
             Ok(mut scan) => {
                 // ⚠ Ordered **before** expanding into entries. Sorting the scan is what keeps a
@@ -1735,31 +1760,7 @@ impl RustroomApp {
                         eprintln!("catalog: {e}");
                     }
                 }
-                // ⚠ One row per (file, copy). Reading every sidecar costs 4.6 ms for 830 files,
-                // measured — small enough to stay inline rather than moving to the loader thread.
-                let entries = entries::build(&scan, sidecar::load_all);
-                let n = entries.len();
-                let ctx2 = ctx.clone();
-                let space = self
-                    .settings
-                    .effective_display_space(self.os_manages_colour);
-                let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
-                self.library = Some(Library {
-                    source: LibrarySource::Folder(dir.clone()),
-                    scan,
-                    entries,
-                    cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
-                    last_want: Vec::new(),
-                    selection: Selection::default(),
-                    loader,
-                    // A fresh `Library` per folder load, so the filter resets by construction.
-                    filter: FormatFilter::default(),
-                    visible: (0..n).collect(),
-                    marks: std::collections::HashMap::new(),
-                    min_stars: 0,
-                });
-                self.reload_marks();
-                self.view = AppView::Library;
+                let n = self.open_scan(ctx, LibrarySource::Folder(dir.clone()), scan);
                 self.status = if n == 0 {
                     "No supported images in this folder.".into()
                 } else {
@@ -1768,6 +1769,153 @@ impl RustroomApp {
             }
             Err(e) => self.status = format!("Could not read folder: {e}"),
         }
+    }
+
+    /// Show every photo the catalog knows, from every folder ever opened.
+    ///
+    /// ⚠⚠ **This does not walk the filesystem.** The modification times come from the catalog,
+    /// recorded when each folder was last scanned — which is what makes the view affordable at
+    /// 10,000 photos, and is what `mtime` was captured for in M4.1 (nothing had read it until
+    /// now). Consequence: a file changed outside Rustroom since its folder was last scanned shows
+    /// a stale time here. Clicking that folder in the panel re-scans it and refreshes them.
+    fn open_all_photos(&mut self, ctx: &egui::Context) {
+        let Some(cat) = &self.catalog else {
+            self.status = "No catalog".into();
+            return;
+        };
+        let rows = match cat.all_photos() {
+            Ok(r) => r,
+            Err(e) => {
+                self.status = format!("Could not read the catalog: {e}");
+                return;
+            }
+        };
+        // ⚠ A lookup built once, rather than a stat per photo. `s.max(0)` guards a negative unix
+        // time, which `SystemTime` addition cannot represent — it would panic rather than sort
+        // oddly.
+        let mtimes: std::collections::HashMap<PathBuf, std::time::SystemTime> = rows
+            .iter()
+            .filter_map(|r| {
+                r.mtime.map(|s| {
+                    (
+                        r.path.clone(),
+                        std::time::SystemTime::UNIX_EPOCH
+                            + std::time::Duration::from_secs(s.max(0) as u64),
+                    )
+                })
+            })
+            .collect();
+        let members: Vec<(PathBuf, u32)> = rows.into_iter().map(|r| (r.path, r.copy)).collect();
+        let mut scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at, |p| {
+            mtimes
+                .get(p)
+                .copied()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(ctx, LibrarySource::AllPhotos, scan);
+        self.status = if n == 0 {
+            "The catalog is empty — open a folder to add photos.".into()
+        } else {
+            format!("All photos — {n}")
+        };
+    }
+
+    /// Open a folder named by the catalog, re-scanning it.
+    ///
+    /// ⚠⚠ **A folder row re-scans; it does not browse from the catalog.** "One idiom for the whole
+    /// panel" was the first instinct and it is wrong here: collections and keywords *span* folders
+    /// and genuinely cannot scan, while a folder row names one real directory and can. So there is
+    /// no such thing as a stale panel-browsed folder, refreshing needs no new button (click the
+    /// row again), and `Reindex` keeps working because the source is a `Folder`.
+    ///
+    /// ⚠ An unreadable directory falls back to the catalog's last-seen rows rather than showing an
+    /// empty folder. An unplugged drive must not look like the folder emptied itself — the rule
+    /// `sync_folder` already follows in never deleting a photo row.
+    fn open_catalog_folder(&mut self, ctx: &egui::Context, dir: &std::path::Path) {
+        if catalog::scan_folder(dir).is_ok() {
+            self.open_folder_at(ctx, dir.to_path_buf());
+            return;
+        }
+        let Some(cat) = &self.catalog else {
+            self.status = "No catalog".into();
+            return;
+        };
+        let names = cat.photos_in(dir).unwrap_or_default();
+        let members: Vec<(PathBuf, u32)> = names.into_iter().map(|n| (dir.join(n), 0)).collect();
+        let mut scan =
+            rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(ctx, LibrarySource::Folder(dir.to_path_buf()), scan);
+        self.status = format!(
+            "{} is unreadable — showing {n} photos last seen",
+            dir.display()
+        );
+    }
+
+    /// Remove a folder from the catalog.
+    ///
+    /// ⚠ Deletes catalog rows only — the photos, their sidecars and every edit in them are
+    /// untouched. Re-opening the folder catalogues it again, minus the library metadata.
+    fn forget_folder(&mut self, ctx: &egui::Context, id: i64, path: &std::path::Path) {
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = cat.forget_folder(id) {
+                self.status = format!("Could not forget the folder: {e}");
+                return;
+            }
+        }
+        // ⚠ What is on screen may now be rows that exist nowhere. Two cases, and both need
+        // handling: the folder itself, and All Photos, which was showing some of its photos.
+        match self.library.as_ref().map(|l| l.source.clone()) {
+            Some(LibrarySource::Folder(p)) if p == path => {
+                // ⚠ Closed rather than left showing rows the catalog no longer has — the rule the
+                // collection and keyword deletions already follow.
+                self.library = None;
+            }
+            Some(LibrarySource::AllPhotos) => self.open_all_photos(ctx),
+            _ => {}
+        }
+        self.status = format!("Forgot “{}”", path.display());
+    }
+
+    /// Build and show a `Library` from an already-sorted scan, returning how many rows it holds.
+    ///
+    /// ⚠⚠ **The one place a `Library` is constructed.** Three loaders had grown three copies of
+    /// these fifteen lines between them, and a fourth was the point at which they became one — a
+    /// new field on `Library` had to be added in three places, which is how two of them drift.
+    ///
+    /// ⚠ One row per (file, copy). Reading every sidecar costs 4.6 ms for 830 files, measured —
+    /// small enough to stay inline rather than moving to the loader thread.
+    fn open_scan(
+        &mut self,
+        ctx: &egui::Context,
+        source: LibrarySource,
+        scan: Vec<catalog::CatalogEntry>,
+    ) -> usize {
+        let entries = entries::build(&scan, sidecar::load_all);
+        let n = entries.len();
+        let ctx2 = ctx.clone();
+        let space = self
+            .settings
+            .effective_display_space(self.os_manages_colour);
+        let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
+        self.library = Some(Library {
+            source,
+            scan,
+            entries,
+            cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
+            last_want: Vec::new(),
+            selection: Selection::default(),
+            loader,
+            // A fresh `Library` per load, so the filter resets by construction.
+            filter: FormatFilter::default(),
+            visible: (0..n).collect(),
+            marks: std::collections::HashMap::new(),
+            min_stars: 0,
+        });
+        self.reload_marks();
+        self.view = AppView::Library;
+        n
     }
 
     fn open_entry(&mut self, ctx: &egui::Context, index: usize) {
@@ -2032,7 +2180,7 @@ impl RustroomApp {
         else {
             // ⚠ Reindex renumbers copies in a *folder*. A collection has no single folder to
             // re-read, and renumbering photos you are merely viewing would be surprising.
-            self.status = "Reindex works on a folder, not a collection".into();
+            self.status = "Reindex works on a folder, not a collection or All Photos".into();
             return;
         };
         // ⚠ Written first: a compaction rewrites the sidecar this photo's edits belong in, so an
@@ -2111,33 +2259,17 @@ impl RustroomApp {
                 return;
             }
         };
-        let mut scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at);
+        let mut scan =
+            rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
         catalog::sort(&mut scan, self.settings.library_sort);
-        let entries = entries::build(&scan, sidecar::load_all);
-        let n = entries.len();
-        let ctx2 = ctx.clone();
-        let space = self
-            .settings
-            .effective_display_space(self.os_manages_colour);
-        let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
-        self.library = Some(Library {
-            source: LibrarySource::Collection {
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::Collection {
                 id,
                 name: name.to_string(),
             },
             scan,
-            entries,
-            cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
-            last_want: Vec::new(),
-            selection: Selection::default(),
-            loader,
-            filter: FormatFilter::default(),
-            visible: (0..n).collect(),
-            marks: std::collections::HashMap::new(),
-            min_stars: 0,
-        });
-        self.reload_marks();
-        self.view = AppView::Library;
+        );
         self.status = if n == 0 {
             format!("“{name}” is empty")
         } else {
@@ -2161,33 +2293,17 @@ impl RustroomApp {
                 return;
             }
         };
-        let mut scan = rustroom_app::collections::scan_of(&members, sidecar::edited_at);
+        let mut scan =
+            rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
         catalog::sort(&mut scan, self.settings.library_sort);
-        let entries = entries::build(&scan, sidecar::load_all);
-        let n = entries.len();
-        let ctx2 = ctx.clone();
-        let space = self
-            .settings
-            .effective_display_space(self.os_manages_colour);
-        let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
-        self.library = Some(Library {
-            source: LibrarySource::Keyword {
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::Keyword {
                 id,
                 name: name.to_string(),
             },
             scan,
-            entries,
-            cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
-            last_want: Vec::new(),
-            selection: Selection::default(),
-            loader,
-            filter: FormatFilter::default(),
-            visible: (0..n).collect(),
-            marks: std::collections::HashMap::new(),
-            min_stars: 0,
-        });
-        self.reload_marks();
-        self.view = AppView::Library;
+        );
         self.status = if n == 0 {
             format!("Nothing tagged “{name}”")
         } else {
@@ -2583,6 +2699,41 @@ fn edit_group_checkboxes(ui: &mut egui::Ui, groups: &mut EditGroups) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_catalog_folder_row_rescans_the_directory() {
+        // ⚠⚠ The whole reason a folder row differs from a collection or keyword row, and the
+        // reason there is no "Refresh" button: browsing a folder from the panel *is* scanning it.
+        // Without this the row would show whatever the catalog last recorded, and a file added
+        // outside Rustroom would never appear — which reads as a bug.
+        //
+        // ⚠ Written because the sabotage step found nothing covered it: forcing
+        // `open_catalog_folder` down its catalog-fallback path left the whole suite green.
+        let dir = test_app::TestDir::new("rescan");
+        std::fs::write(dir.0.join("a.RAF"), b"x").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+
+        app.open_catalog_folder(&ctx, &dir.0);
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            1,
+            "the folder did not load"
+        );
+
+        std::fs::write(dir.0.join("b.RAF"), b"x").unwrap();
+        app.open_catalog_folder(&ctx, &dir.0);
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            2,
+            "the row did not re-scan — a file added outside Rustroom stayed invisible"
+        );
+        // ⚠ And the source must stay a `Folder`, or `Reindex` would start refusing on it.
+        assert!(matches!(
+            app.library.as_ref().unwrap().source,
+            LibrarySource::Folder(_)
+        ));
+    }
 
     #[test]
     fn the_before_view_keeps_the_geometry_and_drops_the_adjustments() {

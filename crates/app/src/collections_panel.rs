@@ -23,12 +23,65 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         DeleteKeyword(i64),
         TagSelection(i64),
         CreateKeyword,
+        OpenAllPhotos,
+        OpenFolder(std::path::PathBuf),
+        ForgetFolder(i64, std::path::PathBuf, i64),
     }
     let mut action = Action::None;
 
     egui::Panel::left("collections")
         .default_size(190.0)
         .show(ui, |ui| {
+            // ⚠ Folders first: "where photos come from" is the outer concept, and All Photos —
+            // the whole catalog — is the natural top of it.
+            ui.heading("Folders");
+            let all = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.photo_count().ok())
+                .unwrap_or(0);
+            let showing_all = matches!(
+                app.library.as_ref().map(|l| &l.source),
+                Some(crate::LibrarySource::AllPhotos)
+            );
+            if ui
+                .selectable_label(showing_all, format!("All Photos ({all})"))
+                .on_hover_text("Every photo in the catalog, from every folder ever opened")
+                .clicked()
+            {
+                action = Action::OpenAllPhotos;
+            }
+            let folders = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.folders().ok())
+                .unwrap_or_default();
+            for f in &folders {
+                ui.horizontal(|ui| {
+                    if ui.button("×").on_hover_text("Forget this folder").clicked() {
+                        action = Action::ForgetFolder(f.id, f.path.clone(), f.count);
+                    }
+                    // ⚠ The basename is what fits and what identifies; the full path is the hover.
+                    let shown = f
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| f.path.to_string_lossy().to_string());
+                    let selected = matches!(
+                        app.library.as_ref().map(|l| &l.source),
+                        Some(crate::LibrarySource::Folder(p)) if p == &f.path
+                    );
+                    if ui
+                        .selectable_label(selected, format!("{shown} ({})", f.count))
+                        .on_hover_text(f.path.to_string_lossy())
+                        .clicked()
+                    {
+                        action = Action::OpenFolder(f.path.clone());
+                    }
+                });
+            }
+            ui.separator();
+
             ui.heading("Collections");
             ui.horizontal(|ui| {
                 ui.add(
@@ -197,6 +250,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 let _ = cat.create_keyword(app.new_keyword.trim(), app.new_keyword_parent);
             }
             app.new_keyword.clear();
+        }
+        Action::OpenAllPhotos => app.open_all_photos(ctx),
+        Action::OpenFolder(path) => app.open_catalog_folder(ctx, &path),
+        Action::ForgetFolder(id, path, count) => {
+            app.modal = crate::modals::Modal::ConfirmForgetFolder { path, id, count };
         }
         Action::OpenKeyword(id, name) => app.open_keyword(ctx, id, &name),
         Action::DeleteKeyword(id) => {

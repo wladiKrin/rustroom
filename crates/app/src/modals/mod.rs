@@ -88,6 +88,16 @@ pub enum Modal {
         name: String,
         dont_ask_again: bool,
     },
+    /// Confirming that a folder is removed from the catalog.
+    ///
+    /// ⚠ **No `dont_ask_again`, deliberately.** A deleted preset goes to a 20-entry trash and is
+    /// restorable by Ctrl+Z; this has neither. Suppressing a guard on the *irrecoverable* action
+    /// is exactly the distinction `the_two_delete_guards_are_independent` exists to protect.
+    ConfirmForgetFolder {
+        path: std::path::PathBuf,
+        id: i64,
+        count: i64,
+    },
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -120,6 +130,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         SaveExport,
         ConfirmDeleteExport,
         ConfirmDelete,
+        ConfirmForget,
         Settings,
         Shortcuts,
         About,
@@ -133,6 +144,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::SaveExportPreset { .. } => Which::SaveExport,
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
+        Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
         Modal::Settings => Which::Settings,
         Modal::KeyboardShortcuts => Which::Shortcuts,
         Modal::About => Which::About,
@@ -150,9 +162,47 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::SaveExport => export::save_preset(app, ctx),
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
+        Which::ConfirmForget => confirm_forget_folder(app, ctx),
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),
         Which::About => about(app, ctx),
+    }
+}
+
+/// Confirming that a folder is removed from the catalog.
+///
+/// ⚠⚠ **No "don't ask again".** A deleted preset goes to a 20-entry trash and Ctrl+Z restores it;
+/// this has neither, so the guard on the irrecoverable action is never suppressible.
+fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
+    let Modal::ConfirmForgetFolder { path, id, count } = &app.modal else {
+        return;
+    };
+    let (path, id, count) = (path.clone(), *id, *count);
+    let mut confirmed = false;
+    let mut cancelled = false;
+
+    let dismissed = dialog(ctx, "confirm_forget_folder", "Forget folder", |ui| {
+        ui.label(format!("Forget “{}”?", path.display()));
+        crate::theme::hint(
+            ui,
+            &format!(
+                "Removes {count} photos from the catalog, with their ratings, flags, labels and \
+                 keywords. No files are deleted and no edits are lost — re-opening the folder \
+                 catalogues it again."
+            ),
+        );
+        ui.separator();
+        let (yes, no) = crate::theme::button_row(ui, "Forget", true, "Cancel");
+        confirmed = yes;
+        cancelled = no;
+    });
+
+    // Clicking outside is a cancel, as in every other confirmation here.
+    if confirmed {
+        app.forget_folder(ctx, id, &path);
+        app.modal = Modal::None;
+    } else if cancelled || dismissed {
+        app.modal = Modal::None;
     }
 }
 
