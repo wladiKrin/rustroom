@@ -977,6 +977,34 @@ impl Catalog {
         Ok(())
     }
 
+    /// How many of `files` carry each keyword — the tri-state a photo menu needs.
+    ///
+    /// ⚠⚠ **Direct assignments only, never the subtree.** `keyword_members` expands descendants
+    /// because a *search* for `Europe` must find `Paris`; a menu toggle removes an
+    /// **assignment**, so a photo tagged only `Paris` must show `Europe` unchecked. Ticking it
+    /// from the subtree would make unticking it appear to do nothing.
+    pub fn keyword_counts(
+        &self,
+        files: &[PathBuf],
+    ) -> Result<std::collections::HashMap<i64, usize>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT pk.keyword_id FROM photo_keywords pk
+             JOIN folders f ON f.id = pk.folder_id
+             WHERE f.path = ?1 AND pk.file_name = ?2",
+        )?;
+        let mut counts = std::collections::HashMap::new();
+        for file in files {
+            let Some((folder, name)) = split(file) else {
+                continue;
+            };
+            let rows = stmt.query_map(rusqlite::params![folder, name], |r| r.get::<_, i64>(0))?;
+            for id in rows.filter_map(Result::ok) {
+                *counts.entry(id).or_insert(0) += 1;
+            }
+        }
+        Ok(counts)
+    }
+
     /// Every photo carrying `keyword` **or any of its descendants**, as `(path, copy)`.
     ///
     /// ⚠⚠ The subtree is resolved by a recursive CTE at query time, never stored. Storing the
@@ -1909,6 +1937,45 @@ mod tests {
         assert!(cat.keyword_members(k).unwrap().is_empty());
         assert_eq!(cat.keywords().unwrap().len(), 1, "the keyword survives");
         assert_eq!(cat.photo_count().unwrap(), 1, "and so does the photo");
+    }
+
+    #[test]
+    fn keyword_counts_count_direct_assignments_and_not_the_subtree() {
+        // ⚠⚠ The trap this exists for: `keyword_members` deliberately expands descendants, so a
+        // search for Europe finds a photo tagged only Paris. A menu **toggle** must not — it
+        // removes an assignment, and a ticked Europe that unticking cannot clear reads as the
+        // control being broken.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF"), entry("b.RAF")])
+            .unwrap();
+        let europe = cat.create_keyword("Europe", None).unwrap();
+        let paris = cat.create_keyword("Paris", Some(europe)).unwrap();
+        cat.assign_keyword(paris, Path::new("/x/a.RAF")).unwrap();
+        cat.assign_keyword(europe, Path::new("/x/a.RAF")).unwrap();
+        cat.assign_keyword(paris, Path::new("/x/b.RAF")).unwrap();
+
+        let files = vec![PathBuf::from("/x/a.RAF"), PathBuf::from("/x/b.RAF")];
+        let counts = cat.keyword_counts(&files).unwrap();
+
+        assert_eq!(counts.get(&paris), Some(&2), "both carry Paris directly");
+        assert_eq!(
+            counts.get(&europe),
+            Some(&1),
+            "only one carries Europe itself — b.RAF is tagged Paris, which is not the same thing"
+        );
+    }
+
+    #[test]
+    fn an_untagged_file_contributes_no_counts() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        cat.create_keyword("Paris", None).unwrap();
+
+        let counts = cat
+            .keyword_counts(&[PathBuf::from("/x/a.RAF")])
+            .unwrap();
+
+        assert!(counts.is_empty(), "an absent keyword is absent, not zero");
     }
 
     #[test]
