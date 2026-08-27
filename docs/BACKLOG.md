@@ -409,3 +409,63 @@ where vertical space is scarce. A dialog is the opposite case and wants its own 
 
 ⚠ **Appearance is exactly what the headless test harness cannot see** (its own recorded caveat), so
 this is a change to be judged by looking at it, one dialog at a time, with the app running.
+
+## Rearranging the Library panel's sections (recorded 2026-08-27 — asked for in use)
+
+**Status:** 🟡 wanted, small-to-medium, no design question. Asked as *"it would be nice to be able
+to rearrange the left outer panel, e.g. by dragging folders below collections."*
+
+The five sections — Folders, Collections, Smart collections, Keywords, Dates — are collapsible and
+persisted (`Settings::panel_sections`), but their **order is literal code**: five `section(..)`
+calls in `collections_panel::show`.
+
+⚠⚠ **The blocker is not the drag; it is that the sections are not data.** Each body is a distinct
+closure over different `app` fields, so there is no list to permute. Making it draggable means
+first making the order a value — `Vec<PanelSection>` in `Settings`, with a `match` from the enum
+to the body — and only then adding the gesture. The `match` is what keeps the bodies as they are.
+
+⚠ **A latent trap the reordering already sprang once:** `picked` and `selected` used to be locals
+of the Collections block that the Keywords block happened to see, because they were sequential
+statements in one closure. Moving Smart between them broke it, and the compiler caught it. Anything
+shared between sections must be read **before** the panel, or the order cannot be a value at all.
+
+⚠ egui's `dnd_drag_source` / `dnd_drop_zone` exist and are the right primitives; nothing needs
+writing from scratch.
+
+## Undo for catalog deletions (recorded 2026-08-27 — asked for in use)
+
+**Status:** 🟡 wanted, and it is a **design question**, not only effort. Asked as *"it should have
+a history, such that if one deletes something, e.g. a collection or keyword, that can be
+reverted."*
+
+Four destructive catalog actions have **no undo at all** today:
+
+| action | what it destroys |
+|---|---|
+| Delete a collection | its membership rows |
+| Delete a keyword | ⚠ **its whole subtree** and every assignment of any of them |
+| Delete a smart collection | its rule |
+| Forget a folder | the folder's photo rows, and with them **every rating, flag, label and keyword assignment** |
+
+⚠⚠ **The precedent is `PresetStore`'s trash, and it does not transfer cleanly.** A deleted preset
+is a *file*, so the trash is a directory and restoring is a rename. These are **rows across several
+tables** — `keywords`, `photo_keywords`, `collections`, `collection_photos`, `photos` — and a
+delete cascades. So "the trash" here is either a serialized snapshot of what was removed, or a
+`deleted_at` column and every query learning to exclude it. **That choice is the design question**,
+and the second option touches every existing query, which is why it should not be picked casually.
+
+⚠ **`ActionLog` is the right home once the payload exists.** It already interleaves photo edits
+with preset deletions chronologically, and `ActionKind::PresetDelete { name }` is exactly the shape
+a `CollectionDelete { .. }` would take — the entry names *which* stack to pop, and the payload
+lives where it already lives. ⚠ Note `reachable()`: a catalog deletion is **global**, like
+`PresetDelete` and `Sync`, not scoped to a photo.
+
+⚠ **Forgetting a folder is the one that matters most and is the hardest.** It is the only action
+that takes *user-created metadata* (ratings, keywords) with it, and it is deliberately confirmed
+for that reason — but a confirmation is not an undo. ⚠ It is also the only one whose restore has to
+recreate rows other tables reference **by id**, so a plain re-insert gets new ids and every
+membership pointing at the old ones is still dangling. Restoring must preserve the ids.
+
+⚠ **A cheaper first slice that is worth doing on its own:** deleting a **keyword** currently takes
+its children with it, silently and with one click. Even without an undo, that deserves the
+confirmation `forget_folder` has, naming the count. Same for a collection with members.
