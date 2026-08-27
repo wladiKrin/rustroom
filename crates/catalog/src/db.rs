@@ -46,7 +46,7 @@ impl From<rusqlite::Error> for CatalogError {
 ///
 /// ⚠ Stored as `1 / -1 / 0` rather than as text: the neutral value is then `0`, the same as an
 /// unrated star and an unset label, so "no mark" needs no special case anywhere.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Flag {
     #[default]
     None,
