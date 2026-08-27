@@ -212,6 +212,7 @@ mod tests {
                         exposure: 1.0,
                         ..Edits::default()
                     },
+                    snapshots: Vec::new(),
                 },
                 CopyEntry {
                     copy: 1,
@@ -220,6 +221,7 @@ mod tests {
                         exposure: 2.0,
                         ..Edits::default()
                     },
+                    snapshots: Vec::new(),
                 },
             ],
         };

@@ -112,6 +112,18 @@ pub struct CopyEntry {
     pub name: Option<String>,
     #[serde(default)]
     pub edits: Edits,
+    /// This copy's named saved states, oldest first.
+    ///
+    /// ⚠ **Per copy, not per file**, because each copy has its own `Edits` and so its own
+    /// history to bookmark. The same split marks take, and the opposite of keywords, for the
+    /// same underlying reason: a snapshot describes *the image you are making*.
+    ///
+    /// ⚠⚠ **`#[serde(default)]` belongs here and is required** — without it every sidecar
+    /// written before this feature fails to parse and `load_all` silently returns an empty
+    /// envelope, discarding every edit. ⚠ It must still **never** be added to `Sidecar` itself;
+    /// that combination is the documented data-loss trap — see `load_all`'s doc comment.
+    #[serde(default)]
+    pub snapshots: Vec<Snapshot>,
 }
 
 /// Everything stored for one file.
@@ -155,6 +167,7 @@ impl Sidecar {
                 copy,
                 name: None,
                 edits,
+                snapshots: Vec::new(),
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -168,6 +181,7 @@ impl Sidecar {
                 copy,
                 name,
                 edits: Edits::default(),
+                snapshots: Vec::new(),
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -268,6 +282,8 @@ pub fn load_all(photo: &Path) -> Sidecar {
                     copy: 0,
                     name: None,
                     edits,
+                    // A sidecar this old predates snapshots by definition.
+                    snapshots: Vec::new(),
                 }],
             },
             Err(_) => Sidecar::default(),
@@ -460,6 +476,7 @@ mod tests {
                         exposure: 0.5,
                         ..Edits::default()
                     },
+                    snapshots: Vec::new(),
                 },
                 CopyEntry {
                     copy: 3,
@@ -468,6 +485,7 @@ mod tests {
                         saturation: -100.0,
                         ..Edits::default()
                     },
+                    snapshots: Vec::new(),
                 },
             ],
         };
@@ -503,6 +521,7 @@ mod tests {
                 copy: n,
                 name: None,
                 edits: Edits::default(),
+                snapshots: Vec::new(),
             });
         }
         s.copies.retain(|c| c.copy != 1);
@@ -519,6 +538,7 @@ mod tests {
             copy: 0,
             name: None,
             edits: Edits::default(),
+            snapshots: Vec::new(),
         });
         assert!(s.is_neutral(), "a neutral, unnamed original only");
 
@@ -528,11 +548,13 @@ mod tests {
                     copy: 0,
                     name: None,
                     edits: Edits::default(),
+                    snapshots: Vec::new(),
                 },
                 CopyEntry {
                     copy: 1,
                     name: None,
                     edits: Edits::default(),
+                    snapshots: Vec::new(),
                 },
             ],
         };
@@ -551,6 +573,7 @@ mod tests {
                             exposure: e0,
                             ..Edits::default()
                         },
+                        snapshots: Vec::new(),
                     },
                     CopyEntry {
                         copy: 1,
@@ -559,6 +582,7 @@ mod tests {
                             exposure: e1,
                             ..Edits::default()
                         },
+                        snapshots: Vec::new(),
                     },
                 ],
             },
@@ -855,5 +879,46 @@ mod snapshot_tests {
         let mut s = snap(3, 0.0);
         s.name = Some("Before the crop".to_string());
         assert_eq!(s.label(), "Before the crop");
+    }
+
+    /// ⚠ The guard on the field's `#[serde(default)]`. Without it every sidecar written before
+    /// this feature fails to parse, `load_all` returns `Sidecar::default()`, and **every edit
+    /// anyone has ever made is silently discarded** with no error anywhere.
+    #[test]
+    fn a_sidecar_from_before_snapshots_still_loads_its_edits() {
+        let dir = Dir::new("presnap");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(
+            path(&photo),
+            r#"{"copies":[{"copy":0,"name":null,"edits":{"exposure":1.5}}]}"#,
+        )
+        .unwrap();
+
+        let s = load_all(&photo);
+        assert_eq!(s.copies.len(), 1, "the copy must survive");
+        assert_eq!(s.copies[0].edits.exposure, 1.5, "its edits must survive");
+        assert!(
+            s.copies[0].snapshots.is_empty(),
+            "and it must read as having no snapshots"
+        );
+    }
+
+    #[test]
+    fn snapshots_round_trip_through_the_file() {
+        let dir = Dir::new("roundtrip");
+        let photo = dir.0.join("a.RAF");
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        let mut one = snap(1, 0.75);
+        one.name = Some("Warm".to_string());
+        one.taken = 1_756_000_000;
+        s.copies[0].snapshots.push(one);
+        save_all(&photo, &s).unwrap();
+
+        assert_eq!(
+            load_all(&photo),
+            s,
+            "the whole envelope must survive the round trip"
+        );
     }
 }

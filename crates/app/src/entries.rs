@@ -106,6 +106,7 @@ mod tests {
             copy: n,
             name: name.map(str::to_string),
             edits: Edits::default(),
+            snapshots: Vec::new(),
         }
     }
 
