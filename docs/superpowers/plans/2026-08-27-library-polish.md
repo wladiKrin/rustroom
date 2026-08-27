@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Keep the filter when the source changes, and give a photo a right-click menu — Edit, Rename, Information.
+**Goal:** Keep the filter when the source changes, give a photo a right-click menu (Edit, Rename, Information), and — added mid-slice from use — fix two rename-field focus bugs and add rubber-band selection to the grid.
 
 **Architecture:** The filter moves from being rebuilt per `Library` to being carried across; the grid and filmstrip cells gain `Response::context_menu`; a new modal shows everything known about one photo, reading its dimensions live rather than from the catalog.
 
