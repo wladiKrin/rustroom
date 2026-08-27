@@ -142,12 +142,14 @@ fn row(
         if let Some((_, t)) = app.snapshot_rename.as_mut() {
             *t = text.clone();
         }
-        // ⚠ Focus is taken once, when the field first appears — not every frame, which would
-        // fight anything else the user clicked.
-        if ui.memory(|m| m.focused()).is_none() {
-            resp.request_focus();
-        }
-        if theme::committed(ui, &resp) {
+        // ⚠⚠ **`name_edit::commit_gesture`, not `theme::committed` — and that distinction is a
+        // bug this shipped with.** A singleline `TextEdit` calls `surrender_focus` *inside*
+        // `ui.add` when Enter is pressed, so the autofocus guard immediately takes the focus back
+        // and `lost_focus()` — which reads live memory — reports `false`. The commit never fired,
+        // for Enter *or* for a click elsewhere. Reported in use, reproduced headlessly, and now
+        // guarded by two tests. The shared helper is the same one the filename field uses, so the
+        // two cannot drift.
+        if crate::name_edit::commit_gesture(ui, &resp, true) {
             let typed = text.trim().to_string();
             // ⚠ Typing the default label back in stores `None`, so the snapshot keeps following
             // its number — the rule an unnamed virtual copy already follows. Freezing the derived
@@ -156,9 +158,6 @@ fn row(
                 n,
                 (!typed.is_empty() && typed != format!("Snapshot {n}")).then_some(typed),
             );
-        } else if resp.lost_focus() {
-            // ⚠ Clicking away abandons. Only Enter commits.
-            app.snapshot_rename = None;
         }
         return;
     }
@@ -295,6 +294,132 @@ mod tests {
         assert_eq!(
             app.settings.snapshot_strip_height, 200,
             "opening another photo must not reset the strip"
+        );
+    }
+
+    /// Run one frame of the real panel with `events`.
+    fn frame(ctx: &egui::Context, app: &mut crate::RustroomApp, events: Vec<egui::Event>) {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(test_ui::screen()),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                crate::develop::panel::show(app, ui);
+            },
+        );
+    }
+
+    /// An app with one snapshot, in the sidecar *and* in the session cache — `set_snapshot_name`
+    /// writes through the sidecar, so a cache-only fixture would prove nothing.
+    fn app_with_a_snapshot(dir: &test_app::TestDir, ctx: &egui::Context) -> crate::RustroomApp {
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"x").unwrap();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, ctx, 8, 4);
+        app.session.as_mut().unwrap().path = photo.clone();
+        app.take_snapshot();
+        app
+    }
+
+    /// ⚠⚠ **Reported from use: "clicking enter or somewhere else does not accept the rename".**
+    #[test]
+    fn pressing_enter_commits_a_snapshot_rename() {
+        let dir = test_app::TestDir::new("renameenter");
+        let ctx = test_ui::ctx();
+        let mut app = app_with_a_snapshot(&dir, &ctx);
+        app.snapshot_rename = Some((1, "Warm".to_string()));
+
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, Vec::new());
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert_eq!(
+            app.session.as_ref().unwrap().snapshots[0].name.as_deref(),
+            Some("Warm"),
+            "Enter must commit the typed name"
+        );
+        assert!(app.snapshot_rename.is_none(), "and close the field");
+    }
+
+    /// ⚠⚠ **The other half of the same report, and a deliberate reversal of the spec.** The design
+    /// said clicking away would *abandon* a half-typed name. In use the expectation was the
+    /// opposite — and the filename field, which people already use, commits on click-away. One
+    /// idiom beats two, so the strip follows it.
+    #[test]
+    fn clicking_elsewhere_commits_a_snapshot_rename() {
+        let dir = test_app::TestDir::new("renameclick");
+        let ctx = test_ui::ctx();
+        let mut app = app_with_a_snapshot(&dir, &ctx);
+        app.snapshot_rename = Some((1, "Warm".to_string()));
+
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, Vec::new());
+        // A press far from the field: the strip surrenders focus, so `lost_focus` fires next
+        // frame — which is the one commit path.
+        let away = egui::pos2(10.0, 10.0);
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(away),
+                egui::Event::PointerButton {
+                    pos: away,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame(&ctx, &mut app, Vec::new());
+
+        assert_eq!(
+            app.session.as_ref().unwrap().snapshots[0].name.as_deref(),
+            Some("Warm"),
+            "a click elsewhere must accept the typed name, not discard it"
+        );
+        assert!(app.snapshot_rename.is_none(), "and close the field");
+    }
+
+    /// ⚠ The rename must reach **disk**, not only the session cache — a name that vanished on the
+    /// next folder open would look identical in every assertion above.
+    #[test]
+    fn a_committed_rename_reaches_the_sidecar() {
+        let dir = test_app::TestDir::new("renamedisk");
+        let ctx = test_ui::ctx();
+        let mut app = app_with_a_snapshot(&dir, &ctx);
+        app.snapshot_rename = Some((1, "Warm".to_string()));
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, Vec::new());
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        let photo = app.session.as_ref().unwrap().path.clone();
+        assert_eq!(
+            rustroom_app::sidecar::load_all(&photo).snapshots_of(0)[0]
+                .name
+                .as_deref(),
+            Some("Warm")
         );
     }
 }

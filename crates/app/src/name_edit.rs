@@ -65,6 +65,47 @@ pub fn caption_or_field(
 /// ⚠ Edits a **scratch** draft, not the stored value. Writing through would rename the file on
 /// every keystroke — creating a file per character — and would commit a half-typed name the moment
 /// focus moved. Same shape the export dialog's `export_draft` uses.
+/// The gesture half of an in-place name field: take focus when it appears, end the edit on Enter
+/// **or** on a press anywhere outside, and report when it ended.
+///
+/// ⚠⚠ **The commit condition is `lost_focus() || (has_focus() && entered)`, never
+/// `lost_focus() && key_pressed(Enter)`** — and that difference is a bug this project has now
+/// shipped once. A singleline `TextEdit` calls `surrender_focus` *within* `ui.add` when Enter is
+/// pressed, so `focused()` is `None` immediately afterwards; the autofocus guard below then takes
+/// the focus straight back, and because `Response::lost_focus()` reads **live** memory it reports
+/// `false`. The `has_focus() && entered` half survives that. `theme::committed` is safe only for
+/// a field that never re-requests focus.
+///
+/// ⚠⚠ **A click anywhere else must end the edit, and `lost_focus` alone does not deliver it.**
+/// Clicking empty space moves focus *nowhere* — there is nothing focusable there — so the field
+/// keeps focus and only Enter can close it. Surrendering here makes `lost_focus()` fire on the
+/// next frame, which is the one commit path.
+///
+/// ⚠ Both `ui.input(..)` reads happen **before** `r` is touched: `Response` methods take the
+/// context lock internally, and holding one across `ui.input(..)` panics inside epaint's mutex —
+/// the re-entrant lock this file already paid for once.
+///
+/// ⚠ `autofocus` only where the field appears **on demand**. A field drawn every frame would grab
+/// the keyboard the moment a photo opened, and every single-key shortcut would type into it.
+pub fn commit_gesture(ui: &mut egui::Ui, r: &egui::Response, autofocus: bool) -> bool {
+    if autofocus && ui.memory(|m| m.focused()).is_none() {
+        r.request_focus();
+    }
+    let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let pressed_at = ui.input(|i| {
+        i.pointer
+            .any_pressed()
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    });
+    if let Some(pos) = pressed_at {
+        if !r.rect.contains(pos) && r.has_focus() {
+            r.surrender_focus();
+        }
+    }
+    r.lost_focus() || (r.has_focus() && entered)
+}
+
 pub fn field(
     ui: &mut egui::Ui,
     id: &PhotoId,
@@ -99,13 +140,6 @@ pub fn field(
     // ⚠⚠ **Only where the field appears on demand.** The Develop panel draws its field on every
     // frame, so autofocusing there would grab the keyboard the moment a photo opened — arrow keys
     // and every single-key shortcut would type into the filename instead.
-    if autofocus && ui.memory(|m| m.focused()).is_none() {
-        r.request_focus();
-    }
-    // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the
-    // context lock internally, and holding one across `ui.input(..)` panics inside epaint's
-    // mutex — the re-entrant lock the canvas-navigation work already paid for.
-    let entered = ui.input(|i| i.key_pressed(egui::Key::Enter));
 
     if r.gained_focus() {
         // Clicking in selects the whole name, so typing replaces it.
@@ -120,27 +154,7 @@ pub fn field(
         }
     }
 
-    // ⚠⚠ **A click anywhere else must end the edit, and `lost_focus` alone does not deliver it.**
-    // Clicking empty space in the grid moves focus *nowhere* — there is nothing focusable there —
-    // so the field kept focus and only Enter could close it. Surrendering focus here makes
-    // `lost_focus()` fire on the next frame, which is the one commit path.
-    //
-    // ⚠ The pointer is read into a local **before** `r` is touched: `Response` methods take the
-    // context lock internally, and holding one across `ui.input(..)` panics inside epaint's mutex
-    // — the re-entrant lock this very function already paid for once.
-    let pressed_at = ui.input(|i| {
-        i.pointer
-            .any_pressed()
-            .then(|| i.pointer.interact_pos())
-            .flatten()
-    });
-    if let Some(pos) = pressed_at {
-        if !r.rect.contains(pos) && r.has_focus() {
-            r.surrender_focus();
-        }
-    }
-
-    if r.lost_focus() || (r.has_focus() && entered) {
+    if commit_gesture(ui, &r, autofocus) {
         let typed = text.clone();
         *draft = None;
         if typed == current {
