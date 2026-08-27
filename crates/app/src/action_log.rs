@@ -55,6 +55,27 @@ pub enum ActionKind {
         path: PathBuf,
         entry: Box<crate::sidecar::CopyEntry>,
     },
+    /// A deleted snapshot, held so undo can put it back.
+    ///
+    /// ⚠ Carries the whole entry because nothing else holds it — `CopyDelete`'s shape and its
+    /// reason. Boxed for the reason `Sync` is: an inline `Edits` would make **every** entry in
+    /// the log that large, including the zero-sized `PhotoEdit`, which is by far the commonest.
+    ///
+    /// ⚠⚠ **Taking** a snapshot has no variant, deliberately. It follows `create_virtual_copy`,
+    /// which pushes nothing while `delete_virtual_copy` does: creation is additive and reversed
+    /// by deleting, deletion destroys the only record of a state. It is the same rule the design
+    /// states — taking a snapshot is not an undo step, because it changes no `Edits`.
+    SnapshotDelete {
+        id: PhotoId,
+        entry: Box<crate::sidecar::Snapshot>,
+    },
+    /// A snapshot renamed — `CopyRename`'s shape exactly, and scoped the same way.
+    SnapshotRename {
+        id: PhotoId,
+        n: u32,
+        from: Option<String>,
+        to: Option<String>,
+    },
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
     PresetDelete { name: String },
@@ -116,7 +137,10 @@ struct Entry {
 /// waits, intact, until you return to the photo it touched.
 fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
     match kind {
-        ActionKind::PhotoEdit { id } | ActionKind::CopyRename { id, .. } => open == Some(id),
+        ActionKind::PhotoEdit { id }
+        | ActionKind::CopyRename { id, .. }
+        | ActionKind::SnapshotDelete { id, .. }
+        | ActionKind::SnapshotRename { id, .. } => open == Some(id),
         // ⚠ A deleted copy has no `PhotoId` left to be reachable *from*, so it is global like a
         // preset deletion rather than scoped like an edit.
         ActionKind::PresetDelete { .. }
@@ -607,5 +631,59 @@ mod tests {
         assert!(log.undo(a()).is_some(), "reachable with a photo open");
         log.redo(a());
         assert!(log.undo(None).is_some(), "and with none open");
+    }
+
+    fn a_snapshot() -> Box<crate::sidecar::Snapshot> {
+        Box::new(crate::sidecar::Snapshot {
+            n: 1,
+            name: None,
+            taken: 0,
+            edits: Edits::default(),
+        })
+    }
+
+    /// ⚠ Scoped to its own photo, exactly as `CopyRename` is: Ctrl+Z while looking at another
+    /// photo must not resurrect a snapshot you cannot see.
+    #[test]
+    fn a_snapshot_deletion_is_reachable_only_from_its_own_photo() {
+        let mine = id("/a.RAF");
+        let other = id("/b.RAF");
+        let mut log = ActionLog::default();
+        log.push(
+            ActionKind::SnapshotDelete {
+                id: mine.clone(),
+                entry: a_snapshot(),
+            },
+            Some(&mine),
+        );
+
+        assert!(
+            log.undo(Some(&other)).is_none(),
+            "unreachable from another photo"
+        );
+        assert!(log.undo(Some(&mine)).is_some(), "reachable from its own");
+    }
+
+    /// ⚠ Scoped to the **copy**, not merely the file: copy 0 must not reach copy 1's rename.
+    #[test]
+    fn a_snapshot_rename_is_reachable_only_from_its_own_copy() {
+        let mine = PhotoId::new(PathBuf::from("/a.RAF"), 1);
+        let other = id("/a.RAF");
+        let mut log = ActionLog::default();
+        log.push(
+            ActionKind::SnapshotRename {
+                id: mine.clone(),
+                n: 1,
+                from: None,
+                to: Some("Warm".to_string()),
+            },
+            Some(&mine),
+        );
+
+        assert!(
+            log.undo(Some(&other)).is_none(),
+            "copy 0 must not reach copy 1's snapshot rename"
+        );
+        assert!(log.undo(Some(&mine)).is_some());
     }
 }

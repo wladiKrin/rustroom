@@ -1237,6 +1237,9 @@ impl RustroomApp {
                 self.rebuild_entries(Some(&id));
                 self.open_path(ctx, id);
             }
+            // ⚠ Wired up in plan 2, with `snapshots_of`/`add_snapshot`/`remove_snapshot`. The
+            // variants exist first so the log's scoping can be tested headlessly.
+            ActionKind::SnapshotDelete { .. } | ActionKind::SnapshotRename { .. } => {}
             ActionKind::Batch(parts) => {
                 // Reverse order: the last effect a gesture had is the first one undone.
                 for part in parts.into_iter().rev() {
@@ -1300,6 +1303,9 @@ impl RustroomApp {
                 self.rebuild_entries(Some(&id));
                 self.open_path(ctx, id);
             }
+            // ⚠ Wired up in plan 2, with `snapshots_of`/`add_snapshot`/`remove_snapshot`. The
+            // variants exist first so the log's scoping can be tested headlessly.
+            ActionKind::SnapshotDelete { .. } | ActionKind::SnapshotRename { .. } => {}
             ActionKind::Batch(parts) => {
                 for part in parts {
                     self.redo_one(ctx, part);
