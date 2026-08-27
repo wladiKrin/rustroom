@@ -112,7 +112,17 @@ struct Library {
     /// whatever the folder happens to hold at that moment.
     scan: Vec<catalog::CatalogEntry>,
     entries: Vec<PhotoEntry>,
-    thumbs: Vec<Option<egui::TextureHandle>>, // parallel to entries; None = still loading
+    /// Loaded thumbnails, keyed by path and bounded by a byte budget.
+    ///
+    /// ⚠ Keyed by **path**, so copies of one file share a texture and a re-sort or a rebuild
+    /// invalidates nothing. `entries` indices never reach it.
+    cache: rustroom_app::thumb_cache::ThumbCache<egui::TextureHandle>,
+    /// The last want-list handed to the loader.
+    ///
+    /// ⚠ Kept so `sync_thumb_window` can call `want` **only when the list changes**. Its body
+    /// runs every frame; without the comparison it would rewrite the queue sixty times a second.
+    /// The same guard `apply_view_demosaic` needs, for the same reason.
+    last_want: Vec<PathBuf>,
     selection: Selection,
     loader: ThumbLoader,
     /// Which formats the browser hides. Reset when a folder is loaded.
@@ -155,6 +165,25 @@ impl Library {
             })
             .collect();
         self.selection.retain_visible(&self.visible);
+    }
+
+    /// Tell the cache and the loader what is on screen.
+    ///
+    /// `window` is every path the view wants resident — the drawn cells plus the prefetch margin.
+    /// Pins them in the cache, evicts down to the budget, then asks the loader for whatever is
+    /// still missing.
+    fn sync_thumb_window(&mut self, window: &[PathBuf]) {
+        self.cache.retain_window(window);
+        let missing: Vec<PathBuf> = window
+            .iter()
+            .filter(|p| !self.cache.contains(p))
+            .cloned()
+            .collect();
+        // ⚠ Only when it changes. See `last_want`.
+        if missing != self.last_want {
+            self.loader.want(&missing);
+            self.last_want = missing;
+        }
     }
 }
 
@@ -1414,11 +1443,10 @@ impl RustroomApp {
     /// The library thumbnail for `path`, if the folder is loaded and that thumbnail has
     /// already arrived. `TextureHandle` is `Arc`-backed, so cloning it is cheap.
     fn thumbnail_for(&self, path: &std::path::Path) -> Option<egui::TextureHandle> {
-        let lib = self.library.as_ref()?;
-        // ⚠ By **path**: copies of one file share a thumbnail, so the first matching row is as
-        // good as any. This is the same decision `BufferCache` makes, for the same reason.
-        let i = lib.entries.iter().position(|e| e.id.path == *path)?;
-        lib.thumbs.get(i).cloned().flatten()
+        // ⚠ By **path**: copies of one file share a thumbnail, which the cache's own key now
+        // expresses, so this is a plain lookup rather than a scan for the first matching row.
+        // The same decision `BufferCache` makes, for the same reason.
+        self.library.as_ref()?.cache.get(path).cloned()
     }
 
     /// Build the editing `Session` from a decoded photo (cache hit or worker result).
@@ -1711,21 +1739,17 @@ impl RustroomApp {
                 // measured — small enough to stay inline rather than moving to the loader thread.
                 let entries = entries::build(&scan, sidecar::load_all);
                 let n = entries.len();
-                // ⚠ Thumbnails are per *file*, and copies share a path — so this list
-                // deliberately repeats a path once per copy, keeping `thumbs` index-parallel to
-                // `entries`. Copies therefore show identical thumbnails, the accepted limitation
-                // recorded in the spec.
-                let paths: Vec<_> = entries.iter().map(|e| e.id.path.clone()).collect();
                 let ctx2 = ctx.clone();
                 let space = self
                     .settings
                     .effective_display_space(self.os_manages_colour);
-                let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
+                let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
                 self.library = Some(Library {
                     source: LibrarySource::Folder(dir.clone()),
                     scan,
                     entries,
-                    thumbs: (0..n).map(|_| None).collect(),
+                    cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
+                    last_want: Vec::new(),
                     selection: Selection::default(),
                     loader,
                     // A fresh `Library` per folder load, so the filter resets by construction.
@@ -1884,10 +1908,9 @@ impl RustroomApp {
                     e.file_name = file_rename::field_text(to);
                 }
             }
-            // ⚠ The *entries* must move too, not just the scan. `rebuild_entries` carries
-            // thumbnails across keyed by path, reading the keys from the entries it is
-            // replacing — so leaving them on the old path made the lookup miss and greyed out
-            // exactly the renamed photo and its copies, while the rest of the folder stayed.
+            // ⚠ The *entries* must move too, not just the scan. Every thumbnail lookup goes
+            // through `entries[i].id.path`, so leaving them on the old path greyed out exactly
+            // the renamed photo and its copies while the rest of the folder stayed.
             for e in lib.entries.iter_mut() {
                 if e.id.path == from {
                     e.id.path = to.to_path_buf();
@@ -2092,12 +2115,11 @@ impl RustroomApp {
         catalog::sort(&mut scan, self.settings.library_sort);
         let entries = entries::build(&scan, sidecar::load_all);
         let n = entries.len();
-        let paths: Vec<_> = entries.iter().map(|e| e.id.path.clone()).collect();
         let ctx2 = ctx.clone();
         let space = self
             .settings
             .effective_display_space(self.os_manages_colour);
-        let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
+        let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
         self.library = Some(Library {
             source: LibrarySource::Collection {
                 id,
@@ -2105,7 +2127,8 @@ impl RustroomApp {
             },
             scan,
             entries,
-            thumbs: (0..n).map(|_| None).collect(),
+            cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
+            last_want: Vec::new(),
             selection: Selection::default(),
             loader,
             filter: FormatFilter::default(),
@@ -2142,12 +2165,11 @@ impl RustroomApp {
         catalog::sort(&mut scan, self.settings.library_sort);
         let entries = entries::build(&scan, sidecar::load_all);
         let n = entries.len();
-        let paths: Vec<_> = entries.iter().map(|e| e.id.path.clone()).collect();
         let ctx2 = ctx.clone();
         let space = self
             .settings
             .effective_display_space(self.os_manages_colour);
-        let loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
+        let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
         self.library = Some(Library {
             source: LibrarySource::Keyword {
                 id,
@@ -2155,7 +2177,8 @@ impl RustroomApp {
             },
             scan,
             entries,
-            thumbs: (0..n).map(|_| None).collect(),
+            cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
+            last_want: Vec::new(),
             selection: Selection::default(),
             loader,
             filter: FormatFilter::default(),
@@ -2281,9 +2304,9 @@ impl RustroomApp {
 
     /// Re-expand the Library's rows after a copy was added or removed.
     ///
-    /// ⚠ Rebuilds `thumbs` and the loader too, because both are index-parallel to `entries` and
-    /// the indices have just shifted. Reusing them would show one photo's thumbnail under
-    /// another's name — the sparse-versus-dense mistake this codebase has made three times.
+    /// ⚠ Touches neither the thumbnail cache nor the loader: both are keyed by **path**, so a
+    /// rebuild that only shifts indices invalidates nothing. This used to have to carry the
+    /// textures across by hand, and getting it wrong greyed out the whole folder.
     fn rebuild_entries(&mut self, select: Option<&PhotoId>) {
         // ⚠ Read before the borrow: `self.settings` and `self.library` are disjoint fields, but
         // the compiler only sees that when the read happens first.
@@ -2291,18 +2314,6 @@ impl RustroomApp {
         let Some(lib) = self.library.as_mut() else {
             return;
         };
-        // ⚠ Carry the loaded thumbnails across, keyed by **path**. Blanking them instead greyed
-        // out the whole folder the moment a copy was created and never refilled it, because
-        // nothing restarts the `ThumbLoader` here — and even with a restart, reloading 830
-        // thumbnails to add one row is work for nothing. Copies share a path with their
-        // original, so a new copy's thumbnail is already in hand.
-        let known: std::collections::HashMap<PathBuf, egui::TextureHandle> = lib
-            .entries
-            .iter()
-            .zip(lib.thumbs.iter())
-            .filter_map(|(e, t)| t.clone().map(|t| (e.id.path.clone(), t)))
-            .collect();
-
         // ⚠ Re-sorted every rebuild rather than only when the order changes: a rename moves a
         // photo's place in a name ordering, and a rebuild is exactly when that has to be seen.
         //
@@ -2315,11 +2326,6 @@ impl RustroomApp {
         }
         catalog::sort(&mut lib.scan, sort);
         lib.entries = entries::build(&lib.scan, sidecar::load_all);
-        lib.thumbs = lib
-            .entries
-            .iter()
-            .map(|e| known.get(&e.id.path).cloned())
-            .collect();
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
         // from the photo we mean rather than kept. Keeping it would silently select whichever
@@ -2393,11 +2399,13 @@ impl RustroomApp {
             .settings
             .effective_display_space(self.os_manages_colour);
         if let Some(lib) = self.library.as_mut() {
-            let paths: Vec<_> = lib.entries.iter().map(|e| e.id.path.clone()).collect();
-            let n = paths.len();
             let ctx2 = ctx.clone();
-            lib.loader = ThumbLoader::new(paths, space, move || ctx2.request_repaint());
-            lib.thumbs = (0..n).map(|_| None).collect();
+            lib.loader = ThumbLoader::new(space, move || ctx2.request_repaint());
+            // ⚠ Every cached thumbnail was converted at load, so they all describe the old space.
+            lib.cache.clear();
+            // ⚠ And the want-list, or `sync_thumb_window` compares against a list that is now
+            // satisfied by nothing and never re-asks.
+            lib.last_want.clear();
         }
         // The canvas is a plain re-render: nothing is decoded. `Session::request` reads the
         // new value on its way through, so it has to be written on the session first.

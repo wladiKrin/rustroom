@@ -4,6 +4,7 @@ use crate::{apply_click, name_edit, thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::format_filter;
 use rustroom_app::photo_id::PhotoId;
+use std::path::PathBuf;
 
 /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -148,7 +149,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 thumb::cell(
                                     ui,
                                     box_size,
-                                    lib.thumbs[i].as_ref(),
+                                    lib.cache.get(&lib.entries[i].id.path),
                                     lib.entries[i].id.copy,
                                     lib.marks
                                         .get(&lib.entries[i].id)
@@ -197,6 +198,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     }
                 }
             });
+            // ⚠ In this task the window is everything visible, so behaviour is unchanged.
+            // Task 5 narrows it to the drawn rows plus a margin.
+            let window: Vec<PathBuf> = visible
+                .iter()
+                .map(|&i| lib.entries[i].id.path.clone())
+                .collect();
+            lib.sync_thumb_window(&window);
         });
     });
 

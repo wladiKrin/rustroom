@@ -101,14 +101,18 @@ impl eframe::App for RustroomApp {
         // Pull finished thumbnails into textures.
         if let Some(lib) = &mut self.library {
             for res in lib.loader.drain() {
-                if let (Some(t), true) = (res.thumb, res.index < lib.thumbs.len()) {
+                if let Some(t) = res.thumb {
+                    let bytes = t.rgba.len();
                     let img =
                         egui::ColorImage::from_rgba_unmultiplied([t.width, t.height], &t.rgba);
-                    lib.thumbs[res.index] = Some(ctx.load_texture(
-                        format!("thumb{}", res.index),
+                    // ⚠ The texture name is derived from the path, not from an index. Two
+                    // different photos sharing a name would have egui serve one image for both.
+                    let tex = ctx.load_texture(
+                        format!("thumb:{}", res.path.display()),
                         img,
                         egui::TextureOptions::LINEAR,
-                    ));
+                    );
+                    lib.cache.insert(res.path, tex, bytes);
                 }
             }
         }

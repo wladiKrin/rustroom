@@ -17,7 +17,6 @@ fn main() {
     for threads in [1, worker_count()] {
         let t = Instant::now();
         let loader = ThumbLoader::with_loader(
-            paths.clone(),
             |p| {
                 if catalog::is_raw(p) {
                     raw_decode::extract_thumbnail(p).ok()
@@ -29,6 +28,7 @@ fn main() {
             color::OutputSpace::Srgb,
             || {},
         );
+        loader.want(&paths);
         let mut got = 0;
         while got < n {
             got += loader.drain().len();

@@ -7,6 +7,7 @@
 
 use crate::{apply_click, thumb, RustroomApp};
 use eframe::egui;
+use std::path::PathBuf;
 
 /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
 /// The panel is resizable (drag its top border); thumbnails scale with its height.
@@ -35,7 +36,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         let resp = thumb::cell(
                             ui,
                             box_size,
-                            lib.thumbs[i].as_ref(),
+                            lib.cache.get(&lib.entries[i].id.path),
                             lib.entries[i].id.copy,
                             lib.marks
                                 .get(&lib.entries[i].id)
@@ -63,6 +64,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         }
                     }
                 });
+                // ⚠ In this task the window is everything visible, so behaviour is unchanged.
+                // Task 6 narrows it to the drawn cells plus a margin.
+                let window: Vec<PathBuf> = visible
+                    .iter()
+                    .map(|&i| lib.entries[i].id.path.clone())
+                    .collect();
+                lib.sync_thumb_window(&window);
             });
         });
     if want_scroll {
