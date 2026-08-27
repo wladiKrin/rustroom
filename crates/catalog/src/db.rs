@@ -125,6 +125,27 @@ pub struct CollectionRow {
     pub count: i64,
 }
 
+/// One photo row, as [`Catalog::all_photos`] returns it.
+///
+/// ⚠ Carries `mtime` **from the catalog**, recorded at scan time. That column has existed since
+/// M4.1 and nothing has ever read it; a whole-library view is what it was captured for, because
+/// walking the filesystem for 10,000 photos is exactly what this view must not do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhotoRow {
+    pub path: PathBuf,
+    pub copy: u32,
+    /// Unix seconds, or `None` if the metadata could not be read when the folder was scanned.
+    pub mtime: Option<i64>,
+}
+
+/// One catalogued folder, with how many photo rows it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderRow {
+    pub id: i64,
+    pub path: PathBuf,
+    pub count: i64,
+}
+
 pub struct Catalog {
     conn: Connection,
 }
@@ -469,6 +490,62 @@ impl Catalog {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
+    /// Every photo the catalog knows, from every folder ever opened.
+    ///
+    /// ⚠ Ordered by folder then name so the result is stable; the Library re-sorts it by the
+    /// user's chosen order anyway, but a stable base makes that sort's tie-break meaningful.
+    pub fn all_photos(&self) -> Result<Vec<PhotoRow>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, p.file_name, p.copy, p.mtime
+             FROM photos p JOIN folders f ON f.id = p.folder_id
+             ORDER BY f.path, p.file_name, p.copy",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let folder: String = r.get(0)?;
+            let name: String = r.get(1)?;
+            Ok(PhotoRow {
+                path: PathBuf::from(folder).join(name),
+                copy: r.get(2)?,
+                mtime: r.get(3)?,
+            })
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Every catalogued folder, with its photo count.
+    pub fn folders(&self) -> Result<Vec<FolderRow>, CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.path, (SELECT count(*) FROM photos p WHERE p.folder_id = f.id)
+             FROM folders f
+             ORDER BY lower(f.path), f.path",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let path: String = r.get(1)?;
+            Ok(FolderRow {
+                id: r.get(0)?,
+                path: PathBuf::from(path),
+                count: r.get(2)?,
+            })
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Remove a folder from the catalog.
+    ///
+    /// ⚠⚠ **This deletes catalog rows and never touches a file.** The photos, their sidecars and
+    /// every edit in them are untouched — re-opening the folder catalogues it again, minus the
+    /// library metadata. That is the M4.1 split doing its job: *delete the catalog and you lose
+    /// organisation, never work.*
+    ///
+    /// ⚠ Its ratings, flags, labels and keyword assignments **do** go, by a chained cascade:
+    /// `folders` → `photos` → `collection_photos`, and `folders` → `photo_keywords`. The second
+    /// hop needs `PRAGMA foreign_keys = ON`, which is set per connection in `open`.
+    pub fn forget_folder(&self, id: i64) -> Result<(), CatalogError> {
+        self.conn
+            .execute("DELETE FROM folders WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// Create a keyword under `parent`, or return the existing one of that name and parent.
     ///
     /// ⚠ A duplicate is not an error, for the reason `create_collection` gives: the name is the
@@ -765,6 +842,23 @@ mod tests {
                 let _ = std::fs::remove_dir_all(p);
             }
         }
+    }
+
+    /// Entries for `folder`, one per name.
+    ///
+    /// ⚠ The `entry` helper below hardcodes `/x/`, which cannot express the two-folder case every
+    /// whole-library query needs — and four existing tests depend on that path, so this is a
+    /// sibling rather than a change to it.
+    fn entries_in(folder: &str, names: &[&str]) -> Vec<CatalogEntry> {
+        names
+            .iter()
+            .map(|n| CatalogEntry {
+                path: PathBuf::from(folder).join(n),
+                file_name: n.to_string(),
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                edited: None,
+            })
+            .collect()
     }
 
     fn entry(name: &str) -> CatalogEntry {
@@ -1489,5 +1583,174 @@ mod tests {
                 ("Spain".to_string(), 1),
             ]
         );
+    }
+
+    #[test]
+    fn all_photos_spans_every_folder() {
+        // ⚠ The point of the whole slice: `open_folder`, `open_collection` and `open_keyword`
+        // were the only loaders, so the catalog held everything and nothing could see it whole.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF", "two.RAF"]))
+            .unwrap();
+        cat.sync_folder(Path::new("/b"), &entries_in("/b", &["three.RAF"]))
+            .unwrap();
+        let rows = cat.all_photos().unwrap();
+        assert_eq!(rows.len(), 3);
+        let mut paths: Vec<String> = rows
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        paths.sort();
+        assert_eq!(paths, ["/a/one.RAF", "/a/two.RAF", "/b/three.RAF"]);
+    }
+
+    #[test]
+    fn all_photos_includes_every_copy() {
+        // A virtual copy is its own row and its own identity — it must appear here as one.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.add_copy(Path::new("/a/one.RAF"), 1).unwrap();
+        let rows = cat.all_photos().unwrap();
+        assert_eq!(rows.len(), 2);
+        let mut copies: Vec<u32> = rows.iter().map(|r| r.copy).collect();
+        copies.sort();
+        assert_eq!(copies, [0, 1]);
+    }
+
+    #[test]
+    fn folders_are_listed_with_their_photo_counts() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF", "two.RAF"]))
+            .unwrap();
+        cat.sync_folder(Path::new("/b"), &entries_in("/b", &["three.RAF"]))
+            .unwrap();
+        let rows = cat.folders().unwrap();
+        assert_eq!(rows.len(), 2);
+        let by_path: Vec<(String, i64)> = rows
+            .iter()
+            .map(|f| (f.path.to_string_lossy().to_string(), f.count))
+            .collect();
+        assert!(by_path.contains(&("/a".to_string(), 2)), "{by_path:?}");
+        assert!(by_path.contains(&("/b".to_string(), 1)), "{by_path:?}");
+    }
+
+    #[test]
+    fn forgetting_a_folder_cascades_through_photos_to_collections_and_keywords() {
+        // ⚠⚠ A **chained** cascade, and the first feature to depend on two hops in series:
+        // folders -> photos -> collection_photos, and folders -> photo_keywords directly. The
+        // second hop happens only because `PRAGMA foreign_keys = ON` is set per connection —
+        // SQLite defaults it OFF, which is why that pragma already has a test of its own.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.sync_folder(Path::new("/b"), &entries_in("/b", &["two.RAF"]))
+            .unwrap();
+        let coll = cat.create_collection("Portfolio").unwrap();
+        cat.add_to_collection(coll, Path::new("/a/one.RAF"), 0)
+            .unwrap();
+        cat.add_to_collection(coll, Path::new("/b/two.RAF"), 0)
+            .unwrap();
+        let kw = cat.create_keyword("Paris", None).unwrap();
+        cat.assign_keyword(kw, Path::new("/a/one.RAF")).unwrap();
+
+        let id = cat
+            .folders()
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == Path::new("/a"))
+            .unwrap()
+            .id;
+        cat.forget_folder(id).unwrap();
+
+        // ⚠⚠ THE ASSERTIONS THAT MATTER ARE THE **RAW COUNTS**, AND FINDING THAT OUT COST A
+        // SABOTAGE. `all_photos`, `collection_members` and `keyword_members` all JOIN through
+        // `folders` — so with the cascade disabled the orphaned rows simply drop out of those
+        // queries and every join-based assertion below passes vacuously. The first version of
+        // this test asserted only on those, and `PRAGMA foreign_keys = OFF` left it green.
+        //
+        // `photo_count`, and the counts inside `collections()` and `keywords()`, do **not** join
+        // `folders` — they count the rows themselves, which is exactly what a missing cascade
+        // leaves behind. Orphans are invisible to the UI and accumulate forever, and worse: a
+        // folder re-added at the same path gets a *new* id, so the old orphans are unreachable.
+        assert_eq!(
+            cat.photo_count().unwrap(),
+            1,
+            "orphaned photo rows survived"
+        );
+        assert_eq!(
+            cat.collections().unwrap()[0].count,
+            1,
+            "an orphaned collection membership survived"
+        );
+        assert_eq!(
+            cat.keywords().unwrap()[0].count,
+            0,
+            "an orphaned keyword assignment survived"
+        );
+
+        // And the user-visible effect, which the raw counts do not by themselves prove.
+        assert_eq!(cat.all_photos().unwrap().len(), 1, "photo rows survived");
+        assert_eq!(cat.folders().unwrap().len(), 1, "the folder row survived");
+        assert_eq!(
+            cat.collection_members(coll).unwrap().len(),
+            1,
+            "the membership of the forgotten folder's photo survived"
+        );
+        assert!(
+            cat.keyword_members(kw).unwrap().is_empty(),
+            "the keyword assignment survived"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_folder_leaves_the_other_folders_alone() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.sync_folder(Path::new("/b"), &entries_in("/b", &["two.RAF"]))
+            .unwrap();
+        let id = cat
+            .folders()
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == Path::new("/a"))
+            .unwrap()
+            .id;
+        cat.forget_folder(id).unwrap();
+        let left = cat.all_photos().unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].path, Path::new("/b/two.RAF"));
+    }
+
+    #[test]
+    fn forgetting_a_folder_deletes_no_files() {
+        // ⚠⚠ The M4.1 split, asserted: *delete the catalog and you lose organisation, never work.*
+        // Edits live in the per-photo sidecars and survive this entirely. Task 1's in-memory tests
+        // structurally cannot see this — they have no files behind them.
+        let db = TempDb::new("nofiles");
+        let dir = db.0.parent().unwrap().to_path_buf();
+        let photo = dir.join("one.RAF");
+        std::fs::write(&photo, b"not really a raw").unwrap();
+        let sidecar = dir.join("one.RAF.json");
+        std::fs::write(&sidecar, b"{}").unwrap();
+
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(
+            &dir,
+            &[CatalogEntry {
+                path: photo.clone(),
+                file_name: "one.RAF".to_string(),
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                edited: None,
+            }],
+        )
+        .unwrap();
+        let id = cat.folders().unwrap()[0].id;
+        cat.forget_folder(id).unwrap();
+
+        assert!(photo.exists(), "the photo was deleted");
+        assert!(sidecar.exists(), "the sidecar was deleted");
+        assert!(cat.all_photos().unwrap().is_empty());
     }
 }
