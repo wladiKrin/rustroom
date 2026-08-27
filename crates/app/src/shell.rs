@@ -39,6 +39,7 @@ impl eframe::App for RustroomApp {
             // ⚠ Discarded rather than committed: renaming is explicit, and navigating away is not
             // a way to confirm a half-typed name.
             self.rename_draft = None;
+            self.snapshot_rename = None;
             self.last_view = self.view;
         }
         self.pump_decodes(&ctx);

@@ -124,6 +124,18 @@ pub struct CopyEntry {
     /// that combination is the documented data-loss trap — see `load_all`'s doc comment.
     #[serde(default)]
     pub snapshots: Vec<Snapshot>,
+    /// The highest snapshot number ever used in this copy.
+    ///
+    /// ⚠⚠ **Without this, deleting the *newest* snapshot frees its number.** Take two, delete the
+    /// second, take another — it would be `2` again; then undo the deletion and the copy holds
+    /// **two snapshots numbered 2**, where a rename or a delete hits whichever comes first.
+    /// `max + 1` over the survivors cannot see a number that only the undo log still holds.
+    ///
+    /// ⚠ `#[serde(default)]` gives `0` for a sidecar written before this, which
+    /// [`Sidecar::next_snapshot`] folds in with `max` — so an older photo degrades to the old
+    /// behaviour rather than breaking.
+    #[serde(default)]
+    pub snapshot_hwm: u32,
 }
 
 /// Everything stored for one file.
@@ -173,22 +185,35 @@ impl Sidecar {
     /// ⚠ Per copy: two copies of one file number their snapshots independently, because a
     /// snapshot belongs to a copy's own editing.
     pub fn next_snapshot(&self, copy: u32) -> u32 {
-        self.snapshots_of(copy)
+        // ⚠ The high-water mark **and** the live maximum, not either alone: the mark is 0 in a
+        // sidecar written before it existed, and the live maximum cannot see a deleted number
+        // that the undo log can still bring back.
+        let live = self
+            .snapshots_of(copy)
             .iter()
             .map(|s| s.n)
             .max()
-            .map_or(1, |m| m + 1)
+            .unwrap_or(0);
+        let hwm = self.get(copy).map_or(0, |c| c.snapshot_hwm);
+        live.max(hwm) + 1
     }
 
     /// Append a snapshot to `copy`, creating the copy's entry if it has none.
     pub fn add_snapshot(&mut self, copy: u32, snapshot: Snapshot) {
+        let n = snapshot.n;
         match self.copies.iter_mut().find(|c| c.copy == copy) {
-            Some(c) => c.snapshots.push(snapshot),
+            Some(c) => {
+                c.snapshots.push(snapshot);
+                // ⚠ Raised here rather than in the caller, so every route in — taking one, and
+                // undoing a deletion — keeps the mark true without having to remember to.
+                c.snapshot_hwm = c.snapshot_hwm.max(n);
+            }
             None => self.copies.push(CopyEntry {
                 copy,
                 name: None,
                 edits: Edits::default(),
                 snapshots: vec![snapshot],
+                snapshot_hwm: n,
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -227,6 +252,7 @@ impl Sidecar {
                 name: None,
                 edits,
                 snapshots: Vec::new(),
+                snapshot_hwm: 0,
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -241,6 +267,7 @@ impl Sidecar {
                 name,
                 edits: Edits::default(),
                 snapshots: Vec::new(),
+                snapshot_hwm: 0,
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -352,6 +379,7 @@ pub fn load_all(photo: &Path) -> Sidecar {
                     edits,
                     // A sidecar this old predates snapshots by definition.
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 }],
             },
             Err(_) => Sidecar::default(),
@@ -545,6 +573,7 @@ mod tests {
                         ..Edits::default()
                     },
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 },
                 CopyEntry {
                     copy: 3,
@@ -554,6 +583,7 @@ mod tests {
                         ..Edits::default()
                     },
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 },
             ],
         };
@@ -590,6 +620,7 @@ mod tests {
                 name: None,
                 edits: Edits::default(),
                 snapshots: Vec::new(),
+                snapshot_hwm: 0,
             });
         }
         s.copies.retain(|c| c.copy != 1);
@@ -607,6 +638,7 @@ mod tests {
             name: None,
             edits: Edits::default(),
             snapshots: Vec::new(),
+            snapshot_hwm: 0,
         });
         assert!(s.is_neutral(), "a neutral, unnamed original only");
 
@@ -617,12 +649,14 @@ mod tests {
                     name: None,
                     edits: Edits::default(),
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 },
                 CopyEntry {
                     copy: 1,
                     name: None,
                     edits: Edits::default(),
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 },
             ],
         };
@@ -642,6 +676,7 @@ mod tests {
                             ..Edits::default()
                         },
                         snapshots: Vec::new(),
+                        snapshot_hwm: 0,
                     },
                     CopyEntry {
                         copy: 1,
@@ -651,6 +686,7 @@ mod tests {
                             ..Edits::default()
                         },
                         snapshots: Vec::new(),
+                        snapshot_hwm: 0,
                     },
                 ],
             },
@@ -1035,6 +1071,36 @@ mod snapshot_tests {
             4,
             "the highest ever used is 3, so the next is 4"
         );
+    }
+
+    /// ⚠⚠ **Deleting the newest snapshot must not free its number**, or undoing that deletion
+    /// after taking another leaves two snapshots numbered the same in one copy — where a rename
+    /// or a delete would hit whichever came first. The live maximum alone cannot see a number
+    /// that only the undo log still holds, which is what `snapshot_hwm` is for.
+    #[test]
+    fn deleting_the_newest_snapshot_does_not_free_its_number() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.add_snapshot(0, snap(1, 1.0));
+        s.add_snapshot(0, snap(2, 2.0));
+        s.remove_snapshot(0, 2);
+        assert_eq!(
+            s.next_snapshot(0),
+            3,
+            "2 was used once and must never be handed out again"
+        );
+    }
+
+    /// ⚠ A sidecar written before the high-water mark existed reads it as `0`, so numbering must
+    /// fall back to the live maximum rather than restarting at 1 and colliding.
+    #[test]
+    fn a_snapshot_list_with_no_recorded_mark_still_numbers_forward() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.copies[0].snapshots.push(snap(1, 1.0));
+        s.copies[0].snapshots.push(snap(2, 2.0));
+        assert_eq!(s.copies[0].snapshot_hwm, 0, "fixture: no mark recorded");
+        assert_eq!(s.next_snapshot(0), 3);
     }
 
     /// Numbering is per copy: copy 1's first snapshot is 1 even when copy 0 has two.

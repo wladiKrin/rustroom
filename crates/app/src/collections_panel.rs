@@ -7,7 +7,7 @@
 //! ⚠ A **left** panel, in the Library view only — Lightroom's placement, and it competes with
 //! nothing. The Presets panel was removed for having two homes; these have one.
 
-use crate::RustroomApp;
+use crate::{theme, RustroomApp};
 use eframe::egui;
 
 /// One collapsible section of the panel.
@@ -34,16 +34,6 @@ fn section<R>(
     if r.header_response.clicked() {
         *open = !*open;
     }
-}
-
-/// Whether a name field was just committed with Enter.
-///
-/// ⚠ **Enter, not a bare `lost_focus()`** — clicking away is abandoning, not committing, the rule
-/// the copy-rename field already follows.
-///
-/// ⚠ Written once so the three name fields cannot disagree about what commits.
-fn committed(ui: &egui::Ui, resp: &egui::Response) -> bool {
-    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
 /// Draw the collections panel. Every action is applied here.
@@ -165,7 +155,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 // what is a valid name — two guards for one rule is how they drift.
                                 let named = !app.new_collection.trim().is_empty();
                                 let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                if named && (plus || committed(ui, &field)) {
+                                if named && (plus || theme::committed(ui, &field)) {
                                     if let Some(cat) = &app.catalog {
                                         let _ = cat.create_collection(app.new_collection.trim());
                                     }
@@ -226,7 +216,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     .add_enabled(ready, egui::Button::new("+"))
                                     .on_hover_text("Save the current source and filter as a rule")
                                     .clicked();
-                                if ready && (plus || committed(ui, &field)) {
+                                if ready && (plus || theme::committed(ui, &field)) {
                                     action = Action::SaveSmart;
                                 }
                             });
@@ -282,7 +272,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 );
                                 let named = !app.new_keyword.trim().is_empty();
                                 let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                if named && (plus || committed(ui, &field)) {
+                                if named && (plus || theme::committed(ui, &field)) {
                                     action = Action::CreateKeyword;
                                 }
                             });

@@ -5,6 +5,7 @@ pub mod color_wheel;
 pub mod geometry;
 pub mod masks;
 pub mod presets;
+pub mod snapshots;
 
 use crate::name_edit;
 use crate::{theme, RustroomApp};
@@ -76,6 +77,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
         .show(ui, |ui| {
             if app.pending.is_some() {
                 ui.disable();
+            }
+            // ⚠⚠ **Before the scroll area, and that ordering is the whole feature.** egui
+            // allocates in call order, so the strip takes its height from the panel's bottom
+            // edge and the scroll area gets what is left — which is what pins the strip while
+            // forty sliders scroll behind it. Moved after, it would scroll away with them.
+            if app.pending.is_none() {
+                let ctx = ui.ctx().clone();
+                photo_edited |= snapshots::show(app, ui, &ctx);
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
                 if app.session.is_none() {

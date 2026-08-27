@@ -107,6 +107,7 @@ mod tests {
             name: name.map(str::to_string),
             edits: Edits::default(),
             snapshots: Vec::new(),
+            snapshot_hwm: 0,
         }
     }
 

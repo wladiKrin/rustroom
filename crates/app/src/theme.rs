@@ -164,6 +164,17 @@ pub fn empty_state(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(egui::Label::new(text).selectable(false))
 }
 
+/// Whether a name field was just committed with Enter.
+///
+/// ⚠ **Enter, not a bare `lost_focus()`** — clicking away is abandoning, not committing, the rule
+/// the copy-rename field already follows.
+///
+/// ⚠ Written once so every in-place name field — collection, keyword, smart collection,
+/// snapshot — cannot disagree about what commits. Two guards for one rule is how they drift.
+pub fn committed(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
 /// A caption: a filename under a thumbnail, a camera model beside a title.
 ///
 /// ⚠ Renders identically to [`hint`] today and means something different — a hint is

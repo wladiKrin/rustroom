@@ -213,6 +213,7 @@ mod tests {
                         ..Edits::default()
                     },
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 },
                 CopyEntry {
                     copy: 1,
@@ -222,6 +223,7 @@ mod tests {
                         ..Edits::default()
                     },
                     snapshots: Vec::new(),
+                    snapshot_hwm: 0,
                 },
             ],
         };
