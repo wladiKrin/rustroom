@@ -21,6 +21,7 @@ pub mod library_filter;
 pub mod marks;
 pub mod mask_tool;
 pub mod menu;
+pub mod metadata_scanner;
 pub mod photo_id;
 pub mod presets;
 pub mod render_engine;

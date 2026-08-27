@@ -117,6 +117,21 @@ impl eframe::App for RustroomApp {
             }
         }
 
+        // Pull finished capture metadata into the catalog.
+        //
+        // ⚠ Written as results arrive rather than batched at the end, so a folder closed half way
+        // keeps what was read.
+        {
+            let done = self.metadata.drain();
+            if let Some(cat) = &self.catalog {
+                for r in &done {
+                    if let Err(e) = cat.set_capture(&r.path, &r.capture) {
+                        eprintln!("catalog: {e}");
+                    }
+                }
+            }
+        }
+
         // ⚠ Applied after the panel closure closes: `commands::execute` takes `&mut self`
         // and the closure already holds it. The same deferred-action shape the preset list
         // uses.

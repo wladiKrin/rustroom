@@ -361,6 +361,12 @@ struct RustroomApp {
     /// ⚠ `Option` rather than a hard failure: a catalog that will not open must not stop you
     /// editing photographs, because edits live in the sidecars and do not need it.
     catalog: Option<catalog::db::Catalog>,
+    /// Reads capture metadata into the catalog in the background.
+    ///
+    /// ⚠ Its own pass rather than part of the thumbnail loader, which is **windowed** — you cannot
+    /// filter by a date that was never read. Built once and kept for the life of the app, so a
+    /// source switch never abandons a half-scanned folder.
+    metadata: rustroom_app::metadata_scanner::MetadataScanner,
     modal: Modal,
     /// One chronological order over photo edits *and* preset deletions, so Ctrl+Z walks
     /// back through both. The payloads stay where they are — photo snapshots in
@@ -416,6 +422,10 @@ impl RustroomApp {
             }
         };
         Self {
+            metadata: rustroom_app::metadata_scanner::MetadataScanner::new({
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            }),
             camera_profiles_cache: Vec::new(),
             os_manages_colour,
             view: AppView::default(),
@@ -1916,8 +1926,40 @@ impl RustroomApp {
             marks: std::collections::HashMap::new(),
         });
         self.reload_marks();
+        self.queue_metadata();
         self.view = AppView::Library;
         n
+    }
+
+    /// Queue whatever this source's folders have not had their capture metadata read yet.
+    ///
+    /// ⚠ Called on load only, never per frame — the `apply_view_demosaic` rule. The scanner
+    /// de-duplicates anyway, but the query would not.
+    ///
+    /// ⚠ One query per **folder**, because a collection or All Photos spans several — the same
+    /// shape `reload_marks` uses, and for the same reason.
+    fn queue_metadata(&mut self) {
+        let Some(cat) = &self.catalog else { return };
+        let Some(lib) = self.library.as_ref() else {
+            return;
+        };
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for e in &lib.entries {
+            if let Some(dir) = e.id.path.parent() {
+                if !folders.iter().any(|f| f == dir) {
+                    folders.push(dir.to_path_buf());
+                }
+            }
+        }
+        let mut want: Vec<PathBuf> = Vec::new();
+        for dir in &folders {
+            if let Ok(names) = cat.files_without_capture(dir) {
+                want.extend(names.into_iter().map(|n| dir.join(n)));
+            }
+        }
+        if !want.is_empty() {
+            self.metadata.scan(&want);
+        }
     }
 
     fn open_entry(&mut self, ctx: &egui::Context, index: usize) {

@@ -77,6 +77,9 @@ pub fn for_test() -> RustroomApp {
             ))
         };
     RustroomApp {
+        // ⚠ A real scanner, with a reader that never runs: nothing queues work in these tests, so
+        // its workers park immediately and cost nothing.
+        metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         camera_profiles_cache: Vec::new(),
         os_manages_colour: false,
         view: AppView::Develop,
