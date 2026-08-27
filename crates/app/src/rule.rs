@@ -92,6 +92,39 @@ pub enum Criterion {
 }
 
 impl Criterion {
+    /// Which family this criterion belongs to, for grouping the editor's dropdown.
+    ///
+    /// ⚠ Lives beside `kind` rather than in the dialog, so the grouping cannot drift from the
+    /// criteria themselves — the rule `EDIT_GROUP_NAMES` and `FlagSet::ALL` already follow. A new
+    /// criterion is a compile error in `kind` and gets a group here in the same edit.
+    pub fn group(&self) -> &'static str {
+        match self {
+            // What you decided about the photo.
+            Criterion::Rating { .. } | Criterion::Flag(_) | Criterion::Label(_) => "Marks",
+            // Where it lives in the library.
+            Criterion::Folder(_)
+            | Criterion::Collection(_)
+            | Criterion::Keyword(_)
+            | Criterion::Text(_)
+            | Criterion::Format(_) => "Library",
+            // What the camera recorded.
+            Criterion::Period { .. }
+            | Criterion::Camera(_)
+            | Criterion::Lens(_)
+            | Criterion::Iso { .. }
+            | Criterion::Aperture { .. }
+            | Criterion::Shutter { .. }
+            | Criterion::FocalLength { .. } => "Capture",
+            // Facts about the file itself.
+            Criterion::FileSize { .. } => "File",
+        }
+    }
+
+    /// Every group, in the order the editor offers them.
+    ///
+    /// ⚠ Marks first because culling is the commonest reason to build a rule.
+    pub const GROUPS: [&'static str; 4] = ["Marks", "Library", "Capture", "File"];
+
     /// Which kind of criterion this is, ignoring its value.
     ///
     /// ⚠ Two callers, which is why it is not speculative: the editor's type dropdown, and the
@@ -409,5 +442,82 @@ mod tests {
         ]);
         let json = serde_json::to_string(&rule).unwrap();
         assert_eq!(serde_json::from_str::<Expr>(&json).unwrap(), rule);
+    }
+
+    #[test]
+    fn every_criterion_has_a_group_from_the_declared_list() {
+        // ⚠ A property over *every* variant, so a new criterion cannot quietly acquire a group
+        // the editor does not offer — it would then be unreachable from the dropdown, which is a
+        // bug nobody can see. The same shape `every_demosaic_tier_has_a_cost_hint` uses.
+        for c in [
+            Criterion::Folder(PathBuf::new()),
+            Criterion::Collection(0),
+            Criterion::Keyword(0),
+            Criterion::Period {
+                year: 2026,
+                month: None,
+                day: None,
+            },
+            Criterion::Text(String::new()),
+            Criterion::Rating {
+                op: Cmp::AtLeast,
+                value: 0,
+            },
+            Criterion::Flag(Flag::None),
+            Criterion::Label(0),
+            Criterion::Camera(String::new()),
+            Criterion::Lens(String::new()),
+            Criterion::Format(String::new()),
+            Criterion::Iso {
+                op: Cmp::AtLeast,
+                value: 0,
+            },
+            Criterion::Aperture {
+                op: Cmp::AtLeast,
+                value: 0.0,
+            },
+            Criterion::Shutter {
+                op: Cmp::AtLeast,
+                value: 0.0,
+            },
+            Criterion::FocalLength {
+                op: Cmp::AtLeast,
+                value: 0.0,
+            },
+            Criterion::FileSize {
+                op: Cmp::AtLeast,
+                value: 0,
+            },
+        ] {
+            assert!(
+                Criterion::GROUPS.contains(&c.group()),
+                "{:?} is in group {:?}, which the editor does not offer",
+                c.kind(),
+                c.group()
+            );
+            assert!(!c.kind().is_empty());
+        }
+    }
+
+    #[test]
+    fn every_group_has_at_least_one_criterion() {
+        // ⚠ The other half: a group with nothing in it would draw an empty heading.
+        let all = [
+            Criterion::Rating {
+                op: Cmp::AtLeast,
+                value: 0,
+            }
+            .group(),
+            Criterion::Folder(PathBuf::new()).group(),
+            Criterion::Camera(String::new()).group(),
+            Criterion::FileSize {
+                op: Cmp::AtLeast,
+                value: 0,
+            }
+            .group(),
+        ];
+        for g in Criterion::GROUPS {
+            assert!(all.contains(&g), "group {g} has no criteria");
+        }
     }
 }

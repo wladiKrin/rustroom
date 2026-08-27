@@ -18,6 +18,8 @@ use rustroom_app::rule_form::{Match, Row};
 /// ⚠ A prototype value per kind rather than a parallel name list: the label comes from
 /// `Criterion::kind`, so the dropdown and the row header cannot drift.
 fn prototypes() -> Vec<Criterion> {
+    // ⚠ The dropdown draws these under `Criterion::GROUPS` headings, so this list's own
+    // order only decides the order *within* a group.
     vec![
         Criterion::Rating {
             op: Cmp::AtLeast,
@@ -29,6 +31,7 @@ fn prototypes() -> Vec<Criterion> {
         Criterion::Collection(0),
         Criterion::Keyword(0),
         Criterion::Folder(std::path::PathBuf::new()),
+        Criterion::Format("raf".into()),
         Criterion::Period {
             year: 2026,
             month: None,
@@ -36,7 +39,6 @@ fn prototypes() -> Vec<Criterion> {
         },
         Criterion::Camera(String::new()),
         Criterion::Lens(String::new()),
-        Criterion::Format("raf".into()),
         Criterion::Iso {
             op: Cmp::AtLeast,
             value: 800,
@@ -352,17 +354,32 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .to_string();
                         egui::ComboBox::from_id_salt(("kind", ri))
                             .selected_text(&current)
-                            .width(120.0)
+                            .width(130.0)
                             .show_ui(ui, |ui| {
-                                for proto in prototypes() {
-                                    if ui
-                                        .selectable_label(proto.kind() == current, proto.kind())
-                                        .clicked()
-                                    {
-                                        // ⚠ Changing the kind resets the values: a Rating cannot carry
-                                        // a Camera's string, and keeping a stale value would be a
-                                        // criterion nobody chose.
-                                        row.values = vec![proto.clone()];
+                                // ⚠⚠ Grouped under headings — sixteen flat entries is more than
+                                // a dropdown can be scanned for. ⚠ The groups come from
+                                // `Criterion::group`, beside the criteria themselves, so a new
+                                // criterion cannot land in a heading the editor does not draw.
+                                let protos = prototypes();
+                                for g in Criterion::GROUPS {
+                                    let mut first = true;
+                                    for proto in protos.iter().filter(|p| p.group() == g) {
+                                        if first {
+                                            if g != Criterion::GROUPS[0] {
+                                                ui.separator();
+                                            }
+                                            ui.label(egui::RichText::new(g).weak().small());
+                                            first = false;
+                                        }
+                                        if ui
+                                            .selectable_label(proto.kind() == current, proto.kind())
+                                            .clicked()
+                                        {
+                                            // ⚠ Changing the kind resets the values: a Rating
+                                            // cannot carry a Camera's string, and keeping a stale
+                                            // value would be a criterion nobody chose.
+                                            row.values = vec![proto.clone()];
+                                        }
                                     }
                                 }
                             });
