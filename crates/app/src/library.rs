@@ -209,6 +209,24 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let name_size = ui.style().text_styles[&egui::TextStyle::Small].size * cell
             / rustroom_app::settings::DEFAULT_CELL as f32;
 
+        // ⚠⚠ **A drag-sensing background, registered BEFORE the cells so the cells win the
+        // hit-test.** egui breaks a tie by registration order — `hit_test.rs`: "In case of a tie,
+        // take the last one = the one on top" — so this must come first, or it would swallow every
+        // click meant for a thumbnail. It is what lets a rubber band start in the gaps between
+        // cells and in the empty area below the last row.
+        //
+        // ⚠ The scrollbar is drawn by the `ScrollArea` afterwards and is therefore on top, so
+        // dragging it still scrolls rather than banding.
+        let bg_rect = ui.available_rect_before_wrap();
+        let bg = ui.interact(
+            bg_rect,
+            ui.id().with("grid_background"),
+            egui::Sense::drag(),
+        );
+        if bg.drag_started_by(egui::PointerButton::Primary) {
+            band_started = bg.interact_pointer_pos();
+        }
+
         // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell.
         let drawn = egui::ScrollArea::vertical()
             // ⚠ The scrollbar belongs at the window's right edge, not hugging the rightmost
