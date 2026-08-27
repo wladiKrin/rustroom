@@ -1,7 +1,7 @@
 # Capture metadata — M4.3b
 
 **Date:** 2026-08-27
-**Status:** plan 1 built 2026-08-27; plan 2 (filtering) outstanding
+**Status:** built 2026-08-27 (both plans)
 **Slice of:** M4.3 (see `2026-08-27-windowed-browsing-design.md` for the four-way decomposition)
 
 ## What this adds
@@ -180,11 +180,17 @@ a future reader checks them again.
 
 ---
 
-## Plan 2 — filtering, sketched only
+## Plan 2 — filtering (built; the open question was settled by the data)
 
-`LibraryFilter` gains a date range and a camera set. ⚠ **egui has no date picker**, so the date UI
-is genuinely open — `YYYY-MM-DD` text fields, relative presets ("this year", "last 30 days"), or
-both. Settled when the data is in the catalog to look at, not before.
+The date UI was left open here deliberately. With the catalog filled it settled itself: **1 camera,
+2 lenses, 2 months, 6 days** — so camera has no discriminating power on this library, a month
+filter nearly none, and **day granularity is what works**. A ten-year archive inverts that, so no
+one granularity could be chosen.
+
+**Dates are browsed from the panel as a year › month › day tree built from a `GROUP BY`** — which
+needs no date picker at all, and is the idiom the panel already uses four times. Camera and lens
+became multi-select sets in the Filter popup, shown only above one value. See
+`docs/superpowers/plans/2026-08-27-metadata-filtering.md`.
 
 ---
 
