@@ -82,224 +82,243 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     egui::Panel::left("collections")
         .default_size(190.0)
         .show(ui, |ui| {
-            // ⚠ Folders first: "where photos come from" is the outer concept, and All Photos —
-            // the whole catalog — is the natural top of it.
-            section(ui, &mut sections.folders, "sec_folders", "Folders", |ui| {
-                let all = app
-                    .catalog
-                    .as_ref()
-                    .and_then(|c| c.photo_count().ok())
-                    .unwrap_or(0);
-                let showing_all = matches!(
-                    app.library.as_ref().map(|l| &l.source),
-                    Some(crate::LibrarySource::AllPhotos)
-                );
-                if ui
-                    .selectable_label(showing_all, format!("All Photos ({all})"))
-                    .on_hover_text("Every photo in the catalog, from every folder ever opened")
-                    .clicked()
-                {
-                    action = Action::OpenAllPhotos;
-                }
-                let folders = app
-                    .catalog
-                    .as_ref()
-                    .and_then(|c| c.folders().ok())
-                    .unwrap_or_default();
-                for f in &folders {
-                    ui.horizontal(|ui| {
-                        if ui.button("×").on_hover_text("Forget this folder").clicked() {
-                            action = Action::ForgetFolder(f.id, f.path.clone(), f.count);
-                        }
-                        // ⚠ The basename is what fits and what identifies; the full path is the hover.
-                        let shown = f
-                            .path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| f.path.to_string_lossy().to_string());
-                        let selected = matches!(
+            // ⚠⚠ **One scroll area for the whole panel, and the three inner ones were REMOVED
+            // to get it.** Nested vertical scroll areas fight over the wheel — the inner one
+            // under the pointer consumes it, so the panel could not be scrolled past whichever
+            // list you happened to be over. With every section collapsible, an inner scrollbar
+            // buys nothing that folding the section does not.
+            //
+            // ⚠ `auto_shrink([false, false])` pins the scrollbar to the panel's edge instead of
+            // letting it track the widest row — the same fix the Library grid needed.
+            egui::ScrollArea::vertical()
+                .id_salt("panel")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // ⚠ Folders first: "where photos come from" is the outer concept, and All Photos —
+                    // the whole catalog — is the natural top of it.
+                    section(ui, &mut sections.folders, "sec_folders", "Folders", |ui| {
+                        let all = app
+                            .catalog
+                            .as_ref()
+                            .and_then(|c| c.photo_count().ok())
+                            .unwrap_or(0);
+                        let showing_all = matches!(
                             app.library.as_ref().map(|l| &l.source),
-                            Some(crate::LibrarySource::Folder(p)) if p == &f.path
+                            Some(crate::LibrarySource::AllPhotos)
                         );
                         if ui
-                            .selectable_label(selected, format!("{shown} ({})", f.count))
-                            .on_hover_text(f.path.to_string_lossy())
+                            .selectable_label(showing_all, format!("All Photos ({all})"))
+                            .on_hover_text(
+                                "Every photo in the catalog, from every folder ever opened",
+                            )
                             .clicked()
                         {
-                            action = Action::OpenFolder(f.path.clone());
+                            action = Action::OpenAllPhotos;
                         }
-                    });
-                }
-            });
-            ui.separator();
-            section(
-                ui,
-                &mut sections.collections,
-                "sec_collections",
-                "Collections",
-                |ui| {
-                    ui.horizontal(|ui| {
-                        let field = ui.add(
-                            egui::TextEdit::singleline(&mut app.new_collection)
-                                .hint_text("New collection")
-                                .desired_width(110.0),
-                        );
-                        // ⚠ Guarded on a non-empty name: the store keys on the name, and a nameless
-                        // collection cannot be told from another nameless one.
-                        //
-                        // ⚠ The **same** guard serves Enter and `+`, so the two cannot disagree about
-                        // what is a valid name — two guards for one rule is how they drift.
-                        let named = !app.new_collection.trim().is_empty();
-                        let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
-                        if named && (plus || committed(ui, &field)) {
-                            if let Some(cat) = &app.catalog {
-                                let _ = cat.create_collection(app.new_collection.trim());
-                            }
-                            app.new_collection.clear();
-                        }
-                    });
-                    ui.separator();
-
-                    let rows = app
-                        .catalog
-                        .as_ref()
-                        .and_then(|c| c.collections().ok())
-                        .unwrap_or_default();
-                    if rows.is_empty() {
-                        crate::theme::hint(ui, "No collections yet.");
-                    }
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for c in &rows {
+                        let folders = app
+                            .catalog
+                            .as_ref()
+                            .and_then(|c| c.folders().ok())
+                            .unwrap_or_default();
+                        for f in &folders {
                             ui.horizontal(|ui| {
-                                if ui.button("×").on_hover_text("Delete").clicked() {
-                                    action = Action::Delete(c.id);
+                                if ui.button("×").on_hover_text("Forget this folder").clicked() {
+                                    action = Action::ForgetFolder(f.id, f.path.clone(), f.count);
                                 }
-                                // ⚠ Enabled only with a selection, and the hover names the count, so it
-                                // can never be ambiguous about what it is about to do.
+                                // ⚠ The basename is what fits and what identifies; the full path is the hover.
+                                let shown = f
+                                    .path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| f.path.to_string_lossy().to_string());
+                                let selected = matches!(
+                                    app.library.as_ref().map(|l| &l.source),
+                                    Some(crate::LibrarySource::Folder(p)) if p == &f.path
+                                );
                                 if ui
-                                    .add_enabled(picked > 0, egui::Button::new("+"))
-                                    .on_hover_text(format!("Add {picked} selected"))
+                                    .selectable_label(selected, format!("{shown} ({})", f.count))
+                                    .on_hover_text(f.path.to_string_lossy())
                                     .clicked()
                                 {
-                                    action = Action::AddSelection(c.id);
-                                }
-                                let label = format!("{} ({})", c.name, c.count);
-                                if ui.selectable_label(selected == Some(c.id), label).clicked() {
-                                    action = Action::Open(c.id, c.name.clone());
+                                    action = Action::OpenFolder(f.path.clone());
                                 }
                             });
                         }
                     });
-                },
-            );
-            ui.separator();
-            section(
-                ui,
-                &mut sections.smart,
-                "sec_smart",
-                "Smart collections",
-                |ui| {
-                    ui.horizontal(|ui| {
-                        let field = ui.add(
-                            egui::TextEdit::singleline(&mut app.new_smart)
-                                .hint_text("Save this view")
-                                .desired_width(110.0),
-                        );
-                        // ⚠ Enabled only with a name *and* a Library open: the rule is built from what is
-                        // on screen, so there has to be something on screen.
-                        let ready = !app.new_smart.trim().is_empty() && app.library.is_some();
-                        let plus = ui
-                            .add_enabled(ready, egui::Button::new("+"))
-                            .on_hover_text("Save the current source and filter as a rule")
-                            .clicked();
-                        if ready && (plus || committed(ui, &field)) {
-                            action = Action::SaveSmart;
-                        }
-                    });
-                    let smarts = app
-                        .catalog
-                        .as_ref()
-                        .and_then(|c| c.smart_collections().ok())
-                        .unwrap_or_default();
-                    if smarts.is_empty() {
-                        crate::theme::hint(ui, "No smart collections yet.");
-                    }
-                    for sc in &smarts {
-                        ui.horizontal(|ui| {
-                            // ⚠ No confirmation: a smart collection is a **query** with nothing behind it,
-                            // so it follows `delete_collection`'s precedent rather than `forget_folder`'s,
-                            // which takes ratings and keywords with it.
-                            if ui.button("×").on_hover_text("Delete").clicked() {
-                                action = Action::DeleteSmart(sc.id);
-                            }
-                            if ui.button("⚙").on_hover_text("Edit the rule").clicked() {
-                                action = Action::EditSmart(sc.id, sc.name.clone(), sc.rule.clone());
-                            }
-                            let selected = matches!(
-                                app.library.as_ref().map(|l| &l.source),
-                                Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
-                            );
-                            // ⚠⚠ **No count, unlike Collections and Keywords.** Computing one means
-                            // evaluating the rule over every photo, every frame. The row does not pretend
-                            // to know something it would be expensive to know.
-                            if ui.selectable_label(selected, &sc.name).clicked() {
-                                action = Action::OpenSmart(sc.id, sc.name.clone());
-                            }
-                        });
-                    }
-                },
-            );
-            ui.separator();
-            section(
-                ui,
-                &mut sections.keywords,
-                "sec_keywords",
-                "Keywords",
-                |ui| {
-                    ui.horizontal(|ui| {
-                        let field = ui.add(
-                            egui::TextEdit::singleline(&mut app.new_keyword)
-                                .hint_text("New keyword")
-                                .desired_width(110.0),
-                        );
-                        let named = !app.new_keyword.trim().is_empty();
-                        let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
-                        if named && (plus || committed(ui, &field)) {
-                            action = Action::CreateKeyword;
-                        }
-                    });
-                    let kws = app
-                        .catalog
-                        .as_ref()
-                        .and_then(|c| c.keywords().ok())
-                        .unwrap_or_default();
-                    // ⚠ The parent is chosen *before* creating, because there is no drag-and-drop and no
-                    // re-parenting: this is the only moment a keyword's place in the tree is decided.
-                    let parent_name = app
-                        .new_keyword_parent
-                        .and_then(|id| kws.iter().find(|k| k.id == id))
-                        .map(|k| k.name.clone())
-                        .unwrap_or_else(|| "(top level)".to_string());
-                    egui::ComboBox::from_id_salt("kw_parent")
-                        .selected_text(format!("under {parent_name}"))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut app.new_keyword_parent, None, "(top level)");
-                            for k in &kws {
-                                ui.selectable_value(
-                                    &mut app.new_keyword_parent,
-                                    Some(k.id),
-                                    format!("{}{}", "  ".repeat(k.depth), k.name),
+                    ui.separator();
+                    section(
+                        ui,
+                        &mut sections.collections,
+                        "sec_collections",
+                        "Collections",
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                let field = ui.add(
+                                    egui::TextEdit::singleline(&mut app.new_collection)
+                                        .hint_text("New collection")
+                                        .desired_width(110.0),
                                 );
-                            }
-                        });
+                                // ⚠ Guarded on a non-empty name: the store keys on the name, and a nameless
+                                // collection cannot be told from another nameless one.
+                                //
+                                // ⚠ The **same** guard serves Enter and `+`, so the two cannot disagree about
+                                // what is a valid name — two guards for one rule is how they drift.
+                                let named = !app.new_collection.trim().is_empty();
+                                let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
+                                if named && (plus || committed(ui, &field)) {
+                                    if let Some(cat) = &app.catalog {
+                                        let _ = cat.create_collection(app.new_collection.trim());
+                                    }
+                                    app.new_collection.clear();
+                                }
+                            });
+                            ui.separator();
 
-                    if kws.is_empty() {
-                        crate::theme::hint(ui, "No keywords yet.");
-                    }
-                    let picked_kw = app.selected_keyword();
-                    egui::ScrollArea::vertical()
-                        .id_salt("keywords")
-                        .show(ui, |ui| {
+                            let rows = app
+                                .catalog
+                                .as_ref()
+                                .and_then(|c| c.collections().ok())
+                                .unwrap_or_default();
+                            if rows.is_empty() {
+                                crate::theme::hint(ui, "No collections yet.");
+                            }
+                            for c in &rows {
+                                ui.horizontal(|ui| {
+                                    if ui.button("×").on_hover_text("Delete").clicked() {
+                                        action = Action::Delete(c.id);
+                                    }
+                                    // ⚠ Enabled only with a selection, and the hover names the count, so it
+                                    // can never be ambiguous about what it is about to do.
+                                    if ui
+                                        .add_enabled(picked > 0, egui::Button::new("+"))
+                                        .on_hover_text(format!("Add {picked} selected"))
+                                        .clicked()
+                                    {
+                                        action = Action::AddSelection(c.id);
+                                    }
+                                    let label = format!("{} ({})", c.name, c.count);
+                                    if ui.selectable_label(selected == Some(c.id), label).clicked()
+                                    {
+                                        action = Action::Open(c.id, c.name.clone());
+                                    }
+                                });
+                            }
+                        },
+                    );
+                    ui.separator();
+                    section(
+                        ui,
+                        &mut sections.smart,
+                        "sec_smart",
+                        "Smart collections",
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                let field = ui.add(
+                                    egui::TextEdit::singleline(&mut app.new_smart)
+                                        .hint_text("Save this view")
+                                        .desired_width(110.0),
+                                );
+                                // ⚠ Enabled only with a name *and* a Library open: the rule is built from what is
+                                // on screen, so there has to be something on screen.
+                                let ready =
+                                    !app.new_smart.trim().is_empty() && app.library.is_some();
+                                let plus = ui
+                                    .add_enabled(ready, egui::Button::new("+"))
+                                    .on_hover_text("Save the current source and filter as a rule")
+                                    .clicked();
+                                if ready && (plus || committed(ui, &field)) {
+                                    action = Action::SaveSmart;
+                                }
+                            });
+                            let smarts = app
+                                .catalog
+                                .as_ref()
+                                .and_then(|c| c.smart_collections().ok())
+                                .unwrap_or_default();
+                            if smarts.is_empty() {
+                                crate::theme::hint(ui, "No smart collections yet.");
+                            }
+                            for sc in &smarts {
+                                ui.horizontal(|ui| {
+                                    // ⚠ No confirmation: a smart collection is a **query** with nothing behind it,
+                                    // so it follows `delete_collection`'s precedent rather than `forget_folder`'s,
+                                    // which takes ratings and keywords with it.
+                                    if ui.button("×").on_hover_text("Delete").clicked() {
+                                        action = Action::DeleteSmart(sc.id);
+                                    }
+                                    if ui.button("⚙").on_hover_text("Edit the rule").clicked() {
+                                        action = Action::EditSmart(
+                                            sc.id,
+                                            sc.name.clone(),
+                                            sc.rule.clone(),
+                                        );
+                                    }
+                                    let selected = matches!(
+                                        app.library.as_ref().map(|l| &l.source),
+                                        Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
+                                    );
+                                    // ⚠⚠ **No count, unlike Collections and Keywords.** Computing one means
+                                    // evaluating the rule over every photo, every frame. The row does not pretend
+                                    // to know something it would be expensive to know.
+                                    if ui.selectable_label(selected, &sc.name).clicked() {
+                                        action = Action::OpenSmart(sc.id, sc.name.clone());
+                                    }
+                                });
+                            }
+                        },
+                    );
+                    ui.separator();
+                    section(
+                        ui,
+                        &mut sections.keywords,
+                        "sec_keywords",
+                        "Keywords",
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                let field = ui.add(
+                                    egui::TextEdit::singleline(&mut app.new_keyword)
+                                        .hint_text("New keyword")
+                                        .desired_width(110.0),
+                                );
+                                let named = !app.new_keyword.trim().is_empty();
+                                let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
+                                if named && (plus || committed(ui, &field)) {
+                                    action = Action::CreateKeyword;
+                                }
+                            });
+                            let kws = app
+                                .catalog
+                                .as_ref()
+                                .and_then(|c| c.keywords().ok())
+                                .unwrap_or_default();
+                            // ⚠ The parent is chosen *before* creating, because there is no drag-and-drop and no
+                            // re-parenting: this is the only moment a keyword's place in the tree is decided.
+                            let parent_name = app
+                                .new_keyword_parent
+                                .and_then(|id| kws.iter().find(|k| k.id == id))
+                                .map(|k| k.name.clone())
+                                .unwrap_or_else(|| "(top level)".to_string());
+                            egui::ComboBox::from_id_salt("kw_parent")
+                                .selected_text(format!("under {parent_name}"))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut app.new_keyword_parent,
+                                        None,
+                                        "(top level)",
+                                    );
+                                    for k in &kws {
+                                        ui.selectable_value(
+                                            &mut app.new_keyword_parent,
+                                            Some(k.id),
+                                            format!("{}{}", "  ".repeat(k.depth), k.name),
+                                        );
+                                    }
+                                });
+
+                            if kws.is_empty() {
+                                crate::theme::hint(ui, "No keywords yet.");
+                            }
+                            let picked_kw = app.selected_keyword();
                             for k in &kws {
                                 ui.horizontal(|ui| {
                                     // ⚠ Indented by depth — the only thing that makes the tree readable,
@@ -339,32 +358,29 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     }
                                 });
                             }
-                        });
-                },
-            );
-            ui.separator();
-            section(ui, &mut sections.dates, "sec_dates", "Dates", |ui| {
-                // ⚠ A tree built from a `GROUP BY` over what is actually in the catalog — which is
-                // what makes this need **no date picker**, since egui has none. It shows the days you
-                // have rather than asking you to type a range.
-                let days = app
-                    .catalog
-                    .as_ref()
-                    .and_then(|c| c.capture_days().ok())
-                    .unwrap_or_default();
-                if days.is_empty() {
-                    crate::theme::hint(ui, "No capture dates yet.");
-                }
-                // ⚠ Every selected period highlights, not just one — the point of multi-select.
-                let open_periods: Vec<rustroom_app::date_tree::Period> =
-                    match app.library.as_ref().map(|l| &l.source) {
-                        Some(crate::LibrarySource::Periods { periods, .. }) => periods.clone(),
-                        _ => Vec::new(),
-                    };
-                egui::ScrollArea::vertical()
-                    .id_salt("dates")
-                    .max_height(200.0)
-                    .show(ui, |ui| {
+                        },
+                    );
+                    ui.separator();
+                    section(ui, &mut sections.dates, "sec_dates", "Dates", |ui| {
+                        // ⚠ A tree built from a `GROUP BY` over what is actually in the catalog — which is
+                        // what makes this need **no date picker**, since egui has none. It shows the days you
+                        // have rather than asking you to type a range.
+                        let days = app
+                            .catalog
+                            .as_ref()
+                            .and_then(|c| c.capture_days().ok())
+                            .unwrap_or_default();
+                        if days.is_empty() {
+                            crate::theme::hint(ui, "No capture dates yet.");
+                        }
+                        // ⚠ Every selected period highlights, not just one — the point of multi-select.
+                        let open_periods: Vec<rustroom_app::date_tree::Period> =
+                            match app.library.as_ref().map(|l| &l.source) {
+                                Some(crate::LibrarySource::Periods { periods, .. }) => {
+                                    periods.clone()
+                                }
+                                _ => Vec::new(),
+                            };
                         for y in rustroom_app::date_tree::group(&days) {
                             // ⚠ `id_salt` on every header: egui's auto-ids shift with what was drawn
                             // before them — the hazard the grid's `push_id` fixed — so two years with
@@ -424,7 +440,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 });
                         }
                     });
-            });
+                });
         });
 
     if sections != app.settings.panel_sections {

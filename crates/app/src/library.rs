@@ -263,7 +263,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ui, |ui| {
         let Some(lib) = &mut app.library else {
             ui.centered_and_justified(|ui| {
-                ui.label("Open a folder to browse (Open folder… button).");
+                crate::theme::empty_state(ui, "Open a folder to browse (Open folder… button).");
             });
             return;
         };
@@ -272,11 +272,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         lib.selection.clamp(lib.entries.len());
         if lib.visible.is_empty() {
             ui.centered_and_justified(|ui| {
-                ui.label(if lib.entries.is_empty() {
-                    "No supported images in this folder."
-                } else {
-                    "Every format is hidden — re-enable one above."
-                });
+                crate::theme::empty_state(
+                    ui,
+                    if lib.entries.is_empty() {
+                        "No supported images in this folder."
+                    } else {
+                        "Every format is hidden — re-enable one above."
+                    },
+                );
             });
             return;
         }

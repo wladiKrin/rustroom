@@ -293,9 +293,17 @@ impl Default for Settings {
 /// `eframe::App::save` — egui's own collapsing state dies with the process, so a collapsed
 /// section would spring open on every launch and the control would be worth nothing.
 ///
-/// ⚠ All true by default, so an existing user loses no discoverability: the sections start
-/// exactly as they were and collapsing is the new capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// ⚠⚠ **All CLOSED by default** (user's call, 2026-08-27). The first version defaulted them open,
+/// on the argument that an existing user should lose no discoverability — but the point of the
+/// control is that the panel does not show every option at once, and a default showing them all
+/// makes it something you must set up before it helps. A collapsed header still names its
+/// section, so nothing is hidden, only folded.
+///
+/// ⚠ `Default` is **derived**, which is correct only while every section defaults to *closed* —
+/// `false` is `bool::default()`. Flip any of them and it must become a hand-written impl, the way
+/// `RadialGradient::default` and `ColorGrading::default` already are. `..._still_loads` asserts
+/// the value rather than the mechanism, so it catches either way round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PanelSections {
     pub folders: bool,
@@ -303,18 +311,6 @@ pub struct PanelSections {
     pub smart: bool,
     pub keywords: bool,
     pub dates: bool,
-}
-
-impl Default for PanelSections {
-    fn default() -> Self {
-        Self {
-            folders: true,
-            collections: true,
-            smart: true,
-            keywords: true,
-            dates: true,
-        }
-    }
 }
 
 /// What a confirm dialog decided.
@@ -517,24 +513,25 @@ mod tests {
         assert_eq!(
             loaded.panel_sections,
             PanelSections::default(),
-            "an absent value must leave every section expanded, so nothing appears to vanish"
+            "an absent value must give the closed default, not a half-filled struct"
         );
         assert!(
-            loaded.panel_sections.folders,
-            "and the default really is open"
+            !loaded.panel_sections.folders,
+            "and the default really is closed"
         );
     }
 
     #[test]
-    fn a_partial_panel_sections_object_keeps_the_others_open() {
-        // ⚠ The container-level `#[serde(default)]`: collapsing one section must not silently
-        // collapse the rest when an older or hand-edited file names only that one.
+    fn a_partial_panel_sections_object_defaults_the_rest() {
+        // ⚠ The container-level `#[serde(default)]`: a file naming only one section must still
+        // parse — `SettingsStore::load` is infallible, so a failure here silently reverts *every*
+        // setting rather than just this one.
         let f = TempFile::new("panel_sections_partial");
-        std::fs::write(&f.0, r#"{"panel_sections":{"dates":false}}"#).unwrap();
+        std::fs::write(&f.0, r#"{"panel_sections":{"dates":true}}"#).unwrap();
         let loaded = SettingsStore::new(f.0.clone()).load();
-        assert!(!loaded.panel_sections.dates);
-        assert!(loaded.panel_sections.folders);
-        assert!(loaded.panel_sections.smart);
+        assert!(loaded.panel_sections.dates, "the named one is honoured");
+        assert!(!loaded.panel_sections.folders, "the rest take the default");
+        assert!(!loaded.panel_sections.smart);
     }
 
     #[test]
@@ -543,17 +540,17 @@ mod tests {
         let store = SettingsStore::new(f.0.clone());
         let s = Settings {
             panel_sections: PanelSections {
-                keywords: false,
-                dates: false,
+                keywords: true,
+                dates: true,
                 ..PanelSections::default()
             },
             ..Settings::default()
         };
         store.save(&s).unwrap();
         let got = store.load();
-        assert!(!got.panel_sections.keywords);
-        assert!(!got.panel_sections.dates);
-        assert!(got.panel_sections.collections);
+        assert!(got.panel_sections.keywords);
+        assert!(got.panel_sections.dates);
+        assert!(!got.panel_sections.collections);
     }
 
     #[test]
@@ -663,7 +660,7 @@ mod tests {
             library_cell: DEFAULT_CELL + CELL_STEP,
             // Non-default in both directions, so a re-defaulted field cannot pass.
             panel_sections: PanelSections {
-                folders: false,
+                folders: true,
                 ..PanelSections::default()
             },
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is

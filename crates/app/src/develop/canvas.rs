@@ -304,7 +304,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
             }
             None => {
                 ui.centered_and_justified(|ui| {
-                    ui.label("Open an image to begin (Open file… button).");
+                    crate::theme::empty_state(ui, "Open an image to begin (Open file… button).");
                 });
             }
         }

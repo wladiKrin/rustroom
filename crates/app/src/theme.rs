@@ -150,6 +150,20 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }
 
+/// The "there is nothing here yet" line filling an empty canvas or grid.
+///
+/// ⚠⚠ **`selectable(false)` is the whole reason this exists.** egui's labels are selectable by
+/// default, so a `Label` senses click-and-drag for text selection and shows the **I-beam over its
+/// whole rect** — and inside `centered_and_justified` that rect is the *entire panel*. The empty
+/// Library therefore turned the cursor into a text caret across the whole window, which reads as
+/// the app being in some editing state it is not.
+///
+/// ⚠ Fixed here rather than by turning `interaction.selectable_labels` off globally: selection is
+/// wanted on ordinary labels, and it is *justification* that makes it a problem.
+pub fn empty_state(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Label::new(text).selectable(false))
+}
+
 /// A caption: a filename under a thumbnail, a camera model beside a title.
 ///
 /// ⚠ Renders identically to [`hint`] today and means something different — a hint is
@@ -192,6 +206,33 @@ pub fn button_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_state_label_does_not_claim_the_text_cursor() {
+        // ⚠⚠ egui's labels are **selectable by default**, so a `Label` senses click-and-drag for
+        // text selection and shows the I-beam over its whole rect — and inside
+        // `centered_and_justified` that rect is the *entire panel*. The empty Library therefore
+        // turned the cursor into a text caret across the whole window.
+        let ctx = egui::Context::default();
+        let mut ours = None;
+        let mut plain = None;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.centered_and_justified(|ui| {
+                ours = Some(empty_state(ui, "nothing here").sense);
+            });
+            plain = Some(ui.label("an ordinary label").sense);
+        });
+        assert!(
+            !ours.unwrap().senses_drag(),
+            "an empty-state label must not sense a drag, or it owns the cursor"
+        );
+        // ⚠ The contrast is what makes the assertion mean something: an ordinary label *does*
+        // sense it, so the test is about `selectable(false)` rather than about egui's defaults.
+        assert!(
+            plain.unwrap().senses_drag(),
+            "an ordinary label still selects — this test would say nothing otherwise"
+        );
+    }
 
     /// A default style with our tweaks applied — what both themes end up with.
     fn tuned() -> egui::Style {
