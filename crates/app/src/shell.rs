@@ -290,7 +290,11 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
 /// ⚠ Composes with the format filter through `Library::refilter`, the single derived `visible`
 /// list every consumer iterates — not a second filtering mechanism.
 fn star_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    let mut min = app.library.as_ref().map(|l| l.min_stars).unwrap_or(0);
+    let mut min = app
+        .library
+        .as_ref()
+        .map(|l| l.filter.min_stars)
+        .unwrap_or(0);
     let text = |v: u8| {
         if v == 0 {
             "All".to_string()
@@ -308,8 +312,8 @@ fn star_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
     // hundreds per frame is the `apply_view_demosaic` mistake in another costume.
     if let Some(lib) = app.library.as_mut() {
-        if lib.min_stars != min {
-            lib.min_stars = min;
+        if lib.filter.min_stars != min {
+            lib.filter.min_stars = min;
             lib.refilter();
         }
     }
@@ -395,14 +399,14 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // one click because the boxes are still there, so the guard cost more than it bought.
     let mut toggled: Option<String> = None;
     for (ext, count) in formats.iter().rev() {
-        let mut shown = !lib.filter.is_hidden(ext);
+        let mut shown = !lib.filter.format.is_hidden(ext);
         let label = format!("{} ({count})", ext.to_uppercase());
         if ui.checkbox(&mut shown, label).changed() {
             toggled = Some(ext.clone());
         }
     }
     if let Some(ext) = toggled {
-        lib.filter.toggle(&ext);
+        lib.filter.format.toggle(&ext);
         lib.refilter();
     }
 }

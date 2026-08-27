@@ -13,7 +13,7 @@ use rustroom_app::edit_history::HistoryStash;
 use rustroom_app::entries::{self, PhotoEntry};
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
 use rustroom_app::file_rename;
-use rustroom_app::format_filter::{self, FormatFilter};
+use rustroom_app::format_filter;
 use rustroom_app::full_res;
 use rustroom_app::history::History;
 use rustroom_app::mask_tool;
@@ -133,8 +133,8 @@ struct Library {
     last_want: Vec<PathBuf>,
     selection: Selection,
     loader: ThumbLoader,
-    /// Which formats the browser hides. Reset when a folder is loaded.
-    filter: FormatFilter,
+    /// Everything that narrows what is shown. Reset when a source is loaded.
+    filter: rustroom_app::library_filter::LibraryFilter,
     /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
     /// `refilter`, never edited directly.
     visible: Vec<usize>,
@@ -145,8 +145,6 @@ struct Library {
     /// trip per photo per frame. Only marked photos are in here, so an unmarked folder costs
     /// nothing.
     marks: std::collections::HashMap<PhotoId, catalog::db::Marks>,
-    /// Minimum star rating shown. 0 shows everything.
-    min_stars: u8,
 }
 
 impl Library {
@@ -156,21 +154,18 @@ impl Library {
     /// selection holding photos that are not on screen, which a sync or a paste would then
     /// write to.
     fn refilter(&mut self) {
-        // ⚠ One derived `visible` list, composed from both filters — **not** a second filtering
+        // ⚠ One derived `visible` list, composed from one filter — **not** a second filtering
         // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
         // bug, and `visible` staying the single derived list is the mitigation that has held.
-        let by_format = self.filter.visible_indices(&self.entries);
-        let min = self.min_stars;
-        self.visible = by_format
-            .into_iter()
-            .filter(|&i| {
-                let m = self
-                    .marks
-                    .get(&self.entries[i].id)
-                    .copied()
-                    .unwrap_or_default();
-                rustroom_app::marks::passes(m, min)
+        self.visible = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                let m = self.marks.get(&e.id).copied().unwrap_or_default();
+                self.filter.matches(e, m)
             })
+            .map(|(i, _)| i)
             .collect();
         self.selection.retain_visible(&self.visible);
     }
@@ -1908,10 +1903,9 @@ impl RustroomApp {
             selection: Selection::default(),
             loader,
             // A fresh `Library` per load, so the filter resets by construction.
-            filter: FormatFilter::default(),
+            filter: Default::default(),
             visible: (0..n).collect(),
             marks: std::collections::HashMap::new(),
-            min_stars: 0,
         });
         self.reload_marks();
         self.view = AppView::Library;

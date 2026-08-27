@@ -191,10 +191,9 @@ pub fn library_of(n: usize) -> Library {
         last_want: Vec::new(),
         selection: Selection::default(),
         loader: ThumbLoader::new(color::OutputSpace::Srgb, || {}),
-        filter: FormatFilter::default(),
+        filter: Default::default(),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
-        min_stars: 0,
     };
     lib.refilter();
     lib
