@@ -10,3 +10,4 @@ color = { path = "../color" }
 image = { workspace = true }
 thiserror = { workspace = true }
 kamadak-exif = "0.6.1"
+chrono = "0.4.45"

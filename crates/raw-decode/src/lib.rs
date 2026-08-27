@@ -66,6 +66,16 @@ pub struct DecodedRaw {
 pub use core_image::Thumbnail;
 
 /// Extract and decode the camera's embedded preview thumbnail (fast — no demosaic).
+/// Read a RAW's capture metadata without decoding it.
+///
+/// ⚠ Reads the whole file: `RawImage::open` takes a `&[u8]`, and a truncated prefix was measured
+/// and rejected — libraw opens nothing at 1 MB and only half the files at 4 MB, so a prefix read
+/// would silently miss part of a library.
+pub fn read_capture(path: &Path) -> Result<core_image::Capture, DecodeError> {
+    let bytes = std::fs::read(path)?;
+    backend_rsraw::read_capture(&bytes)
+}
+
 pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
     let bytes = std::fs::read(path)?;
     backend_rsraw::extract_thumbnail(&bytes)

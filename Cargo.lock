@@ -2233,6 +2233,7 @@ dependencies = [
 name = "image-decode"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "color 0.1.0",
  "core-image",
  "image",
@@ -3478,6 +3479,7 @@ name = "raw-decode"
 version = "0.1.0"
 dependencies = [
  "camera-profile",
+ "chrono",
  "color 0.1.0",
  "core-image",
  "edit-model",

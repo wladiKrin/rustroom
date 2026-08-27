@@ -5,6 +5,7 @@
 //! the pipeline's linear ProPhoto working space so the
 //! result lives in the same linear-light space as a decoded RAW.
 
+use core_image::Capture;
 use core_image::{ImageBuf, Thumbnail};
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::path::Path;
@@ -261,5 +262,145 @@ mod tests {
             assert_eq!((d.width, d.height), expect, "orientation {o}");
             std::fs::remove_file(&path).ok();
         }
+    }
+}
+
+/// Read an image file's EXIF, if it has any.
+///
+/// ⚠ PNG and TIFF usually carry none. That is not an error: an empty [`Capture`] is a valid
+/// answer, and it must still be *recorded*, or the background pass retries the file forever.
+pub fn read_capture(path: &Path) -> Result<Capture, ImageDecodeError> {
+    // ⚠ `ImageDecodeError` wraps `image::ImageError`, not `io::Error`, so an unopenable file goes
+    // through the same "no EXIF is normal" path rather than needing a new error variant.
+    let Ok(file) = std::fs::File::open(path) else {
+        return Ok(Capture::default());
+    };
+    let mut r = std::io::BufReader::new(&file);
+    let Ok(ex) = exif::Reader::new().read_from_container(&mut r) else {
+        // ⚠ No EXIF is normal, not a failure. An error here would make the scanner retry this file
+        // on every folder open forever.
+        return Ok(Capture::default());
+    };
+    let make = string_of(&ex, exif::Tag::Make).unwrap_or_default();
+    let model = string_of(&ex, exif::Tag::Model).unwrap_or_default();
+    Ok(Capture {
+        taken: ex
+            .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+            .and_then(|f| match &f.value {
+                exif::Value::Ascii(v) => v.first().cloned(),
+                _ => None,
+            })
+            .and_then(|b| exif::DateTime::from_ascii(&b).ok())
+            .and_then(naive_seconds),
+        camera: Capture::camera_name(&make, &model),
+        lens: string_of(&ex, exif::Tag::LensModel),
+        iso: ex
+            .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
+            .and_then(|f| f.value.get_uint(0)),
+        shutter: rational_of(&ex, exif::Tag::ExposureTime),
+        aperture: rational_of(&ex, exif::Tag::FNumber),
+        focal_len: rational_of(&ex, exif::Tag::FocalLength),
+    })
+}
+
+/// ⚠⚠ Reads `Field::value`, **never `display_value()`**. EXIF string fields are arrays, and a real
+/// X-T4 JPEG returns the lens name followed by **51 empty strings** — `display_value()` renders
+/// every one of them, so a naïve implementation stores `"XF23mmF2 R WR", "", "", …`.
+fn string_of(ex: &exif::Exif, tag: exif::Tag) -> Option<String> {
+    let f = ex.get_field(tag, exif::In::PRIMARY)?;
+    let exif::Value::Ascii(parts) = &f.value else {
+        return None;
+    };
+    first_non_empty(parts)
+}
+
+/// The first non-empty entry of an EXIF string array.
+///
+/// ⚠ Split out from `string_of` **so it is testable without building an EXIF container**. The
+/// padding is the whole finding, and a test that cannot reach it is not a test of it.
+fn first_non_empty(parts: &[Vec<u8>]) -> Option<String> {
+    parts
+        .iter()
+        .map(|b| String::from_utf8_lossy(b).trim().to_string())
+        .find(|s| !s.is_empty())
+}
+
+fn rational_of(ex: &exif::Exif, tag: exif::Tag) -> Option<f32> {
+    let f = ex.get_field(tag, exif::In::PRIMARY)?;
+    let v = match &f.value {
+        exif::Value::Rational(r) => r.first()?.to_f64(),
+        exif::Value::SRational(r) => r.first()?.to_f64(),
+        _ => return None,
+    };
+    (v.is_finite() && v > 0.0).then_some(v as f32)
+}
+
+/// ⚠ Interpreted as **wall-clock**, matching the RAW reader — EXIF's `DateTimeOriginal` carries no
+/// timezone, and a photographer's "the shots from the 17th" means the 17th where they stood.
+fn naive_seconds(dt: exif::DateTime) -> Option<i64> {
+    chrono::NaiveDate::from_ymd_opt(dt.year as i32, dt.month as u32, dt.day as u32)?
+        .and_hms_opt(dt.hour as u32, dt.minute as u32, dt.second as u32)
+        .map(|d| d.and_utc().timestamp())
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn a_padded_string_field_is_read_as_one_value() {
+        // ⚠⚠ The finding, and it is not hypothetical: for a real X-T4 JPEG, `LensModel` comes back
+        // as the lens name followed by **51 empty strings**, and `display_value()` renders every
+        // one of them. Reproduced at the level the padding actually lives.
+        let mut padded: Vec<Vec<u8>> = vec![b"XF23mmF2 R WR".to_vec()];
+        padded.extend(std::iter::repeat_n(Vec::new(), 51));
+        assert_eq!(first_non_empty(&padded).as_deref(), Some("XF23mmF2 R WR"));
+    }
+
+    #[test]
+    fn a_field_of_nothing_but_padding_is_none() {
+        let empty: Vec<Vec<u8>> = std::iter::repeat_n(Vec::new(), 8).collect();
+        assert_eq!(first_non_empty(&empty), None);
+        assert_eq!(first_non_empty(&[]), None);
+    }
+
+    #[test]
+    fn leading_padding_is_skipped_rather_than_taken() {
+        // ⚠ "First non-empty", not "first" — a field whose first slot is blank must not read as
+        // absent.
+        let parts = vec![Vec::new(), b"  ".to_vec(), b"X-T4".to_vec()];
+        assert_eq!(first_non_empty(&parts).as_deref(), Some("X-T4"));
+    }
+
+    #[test]
+    fn a_wall_clock_conversion_ignores_any_offset() {
+        // ⚠ The RAW reader takes `.naive_local()` and this takes the fields as written, so a
+        // RAW+JPEG pair of one shot lands on the same second.
+        let dt = exif::DateTime {
+            year: 2026,
+            month: 5,
+            day: 17,
+            hour: 19,
+            minute: 26,
+            second: 41,
+            nanosecond: None,
+            offset: Some(120),
+        };
+        let with_offset = naive_seconds(dt);
+        let dt2 = exif::DateTime {
+            offset: None,
+            ..exif::DateTime {
+                year: 2026,
+                month: 5,
+                day: 17,
+                hour: 19,
+                minute: 26,
+                second: 41,
+                nanosecond: None,
+                offset: None,
+            }
+        };
+        assert_eq!(with_offset, naive_seconds(dt2));
+        assert!(with_offset.is_some());
     }
 }

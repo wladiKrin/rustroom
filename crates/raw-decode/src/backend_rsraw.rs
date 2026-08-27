@@ -1,6 +1,7 @@
 //! libraw-backed decode via the `rsraw` crate.
 
 use crate::{DecodeError, DecodeOptions, DecodedRaw, RawMetadata, Thumbnail};
+use core_image::Capture;
 use core_image::ImageBuf;
 use rsraw::{RawImage, ThumbFormat, BIT_DEPTH_16};
 use std::path::Path;
@@ -296,5 +297,84 @@ mod tests {
         // Clockwise sends the left-hand (red) pixel to the top.
         assert_eq!(out.get_pixel(0, 0), &Rgb([255, 0, 0]));
         assert_eq!(out.get_pixel(0, 1), &Rgb([0, 0, 255]));
+    }
+}
+
+/// Read what the file records about how it was taken, without decoding it.
+///
+/// ⚠ Measured: ~0.2 ms of parsing on top of reading the file, which is ~11–15 ms for a 29 MB RAF.
+/// The read dominates, which is why the caller is a background pass and not the folder scan.
+pub fn read_capture(bytes: &[u8]) -> Result<Capture, DecodeError> {
+    let raw = RawImage::open(bytes).map_err(|e| DecodeError::Backend(e.to_string()))?;
+    let lens = raw.lens_info();
+    Ok(Capture {
+        // ⚠⚠ `.naive_local()`, NOT the UTC instant. EXIF carries no timezone at all, so storing
+        // true instants would make a RAW exact and its JPEG sibling a guess about the machine's
+        // zone — the pair could then differ by hours. See `Capture::taken`.
+        taken: raw
+            .datetime()
+            .map(|d| d.naive_local().and_utc().timestamp()),
+        camera: Capture::camera_name(&raw.normalized_make(), &raw.normalized_model()),
+        lens: non_empty(&lens.lens_name),
+        iso: non_zero_u32(raw.iso_speed()),
+        shutter: non_zero_f32(raw.shutter()),
+        aperture: non_zero_f32(raw.aperture()),
+        focal_len: non_zero_f32(raw.focal_len()),
+    })
+}
+
+/// ⚠ libraw reports **0** for a value it does not have, not an absence. Storing 0 would put
+/// "ISO 0" and "f/0" into a filter as real-looking options.
+fn non_zero_u32(v: u32) -> Option<u32> {
+    (v != 0).then_some(v)
+}
+
+fn non_zero_f32(v: f32) -> Option<f32> {
+    (v.is_finite() && v > 0.0).then_some(v)
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_value_is_none_rather_than_zero() {
+        // ⚠ libraw reports 0 for a value it does not have.
+        assert_eq!(non_zero_u32(0), None);
+        assert_eq!(non_zero_u32(1600), Some(1600));
+        assert_eq!(non_zero_f32(0.0), None);
+        assert_eq!(non_zero_f32(f32::NAN), None);
+        assert_eq!(non_zero_f32(-1.0), None);
+        assert_eq!(non_zero_f32(2.0), Some(2.0));
+        assert_eq!(non_empty("  "), None);
+        assert_eq!(
+            non_empty(" XF23mmF2 R WR "),
+            Some("XF23mmF2 R WR".to_string())
+        );
+    }
+
+    #[test]
+    fn a_real_raw_reports_its_capture() {
+        // ⚠ Gated on the fixture, so it **skips** without it — a green CI run does not mean this
+        // ran. It is the only end-to-end proof either reader has.
+        let Ok(path) = std::env::var("RAW_FIXTURE") else {
+            return;
+        };
+        let c = crate::read_capture(std::path::Path::new(&path)).expect("read");
+        assert!(c.taken.is_some(), "no capture time: {c:?}");
+        assert!(c.iso.is_some() && c.aperture.is_some(), "{c:?}");
+        // ⚠ The normalization, end to end: whatever libraw's casing, the make is uppercase here.
+        let cam = c.camera.expect("no camera");
+        let make = cam.split_whitespace().next().unwrap();
+        assert_eq!(
+            make,
+            make.to_uppercase(),
+            "the make was not normalized: {cam}"
+        );
     }
 }
