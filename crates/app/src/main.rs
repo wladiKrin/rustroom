@@ -543,6 +543,17 @@ pub struct Session {
     /// This copy's own name, when it has one. Always `None` on the original, whose name is the
     /// filename on disk.
     name: Option<String>,
+    /// This copy's snapshots, cached from the sidecar when the photo opened.
+    ///
+    /// ⚠⚠ **Cached rather than read where it is drawn.** The strip lives in the panel body, which
+    /// runs every frame; a `load_all` there would read the file sixty times a second — the
+    /// `apply_view_demosaic` rule. `name` above is cached from the same envelope for the same
+    /// reason.
+    ///
+    /// ⚠ Kept in step by the `RustroomApp::*_snapshot` methods, which are the only writers. A
+    /// second place mutating the sidecar's snapshots without updating this is two facts that can
+    /// disagree.
+    snapshots: Vec<rustroom_app::sidecar::Snapshot>,
     engine: RenderEngine,
     edits: Edits,
     texture: Option<egui::TextureHandle>,
@@ -1561,6 +1572,10 @@ impl RustroomApp {
             }
         };
 
+        // ⚠ One read for both the name and the snapshots, rather than a `load_all` per field:
+        // they come from the same envelope, and a second read is a second chance to disagree.
+        let envelope = sidecar::load_all(&id.path);
+
         let bf = &decoded.baseline;
         let baseline = ctx.load_texture(
             "baseline",
@@ -1605,9 +1620,8 @@ impl RustroomApp {
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session
             // opened without a Library (single-file mode) still knows its own name.
-            name: sidecar::load_all(&id.path)
-                .name_of(id.copy)
-                .map(str::to_string),
+            name: envelope.name_of(id.copy).map(str::to_string),
+            snapshots: envelope.snapshots_of(id.copy).to_vec(),
             engine,
             edits,
             texture: None,
@@ -3445,6 +3459,87 @@ mod tests {
             "full {} vs half {}",
             full.width(),
             half.width()
+        );
+    }
+
+    /// A `Decoded` with nothing behind it, so `finalize_session` can be driven directly.
+    fn fake_decode() -> Arc<Decoded> {
+        Arc::new(Decoded {
+            buffer: test_app::buffer(8, 4),
+            label: "Test Camera".to_string(),
+            baseline: rustroom_app::render_engine::RenderedFrame {
+                width: 8,
+                height: 4,
+                rgba: vec![0; 8 * 4 * 4],
+                region: None,
+                hist: [[0; 256]; 3],
+                max_dim: 8,
+            },
+            source_scale: 1.0,
+            lens: LensFacts::default(),
+        })
+    }
+
+    /// ⚠⚠ Drives the **real** `finalize_session`, not a hand-assigned field. Read once when the
+    /// photo opens and never in a panel body — the `apply_view_demosaic` rule; `Session::name`
+    /// caches the copy name from the same envelope for the same reason.
+    #[test]
+    fn opening_a_photo_caches_its_snapshots_and_its_name() {
+        let dir = test_app::TestDir::new("sessionsnaps");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"not a real raw").unwrap();
+
+        let mut sc = rustroom_app::sidecar::Sidecar::default();
+        sc.set_edits(1, Edits::default());
+        sc.set_name(1, Some("Warm".to_string()));
+        sc.add_snapshot(
+            1,
+            rustroom_app::sidecar::Snapshot {
+                n: 1,
+                name: Some("Before the crop".to_string()),
+                taken: 0,
+                edits: Edits::default(),
+            },
+        );
+        rustroom_app::sidecar::save_all(&photo, &sc).unwrap();
+
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.finalize_session(&ctx, PhotoId::new(photo.clone(), 1), fake_decode());
+
+        let s = app.session.as_ref().expect("the session must exist");
+        assert_eq!(s.name.as_deref(), Some("Warm"), "the name still caches");
+        assert_eq!(s.snapshots.len(), 1, "and so do the snapshots");
+        assert_eq!(s.snapshots[0].label(), "Before the crop");
+    }
+
+    /// ⚠ Snapshots are **per copy**: opening copy 0 must not show copy 1's.
+    #[test]
+    fn a_session_caches_only_its_own_copys_snapshots() {
+        let dir = test_app::TestDir::new("percopysnaps");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"not a real raw").unwrap();
+
+        let mut sc = rustroom_app::sidecar::Sidecar::default();
+        sc.set_edits(0, Edits::default());
+        sc.add_snapshot(
+            1,
+            rustroom_app::sidecar::Snapshot {
+                n: 1,
+                name: None,
+                taken: 0,
+                edits: Edits::default(),
+            },
+        );
+        rustroom_app::sidecar::save_all(&photo, &sc).unwrap();
+
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.finalize_session(&ctx, PhotoId::original(photo.clone()), fake_decode());
+
+        assert!(
+            app.session.as_ref().unwrap().snapshots.is_empty(),
+            "copy 0 has none of its own"
         );
     }
 }

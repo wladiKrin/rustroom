@@ -147,6 +147,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         path: std::path::PathBuf::from("/test/a.RAF"),
         copy: 0,
         name: None,
+        snapshots: Vec::new(),
         engine,
         edits: Edits::default(),
         texture: Some(texture(ctx, "frame", w, h)),
