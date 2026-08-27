@@ -26,6 +26,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         OpenAllPhotos,
         OpenFolder(std::path::PathBuf),
         ForgetFolder(i64, std::path::PathBuf, i64),
+        OpenPeriod(i32, Option<u32>, Option<u32>, String),
     }
     let mut action = Action::None;
 
@@ -208,6 +209,82 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         });
                     }
                 });
+
+            ui.separator();
+            ui.heading("Dates");
+            // ⚠ A tree built from a `GROUP BY` over what is actually in the catalog — which is
+            // what makes this need **no date picker**, since egui has none. It shows the days you
+            // have rather than asking you to type a range.
+            let days = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.capture_days().ok())
+                .unwrap_or_default();
+            if days.is_empty() {
+                crate::theme::hint(ui, "No capture dates yet.");
+            }
+            let open_period = match app.library.as_ref().map(|l| &l.source) {
+                Some(crate::LibrarySource::Period {
+                    year, month, day, ..
+                }) => Some((*year, *month, *day)),
+                _ => None,
+            };
+            egui::ScrollArea::vertical()
+                .id_salt("dates")
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    for y in rustroom_app::date_tree::group(&days) {
+                        // ⚠ `id_salt` on every header: egui's auto-ids shift with what was drawn
+                        // before them — the hazard the grid's `push_id` fixed — so two years with
+                        // the same month number would otherwise collapse together.
+                        egui::CollapsingHeader::new(format!("{} ({})", y.year, y.count))
+                            .id_salt(("year", y.year))
+                            .show(ui, |ui| {
+                                let sel = open_period == Some((y.year, None, None));
+                                if ui
+                                    .selectable_label(sel, format!("All of {}", y.year))
+                                    .clicked()
+                                {
+                                    action =
+                                        Action::OpenPeriod(y.year, None, None, y.year.to_string());
+                                }
+                                for m in &y.months {
+                                    let name = rustroom_app::date_tree::month_name(m.month);
+                                    egui::CollapsingHeader::new(format!("{name} ({})", m.count))
+                                        .id_salt(("month", y.year, m.month))
+                                        .show(ui, |ui| {
+                                            let sel =
+                                                open_period == Some((y.year, Some(m.month), None));
+                                            if ui
+                                                .selectable_label(sel, format!("All of {name}"))
+                                                .clicked()
+                                            {
+                                                action = Action::OpenPeriod(
+                                                    y.year,
+                                                    Some(m.month),
+                                                    None,
+                                                    format!("{name} {}", y.year),
+                                                );
+                                            }
+                                            for d in &m.days {
+                                                let sel = open_period
+                                                    == Some((y.year, Some(m.month), Some(d.day)));
+                                                let label =
+                                                    format!("{} {name} ({})", d.day, d.count);
+                                                if ui.selectable_label(sel, label).clicked() {
+                                                    action = Action::OpenPeriod(
+                                                        y.year,
+                                                        Some(m.month),
+                                                        Some(d.day),
+                                                        format!("{} {name} {}", d.day, y.year),
+                                                    );
+                                                }
+                                            }
+                                        });
+                                }
+                            });
+                    }
+                });
         });
 
     match action {
@@ -252,6 +329,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.new_keyword.clear();
         }
         Action::OpenAllPhotos => app.open_all_photos(ctx),
+        Action::OpenPeriod(y, m, d, label) => app.open_period(ctx, y, m, d, &label),
         Action::OpenFolder(path) => app.open_catalog_folder(ctx, &path),
         Action::ForgetFolder(id, path, count) => {
             app.modal = crate::modals::Modal::ConfirmForgetFolder { path, id, count };

@@ -348,56 +348,78 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
     egui::containers::menu::MenuButton::new(mark_filter_label(&f))
         .config(cfg)
         .ui(ui, |ui| {
-            // ⚠⚠ **One ordering across all three sections: the unset value first, then the
-            // values.** Flag used to read "Any, picked, rejected, unflagged" while colour read
-            // "Any, unlabelled, colours" — two orderings for one idea. There is no "Any" row any
-            // more either: an empty set *is* "any", which is the same convention in all three and
-            // one fewer thing to explain.
-            ui.label("Rating");
-            for v in 0..=rustroom_app::library_filter::RatingSet::MAX {
-                let text = if v == 0 {
-                    "Unrated".to_string()
-                } else {
-                    format!("{v}★")
-                };
-                let mut on = f.stars.contains(v);
-                if ui.checkbox(&mut on, text).changed() {
-                    f.stars.toggle(v);
-                }
-            }
-            ui.separator();
-            ui.label("Flag");
-            // ⚠ Driven by `FlagSet::ALL`, so the ordering lives beside the type rather than being
-            // re-invented here — the rule `EDIT_GROUP_NAMES` and `Tool::ALL` already follow.
-            for flag in rustroom_app::library_filter::FlagSet::ALL {
-                let text = match flag {
-                    catalog::db::Flag::None => "Unflagged",
-                    catalog::db::Flag::Pick => "⚑ Picked",
-                    catalog::db::Flag::Reject => "× Rejected",
-                };
-                let mut on = f.flags.contains(flag);
-                if ui.checkbox(&mut on, text).changed() {
-                    f.flags.toggle(flag);
-                }
-            }
-            ui.separator();
-            ui.label("Colour");
-            for (n, name) in [
-                (0u8, "Unlabelled"),
-                (1, "Red"),
-                (2, "Blue"),
-                (3, "Yellow"),
-                (4, "Green"),
-            ] {
-                let mut on = f.labels.contains(n);
-                if ui.checkbox(&mut on, name).changed() {
-                    f.labels.toggle(n);
-                }
-            }
-            ui.separator();
-            if ui.button("Clear").clicked() {
-                f.clear_marks_and_text();
-            }
+            // ⚠ Tall enough to need scrolling now that capture values join the marks — the list
+            // of lenses grows with the library, unlike the fixed mark sections.
+            egui::ScrollArea::vertical()
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    // ⚠⚠ **One ordering across all three sections: the unset value first, then the
+                    // values.** Flag used to read "Any, picked, rejected, unflagged" while colour read
+                    // "Any, unlabelled, colours" — two orderings for one idea. There is no "Any" row any
+                    // more either: an empty set *is* "any", which is the same convention in all three and
+                    // one fewer thing to explain.
+                    ui.label("Rating");
+                    for v in 0..=rustroom_app::library_filter::RatingSet::MAX {
+                        let text = if v == 0 {
+                            "Unrated".to_string()
+                        } else {
+                            format!("{v}★")
+                        };
+                        let mut on = f.stars.contains(v);
+                        if ui.checkbox(&mut on, text).changed() {
+                            f.stars.toggle(v);
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Flag");
+                    // ⚠ Driven by `FlagSet::ALL`, so the ordering lives beside the type rather than being
+                    // re-invented here — the rule `EDIT_GROUP_NAMES` and `Tool::ALL` already follow.
+                    for flag in rustroom_app::library_filter::FlagSet::ALL {
+                        let text = match flag {
+                            catalog::db::Flag::None => "Unflagged",
+                            catalog::db::Flag::Pick => "⚑ Picked",
+                            catalog::db::Flag::Reject => "× Rejected",
+                        };
+                        let mut on = f.flags.contains(flag);
+                        if ui.checkbox(&mut on, text).changed() {
+                            f.flags.toggle(flag);
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Colour");
+                    for (n, name) in [
+                        (0u8, "Unlabelled"),
+                        (1, "Red"),
+                        (2, "Blue"),
+                        (3, "Yellow"),
+                        (4, "Green"),
+                    ] {
+                        let mut on = f.labels.contains(n);
+                        if ui.checkbox(&mut on, name).changed() {
+                            f.labels.toggle(n);
+                        }
+                    }
+                    ui.separator();
+                    // ⚠⚠ Shown only with **more than one** value. Measured: this library has exactly one
+                    // camera, so a Camera section would be a single checkbox that can only hide
+                    // everything — the same reasoning that hides the format chips below two formats.
+                    let cameras = app
+                        .catalog
+                        .as_ref()
+                        .and_then(|c| c.distinct_cameras().ok())
+                        .unwrap_or_default();
+                    capture_section(ui, "Camera", &cameras, &mut f.cameras);
+                    let lenses = app
+                        .catalog
+                        .as_ref()
+                        .and_then(|c| c.distinct_lenses().ok())
+                        .unwrap_or_default();
+                    capture_section(ui, "Lens", &lenses, &mut f.lenses);
+                    ui.separator();
+                    if ui.button("Clear").clicked() {
+                        f.clear_marks_and_text();
+                    }
+                });
         });
 
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
@@ -408,6 +430,33 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
             lib.refilter();
         }
     }
+}
+
+/// One multi-select section of open-ended string values.
+///
+/// ⚠ Drawn only when there is **more than one** value: a single checkbox can only hide everything,
+/// which is not a filter. The same guard the format chips use.
+fn capture_section(
+    ui: &mut egui::Ui,
+    title: &str,
+    values: &[String],
+    chosen: &mut std::collections::BTreeSet<String>,
+) {
+    if values.len() < 2 {
+        return;
+    }
+    ui.label(title);
+    for v in values {
+        let mut on = chosen.contains(v);
+        if ui.checkbox(&mut on, v).changed() {
+            if on {
+                chosen.insert(v.clone());
+            } else {
+                chosen.remove(v);
+            }
+        }
+    }
+    ui.separator();
 }
 
 /// What the Filter button says.
@@ -433,6 +482,12 @@ fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter) -> String 
             }
             .to_string(),
         );
+    }
+    for c in &f.cameras {
+        parts.push(c.clone());
+    }
+    for l in &f.lenses {
+        parts.push(l.clone());
     }
     if !f.labels.is_empty() {
         let names = ["unlabelled", "red", "blue", "yellow", "green"];

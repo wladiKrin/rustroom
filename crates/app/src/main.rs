@@ -96,6 +96,13 @@ enum LibrarySource {
     Folder(PathBuf),
     /// Every photo the catalog knows, from every folder ever opened.
     AllPhotos,
+    /// Photos taken in a calendar period — a year, a month, or a day.
+    Period {
+        year: i32,
+        month: Option<u32>,
+        day: Option<u32>,
+        label: String,
+    },
     Collection {
         id: i64,
         name: String,
@@ -1836,6 +1843,50 @@ impl RustroomApp {
         };
     }
 
+    /// Show every photo taken in a calendar period.
+    ///
+    /// ⚠ Browsed rather than filtered, like a keyword — which is what makes it need **no date
+    /// picker**: the tree in the panel is a `GROUP BY` over what is actually there. The cost is
+    /// that "in this collection, show me July" is not expressible; that is what M4.3c is for.
+    fn open_period(
+        &mut self,
+        ctx: &egui::Context,
+        year: i32,
+        month: Option<u32>,
+        day: Option<u32>,
+        label: &str,
+    ) {
+        let Some(cat) = &self.catalog else {
+            self.status = "No catalog".into();
+            return;
+        };
+        let members = match cat.photos_in_period(year, month, day) {
+            Ok(m) => m,
+            Err(e) => {
+                self.status = format!("Could not read the catalog: {e}");
+                return;
+            }
+        };
+        let mut scan =
+            rustroom_app::collections::scan_of(&members, sidecar::edited_at, fs_modified);
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::Period {
+                year,
+                month,
+                day,
+                label: label.to_string(),
+            },
+            scan,
+        );
+        self.status = if n == 0 {
+            format!("Nothing taken in {label}")
+        } else {
+            format!("{label} — {n} photos")
+        };
+    }
+
     /// Open a folder named by the catalog, re-scanning it.
     ///
     /// ⚠⚠ **A folder row re-scans; it does not browse from the catalog.** "One idiom for the whole
@@ -2236,7 +2287,8 @@ impl RustroomApp {
         else {
             // ⚠ Reindex renumbers copies in a *folder*. A collection has no single folder to
             // re-read, and renumbering photos you are merely viewing would be surprising.
-            self.status = "Reindex works on a folder, not a collection or All Photos".into();
+            self.status =
+                "Reindex works on a folder, not a collection, a date or All Photos".into();
             return;
         };
         // ⚠ Written first: a compaction rewrites the sidecar this photo's edits belong in, so an
