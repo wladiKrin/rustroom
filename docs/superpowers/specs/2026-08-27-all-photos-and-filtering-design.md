@@ -1,7 +1,7 @@
 # "All Photos", folder management and a filter bar — M4.3a-ii
 
 **Date:** 2026-08-27
-**Status:** designed, not built
+**Status:** plan 1 built 2026-08-27; plan 2 (filtering) outstanding
 **Slice of:** M4.3 (see `2026-08-27-windowed-browsing-design.md` for the four-way decomposition)
 
 ## What this closes
