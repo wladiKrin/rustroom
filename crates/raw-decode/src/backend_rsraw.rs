@@ -243,6 +243,32 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
 /// thumbnail and decode on one source of truth instead of parsing the thumbnail's EXIF.
 ///
 /// Codes follow the dcraw convention: 0 = none, 3 = 180°, 5 = 90° CCW, 6 = 90° CW.
+/// The photo's pixel dimensions **as displayed**, without decoding it.
+///
+/// ⚠⚠ Read **live**, never from the catalog, and that is forced rather than chosen. The metadata
+/// scanner queues files with **no capture row**, so adding `width`/`height` columns now would leave
+/// every already-scanned file NULL forever — the fields would apply only to photos nobody owns yet.
+/// Fixing that needs a `capture_version` column and a re-read pass; reading one photo on demand
+/// needs neither.
+///
+/// ⚠ Costs a whole-file read (~11–15 ms for a RAF) because `RawImage::open` takes a `&[u8]`. Fine
+/// for one photo when a dialog opens, and exactly why the *scan* does not do it for every file.
+///
+/// ⚠ **Swapped for a portrait orientation**, because libraw reports the *sensor's* dimensions.
+/// CLAUDE.md records that `sips` doing the same sent an investigation down a blind alley: it
+/// called all 411 files landscape while the thumbnails were genuinely portrait.
+pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let raw = RawImage::open(bytes).ok()?;
+    let (w, h) = (raw.width(), raw.height());
+    let flip = raw.as_ref().sizes.flip;
+    // dcraw codes: 5 = 270°, 6 = 90° — the two that transpose.
+    Some(if matches!(flip, 5 | 6) {
+        (h, w)
+    } else {
+        (w, h)
+    })
+}
+
 fn apply_flip(img: image::DynamicImage, flip: i32) -> image::DynamicImage {
     match flip {
         3 => img.rotate180(),
@@ -356,6 +382,53 @@ mod capture_tests {
             non_empty(" XF23mmF2 R WR "),
             Some("XF23mmF2 R WR".to_string())
         );
+    }
+
+    #[test]
+    fn a_real_raw_reports_its_dimensions_and_agrees_with_its_jpeg() {
+        // ⚠ Gated: it **skips** without the fixture, so a green CI run does not mean it ran.
+        //
+        // ⚠⚠ **A RAW and its JPEG sibling legitimately differ in SIZE, and that is the finding.**
+        // Measured on an X-T4 pair: the RAW is 6246×4170 and the camera's JPEG is 6240×4160 —
+        // libraw's active area includes border pixels the camera crops when writing its own JPEG.
+        // 6246×4170 is exactly what a full decode produces, so the RAW figure is the right one.
+        //
+        // ⚠ This is where dimensions differ from camera/date/lens: those are facts about the
+        // *shot* and must agree exactly, which is why they are normalized. Dimensions are a
+        // property of the *file*, and the two files really are different sizes. The first version
+        // of this test asserted equality and was false about correct code.
+        //
+        // What must hold is the **orientation**: both must agree about which way up it is, or one
+        // would report portrait and the other landscape.
+        let Ok(path) = std::env::var("RAW_FIXTURE") else {
+            return;
+        };
+        let raf = std::path::PathBuf::from(&path);
+        let (w, h) = crate::dimensions(&raf).expect("no dimensions");
+        assert!(w > 0 && h > 0);
+
+        let jpg = raf.with_extension("JPG");
+        if jpg.exists() {
+            let (jw, jh) = image_decode_dimensions(&jpg).expect("no jpeg dimensions");
+            assert_eq!(
+                w > h,
+                jw > jh,
+                "a RAW and its JPEG sibling disagree about the orientation: \
+                 {w}x{h} vs {jw}x{jh}"
+            );
+            // Within 2%: the same photograph, differing only by the sensor border.
+            let ratio = (w as f64 / jw as f64 - 1.0).abs();
+            assert!(
+                ratio < 0.02,
+                "the two differ by more than a sensor border: {w}x{h} vs {jw}x{jh}"
+            );
+        }
+    }
+
+    /// ⚠ `raw-decode` must not depend on `image-decode`, so the sibling check shells out to the
+    /// same header read `image_decode::dimensions` performs. Kept deliberately small.
+    fn image_decode_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
+        image::image_dimensions(path).ok()
     }
 
     #[test]

@@ -404,3 +404,39 @@ mod capture_tests {
         assert!(with_offset.is_some());
     }
 }
+
+/// The image's displayed pixel dimensions, from the header alone.
+///
+/// ⚠ Cheap — `image_dimensions` reads only the header, unlike the RAW side, which must read the
+/// whole file.
+///
+/// ⚠⚠ **EXIF orientation is applied**, so a portrait JPEG reports portrait. `image_dimensions`
+/// does not do that on its own, and without it a RAW and its JPEG sibling would disagree about
+/// which way up the photograph is.
+///
+/// ⚠ They still differ slightly in *size*, and that is correct: measured on an X-T4 pair, the RAW
+/// is 6246×4170 and the camera JPEG 6240×4160, because libraw's active area includes border
+/// pixels the camera crops. Unlike camera and date — facts about the *shot*, normalized to agree
+/// exactly — dimensions are a property of the *file*.
+pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
+    use image::metadata::Orientation;
+    let (w, h) = image::image_dimensions(path).ok()?;
+    // ⚠ The four transposing orientations, named rather than a numeric range: the enum is what
+    // `open_oriented` already uses, and a `5..=8` range would silently mean something else if the
+    // crate ever reordered it.
+    let transposed = ImageReader::open(path)
+        .ok()
+        .and_then(|r| r.with_guessed_format().ok())
+        .and_then(|r| r.into_decoder().ok())
+        .and_then(|mut d| d.orientation().ok())
+        .is_some_and(|o| {
+            matches!(
+                o,
+                Orientation::Rotate90
+                    | Orientation::Rotate270
+                    | Orientation::Rotate90FlipH
+                    | Orientation::Rotate270FlipH
+            )
+        });
+    Some(if transposed { (h, w) } else { (w, h) })
+}

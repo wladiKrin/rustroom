@@ -76,6 +76,14 @@ pub fn read_capture(path: &Path) -> Result<core_image::Capture, DecodeError> {
     backend_rsraw::read_capture(&bytes)
 }
 
+/// The photo's displayed pixel dimensions, without decoding it.
+///
+/// ⚠ Reads the whole file — see `backend_rsraw::dimensions`.
+pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
+    let bytes = std::fs::read(path).ok()?;
+    backend_rsraw::dimensions(&bytes)
+}
+
 pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
     let bytes = std::fs::read(path)?;
     backend_rsraw::extract_thumbnail(&bytes)
