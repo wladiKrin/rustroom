@@ -120,6 +120,26 @@ pub fn field(
         }
     }
 
+    // ⚠⚠ **A click anywhere else must end the edit, and `lost_focus` alone does not deliver it.**
+    // Clicking empty space in the grid moves focus *nowhere* — there is nothing focusable there —
+    // so the field kept focus and only Enter could close it. Surrendering focus here makes
+    // `lost_focus()` fire on the next frame, which is the one commit path.
+    //
+    // ⚠ The pointer is read into a local **before** `r` is touched: `Response` methods take the
+    // context lock internally, and holding one across `ui.input(..)` panics inside epaint's mutex
+    // — the re-entrant lock this very function already paid for once.
+    let pressed_at = ui.input(|i| {
+        i.pointer
+            .any_pressed()
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    });
+    if let Some(pos) = pressed_at {
+        if !r.rect.contains(pos) && r.has_focus() {
+            r.surrender_focus();
+        }
+    }
+
     if r.lost_focus() || (r.has_focus() && entered) {
         let typed = text.clone();
         *draft = None;

@@ -29,6 +29,16 @@ impl eframe::App for RustroomApp {
         // user into the Library is noise there — it describes work in a view they have left.
         if self.view != self.last_view {
             self.status.clear();
+            // ⚠⚠ **The rename draft is per view too, and this is a real bug fix.** The Develop
+            // panel draws its name field on *every* frame, so `get_or_insert_with` leaves a draft
+            // behind for whatever photo was open. Harmless there — autofocus is deliberately off
+            // in Develop — but the Library grid draws the field for whichever row owns the draft
+            // **and autofocuses it**, so returning to the Library put you in a text box you never
+            // asked for, with the keyboard captured.
+            //
+            // ⚠ Discarded rather than committed: renaming is explicit, and navigating away is not
+            // a way to confirm a half-typed name.
+            self.rename_draft = None;
             self.last_view = self.view;
         }
         self.pump_decodes(&ctx);

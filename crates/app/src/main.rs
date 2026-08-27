@@ -159,6 +159,13 @@ struct Library {
     /// ⚠⚠ Read **once per rebuild**, never per frame and never per cell — the rule `marks`
     /// already follows, and for the same reason: the grid draws sixty times a second.
     captures: std::collections::HashMap<PathBuf, core_image::Capture>,
+    /// An in-progress rubber-band selection, as `(start, current)` in **screen** coordinates.
+    ///
+    /// ⚠ Screen coordinates rather than content coordinates, because the cell rects it is tested
+    /// against come from `Response::rect`, which is also screen. Both are recomputed every frame,
+    /// so scrolling mid-drag cannot leave them describing different things — the mistake the
+    /// M3.1a mask overlay made by caching a derived screen position.
+    band: Option<(egui::Pos2, egui::Pos2)>,
 }
 
 impl Library {
@@ -1986,6 +1993,7 @@ impl RustroomApp {
             visible: (0..n).collect(),
             marks: std::collections::HashMap::new(),
             captures: std::collections::HashMap::new(),
+            band: None,
         });
         // ⚠ Applied explicitly rather than left to `reload_marks`, which early-returns when there
         // is no catalog — the filter must hold across a source switch whether or not one is open.
