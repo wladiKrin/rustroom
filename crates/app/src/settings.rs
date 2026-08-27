@@ -204,6 +204,9 @@ pub struct Settings {
     /// ⚠ Still clamped by [`Settings::clamped_cell`] rather than trusted: this is read from a
     /// file a user can edit, and a zero cell divides by zero when the column count is worked out.
     pub library_cell: u32,
+    /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
+    /// state does not survive a restart here — see [`PanelSections`].
+    pub panel_sections: PanelSections,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -279,6 +282,37 @@ impl Default for Settings {
             auto_lens_correction: true,
             library_sort: catalog::SortOrder::default(),
             library_cell: DEFAULT_CELL,
+            panel_sections: PanelSections::default(),
+        }
+    }
+}
+
+/// Which of the Library panel's sections are expanded.
+///
+/// ⚠⚠ **Persisted here rather than left to egui**, because this app implements no
+/// `eframe::App::save` — egui's own collapsing state dies with the process, so a collapsed
+/// section would spring open on every launch and the control would be worth nothing.
+///
+/// ⚠ All true by default, so an existing user loses no discoverability: the sections start
+/// exactly as they were and collapsing is the new capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PanelSections {
+    pub folders: bool,
+    pub collections: bool,
+    pub smart: bool,
+    pub keywords: bool,
+    pub dates: bool,
+}
+
+impl Default for PanelSections {
+    fn default() -> Self {
+        Self {
+            folders: true,
+            collections: true,
+            smart: true,
+            keywords: true,
+            dates: true,
         }
     }
 }
@@ -473,6 +507,56 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_file_from_before_the_panel_sections_still_loads() {
+        // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
+        // *every* setting — which is why each new field needs this.
+        let f = TempFile::new("panel_sections_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert_eq!(
+            loaded.panel_sections,
+            PanelSections::default(),
+            "an absent value must leave every section expanded, so nothing appears to vanish"
+        );
+        assert!(
+            loaded.panel_sections.folders,
+            "and the default really is open"
+        );
+    }
+
+    #[test]
+    fn a_partial_panel_sections_object_keeps_the_others_open() {
+        // ⚠ The container-level `#[serde(default)]`: collapsing one section must not silently
+        // collapse the rest when an older or hand-edited file names only that one.
+        let f = TempFile::new("panel_sections_partial");
+        std::fs::write(&f.0, r#"{"panel_sections":{"dates":false}}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.panel_sections.dates);
+        assert!(loaded.panel_sections.folders);
+        assert!(loaded.panel_sections.smart);
+    }
+
+    #[test]
+    fn settings_round_trip_carries_the_collapsed_sections() {
+        let f = TempFile::new("panel_sections_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let s = Settings {
+            panel_sections: PanelSections {
+                keywords: false,
+                dates: false,
+                ..PanelSections::default()
+            },
+            ..Settings::default()
+        };
+        store.save(&s).unwrap();
+        let got = store.load();
+        assert!(!got.panel_sections.keywords);
+        assert!(!got.panel_sections.dates);
+        assert!(got.panel_sections.collections);
+    }
+
+    #[test]
     fn settings_round_trip_carries_the_demosaic_choice() {
         let f = TempFile::new("demosaic_rt");
         let store = SettingsStore::new(f.0.clone());
@@ -577,6 +661,11 @@ mod tests {
             // like it round-tripped.
             library_sort: catalog::SortOrder::ModifiedDesc,
             library_cell: DEFAULT_CELL + CELL_STEP,
+            // Non-default in both directions, so a re-defaulted field cannot pass.
+            panel_sections: PanelSections {
+                folders: false,
+                ..PanelSections::default()
+            },
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is
             // what proves it round-trips rather than being re-defaulted.
             auto_lens_correction: false,
