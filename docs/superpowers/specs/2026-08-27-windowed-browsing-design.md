@@ -85,9 +85,14 @@ then testable rather than only visible as a wrong image.
 ### 2. `app::thumb_cache::ThumbCache` — bounded residency
 
 Replaces `Library.thumbs: Vec<Option<egui::TextureHandle>>`. An LRU under
-`THUMB_BUDGET_BYTES = 256 MB` — about 365 thumbnails, three to four screens at the default cell
-size, so ordinary up-and-down browsing never evicts anything while a 10k library is bounded at
-256 MB instead of 7 GB.
+`THUMB_BUDGET_BYTES`, bounding a 10k library instead of letting it reach 7 GB.
+
+⚠⚠ **Shipped at 256 MB; raised to 512 MB the same day, from use.** A 415-file folder measures
+276 MB, so a round trip to the end of it evicted the top ~30 thumbnails and they visibly
+reloaded — the boundary was landing on ordinary folders. At 512 MB the cache holds ~749
+thumbnails, so anything up to ~700 photos is browsed end-to-end and back with no eviction, and
+512 matches `MID_BUDGET_BYTES`, whose *single* full-resolution checkpoint is ~313 MB. The sizing
+is a compile-time assertion, so lowering it again is a build error.
 
 The budget is guarded by a **module-level** `const _: () = assert!(…)`, not an associated one.
 ⚠ CLAUDE.md records that an associated `const` inside an `impl` is only evaluated where it is used,

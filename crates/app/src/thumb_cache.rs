@@ -14,15 +14,29 @@ use std::path::{Path, PathBuf};
 
 /// How much memory thumbnails may occupy.
 ///
-/// ~365 thumbnails at the measured ~0.7 MB each — three to four screens at the default cell
-/// size, so ordinary up-and-down browsing never evicts, while a 10,000-photo source is bounded
+/// ~770 thumbnails at the measured ~0.67 MB each, so any folder up to roughly that size is
+/// browsed end-to-end and back with no eviction at all, while a 10,000-photo source is bounded
 /// here instead of at ~7 GB.
-pub const THUMB_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+///
+/// ⚠⚠ **It was 256 MB and that was too small, found by using it.** A 415-file folder measures
+/// **276 MB** — 20 MB over — so scrolling to the end and back evicted the top ~30 thumbnails and
+/// they visibly reloaded. The boundary was landing on ordinary folders. 512 MB also matches this
+/// project's own sizing precedent: `MID_BUDGET_BYTES` is 512 MB, and a *single* full-resolution
+/// prefix checkpoint is ~313 MB — larger than this whole cache was.
+pub const THUMB_BUDGET_BYTES: usize = 512 * 1024 * 1024;
 
-// ⚠ A **module-level** compile-time guard, not an associated one. An associated `const` inside an
+/// A typical thumbnail, measured: 415 RAF previews came to 276 MB, and 830 mixed RAF+JPEG ones
+/// to 552 MB — 0.665 MB apiece both times.
+const TYPICAL_THUMB_BYTES: usize = 700 * 1024;
+
+// ⚠ **Module-level** compile-time guards, not associated ones. An associated `const` inside an
 // `impl` is only evaluated where it is used, so `PrefixCache`'s first attempt at exactly this
 // compiled happily with a budget of zero — a guard that did not guard.
 const _: () = assert!(THUMB_BUDGET_BYTES > 0);
+// ⚠ The *reasoning* for the number, not merely the number. Lowering the budget below a folder of
+// ~700 photos brings back the eviction-on-round-trip this was raised to fix, and a comment alone
+// would not stop it.
+const _: () = assert!(THUMB_BUDGET_BYTES / TYPICAL_THUMB_BYTES >= 700);
 
 struct Entry<T> {
     value: T,

@@ -139,6 +139,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell.
         let drawn = egui::ScrollArea::vertical()
+            // ⚠ The scrollbar belongs at the window's right edge, not hugging the rightmost
+            // thumbnail. With `auto_shrink` egui puts the leftover width *outside* the scroll
+            // area, so the bar tracked the grid and moved whenever the column count or cell size
+            // changed. `false` puts that space inside instead, pinning the bar.
+            .auto_shrink([false, false])
             .show_rows(ui, cell, rows, |ui, row_range| {
                 for row in row_range.clone() {
                     ui.horizontal(|ui| {
