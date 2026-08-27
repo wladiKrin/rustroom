@@ -1,7 +1,7 @@
 # Capture metadata — M4.3b
 
 **Date:** 2026-08-27
-**Status:** designed, not built
+**Status:** plan 1 built 2026-08-27; plan 2 (filtering) outstanding
 **Slice of:** M4.3 (see `2026-08-27-windowed-browsing-design.md` for the four-way decomposition)
 
 ## What this adds
@@ -215,6 +215,23 @@ the catalog is not re-read; results reach the catalog as they arrive.
 ⚠ The check for whether a sabotage compiled is *"did a `test result:` line appear at all"*, not a
 grep for `^error:` — that matches cargo's ordinary test-failure line and produced a false "did not
 compile" three times two slices ago.
+
+## Verified on the real catalog (2026-08-27)
+
+Schema v4 migrated the author's live catalog with **every row preserved** — folders, photos,
+collections, keywords, keyword assignments and collection memberships all matched a
+pre-migration backup exactly.
+
+A background scan of the 832-file folder produced:
+
+- **832 capture rows of 832 files**, 830 with a date and a camera.
+- **`SELECT DISTINCT camera` returns exactly one body** — `FUJIFILM X-T4` — across RAW *and* JPEG.
+  That is finding 1's normalization holding at scale, not just on the probe pair.
+- **415 of 415 RAW+JPEG pairs agree on every field** (date, camera, lens, ISO), from two entirely
+  different readers.
+- **Two rows are entirely empty**, both exported JPEGs carrying no EXIF — stored rather than
+  skipped, which is exactly what stops them being re-read forever.
+- Re-opening the folder queues **nothing**.
 
 ## Accepted caveats
 
