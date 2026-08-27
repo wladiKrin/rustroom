@@ -29,5 +29,6 @@ pub mod settings;
 pub mod sidecar;
 pub mod sync;
 pub mod thumb_loader;
+pub mod thumb_window;
 pub mod tool;
 pub mod view_region;
