@@ -375,4 +375,37 @@ mod tests {
             "asked for {asked} thumbnails — the grid is not windowed"
         );
     }
+
+    #[test]
+    fn a_filter_that_hides_a_selected_photo_prunes_the_selection() {
+        // ⚠⚠ The hazard `retain_visible` exists for, and the reason `refilter` always does BOTH
+        // halves. Select photos, then filter them away, and the selection would still hold them —
+        // so a sync or a paste would write to photos that are not on screen. Silent, and
+        // discovered as data loss rather than as a bug.
+        let mut lib = crate::test_app::library_of(4);
+        lib.selection.select_indices(&[0, 1, 2, 3]);
+        assert_eq!(lib.selection.len(), 4);
+        lib.filter.text = "nothing matches this".into();
+        lib.refilter();
+        assert!(lib.visible.is_empty(), "the filter did not hide anything");
+        assert_eq!(
+            lib.selection.len(),
+            0,
+            "the selection still holds photos that are not on screen"
+        );
+    }
+
+    #[test]
+    fn the_search_text_narrows_without_touching_the_others() {
+        // ⚠ Composition through the one `visible` list, asserted end to end on a real `Library`
+        // rather than only on `LibraryFilter` in isolation.
+        let mut lib = crate::test_app::library_of(20);
+        assert_eq!(lib.visible.len(), 20);
+        // ⚠ "0001" would match eleven rows — 00001 and 00010..00019 — which is *correct* and was
+        // the first version of this assertion, wrong about right code. A substring that occurs in
+        // exactly one name is what discriminates.
+        lib.filter.text = "00007".into();
+        lib.refilter();
+        assert_eq!(lib.visible.len(), 1, "expected exactly rustroom_00007.RAF");
+    }
 }

@@ -136,6 +136,15 @@ impl eframe::App for RustroomApp {
                     let decoding = self.pending.is_some();
                     ui.add_enabled_ui(!decoding, |ui| develop::toolbar(self, ui, &ctx));
                 }
+                // ⚠ On the LEFT, not in the right-aligned cluster below. A text field needs
+                // ~180 px and that cluster already carries five controls plus the status line;
+                // adding it there squeezes the status out, which is the exact bug the cluster was
+                // created to fix. This space is where the Develop toolbar sits, and it is empty
+                // in Library.
+                if self.view == AppView::Library && self.library.is_some() {
+                    ui.separator();
+                    search_field(self, ui);
+                }
                 // ⚠ One right-aligned cluster for everything that belongs at the far end, laid
                 // out **rightmost first**. Previously the develop toolbar right-aligned the
                 // filename itself and then the status label was added after it — which meant
@@ -147,7 +156,7 @@ impl eframe::App for RustroomApp {
                     if self.view == AppView::Library {
                         format_bullets(self, ui);
                         if self.library.is_some() {
-                            star_filter(self, ui);
+                            mark_filter(self, ui);
                             grid_size_buttons(self, ui);
                             sort_combo(self, ui);
                             let r = ui.button("Reindex").on_hover_text(
@@ -285,35 +294,121 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
 /// decision — it has no meaning while a single photo is open, and it sat in the Develop
 /// toolbar for no better reason than living in a shared row.
 ///
-/// Show only photos rated at least this many stars.
+/// Rating, flag and colour-label filtering, in one popup.
 ///
-/// ⚠ Composes with the format filter through `Library::refilter`, the single derived `visible`
-/// list every consumer iterates — not a second filtering mechanism.
-fn star_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    let mut min = app
-        .library
-        .as_ref()
-        .map(|l| l.filter.min_stars)
-        .unwrap_or(0);
-    let text = |v: u8| {
-        if v == 0 {
-            "All".to_string()
-        } else {
-            format!("{v}★+")
-        }
+/// ⚠ **One control rather than three.** The row it sits in is a right-to-left cluster already
+/// carrying the format bullets, the grid-size buttons, the sort combo, Reindex and the status
+/// line; three more controls would squeeze the status out — the exact bug that cluster was
+/// created to fix.
+///
+/// ⚠ The button reports the active state, so a filter is never invisible. A control that hides
+/// rows while looking idle is the "invisible state" problem the crop aspect lock was fixed for.
+///
+/// ⚠ Composes with the format filter and the search text through `Library::refilter`, the single
+/// derived `visible` list every consumer iterates — not a second filtering mechanism.
+fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let Some(before) = app.library.as_ref().map(|l| l.filter.clone()) else {
+        return;
     };
-    egui::ComboBox::from_id_salt("min_stars")
-        .selected_text(text(min))
-        .show_ui(ui, |ui| {
-            for v in 0..=5u8 {
-                ui.selectable_value(&mut min, v, text(v));
-            }
-        });
+    let mut f = before.clone();
+
+    ui.menu_button(mark_filter_label(&f), |ui| {
+        ui.label("Rating");
+        for v in 0..=5u8 {
+            let text = if v == 0 {
+                "All".to_string()
+            } else {
+                format!("{v}★+")
+            };
+            ui.selectable_value(&mut f.min_stars, v, text);
+        }
+        ui.separator();
+        ui.label("Flag");
+        ui.selectable_value(&mut f.flag, None, "Any");
+        ui.selectable_value(&mut f.flag, Some(catalog::db::Flag::Pick), "⚑ Picked");
+        ui.selectable_value(&mut f.flag, Some(catalog::db::Flag::Reject), "× Rejected");
+        ui.selectable_value(&mut f.flag, Some(catalog::db::Flag::None), "Unflagged");
+        ui.separator();
+        ui.label("Colour");
+        ui.selectable_value(&mut f.label, None, "Any");
+        ui.selectable_value(&mut f.label, Some(0), "Unlabelled");
+        for (n, name) in [(1u8, "Red"), (2, "Blue"), (3, "Yellow"), (4, "Green")] {
+            ui.selectable_value(&mut f.label, Some(n), name);
+        }
+        ui.separator();
+        if ui.button("Clear").clicked() {
+            f.clear_marks_and_text();
+        }
+    });
+
     // ⚠ Guarded on an actual change: this body runs every frame, and refiltering a folder of
     // hundreds per frame is the `apply_view_demosaic` mistake in another costume.
-    if let Some(lib) = app.library.as_mut() {
-        if lib.filter.min_stars != min {
-            lib.filter.min_stars = min;
+    if f != before {
+        if let Some(lib) = app.library.as_mut() {
+            lib.filter = f;
+            lib.refilter();
+        }
+    }
+}
+
+/// What the Filter button says.
+///
+/// ⚠ Pure, so "an active filter is visible" is testable without a window.
+fn mark_filter_label(f: &rustroom_app::library_filter::LibraryFilter) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if f.min_stars > 0 {
+        parts.push(format!("{}★+", f.min_stars));
+    }
+    match f.flag {
+        Some(catalog::db::Flag::Pick) => parts.push("⚑".into()),
+        Some(catalog::db::Flag::Reject) => parts.push("×".into()),
+        Some(catalog::db::Flag::None) => parts.push("unflagged".into()),
+        None => {}
+    }
+    if let Some(n) = f.label {
+        parts.push(if n == 0 {
+            "unlabelled".into()
+        } else {
+            format!("colour {n}")
+        });
+    }
+    if parts.is_empty() {
+        "Filter".to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+/// Narrow the Library by name.
+///
+/// ⚠ Matches `entries::shown_name`, so what you search is what the caption shows — including a
+/// copy's own name.
+///
+/// ⚠ **Needs no new keyboard work, and that is checked rather than assumed.** The Library's bare
+/// culling keys (`0`–`9`, `p`, `x`, `u`), its arrow navigation and `pressed_command` are all
+/// already gated on `memory().focused()`, which is exactly the gate a text field needs. Escape is
+/// added so the keyboard is recoverable without the mouse.
+fn search_field(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let Some(before) = app.library.as_ref().map(|l| l.filter.text.clone()) else {
+        return;
+    };
+    let mut text = before.clone();
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text("Search")
+            .desired_width(170.0),
+    );
+    // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the context
+    // lock internally, and holding one across `ui.input(..)` panics inside epaint's mutex — the
+    // re-entrant lock `name_edit::field` already paid for.
+    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if escaped && r.has_focus() {
+        r.surrender_focus();
+    }
+    // ⚠ Guarded on a change: the body runs every frame.
+    if text != before {
+        if let Some(lib) = app.library.as_mut() {
+            lib.filter.text = text;
             lib.refilter();
         }
     }
@@ -413,6 +508,54 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_filter_button_reports_an_active_filter() {
+        // ⚠ A control that hides rows while looking idle is invisible state — the problem the crop
+        // aspect lock was fixed for. This label is the only thing that says a filter is on.
+        use rustroom_app::library_filter::LibraryFilter;
+        assert_eq!(mark_filter_label(&LibraryFilter::default()), "Filter");
+        for f in [
+            LibraryFilter {
+                min_stars: 3,
+                ..Default::default()
+            },
+            LibraryFilter {
+                flag: Some(catalog::db::Flag::None),
+                ..Default::default()
+            },
+            LibraryFilter {
+                label: Some(0),
+                ..Default::default()
+            },
+        ] {
+            assert_ne!(
+                mark_filter_label(&f),
+                "Filter",
+                "an active filter looked idle: {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_filter_glyph_is_renderable() {
+        // ⚠⚠ M4.2a found `✓` and `✕` are in NO bundled font and would have shipped as tofu boxes,
+        // and the rail's four candidates were all absent too. Probe, never assume.
+        //
+        // ⚠ A frame must run before the fonts exist, and `install_fonts` is what makes this ask
+        // about the stack production uses rather than egui's defaults.
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        for c in ['★', '⚑', '×'] {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyph(&id, c)),
+                "{c} (U+{:04X}) is not in any bundled font and would render as a tofu box",
+                c as u32
+            );
+        }
+    }
     use super::*;
 
     #[test]
