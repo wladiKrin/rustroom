@@ -81,6 +81,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // only what is on screen — which is also all it can cover, since it cannot leave the viewport.
     let mut cell_rects: Vec<(usize, egui::Rect)> = Vec::new();
     let mut band_started: Option<egui::Pos2> = None;
+    let mut bg_clicked = false;
     // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
     let mut rename: Option<(PhotoId, name_edit::Rename)> = None;
@@ -221,11 +222,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let bg = ui.interact(
             bg_rect,
             ui.id().with("grid_background"),
-            egui::Sense::drag(),
+            egui::Sense::click_and_drag(),
         );
         if bg.drag_started_by(egui::PointerButton::Primary) {
             band_started = bg.interact_pointer_pos();
         }
+        // ⚠ A *click* on empty space clears the selection. egui fires `clicked()` only for a
+        // press-and-release that did **not** become a drag, so this and the rubber band above
+        // cannot both happen from one gesture.
+        bg_clicked = bg.clicked();
 
         // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell.
         let drawn = egui::ScrollArea::vertical()
@@ -377,6 +382,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let released = ui.input(|i| i.pointer.any_released());
         let mods = ui.input(|i| i.modifiers);
         if let Some(lib) = app.library.as_mut() {
+            // ⚠ **Only a plain click**, matching `apply_click`'s rule that only a plain click
+            // moves the active photo: a ⌘- or Shift-click on empty space is part of building a
+            // selection, not a request to throw it away.
+            if bg_clicked && !mods.any() {
+                lib.selection.clear();
+            }
             if let Some(start) = band_started {
                 lib.band = Some((start, start));
             }
