@@ -1242,8 +1242,10 @@ impl RustroomApp {
                 // must survive the restore.
                 let mut sidecar = sidecar::load_all(&path);
                 let n = entry.copy;
-                sidecar.copies.push(*entry);
-                sidecar.copies.sort_by_key(|c| c.copy);
+                // ⚠ Through `restore_copy`, not a bare `copies.push`: a direct push bypasses the
+                // high-water mark, which is the one thing stopping this undo from landing a
+                // second copy with a number a *newer* copy has since taken.
+                sidecar.restore_copy(*entry);
                 match sidecar::persist_all(&path, &sidecar) {
                     Ok(()) => self.status = format!("Restored copy {n}"),
                     Err(e) => self.status = format!("Could not restore the copy: {e}"),

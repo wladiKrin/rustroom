@@ -127,6 +127,7 @@ mod tests {
         // from the browser after making a copy of it.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(1, None)],
+            copy_hwm: 0,
         });
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].id.copy, 0, "the original comes first");
@@ -139,6 +140,7 @@ mod tests {
             if p.ends_with("a.RAF") {
                 Sidecar {
                     copies: vec![copy(3, None), copy(0, None), copy(1, None)],
+                    copy_hwm: 0,
                 }
             } else {
                 Sidecar::default()
@@ -165,6 +167,7 @@ mod tests {
         // name are the same value. The original carries no number at all.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, None), copy(1, None), copy(2, None)],
+            copy_hwm: 0,
         });
         assert_eq!(got[0].label(), "a.RAF");
         assert_eq!(got[1].label(), "a_1.RAF");
@@ -183,6 +186,7 @@ mod tests {
                 copy(2, None),
                 copy(3, Some("Warm")),
             ],
+            copy_hwm: 0,
         });
         let after = build(&scan(&["b.RAF"]), |_| Sidecar {
             copies: vec![
@@ -191,6 +195,7 @@ mod tests {
                 copy(2, None),
                 copy(3, Some("Warm")),
             ],
+            copy_hwm: 0,
         });
         let labels = |v: &[PhotoEntry]| v.iter().map(|e| e.label()).collect::<Vec<_>>();
         assert_eq!(labels(&before), ["a.RAF", "a_1.RAF", "a_2.RAF", "Warm"]);
@@ -206,6 +211,7 @@ mod tests {
         // ⚠ Not "a.RAF / 1". The label *is* what the copy exports as, so it reads as a filename.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, None), copy(1, None)],
+            copy_hwm: 0,
         });
         assert_eq!(got[0].label(), "a.RAF");
         assert_eq!(got[1].label(), "a_1.RAF");
@@ -215,6 +221,7 @@ mod tests {
     fn a_named_copy_shows_its_name_instead_of_its_number() {
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, None), copy(1, None), copy(2, Some("B&W"))],
+            copy_hwm: 0,
         });
         assert_eq!(
             got[1].label(),
@@ -234,6 +241,7 @@ mod tests {
         // hand-edited sidecar can hold — must not become a second name shown beside the first.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, Some("nonsense")), copy(1, Some("B&W"))],
+            copy_hwm: 0,
         });
         assert_eq!(got[0].name, None);
         assert_eq!(got[0].label(), "a.RAF");

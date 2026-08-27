@@ -226,6 +226,7 @@ mod tests {
                     snapshot_hwm: 0,
                 },
             ],
+            copy_hwm: 0,
         };
         sidecar::save_all(&photo, &before).unwrap();
 

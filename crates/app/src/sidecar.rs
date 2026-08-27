@@ -152,6 +152,24 @@ pub struct CopyEntry {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Sidecar {
     pub copies: Vec<CopyEntry>,
+    /// The highest copy number ever used for this file.
+    ///
+    /// ⚠⚠ **Without this, deleting the *newest* copy frees its number.** Make two copies, delete
+    /// copy 2, make another — it would be `2` again; then undo the deletion (`CopyDelete` keeps
+    /// the removed entry precisely so it can come back) and the file holds **two copies numbered
+    /// 2**. They share an export filename and a history-stash key, and the catalog upserts on
+    /// `(folder_id, file_name, copy)`, so the Library shows **one** row for the pair and the
+    /// other is unreachable. `max + 1` over the survivors cannot see a number that only the undo
+    /// log still holds.
+    ///
+    /// ⚠ **Field-level `#[serde(default)]` only.** A *container*-level one on `Sidecar` is the
+    /// documented data-loss trap — see this struct's own doc comment and `load_all`'s. Adding it
+    /// here is safe because `copies` stays required, which is what the trap turns on.
+    ///
+    /// ⚠ Reset by [`Sidecar::compact`]: Reindex exists to close gaps, so it must hand the
+    /// numbering back to the compacted maximum rather than keep counting from the old high.
+    #[serde(default)]
+    pub copy_hwm: u32,
 }
 
 impl Sidecar {
@@ -164,11 +182,11 @@ impl Sidecar {
     /// ⚠ `max + 1`, never "first free". Reusing a number would point a new copy at an old
     /// copy's export filename and history stash.
     pub fn next_copy(&self) -> u32 {
-        self.copies
-            .iter()
-            .map(|c| c.copy)
-            .max()
-            .map_or(1, |m| m + 1)
+        // ⚠ The high-water mark **and** the live maximum, not either alone: the mark is 0 in a
+        // sidecar written before it existed, and the live maximum cannot see a number that only
+        // the undo log can still bring back.
+        let live = self.copies.iter().map(|c| c.copy).max().unwrap_or(0);
+        live.max(self.copy_hwm) + 1
     }
 
     /// One copy's snapshots, oldest first. Empty when that copy has none, or is not there.
@@ -245,6 +263,9 @@ impl Sidecar {
 
     /// Replace (or add) one copy's edits, leaving its name alone.
     pub fn set_edits(&mut self, copy: u32, edits: Edits) {
+        // ⚠ Raised here rather than at the call sites, so every route that brings a copy into
+        // existence keeps the mark true without having to remember to.
+        self.copy_hwm = self.copy_hwm.max(copy);
         match self.copies.iter_mut().find(|c| c.copy == copy) {
             Some(c) => c.edits = edits,
             None => self.copies.push(CopyEntry {
@@ -260,6 +281,9 @@ impl Sidecar {
 
     /// Replace (or add) one copy's name, leaving its edits alone.
     pub fn set_name(&mut self, copy: u32, name: Option<String>) {
+        // ⚠ Raised here rather than at the call sites, so every route that brings a copy into
+        // existence keeps the mark true without having to remember to.
+        self.copy_hwm = self.copy_hwm.max(copy);
         match self.copies.iter_mut().find(|c| c.copy == copy) {
             Some(c) => c.name = name,
             None => self.copies.push(CopyEntry {
@@ -270,6 +294,18 @@ impl Sidecar {
                 snapshot_hwm: 0,
             }),
         }
+        self.copies.sort_by_key(|c| c.copy);
+    }
+
+    /// Put a deleted copy back, from the undo log's own copy of it.
+    ///
+    /// ⚠ A funnel rather than a bare `copies.push` at the call site: pushing directly bypasses
+    /// the high-water mark, which is the one thing standing between an undo and two copies
+    /// sharing a number.
+    pub fn restore_copy(&mut self, entry: CopyEntry) {
+        self.copy_hwm = self.copy_hwm.max(entry.copy);
+        self.copies.retain(|c| c.copy != entry.copy);
+        self.copies.push(entry);
         self.copies.sort_by_key(|c| c.copy);
     }
 
@@ -302,6 +338,13 @@ impl Sidecar {
             }
             next += 1;
         }
+        // ⚠⚠ **Reset, not raised.** Reindex exists to close gaps, so it must hand the numbering
+        // back to the compacted maximum — keeping the old high would make the very next copy
+        // `_10` on a file that now runs 1, 2, 3, which is the mess this button removes.
+        //
+        // ⚠ Safe only because Reindex already breaks the never-reused invariant deliberately and
+        // drops the undo stacks of everything it renumbered — see this function's doc comment.
+        self.copy_hwm = next - 1;
         moves
     }
 
@@ -381,6 +424,8 @@ pub fn load_all(photo: &Path) -> Sidecar {
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
                 }],
+                // A sidecar this old predates the mark; copy 0 is the only number in use.
+                copy_hwm: 0,
             },
             Err(_) => Sidecar::default(),
         }
@@ -586,6 +631,7 @@ mod tests {
                     snapshot_hwm: 0,
                 },
             ],
+            copy_hwm: 0,
         };
         save_all(&photo, &want).unwrap();
         assert_eq!(load_all(&photo), want);
@@ -605,6 +651,78 @@ mod tests {
         let photo = dir.0.join("a.RAF");
         std::fs::write(path(&photo), "{ not json at all").unwrap();
         assert_eq!(load_all(&photo), Sidecar::default());
+    }
+
+    /// ⚠⚠ **Deleting the newest copy must not free its number.** `delete_virtual_copy` retains
+    /// every other copy and `ActionKind::CopyDelete` keeps the removed entry so undo can put it
+    /// back — so if a *new* copy takes the freed number first, the undo lands a second copy with
+    /// the same number. Two copies numbered 2 share an export filename and a history-stash key,
+    /// and the catalog upserts on `(folder, file, copy)`, so the Library shows **one** row for
+    /// them and the other is unreachable.
+    ///
+    /// The same bug snapshots had, in the mechanism snapshots copied their numbering from.
+    #[test]
+    fn deleting_the_newest_copy_does_not_free_its_number() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+
+        let a = s.next_copy();
+        s.set_edits(a, Edits::default());
+        let b = s.next_copy();
+        s.set_edits(b, Edits::default());
+        assert_eq!((a, b), (1, 2), "fixture: two copies, numbered 1 and 2");
+
+        // What `delete_virtual_copy` does.
+        s.copies.retain(|c| c.copy != b);
+
+        assert_eq!(
+            s.next_copy(),
+            3,
+            "2 was used once and must never be handed out again"
+        );
+    }
+
+    /// ⚠⚠ **The collision the mark exists to prevent, through the real API.** Make two copies,
+    /// delete the newest, make another, then undo the deletion — every copy must still have its
+    /// own number. `restore_copy` is the funnel the undo arm goes through for exactly this.
+    #[test]
+    fn restoring_a_deleted_copy_after_making_another_cannot_duplicate_a_number() {
+        let mut s = Sidecar::default();
+        s.set_edits(0, Edits::default());
+        s.set_edits(
+            s.next_copy(),
+            Edits {
+                exposure: 1.0,
+                ..Edits::default()
+            },
+        );
+        let doomed = s.next_copy();
+        s.set_edits(
+            doomed,
+            Edits {
+                exposure: 2.0,
+                ..Edits::default()
+            },
+        );
+
+        let removed = s.get(doomed).cloned().expect("copy 2 exists");
+        s.copies.retain(|c| c.copy != doomed);
+        s.set_edits(
+            s.next_copy(),
+            Edits {
+                exposure: 3.0,
+                ..Edits::default()
+            },
+        );
+
+        s.restore_copy(removed);
+
+        let mut ns: Vec<u32> = s.copies.iter().map(|c| c.copy).collect();
+        let before = ns.len();
+        ns.sort_unstable();
+        ns.dedup();
+        assert_eq!(ns.len(), before, "every copy must have its own number");
+        assert_eq!(ns, vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -659,6 +777,7 @@ mod tests {
                     snapshot_hwm: 0,
                 },
             ],
+            copy_hwm: 0,
         };
         assert!(!two.is_neutral(), "a copy is worth keeping the file for");
     }
@@ -689,6 +808,7 @@ mod tests {
                         snapshot_hwm: 0,
                     },
                 ],
+                copy_hwm: 0,
             },
         )
         .unwrap();
