@@ -813,6 +813,33 @@ impl Catalog {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
+    /// Every photo taken in **any** of these periods, as `(path, copy)`, de-duplicated.
+    ///
+    /// ⚠ `photos_in_period` stays as the single-period case rather than being folded into this —
+    /// it is what a plain click uses, and routing it through here would be the same query with
+    /// more machinery.
+    ///
+    /// ⚠⚠ An **empty** slice matches nothing, not everything: it is the state the date panel is
+    /// in before anything is clicked, and showing the whole library then would be surprising.
+    ///
+    /// ⚠ De-duplicated explicitly rather than by a `DISTINCT` over a union, because the periods
+    /// can **overlap** — a day and the month containing it are both legitimate selections, and a
+    /// photo in both must appear once.
+    pub fn photos_in_periods(
+        &self,
+        periods: &[(i32, Option<u32>, Option<u32>)],
+    ) -> Result<Vec<(PathBuf, u32)>, CatalogError> {
+        let mut out: Vec<(PathBuf, u32)> = Vec::new();
+        for &(year, month, day) in periods {
+            for hit in self.photos_in_period(year, month, day)? {
+                if !out.contains(&hit) {
+                    out.push(hit);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Every capture row in a folder, as `(path, capture)`.
     ///
     /// ⚠⚠ One query per folder per rebuild, never one per photo — the rule `marks_in` follows,
@@ -2399,5 +2426,50 @@ mod tests {
         cat.delete_smart(id).unwrap();
         assert!(cat.smart_collections().unwrap().is_empty());
         assert_eq!(cat.photo_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn several_periods_come_back_as_one_set() {
+        // ⚠ A union, not a repeated query: a photo in two of the requested periods (a day and the
+        // month containing it) must appear **once**.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(
+            Path::new("/a"),
+            &entries_in("/a", &["one.RAF", "two.RAF", "three.RAF"]),
+        )
+        .unwrap();
+        cat.set_capture(Path::new("/a/one.RAF"), &on_day(2026, 5, 17))
+            .unwrap();
+        cat.set_capture(Path::new("/a/two.RAF"), &on_day(2026, 7, 9))
+            .unwrap();
+        cat.set_capture(Path::new("/a/three.RAF"), &on_day(2025, 1, 1))
+            .unwrap();
+
+        let got = cat
+            .photos_in_periods(&[(2026, Some(5), Some(17)), (2026, Some(7), Some(9))])
+            .unwrap();
+        assert_eq!(got.len(), 2);
+
+        // ⚠ Overlapping periods must not double a photo.
+        let overlapping = cat
+            .photos_in_periods(&[(2026, Some(5), Some(17)), (2026, Some(5), None)])
+            .unwrap();
+        assert_eq!(
+            overlapping.len(),
+            1,
+            "an overlapping period doubled a photo"
+        );
+    }
+
+    #[test]
+    fn an_empty_period_list_matches_nothing() {
+        // ⚠ Not "everything": an empty selection is the state the panel is in before any date is
+        // clicked, and showing the whole library then would be surprising.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.set_capture(Path::new("/a/one.RAF"), &on_day(2026, 5, 17))
+            .unwrap();
+        assert!(cat.photos_in_periods(&[]).unwrap().is_empty());
     }
 }
