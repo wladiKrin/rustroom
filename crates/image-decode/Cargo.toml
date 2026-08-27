@@ -9,3 +9,4 @@ core-image = { path = "../core-image" }
 color = { path = "../color" }
 image = { workspace = true }
 thiserror = { workspace = true }
+kamadak-exif = "0.6.1"
