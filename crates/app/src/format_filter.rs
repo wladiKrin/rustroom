@@ -47,6 +47,14 @@ impl FormatFilter {
         self.hidden.contains(ext)
     }
 
+    /// True when at least one format is hidden.
+    ///
+    /// ⚠ Lands with its first caller (`LibraryFilter::is_active`), per this crate's rule that an
+    /// item with no caller is dead code in the binary.
+    pub fn is_active(&self) -> bool {
+        !self.hidden.is_empty()
+    }
+
     pub fn toggle(&mut self, ext: &str) {
         if !self.hidden.remove(ext) {
             self.hidden.insert(ext.to_string());
