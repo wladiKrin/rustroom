@@ -5,8 +5,13 @@
 use std::time::Instant;
 
 fn main() {
-    let dir = std::env::args().nth(1).expect("usage: bench_metadata <folder> [n]");
-    let n: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(40);
+    let dir = std::env::args()
+        .nth(1)
+        .expect("usage: bench_metadata <folder> [n]");
+    let n: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(40);
     let mut paths: Vec<_> = std::fs::read_dir(&dir)
         .expect("read_dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -50,7 +55,10 @@ fn main() {
         open_ms / paths.len() as f64
     );
     let per = (read_ms + open_ms) / paths.len() as f64;
-    println!("TOTAL      : {per:.1} ms/file  =>  830 files ≈ {:.1} s", per * 830.0 / 1000.0);
+    println!(
+        "TOTAL      : {per:.1} ms/file  =>  830 files ≈ {:.1} s",
+        per * 830.0 / 1000.0
+    );
 
     // Does libraw need the whole file, or only the header? The read dominates, so this is the
     // question that decides whether a scan can afford metadata inline.

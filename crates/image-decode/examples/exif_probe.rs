@@ -22,7 +22,11 @@ fn main() {
         exif::Tag::FocalLength,
     ] {
         match ex.get_field(tag, exif::In::PRIMARY) {
-            Some(f) => println!("{:<26} = {}", format!("{tag}"), f.display_value().with_unit(&ex)),
+            Some(f) => println!(
+                "{:<26} = {}",
+                format!("{tag}"),
+                f.display_value().with_unit(&ex)
+            ),
             None => println!("{:<26} = <absent>", format!("{tag}")),
         }
     }

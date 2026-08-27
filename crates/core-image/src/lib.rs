@@ -287,6 +287,64 @@ impl ImageBuf {
     }
 }
 
+/// What a photograph records about how it was taken.
+///
+/// ⚠ It lives here, beside [`Thumbnail`], for the reason `Thumbnail` does: **both decoder crates
+/// produce it**, and neither may depend on the other.
+///
+/// ⚠⚠ **Every field is `Option`, because a file with no EXIF is normal rather than an error** — a
+/// scan, an export or a screenshot strips it. A `Capture` with every field `None` is a valid
+/// answer and must still be *stored*, or the background pass would re-read that file on every
+/// folder open forever.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Capture {
+    /// When the shutter fired, as **naive local wall-clock** seconds since the epoch.
+    ///
+    /// ⚠⚠ Wall-clock, not a true instant, and that is deliberate. EXIF's `DateTimeOriginal`
+    /// carries no timezone at all while libraw's does, so storing true UTC would make a RAW exact
+    /// and its JPEG sibling a guess about the machine's zone — the pair could differ by hours.
+    /// Wall-clock also *is* what a photographer means by "date taken": the shots from the 17th
+    /// means the 17th where they were standing.
+    pub taken: Option<i64>,
+    /// `"{MAKE} {model}"`, the make uppercased. See [`Capture::camera_name`].
+    pub camera: Option<String>,
+    pub lens: Option<String>,
+    pub iso: Option<u32>,
+    /// Exposure time in seconds.
+    pub shutter: Option<f32>,
+    pub aperture: Option<f32>,
+    /// Focal length in millimetres.
+    pub focal_len: Option<f32>,
+}
+
+impl Capture {
+    /// Build the stored camera name from a make and a model.
+    ///
+    /// ⚠⚠ **The make is uppercased, and that is load-bearing.** The two readers disagree about it:
+    /// for one and the same shot, libraw says `"Fujifilm"` and EXIF says `"FUJIFILM"`. Without
+    /// normalizing, a RAW+JPEG pair from one body appears as **two cameras** in a filter — the
+    /// same class of problem colour-management C4 solved for profile matching, except here it is
+    /// our own two readers disagreeing with each other.
+    ///
+    /// Uppercase rather than a heuristic because it is deterministic, needs no alias table, and is
+    /// what most cameras write in EXIF and print on themselves.
+    pub fn camera_name(make: &str, model: &str) -> Option<String> {
+        let make = make.trim();
+        let model = model.trim();
+        match (make.is_empty(), model.is_empty()) {
+            (true, true) => None,
+            (true, false) => Some(model.to_string()),
+            (false, true) => Some(make.to_uppercase()),
+            (false, false) => Some(format!("{} {model}", make.to_uppercase())),
+        }
+    }
+
+    /// True when nothing at all was read. ⚠ Still worth storing — see the type's note.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// A decoded, display-referred preview image (interleaved RGBA8).
 #[derive(Debug, Clone)]
 pub struct Thumbnail {
@@ -598,5 +656,34 @@ mod tests {
         assert_eq!(out.pixel(0, 0), [0.6, 0.8, 0.2]);
         assert_eq!(out.pixel(1, 0), [0.1, 0.2, 0.1]);
         assert_eq!((out.width(), out.height()), (2, 1));
+    }
+
+    #[test]
+    fn the_two_readers_agree_on_one_camera() {
+        // ⚠⚠ The finding this normalization exists for: for the *same shot*, libraw reports
+        // "Fujifilm" and EXIF reports "FUJIFILM". Unnormalized, one body shows as two cameras.
+        let from_raw = Capture::camera_name("Fujifilm", "X-T4");
+        let from_jpeg = Capture::camera_name("FUJIFILM", "X-T4");
+        assert_eq!(from_raw, from_jpeg);
+        assert_eq!(from_raw.as_deref(), Some("FUJIFILM X-T4"));
+    }
+
+    #[test]
+    fn a_missing_half_of_the_camera_name_still_yields_something() {
+        assert_eq!(Capture::camera_name("", "X-T4").as_deref(), Some("X-T4"));
+        assert_eq!(Capture::camera_name("Canon", "").as_deref(), Some("CANON"));
+        assert_eq!(Capture::camera_name("  ", " "), None);
+    }
+
+    #[test]
+    fn an_empty_capture_is_recognisable_but_still_a_value() {
+        // ⚠ It must be storable: a file with no EXIF that is not recorded would be re-read on
+        // every folder open forever.
+        assert!(Capture::default().is_empty());
+        assert!(!Capture {
+            iso: Some(100),
+            ..Default::default()
+        }
+        .is_empty());
     }
 }
