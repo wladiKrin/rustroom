@@ -91,6 +91,33 @@ pub enum Criterion {
     },
 }
 
+impl Criterion {
+    /// Which kind of criterion this is, ignoring its value.
+    ///
+    /// ⚠ Two callers, which is why it is not speculative: the editor's type dropdown, and the
+    /// check that a multi-value row holds **one** kind.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Criterion::Folder(_) => "Folder",
+            Criterion::Collection(_) => "Collection",
+            Criterion::Keyword(_) => "Keyword",
+            Criterion::Period { .. } => "Date",
+            Criterion::Text(_) => "Name contains",
+            Criterion::Rating { .. } => "Rating",
+            Criterion::Flag(_) => "Flag",
+            Criterion::Label(_) => "Colour",
+            Criterion::Camera(_) => "Camera",
+            Criterion::Lens(_) => "Lens",
+            Criterion::Format(_) => "Format",
+            Criterion::Iso { .. } => "ISO",
+            Criterion::Aperture { .. } => "Aperture",
+            Criterion::Shutter { .. } => "Shutter",
+            Criterion::FocalLength { .. } => "Focal length",
+            Criterion::FileSize { .. } => "File size",
+        }
+    }
+}
+
 /// A boolean expression over [`Criterion`]s.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expr {

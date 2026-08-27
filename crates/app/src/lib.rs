@@ -27,6 +27,7 @@ pub mod photo_id;
 pub mod presets;
 pub mod render_engine;
 pub mod rule;
+pub mod rule_form;
 pub mod safe_name;
 pub mod selection;
 pub mod settings;
