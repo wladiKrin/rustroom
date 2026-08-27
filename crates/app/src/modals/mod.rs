@@ -31,6 +31,7 @@
 
 pub mod edits;
 pub mod export;
+pub mod info;
 pub mod presets;
 pub mod settings;
 
@@ -88,6 +89,14 @@ pub enum Modal {
         name: String,
         dont_ask_again: bool,
     },
+    /// Everything known about one photo.
+    ///
+    /// ⚠ `dims` is filled on the **first frame** and cached here, because reading them costs a
+    /// whole-file read (~15 ms for a RAW) and a dialog body runs every frame.
+    PhotoInfo {
+        id: crate::PhotoId,
+        dims: Option<(u32, u32)>,
+    },
     /// Confirming that a folder is removed from the catalog.
     ///
     /// ⚠ **No `dont_ask_again`, deliberately.** A deleted preset goes to a 20-entry trash and is
@@ -131,6 +140,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDeleteExport,
         ConfirmDelete,
         ConfirmForget,
+        PhotoInfo,
         Settings,
         Shortcuts,
         About,
@@ -145,6 +155,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
+        Modal::PhotoInfo { .. } => Which::PhotoInfo,
         Modal::Settings => Which::Settings,
         Modal::KeyboardShortcuts => Which::Shortcuts,
         Modal::About => Which::About,
@@ -163,6 +174,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
+        Which::PhotoInfo => info::show(app, ctx),
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),
         Which::About => about(app, ctx),

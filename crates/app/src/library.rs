@@ -7,8 +7,56 @@ use rustroom_app::photo_id::PhotoId;
 use std::path::PathBuf;
 
 /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
+/// What a photo's right-click menu can do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CellAction {
+    /// Open it in Develop.
+    Edit,
+    /// Put its caption into edit mode.
+    Rename,
+    /// Show everything known about it.
+    Info,
+}
+
+/// Apply a context-menu choice. Shared by the grid and the filmstrip so the two cannot drift.
+pub fn apply_cell_action(
+    app: &mut RustroomApp,
+    ctx: &egui::Context,
+    index: usize,
+    action: CellAction,
+) {
+    let Some(id) = app
+        .library
+        .as_ref()
+        .and_then(|l| l.entries.get(index).map(|e| e.id.clone()))
+    else {
+        return;
+    };
+    match action {
+        CellAction::Edit => app.open_entry(ctx, index),
+        // ⚠ Reuses `name_edit`'s draft rather than adding a second path. Two editable-name
+        // mechanisms drifting is the bug that made copy names invisible in the grid.
+        CellAction::Rename => {
+            let shown = app
+                .library
+                .as_ref()
+                .and_then(|l| l.entries.get(index))
+                .map(|e| e.label())
+                .unwrap_or_default();
+            app.rename_draft = Some((id, shown));
+        }
+        CellAction::Info => {
+            app.modal = crate::modals::Modal::PhotoInfo { id, dims: None };
+        }
+    }
+}
+
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut open_index: Option<usize> = None;
+    // ⚠ Collected and applied after the closure, the shape every action in this file uses: the
+    // closure holds `lib`, and all three of these need `&mut app`.
+    let mut menu: Option<(usize, CellAction)> = None;
+    let mut menu_select: Option<usize> = None;
     // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
     let mut rename: Option<(PhotoId, name_edit::Rename)> = None;
@@ -213,6 +261,27 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 if resp.double_clicked() {
                                     open_index = Some(i);
                                 }
+                                // ⚠⚠ A secondary click does **not** fire `clicked()`, so the
+                                // photo is selected here explicitly — otherwise Edit and Rename
+                                // would act on whatever was selected before rather than on what
+                                // was right-clicked.
+                                resp.context_menu(|ui| {
+                                    if !lib.selection.contains(i) {
+                                        menu_select = Some(i);
+                                    }
+                                    if ui.button("Edit").clicked() {
+                                        menu = Some((i, CellAction::Edit));
+                                        ui.close();
+                                    }
+                                    if ui.button("Rename").clicked() {
+                                        menu = Some((i, CellAction::Rename));
+                                        ui.close();
+                                    }
+                                    if ui.button("Information…").clicked() {
+                                        menu = Some((i, CellAction::Info));
+                                        ui.close();
+                                    }
+                                });
                             });
                         }
                     });
@@ -245,6 +314,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     if let Some((id, r)) = rename {
         name_edit::commit(app, ctx, &id, r);
+    }
+    if let Some(i) = menu_select {
+        if let Some(lib) = app.library.as_mut() {
+            lib.selection.click(i);
+        }
+    }
+    if let Some((i, action)) = menu {
+        apply_cell_action(app, ctx, i, action);
     }
     if let Some(i) = open_index {
         app.open_entry(ctx, i);

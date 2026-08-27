@@ -13,6 +13,10 @@ use std::path::PathBuf;
 /// The panel is resizable (drag its top border); thumbnails scale with its height.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut open_index: Option<usize> = None;
+    // ⚠ The same menu as the grid's, applied through the same shared function so the two cannot
+    // drift — the rule `thumb::cell` and `name_edit` already follow.
+    let mut menu: Option<(usize, crate::library::CellAction)> = None;
+    let mut menu_select: Option<usize> = None;
     // Decided before the panel borrows `app.library`, so the closure only needs two
     // `Copy` locals. Opening from the Library grid and arrow-navigating both land here.
     let active = app.library.as_ref().and_then(|l| l.selection.active());
@@ -96,6 +100,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         open_index = Some(i);
                                     }
                                 }
+                                // ⚠ A secondary click does not fire `clicked()`, so the photo is
+                                // selected here explicitly.
+                                resp.context_menu(|ui| {
+                                    if !lib.selection.contains(i) {
+                                        menu_select = Some(i);
+                                    }
+                                    if ui.button("Edit").clicked() {
+                                        menu = Some((i, crate::library::CellAction::Edit));
+                                        ui.close();
+                                    }
+                                    if ui.button("Rename").clicked() {
+                                        menu = Some((i, crate::library::CellAction::Rename));
+                                        ui.close();
+                                    }
+                                    if ui.button("Information…").clicked() {
+                                        menu = Some((i, crate::library::CellAction::Info));
+                                        ui.close();
+                                    }
+                                });
                             });
                         }
                         ui.add_space((visible.len() - span.end) as f32 * step);
@@ -117,6 +140,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
     if want_scroll {
         app.filmstrip_scrolled_to = active;
+    }
+    if let Some(i) = menu_select {
+        if let Some(lib) = app.library.as_mut() {
+            lib.selection.click(i);
+        }
+    }
+    if let Some((i, action)) = menu {
+        crate::library::apply_cell_action(app, ctx, i, action);
     }
     if let Some(i) = open_index {
         app.open_entry(ctx, i);
