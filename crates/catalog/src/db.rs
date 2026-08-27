@@ -1971,9 +1971,7 @@ mod tests {
         cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
         cat.create_keyword("Paris", None).unwrap();
 
-        let counts = cat
-            .keyword_counts(&[PathBuf::from("/x/a.RAF")])
-            .unwrap();
+        let counts = cat.keyword_counts(&[PathBuf::from("/x/a.RAF")]).unwrap();
 
         assert!(counts.is_empty(), "an absent keyword is absent, not zero");
     }

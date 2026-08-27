@@ -2837,6 +2837,86 @@ impl RustroomApp {
         self.status = format!("Tagged {n} photos");
     }
 
+    /// Add a right-click's targets to a collection.
+    ///
+    /// ⚠ Per **copy**, not per file — a collection can hold the black-and-white copy and leave
+    /// the colour one out, which is the whole reason collections are not merely saved searches.
+    fn add_targets_to_collection(&mut self, collection: i64, clicked: usize) {
+        let targets = self
+            .library
+            .as_ref()
+            .map(|l| crate::library::menu_targets(l, clicked))
+            .unwrap_or_default();
+        let mut n = 0;
+        if let Some(cat) = &self.catalog {
+            for pid in &targets {
+                if cat
+                    .add_to_collection(collection, &pid.path, pid.copy)
+                    .is_ok()
+                {
+                    n += 1;
+                }
+            }
+        }
+        self.status = format!("Added {n} to the collection");
+    }
+
+    /// Assign or remove a keyword across a right-click's targets.
+    ///
+    /// ⚠ De-duplicated to **files**, the rule `assign_keyword_to_selection` already follows: two
+    /// copies of one photo are one file to tag, and a count that said otherwise would lie.
+    fn set_keyword_on_targets(&mut self, keyword: i64, on: bool, clicked: usize) {
+        let files = self
+            .library
+            .as_ref()
+            .map(|l| crate::library::distinct_files(&crate::library::menu_targets(l, clicked)))
+            .unwrap_or_default();
+        let mut n = 0;
+        if let Some(cat) = &self.catalog {
+            for f in &files {
+                let ok = if on {
+                    cat.assign_keyword(keyword, f).is_ok()
+                } else {
+                    cat.unassign_keyword(keyword, f).is_ok()
+                };
+                if ok {
+                    n += 1;
+                }
+            }
+        }
+        self.status = if on {
+            format!("Tagged {n} photos")
+        } else {
+            format!("Removed the keyword from {n} photos")
+        };
+    }
+
+    /// Remove a keyword from every selected photo — the panel's `−`, mirroring its `+`.
+    fn unassign_keyword_from_selection(&mut self, keyword: i64) {
+        let mut files: Vec<PathBuf> = Vec::new();
+        if let Some(lib) = self.library.as_ref() {
+            for i in lib.selection.iter() {
+                if let Some(e) = lib.entries.get(i) {
+                    if !files.contains(&e.id.path) {
+                        files.push(e.id.path.clone());
+                    }
+                }
+            }
+        }
+        if files.is_empty() {
+            return;
+        }
+        let mut n = 0;
+        if let Some(cat) = &self.catalog {
+            for f in &files {
+                if cat.unassign_keyword(keyword, f).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        self.status = format!("Removed the keyword from {n} photos");
+    }
+
     /// Which collection the Library is showing, if it is showing one.
     fn selected_collection(&self) -> Option<i64> {
         match self.library.as_ref().map(|l| &l.source) {

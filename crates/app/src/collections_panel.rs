@@ -10,6 +10,16 @@
 use crate::RustroomApp;
 use eframe::egui;
 
+/// Whether a name field was just committed with Enter.
+///
+/// ⚠ **Enter, not a bare `lost_focus()`** — clicking away is abandoning, not committing, the rule
+/// the copy-rename field already follows.
+///
+/// ⚠ Written once so the three name fields cannot disagree about what commits.
+fn committed(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
 /// Draw the collections panel. Every action is applied here.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Collected and applied after the list closes, the shape every panel in this app uses:
@@ -22,6 +32,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         OpenKeyword(i64, String),
         DeleteKeyword(i64),
         TagSelection(i64),
+        UntagSelection(i64),
         CreateKeyword,
         OpenAllPhotos,
         OpenFolder(std::path::PathBuf),
@@ -89,15 +100,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             ui.heading("Collections");
             ui.horizontal(|ui| {
-                ui.add(
+                let field = ui.add(
                     egui::TextEdit::singleline(&mut app.new_collection)
                         .hint_text("New collection")
                         .desired_width(110.0),
                 );
                 // ⚠ Guarded on a non-empty name: the store keys on the name, and a nameless
                 // collection cannot be told from another nameless one.
+                //
+                // ⚠ The **same** guard serves Enter and `+`, so the two cannot disagree about
+                // what is a valid name — two guards for one rule is how they drift.
                 let named = !app.new_collection.trim().is_empty();
-                if ui.add_enabled(named, egui::Button::new("+")).clicked() {
+                let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
+                if named && (plus || committed(ui, &field)) {
                     if let Some(cat) = &app.catalog {
                         let _ = cat.create_collection(app.new_collection.trim());
                     }
@@ -142,13 +157,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.separator();
             ui.heading("Keywords");
             ui.horizontal(|ui| {
-                ui.add(
+                let field = ui.add(
                     egui::TextEdit::singleline(&mut app.new_keyword)
                         .hint_text("New keyword")
                         .desired_width(110.0),
                 );
                 let named = !app.new_keyword.trim().is_empty();
-                if ui.add_enabled(named, egui::Button::new("+")).clicked() {
+                let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
+                if named && (plus || committed(ui, &field)) {
                     action = Action::CreateKeyword;
                 }
             });
@@ -203,6 +219,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             {
                                 action = Action::TagSelection(k.id);
                             }
+                            // ⚠ Completing the existing mechanism rather than adding a second
+                            // one: `unassign_keyword` already existed and was tested, and the
+                            // `+` was already here. Both go through one pair of functions the
+                            // photo context menu also calls.
+                            if ui
+                                .add_enabled(picked > 0, egui::Button::new("−"))
+                                .on_hover_text(format!("Remove from {picked} selected"))
+                                .clicked()
+                            {
+                                action = Action::UntagSelection(k.id);
+                            }
                             let label = format!("{} ({})", k.name, k.count);
                             if ui
                                 .selectable_label(picked_kw == Some(k.id), label)
@@ -217,7 +244,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.separator();
             ui.heading("Smart");
             ui.horizontal(|ui| {
-                ui.add(
+                let field = ui.add(
                     egui::TextEdit::singleline(&mut app.new_smart)
                         .hint_text("Save this view")
                         .desired_width(110.0),
@@ -225,11 +252,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 // ⚠ Enabled only with a name *and* a Library open: the rule is built from what is
                 // on screen, so there has to be something on screen.
                 let ready = !app.new_smart.trim().is_empty() && app.library.is_some();
-                if ui
+                let plus = ui
                     .add_enabled(ready, egui::Button::new("+"))
                     .on_hover_text("Save the current source and filter as a rule")
-                    .clicked()
-                {
+                    .clicked();
+                if ready && (plus || committed(ui, &field)) {
                     action = Action::SaveSmart;
                 }
             });
@@ -454,5 +481,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         }
         Action::TagSelection(id) => app.assign_keyword_to_selection(id),
+        Action::UntagSelection(id) => app.unassign_keyword_from_selection(id),
     }
 }

@@ -21,6 +21,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // `Copy` locals. Opening from the Library grid and arrow-navigating both land here.
     let active = app.library.as_ref().and_then(|l| l.selection.active());
     let want_scroll = active.is_some() && app.filmstrip_scrolled_to != active;
+    // ⚠ Borrowed out of `app` up front: the context menu reads the catalog while the closure
+    // below holds `&mut app.library`, and the borrow checker only accepts that when the two
+    // fields are visibly disjoint. Same shape the grid uses.
+    let catalog = app.catalog.as_ref();
     egui::Panel::bottom("filmstrip")
         .resizable(true)
         .default_size(96.0)
@@ -72,7 +76,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             // has no text field, so the failure is milder, but a click resolving
                             // against a shifted id for one frame is the same hazard and
                             // `push_id` costs nothing.
-                            ui.push_id(&lib.entries[i].id, |ui| {
+                            // ⚠ Cloned rather than borrowed: the closure reads `*lib` whole (the
+                            // context menu needs the selection *and* the entries), so a live
+                            // borrow of `lib.entries` in the argument would conflict with it.
+                            let cell_id = lib.entries[i].id.clone();
+                            ui.push_id(&cell_id, |ui| {
                                 // The filmstrip's cell *is* its click target, so it opts in here.
                                 let resp = thumb::cell(
                                     ui,
@@ -84,7 +92,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         .copied()
                                         .unwrap_or_default(),
                                 )
-                                .interact(egui::Sense::click());
+                                .interact(egui::Sense::click())
+                                // ⚠ `label()`, never `file_name` — the one rule the Library
+                                // caption, the rename field and the default export name share.
+                                // The grid needs no hover: it draws the caption already.
+                                .on_hover_text(lib.entries[i].label());
                                 thumb::selection_border(
                                     ui,
                                     resp.rect,
@@ -106,17 +118,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     if !lib.selection.contains(i) {
                                         menu_select = Some(i);
                                     }
-                                    if ui.button("Edit").clicked() {
-                                        menu = Some((i, crate::library::CellAction::Edit));
-                                        ui.close();
-                                    }
-                                    if ui.button("Rename").clicked() {
-                                        menu = Some((i, crate::library::CellAction::Rename));
-                                        ui.close();
-                                    }
-                                    if ui.button("Information…").clicked() {
-                                        menu = Some((i, crate::library::CellAction::Info));
-                                        ui.close();
+                                    let targets = crate::library::menu_targets(lib, i);
+                                    if let Some(a) =
+                                        crate::library::cell_menu(ui, catalog, &targets)
+                                    {
+                                        menu = Some((i, a));
                                     }
                                 });
                             });
