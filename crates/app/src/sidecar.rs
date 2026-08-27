@@ -52,6 +52,48 @@ pub fn remove(photo: &Path) -> std::io::Result<()> {
     }
 }
 
+/// One saved state within a copy — a named point in that copy's editing.
+///
+/// ⚠⚠ **Deliberately outside `History<Edits>`, and joined to it at exactly one point.** Taking
+/// one changes no `Edits`, so there is nothing for an undo stack of `Edits` to hold; *restoring*
+/// one does change them, so `History::push` covers it and Ctrl+Z undoes a restore for free.
+/// Undoing past a snapshot cannot touch it, because it was never in the stack. That independence
+/// is what makes a snapshot unable to vanish silently — which is why this replaced the dropped
+/// "persistent undo history". See `docs/superpowers/specs/2026-08-27-snapshots-design.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Identity: `max + 1` within its copy, **never reused**.
+    ///
+    /// ⚠ The copy-number rule, for the copy-number reason: an *unnamed* snapshot's label is
+    /// derived from this, so reusing a number would silently rename an existing row.
+    pub n: u32,
+    /// What it is called, when it has been given a name. `None` follows the number.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// When it was taken — **local wall-clock seconds** since the epoch.
+    ///
+    /// ⚠ The same convention `Capture::taken` stores its date under, and for the same two
+    /// reasons: rendering it needs no timezone, and wall-clock is what a person means by "when
+    /// I took it".
+    pub taken: i64,
+    pub edits: Edits,
+}
+
+impl Snapshot {
+    /// What this snapshot is called on screen.
+    ///
+    /// ⚠ **The one rule, with every consumer going through it** — the strip's row, the rename
+    /// field's initial text, the name seeded into a virtual copy. That is `entries::shown_name`'s
+    /// rule and the reason it exists: this project has already shipped a bug where the Library
+    /// printed `file_name` while a copy's real name lived somewhere else, because two
+    /// implementations of "what is this called" existed.
+    pub fn label(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| format!("Snapshot {}", self.n))
+    }
+}
+
 /// One version of a photo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopyEntry {
@@ -754,5 +796,64 @@ mod compact_tests {
         s.compact();
         assert_eq!(s.next_copy(), 3);
         assert!(s.get(3).is_none(), "and that number really is free");
+    }
+}
+
+/// Snapshots: labelling, storage, numbering and the neutrality rule.
+///
+/// ⚠ Its own module rather than more of `tests`, following this file's existing partition —
+/// `naming_tests` and `compact_tests` are organised the same way.
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    /// A unique temp directory for one test, removed on drop.
+    ///
+    /// ⚠ Uniqueness is **structural** — process id plus a counter — never the tag alone. Two
+    /// tests sharing a tag destroy each other's directory here, because `remove_dir_all` runs
+    /// first and `cargo test` runs in parallel. That has already happened once in this file.
+    struct Dir(PathBuf);
+
+    impl Dir {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir()
+                .join(format!("rustroom_snap_{tag}_{}_{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn snap(n: u32, exposure: f32) -> Snapshot {
+        Snapshot {
+            n,
+            name: None,
+            taken: 0,
+            edits: Edits {
+                exposure,
+                ..Edits::default()
+            },
+        }
+    }
+
+    #[test]
+    fn an_unnamed_snapshot_is_labelled_by_its_number() {
+        assert_eq!(snap(3, 0.0).label(), "Snapshot 3");
+    }
+
+    #[test]
+    fn a_named_snapshot_is_labelled_by_its_name() {
+        let mut s = snap(3, 0.0);
+        s.name = Some("Before the crop".to_string());
+        assert_eq!(s.label(), "Before the crop");
     }
 }
