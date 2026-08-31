@@ -13,10 +13,17 @@ fn main() {
         .nth(1)
         .expect("usage: bench_thumb_render <raw>");
     let path = std::path::Path::new(&path);
-    let edits = edit_model::Edits {
-        saturation: -100.0,
-        exposure: 0.8,
-        ..Default::default()
+    // ⚠ Neutral by default: that isolates "the camera's rendering vs Rustroom's", which is the
+    // residual difference a viewer sees when the decode replaces the placeholder. Pass any third
+    // argument to use a strong edit instead.
+    let edits = if std::env::args().nth(3).is_some() {
+        edit_model::Edits {
+            saturation: -100.0,
+            exposure: 0.8,
+            ..Default::default()
+        }
+    } else {
+        edit_model::Edits::default()
     };
 
     // C — today.
@@ -99,4 +106,34 @@ fn main() {
     )
     .unwrap();
     println!("wrote thumb_A_from_embedded.png and thumb_B_from_decode.png to {dir}");
+
+    // ⚠ How far apart are they? This is what a viewer sees when the decoded render replaces the
+    // placeholder on the canvas.
+    // ⚠ The two can differ by a row: the camera's embedded JPEG is cropped slightly tighter than
+    // libraw's active area (6240x4160 against 6246x4170 on this body), so compare the overlap.
+    // ⚠ The two can differ by a row or a column: the camera's embedded JPEG is cropped slightly
+    // tighter than libraw's active area (6240x4160 against 6246x4170 on this body), so compare
+    // the shared top-left region rather than refusing.
+    let (w, h) = (aw.min(bw), ah.min(bh));
+    let mut sum = 0u64;
+    let mut max = 0u8;
+    let mut over8 = 0usize;
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..3 {
+                let d = rgb_a[(y * aw + x) * 3 + c].abs_diff(rgb_b[(y * bw + x) * 3 + c]);
+                sum += d as u64;
+                max = max.max(d);
+                if d > 8 {
+                    over8 += 1;
+                }
+            }
+        }
+    }
+    let n = w * h * 3;
+    println!(
+        "A vs B over {w}x{h}: mean {:.2}/255, max {max}, {:.1}% of samples differ by more than 8",
+        sum as f64 / n as f64,
+        100.0 * over8 as f64 / n as f64
+    );
 }

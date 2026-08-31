@@ -108,6 +108,16 @@ fn render_edits(thumb: Thumbnail, edits: &Edits) -> Thumbnail {
             }
         }
     }
+    // ⚠⚠ **`srgb_to_prophoto`, and leaving it out is a bug this shipped once.** The pipeline's
+    // working space is linear **ProPhoto**, and its output transform converts ProPhoto→sRGB on the
+    // way out. Handing it linear *sRGB* means that matrix is applied to data that was never in
+    // ProPhoto, and the result is heavily **oversaturated** — reported as "the saturation is very
+    // exaggerated". `image_decode::decode` does exactly this pair of steps for the same reason,
+    // and its own comment warns about it in the same words.
+    //
+    // ⚠ It bit only *edited* photos, because a neutral one takes the early return above and never
+    // reaches the pipeline at all — which made the effect look arbitrary rather than systematic.
+    let buf = buf.map_pixels(color::srgb_to_prophoto);
     let out = pipeline::build_pipeline(edits, pipeline::RenderScale::new(1.0)).run(buf);
     Thumbnail {
         width: out.width(),
@@ -762,6 +772,62 @@ mod tests {
             spread(&mono) <= 2,
             "-100 saturation must reach the pixels, but the render still has a spread of {}",
             spread(&mono)
+        );
+    }
+
+    /// ⚠⚠ **The regression guard for the oversaturation bug**, reported as *"the saturation of
+    /// the raw file is very exaggerated"*.
+    ///
+    /// A *negligible* edit must leave the colours alone. It did not: `render_edits` linearized the
+    /// thumbnail's sRGB and handed it straight to the pipeline, whose working space is linear
+    /// **ProPhoto** and whose output transform converts ProPhoto→sRGB — so that matrix was applied
+    /// to data that had never been in ProPhoto, expanding every colour.
+    ///
+    /// ⚠ `a_saturation_edit_really_reaches_the_pixels` above could **not** see this: −100
+    /// saturation collapses the channels to grey whether or not the space is right. A test that
+    /// exercises a *strong* edit is blind to a wrong colour space; only a near-neutral one is not.
+    #[test]
+    fn a_negligible_edit_does_not_change_the_colours() {
+        let mut thumb = Thumbnail {
+            width: 16,
+            height: 16,
+            rgba: Vec::new(),
+        };
+        // A spread of ordinary, moderately saturated colours.
+        for i in 0..16 * 16 {
+            let (r, g, b) = ((i * 7 % 200 + 30) as u8, (i * 13 % 180 + 40) as u8, 90u8);
+            thumb.rgba.extend_from_slice(&[r, g, b, 255]);
+        }
+
+        let spread = |rgba: &[u8]| -> f64 {
+            let mut t = 0.0;
+            let mut n = 0.0;
+            for px in rgba.as_chunks::<4>().0 {
+                let mx = px[..3].iter().copied().max().unwrap() as f64;
+                let mn = px[..3].iter().copied().min().unwrap() as f64;
+                if mx > 0.0 {
+                    t += (mx - mn) / mx;
+                    n += 1.0;
+                }
+            }
+            t / n
+        };
+
+        let before = spread(&thumb.rgba);
+        let after = render_edits(
+            thumb,
+            &Edits {
+                // Small enough to be invisible; large enough that `is_active` puts a stage in the
+                // pipeline, which is what makes the colour space matter.
+                exposure: 0.01,
+                ..Default::default()
+            },
+        );
+        let after = spread(&after.rgba);
+        assert!(
+            (after - before).abs() < 0.02,
+            "a negligible edit changed mean saturation from {before:.4} to {after:.4} — the \
+             thumbnail is not being converted into the pipeline's ProPhoto working space"
         );
     }
 }
