@@ -173,11 +173,22 @@ more force here because keystone empties far more of the frame.
 
 **The rail entry is renamed `Crop` → `Geometry`.** Its hover text already reads *"Crop &
 Geometry"*, the edit group is already `Geometry`, and the panel module is already `geometry.rs` —
-so the name finally agrees everywhere. The glyph and the `4` shortcut are unchanged.
+so the name finally agrees everywhere. The glyph and the `2` shortcut are unchanged.
 
-⚠ A **Reset perspective** control is not added. The Crop tool's existing "Reset crop" resets the
-Geometry *group*, and perspective is in that group, so it is covered — and adding a second reset
-would be two controls whose scopes overlap.
+⚠ A **Reset perspective** control is not added. The tool's existing reset button is scoped to the
+Geometry *group* (`GEOMETRY_GROUP`), and perspective is in that group, so it is already covered —
+adding a second reset would be two controls whose scopes overlap.
+
+⚠⚠ **But that button's label and hover text go stale, and must move in the same change.** It
+currently reads "Reset crop", hovering *"Resets the crop, the straighten angle and any rotation or
+flip"* — an enumeration that becomes wrong the instant a fifth thing joins the group. This is the
+same failure as the "Reset adjustments" hover text that named five panel sections literally and
+went wrong when a sixth was added; that one was fixed by **deriving** the text from `SECTIONS`.
+There is no equivalent table here, so the fix is to make the text stop enumerating: the button
+becomes **"Reset geometry"**, hovering *"Resets the crop, straighten, rotation, flip and
+perspective. Leaves the adjustments and any masks alone."* ⚠ It still enumerates, so the rule for
+the next person is written at the call site: **anything added to `GEOMETRY_GROUP` must be named
+here.**
 
 ## Testing
 
