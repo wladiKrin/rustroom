@@ -351,6 +351,11 @@ fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option
 ///
 /// Returns whether a drag settled into a new history entry, so the caller can treat that as
 /// a photo edit — it is one of the two places a photo edit is committed.
+/// How far each corner bracket reaches along its two edges, in screen points.
+///
+/// ⚠ Shrinks for a small crop — see `canvas_geom::corner_brackets`.
+const CROP_BRACKET_ARM: f32 = 22.0;
+
 fn draw_crop_overlay(
     ui: &egui::Ui,
     s: &mut Session,
@@ -378,19 +383,31 @@ fn draw_crop_overlay(
     for outside in rects_around(img_rect, crop_rect) {
         painter.rect_filled(outside, egui::CornerRadius::ZERO, dim);
     }
+    // ⚠⚠ **Every mark is drawn twice — a dark stroke first, the light one over it.** A plain
+    // white line is invisible against a bright photograph, and the crop border is *hardest* to
+    // see in the case that matters most: at a full-frame crop it lies exactly on the image
+    // boundary, so there is nothing to distinguish the control from the edge of the picture.
+    // Reported in use as the border and the corner dots being easy to miss entirely.
+    let halo = egui::Color32::from_black_alpha(160);
     painter.rect_stroke(
         crop_rect,
         egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.5, egui::Color32::WHITE),
+        egui::Stroke::new(3.0, halo),
         egui::StrokeKind::Inside,
     );
-    for c in [
-        crop_rect.left_top(),
-        crop_rect.right_top(),
-        crop_rect.left_bottom(),
-        crop_rect.right_bottom(),
-    ] {
-        painter.circle_filled(c, 4.0, egui::Color32::WHITE);
+    painter.rect_stroke(
+        crop_rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(1.0, egui::Color32::WHITE),
+        egui::StrokeKind::Inside,
+    );
+
+    // ⚠ Corner **brackets**, not dots. They are the conventional crop affordance, they read as
+    // "grab me" where a dot reads as decoration, and they are far larger targets — the hit test
+    // below uses a 0.03 tolerance, which a 4 px dot badly under-advertised.
+    for (a, b) in canvas_geom::corner_brackets(crop_rect, CROP_BRACKET_ARM) {
+        painter.line_segment([a, b], egui::Stroke::new(6.0, halo));
+        painter.line_segment([a, b], egui::Stroke::new(3.0, egui::Color32::WHITE));
     }
 
     if let Some(p) = resp.interact_pointer_pos() {

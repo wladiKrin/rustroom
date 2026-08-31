@@ -136,3 +136,89 @@ mod tests {
         assert_eq!(frame_aspect(rect(0.0, 0.0, 50.0, 100.0)), 0.5);
     }
 }
+
+/// The two arm end-points of each corner bracket, as `(from, to)` segments — eight in all.
+///
+/// ⚠⚠ **Every arm points INWARD.** At a full-frame crop the rectangle sits exactly on the image
+/// boundary, and `painter_at(img_rect)` clips to that boundary — so an arm drawn outward would be
+/// half-clipped and read as a stray tick rather than a corner. That is the case the crop overlay
+/// is hardest to see in, and the one this exists for.
+///
+/// ⚠ The arm length shrinks for a small crop, so the four brackets can never meet in the middle
+/// and turn into a solid outline.
+pub fn corner_brackets(rect: egui::Rect, arm: f32) -> Vec<(egui::Pos2, egui::Pos2)> {
+    // At most a third of the shorter side, so opposite brackets always leave a gap.
+    let arm = arm
+        .min(rect.width() / 3.0)
+        .min(rect.height() / 3.0)
+        .max(1.0);
+    let mut out = Vec::with_capacity(8);
+    for (corner, sx, sy) in [
+        (rect.left_top(), 1.0, 1.0),
+        (rect.right_top(), -1.0, 1.0),
+        (rect.left_bottom(), 1.0, -1.0),
+        (rect.right_bottom(), -1.0, -1.0),
+    ] {
+        out.push((corner, egui::pos2(corner.x + sx * arm, corner.y)));
+        out.push((corner, egui::pos2(corner.x, corner.y + sy * arm)));
+    }
+    out
+}
+
+#[cfg(test)]
+mod bracket_tests {
+    use super::*;
+
+    fn r() -> egui::Rect {
+        egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(210.0, 140.0))
+    }
+
+    /// ⚠⚠ The property the full-frame case depends on: nothing may stick out past the rectangle,
+    /// because the painter clips to the image and an overhanging arm would be cut in half.
+    #[test]
+    fn every_bracket_arm_stays_inside_the_rectangle() {
+        for (a, b) in corner_brackets(r(), 24.0) {
+            for p in [a, b] {
+                assert!(
+                    r().contains(p),
+                    "{p:?} is outside {:?} and would be clipped away",
+                    r()
+                );
+            }
+        }
+    }
+
+    /// Two arms per corner, four corners, and each arm actually starts at its corner.
+    #[test]
+    fn there_are_two_arms_at_each_of_the_four_corners() {
+        let segs = corner_brackets(r(), 24.0);
+        assert_eq!(segs.len(), 8);
+        for c in [
+            r().left_top(),
+            r().right_top(),
+            r().left_bottom(),
+            r().right_bottom(),
+        ] {
+            assert_eq!(
+                segs.iter().filter(|(a, _)| *a == c).count(),
+                2,
+                "corner {c:?} should have two arms"
+            );
+        }
+    }
+
+    /// ⚠ A tiny crop must not turn into a solid outline: the arms shorten so opposite brackets
+    /// always leave a gap. Without the clamp a 30 px crop with a 24 px arm would meet in the
+    /// middle and the corners would stop reading as corners.
+    #[test]
+    fn the_arms_shorten_rather_than_meeting_on_a_small_crop() {
+        let small = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(30.0, 30.0));
+        for (a, b) in corner_brackets(small, 24.0) {
+            let len = (b - a).length();
+            assert!(
+                len <= small.width() / 3.0 + 1e-3,
+                "arm of {len} is more than a third of the crop"
+            );
+        }
+    }
+}
