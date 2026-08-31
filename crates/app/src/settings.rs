@@ -239,6 +239,16 @@ pub struct Settings {
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
     /// missing field comes from `Settings::default()` — an empty map.
     pub dialog_sizes: std::collections::BTreeMap<String, [u32; 2]>,
+    /// The order the Library panel's sections are drawn in.
+    ///
+    /// ⚠⚠ **Never read directly — go through [`Settings::panel_order`]**, the method, which
+    /// repairs it. The two share a name deliberately: the field is the raw stored value and the
+    /// method the usable one, and no call site can confuse them because only the method returns a
+    /// list with every section in it.
+    ///
+    /// ⚠ A `Vec` rather than `[PanelSection; 5]` precisely because `settings.json` is
+    /// hand-editable and can hold any list at all.
+    pub panel_order: Vec<PanelSection>,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -267,6 +277,28 @@ impl Settings {
     /// The grid cell size in points, guaranteed usable.
     pub fn clamped_cell(&self) -> f32 {
         self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
+    }
+
+    /// The panel's section order, guaranteed to contain every section exactly once.
+    ///
+    /// ⚠⚠ **Repaired rather than trusted.** The file is user-editable, so the stored order can
+    /// omit a section, list one twice, or be empty. Duplicates are dropped and anything missing is
+    /// appended in default order, so **a section can never become unreachable** whatever the file
+    /// says. That is `FormatFilter`'s hidden-by-exception robustness: the safe state is the one
+    /// you get by default, not one you have to maintain.
+    pub fn panel_order(&self) -> Vec<PanelSection> {
+        let mut out: Vec<PanelSection> = Vec::with_capacity(PanelSection::ALL.len());
+        for s in &self.panel_order {
+            if !out.contains(s) {
+                out.push(*s);
+            }
+        }
+        for s in PanelSection::ALL {
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        out
     }
 
     /// The snapshot strip's height in points, guaranteed usable.
@@ -370,8 +402,37 @@ impl Default for Settings {
             panel_sections: PanelSections::default(),
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),
+            panel_order: PanelSection::ALL.to_vec(),
         }
     }
+}
+
+/// One section of the Library panel.
+///
+/// ⚠ Exists so the panel's **order** can be a value rather than five literal calls. The bodies
+/// stay exactly where they are; `collections_panel::show` matches this to each one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PanelSection {
+    Folders,
+    Collections,
+    Smart,
+    Keywords,
+    Dates,
+}
+
+impl PanelSection {
+    /// Every section, in the order the panel shipped with.
+    ///
+    /// ⚠ Folders first because "where photos come from" is the outer concept, and All Photos —
+    /// the whole catalog — is the natural top of it. That reasoning is `collections_panel`'s and
+    /// is preserved here as the default rather than re-derived.
+    pub const ALL: [PanelSection; 5] = [
+        Self::Folders,
+        Self::Collections,
+        Self::Smart,
+        Self::Keywords,
+        Self::Dates,
+    ];
 }
 
 /// Which of the Library panel's sections are expanded.
@@ -750,6 +811,9 @@ mod tests {
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT + 20,
             // Non-default so a field re-defaulted on load cannot pass.
             dialog_sizes: std::collections::BTreeMap::from([("x".to_string(), [500u32, 300u32])]),
+            // Non-default so a field re-defaulted on load cannot pass. ⚠ Stored *unrepaired* —
+            // the repair lives only in the accessor, and this asserts it has not leaked into serde.
+            panel_order: vec![PanelSection::Dates, PanelSection::Folders],
             // Non-default in both directions, so a re-defaulted field cannot pass.
             panel_sections: PanelSections {
                 folders: true,
@@ -1304,6 +1368,80 @@ mod tests {
         assert_eq!(
             s.dialog_size("x", (400.0, 120.0), (480.0, 320.0)),
             (612.0, 400.0)
+        );
+    }
+
+    /// ⚠ `settings.json` is hand-editable, so the stored order can be any list at all. A section
+    /// missing from it must still be reachable.
+    #[test]
+    fn a_stored_order_missing_a_section_gets_it_appended() {
+        let s = Settings {
+            panel_order: vec![PanelSection::Dates, PanelSection::Folders],
+            ..Settings::default()
+        };
+        let got = s.panel_order();
+        assert_eq!(got[0], PanelSection::Dates, "the stored prefix is kept");
+        assert_eq!(got[1], PanelSection::Folders);
+        assert_eq!(
+            got.len(),
+            PanelSection::ALL.len(),
+            "and every section is present"
+        );
+        for sec in PanelSection::ALL {
+            assert!(got.contains(&sec), "{sec:?} must be reachable");
+        }
+    }
+
+    #[test]
+    fn a_duplicated_section_appears_once() {
+        let s = Settings {
+            panel_order: vec![
+                PanelSection::Folders,
+                PanelSection::Folders,
+                PanelSection::Dates,
+            ],
+            ..Settings::default()
+        };
+        let got = s.panel_order();
+        assert_eq!(got.len(), PanelSection::ALL.len());
+        assert_eq!(
+            got.iter().filter(|x| **x == PanelSection::Folders).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_empty_stored_order_gives_the_default() {
+        let s = Settings {
+            panel_order: Vec::new(),
+            ..Settings::default()
+        };
+        assert_eq!(s.panel_order(), PanelSection::ALL.to_vec());
+    }
+
+    /// ⚠ The default really is the order the panel shipped with — Folders first, because "where
+    /// photos come from" is the outer concept.
+    #[test]
+    fn the_default_order_is_the_shipped_one() {
+        assert_eq!(
+            Settings::default().panel_order(),
+            PanelSection::ALL.to_vec()
+        );
+        assert_eq!(PanelSection::ALL[0], PanelSection::Folders);
+    }
+
+    /// ⚠ `SettingsStore::load` is infallible, so one unparseable field silently reverts **every**
+    /// setting. The sibling of `a_settings_file_from_before_dialog_sizes_still_loads`.
+    #[test]
+    fn a_settings_file_from_before_the_panel_order_still_loads() {
+        let f = TempFile::new("prepanelorder");
+        std::fs::write(&f.0, r#"{"library_cell":200}"#).unwrap();
+        let got = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(got.library_cell, 200, "the stored field must survive");
+        assert_eq!(
+            got.panel_order(),
+            PanelSection::ALL.to_vec(),
+            "and an absent order must give the default"
         );
     }
 }
