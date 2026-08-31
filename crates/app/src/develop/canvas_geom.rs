@@ -222,3 +222,55 @@ mod bracket_tests {
         }
     }
 }
+
+/// The widest stroke the crop overlay paints, in screen points.
+pub const CROP_HALO_WIDTH: f32 = 6.0;
+
+/// The clip the crop overlay's *marks* are painted into.
+///
+/// ⚠⚠ **Wider than the image, and that is the whole point.** `line_segment` centres its stroke on
+/// the path, so a 6 pt halo drawn along the crop boundary puts 3 pt of itself on each side. At a
+/// **full-frame** crop that boundary *is* the image edge, so clipping to the image cuts every mark
+/// in half — the halo worst of all, being the widest. Reported in use as *"parts of the lines are
+/// outside and cannot be seen"*.
+///
+/// ⚠ The dimming rectangles keep the **tight** clip: they darken what falls outside the crop, and
+/// there is no photograph beyond the image to darken.
+pub fn overlay_clip(img_rect: egui::Rect) -> egui::Rect {
+    img_rect.expand(CROP_HALO_WIDTH / 2.0)
+}
+
+#[cfg(test)]
+mod overlay_clip_tests {
+    use super::*;
+
+    fn img() -> egui::Rect {
+        egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(210.0, 140.0))
+    }
+
+    /// ⚠⚠ The regression guard for the reported bug: at a **full-frame** crop every mark lies on
+    /// the image edge, so the clip must hold the full stroke width on both sides of it. Without
+    /// the expansion the outer half of every line is cut away.
+    #[test]
+    fn the_clip_holds_the_whole_stroke_of_a_mark_on_the_image_edge() {
+        let clip = overlay_clip(img());
+        let half = CROP_HALO_WIDTH / 2.0;
+        // A full-frame crop: the brackets sit exactly on the image boundary.
+        for (a, b) in corner_brackets(img(), 22.0) {
+            for p in [a, b] {
+                let stroke = egui::Rect::from_center_size(p, egui::vec2(half * 2.0, half * 2.0));
+                assert!(
+                    clip.contains_rect(stroke),
+                    "the stroke around {p:?} is cut by the clip {clip:?}"
+                );
+            }
+        }
+    }
+
+    /// ⚠ It expands rather than shrinking. An earlier fix inset the *geometry* instead, which
+    /// keeps the marks whole but moves them off the crop line they are supposed to mark.
+    #[test]
+    fn the_overlay_clip_contains_the_image_rather_than_shrinking_it() {
+        assert!(overlay_clip(img()).contains_rect(img()));
+    }
+}

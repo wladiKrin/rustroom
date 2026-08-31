@@ -383,31 +383,47 @@ fn draw_crop_overlay(
     for outside in rects_around(img_rect, crop_rect) {
         painter.rect_filled(outside, egui::CornerRadius::ZERO, dim);
     }
+    // ⚠⚠ A **wider** clip for the marks. `line_segment` centres its stroke on the path, so at a
+    // full-frame crop — where the boundary *is* the image edge — clipping to the image cuts the
+    // outer half off every mark. See `canvas_geom::overlay_clip`. The dimming above keeps the
+    // tight clip: there is no photograph outside the image to darken.
+    let marks = ui.painter_at(canvas_geom::overlay_clip(img_rect));
     // ⚠⚠ **Every mark is drawn twice — a dark stroke first, the light one over it.** A plain
     // white line is invisible against a bright photograph, and the crop border is *hardest* to
     // see in the case that matters most: at a full-frame crop it lies exactly on the image
     // boundary, so there is nothing to distinguish the control from the edge of the picture.
     // Reported in use as the border and the corner dots being easy to miss entirely.
-    let halo = egui::Color32::from_black_alpha(160);
-    painter.rect_stroke(
+    let halo = egui::Color32::from_black_alpha(180);
+    // ⚠ Red, not white and not the theme accent. White vanishes against a bright photograph, and
+    // the accent is user-switchable — including a `Neutral` setting whose whole point is to have
+    // no colour, which would defeat this. A fixed red is legible on essentially all photographic
+    // content and reads unmistakably as a control rather than part of the picture.
+    //
+    // ⚠ The crop overlay was already painted by hand with fixed colours and deliberately does not
+    // follow the accent; this keeps that, rather than introducing a second rule.
+    let mark = egui::Color32::from_rgb(255, 60, 60);
+    marks.rect_stroke(
         crop_rect,
         egui::CornerRadius::ZERO,
-        egui::Stroke::new(3.0, halo),
-        egui::StrokeKind::Inside,
+        egui::Stroke::new(4.0, halo),
+        egui::StrokeKind::Middle,
     );
-    painter.rect_stroke(
+    marks.rect_stroke(
         crop_rect,
         egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.0, egui::Color32::WHITE),
-        egui::StrokeKind::Inside,
+        egui::Stroke::new(1.5, mark),
+        egui::StrokeKind::Middle,
     );
 
     // ⚠ Corner **brackets**, not dots. They are the conventional crop affordance, they read as
     // "grab me" where a dot reads as decoration, and they are far larger targets — the hit test
     // below uses a 0.03 tolerance, which a 4 px dot badly under-advertised.
     for (a, b) in canvas_geom::corner_brackets(crop_rect, CROP_BRACKET_ARM) {
-        painter.line_segment([a, b], egui::Stroke::new(6.0, halo));
-        painter.line_segment([a, b], egui::Stroke::new(3.0, egui::Color32::WHITE));
+        marks.line_segment(
+            [a, b],
+            egui::Stroke::new(canvas_geom::CROP_HALO_WIDTH, halo),
+        );
+        marks.line_segment([a, b], egui::Stroke::new(3.5, mark));
     }
 
     if let Some(p) = resp.interact_pointer_pos() {
