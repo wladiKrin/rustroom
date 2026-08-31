@@ -1,16 +1,25 @@
-//! A path-keyed, byte-budgeted cache of loaded thumbnails.
+//! A cache of rendered thumbnails, keyed by photo **and edits**, byte-budgeted.
 //!
-//! ⚠⚠ **Keyed by `PathBuf`, not by an `entries` index**, and three things fall out of that:
-//! copies of one file share one texture (a Library thumbnail is the camera's embedded JPEG, so
-//! every copy's is pixel-identical); a re-sort or `rebuild_entries` invalidates nothing; and
-//! indices never leave the UI, which removes this project's third-most-repeated bug family —
-//! sparse-versus-dense index confusion — at the boundary rather than guarding against it.
+//! ⚠⚠ **Keyed by [`ThumbKey`] — a `PhotoId` plus a fingerprint of that copy's `Edits`.** It was
+//! keyed by `PathBuf`, deliberately, so copies of one file shared one texture; that was right
+//! while a thumbnail was the camera's embedded JPEG, and is exactly the bug once thumbnails show
+//! edits, since a black-and-white copy appeared in colour.
+//!
+//! ⚠ Two of the three properties that fell out of path-keying survive, and both are load-bearing
+//! in the Library, which is this project's worst area for defects: a re-sort or `rebuild_entries`
+//! still invalidates nothing, and **indices never leave the UI**, which removes sparse-versus-
+//! dense index confusion at the boundary rather than guarding against it downstream.
+//!
+//! ⚠ Making the edits part of the *key* is what means nothing has to invalidate: a sync, a paste,
+//! a preset, an undo and a snapshot restore are all correct without knowing this cache exists.
+//! `PrefixKey` in the render engine works the same way and for the same reason.
 //!
 //! ⚠ Generic over the value so it can live in this lib, which must not depend on egui. The bin
 //! instantiates `ThumbCache<egui::TextureHandle>`.
 
+use crate::photo_id::PhotoId;
+use crate::thumb_key::ThumbKey;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 /// How much memory thumbnails may occupy.
 ///
@@ -46,7 +55,7 @@ struct Entry<T> {
 }
 
 pub struct ThumbCache<T> {
-    map: HashMap<PathBuf, Entry<T>>,
+    map: HashMap<ThumbKey, Entry<T>>,
     budget: usize,
     bytes: usize,
     clock: u64,
@@ -70,19 +79,37 @@ impl<T> ThumbCache<T> {
     /// what makes a thumbnail recent is *being on screen*, which is exactly what `retain_window`
     /// is told; and a `&mut self` accessor called from inside the draw loop would fight the
     /// shared borrows of `entries` and `visible` that the loop already holds.
-    pub fn get(&self, path: &Path) -> Option<&T> {
-        self.map.get(path).map(|e| &e.value)
+    pub fn get(&self, key: &ThumbKey) -> Option<&T> {
+        self.map.get(key).map(|e| &e.value)
     }
 
-    pub fn contains(&self, path: &Path) -> bool {
-        self.map.contains_key(path)
+    /// The most recent thumbnail of `id`, whatever edits it was rendered with.
+    ///
+    /// ⚠⚠ **For the pending state only.** An exact-key miss means the edits changed and a render
+    /// is in flight; the previous picture of the same photo is a far better placeholder than
+    /// grey, and it resolves in about 100 ms.
+    ///
+    /// ⚠ Scoped to one `PhotoId` — never another copy, never another file — or a cell would show
+    /// a different photograph.
+    ///
+    /// ⚠ Takes `&self` and does not touch recency, for the reason [`Self::get`] gives.
+    pub fn get_stale(&self, id: &PhotoId) -> Option<&T> {
+        self.map
+            .iter()
+            .filter(|(k, _)| &k.id == id)
+            .max_by_key(|(_, e)| e.seq)
+            .map(|(_, e)| &e.value)
     }
 
-    /// Store `value` for `path`, replacing whatever was there.
-    pub fn insert(&mut self, path: PathBuf, value: T, bytes: usize) {
+    pub fn contains(&self, key: &ThumbKey) -> bool {
+        self.map.contains_key(key)
+    }
+
+    /// Store `value` for `key`, replacing whatever was there.
+    pub fn insert(&mut self, key: ThumbKey, value: T, bytes: usize) {
         self.clock += 1;
         let seq = self.clock;
-        if let Some(old) = self.map.insert(path, Entry { value, bytes, seq }) {
+        if let Some(old) = self.map.insert(key, Entry { value, bytes, seq }) {
             // ⚠ Subtract the replaced entry's bytes, or a re-inserted path double-counts and the
             // budget drifts upward until eviction starts throwing away live thumbnails.
             self.bytes = self.bytes.saturating_sub(old.bytes);
@@ -95,12 +122,12 @@ impl<T> ThumbCache<T> {
     /// ⚠⚠ **The window is pinned, not merely preferred.** Nothing in `window` is ever evicted,
     /// however far the budget falls, so the cache may legitimately exceed its budget while a very
     /// large window is on screen.
-    pub fn retain_window(&mut self, window: &[PathBuf]) {
-        let pinned: HashSet<&Path> = window.iter().map(PathBuf::as_path).collect();
-        for path in window {
+    pub fn retain_window(&mut self, window: &[ThumbKey]) {
+        let pinned: HashSet<&ThumbKey> = window.iter().collect();
+        for key in window {
             self.clock += 1;
             let seq = self.clock;
-            if let Some(e) = self.map.get_mut(path) {
+            if let Some(e) = self.map.get_mut(key) {
                 e.seq = seq;
             }
         }
@@ -108,9 +135,9 @@ impl<T> ThumbCache<T> {
             let victim = self
                 .map
                 .iter()
-                .filter(|(path, _)| !pinned.contains(path.as_path()))
+                .filter(|(key, _)| !pinned.contains(key))
                 .min_by_key(|(_, e)| e.seq)
-                .map(|(path, _)| path.clone());
+                .map(|(key, _)| key.clone());
             // `None` means everything left is pinned — stop rather than blank the screen.
             let Some(victim) = victim else { break };
             if let Some(e) = self.map.remove(&victim) {
@@ -141,8 +168,18 @@ impl<T> ThumbCache<T> {
 mod tests {
     use super::*;
 
-    fn p(name: &str) -> PathBuf {
-        PathBuf::from(format!("/x/{name}.RAF"))
+    /// ⚠ Returns a `ThumbKey` now rather than a `PathBuf`, so every test body below keeps its
+    /// exact previous form — their assertions passing **unchanged** is the evidence that
+    /// re-keying moved none of the eviction, budget or pinning behaviour.
+    fn p(name: &str) -> ThumbKey {
+        key(&format!("/x/{name}.RAF"), 0, 1)
+    }
+
+    fn key(path: &str, copy: u32, edits: u64) -> ThumbKey {
+        ThumbKey {
+            id: PhotoId::new(std::path::PathBuf::from(path), copy),
+            edits,
+        }
     }
 
     /// Five 10-byte entries, `a`..`e`, inserted in order.
@@ -218,7 +255,7 @@ mod tests {
         // the budget falls — otherwise a large window silently blanks the very cells being drawn,
         // and the failure looks like a slow loader rather than a bug.
         let mut c = cache_of_five(10);
-        let window: Vec<PathBuf> = ["a", "b", "c", "d", "e"].iter().map(|n| p(n)).collect();
+        let window: Vec<ThumbKey> = ["a", "b", "c", "d", "e"].iter().map(|n| p(n)).collect();
         c.retain_window(&window);
         assert_eq!(c.len(), 5, "an on-screen thumbnail was evicted");
         assert!(c.bytes() > c.budget, "the test is not exercising the pin");
@@ -238,5 +275,77 @@ mod tests {
         c.clear();
         assert!(c.is_empty());
         assert_eq!(c.bytes(), 0);
+    }
+
+    /// The whole feature: two copies of one file hold two textures.
+    #[test]
+    fn two_copies_of_one_file_no_longer_share_a_thumbnail() {
+        let mut c = ThumbCache::<String>::with_default_budget();
+        c.insert(key("/a.RAF", 0, 1), "colour".into(), 10);
+        c.insert(key("/a.RAF", 1, 2), "b&w".into(), 10);
+        assert_eq!(
+            c.get(&key("/a.RAF", 0, 1)).map(String::as_str),
+            Some("colour")
+        );
+        assert_eq!(c.get(&key("/a.RAF", 1, 2)).map(String::as_str), Some("b&w"));
+    }
+
+    /// ⚠⚠ **The pending state.** An exact-key miss falls back to any entry for the same photo, so
+    /// a re-render shows the slightly-stale picture rather than flashing grey while a slider is
+    /// dragged.
+    #[test]
+    fn a_changed_edit_falls_back_to_the_same_photos_previous_thumbnail() {
+        let mut c = ThumbCache::<String>::with_default_budget();
+        c.insert(key("/a.RAF", 0, 1), "old".into(), 10);
+        assert!(c.get(&key("/a.RAF", 0, 2)).is_none(), "not an exact hit");
+        assert_eq!(
+            c.get_stale(&PhotoId::new(std::path::PathBuf::from("/a.RAF"), 0))
+                .map(String::as_str),
+            Some("old"),
+            "but the previous render of *this* photo is available"
+        );
+    }
+
+    /// ⚠ …and never falls back to a **different** photo's, which would show the wrong picture.
+    #[test]
+    fn the_stale_fallback_never_reaches_another_photo() {
+        let mut c = ThumbCache::<String>::with_default_budget();
+        c.insert(key("/a.RAF", 0, 1), "a".into(), 10);
+        assert!(c
+            .get_stale(&PhotoId::new(std::path::PathBuf::from("/b.RAF"), 0))
+            .is_none());
+        assert!(
+            c.get_stale(&PhotoId::new(std::path::PathBuf::from("/a.RAF"), 1))
+                .is_none(),
+            "nor to another copy of the same file"
+        );
+    }
+
+    /// ⚠ With several renders of one photo cached, the fallback must give the **newest**, not an
+    /// arbitrary one — otherwise dragging a slider could show an older state than the one just
+    /// replaced.
+    #[test]
+    fn the_stale_fallback_gives_the_most_recent_render() {
+        let mut c = ThumbCache::<String>::with_default_budget();
+        c.insert(key("/a.RAF", 0, 1), "first".into(), 10);
+        c.insert(key("/a.RAF", 0, 2), "second".into(), 10);
+        assert_eq!(
+            c.get_stale(&PhotoId::new(std::path::PathBuf::from("/a.RAF"), 0))
+                .map(String::as_str),
+            Some("second")
+        );
+    }
+
+    /// ⚠ `rebuild_entries` must still invalidate nothing — it re-sorts and re-expands rows, and
+    /// the cache is keyed by identity rather than by position. Stated as a property so a future
+    /// move back to index keys breaks a test rather than the Library.
+    #[test]
+    fn reordering_the_entries_does_not_invalidate_anything() {
+        let mut c = ThumbCache::<String>::with_default_budget();
+        let (a, b) = (p("a"), p("b"));
+        c.insert(a.clone(), "a".into(), 10);
+        c.insert(b.clone(), "b".into(), 10);
+        c.retain_window(&[b.clone(), a.clone()]);
+        assert!(c.get(&a).is_some() && c.get(&b).is_some());
     }
 }

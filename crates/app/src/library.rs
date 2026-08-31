@@ -4,6 +4,7 @@ use crate::{apply_click, name_edit, thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::format_filter;
 use rustroom_app::photo_id::PhotoId;
+use rustroom_app::thumb_loader::ThumbRequest;
 use std::path::PathBuf;
 
 /// The Library grid: thumbnails, selection, double-click / Enter to open in Develop.
@@ -249,6 +250,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         app.save_settings();
     }
 
+    // ⚠ Hoisted out of `app` before the closure borrows `app.library`: the open photo's edits
+    // live in `Session` and the sidecar is stale while it is being edited, so the thumbnail must
+    // use these rather than the row's stored copy.
+    //
+    // ⚠ **Before any `&mut app.*` binding below**: `live_edits` takes `&self`, so it borrows the
+    // whole of `app` and cannot follow a mutable borrow of one of its fields.
+    let live = app.live_edits();
     // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
     // and the two are disjoint fields — which the borrow checker only accepts when it can see so.
     let rename_draft = &mut app.rename_draft;
@@ -419,7 +427,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             thumb::cell(
                                                 ui,
                                                 box_size,
-                                                lib.cache.get(&lib.entries[i].id.path),
+                                                // ⚠ The exact render if it is there, else this
+                                                // photo's previous one — never grey while a
+                                                // re-render is in flight.
+                                                lib.cache
+                                                    .get(&lib.thumb_request(i, live.as_ref()).key())
+                                                    .or_else(|| {
+                                                        lib.cache.get_stale(&lib.entries[i].id)
+                                                    }),
                                                 lib.entries[i].id.copy,
                                                 lib.marks
                                                     .get(&lib.entries[i].id)
@@ -500,15 +515,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // actually laid out this frame.
         let first = drawn.start.saturating_sub(MARGIN_ROWS);
         let last = drawn.end.saturating_add(MARGIN_ROWS).min(rows);
-        let mut window: Vec<PathBuf> = Vec::new();
+        let mut window: Vec<ThumbRequest> = Vec::new();
         for row in first..last {
             for pos in cells_in_row(row, cols, visible.len()) {
-                let path = &lib.entries[visible[pos]].id.path;
-                // ⚠ De-duplicated: a file's copies are separate rows sharing one path, and the
-                // cache holds one entry per path.
-                if !window.iter().any(|p| p == path) {
-                    window.push(path.clone());
-                }
+                // ⚠ **No longer de-duplicated by path.** A file's copies were separate rows
+                // sharing one cache entry while a thumbnail was the camera's JPEG; now each copy
+                // renders its own edits, so each is its own request.
+                window.push(lib.thumb_request(visible[pos], live.as_ref()));
             }
         }
         lib.sync_thumb_window(&window);

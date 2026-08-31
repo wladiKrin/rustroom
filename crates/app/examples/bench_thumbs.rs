@@ -10,20 +10,28 @@ fn main() {
         .nth(1)
         .expect("usage: bench_thumbs <folder>");
     let entries = catalog::scan_folder(std::path::Path::new(&dir)).expect("scan");
-    let paths: Vec<_> = entries.iter().map(|e| e.path.clone()).take(120).collect();
+    let paths: Vec<rustroom_app::thumb_loader::ThumbRequest> = entries
+        .iter()
+        .take(120)
+        .map(|e| rustroom_app::thumb_loader::ThumbRequest {
+            id: rustroom_app::photo_id::PhotoId::original(e.path.clone()),
+            edits: Default::default(),
+        })
+        .collect();
     let n = paths.len();
     println!("{n} entries, worker_count() = {}", worker_count());
 
     for threads in [1, worker_count()] {
         let t = Instant::now();
         let loader = ThumbLoader::with_loader(
-            |p| {
+            std::sync::Arc::new(|r: &rustroom_app::thumb_loader::ThumbRequest| {
+                let p = r.id.path.as_path();
                 if catalog::is_raw(p) {
                     raw_decode::extract_thumbnail(p).ok()
                 } else {
                     image_decode::thumbnail(p).ok()
                 }
-            },
+            }),
             threads,
             color::OutputSpace::Srgb,
             || {},

@@ -127,6 +127,7 @@ mod tests {
             name: None,
             id: crate::photo_id::PhotoId::new(PathBuf::from(format!("/f/{name}")), copy),
             file_name: name.to_string(),
+            edits: Default::default(),
         }
     }
 

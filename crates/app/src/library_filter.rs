@@ -226,6 +226,7 @@ mod tests {
             id: PhotoId::new(PathBuf::from(format!("/x/{name}")), copy),
             file_name: name.to_string(),
             name: copy_name.map(str::to_string),
+            edits: Default::default(),
         }
     }
 

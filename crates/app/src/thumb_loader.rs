@@ -1,19 +1,49 @@
 //! Background workers that extract embedded thumbnails off the UI thread, loading whatever the
 //! UI currently wants and streaming the results back keyed by path.
 
+use crate::photo_id::PhotoId;
+use crate::thumb_key::ThumbKey;
 use core_image::Thumbnail;
+use edit_model::Edits;
 use std::collections::{HashSet, VecDeque};
-use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
+/// How a thumbnail is produced. Injected so the whole loop is unit-testable with no image
+/// fixtures, the way `DecodeWorker` takes its decode fn.
+///
+/// ⚠ A boxed closure rather than a `fn` pointer, which cannot capture — the production one is a
+/// plain fn, but a test's needs to count calls.
+pub type LoadFn = Arc<dyn Fn(&ThumbRequest) -> Option<Thumbnail> + Send + Sync>;
+
+/// One thumbnail to produce: which photo, and the edits to render it with.
+///
+/// ⚠ Carries the `Edits` **by value** rather than a fingerprint: the worker has to *render* with
+/// them, and re-reading the sidecar on the worker would be a second source of truth for what a
+/// photo's edits are.
+#[derive(Clone, PartialEq)]
+pub struct ThumbRequest {
+    pub id: PhotoId,
+    pub edits: Edits,
+}
+
+impl ThumbRequest {
+    pub fn key(&self) -> ThumbKey {
+        ThumbKey::new(self.id.clone(), &self.edits)
+    }
+}
+
 /// One finished thumbnail (or `None` if that file had no usable preview).
 ///
-/// ⚠ Keyed by **path**, not by an index. Indices shift under a re-sort or a copy being created;
-/// a path does not, and the cache this feeds is path-keyed for the same reason.
+/// ⚠ Keyed by **identity**, not by an index. Indices shift under a re-sort or a copy being
+/// created; a `ThumbKey` does not, and the cache this feeds is keyed the same way.
+///
+/// ⚠⚠ The key is built from the **request the worker was handed**, never from anything it
+/// re-reads: a key derived from a second read of the sidecar could disagree with the one the UI
+/// is looking up under, and the thumbnail would never be found.
 pub struct ThumbResult {
-    pub path: PathBuf,
+    pub key: ThumbKey,
     pub thumb: Option<Thumbnail>,
 }
 
@@ -33,11 +63,56 @@ pub fn worker_count() -> usize {
 }
 
 /// Extract one thumbnail, dispatching on the file type.
-fn load_thumbnail(path: &Path) -> Option<Thumbnail> {
-    if catalog::is_raw(path) {
-        raw_decode::extract_thumbnail(path).ok()
+/// Extract a photo's embedded preview and render its edits over it.
+///
+/// ⚠⚠ **Rendered from the embedded JPEG, not from a decode.** Measured: 4.9 ms of render on top
+/// of the ~90 ms extraction, against 934 ms for a half-size decode — 9.8×, essentially all of it
+/// the decode. It matters most on *invalidation*: a changed edit costs another ~95 ms here and
+/// would cost ~930 ms there, which cannot be cached away since a decoded buffer is 78 MB.
+/// Reproduce with `cargo run --release -p app --example bench_thumb_render <raw>`.
+///
+/// ⚠ **Accepted cost: the JPEG is 8-bit and display-referred, so highlight recovery is invisible
+/// in the grid** — the headroom is gone before the pipeline sees it. Shadows compress the same
+/// way, and the thumbnail shows the camera's rendering plus your edits rather than Rustroom's own
+/// render.
+fn load_thumbnail(req: &ThumbRequest) -> Option<Thumbnail> {
+    let path = req.id.path.as_path();
+    let thumb = if catalog::is_raw(path) {
+        raw_decode::extract_thumbnail(path).ok()?
     } else {
-        image_decode::thumbnail(path).ok()
+        image_decode::thumbnail(path).ok()?
+    };
+    if req.edits == Edits::default() {
+        // ⚠ Neutral edits are the common case on a first folder open; skip the round trip rather
+        // than paying it 830 times for a no-op.
+        return Some(thumb);
+    }
+    Some(render_edits(thumb, &req.edits))
+}
+
+/// Run the pipeline over an already-extracted thumbnail.
+///
+/// ⚠ `RenderScale::new(1.0)`: the thumbnail *is* the image as far as the pipeline is concerned,
+/// so spatial radii are relative to it. A scale derived from the original's dimensions would make
+/// a 512 px thumbnail apply full-resolution blur radii.
+///
+/// ⚠ The output dimensions come from the rendered image, **not** from the input — a crop changes
+/// them, and reusing the input's would paint a cropped photo into the original's rect and skew it.
+fn render_edits(thumb: Thumbnail, edits: &Edits) -> Thumbnail {
+    let mut buf = core_image::ImageBuf::new(thumb.width, thumb.height);
+    {
+        let d = buf.data_mut();
+        for (i, px) in thumb.rgba.as_chunks::<4>().0.iter().enumerate() {
+            for c in 0..3 {
+                d[i * 3 + c] = color::srgb_to_linear(px[c] as f32 / 255.0);
+            }
+        }
+    }
+    let out = pipeline::build_pipeline(edits, pipeline::RenderScale::new(1.0)).run(buf);
+    Thumbnail {
+        width: out.width(),
+        height: out.height(),
+        rgba: out.to_rgba8(),
     }
 }
 
@@ -57,8 +132,11 @@ fn convert_thumb(thumb: &mut Thumbnail, space: color::OutputSpace) {
 
 #[derive(Default)]
 struct Queue {
-    wanted: VecDeque<PathBuf>,
-    in_flight: HashSet<PathBuf>,
+    wanted: VecDeque<ThumbRequest>,
+    /// ⚠ Keyed by `ThumbKey`, not `PhotoId`: two renders of one photo with different edits are
+    /// two different jobs, and de-duplicating on the photo alone would drop the newer one and
+    /// leave a stale thumbnail on screen for good.
+    in_flight: HashSet<ThumbKey>,
     stop: bool,
 }
 
@@ -75,7 +153,12 @@ impl ThumbLoader {
         display_space: color::OutputSpace,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
-        Self::with_loader(load_thumbnail, worker_count(), display_space, on_progress)
+        Self::with_loader(
+            Arc::new(load_thumbnail),
+            worker_count(),
+            display_space,
+            on_progress,
+        )
     }
 
     /// The injectable form: `load` and the thread count are parameters so the whole loop is
@@ -85,7 +168,7 @@ impl ThumbLoader {
     /// over a fixed list. A folder mixes RAW and JPEG, whose extraction costs differ by a lot, so
     /// static chunking would leave threads idle while one ground through the expensive half.
     pub fn with_loader(
-        load: fn(&Path) -> Option<Thumbnail>,
+        load: LoadFn,
         threads: usize,
         display_space: color::OutputSpace,
         on_progress: impl Fn() + Send + Sync + 'static,
@@ -100,22 +183,23 @@ impl ThumbLoader {
                 let queue = queue.clone();
                 let tx = tx.clone();
                 let on_progress = on_progress.clone();
+                let load = load.clone();
                 thread::spawn(move || {
                     let (lock, cv) = &*queue;
                     loop {
                         // Park until there is something to do, or the loader is dropped.
-                        let path = loop {
+                        let req = loop {
                             let mut q = lock.lock().unwrap();
                             if q.stop {
                                 return;
                             }
-                            if let Some(p) = q.wanted.pop_front() {
-                                q.in_flight.insert(p.clone());
-                                break p;
+                            if let Some(r) = q.wanted.pop_front() {
+                                q.in_flight.insert(r.key());
+                                break r;
                             }
                             drop(cv.wait(q).unwrap());
                         };
-                        let mut thumb = load(&path);
+                        let mut thumb = load(&req);
                         // ⚠ Converted here rather than at upload, so a thumbnail is stored the
                         // way it will be shown. Not optional polish: the filmstrip sits directly
                         // beside the canvas showing the same photo, so correcting only the canvas
@@ -123,10 +207,11 @@ impl ThumbLoader {
                         if let Some(t) = thumb.as_mut() {
                             convert_thumb(t, display_space);
                         }
-                        lock.lock().unwrap().in_flight.remove(&path);
+                        let key = req.key();
+                        lock.lock().unwrap().in_flight.remove(&key);
                         // An error means the UI dropped the loader — stop rather than finish a
                         // folder nobody is looking at any more.
-                        if tx.send(ThumbResult { path, thumb }).is_err() {
+                        if tx.send(ThumbResult { key, thumb }).is_err() {
                             return;
                         }
                         on_progress();
@@ -144,26 +229,26 @@ impl ThumbLoader {
         }
     }
 
-    /// Ask for exactly these paths, in this order, discarding whatever was wanted before.
+    /// Ask for exactly these thumbnails, in this order, discarding whatever was wanted before.
     ///
     /// ⚠⚠ **Replacing the list is the cancellation, and no cancellation mechanism is needed.** A
     /// scrolled-past request is simply never popped — "abandon, don't abort", the same trade
     /// `DecodeWorker` and `batch_export` make, because the work has no safe interruption point.
     ///
-    /// ⚠ Paths already in flight are skipped. Consecutive want-lists overlap almost entirely as
+    /// ⚠ Requests already in flight are skipped. Consecutive want-lists overlap almost entirely as
     /// the window moves, so without this one slow thumbnail is fetched once per window move.
     ///
     /// ⚠ The caller filters out what it already holds — the UI owns the cache, so the UI is the
     /// only thing that knows what is loaded. A loader keeping its own shadow copy of that would
     /// be two facts that can disagree, the failure `render_max_dim` and `Session::geometry_mode`
     /// were each fixed by deriving rather than storing alongside.
-    pub fn want(&self, paths: &[PathBuf]) {
+    pub fn want(&self, wanted: &[ThumbRequest]) {
         let (lock, cv) = &*self.queue;
         let mut q = lock.lock().unwrap();
         q.wanted.clear();
-        for p in paths {
-            if !q.in_flight.contains(p) {
-                q.wanted.push_back(p.clone());
+        for r in wanted {
+            if !q.in_flight.contains(&r.key()) {
+                q.wanted.push_back(r.clone());
             }
         }
         drop(q);
@@ -173,7 +258,7 @@ impl ThumbLoader {
     /// Take all thumbnails finished since the last call.
     ///
     /// ⚠ Results arrive **out of order**, since several threads share the queue. Every one
-    /// carries its `path`, and the caller stores by that — but do not reintroduce an assumption
+    /// carries its `key`, and the caller stores by that — but do not reintroduce an assumption
     /// that it is sorted.
     pub fn drain(&self) -> Vec<ThumbResult> {
         self.rx.try_iter().collect()
@@ -194,6 +279,7 @@ impl Drop for ThumbLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Collect results until `want` of them have arrived or the deadline passes.
@@ -206,13 +292,23 @@ mod tests {
             }
             thread::sleep(std::time::Duration::from_millis(5));
         }
-        results.sort_by(|a, b| a.path.cmp(&b.path));
+        results.sort_by(|a, b| a.key.id.path.cmp(&b.key.id.path));
         results
     }
 
-    fn paths(n: usize) -> Vec<PathBuf> {
+    fn path_of(i: usize) -> PathBuf {
+        PathBuf::from(format!("/nonexistent/rustroom_{i:04}.raf"))
+    }
+
+    /// ⚠ Returns requests now rather than paths, so every test body below keeps its exact
+    /// previous form — their assertions passing **unchanged** is the evidence that carrying edits
+    /// moved none of the queue, parking, want-replacement or `Drop` behaviour.
+    fn paths(n: usize) -> Vec<ThumbRequest> {
         (0..n)
-            .map(|i| PathBuf::from(format!("/nonexistent/rustroom_{i:04}.raf")))
+            .map(|i| ThumbRequest {
+                id: PhotoId::original(path_of(i)),
+                edits: Edits::default(),
+            })
             .collect()
     }
 
@@ -223,19 +319,25 @@ mod tests {
         loader.want(&paths(2));
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].path, paths(2)[0]);
-        assert_eq!(results[1].path, paths(2)[1]);
+        assert_eq!(results[0].key.id.path, path_of(0));
+        assert_eq!(results[1].key.id.path, path_of(1));
         assert!(results[0].thumb.is_none() && results[1].thumb.is_none());
     }
 
     #[test]
     fn every_wanted_path_is_loaded_exactly_once() {
-        let loader = ThumbLoader::with_loader(|_| None, 4, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(|_: &ThumbRequest| None),
+            4,
+            color::OutputSpace::Srgb,
+            || {},
+        );
         loader.want(&paths(50));
         let results = collect(&loader, 50);
         assert_eq!(results.len(), 50, "wrong number of results");
-        let got: Vec<PathBuf> = results.iter().map(|r| r.path.clone()).collect();
-        assert_eq!(got, paths(50));
+        let got: Vec<PathBuf> = results.iter().map(|r| r.key.id.path.clone()).collect();
+        let want: Vec<PathBuf> = (0..50).map(path_of).collect();
+        assert_eq!(got, want);
     }
 
     #[test]
@@ -243,7 +345,12 @@ mod tests {
         // ⚠ The structural change from the old fixed-list loader: workers must park on an empty
         // queue and wake when the window moves, rather than returning when the list runs out.
         // Without the condvar notify they sleep forever and the grid stays grey.
-        let loader = ThumbLoader::with_loader(|_| None, 2, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(|_: &ThumbRequest| None),
+            2,
+            color::OutputSpace::Srgb,
+            || {},
+        );
         thread::sleep(std::time::Duration::from_millis(30));
         assert!(loader.drain().is_empty(), "nothing was wanted yet");
         loader.want(&paths(3));
@@ -258,16 +365,19 @@ mod tests {
         //
         // Two workers, so at most two of the abandoned batch can already be in hand.
         static STARTED: AtomicUsize = AtomicUsize::new(0);
-        fn slow(_p: &Path) -> Option<Thumbnail> {
+        fn slow(_r: &ThumbRequest) -> Option<Thumbnail> {
             STARTED.fetch_add(1, Ordering::SeqCst);
             thread::sleep(std::time::Duration::from_millis(20));
             None
         }
         STARTED.store(0, Ordering::SeqCst);
-        let loader = ThumbLoader::with_loader(slow, 2, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(Arc::new(slow), 2, color::OutputSpace::Srgb, || {});
         loader.want(&paths(200));
         thread::sleep(std::time::Duration::from_millis(10));
-        let keep: Vec<PathBuf> = vec![PathBuf::from("/nonexistent/kept_a.raf")];
+        let keep = vec![ThumbRequest {
+            id: PhotoId::original(PathBuf::from("/nonexistent/kept_a.raf")),
+            edits: Edits::default(),
+        }];
         loader.want(&keep);
         // ⚠ Wait for *this* path, not merely for the first result to arrive. The paths already in
         // flight when the list was replaced finish first, so `collect(&loader, 1)` returns one of
@@ -276,13 +386,13 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
             results.extend(loader.drain());
-            if results.iter().any(|r| r.path == keep[0]) {
+            if results.iter().any(|r| r.key.id == keep[0].id) {
                 break;
             }
             thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(
-            results.iter().any(|r| r.path == keep[0]),
+            results.iter().any(|r| r.key.id == keep[0].id),
             "the newly wanted path never loaded"
         );
         // The abandoned batch must not grind on: only what was already in hand may finish.
@@ -301,7 +411,7 @@ mod tests {
         // window move.
         static STARTS: AtomicUsize = AtomicUsize::new(0);
         static RELEASE: AtomicUsize = AtomicUsize::new(0);
-        fn gated(_p: &Path) -> Option<Thumbnail> {
+        fn gated(_r: &ThumbRequest) -> Option<Thumbnail> {
             STARTS.fetch_add(1, Ordering::SeqCst);
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
             while RELEASE.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
@@ -312,7 +422,7 @@ mod tests {
         STARTS.store(0, Ordering::SeqCst);
         RELEASE.store(0, Ordering::SeqCst);
         let one = paths(1);
-        let loader = ThumbLoader::with_loader(gated, 4, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(Arc::new(gated), 4, color::OutputSpace::Srgb, || {});
         for _ in 0..20 {
             loader.want(&one);
             thread::sleep(std::time::Duration::from_millis(2));
@@ -342,7 +452,7 @@ mod tests {
         static ARRIVED: AtomicUsize = AtomicUsize::new(0);
         static LIVE: AtomicUsize = AtomicUsize::new(0);
         static PEAK: AtomicUsize = AtomicUsize::new(0);
-        fn gated(_p: &Path) -> Option<Thumbnail> {
+        fn gated(_r: &ThumbRequest) -> Option<Thumbnail> {
             ARRIVED.fetch_add(1, Ordering::SeqCst);
             let live = LIVE.fetch_add(1, Ordering::SeqCst) + 1;
             PEAK.fetch_max(live, Ordering::SeqCst);
@@ -353,7 +463,8 @@ mod tests {
             LIVE.fetch_sub(1, Ordering::SeqCst);
             None
         }
-        let loader = ThumbLoader::with_loader(gated, PAR, color::OutputSpace::Srgb, || {});
+        let loader =
+            ThumbLoader::with_loader(Arc::new(gated), PAR, color::OutputSpace::Srgb, || {});
         loader.want(&paths(PAR));
         assert_eq!(collect(&loader, PAR).len(), PAR);
         assert_eq!(
@@ -370,13 +481,14 @@ mod tests {
         // ⚠ The old loader stopped because `tx.send` failed once `rx` was dropped. A parked
         // worker never reaches `send`, so `Drop` has to set the stop flag and wake them.
         static STARTED: AtomicUsize = AtomicUsize::new(0);
-        fn counted(_p: &Path) -> Option<Thumbnail> {
+        fn counted(_r: &ThumbRequest) -> Option<Thumbnail> {
             STARTED.fetch_add(1, Ordering::SeqCst);
             thread::sleep(std::time::Duration::from_millis(10));
             None
         }
         STARTED.store(0, Ordering::SeqCst);
-        let loader = ThumbLoader::with_loader(counted, 2, color::OutputSpace::Srgb, || {});
+        let loader =
+            ThumbLoader::with_loader(Arc::new(counted), 2, color::OutputSpace::Srgb, || {});
         loader.want(&paths(500));
         thread::sleep(std::time::Duration::from_millis(30));
         drop(loader);
@@ -403,7 +515,12 @@ mod tests {
         //
         // Each worker holds a clone of the queue `Arc`, so the strong count *is* the number of
         // live workers — which is the thing being asserted, rather than a proxy for it.
-        let loader = ThumbLoader::with_loader(|_| None, 3, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(|_: &ThumbRequest| None),
+            3,
+            color::OutputSpace::Srgb,
+            || {},
+        );
         // Nothing is wanted, so every worker parks immediately.
         let queue = loader.queue.clone();
         assert_eq!(
@@ -426,7 +543,12 @@ mod tests {
 
     #[test]
     fn more_threads_than_paths_is_harmless() {
-        let loader = ThumbLoader::with_loader(|_| None, 32, color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::with_loader(
+            Arc::new(|_: &ThumbRequest| None),
+            32,
+            color::OutputSpace::Srgb,
+            || {},
+        );
         loader.want(&paths(2));
         assert_eq!(collect(&loader, 2).len(), 2);
         // And an empty want-list must not spawn work or panic.

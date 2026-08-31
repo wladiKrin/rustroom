@@ -7,11 +7,18 @@
 
 use crate::{apply_click, thumb, RustroomApp};
 use eframe::egui;
-use std::path::PathBuf;
+use rustroom_app::thumb_loader::ThumbRequest;
 
 /// Bottom strip of the loaded folder's thumbnails; click a cell to open that photo.
 /// The panel is resizable (drag its top border); thumbnails scale with its height.
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    // ⚠ Hoisted out of `app` before the closure borrows `app.library`: the open photo's edits
+    // live in `Session` and the sidecar is stale while it is being edited, so the thumbnail must
+    // use these rather than the row's stored copy.
+    //
+    // ⚠ **Before any `&mut app.*` binding below**: `live_edits` takes `&self`, so it borrows the
+    // whole of `app` and cannot follow a mutable borrow of one of its fields.
+    let live = app.live_edits();
     let mut open_index: Option<usize> = None;
     // ⚠ The same menu as the grid's, applied through the same shared function so the two cannot
     // drift — the rule `thumb::cell` and `name_edit` already follow.
@@ -85,7 +92,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 let resp = thumb::cell(
                                     ui,
                                     box_size,
-                                    lib.cache.get(&lib.entries[i].id.path),
+                                    // ⚠ The exact render if it is there, else this photo's
+                                    // previous one — never grey while a re-render is in flight.
+                                    lib.cache
+                                        .get(&lib.thumb_request(i, live.as_ref()).key())
+                                        .or_else(|| lib.cache.get_stale(&lib.entries[i].id)),
                                     lib.entries[i].id.copy,
                                     lib.marks
                                         .get(&lib.entries[i].id)
@@ -135,12 +146,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             let first = span.start.saturating_sub(MARGIN_CELLS);
             let last = span.end.saturating_add(MARGIN_CELLS).min(visible.len());
-            let mut window: Vec<PathBuf> = Vec::new();
+            // ⚠ One request per row, not per path: each copy renders its own edits now.
+            let mut window: Vec<ThumbRequest> = Vec::new();
             for &i in &visible[first..last] {
-                let path = &lib.entries[i].id.path;
-                if !window.iter().any(|p| p == path) {
-                    window.push(path.clone());
-                }
+                window.push(lib.thumb_request(i, live.as_ref()));
             }
             lib.sync_thumb_window(&window);
         });

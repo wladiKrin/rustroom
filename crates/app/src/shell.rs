@@ -116,14 +116,20 @@ impl eframe::App for RustroomApp {
                     let bytes = t.rgba.len();
                     let img =
                         egui::ColorImage::from_rgba_unmultiplied([t.width, t.height], &t.rgba);
-                    // ⚠ The texture name is derived from the path, not from an index. Two
-                    // different photos sharing a name would have egui serve one image for both.
+                    // ⚠ The texture name is derived from the **key**, not from an index: two
+                    // different photos sharing a name would have egui serve one image for both,
+                    // and now two renders of one photo with different edits would too.
                     let tex = ctx.load_texture(
-                        format!("thumb:{}", res.path.display()),
+                        format!(
+                            "thumb:{}#{}:{}",
+                            res.key.id.path.display(),
+                            res.key.id.copy,
+                            res.key.edits
+                        ),
                         img,
                         egui::TextureOptions::LINEAR,
                     );
-                    lib.cache.insert(res.path, tex, bytes);
+                    lib.cache.insert(res.key, tex, bytes);
                 }
             }
         }

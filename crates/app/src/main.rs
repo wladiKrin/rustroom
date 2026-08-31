@@ -24,7 +24,8 @@ use rustroom_app::selection::Selection;
 use rustroom_app::settings::{Accent, Settings, SettingsStore, ThemeChoice};
 use rustroom_app::sidecar;
 use rustroom_app::sync;
-use rustroom_app::thumb_loader::ThumbLoader;
+use rustroom_app::thumb_key::ThumbKey;
+use rustroom_app::thumb_loader::{ThumbLoader, ThumbRequest};
 use rustroom_app::tool::Tool;
 use rustroom_app::view_region;
 use std::path::{Path, PathBuf};
@@ -143,7 +144,7 @@ struct Library {
     /// ⚠ Kept so `sync_thumb_window` can call `want` **only when the list changes**. Its body
     /// runs every frame; without the comparison it would rewrite the queue sixty times a second.
     /// The same guard `apply_view_demosaic` needs, for the same reason.
-    last_want: Vec<PathBuf>,
+    last_want: Vec<ThumbRequest>,
     selection: Selection,
     loader: ThumbLoader,
     /// Indices into `entries` that pass `filter`, ascending. Derived — recomputed by
@@ -198,16 +199,36 @@ impl Library {
         self.selection.retain_visible(&self.visible);
     }
 
+    /// The thumbnail request for row `i`, using `live` in place of the stored edits when that
+    /// row is the photo currently open.
+    ///
+    /// ⚠ `live` is passed in rather than read from `app`: the callers hold `&mut Library` through
+    /// a closure and cannot reach `app.session` from there. Hoisting it out is the same shape the
+    /// grid's context menu already uses for the catalog.
+    fn thumb_request(&self, i: usize, live: Option<&(PathBuf, u32, Edits)>) -> ThumbRequest {
+        let e = &self.entries[i];
+        let edits = match live {
+            Some((p, c, ed)) if *p == e.id.path && *c == e.id.copy => ed.clone(),
+            _ => e.edits.clone(),
+        };
+        ThumbRequest {
+            id: e.id.clone(),
+            edits,
+        }
+    }
+
     /// Tell the cache and the loader what is on screen.
     ///
-    /// `window` is every path the view wants resident — the drawn cells plus the prefetch margin.
+    /// `window` is every thumbnail the view wants resident — the drawn cells plus the prefetch
+    /// margin, one request per row rather than per file.
     /// Pins them in the cache, evicts down to the budget, then asks the loader for whatever is
     /// still missing.
-    fn sync_thumb_window(&mut self, window: &[PathBuf]) {
-        self.cache.retain_window(window);
-        let missing: Vec<PathBuf> = window
+    fn sync_thumb_window(&mut self, window: &[ThumbRequest]) {
+        let keys: Vec<ThumbKey> = window.iter().map(|r| r.key()).collect();
+        self.cache.retain_window(&keys);
+        let missing: Vec<ThumbRequest> = window
             .iter()
-            .filter(|p| !self.cache.contains(p))
+            .filter(|r| !self.cache.contains(&r.key()))
             .cloned()
             .collect();
         // ⚠ Only when it changes. See `last_want`.
@@ -1553,7 +1574,7 @@ impl RustroomApp {
             return;
         }
 
-        let placeholder = self.thumbnail_for(&id.path);
+        let placeholder = self.thumbnail_for(&id);
         let path = id.path.clone();
         let name = path
             .file_name()
@@ -1570,11 +1591,22 @@ impl RustroomApp {
 
     /// The library thumbnail for `path`, if the folder is loaded and that thumbnail has
     /// already arrived. `TextureHandle` is `Arc`-backed, so cloning it is cheap.
-    fn thumbnail_for(&self, path: &std::path::Path) -> Option<egui::TextureHandle> {
-        // ⚠ By **path**: copies of one file share a thumbnail, which the cache's own key now
-        // expresses, so this is a plain lookup rather than a scan for the first matching row.
-        // The same decision `BufferCache` makes, for the same reason.
-        self.library.as_ref()?.cache.get(path).cloned()
+    fn thumbnail_for(&self, id: &PhotoId) -> Option<egui::TextureHandle> {
+        // ⚠ `get_stale`: the best thumbnail available for this photo, even if its edits have
+        // since changed. The decode placeholder and the grid then show the previous render rather
+        // than grey while a re-render is in flight.
+        self.library.as_ref()?.cache.get_stale(id).cloned()
+    }
+
+    /// The edits a photo's thumbnail should be rendered with.
+    ///
+    /// ⚠⚠ **Two sources, deliberately.** For the **open** photo the edits live in `Session` and
+    /// the sidecar is stale — `persist_current_session` writes only on a photo switch or on quit,
+    /// which is exactly the period during which the filmstrip most needs to update. For every
+    /// other photo the entry's copy, read from the sidecar when the row was built, is correct.
+    fn live_edits(&self) -> Option<(PathBuf, u32, Edits)> {
+        let s = self.session.as_ref()?;
+        Some((s.path.clone(), s.copy, s.edits.clone()))
     }
 
     /// Build the editing `Session` from a decoded photo (cache hit or worker result).

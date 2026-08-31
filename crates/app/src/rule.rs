@@ -269,6 +269,7 @@ mod tests {
             id: PhotoId::new(PathBuf::from(format!("/x/{name}")), 0),
             file_name: name.to_string(),
             name: None,
+            edits: Default::default(),
         }
     }
 
