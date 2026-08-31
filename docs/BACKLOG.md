@@ -193,16 +193,7 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
   which has barely been looked at.
 - **Export has no filename templating** — `<stem>.<ext>` into a chosen folder.
 - **Presets: no import/export, no folders, no rename.**
-- **⚠ Edit-accurate rendered thumbnails.** The grid shows the camera's embedded JPEG, so it never
-  reflects your edits. ⚠ **Virtual copies (M3.4) raised the stakes on this**: every copy of one file
-  shows a *pixel-identical* thumbnail, so a black-and-white copy appears in colour and is told apart
-  only by its badge and name. Deliberately kept out of M3.4 rather than pulled in — it is a
-  separable feature (render per entry, cache it, invalidate on every edit) that does not need copies
-  to exist, and doing both at once would mean two large simultaneous changes to the Library, which
-  is the area with this project's worst defect record. Doing it fixes the copy case *and* every
-  ordinary photo.
-- **Library:** no on-disk thumbnail cache, no edit-accurate rendered thumbnails (the grid shows the
-  camera's embedded JPEG), no ratings, no subfolders, no vertical filmstrip.
+- **Library:** no on-disk thumbnail cache, no subfolders, no vertical filmstrip.
 - **A nicer decode placeholder** — run the pipeline over the thumbnail for an instant low-res
   preview, instead of showing the camera JPEG.
 
