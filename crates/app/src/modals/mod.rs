@@ -166,6 +166,15 @@ pub enum Modal {
         id: i64,
         count: i64,
     },
+    /// Confirming a keyword deletion that would take descendants or assignments with it.
+    ///
+    /// ⚠ Opened **only** when it would; a bare leaf is deleted outright. See `DeleteKeyword`.
+    ConfirmDeleteKeyword {
+        id: i64,
+        name: String,
+        descendants: usize,
+        assignments: usize,
+    },
     /// Confirming a preset deletion. `dont_ask_again` is scratch state — it is committed to
     /// `Settings` only on the Delete path, never on Cancel.
     ConfirmDeletePreset {
@@ -213,6 +222,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         ConfirmDeleteExport,
         ConfirmDelete,
         ConfirmForget,
+        ConfirmDeleteKeyword,
         PhotoInfo,
         EditRule,
         Settings,
@@ -229,6 +239,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
         Modal::ConfirmForgetFolder { .. } => Which::ConfirmForget,
+        Modal::ConfirmDeleteKeyword { .. } => Which::ConfirmDeleteKeyword,
         Modal::PhotoInfo { .. } => Which::PhotoInfo,
         Modal::EditRule { .. } => Which::EditRule,
         Modal::Settings => Which::Settings,
@@ -249,6 +260,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::ConfirmDeleteExport => export::confirm_delete(app, ctx),
         Which::ConfirmDelete => presets::confirm_delete(app, ctx),
         Which::ConfirmForget => confirm_forget_folder(app, ctx),
+        Which::ConfirmDeleteKeyword => confirm_delete_keyword(app, ctx),
         Which::PhotoInfo => info::show(app, ctx),
         Which::EditRule => rule_edit::show(app, ctx),
         Which::Settings => settings::show(app, ctx),
@@ -300,6 +312,68 @@ fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
     // Clicking outside is a cancel, as in every other confirmation here.
     if confirmed {
         app.forget_folder(ctx, id, &path);
+        app.modal = Modal::None;
+    } else if cancelled || dismissed {
+        app.modal = Modal::None;
+    }
+}
+
+/// Confirming a keyword deletion that takes more than the keyword itself.
+///
+/// ⚠⚠ **Undo does not help if you never notice.** Deleting a keyword removes its whole subtree
+/// and every assignment of any of them from one click, with nothing said — so this names what is
+/// about to go, in the shape `confirm_forget_folder` already uses.
+fn confirm_delete_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
+    let Modal::ConfirmDeleteKeyword {
+        id,
+        name,
+        descendants,
+        assignments,
+    } = &app.modal
+    else {
+        return;
+    };
+    let (id, name, descendants, assignments) = (*id, name.clone(), *descendants, *assignments);
+    let mut confirmed = false;
+    let mut cancelled = false;
+
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "confirm_delete_keyword",
+        "Delete keyword",
+        theme::DialogSize::Compact,
+        |ui| {
+            ui.label(format!("Delete “{name}”?"));
+            let mut what = Vec::new();
+            if descendants > 0 {
+                what.push(format!(
+                    "{descendants} keyword{} beneath it",
+                    if descendants == 1 { "" } else { "s" }
+                ));
+            }
+            if assignments > 0 {
+                what.push(format!(
+                    "the keyword from {assignments} photo{}",
+                    if assignments == 1 { "" } else { "s" }
+                ));
+            }
+            crate::theme::hint(
+                ui,
+                &format!(
+                    "This also deletes {}. Ctrl+Z restores it.",
+                    what.join(" and ")
+                ),
+            );
+            ui.separator();
+            let (yes, no) = crate::theme::button_row(ui, "Delete", true, "Cancel");
+            confirmed = yes;
+            cancelled = no;
+        },
+    );
+
+    if confirmed {
+        app.delete_keyword_now(id);
         app.modal = Modal::None;
     } else if cancelled || dismissed {
         app.modal = Modal::None;
@@ -469,7 +543,7 @@ mod tests {
     /// `egui::Resize` state.
     #[test]
     fn every_dialog_has_a_class_and_the_ids_are_unique() {
-        let dialogs: [(&str, DialogSize); 14] = [
+        let dialogs: [(&str, DialogSize); 15] = [
             ("save_preset", DialogSize::Standard),
             ("confirm_delete", DialogSize::Compact),
             ("paste_settings", DialogSize::Standard),
@@ -479,6 +553,7 @@ mod tests {
             ("confirm_delete_export", DialogSize::Compact),
             ("export_collision", DialogSize::Standard),
             ("confirm_forget_folder", DialogSize::Compact),
+            ("confirm_delete_keyword", DialogSize::Compact),
             ("photo_info", DialogSize::Wide),
             ("edit_rule", DialogSize::Wide),
             ("settings", DialogSize::Standard),

@@ -82,7 +82,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         Delete(i64),
         AddSelection(i64),
         OpenKeyword(i64, String),
-        DeleteKeyword(i64),
+        DeleteKeyword(i64, String),
         TagSelection(i64),
         UntagSelection(i64),
         CreateKeyword,
@@ -374,7 +374,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             .on_hover_text("Delete, with everything under it")
                                             .clicked()
                                         {
-                                            action = Action::DeleteKeyword(k.id);
+                                            action = Action::DeleteKeyword(k.id, k.name.clone());
                                         }
                                         if ui
                                             .add_enabled(picked > 0, egui::Button::new("+"))
@@ -658,21 +658,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.modal = crate::modals::Modal::ConfirmForgetFolder { path, id, count };
         }
         Action::OpenKeyword(id, name) => app.open_keyword(ctx, id, &name),
-        Action::DeleteKeyword(id) => {
-            if let Some(snap) = app.catalog.as_ref().and_then(|c| c.delete_keyword(id).ok()) {
-                let open = app.open_photo();
-                app.actions.push(
-                    rustroom_app::action_log::ActionKind::CatalogDelete {
-                        snapshot: Box::new(snap),
-                    },
-                    open.as_ref(),
-                );
-            }
-            // ⚠ If the deleted keyword was on screen there is nothing left to show — and its
-            // children went with it, so a child cannot be showing either.
-            if app.selected_keyword() == Some(id) {
-                app.library = None;
-                app.status = "Keyword deleted".into();
+        Action::DeleteKeyword(id, name) => {
+            let scope = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.keyword_delete_scope(id).ok())
+                .unwrap_or((0, 0));
+            // ⚠⚠ Confirmed **only when the deletion removes more than the keyword itself.** A
+            // leaf nobody has used is an unsurprising deletion, and a dialog for it is the false
+            // alarm `banding_warning` already rejects: one that fires on ordinary practice trains
+            // people to dismiss the one that matters.
+            if scope.0 > 0 || scope.1 > 0 {
+                app.modal = crate::modals::Modal::ConfirmDeleteKeyword {
+                    id,
+                    name,
+                    descendants: scope.0,
+                    assignments: scope.1,
+                };
+            } else {
+                app.delete_keyword_now(id);
             }
         }
         Action::TagSelection(id) => app.assign_keyword_to_selection(id),

@@ -1424,6 +1424,37 @@ impl RustroomApp {
         }
     }
 
+    /// Delete a keyword and record it, however the deletion was reached.
+    ///
+    /// ⚠⚠ **The one implementation both routes share.** Two copies of "delete, then push the undo
+    /// entry, then tidy the view" is how one of them ends up not pushing — the rule
+    /// `apply_cell_action` and `name_edit` already follow.
+    fn delete_keyword_now(&mut self, id: i64) {
+        let Some(cat) = &self.catalog else {
+            return;
+        };
+        let snap = match cat.delete_keyword(id) {
+            Ok(snap) => snap,
+            Err(e) => {
+                self.status = format!("Could not delete the keyword: {e}");
+                return;
+            }
+        };
+        let open = self.open_photo();
+        self.actions.push(
+            ActionKind::CatalogDelete {
+                snapshot: Box::new(snap),
+            },
+            open.as_ref(),
+        );
+        // ⚠ If the deleted keyword was on screen there is nothing left to show — and its children
+        // went with it, so a child cannot be showing either.
+        if self.selected_keyword() == Some(id) {
+            self.library = None;
+        }
+        self.status = "Deleted keyword — Ctrl+Z to restore".to_string();
+    }
+
     /// Put the view back in step after a catalog row came back.
     ///
     /// ⚠ Only the *folder* case needs anything: restoring a collection or a keyword adds a panel

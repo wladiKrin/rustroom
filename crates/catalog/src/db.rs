@@ -1026,6 +1026,27 @@ impl Catalog {
         Ok(rows.filter_map(Result::ok).collect())
     }
 
+    /// How much a keyword deletion would take with it: `(descendants, assignments)`.
+    ///
+    /// ⚠ Descendants **excludes** the keyword itself, and assignments **includes** the whole
+    /// subtree's — the two numbers the confirmation says out loud.
+    ///
+    /// ⚠ The same recursive CTE `keyword_members` uses, so nothing new walks the subtree.
+    pub fn keyword_delete_scope(&self, id: i64) -> Result<(usize, usize), CatalogError> {
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE sub(id) AS (
+                 SELECT ?1
+                 UNION ALL
+                 SELECT k.id FROM keywords k JOIN sub ON k.parent_id = sub.id
+             )
+             SELECT
+               (SELECT count(*) FROM sub) - 1,
+               (SELECT count(*) FROM photo_keywords WHERE keyword_id IN (SELECT id FROM sub))",
+        )?;
+        let (d, a): (i64, i64) = stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok((d.max(0) as usize, a.max(0) as usize))
+    }
+
     /// Remove a keyword. ⚠ Its **children go with it**, and every assignment of any of them.
     pub fn delete_keyword(&self, id: i64) -> Result<CatalogSnapshot, CatalogError> {
         let tx = self.conn.unchecked_transaction()?;
@@ -2968,5 +2989,39 @@ mod tests {
         let row = cat.collections().unwrap().into_iter().next().unwrap();
         assert_eq!(row.name, "Portfolio");
         assert_eq!(row.count, 1, "the membership came back too");
+    }
+    #[test]
+    fn the_delete_scope_counts_the_subtree_but_not_the_keyword_itself() {
+        let c = Catalog::open_in_memory().unwrap();
+        let europe = c.create_keyword("Europe", None).unwrap();
+        let france = c.create_keyword("France", Some(europe)).unwrap();
+        c.create_keyword("Paris", Some(france)).unwrap();
+        assert_eq!(c.keyword_delete_scope(europe).unwrap(), (2, 0));
+        assert_eq!(c.keyword_delete_scope(france).unwrap().0, 1);
+    }
+
+    /// ⚠ Both halves. A dialog that never fires and one that always fires are equally wrong, and
+    /// only the pair of assertions tells them apart.
+    #[test]
+    fn a_bare_keyword_is_deleted_without_a_dialog_and_a_parent_is_not() {
+        let c = Catalog::open_in_memory().unwrap();
+        let leaf = c.create_keyword("Paris", None).unwrap();
+        assert_eq!(c.keyword_delete_scope(leaf).unwrap(), (0, 0), "no dialog");
+
+        let parent = c.create_keyword("Europe", None).unwrap();
+        c.create_keyword("France", Some(parent)).unwrap();
+        assert_ne!(c.keyword_delete_scope(parent).unwrap(), (0, 0), "dialog");
+    }
+
+    /// ⚠ An assignment alone is enough to confirm, with no descendants at all — the second half
+    /// of the rule, which the descendant tests cannot see.
+    #[test]
+    fn an_assignment_alone_is_enough_to_need_a_confirmation() {
+        let c = Catalog::open_in_memory().unwrap();
+        c.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        let k = c.create_keyword("Paris", None).unwrap();
+        c.assign_keyword(k, Path::new("/a/one.RAF")).unwrap();
+        assert_eq!(c.keyword_delete_scope(k).unwrap(), (0, 1));
     }
 }
