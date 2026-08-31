@@ -23,6 +23,7 @@ pub mod marks;
 pub mod mask_tool;
 pub mod menu;
 pub mod metadata_scanner;
+pub mod panel_order;
 pub mod photo_id;
 pub mod presets;
 pub mod render_engine;
