@@ -1,6 +1,7 @@
 //! The thin catalog: scan a folder for RAW files. In-memory only (no DB yet).
 
 pub mod db;
+pub mod snapshot;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
