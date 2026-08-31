@@ -137,6 +137,33 @@ fn roll_for(
     }
 }
 
+/// Where a guide point drawn on the **raw** frame appears once the correction is applied.
+///
+/// ⚠⚠ **This is what makes a live solve usable.** With the correction visible, a guide left at its
+/// raw position would slide off the feature it was traced onto — so it is mapped through the same
+/// transform the pixels take: perspective, then the straighten rotation. Both move together, so
+/// the line stays on the edge.
+///
+/// Coordinates are `[0, 1]` across the frame both ways; `aspect` is width over height.
+pub fn to_frame(p: [f32; 2], h: &super::Homography, angle_rad: f32, aspect: f32) -> [f32; 2] {
+    // → centred, in units of the half-height, which is isotropic so the rotation is a plain one.
+    let c = ((p[0] - 0.5) * 2.0 * aspect, (p[1] - 0.5) * 2.0);
+    let q = h.output_of(c);
+    // ⚠ `GeometryStage` inverse-maps with `-angle`, so the forward direction is `+angle`.
+    let (sin, cos) = angle_rad.sin_cos();
+    let r = (q.0 * cos - q.1 * sin, q.0 * sin + q.1 * cos);
+    [r.0 / (2.0 * aspect) + 0.5, r.1 / 2.0 + 0.5]
+}
+
+/// The inverse of [`to_frame`] — where a point on the corrected frame came from on the raw one.
+pub fn from_frame(p: [f32; 2], h: &super::Homography, angle_rad: f32, aspect: f32) -> [f32; 2] {
+    let r = ((p[0] - 0.5) * 2.0 * aspect, (p[1] - 0.5) * 2.0);
+    let (sin, cos) = (-angle_rad).sin_cos();
+    let q = (r.0 * cos - r.1 * sin, r.0 * sin + r.1 * cos);
+    let c = h.source_of(q);
+    [c.0 / (2.0 * aspect) + 0.5, c.1 / 2.0 + 0.5]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +303,33 @@ mod tests {
             .expect("converging");
         let (_, _, roll) = solve(Some(tilted), None);
         assert!(roll.abs() > 1e-3, "a leaning family needs roll: {roll}");
+    }
+
+    /// ⚠ The pair must be exact inverses, or a dragged endpoint drifts away from the cursor a
+    /// little more on every frame. Probes with leverage — corners, not the centre.
+    #[test]
+    fn the_frame_mapping_round_trips() {
+        let h = Homography::from_angles(0.25, -0.15, 1.1, 1.0);
+        for p in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.3, 0.8]] {
+            let back = from_frame(to_frame(p, &h, 0.07, 1.5), &h, 0.07, 1.5);
+            assert!(
+                (back[0] - p[0]).abs() < 1e-4 && (back[1] - p[1]).abs() < 1e-4,
+                "{p:?} round-tripped to {back:?}"
+            );
+        }
+    }
+
+    /// ⚠ A neutral transform must leave a point exactly where it is, or every guide shifts the
+    /// instant the sub-mode opens.
+    #[test]
+    fn a_neutral_transform_moves_no_guide_point() {
+        let h = Homography::from_angles(0.0, 0.0, 1.0, 1.0);
+        for p in [[0.0, 0.0], [1.0, 1.0], [0.42, 0.17]] {
+            let q = to_frame(p, &h, 0.0, 1.5);
+            assert!(
+                (q[0] - p[0]).abs() < 1e-5 && (q[1] - p[1]).abs() < 1e-5,
+                "{p:?} moved to {q:?}"
+            );
+        }
     }
 }

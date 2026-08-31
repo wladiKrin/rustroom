@@ -84,7 +84,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     let mut photo_edited = false;
     // ⚠ The solve needs `&mut RustroomApp`, which the session borrow below rules out — so the
     // overlay only reports that a drag settled and `show` runs the solve afterwards.
-    let mut guides_settled = false;
+    let mut guide_drag = GuideDrag::None;
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
@@ -237,7 +237,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             // gesture — and the crop rectangle is invisible here anyway, since
                             // the preview resets the crop.
                             if s.show_guides {
-                                guides_settled |= draw_guide_overlay(ui, s, &resp, img_rect);
+                                let d = draw_guide_overlay(ui, s, &resp, img_rect);
+                                if d != GuideDrag::None {
+                                    guide_drag = d;
+                                }
                             } else {
                                 photo_edited |=
                                     draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
@@ -321,9 +324,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
             }
         }
     });
-    if guides_settled {
-        // ⚠ One gesture, one history entry — the rule every drag in this app follows.
-        if app.solve_guides() {
+    if guide_drag != GuideDrag::None {
+        // ⚠ Solved on **every** frame of the drag so the correction is visible as you trace, but
+        // recorded only on release: one gesture, one Ctrl+Z, the rule every drag here follows.
+        let changed = app.solve_guides();
+        if changed {
+            if let Some(s) = app.session.as_mut() {
+                s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+            }
+        }
+        if guide_drag == GuideDrag::Settled && changed {
             if let Some(s) = app.session.as_mut() {
                 s.history.push(s.edits.clone());
             }
@@ -375,18 +385,45 @@ fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option
 /// How close, in normalised frame units, a press must be to grab a guide endpoint.
 const GUIDE_GRAB: f32 = 0.03;
 
-/// Draw the perspective guides and apply any drag. Returns whether a drag settled — the same
-/// contract `draw_crop_overlay` has.
+/// What a frame of guide interaction produced.
 ///
-/// ⚠⚠ Guides are drawn on the **raw** frame: `preview_edits` resets perspective and straighten
-/// while this sub-mode is on, so a normalised coordinate here always means one fixed thing.
+/// ⚠ `Live` and `Settled` both re-solve; only `Settled` records a history entry, so a whole drag
+/// is one Ctrl+Z — the rule every drag in this app follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GuideDrag {
+    None,
+    Live,
+    Settled,
+}
+
+/// Draw the perspective guides and apply any drag.
+///
+/// ⚠⚠ Guides are stored on the **raw** frame and drawn mapped through the live correction, so a
+/// line stays on the feature it was traced onto while the photo is being corrected underneath it.
 fn draw_guide_overlay(
     ui: &egui::Ui,
     s: &mut Session,
     resp: &egui::Response,
     img_rect: egui::Rect,
-) -> bool {
-    use pipeline::perspective::guides::{Family, Guide};
+) -> GuideDrag {
+    use pipeline::perspective::guides::{self, Family, Guide};
+
+    let aspect = img_rect.width() / img_rect.height().max(1.0);
+    // ⚠⚠ The transform the pixels are taking right now. Guides are stored on the **raw** frame, so
+    // they must be mapped through it to stay on the features they were traced onto — that is what
+    // makes a live solve usable rather than disorienting.
+    let hom = pipeline::perspective::Homography::from_edits(&s.edits.perspective, aspect);
+    let angle = s.edits.geometry.angle.to_radians();
+    let shown: Vec<([f32; 2], [f32; 2])> = s
+        .guides
+        .iter()
+        .map(|g| {
+            (
+                guides::to_frame(g.from, &hom, angle, aspect),
+                guides::to_frame(g.to, &hom, angle, aspect),
+            )
+        })
+        .collect();
 
     let to_screen = |n: [f32; 2]| {
         egui::pos2(
@@ -396,14 +433,14 @@ fn draw_guide_overlay(
     };
     let marks = ui.painter_at(canvas_geom::overlay_clip(img_rect));
     let halo = egui::Color32::from_black_alpha(180);
-    for g in &s.guides {
+    for (g, (a, b)) in s.guides.iter().zip(&shown) {
         // ⚠ The inferred family is **shown**, so a misclassified 45° line is visible and fixed by
         // nudging an endpoint. A rule the user cannot see is one they cannot correct.
         let colour = match g.family() {
             Family::Vertical => egui::Color32::from_rgb(80, 200, 255),
             Family::Horizontal => egui::Color32::from_rgb(255, 190, 70),
         };
-        let (a, b) = (to_screen(g.from), to_screen(g.to));
+        let (a, b) = (to_screen(*a), to_screen(*b));
         marks.line_segment([a, b], egui::Stroke::new(5.0, halo));
         marks.line_segment([a, b], egui::Stroke::new(2.0, colour));
         for p in [a, b] {
@@ -412,18 +449,39 @@ fn draw_guide_overlay(
         }
     }
 
-    let mut settled = false;
-    if let Some(p) = resp.interact_pointer_pos() {
-        let n = [
+    let norm = |p: egui::Pos2| {
+        [
             ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0),
             ((p.y - img_rect.top()) / img_rect.height()).clamp(0.0, 1.0),
-        ];
+        ]
+    };
+
+    // ⚠ Right-click removes one guide, so a single bad line does not cost you the whole set.
+    // Read before the drag handling: a secondary press is not a drag and would otherwise fall
+    // through to creating a guide.
+    if resp.secondary_clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            if let Some(i) = canvas_geom::guide_near(&shown, norm(p), GUIDE_GRAB) {
+                s.guides.remove(i);
+                s.active_guide = None;
+                return GuideDrag::Settled;
+            }
+        }
+        return GuideDrag::None;
+    }
+
+    let mut out = GuideDrag::None;
+    if let Some(p) = resp.interact_pointer_pos() {
+        let screen = norm(p);
+        // ⚠ The cursor is on the *corrected* frame; a guide lives on the raw one.
+        let raw = guides::from_frame(screen, &hom, angle, aspect);
         if tool_drag_started(resp) {
-            s.active_guide =
-                canvas_geom::guide_endpoint_at(&s.guides, n, GUIDE_GRAB).or_else(|| {
-                    // ⚠ A new guide starts as a zero-length line whose *`to`* end follows the cursor,
-                    // so the very first drag frame extends it — no separate "creating" state.
-                    s.guides.push(Guide { from: n, to: n });
+            s.active_guide = canvas_geom::guide_endpoint_at_shown(&shown, screen, GUIDE_GRAB)
+                .or_else(|| {
+                    // ⚠ A new guide starts as a zero-length line whose *`to`* end follows the
+                    // cursor, so the very first drag frame extends it — no separate "creating"
+                    // state.
+                    s.guides.push(Guide { from: raw, to: raw });
                     Some((s.guides.len() - 1, 1))
                 });
         }
@@ -431,11 +489,14 @@ fn draw_guide_overlay(
             if let Some((i, e)) = s.active_guide {
                 if let Some(g) = s.guides.get_mut(i) {
                     if e == 0 {
-                        g.from = n;
+                        g.from = raw;
                     } else {
-                        g.to = n;
+                        g.to = raw;
                     }
                 }
+                // ⚠⚠ **Solve every frame, not only on release.** Without it the sub-mode feels
+                // inert: you draw, let go, and nothing visibly happens until you toggle out.
+                out = GuideDrag::Live;
             }
         }
         if resp.drag_stopped() {
@@ -450,10 +511,10 @@ fn draw_guide_overlay(
                 }
             }
             s.active_guide = None;
-            settled = true;
+            out = GuideDrag::Settled;
         }
     }
-    settled
+    out
 }
 
 /// How far each corner bracket reaches along its two edges, in screen points.

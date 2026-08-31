@@ -718,21 +718,10 @@ impl Session {
 /// ⚠ **Only the crop.** The orientation must survive, or the preview would show a
 /// differently-oriented image from the one being edited — and the crop overlay would then be
 /// drawn against a frame that does not match it.
-fn preview_edits(edits: &Edits, tool: Tool, guides: bool) -> Edits {
+fn preview_edits(edits: &Edits, tool: Tool) -> Edits {
     let mut e = edits.clone();
     if tool.is_geometry() {
         e.geometry.crop = edit_model::CropRect::default();
-        // ⚠⚠ The Guides sub-mode additionally resets **perspective and the straighten angle**, so
-        // guides are drawn onto the raw frame. Without that the correction moves the very feature
-        // you are aligning to out from under the line being dragged — the identical problem the
-        // crop reset above already solves.
-        //
-        // ⚠ Orientation is deliberately *not* reset: it is a lossless reframe, and undoing it
-        // would show the photo sideways.
-        if guides {
-            e.perspective = edit_model::Perspective::default();
-            e.geometry.angle = 0.0;
-        }
     }
     e
 }
@@ -756,7 +745,7 @@ impl Session {
         } else {
             self.edits.clone()
         };
-        preview_edits(&edits, tool, self.show_guides)
+        preview_edits(&edits, tool)
     }
 }
 

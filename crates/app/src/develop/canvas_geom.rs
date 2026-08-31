@@ -279,14 +279,17 @@ mod overlay_clip_tests {
 ///
 /// ⚠ **Nearest wins, not first.** Two endpoints can end up overlapping after a drag, and
 /// "whichever was drawn first" would make one of them permanently unreachable.
-pub fn guide_endpoint_at(
-    guides: &[pipeline::perspective::guides::Guide],
+///
+/// ⚠ Takes the guides' **displayed** positions rather than the guides themselves — you grab what
+/// you can see, and with a live solve the two differ.
+pub fn guide_endpoint_at_shown(
+    segments: &[([f32; 2], [f32; 2])],
     p: [f32; 2],
     tol: f32,
 ) -> Option<(usize, usize)> {
     let mut best: Option<((usize, usize), f32)> = None;
-    for (i, g) in guides.iter().enumerate() {
-        for (e, pt) in [(0usize, g.from), (1usize, g.to)] {
+    for (i, (a, b)) in segments.iter().enumerate() {
+        for (e, pt) in [(0usize, *a), (1usize, *b)] {
             let d = ((pt[0] - p[0]).powi(2) + (pt[1] - p[1]).powi(2)).sqrt();
             if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
                 best = Some(((i, e), d));
@@ -299,43 +302,98 @@ pub fn guide_endpoint_at(
 #[cfg(test)]
 mod guide_hit_tests {
     use super::*;
-    use pipeline::perspective::guides::Guide;
-
-    fn gs() -> Vec<Guide> {
-        vec![
-            Guide {
-                from: [0.1, 0.1],
-                to: [0.2, 0.9],
-            },
-            Guide {
-                from: [0.8, 0.1],
-                to: [0.7, 0.9],
-            },
-        ]
+    fn gs() -> Vec<([f32; 2], [f32; 2])> {
+        vec![([0.1, 0.1], [0.2, 0.9]), ([0.8, 0.1], [0.7, 0.9])]
     }
 
     #[test]
     fn an_endpoint_within_tolerance_is_found_and_others_are_not() {
-        assert_eq!(guide_endpoint_at(&gs(), [0.105, 0.105], 0.03), Some((0, 0)));
-        assert_eq!(guide_endpoint_at(&gs(), [0.71, 0.89], 0.03), Some((1, 1)));
-        assert_eq!(guide_endpoint_at(&gs(), [0.5, 0.5], 0.03), None);
+        assert_eq!(
+            guide_endpoint_at_shown(&gs(), [0.105, 0.105], 0.03),
+            Some((0, 0))
+        );
+        assert_eq!(
+            guide_endpoint_at_shown(&gs(), [0.71, 0.89], 0.03),
+            Some((1, 1))
+        );
+        assert_eq!(guide_endpoint_at_shown(&gs(), [0.5, 0.5], 0.03), None);
     }
 
     /// ⚠ Nearest, not first. With two endpoints inside the tolerance, taking the first would make
     /// the other unreachable for as long as they overlap.
     #[test]
     fn the_nearest_endpoint_wins_when_two_are_in_range() {
-        let g = vec![
-            Guide {
-                from: [0.50, 0.50],
-                to: [0.5, 0.9],
-            },
-            Guide {
-                from: [0.52, 0.50],
-                to: [0.9, 0.5],
-            },
-        ];
-        assert_eq!(guide_endpoint_at(&g, [0.519, 0.50], 0.05), Some((1, 0)));
-        assert_eq!(guide_endpoint_at(&g, [0.501, 0.50], 0.05), Some((0, 0)));
+        let g = vec![([0.50, 0.50], [0.5, 0.9]), ([0.52, 0.50], [0.9, 0.5])];
+        assert_eq!(
+            guide_endpoint_at_shown(&g, [0.519, 0.50], 0.05),
+            Some((1, 0))
+        );
+        assert_eq!(
+            guide_endpoint_at_shown(&g, [0.501, 0.50], 0.05),
+            Some((0, 0))
+        );
+    }
+}
+
+/// Which guide's **line** passes within `tol` of `p`, nearest first.
+///
+/// ⚠ Distance to the *segment*, not to the infinite line: a guide's extension across the rest of
+/// the frame is not part of it, and hit-testing the infinite line would make a short guide near
+/// the edge swallow clicks right across the picture.
+///
+/// ⚠ The points are the guide's **displayed** positions, so the caller maps them first — you
+/// click what you can see.
+pub fn guide_near(segments: &[([f32; 2], [f32; 2])], p: [f32; 2], tol: f32) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (i, (a, b)) in segments.iter().enumerate() {
+        let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
+        let (wx, wy) = (p[0] - a[0], p[1] - a[1]);
+        let len2 = vx * vx + vy * vy;
+        // A zero-length guide is a point; clamping `t` to 0 measures to it correctly.
+        let t = if len2 > 1e-12 {
+            ((wx * vx + wy * vy) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (dx, dy) = (wx - t * vx, wy - t * vy);
+        let d = (dx * dx + dy * dy).sqrt();
+        if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((i, d));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+#[cfg(test)]
+mod guide_near_tests {
+    use super::*;
+
+    fn segs() -> Vec<([f32; 2], [f32; 2])> {
+        vec![([0.2, 0.1], [0.2, 0.9]), ([0.8, 0.1], [0.8, 0.9])]
+    }
+
+    #[test]
+    fn a_click_on_the_line_finds_it_and_one_away_does_not() {
+        assert_eq!(guide_near(&segs(), [0.21, 0.5], 0.03), Some(0));
+        assert_eq!(guide_near(&segs(), [0.79, 0.3], 0.03), Some(1));
+        assert_eq!(guide_near(&segs(), [0.5, 0.5], 0.03), None);
+    }
+
+    /// ⚠⚠ The segment, not the infinite line. This click is exactly on the *extension* of guide 0
+    /// beyond its end — hit-testing the infinite line would return `Some(0)` and let a short guide
+    /// near one edge swallow clicks right across the picture.
+    #[test]
+    fn the_extension_beyond_an_end_is_not_part_of_the_guide() {
+        assert_eq!(guide_near(&segs(), [0.2, 0.99], 0.03), None);
+        // ...while just inside the end still hits.
+        assert_eq!(guide_near(&segs(), [0.2, 0.88], 0.03), Some(0));
+    }
+
+    /// ⚠ Nearest wins, so two crossing guides both in range resolve to the closer one.
+    #[test]
+    fn the_nearest_line_wins() {
+        let s = vec![([0.0, 0.50], [1.0, 0.50]), ([0.0, 0.54], [1.0, 0.54])];
+        assert_eq!(guide_near(&s, [0.5, 0.505], 0.05), Some(0));
+        assert_eq!(guide_near(&s, [0.5, 0.535], 0.05), Some(1));
     }
 }

@@ -155,8 +155,9 @@ pub fn show(
         if ui
             .toggle_value(&mut s.show_guides, "Guides")
             .on_hover_text(
-                "Draw lines along features that should be vertical or horizontal, then let go. \
-                 The photo is shown uncorrected while you draw.",
+                "Draw a line along something that should be vertical or horizontal — a door \
+                 frame, a roofline. Two of a kind solve the tilt and set the sliders below, live \
+                 as you drag. Right-click a line to remove it.",
             )
             .changed()
         {
@@ -473,23 +474,28 @@ mod tests {
         assert_eq!(s.edits.perspective.vertical, 42.0, "the solve must survive");
     }
 
-    /// ⚠ The preview must show the **raw** frame while guides are being drawn, or the correction
-    /// slides the feature out from under the line being dragged. Both halves, since a reset that
-    /// never fires and one that always fires are equally wrong.
+    /// ⚠⚠ **The correction stays visible while guides are drawn — the live solve depends on it.**
+    /// An earlier version reset perspective and straighten here so guides sat on the raw frame,
+    /// which removed a feedback loop but made the sub-mode feel inert: you drew, let go, and had
+    /// to toggle out to see anything. The loop is handled by *mapping the guides* through the
+    /// live transform instead, so both move together.
     #[test]
-    fn the_guides_preview_drops_the_perspective_and_the_straighten() {
+    fn the_guides_preview_keeps_the_correction_and_only_drops_the_crop() {
         let mut e = edit_model::Edits::default();
         e.perspective.vertical = 40.0;
         e.geometry.angle = 3.0;
+        e.geometry.crop = asymmetric();
 
-        let off = crate::preview_edits(&e, rustroom_app::tool::Tool::Crop, false);
-        assert_eq!(off.perspective.vertical, 40.0, "kept with guides off");
-        assert_eq!(off.geometry.angle, 3.0);
-
-        let on = crate::preview_edits(&e, rustroom_app::tool::Tool::Crop, true);
-        assert_eq!(on.perspective, edit_model::Perspective::default());
-        assert_eq!(on.geometry.angle, 0.0);
-        // ⚠ Orientation is a lossless reframe and must survive, or the photo shows sideways.
-        assert_eq!(on.geometry.orientation, e.geometry.orientation);
+        let p = crate::preview_edits(&e, rustroom_app::tool::Tool::Crop);
+        assert_eq!(
+            p.perspective.vertical, 40.0,
+            "the correction must stay visible"
+        );
+        assert_eq!(p.geometry.angle, 3.0);
+        assert_eq!(
+            p.geometry.crop,
+            edit_model::CropRect::default(),
+            "only the crop is reset, so the whole frame shows under the overlay"
+        );
     }
 }
