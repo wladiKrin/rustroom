@@ -122,6 +122,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // when all three line up, after the panel closes — the closure already borrows `app`.
     let mut drag_started: Option<PanelSection> = None;
     let mut drag_released = false;
+    let mut drop_to: Option<usize> = None;
 
     egui::Panel::left("collections")
         .default_size(190.0)
@@ -509,8 +510,47 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         }
                     }
 
+                    // ⚠ Painted after every section, so the line sits on top of them rather than
+                    // under the next one.
+                    if app.panel_drag.is_some() {
+                        if let Some(y) = ui.ctx().pointer_interact_pos().map(|p| p.y) {
+                            let at = rustroom_app::panel_order::drop_index(&tops, y);
+                            drop_to = Some(at);
+                            let line_y =
+                                tops.get(at).copied().unwrap_or_else(|| ui.cursor().top());
+                            ui.painter().hline(
+                                ui.max_rect().x_range(),
+                                line_y,
+                                egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                            );
+                        }
+                    }
+
                 });
         });
+
+    // ⚠ A drag begins on the frame a grip reports `drag_started`, and `app.panel_drag` is what
+    // carries it across frames.
+    if let Some(sec) = drag_started {
+        app.panel_drag = Some(sec);
+    }
+    if drag_released {
+        if let (Some(from), Some(to)) = (app.panel_drag, drop_to) {
+            let order = app.settings.panel_order();
+            if let Some(i) = order.iter().position(|s| *s == from) {
+                let next = rustroom_app::panel_order::moved(&order, i, to);
+                if next != order {
+                    app.settings.panel_order = next;
+                    // ⚠ Written when the drag **settles**, not per frame — the
+                    // `apply_view_demosaic` rule, cited more than a dozen times in CLAUDE.md.
+                    app.save_settings();
+                }
+            }
+        }
+        // ⚠ Cleared whatever happened, including a release with no drop position: a stuck
+        // `panel_drag` would leave the insertion line painted forever.
+        app.panel_drag = None;
+    }
 
     if sections != app.settings.panel_sections {
         app.settings.panel_sections = sections;

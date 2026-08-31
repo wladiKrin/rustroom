@@ -109,6 +109,7 @@ pub fn for_test() -> RustroomApp {
         new_keyword_parent: None,
         rename_draft: None,
         snapshot_rename: None,
+        panel_drag: None,
         cell_zoom_pending: false,
         tool: Default::default(),
         crop_aspect: None,

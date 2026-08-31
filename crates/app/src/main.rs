@@ -347,6 +347,11 @@ struct RustroomApp {
     /// wherever `rename_draft` is, and for the same reason — a draft left behind belongs to a
     /// photo that is no longer open.
     snapshot_rename: Option<(u32, String)>,
+    /// The Library panel section being dragged, if one is.
+    ///
+    /// ⚠ On the app rather than a local, because a drag spans frames and a `Response` only knows
+    /// about the frame it was built in. Cleared on release, whatever the outcome.
+    panel_drag: Option<rustroom_app::settings::PanelSection>,
     /// A grid-size pinch is under way and its result has not been written to disk yet.
     ///
     /// ⚠ Exists so the settings file is written once when the gesture settles rather than sixty
@@ -535,6 +540,7 @@ impl RustroomApp {
             new_keyword_parent: None,
             rename_draft: None,
             snapshot_rename: None,
+            panel_drag: None,
             cell_zoom_pending: false,
             tool: Default::default(),
             crop_aspect: None,
