@@ -142,7 +142,7 @@ pub fn show(
     // not assumed. `⬌ ⬍ ‹ › « »` are present.
     ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌")
         .on_hover_text("Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.");
-    ed.slider(ui, &mut p.scale, 0.0..=100.0, "Scale")
+    ed.slider(ui, &mut p.scale, -100.0..=100.0, "Scale")
         .on_hover_text(
             "Zooms in to hide the empty corners the correction opens. 0 shows the whole frame.",
         );

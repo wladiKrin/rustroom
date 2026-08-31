@@ -40,7 +40,10 @@ pub const MAX_ASPECT: f32 = 1.4;
 /// division.
 const PROBE_EPS: f32 = 1e-3;
 
-/// Past this there is nothing usable left in the frame, so the autoscale stops climbing.
+/// Below this the fitted image is a speck in a black field; the fit direction stops shrinking.
+const MIN_FIT_SCALE: f32 = 0.125;
+
+/// Past this there is nothing usable left in the frame, so the fill direction stops climbing.
 const MAX_AUTOSCALE: f32 = 8.0;
 
 /// How close to "everything inside" the autoscale iteration has to get before it stops.
@@ -182,11 +185,18 @@ impl Homography {
 
     /// The full transform for these sliders at this frame aspect, autoscale included.
     pub fn from_edits(p: &Perspective, aspect: f32) -> Self {
-        let full = Self::autoscale(p, aspect);
-        // 0..100 interpolates 1.0 → autoscale, exactly as `LensCorrection::scale` does.
-        let k = 1.0 + (full - 1.0) * (p.scale.clamp(0.0, 100.0) / 100.0);
-        let (pitch, yaw, s) = Self::angles(p);
-        Self::from_angles(pitch, yaw, s, k)
+        // ⚠⚠ **Bipolar: −100 fits, 0 leaves the transform raw, +100 fills.** Three landmarks on
+        // one control, with the honest un-scaled view in the middle. Both ends answer a real
+        // complaint — filling because the raw view leaves black corners, fitting because it also
+        // throws content off the edges.
+        let want = p.scale.clamp(-100.0, 100.0);
+        let k = if want < 0.0 {
+            1.0 + (Self::fit_scale(p, aspect) - 1.0) * (-want / 100.0)
+        } else {
+            1.0 + (Self::fill_scale(p, aspect) - 1.0) * (want / 100.0)
+        };
+        let (pitch, yaw, stretch) = Self::angles(p);
+        Self::from_angles(pitch, yaw, stretch, k)
     }
 
     /// Where in the source an output point comes from. Normalised coordinates both sides.
@@ -199,12 +209,13 @@ impl Homography {
         apply(&self.fwd, p)
     }
 
-    /// The scale that just fills the frame with real image data.
+    /// The scale that just **fills** the frame with real image data — no black, but content is
+    /// lost off the edges. Always `>= 1`.
     ///
     /// ⚠ Iterates, because one pass is not enough — see [`MAX_AUTOSCALE_ITERS`]. Each round
     /// rebuilds the transform at the scale found so far and asks what is still hanging outside;
     /// the sequence contracts quickly, converging in three or four rounds at realistic angles.
-    pub fn autoscale(p: &Perspective, aspect: f32) -> f32 {
+    pub fn fill_scale(p: &Perspective, aspect: f32) -> f32 {
         let (pitch, yaw, stretch) = Self::angles(p);
         let mut k = 1.0f32;
         for _ in 0..MAX_AUTOSCALE_ITERS {
@@ -215,6 +226,38 @@ impl Homography {
             k = (k * need).min(MAX_AUTOSCALE);
         }
         k.clamp(1.0, MAX_AUTOSCALE)
+    }
+
+    /// The scale that **fits** the whole transformed image inside the frame — nothing lost, black
+    /// around it. Always `<= 1`.
+    ///
+    /// ⚠⚠ The mirror of [`Self::fill_scale`], and the frame loses content without it: a keystone
+    /// pushes two corners **out** of the canvas, where they are simply clipped away. Reported in
+    /// use as *"moving the vertical or horizontal slider far to the side moves parts of the photo
+    /// outside of the crop range, so it's simply gone."*
+    ///
+    /// ⚠ **No iteration needed, unlike the fill direction.** This maps the four source corners
+    /// *forward* and asks how far past the frame they land; scaling the output is linear in the
+    /// output, so `1/extent` is exact in one step. The fill direction has to iterate because it
+    /// works through the *inverse*, where scaling is not linear.
+    pub fn fit_scale(p: &Perspective, aspect: f32) -> f32 {
+        let (pitch, yaw, stretch) = Self::angles(p);
+        let h = Self::from_angles(pitch, yaw, stretch, 1.0);
+        let mut extent = 0.0f32;
+        for c in [
+            (-aspect, -1.0),
+            (aspect, -1.0),
+            (-aspect, 1.0),
+            (aspect, 1.0),
+        ] {
+            let o = h.output_of(c);
+            extent = extent.max((o.0 / aspect).abs()).max(o.1.abs());
+        }
+        if extent <= 1.0 {
+            // Already wholly inside; magnifying is the *other* direction's job.
+            return 1.0;
+        }
+        (1.0 / extent).clamp(MIN_FIT_SCALE, 1.0)
     }
 
     /// The largest factor by which any probe's source lies outside the frame; 1.0 = all inside.
@@ -377,7 +420,7 @@ mod tests {
             ..Default::default()
         };
         let bare = Homography::unscaled(&p);
-        let k = Homography::autoscale(&p, ASPECT);
+        let k = Homography::fill_scale(&p, ASPECT);
         assert!(k > 1.0, "a strong keystone must need scaling, got {k}");
 
         let outside = |h: &Homography| {
@@ -460,7 +503,7 @@ mod tests {
             ..Default::default()
         };
         let one_pass = Homography::unscaled(&p).overflow(ASPECT);
-        let converged = Homography::autoscale(&p, ASPECT);
+        let converged = Homography::fill_scale(&p, ASPECT);
         assert!(
             converged > one_pass * 1.2,
             "converged {converged} should far exceed the single pass {one_pass}"
@@ -476,6 +519,80 @@ mod tests {
             vertical: 100.0,
             ..Default::default()
         };
-        assert_eq!(Homography::autoscale(&p, ASPECT), MAX_AUTOSCALE);
+        assert_eq!(Homography::fill_scale(&p, ASPECT), MAX_AUTOSCALE);
+    }
+
+    /// ⚠⚠ **The report this direction exists for**: without it a keystone pushes two corners off
+    /// the canvas and that content is simply clipped away. Asserts the whole source rectangle
+    /// lands inside the frame once fitted.
+    #[test]
+    fn fitting_keeps_every_corner_of_the_source_inside_the_frame() {
+        let p = Perspective {
+            vertical: 60.0,
+            scale: -100.0,
+            ..Default::default()
+        };
+        let bare = Homography::unscaled(&p);
+        let corners = [
+            (-ASPECT, -1.0),
+            (ASPECT, -1.0),
+            (-ASPECT, 1.0),
+            (ASPECT, 1.0),
+        ];
+        let outside = |h: &Homography| {
+            corners.iter().any(|&c| {
+                let o = h.output_of(c);
+                o.0.abs() > ASPECT + 1e-3 || o.1.abs() > 1.0 + 1e-3
+            })
+        };
+        assert!(
+            outside(&bare),
+            "fixture check: uncorrected, a corner really is pushed off the canvas"
+        );
+        assert!(
+            !outside(&Homography::from_edits(&p, ASPECT)),
+            "at scale −100 no source corner may land outside the frame"
+        );
+    }
+
+    /// ⚠ Fit shrinks, fill magnifies, and 0 does neither. The three landmarks in one assertion,
+    /// because a bipolar control whose halves were swapped would still "do something" at each end.
+    #[test]
+    fn the_scale_slider_fits_below_zero_and_fills_above_it() {
+        let at = |v: f32| {
+            let p = Perspective {
+                vertical: 50.0,
+                scale: v,
+                ..Default::default()
+            };
+            // The frame centre is fixed, so a horizontal probe's displacement reads the zoom.
+            Homography::from_edits(&p, ASPECT)
+                .source_of((ASPECT, 0.0))
+                .0
+        };
+        let (fit, raw, fill) = (at(-100.0), at(0.0), at(100.0));
+        // ⚠⚠ `source_of` is the **inverse** map, so the directions read backwards from the
+        // visible effect: fitting *shrinks the picture*, which means the frame's edge reaches
+        // **further out** into the source. An earlier version of this test asserted the opposite
+        // and failed against perfectly correct code — the third assertion in this file to get an
+        // inverse direction wrong, which is why the comment is here rather than in a commit
+        // message.
+        assert!(
+            fit > raw,
+            "fitting shrinks the picture, so the frame reaches further into the source: {fit} vs {raw}"
+        );
+        assert!(
+            fill < raw,
+            "filling zooms in, so the frame reaches less far: {fill} vs {raw}"
+        );
+    }
+
+    /// ⚠ A neutral perspective needs no scaling in either direction, so both ends collapse to the
+    /// identity — which is what lets `scale` default to −100 without affecting a neutral render.
+    #[test]
+    fn a_neutral_perspective_neither_fits_nor_fills() {
+        let p = Perspective::default();
+        assert_eq!(Homography::fit_scale(&p, ASPECT), 1.0);
+        assert_eq!(Homography::fill_scale(&p, ASPECT), 1.0);
     }
 }

@@ -1246,8 +1246,13 @@ fn golden_perspective_vertical() {
     check_golden_with(
         "perspective_vertical",
         &Edits {
+            // ⚠ `scale: 0` — the **raw** transform, so the reference is mostly image rather than
+            // mostly black. At the default (−100, fit) this chart comes back 66% black, which
+            // leaves only a third of the pixels able to witness a change in the transform. The
+            // fit path is covered by `perspective_aspect` below and by three unit tests.
             perspective: edit_model::Perspective {
                 vertical: 55.0,
+                scale: 0.0,
                 ..Default::default()
             },
             ..Default::default()
@@ -1261,6 +1266,8 @@ fn golden_perspective_aspect() {
     check_golden_with(
         "perspective_aspect",
         &Edits {
+            // ⚠ Left at the default `scale: -100`, so this one exercises the **fit** path — the
+            // pair covers both, which one setting could not.
             perspective: edit_model::Perspective {
                 horizontal: -40.0,
                 aspect: 60.0,

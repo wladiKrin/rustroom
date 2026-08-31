@@ -898,11 +898,7 @@ impl LensCorrection {
 /// ⚠ Its own field on [`Edits`], **not** a member of [`Geometry`]. That is what buys the separate
 /// cache checkpoint: sharing `PrefixStepKey::Geometry` would make every crop drag and every
 /// Straighten frame re-run the perspective resample.
-/// ⚠ `Default` is **derived**, which is correct only while every field is `0.0`. Hand-write it
-/// the moment one of them is not — the trap `LensCorrection::default` and `ColorGrading::default`
-/// each carry, where a derived impl silently gives every partial sidecar a zero for a field whose
-/// neutral value is not zero.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Perspective {
     /// Keystone about the horizontal axis (camera pitch), ~[-100, 100].
@@ -911,19 +907,38 @@ pub struct Perspective {
     pub horizontal: f32,
     /// Counteracts the stretch a keystone correction causes, ~[-100, 100].
     pub aspect: f32,
-    /// How far to scale the corrected image, 0..100.
+    /// How the corrected image is scaled into the frame, −100..100.
     ///
-    /// ⚠⚠ **Defaults to 0 — the opposite of [`LensCorrection::scale`], and the reasoning that
-    /// first put it at 100 was backwards.** The argument was "a keystone empties far more of the
-    /// frame than pincushion does, so scale it away by default". But the autoscale needed to fill
-    /// the frame is enormous — measured at 3:2, Vertical 40 needs **1.92×, keeping 27% of the
-    /// image, and Vertical 60 needs 3.31×, keeping 9%.** Applied automatically that reads as the
-    /// slider simply cropping, and it **hides the very correction being judged.** Reported in use
-    /// as *"moving vertical seems to simply be a crop of the image"*, which is exactly what it was.
+    /// ⚠⚠ **Bipolar, and both ends exist because of a report from using it.** −100 **fits**: the
+    /// whole transformed image is shrunk to stay inside the frame, black around it, nothing lost.
+    /// 0 leaves the transform **raw**: black where it pulled inward, content clipped where it
+    /// pushed outward. +100 **fills**: no black, content lost off the edges.
     ///
-    /// ⚠ So the frame is shown whole, with black where there is nothing to fill, and scaling in
-    /// is an explicit second decision — which the crop rectangle, right above, can also make.
+    /// ⚠ Filling was there first and defaulted to on, which read as the slider *cropping* — the
+    /// scale needed to fill is enormous, measured at 3:2 as **1.92× at Vertical 40, keeping 27% of
+    /// the image, and 3.31× at 60, keeping 9%.** Fitting was then added because the raw view still
+    /// **throws content off the edges**, reported as *"parts of the photo outside of the crop
+    /// range, so it's simply gone."*
+    ///
+    /// ⚠ **Defaults to −100**, so nothing is ever silently discarded: you see the whole corrected
+    /// frame and scale in when you have decided what to keep — which the crop rectangle, right
+    /// above, can also do.
     pub scale: f32,
+}
+
+impl Default for Perspective {
+    /// ⚠ Hand-written, **not** derived: `scale` is **−100** at neutral, and the container-level
+    /// `#[serde(default)]` fills a missing field from this. A derived `Default` would give every
+    /// partial sidecar `scale: 0` — the raw view, which clips content — silently. The trap
+    /// `LensCorrection::default`, `RadialGradient::default` and `ColorGrading::default` each carry.
+    fn default() -> Self {
+        Self {
+            vertical: 0.0,
+            horizontal: 0.0,
+            aspect: 0.0,
+            scale: -100.0,
+        }
+    }
 }
 
 impl Perspective {
@@ -2517,12 +2532,17 @@ mod tests {
         assert_eq!(EDIT_GROUP_NAMES[5], "Vignette");
     }
 
-    /// ⚠⚠ The value, not the mechanism — and it is **0**, deliberately. Scaling the frame
-    /// automatically hides the correction being judged: at 3:2 a Vertical of 40 needs a 1.92×
-    /// autoscale, keeping 27% of the image. Reported in use as the slider "simply cropping".
+    /// ⚠⚠ The value, not the mechanism — and it is **−100 (fit)**, deliberately. It went 100 →
+    /// 0 → −100 over two rounds of use, and each move answered a specific report: 100 read as the
+    /// slider *cropping* (the fill scale is 1.92× at Vertical 40, keeping 27% of the image), and 0
+    /// still **threw content off the edges**. Only −100 discards nothing.
+    ///
+    /// ⚠ At neutral every value of `scale` is the identity anyway, since both fit and fill are
+    /// 1.0 with no correction — so this is about what happens on the *first drag*, not about the
+    /// neutral render.
     #[test]
-    fn a_neutral_perspective_does_not_scale_the_frame() {
-        assert_eq!(Perspective::default().scale, 0.0);
+    fn a_neutral_perspective_fits_rather_than_fills() {
+        assert_eq!(Perspective::default().scale, -100.0);
         assert!(!Perspective::default().is_active());
     }
 
