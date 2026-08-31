@@ -21,18 +21,28 @@ use rustroom_app::settings::PanelSection;
 ///
 /// ⚠ `id_salt` on every one: egui's auto-ids shift with what was drawn before them, and this
 /// panel's contents change with the catalog.
-/// One collapsible panel section, with a drag grip in its header.
+/// One collapsible panel section whose **title** both toggles it and drags it.
 ///
-/// Returns the grip's `Response`, which is the **only** thing that senses a drag.
+/// Returns the title's `Response`, which is the only thing that senses either gesture.
 ///
-/// ⚠⚠ Built on `CollapsingState` rather than `CollapsingHeader` because that one has no slot for
-/// header content, and the grip has to live in the header.
+/// ⚠⚠ **One widget for both, and `Sense::click_and_drag()` is what makes that safe.** egui reports
+/// `clicked()` only for a press-release that did **not** become a drag, so a click and a drag are
+/// mutually exclusive *by construction* rather than by a threshold — the same guarantee the
+/// Library's rubber-band selection already relies on. A separate grip was built first, on the
+/// assumption that this needed one, and removed as visual clutter once it was clear it did not.
 ///
-/// ⚠⚠ **The grip is the only drag source, and that is forced by egui rather than chosen.**
-/// `Ui::dnd_drag_source` registers a drag `interact` over the *whole* rect it wraps, and hit-test
-/// ties go to whatever registered last — so making the section draggable would swallow every
-/// button, field and list inside it, the exact tie-break that broke Library thumbnails once.
-/// Making the *header* draggable would swallow the click that toggles it.
+/// ⚠⚠ **It also fixes a regression.** `CollapsingState::show_header`'s response comes from a plain
+/// `horizontal` scope, whose sense is `Sense::hover()` — so `header_response.response.clicked()`
+/// is *always false*, and the `open` flag that persists the collapsed state silently stopped
+/// updating when this moved off `CollapsingHeader`. Collapsing still looked fine because egui's
+/// own arrow handles it in-session; only the *persistence* was lost. The title's own response is a
+/// real click-sensing one.
+///
+/// ⚠ `selectable(false)`: an egui label senses click-and-drag for **text selection** by default,
+/// which would fight the drag and show an I-beam — the same reason `theme::empty_state` sets it.
+///
+/// ⚠ Built on `CollapsingState` rather than `CollapsingHeader` because that one has no slot for
+/// header content, and the title has to be a widget we own.
 fn section<R>(
     ui: &mut egui::Ui,
     open: &mut bool,
@@ -43,46 +53,23 @@ fn section<R>(
     let state_id = ui.make_persistent_id(id);
     let state =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), state_id, *open);
-    // ⚠ `show_header` consumes the state and returns a value that borrows `ui`, so the body must
-    // go through `HeaderResponse::body` rather than a second call on the state.
+    // ⚠ `show_header` consumes the state and returns a value borrowing `ui`, so the body goes
+    // through `HeaderResponse::body`. Its fields are private, so the header's response — and with
+    // it the title's — comes back out of that call, which is why the click is read afterwards.
     let header = state.show_header(ui, |ui| {
-        let grip = drag_grip(ui);
-        ui.label(egui::RichText::new(title).heading());
-        grip
+        ui.add(
+            egui::Label::new(egui::RichText::new(title).heading())
+                .selectable(false)
+                .sense(egui::Sense::click_and_drag()),
+        )
+        .on_hover_cursor(egui::CursorIcon::Grab)
     });
-    // ⚠ `HeaderResponse`'s fields are private, so the header's response comes back out of
-    // `body(..)` — which means the body must be drawn *before* the click can be read, not after.
     let (_toggle, header_response, _body) = header.body(body);
-    if header_response.response.clicked() {
+    let title_response = header_response.inner;
+    if title_response.clicked() {
         *open = !*open;
     }
-    header_response.inner
-}
-
-/// A six-dot drag grip. Returns its response, which senses a drag.
-///
-/// ⚠⚠ **Painted, not a font glyph.** This project has three recorded cases of a chosen glyph being
-/// absent from the bundled fonts and shipping as tofu — the rail's four, the mark badges, the
-/// keyword ticks — each found only by probing. A grip *is* six dots, so drawing it needs no font,
-/// no probe and no coverage test, and it takes the theme's colour for free.
-fn drag_grip(ui: &mut egui::Ui) -> egui::Response {
-    let size = egui::vec2(10.0, ui.spacing().interact_size.y);
-    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::drag());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::Grab);
-    let c = if resp.hovered() || resp.dragged() {
-        ui.visuals().strong_text_color()
-    } else {
-        ui.visuals().weak_text_color()
-    };
-    let p = ui.painter();
-    for row in 0..3 {
-        for col in 0..2 {
-            let x = rect.center().x + (col as f32 - 0.5) * 4.0;
-            let y = rect.center().y + (row as f32 - 1.0) * 4.0;
-            p.circle_filled(egui::pos2(x, y), 1.2, c);
-        }
-    }
-    resp
+    title_response
 }
 
 /// Draw the collections panel. Every action is applied here.
@@ -666,5 +653,75 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::TagSelection(id) => app.assign_keyword_to_selection(id),
         Action::UntagSelection(id) => app.unassign_keyword_from_selection(id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_ui;
+    use eframe::egui;
+
+    /// Run `section` for one frame with `events`, returning the `open` flag afterwards.
+    fn click_title(events: Vec<egui::Event>, start_open: bool) -> bool {
+        let ctx = test_ui::ctx();
+        let mut open = start_open;
+        // Two passes: the first lays the title out so the second can land a click on it.
+        for pass in 0..2 {
+            let ev = if pass == 1 {
+                events.clone()
+            } else {
+                Vec::new()
+            };
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(test_ui::screen()),
+                    events: ev,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::section(ui, &mut open, "sec_test", "Folders", |ui| {
+                        ui.label("body");
+                    });
+                },
+            );
+        }
+        open
+    }
+
+    /// ⚠⚠ **The guard for a regression this shipped once.**
+    /// `CollapsingState::show_header`'s own response comes from a plain `horizontal` scope, whose
+    /// sense is `Sense::hover()` — so `clicked()` on it is *always false*, and the flag that
+    /// persists the collapsed state silently stopped updating. Collapsing still looked correct
+    /// because egui's arrow handles it in-session; only persistence was lost, which no screenshot
+    /// would ever show.
+    #[test]
+    fn clicking_the_title_toggles_the_persisted_open_flag() {
+        // The title sits near the top-left of the panel, right of the collapse arrow.
+        let at = egui::pos2(60.0, 12.0);
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        assert!(
+            !click_title(events, true),
+            "clicking an open section's title must close it"
+        );
+    }
+
+    /// ⚠ And nothing happens without a click — or the test above would pass on any frame at all.
+    #[test]
+    fn drawing_the_section_alone_does_not_toggle_it() {
+        assert!(click_title(Vec::new(), true), "no click, no change");
     }
 }
