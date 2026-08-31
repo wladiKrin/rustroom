@@ -186,6 +186,20 @@ pub enum Modal {
 /// *which* dialog into a plain value first, then dispatch.
 /// Draw whichever modal is open. Called once per frame from `ui`.
 pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
+    // ⚠⚠ **The one place a dialog's size is written to disk.** `dialog` keeps `Settings` current
+    // in memory every frame, which is cheap; the *file* is written only here, on the frame a
+    // dialog closes. A resize runs at 60 Hz and the settings file is not a place to write sixty
+    // times a second — the `apply_view_demosaic` rule.
+    //
+    // ⚠ Detected centrally rather than in each dialog's close path: there are fourteen of those —
+    // a button, the backdrop, Escape — and every one would have to remember. This catches all of
+    // them, including any dialog added later.
+    //
+    // ⚠ There is deliberately **no headless test for this hook**, and a fake one would be worse
+    // than none: it needs a live `egui::Context`, a real modal frame and a real settings file.
+    // It is verified by hand — resize, close, reopen, and again after a restart.
+    let was_open = !matches!(app.modal, Modal::None) || app.export_collision.is_some();
+
     // Decide *which* modal first, then dispatch. Matching on `app.modal` directly and
     // calling a `&mut self` method from an arm keeps the scrutinee's borrow alive across
     // the call, which does not compile.
@@ -240,6 +254,11 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),
         Which::About => about(app, ctx),
+    }
+
+    let still_open = !matches!(app.modal, Modal::None) || app.export_collision.is_some();
+    if was_open && !still_open {
+        app.save_settings();
     }
 }
 
