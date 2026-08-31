@@ -588,6 +588,11 @@ mod tests {
                 vignetting: true,
                 scale: 80.0,
             },
+            perspective: edit_model::Perspective {
+                vertical: 30.0,
+                horizontal: -15.0,
+                ..Default::default()
+            },
             geometry: edit_model::Geometry {
                 angle: 2.0,
                 orientation: edit_model::Orientation {

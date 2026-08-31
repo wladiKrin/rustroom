@@ -140,6 +140,10 @@ mod tests {
                 amount: -25.0,
                 ..Default::default()
             },
+            perspective: edit_model::Perspective {
+                vertical: 25.0,
+                ..Default::default()
+            },
             geometry: edit_model::Geometry {
                 angle: 1.5,
                 ..Default::default()

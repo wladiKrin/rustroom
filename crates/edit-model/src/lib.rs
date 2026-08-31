@@ -892,6 +892,55 @@ impl LensCorrection {
     }
 }
 
+/// Manual perspective correction — keystone about both axes, plus the two controls that make it
+/// usable.
+///
+/// ⚠ Its own field on [`Edits`], **not** a member of [`Geometry`]. That is what buys the separate
+/// cache checkpoint: sharing `PrefixStepKey::Geometry` would make every crop drag and every
+/// Straighten frame re-run the perspective resample.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Perspective {
+    /// Keystone about the horizontal axis (camera pitch), ~[-100, 100].
+    pub vertical: f32,
+    /// Keystone about the vertical axis (camera yaw), ~[-100, 100].
+    pub horizontal: f32,
+    /// Counteracts the stretch a keystone correction causes, ~[-100, 100].
+    pub aspect: f32,
+    /// How far to scale the corrected image, 0..100.
+    ///
+    /// ⚠ 0 leaves the empty corners the correction opens; 100 scales until they are gone. A
+    /// keystone empties far more of the frame than pincushion distortion does, which is why this
+    /// defaults to 100 where [`LensCorrection::scale`] could reasonably have defaulted to 0.
+    pub scale: f32,
+}
+
+impl Default for Perspective {
+    /// ⚠ Hand-written, **not** derived: `scale` is 100 at neutral, and the container-level
+    /// `#[serde(default)]` fills a missing field from this. A derived `Default` would give every
+    /// partial sidecar `scale: 0`, silently — the trap `LensCorrection::default`,
+    /// `RadialGradient::default` and `ColorGrading::default` each carry.
+    fn default() -> Self {
+        Self {
+            vertical: 0.0,
+            horizontal: 0.0,
+            aspect: 0.0,
+            scale: 100.0,
+        }
+    }
+}
+
+impl Perspective {
+    /// Whether this warrants a pipeline stage.
+    ///
+    /// ⚠ The three *corrections* only — `scale` is a modifier, and dragging it alone must not
+    /// insert a stage that would resample the whole image for nothing. The rule
+    /// `NoiseReduction`, `Vignette` and `Sharpening` already follow.
+    pub fn is_active(&self) -> bool {
+        self.vertical != 0.0 || self.horizontal != 0.0 || self.aspect != 0.0
+    }
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -924,6 +973,7 @@ pub struct Edits {
     pub vignette: Vignette,
     pub sharpening: Sharpening,
     pub lens_correction: LensCorrection,
+    pub perspective: Perspective,
     pub geometry: Geometry,
     /// Local adjustments, each confined to a mask. Applied in order, after the global
     /// per-pixel adjustments and before the vignette.
@@ -973,6 +1023,7 @@ impl Edits {
             noise_reduction,
             sharpening,
             lens_correction,
+            perspective,
             vignette,
             geometry,
             masks,
@@ -1010,6 +1061,10 @@ impl Edits {
         }
         if groups.geometry {
             self.geometry = *geometry;
+            // ⚠ Perspective is compositional, exactly as the crop is: a keystone framed for one
+            // photograph is meaningless on another. So it rides the Geometry group, which
+            // defaults **off** for presets, paste and sync.
+            self.perspective = *perspective;
         }
         if groups.masks {
             self.masks = masks.clone();
@@ -1710,6 +1765,12 @@ mod tests {
                 tca: true,
                 vignetting: false,
                 scale: 60.0,
+            },
+            perspective: Perspective {
+                vertical: 40.0,
+                horizontal: -20.0,
+                aspect: 15.0,
+                scale: 80.0,
             },
             vignette: Vignette {
                 amount: -30.0,
@@ -2458,5 +2519,75 @@ mod tests {
     fn the_vignette_group_is_named_for_what_it_carries() {
         // It holds exactly one thing, and calling it "Effects" said otherwise.
         assert_eq!(EDIT_GROUP_NAMES[5], "Vignette");
+    }
+
+    /// ⚠ The value, not the mechanism. A derived `Default` would give `scale: 0`, and every
+    /// sidecar written without the field would silently come back with the correction scaled
+    /// away. Sabotage: `#[derive(Default)]` on `Perspective`.
+    #[test]
+    fn a_neutral_perspective_scales_fully() {
+        assert_eq!(Perspective::default().scale, 100.0);
+        assert!(!Perspective::default().is_active());
+    }
+
+    /// ⚠ `scale` is a modifier, so dragging it alone must not insert a stage.
+    #[test]
+    fn scale_alone_does_not_activate_the_perspective_stage() {
+        let p = Perspective {
+            scale: 0.0,
+            ..Default::default()
+        };
+        assert!(!p.is_active(), "scale is a modifier, not a correction");
+        for probe in [
+            Perspective {
+                vertical: 1.0,
+                ..Default::default()
+            },
+            Perspective {
+                horizontal: 1.0,
+                ..Default::default()
+            },
+            Perspective {
+                aspect: 1.0,
+                ..Default::default()
+            },
+        ] {
+            assert!(probe.is_active(), "{probe:?} must activate");
+        }
+    }
+
+    /// ⚠ A sidecar written before this field existed must load with the *neutral* perspective,
+    /// not a zeroed one. `#[serde(default)]` at the container level is what does it.
+    #[test]
+    fn a_sidecar_from_before_perspective_still_loads() {
+        let json = r#"{"version":1,"exposure":0.5}"#;
+        let e: Edits = serde_json::from_str(json).unwrap();
+        assert_eq!(e.perspective, Perspective::default());
+        assert_eq!(e.exposure, 0.5);
+    }
+
+    /// ⚠ Both directions. That it *travels* with Geometry proves the arm exists; that it does
+    /// **not** travel with any other group proves it was not put in two.
+    #[test]
+    fn perspective_travels_on_the_geometry_group_and_no_other() {
+        let src = all_nonneutral();
+        let mut with = Edits::default();
+        with.merge_from(&src, EditGroups::only(GEOMETRY_GROUP));
+        assert_eq!(with.perspective, src.perspective);
+
+        for g in 0..EDIT_GROUP_NAMES.len() {
+            if g == GEOMETRY_GROUP {
+                continue;
+            }
+            let mut without = Edits::default();
+            without.merge_from(&src, EditGroups::only(g));
+            assert_eq!(
+                without.perspective,
+                Perspective::default(),
+                "group {} ({}) must not carry perspective",
+                g,
+                EDIT_GROUP_NAMES[g]
+            );
+        }
     }
 }
