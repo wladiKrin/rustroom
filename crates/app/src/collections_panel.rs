@@ -548,8 +548,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         Action::None => {}
         Action::Open(id, name) => app.open_collection(ctx, id, &name),
         Action::Delete(id) => {
-            if let Some(cat) = &app.catalog {
-                let _ = cat.delete_collection(id);
+            // ⚠ The snapshot is **pushed**, not discarded. `let _ =` here still compiles and
+            // silently throws away the only record of what was deleted.
+            if let Some(snap) = app
+                .catalog
+                .as_ref()
+                .and_then(|c| c.delete_collection(id).ok())
+            {
+                let open = app.open_photo();
+                app.actions.push(
+                    rustroom_app::action_log::ActionKind::CatalogDelete {
+                        snapshot: Box::new(snap),
+                    },
+                    open.as_ref(),
+                );
             }
             // ⚠ If the deleted collection was the one on screen, there is nothing left to show.
             if app.selected_collection() == Some(id) {
@@ -605,8 +617,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             };
         }
         Action::DeleteSmart(id) => {
-            if let Some(cat) = &app.catalog {
-                let _ = cat.delete_smart(id);
+            if let Some(snap) = app.catalog.as_ref().and_then(|c| c.delete_smart(id).ok()) {
+                let open = app.open_photo();
+                app.actions.push(
+                    rustroom_app::action_log::ActionKind::CatalogDelete {
+                        snapshot: Box::new(snap),
+                    },
+                    open.as_ref(),
+                );
             }
             // ⚠ If the deleted rule was the one on screen there is nothing left to show — the
             // rule the collection and keyword deletions already follow.
@@ -641,8 +659,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::OpenKeyword(id, name) => app.open_keyword(ctx, id, &name),
         Action::DeleteKeyword(id) => {
-            if let Some(cat) = &app.catalog {
-                let _ = cat.delete_keyword(id);
+            if let Some(snap) = app.catalog.as_ref().and_then(|c| c.delete_keyword(id).ok()) {
+                let open = app.open_photo();
+                app.actions.push(
+                    rustroom_app::action_log::ActionKind::CatalogDelete {
+                        snapshot: Box::new(snap),
+                    },
+                    open.as_ref(),
+                );
             }
             // ⚠ If the deleted keyword was on screen there is nothing left to show — and its
             // children went with it, so a child cannot be showing either.

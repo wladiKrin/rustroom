@@ -76,6 +76,20 @@ pub enum ActionKind {
         from: Option<String>,
         to: Option<String>,
     },
+    /// A catalog row was deleted — a collection, a smart collection, a keyword subtree, or a
+    /// whole folder — held so undo can put it back.
+    ///
+    /// ⚠⚠ **Global, not scoped to a photo.** A collection or a keyword is not a property of any
+    /// one photograph, and forgetting a folder may close the very library the deletion happened
+    /// in — so there would be nothing left for `reachable` to compare against. `PresetDelete`'s
+    /// rule, for `PresetDelete`'s reason.
+    ///
+    /// ⚠ Boxed for the reason `Sync` is: a `Folder` snapshot holds every photo row in the folder,
+    /// and an inline variant would make **every** entry in the log that large, including the
+    /// zero-sized `PhotoEdit`.
+    CatalogDelete {
+        snapshot: Box<catalog::snapshot::CatalogSnapshot>,
+    },
     /// A preset was moved to the trash. Named so a redo can delete the same one again, and
     /// so an undo restores *that* preset rather than whatever happens to be newest.
     PresetDelete { name: String },
@@ -146,6 +160,7 @@ fn reachable(kind: &ActionKind, open: Option<&PhotoId>) -> bool {
         ActionKind::PresetDelete { .. }
         | ActionKind::Sync(_)
         | ActionKind::CopyDelete { .. }
+        | ActionKind::CatalogDelete { .. }
         | ActionKind::Rename { .. } => true,
         ActionKind::Batch(parts) => parts.iter().all(|p| reachable(p, open)),
     }
@@ -685,5 +700,45 @@ mod tests {
             "copy 0 must not reach copy 1's snapshot rename"
         );
         assert!(log.undo(Some(&mine)).is_some());
+    }
+
+    fn catalog_delete(name: &str) -> ActionKind {
+        ActionKind::CatalogDelete {
+            snapshot: Box::new(catalog::snapshot::CatalogSnapshot::Collection {
+                name: name.to_string(),
+                created: 0,
+                members: Vec::new(),
+            }),
+        }
+    }
+
+    /// ⚠⚠ **Global, and this is the test that matters.** Forgetting a folder can close the very
+    /// library it happened in, and a collection belongs to no photograph — so scoped to a photo
+    /// the undo would be unreachable exactly when it is wanted. Deleting from the Library grid
+    /// with no photo open is the concrete case: `open` is `None`.
+    #[test]
+    fn a_catalog_deletion_is_undoable_from_anywhere() {
+        let mut log = ActionLog::default();
+        log.push(catalog_delete("Portfolio"), a());
+        assert!(log.can_undo(b()), "reachable from another photo");
+        assert!(log.can_undo(None), "and with no photo open at all");
+        assert!(matches!(
+            log.undo(None),
+            Some(ActionKind::CatalogDelete { .. })
+        ));
+    }
+
+    /// ⚠ A photo edit must not be able to *reach past* a catalog deletion and undo it out of
+    /// order — the ordering is one chronological log, exactly as it is for a preset deletion.
+    #[test]
+    fn a_catalog_deletion_undoes_after_the_edit_that_followed_it() {
+        let mut log = ActionLog::default();
+        log.push(catalog_delete("Portfolio"), a());
+        log.push(edit("/a.RAF"), a());
+        assert!(matches!(log.undo(a()), Some(ActionKind::PhotoEdit { .. })));
+        assert!(matches!(
+            log.undo(a()),
+            Some(ActionKind::CatalogDelete { .. })
+        ));
     }
 }

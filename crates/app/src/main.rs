@@ -1,3 +1,4 @@
+use catalog::snapshot::CatalogSnapshot;
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
@@ -1311,6 +1312,15 @@ impl RustroomApp {
                 }
                 self.rerender_current();
             }
+            ActionKind::CatalogDelete { snapshot } => {
+                if let Some(cat) = &self.catalog {
+                    match cat.restore(&snapshot) {
+                        Ok(()) => self.status = snapshot.label(),
+                        Err(e) => self.status = format!("Could not restore: {e}"),
+                    }
+                }
+                self.after_catalog_restore(ctx, &snapshot);
+            }
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.restore(&name) {
                     Ok(Some(p)) => self.status = format!("Restored preset “{}”", p.name),
@@ -1395,6 +1405,9 @@ impl RustroomApp {
                 }
                 self.rerender_current();
             }
+            ActionKind::CatalogDelete { snapshot } => {
+                self.redo_catalog_delete(ctx, &snapshot);
+            }
             ActionKind::PresetDelete { name } => {
                 match self.preset_store.delete(&name) {
                     Ok(()) => self.status = format!("Deleted preset “{name}”"),
@@ -1407,6 +1420,79 @@ impl RustroomApp {
                 self.status = format!("Re-synced {} photos", report.prior.len());
                 let paths: Vec<PathBuf> = action.targets.iter().map(|t| t.path.clone()).collect();
                 self.reload_if_affected(&paths);
+            }
+        }
+    }
+
+    /// Put the view back in step after a catalog row came back.
+    ///
+    /// ⚠ Only the *folder* case needs anything: restoring a collection or a keyword adds a panel
+    /// row, and the panel reads the catalog as it draws. A restored folder, on the other hand,
+    /// puts photos back into All Photos, which is materialised.
+    fn after_catalog_restore(&mut self, ctx: &egui::Context, snap: &CatalogSnapshot) {
+        if matches!(snap, CatalogSnapshot::Folder { .. })
+            && matches!(
+                self.library.as_ref().map(|l| &l.source),
+                Some(LibrarySource::AllPhotos)
+            )
+        {
+            self.open_all_photos(ctx);
+        }
+    }
+
+    /// Delete again what an undo put back.
+    ///
+    /// ⚠⚠ **Looked up by NAME, never by the id in the snapshot.** The restore gave the row a
+    /// *fresh* id, so the old one either names nothing or — worse — names something else that has
+    /// since taken it. That is the same reason `PresetDelete` is keyed by name rather than by
+    /// "whatever is newest in the trash".
+    fn redo_catalog_delete(&mut self, ctx: &egui::Context, snap: &CatalogSnapshot) {
+        let Some(cat) = &self.catalog else {
+            return;
+        };
+        let found = match snap {
+            CatalogSnapshot::Smart { name, .. } => cat
+                .smart_collections()
+                .ok()
+                .and_then(|rows| rows.into_iter().find(|r| &r.name == name))
+                .map(|r| cat.delete_smart(r.id)),
+            CatalogSnapshot::Collection { name, .. } => cat
+                .collections()
+                .ok()
+                .and_then(|rows| rows.into_iter().find(|r| &r.name == name))
+                .map(|r| cat.delete_collection(r.id)),
+            CatalogSnapshot::Keyword { tree, .. } => tree.first().and_then(|root| {
+                cat.keywords()
+                    .ok()
+                    .and_then(|rows| {
+                        rows.into_iter().find(|r| {
+                            r.name == root.name && r.parent_id.is_none() == root.parent_id.is_none()
+                        })
+                    })
+                    .map(|r| cat.delete_keyword(r.id))
+            }),
+            CatalogSnapshot::Folder { path, .. } => cat
+                .folders()
+                .ok()
+                .and_then(|rows| rows.into_iter().find(|r| &r.path == path))
+                .map(|r| cat.forget_folder(r.id)),
+        };
+        match found {
+            // ⚠ The returned snapshot is discarded: the log already holds an equivalent one, and
+            // the restore reproduced the same content under new ids.
+            Some(Ok(_)) => self.status = "Deleted again".into(),
+            Some(Err(e)) => self.status = format!("Could not delete: {e}"),
+            // Renamed or removed by hand since the undo. Reported rather than silent.
+            None => self.status = "It is no longer in the catalog".into(),
+        }
+        if matches!(snap, CatalogSnapshot::Folder { .. }) {
+            match self.library.as_ref().map(|l| l.source.clone()) {
+                Some(LibrarySource::AllPhotos) => self.open_all_photos(ctx),
+                Some(LibrarySource::Folder(p)) if matches!(snap, CatalogSnapshot::Folder { path, .. } if *path == p) =>
+                {
+                    self.library = None;
+                }
+                _ => {}
             }
         }
     }
@@ -2407,9 +2493,22 @@ impl RustroomApp {
     /// untouched. Re-opening the folder catalogues it again, minus the library metadata.
     fn forget_folder(&mut self, ctx: &egui::Context, id: i64, path: &std::path::Path) {
         if let Some(cat) = &self.catalog {
-            if let Err(e) = cat.forget_folder(id) {
-                self.status = format!("Could not forget the folder: {e}");
-                return;
+            match cat.forget_folder(id) {
+                // ⚠ Pushed so the deletion is undoable. This is the destructive one — it takes
+                // the ratings, flags, labels and keyword assignments with it.
+                Ok(snap) => {
+                    let open = self.open_photo();
+                    self.actions.push(
+                        ActionKind::CatalogDelete {
+                            snapshot: Box::new(snap),
+                        },
+                        open.as_ref(),
+                    );
+                }
+                Err(e) => {
+                    self.status = format!("Could not forget the folder: {e}");
+                    return;
+                }
             }
         }
         // ⚠ What is on screen may now be rows that exist nowhere. Two cases, and both need
