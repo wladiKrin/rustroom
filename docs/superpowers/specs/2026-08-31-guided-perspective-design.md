@@ -105,6 +105,12 @@ In the Geometry tool's Perspective section: a **Guides** toggle and a **Clear gu
 latter disabled when there are none.
 
 - Dragging on empty canvas draws a new guide; dragging an endpoint moves it.
+
+⚠⚠ **While Guides is active the crop overlay is neither drawn nor interactive.** The Geometry
+tool's canvas already gives every drag to the crop rectangle, so without this the two would fight
+over the same gesture — and the crop rectangle is invisible in this sub-mode anyway, since the
+preview resets the crop. This makes the sub-mode genuinely exclusive, the same rule the rail's
+four tools follow, rather than layering a second draggable thing over a first.
 - Endpoint handles get the crop overlay's treatment — a dark halo under a coloured mark — for the
   reason that overlay needed it: an unhaloed mark is invisible on a bright photograph.
 - Guides are drawn only while the sub-mode is on, so they never obscure ordinary editing.
