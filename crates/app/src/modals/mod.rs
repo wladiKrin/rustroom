@@ -381,6 +381,85 @@ fn about(app: &mut RustroomApp, ctx: &egui::Context) {
 mod tests {
     use crate::theme::DialogSize;
 
+    /// Run `dialog` once on a viewport of `size`, returning what it recorded.
+    #[cfg(test)]
+    fn record_once(
+        ctx: &egui::Context,
+        settings: &mut rustroom_app::settings::Settings,
+        size: egui::Vec2,
+    ) -> Option<[u32; 2]> {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| {
+                super::dialog(
+                    ui.ctx(),
+                    settings,
+                    "round_trip",
+                    "Round trip",
+                    DialogSize::Compact,
+                    |ui| {
+                        ui.label("body");
+                    },
+                );
+            },
+        );
+        settings.dialog_sizes.get("round_trip").copied()
+    }
+
+    /// ⚠⚠ **The round trip the design could not confirm from egui's source**, because
+    /// `Resize::State::desired_size` is `pub(crate)`. `dialog` measures the content `Ui`'s
+    /// available size and feeds it back as `default_size` next time; if those are not the same
+    /// quantity, a dialog creeps larger or smaller every time it is opened.
+    ///
+    /// Three cycles, because a one-frame check cannot see a creep.
+    ///
+    /// ⚠ On a **large** viewport, so nothing is clamped and the recorded size can be compared to
+    /// the class default directly. A small screen would clamp the width to 80% of it and the test
+    /// would pass while proving only that the clamp is stable — which is how a round-trip test
+    /// ends up unable to see the thing it names.
+    #[test]
+    fn a_dialogs_measured_size_round_trips_and_does_not_creep() {
+        use crate::test_ui;
+        let ctx = test_ui::ctx();
+        let mut settings = rustroom_app::settings::Settings::default();
+        let big = egui::vec2(1600.0, 1200.0);
+
+        let seen: Vec<Option<[u32; 2]>> = (0..3)
+            .map(|_| record_once(&ctx, &mut settings, big))
+            .collect();
+
+        let (w, h) = DialogSize::Compact.default_size();
+        let want = [w as u32, h as u32];
+        assert!(
+            seen.iter().all(|s| *s == Some(want)),
+            "the size must round-trip at the class default, got {seen:?}, wanted {want:?}"
+        );
+    }
+
+    /// ⚠ The other half: a viewport too small for the class **clamps**, and stays clamped rather
+    /// than shrinking again on each reopen.
+    #[test]
+    fn a_small_viewport_clamps_the_dialog_once_and_then_holds() {
+        use crate::test_ui;
+        let ctx = test_ui::ctx();
+        let mut settings = rustroom_app::settings::Settings::default();
+        let small = egui::vec2(400.0, 300.0);
+
+        let seen: Vec<Option<[u32; 2]>> = (0..3)
+            .map(|_| record_once(&ctx, &mut settings, small))
+            .collect();
+
+        // 80% of 400 is 320, below Compact's 340 default and above its 300 minimum.
+        assert_eq!(seen[0], Some([320, 140]), "clamped to the viewport");
+        assert!(
+            seen.iter().all(|s| *s == seen[0]),
+            "and then stable, got {seen:?}"
+        );
+    }
+
     /// Every dialog id in the app, with the class it uses.
     ///
     /// ⚠ **A documentation test, and it is worth saying so rather than overselling it.** It pins
