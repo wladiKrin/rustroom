@@ -82,6 +82,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // reading it *through* `app` after the borrow is E0502. `Tool` is `Copy`, so this is free.
     let tool = app.tool;
     let mut photo_edited = false;
+    // ⚠ The solve needs `&mut RustroomApp`, which the session borrow below rules out — so the
+    // overlay only reports that a drag settled and `show` runs the solve afterwards.
+    let mut guides_settled = false;
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
@@ -228,8 +231,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // decision about what the canvas does under it.
                     match tool {
                         Tool::Crop => {
-                            photo_edited |=
-                                draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
+                            // ⚠⚠ **Exclusive**: while Guides is on the crop overlay is neither
+                            // drawn nor interactive. The Geometry tool gives every drag to the
+                            // crop rectangle, so without this the two would fight over one
+                            // gesture — and the crop rectangle is invisible here anyway, since
+                            // the preview resets the crop.
+                            if s.show_guides {
+                                guides_settled |= draw_guide_overlay(ui, s, &resp, img_rect);
+                            } else {
+                                photo_edited |=
+                                    draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
+                            }
                         }
                         Tool::Masks => {
                             photo_edited |= draw_mask_overlay(
@@ -309,6 +321,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
             }
         }
     });
+    if guides_settled {
+        // ⚠ One gesture, one history entry — the rule every drag in this app follows.
+        if app.solve_guides() {
+            if let Some(s) = app.session.as_mut() {
+                s.history.push(s.edits.clone());
+            }
+            photo_edited = true;
+        }
+    }
     photo_edited
 }
 
@@ -351,6 +372,90 @@ fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option
 ///
 /// Returns whether a drag settled into a new history entry, so the caller can treat that as
 /// a photo edit — it is one of the two places a photo edit is committed.
+/// How close, in normalised frame units, a press must be to grab a guide endpoint.
+const GUIDE_GRAB: f32 = 0.03;
+
+/// Draw the perspective guides and apply any drag. Returns whether a drag settled — the same
+/// contract `draw_crop_overlay` has.
+///
+/// ⚠⚠ Guides are drawn on the **raw** frame: `preview_edits` resets perspective and straighten
+/// while this sub-mode is on, so a normalised coordinate here always means one fixed thing.
+fn draw_guide_overlay(
+    ui: &egui::Ui,
+    s: &mut Session,
+    resp: &egui::Response,
+    img_rect: egui::Rect,
+) -> bool {
+    use pipeline::perspective::guides::{Family, Guide};
+
+    let to_screen = |n: [f32; 2]| {
+        egui::pos2(
+            img_rect.left() + n[0] * img_rect.width(),
+            img_rect.top() + n[1] * img_rect.height(),
+        )
+    };
+    let marks = ui.painter_at(canvas_geom::overlay_clip(img_rect));
+    let halo = egui::Color32::from_black_alpha(180);
+    for g in &s.guides {
+        // ⚠ The inferred family is **shown**, so a misclassified 45° line is visible and fixed by
+        // nudging an endpoint. A rule the user cannot see is one they cannot correct.
+        let colour = match g.family() {
+            Family::Vertical => egui::Color32::from_rgb(80, 200, 255),
+            Family::Horizontal => egui::Color32::from_rgb(255, 190, 70),
+        };
+        let (a, b) = (to_screen(g.from), to_screen(g.to));
+        marks.line_segment([a, b], egui::Stroke::new(5.0, halo));
+        marks.line_segment([a, b], egui::Stroke::new(2.0, colour));
+        for p in [a, b] {
+            marks.circle_filled(p, 6.0, halo);
+            marks.circle_filled(p, 4.0, colour);
+        }
+    }
+
+    let mut settled = false;
+    if let Some(p) = resp.interact_pointer_pos() {
+        let n = [
+            ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0),
+            ((p.y - img_rect.top()) / img_rect.height()).clamp(0.0, 1.0),
+        ];
+        if tool_drag_started(resp) {
+            s.active_guide =
+                canvas_geom::guide_endpoint_at(&s.guides, n, GUIDE_GRAB).or_else(|| {
+                    // ⚠ A new guide starts as a zero-length line whose *`to`* end follows the cursor,
+                    // so the very first drag frame extends it — no separate "creating" state.
+                    s.guides.push(Guide { from: n, to: n });
+                    Some((s.guides.len() - 1, 1))
+                });
+        }
+        if tool_drag(resp) {
+            if let Some((i, e)) = s.active_guide {
+                if let Some(g) = s.guides.get_mut(i) {
+                    if e == 0 {
+                        g.from = n;
+                    } else {
+                        g.to = n;
+                    }
+                }
+            }
+        }
+        if resp.drag_stopped() {
+            // ⚠ A tap that never became a drag leaves a zero-length guide, which has no direction
+            // and would classify arbitrarily. Drop it rather than keeping a line nobody can see.
+            if let Some((i, _)) = s.active_guide {
+                let dead = s.guides.get(i).is_some_and(|g| {
+                    (g.to[0] - g.from[0]).abs() < 1e-4 && (g.to[1] - g.from[1]).abs() < 1e-4
+                });
+                if dead {
+                    s.guides.remove(i);
+                }
+            }
+            s.active_guide = None;
+            settled = true;
+        }
+    }
+    settled
+}
+
 /// How far each corner bracket reaches along its two edges, in screen points.
 ///
 /// ⚠ Shrinks for a small crop — see `canvas_geom::corner_brackets`.

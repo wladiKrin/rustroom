@@ -144,8 +144,34 @@ pub fn show(
         .on_hover_text("Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.");
     ed.slider(ui, &mut p.scale, -100.0..=100.0, "Scale")
         .on_hover_text(
-            "Zooms in to hide the empty corners the correction opens. 0 shows the whole frame.",
+            "−100 fits the whole corrected image inside the frame; 0 leaves it raw, which \
+             clips whatever the correction pushes off the edges; +100 zooms in until no black \
+             corners remain.",
         );
+
+    ui.horizontal(|ui| {
+        // ⚠ The toggle deliberately does **not** disable the sliders above. They are the *output*
+        // of a solve, and watching them move is what explains where the numbers came from.
+        if ui
+            .toggle_value(&mut s.show_guides, "Guides")
+            .on_hover_text(
+                "Draw lines along features that should be vertical or horizontal, then let go. \
+                 The photo is shown uncorrected while you draw.",
+            )
+            .changed()
+        {
+            ed.discrete();
+        }
+        let any = !s.guides.is_empty();
+        if ui
+            .add_enabled(any, egui::Button::new("Clear"))
+            .on_hover_text("Remove all guides. The sliders they produced are left alone.")
+            .clicked()
+        {
+            s.guides.clear();
+            s.active_guide = None;
+        }
+    });
 
     ui.separator();
     // ⚠ Scoped to the Geometry group, the same rule the Edit tool's reset follows: under an
@@ -409,5 +435,61 @@ mod tests {
             label.contains('⬍') && label.contains('⬌'),
             "the Aspect label names neither direction: {label:?}"
         );
+    }
+
+    /// ⚠ That the control is drawn at all. A block added to the wrong branch compiles, runs, and
+    /// is simply never on screen — which no other test in this file would notice.
+    #[test]
+    fn the_guides_toggle_and_clear_are_drawn() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let (mut aspect, mut ed) = (None, Edited::default());
+        let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut s, &mut aspect, false, &mut ed);
+        });
+        for want in ["Guides", "Clear"] {
+            assert!(
+                found.iter().any(|(l, _)| l.contains(want)),
+                "no “{want}” control; found {:?}",
+                found.iter().map(|(l, _)| l).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// ⚠⚠ Clearing must leave the **sliders** alone. The guides are the input and the sliders are
+    /// the output, so throwing the scaffolding away cannot undo the correction it produced — that
+    /// is the whole point of solving *into* the sliders rather than storing the guides.
+    #[test]
+    fn clearing_the_guides_leaves_the_correction_alone() {
+        let mut s = session();
+        s.show_guides = true;
+        s.edits.perspective.vertical = 42.0;
+        s.guides.push(pipeline::perspective::guides::Guide {
+            from: [0.1, 0.1],
+            to: [0.2, 0.9],
+        });
+        click_in_panel("Clear", &mut s, false);
+        assert!(s.guides.is_empty(), "the guides should be gone");
+        assert_eq!(s.edits.perspective.vertical, 42.0, "the solve must survive");
+    }
+
+    /// ⚠ The preview must show the **raw** frame while guides are being drawn, or the correction
+    /// slides the feature out from under the line being dragged. Both halves, since a reset that
+    /// never fires and one that always fires are equally wrong.
+    #[test]
+    fn the_guides_preview_drops_the_perspective_and_the_straighten() {
+        let mut e = edit_model::Edits::default();
+        e.perspective.vertical = 40.0;
+        e.geometry.angle = 3.0;
+
+        let off = crate::preview_edits(&e, rustroom_app::tool::Tool::Crop, false);
+        assert_eq!(off.perspective.vertical, 40.0, "kept with guides off");
+        assert_eq!(off.geometry.angle, 3.0);
+
+        let on = crate::preview_edits(&e, rustroom_app::tool::Tool::Crop, true);
+        assert_eq!(on.perspective, edit_model::Perspective::default());
+        assert_eq!(on.geometry.angle, 0.0);
+        // ⚠ Orientation is a lossless reframe and must survive, or the photo shows sideways.
+        assert_eq!(on.geometry.orientation, e.geometry.orientation);
     }
 }

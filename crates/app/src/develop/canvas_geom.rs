@@ -274,3 +274,68 @@ mod overlay_clip_tests {
         assert!(overlay_clip(img()).contains_rect(img()));
     }
 }
+
+/// Which guide endpoint is within `tol` of `p`, as `(guide index, 0 = from | 1 = to)`.
+///
+/// ⚠ **Nearest wins, not first.** Two endpoints can end up overlapping after a drag, and
+/// "whichever was drawn first" would make one of them permanently unreachable.
+pub fn guide_endpoint_at(
+    guides: &[pipeline::perspective::guides::Guide],
+    p: [f32; 2],
+    tol: f32,
+) -> Option<(usize, usize)> {
+    let mut best: Option<((usize, usize), f32)> = None;
+    for (i, g) in guides.iter().enumerate() {
+        for (e, pt) in [(0usize, g.from), (1usize, g.to)] {
+            let d = ((pt[0] - p[0]).powi(2) + (pt[1] - p[1]).powi(2)).sqrt();
+            if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some(((i, e), d));
+            }
+        }
+    }
+    best.map(|(k, _)| k)
+}
+
+#[cfg(test)]
+mod guide_hit_tests {
+    use super::*;
+    use pipeline::perspective::guides::Guide;
+
+    fn gs() -> Vec<Guide> {
+        vec![
+            Guide {
+                from: [0.1, 0.1],
+                to: [0.2, 0.9],
+            },
+            Guide {
+                from: [0.8, 0.1],
+                to: [0.7, 0.9],
+            },
+        ]
+    }
+
+    #[test]
+    fn an_endpoint_within_tolerance_is_found_and_others_are_not() {
+        assert_eq!(guide_endpoint_at(&gs(), [0.105, 0.105], 0.03), Some((0, 0)));
+        assert_eq!(guide_endpoint_at(&gs(), [0.71, 0.89], 0.03), Some((1, 1)));
+        assert_eq!(guide_endpoint_at(&gs(), [0.5, 0.5], 0.03), None);
+    }
+
+    /// ⚠ Nearest, not first. With two endpoints inside the tolerance, taking the first would make
+    /// the other unreachable for as long as they overlap.
+    #[test]
+    fn the_nearest_endpoint_wins_when_two_are_in_range() {
+        let g = vec![
+            Guide {
+                from: [0.50, 0.50],
+                to: [0.5, 0.9],
+            },
+            Guide {
+                from: [0.52, 0.50],
+                to: [0.9, 0.5],
+            },
+        ];
+        assert_eq!(guide_endpoint_at(&g, [0.519, 0.50], 0.05), Some((1, 0)));
+        assert_eq!(guide_endpoint_at(&g, [0.501, 0.50], 0.05), Some((0, 0)));
+    }
+}

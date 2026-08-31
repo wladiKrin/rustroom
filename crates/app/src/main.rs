@@ -624,6 +624,20 @@ pub struct Session {
     /// ⚠ Load-bearing for panning: a drag that did *not* start on a handle must still pan the
     /// image, so this records whether the mask claimed the gesture.
     active_mask_handle: Option<mask_tool::Handle>,
+    /// Drawn perspective guides.
+    ///
+    /// ⚠⚠ **View state, never `Edits`.** A guide is scaffolding for arriving at a slider value,
+    /// not part of the photograph's description — `selected_mask`'s rule. So guides never reach
+    /// the sidecar, never travel with a paste, preset or sync, and reset on a photo switch. That
+    /// is what makes "solve into the sliders" one representation rather than two.
+    guides: Vec<pipeline::perspective::guides::Guide>,
+    /// Whether the Guides sub-mode of the Geometry tool is on.
+    ///
+    /// ⚠ On `Session` rather than `RustroomApp`, beside the guides themselves — which is what
+    /// lets `view_edits` read it directly and leaves all seven of its call sites untouched.
+    show_guides: bool,
+    /// `(guide index, 0 = from | 1 = to)` while an endpoint is being dragged.
+    active_guide: Option<(usize, usize)>,
     /// The region the current texture covers, as a rect, so the canvas can both place it and
     /// test containment without consulting texture dimensions — which would be wrong while
     /// `show_before` swaps in the whole-image baseline. `None` = whole image.
@@ -704,10 +718,21 @@ impl Session {
 /// ⚠ **Only the crop.** The orientation must survive, or the preview would show a
 /// differently-oriented image from the one being edited — and the crop overlay would then be
 /// drawn against a frame that does not match it.
-fn preview_edits(edits: &Edits, tool: Tool) -> Edits {
+fn preview_edits(edits: &Edits, tool: Tool, guides: bool) -> Edits {
     let mut e = edits.clone();
     if tool.is_geometry() {
         e.geometry.crop = edit_model::CropRect::default();
+        // ⚠⚠ The Guides sub-mode additionally resets **perspective and the straighten angle**, so
+        // guides are drawn onto the raw frame. Without that the correction moves the very feature
+        // you are aligning to out from under the line being dragged — the identical problem the
+        // crop reset above already solves.
+        //
+        // ⚠ Orientation is deliberately *not* reset: it is a lossless reframe, and undoing it
+        // would show the photo sideways.
+        if guides {
+            e.perspective = edit_model::Perspective::default();
+            e.geometry.angle = 0.0;
+        }
     }
     e
 }
@@ -731,7 +756,42 @@ impl Session {
         } else {
             self.edits.clone()
         };
-        preview_edits(&edits, tool)
+        preview_edits(&edits, tool, self.show_guides)
+    }
+}
+
+impl RustroomApp {
+    /// Solve the drawn guides and write the answer into the sliders.
+    ///
+    /// ⚠⚠ **The guides are the input and the sliders are the output — there is no second stored
+    /// representation.** Afterwards the `Edits` are indistinguishable from the same values
+    /// dialled in by hand, which is the whole point of the chosen model.
+    ///
+    /// Returns whether anything changed, so the caller records exactly one history entry — the
+    /// contract `draw_crop_overlay` already has.
+    fn solve_guides(&mut self) -> bool {
+        use pipeline::perspective::guides::{self, Family};
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
+        let of = |f: Family| -> Option<(f32, f32)> {
+            let mut it = s.guides.iter().filter(|g| g.family() == f);
+            match (it.next(), it.next()) {
+                // ⚠ Two are required. A single line has no vanishing point at all, so one guide
+                // must leave the edits alone rather than solving from nothing.
+                (Some(a), Some(b)) => guides::vanishing_point(a, b),
+                _ => None,
+            }
+        };
+        let (pitch, yaw, roll) = guides::solve(of(Family::Vertical), of(Family::Horizontal));
+        let to_slider = |rad: f32| {
+            (rad.to_degrees() / pipeline::perspective::MAX_ANGLE_DEG * 100.0).clamp(-100.0, 100.0)
+        };
+        let before = (s.edits.perspective, s.edits.geometry.angle);
+        s.edits.perspective.vertical = to_slider(pitch);
+        s.edits.perspective.horizontal = to_slider(yaw);
+        s.edits.geometry.angle = roll.to_degrees().clamp(-45.0, 45.0);
+        (s.edits.perspective, s.edits.geometry.angle) != before
     }
 }
 
@@ -1832,6 +1892,9 @@ impl RustroomApp {
             active_handle: None,
             selected_mask: None,
             active_mask_handle: None,
+            guides: Vec::new(),
+            active_guide: None,
+            show_guides: false,
             rendered_region: None,
             requested_region: None,
             // Corrected by the first frame that arrives; the placeholder only has to be
