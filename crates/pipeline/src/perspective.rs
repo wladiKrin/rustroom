@@ -368,8 +368,12 @@ mod tests {
     /// fact that without it the frame really is empty at the corners.
     #[test]
     fn the_autoscale_pulls_every_probe_back_inside() {
+        // ⚠ `scale` is stated rather than defaulted: the default is now **0** (show the empty
+        // corners), so a `..Default::default()` here would be testing the un-scaled case and the
+        // containment assertion below could never hold.
         let p = Perspective {
             vertical: 60.0,
+            scale: 100.0,
             ..Default::default()
         };
         let bare = Homography::unscaled(&p);
