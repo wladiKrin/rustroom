@@ -1103,36 +1103,42 @@ Add above it:
 
 - [ ] **Step 4: Add the two headless panel tests**
 
-Append to `mod tests` in `crates/app/src/develop/panel/geometry.rs` (the module already exists with four tests; reuse whatever fixture helper they use — check `test_app` and `test_ui`):
+Append to `mod tests` in `crates/app/src/develop/panel/geometry.rs`. It already has a `session()`
+fixture and a `click_in_panel` helper; these reuse `session()` and call `show` with the same five
+arguments `click_in_panel` does.
 
 ```rust
     /// ⚠ That the sliders are actually drawn. A section added to the wrong branch compiles, runs,
-    /// and is simply never on screen — which no other test here would notice.
+    /// and is simply never on screen — which no other test in this file would notice.
     #[test]
-    fn the_perspective_sliders_are_drawn_in_the_crop_tool() {
-        let mut app = crate::test_app::app();
-        app.tool = rustroom_app::tool::Tool::Crop;
-        let labels = crate::test_ui::labelled_centres(&mut app, |app, ui| {
-            crate::develop::panel::show(app, ui);
+    fn the_perspective_sliders_are_drawn() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut ed = Edited::default();
+        let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut s, &mut aspect, false, &mut ed);
         });
-        for want in ["Vertical", "Horizontal", "Aspect"] {
+        for want in ["Vertical", "Horizontal", "Aspect", "Scale"] {
             assert!(
-                labels.keys().any(|k| k.contains(want)),
+                found.iter().any(|(label, _)| label.contains(want)),
                 "no “{want}” slider in the Geometry tool; found {:?}",
-                labels.keys().collect::<Vec<_>>()
+                found.iter().map(|(l, _)| l).collect::<Vec<_>>()
             );
         }
     }
 
     /// ⚠ The rail must say what the tool now does. Asserted on `Tool::label` rather than by
-    /// finding the widget, because the rail is drawn by a different module.
+    /// finding the widget, because the rail is drawn by a different module entirely.
     #[test]
     fn the_rail_calls_the_crop_tool_geometry() {
         assert_eq!(rustroom_app::tool::Tool::Crop.label(), "Geometry");
     }
 ```
 
-⚠ **Check the real names before running**: the fixture is `crates/app/src/test_app.rs` and the query helper is `crates/app/src/test_ui.rs`. Read the four existing tests in `panel/geometry.rs` first and copy their exact call shape rather than the sketch above — they already know how `show` is invoked and what its arguments are.
+⚠ **`Scale` appears twice when a lens profile is present** — the Lens block draws one too. The
+test passes `lens = false`, so only the perspective one is drawn and the assertion is unambiguous.
+That duplication is deliberate and pre-existing; do not "fix" it by renaming either slider.
 
 - [ ] **Step 5: Green, clippy, commit**
 
