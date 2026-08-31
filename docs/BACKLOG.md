@@ -147,11 +147,31 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
   **forward** distortion map and the `lensfun` crate exposes only the inverse, so it means an
   iterative solve per stroke point. Deferred on the grounds that lens corrections are enabled once,
   early, not toggled mid-edit.
-- **Perspective correction (M3.2's remaining slice).** Keystone and rotation, either from manual
-  sliders or from automatic vertical detection. ⚠ Unlike the three automatic corrections it is
-  **not profile-driven** — it needs user input and canvas interaction, which is the half this
-  project's record says is expensive and defect-prone. The maths is `mod_pc` in the `lensfun`
-  crate and `Modifier::enable_perspective_correction` is already available; the work is the UI.
+- **Guided perspective control points** (recorded 2026-08-31, after the manual sliders shipped).
+  Drag 2–4 lines onto edges that should be vertical or horizontal and let lensfun solve, instead
+  of judging by eye. ⚠ **This is the half `mod_pc` actually serves** —
+  `enable_perspective_correction(x, y, d)` takes 4–8 pixel coordinates and runs a Jacobi SVD; the
+  slider half could not use it at all. Two facts already established, so nobody re-derives them:
+  `build_perspective_state` is a **public free function** taking normalised coordinates
+  (`mod_pc.rs:546`), so it needs no `Modifier` and therefore **no matched lens profile**; and **at
+  8 control points lensfun estimates the focal length itself** (`mod_pc.rs:341-348`), so it works
+  on unprofiled lenses and on JPEGs. ⚠ The cost is a new canvas overlay with drag handles — the
+  half this project's record says is expensive and defect-prone.
+
+- **A better interpolator for the geometric stages** (recorded 2026-08-31). ⚠⚠ **This is the
+  larger win and it was found by accident** while measuring something else. Mean-absolute-Laplacian
+  acutance on a real X-T4 frame: neutral **0.03186**, after **one** bilinear resample **0.01661** —
+  a **48% loss from a single pass**. That already applies to straighten and to lens correction,
+  which ship today; it is not specific to perspective. Bicubic or Lanczos in `sample_bilinear`
+  would improve every geometric stage at once. Reproduce with
+  `cargo run --release -p app --example persp_sharpness <raw>`.
+
+- **Fuse perspective into `GeometryStage`** (recorded 2026-08-31). One resample instead of two when
+  straighten and perspective are both active. ⚠ **Measured at ~20%** of acutance — real, but
+  secondary to the interpolator question above, which is why that one comes first. ⚠ The cost is
+  that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
+  with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
+  perspective's own cache checkpoint, so every crop drag would re-run the resample.
 - **Colour grading does not reach masks.** `LocalAdjustments` is per-pixel-only and a grade is
   global look. Also **no visual feedback of the grading range boundaries** on canvas or histogram.
 
