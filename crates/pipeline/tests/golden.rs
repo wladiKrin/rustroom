@@ -1236,3 +1236,38 @@ fn golden_lens_vignetting() {
         },
     );
 }
+
+/// ⚠ Reuses the **existing** `grid_chart` the lens-correction goldens already use, rather than
+/// adding a second grid. One chart for every geometric stage means a keystone golden and a
+/// distortion golden are directly comparable, and the chart's dimness (0.85 on 0.12) has already
+/// been shown not to clip.
+#[test]
+fn golden_perspective_vertical() {
+    check_golden_with(
+        "perspective_vertical",
+        &Edits {
+            perspective: edit_model::Perspective {
+                vertical: 55.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        grid_chart(),
+    );
+}
+
+#[test]
+fn golden_perspective_aspect() {
+    check_golden_with(
+        "perspective_aspect",
+        &Edits {
+            perspective: edit_model::Perspective {
+                horizontal: -40.0,
+                aspect: 60.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        grid_chart(),
+    );
+}
