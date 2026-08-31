@@ -85,6 +85,27 @@ changes the Library view, so yanking it back on Ctrl+Z would move you somewhere 
 go. ⚠ And it *could not* anyway: `LibrarySource::{Collection, Keyword, Smart}` each hold the **old**
 catalog id, which the remap has invalidated. The panel refreshes; the view stays put.
 
+### A confirmation before a keyword takes its subtree
+
+⚠⚠ **Undo does not help if you never notice**, and deleting a keyword removes its whole subtree
+and every assignment of any of them from one click, with nothing said. The confirmation names what
+is about to go, in the shape `forget_folder`'s already does:
+
+> Delete "Europe"? *This also deletes 3 keywords beneath it and removes the keyword from 47
+> photos. Ctrl+Z restores it.*
+
+⚠ **Shown only when the deletion removes more than the keyword itself** — descendants or
+assignments. A leaf keyword nobody has used is an unsurprising deletion, and a dialog for it is the
+false alarm the `banding_warning` reasoning already rejects: *a warning that fires on ordinary
+practice trains people to dismiss the one that matters.*
+
+⚠ **The counts come from the recursive CTE `keyword_members` already uses**, so nothing new has to
+be written to walk the subtree.
+
+⚠ **Deleting a collection stays unconfirmed**, deliberately. Its scope is not surprising — the
+panel shows its member count beside its name — and it destroys only membership, which undo now
+restores.
+
 ### No cap on the payload
 
 A forgotten 830-photo folder serializes to a few hundred KB held in the undo log. `PresetStore`'s
@@ -104,6 +125,9 @@ The catalog is testable in memory (`Catalog::open_in_memory`), so all of this is
 - **⚠ A membership whose collection has since been deleted is skipped, not fatal** — the rest of the
   restore still lands. Asserted by count, not by absence of an error.
 - **Redo re-deletes**, so the two directions stay symmetric.
+- **The confirmation fires only when it should**: a keyword with descendants or assignments is
+  confirmed, a bare leaf is not. ⚠ Both halves, since a dialog that never fires and one that always
+  fires are equally wrong and only the pair of assertions distinguishes them.
 - **A restore is atomic**: an injected failure part-way leaves the catalog unchanged.
 - ⚠ **Not tested here**: that Ctrl+Z reaches these from the UI, and that the panel refreshes. Those
   are wiring, verified by hand with the app running.
@@ -114,9 +138,8 @@ The catalog is testable in memory (`Catalog::open_in_memory`), so all of this is
    the restore does not reopen the view. Nothing persists these ids, so nothing outside memory is
    affected.
 2. **Undo is session-only**, like every other entry in `ActionLog`. Quitting loses it.
-3. **Deleting a keyword still takes its subtree silently.** Undo only helps if you notice. A
-   confirmation naming the child count was considered and left out — the backlog framed it as an
-   *alternative* to undo, and undo is the better answer — but the residual gap is real.
+3. **A keyword deletion is confirmed; a collection deletion is not.** That asymmetry is deliberate
+   — a keyword's subtree is invisible at the point of deletion, a collection's member count is not.
 4. **No trash browser.** A deletion is recoverable through Ctrl+Z or not at all.
 5. **A restored photo row is not re-scanned.** It comes back exactly as it was recorded, including
    a `last_seen` that is now old; the next scan of that folder corrects it.
