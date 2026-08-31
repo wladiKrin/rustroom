@@ -54,14 +54,27 @@ pub fn taken_text(secs: Option<i64>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
+/// One `label: value` line, inside a [`grid`] block.
+///
+/// ⚠ Must be called inside `Grid::show` — that is what aligns the value column. The previous
+/// version used a fixed 130 pt label, which aligns until a label is longer than that, and is a
+/// magic number besides. `egui::Grid` sizes the column to the widest row instead.
 fn row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            [130.0, ui.spacing().interact_size.y],
-            egui::Label::new(egui::RichText::new(label).weak()),
-        );
-        ui.label(value);
-    });
+    ui.label(egui::RichText::new(label).weak());
+    ui.label(value);
+    ui.end_row();
+}
+
+/// A block of `label: value` rows with an aligned value column.
+///
+/// ⚠ Each block needs its **own** salt: `egui::Grid` sizes columns per id, so sharing one across
+/// the File/Image/Capture/Marks blocks would make them share a width — and "Path" is far longer
+/// than "ISO", so every block would inherit the widest label in the dialog.
+fn grid(ui: &mut egui::Ui, salt: &str, rows: impl FnOnce(&mut egui::Ui)) {
+    egui::Grid::new(salt)
+        .num_columns(2)
+        .spacing([12.0, 4.0])
+        .show(ui, rows);
 }
 
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
@@ -121,96 +134,104 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         theme::DialogSize::Wide,
         |ui| {
             ui.label(egui::RichText::new("File").strong());
-            row(ui, "Name", &shown);
-            row(ui, "Path", &id.path.to_string_lossy());
-            row(ui, "Copy", &id.copy.to_string());
-            row(
-                ui,
-                "Size",
-                &size.map(size_text).unwrap_or_else(|| "—".into()),
-            );
+            grid(ui, "info_file", |ui| {
+                row(ui, "Name", &shown);
+                row(ui, "Path", &id.path.to_string_lossy());
+                row(ui, "Copy", &id.copy.to_string());
+                row(
+                    ui,
+                    "Size",
+                    &size.map(size_text).unwrap_or_else(|| "—".into()),
+                );
+            });
             ui.separator();
 
             ui.label(egui::RichText::new("Image").strong());
-            if dims == (0, 0) {
-                row(ui, "Dimensions", "—");
-            } else {
-                row(ui, "Dimensions", &format!("{} × {}", dims.0, dims.1));
-                let mp = dims.0 as f64 * dims.1 as f64 / 1_000_000.0;
-                row(ui, "Megapixels", &format!("{mp:.1} MP"));
-                let orient = if dims.0 > dims.1 {
-                    "Landscape"
-                } else if dims.1 > dims.0 {
-                    "Portrait"
+            grid(ui, "info_image", |ui| {
+                if dims == (0, 0) {
+                    row(ui, "Dimensions", "—");
                 } else {
-                    "Square"
-                };
-                row(ui, "Orientation", orient);
-            }
+                    row(ui, "Dimensions", &format!("{} × {}", dims.0, dims.1));
+                    let mp = dims.0 as f64 * dims.1 as f64 / 1_000_000.0;
+                    row(ui, "Megapixels", &format!("{mp:.1} MP"));
+                    let orient = if dims.0 > dims.1 {
+                        "Landscape"
+                    } else if dims.1 > dims.0 {
+                        "Portrait"
+                    } else {
+                        "Square"
+                    };
+                    row(ui, "Orientation", orient);
+                }
+            });
             ui.separator();
 
             ui.label(egui::RichText::new("Capture").strong());
-            row(ui, "Taken", &taken_text(capture.taken));
-            row(ui, "Camera", &opt_text(capture.camera.as_deref()));
-            row(ui, "Lens", &opt_text(capture.lens.as_deref()));
-            row(ui, "ISO", &opt_text(capture.iso));
-            row(
-                ui,
-                "Shutter",
-                &capture
-                    .shutter
-                    .map(shutter_text)
-                    .unwrap_or_else(|| "—".into()),
-            );
-            row(
-                ui,
-                "Aperture",
-                &capture
-                    .aperture
-                    .map(|a| format!("f/{a}"))
-                    .unwrap_or_else(|| "—".into()),
-            );
-            row(
-                ui,
-                "Focal length",
-                &capture
-                    .focal_len
-                    .map(|f| format!("{f} mm"))
-                    .unwrap_or_else(|| "—".into()),
-            );
+            grid(ui, "info_capture", |ui| {
+                row(ui, "Taken", &taken_text(capture.taken));
+                row(ui, "Camera", &opt_text(capture.camera.as_deref()));
+                row(ui, "Lens", &opt_text(capture.lens.as_deref()));
+                row(ui, "ISO", &opt_text(capture.iso));
+                row(
+                    ui,
+                    "Shutter",
+                    &capture
+                        .shutter
+                        .map(shutter_text)
+                        .unwrap_or_else(|| "—".into()),
+                );
+                row(
+                    ui,
+                    "Aperture",
+                    &capture
+                        .aperture
+                        .map(|a| format!("f/{a}"))
+                        .unwrap_or_else(|| "—".into()),
+                );
+                row(
+                    ui,
+                    "Focal length",
+                    &capture
+                        .focal_len
+                        .map(|f| format!("{f} mm"))
+                        .unwrap_or_else(|| "—".into()),
+                );
+            });
             ui.separator();
 
             ui.label(egui::RichText::new("Marks").strong());
-            row(
-                ui,
-                "Rating",
-                &if marks.rating == 0 {
-                    "—".to_string()
-                } else {
-                    "★".repeat(marks.rating as usize)
-                },
-            );
-            row(
-                ui,
-                "Flag",
-                match marks.flag {
-                    catalog::db::Flag::Pick => "⚑ Picked",
-                    catalog::db::Flag::Reject => "× Rejected",
-                    catalog::db::Flag::None => "—",
-                },
-            );
-            row(
-                ui,
-                "Colour",
-                &if marks.label == 0 {
-                    "—".to_string()
-                } else {
-                    ["", "Red", "Blue", "Yellow", "Green"]
-                        .get(marks.label as usize)
-                        .unwrap_or(&"—")
-                        .to_string()
-                },
-            );
+            grid(ui, "info_marks", |ui| {
+                row(
+                    ui,
+                    "Rating",
+                    &if marks.rating == 0 {
+                        "—".to_string()
+                    } else {
+                        "★".repeat(marks.rating as usize)
+                    },
+                );
+                row(
+                    ui,
+                    "Flag",
+                    match marks.flag {
+                        catalog::db::Flag::Pick => "⚑ Picked",
+                        catalog::db::Flag::Reject => "× Rejected",
+                        catalog::db::Flag::None => "—",
+                    },
+                );
+                row(
+                    ui,
+                    "Colour",
+                    &if marks.label == 0 {
+                        "—".to_string()
+                    } else {
+                        ["", "Red", "Blue", "Yellow", "Green"]
+                            .get(marks.label as usize)
+                            .unwrap_or(&"—")
+                            .to_string()
+                    },
+                );
+            });
             ui.separator();
             if ui.button("Close").clicked() {
                 close = true;

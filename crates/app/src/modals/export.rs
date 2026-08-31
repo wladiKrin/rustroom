@@ -78,26 +78,39 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                 };
                 ui.label(shown);
             });
-            ui.horizontal(|ui| {
-                ui.label("Format");
-                egui::ComboBox::from_id_salt("format_pick")
-                    .selected_text(opts.format.label())
-                    .show_ui(ui, |ui| {
-                        for f in export::ExportFormat::ALL {
-                            ui.selectable_value(&mut opts.format, f, f.label());
-                        }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Colour space");
-                egui::ComboBox::from_id_salt("space_pick")
-                    .selected_text(opts.space.label())
-                    .show_ui(ui, |ui| {
-                        for s in color::OutputSpace::ALL {
-                            ui.selectable_value(&mut opts.space, s, s.label());
-                        }
-                    });
-            });
+            // ⚠⚠ **Only these two.** `Demosaic` further down is also a labelled control, but it
+            // is separated from these by the banding hint, the quality slider, the long-edge
+            // checkbox and its slider — folding it in here would **reorder the dialog** and
+            // detach the banding hint from the two controls it is about, whose placement is
+            // deliberate (see its comment). Alignment is not worth silently rearranging a dialog
+            // someone reasoned about.
+            //
+            // ⚠ The two sliders carry their labels inside the widget (`Slider::text`), so they
+            // are not `label: control` rows and do not belong in a column either.
+            egui::Grid::new("export_output")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Format");
+                    egui::ComboBox::from_id_salt("format_pick")
+                        .selected_text(opts.format.label())
+                        .show_ui(ui, |ui| {
+                            for f in export::ExportFormat::ALL {
+                                ui.selectable_value(&mut opts.format, f, f.label());
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("Colour space");
+                    egui::ComboBox::from_id_salt("space_pick")
+                        .selected_text(opts.space.label())
+                        .show_ui(ui, |ui| {
+                            for s in color::OutputSpace::ALL {
+                                ui.selectable_value(&mut opts.space, s, s.label());
+                            }
+                        });
+                    ui.end_row();
+                });
             // ⚠ Warn, never block — see `banding_warning`. Placed under the two controls it is
             // about, so the fix ("use 16-bit") is one glance from the Format dropdown.
             if let Some(msg) = banding_warning(opts.space, opts.format) {

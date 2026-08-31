@@ -27,26 +27,33 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.checkbox(&mut confirm, "Confirm before deleting a preset");
             ui.separator();
 
-            ui.horizontal(|ui| {
-                ui.label("Theme");
-                egui::ComboBox::from_id_salt("theme_pick")
-                    .selected_text(theme_choice.label())
-                    .show_ui(ui, |ui| {
-                        for t in ThemeChoice::ALL {
-                            ui.selectable_value(&mut theme_choice, t, t.label());
-                        }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Accent");
-                egui::ComboBox::from_id_salt("accent_pick")
-                    .selected_text(accent.label())
-                    .show_ui(ui, |ui| {
-                        for a in Accent::ALL {
-                            ui.selectable_value(&mut accent, a, a.label());
-                        }
-                    });
-            });
+            // ⚠ One grid so the two controls line up. The Display row below sits in a runtime
+            // branch and gets its **own** grid: a `Grid` whose row count changes between frames
+            // is an id-and-column-width problem for no gain.
+            egui::Grid::new("settings_appearance")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Theme");
+                    egui::ComboBox::from_id_salt("theme_pick")
+                        .selected_text(theme_choice.label())
+                        .show_ui(ui, |ui| {
+                            for t in ThemeChoice::ALL {
+                                ui.selectable_value(&mut theme_choice, t, t.label());
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("Accent");
+                    egui::ComboBox::from_id_salt("accent_pick")
+                        .selected_text(accent.label())
+                        .show_ui(ui, |ui| {
+                            for a in Accent::ALL {
+                                ui.selectable_value(&mut accent, a, a.label());
+                            }
+                        });
+                    ui.end_row();
+                });
             theme::hint(
                 ui,
                 "Dark is the default because a light surround changes how you judge exposure. \
