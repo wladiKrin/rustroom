@@ -21,6 +21,7 @@ impl BrushCoverage {
         self.maps.get(i).and_then(|m| m.clone())
     }
 }
+pub mod perspective;
 pub mod spatial;
 mod stages;
 

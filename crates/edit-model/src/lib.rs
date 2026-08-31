@@ -2575,7 +2575,7 @@ mod tests {
         with.merge_from(&src, EditGroups::only(GEOMETRY_GROUP));
         assert_eq!(with.perspective, src.perspective);
 
-        for g in 0..EDIT_GROUP_NAMES.len() {
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
             if g == GEOMETRY_GROUP {
                 continue;
             }
@@ -2584,9 +2584,7 @@ mod tests {
             assert_eq!(
                 without.perspective,
                 Perspective::default(),
-                "group {} ({}) must not carry perspective",
-                g,
-                EDIT_GROUP_NAMES[g]
+                "group {g} ({name}) must not carry perspective"
             );
         }
     }

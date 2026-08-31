@@ -19,8 +19,13 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib
 ⚠ **Check clippy's exit code before every commit.** `cargo test` passing is not evidence about clippy; six commits this month went in with `clippy -D warnings` failing and had to be amended. Always:
 
 ```bash
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 ```
+
+⚠⚠ **`-- -D warnings` is not optional — it is what CI runs** (`.github/workflows`, line 19). Without
+it clippy exits 0 on warnings that fail the build on push. Caught during Task 2 of this very plan,
+with two real lints (`needless_range_loop`, `manual_is_multiple_of`) sitting in an already-committed
+task.
 
 ⚠ **Branch:** work happens on `perspective-correction`, which already exists. **Never push.**
 
@@ -245,7 +250,7 @@ Append inside `mod tests` in `crates/edit-model/src/lib.rs`:
 
 ```bash
 cargo fmt
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 cargo test --all 2>&1 | grep "test result:" | awk -F'[ ;]' '{p+=$4; f+=$6} END {print "passed="p, "failed="f}'
 ```
 
@@ -682,7 +687,7 @@ Expected: `test result: ok. 9 passed`.
 
 ```bash
 cargo fmt
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 git add -A
 git commit -m "feat(pipeline): the perspective homography, with no image handling"
 ```
@@ -910,7 +915,7 @@ Expected: failed=0, **all 47 goldens still passing without regeneration**. ⚠ I
 
 ```bash
 cargo fmt
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 git add -A
 git commit -m "feat(pipeline): PerspectiveStage, between lens correction and geometry"
 ```
@@ -1035,7 +1040,7 @@ Expected: `clipped = 0` for both, and `the two goldens differ: True`.
 
 ```bash
 cargo fmt
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 cargo test --all 2>&1 | grep "test result:" | awk -F'[ ;]' '{p+=$4; f+=$6} END {print "passed="p, "failed="f}'
 git add -A
 git commit -m "test(pipeline): two perspective goldens on a grid chart"
@@ -1144,7 +1149,7 @@ That duplication is deliberate and pre-existing; do not "fix" it by renaming eit
 
 ```bash
 cargo fmt
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 cargo test --all 2>&1 | grep "test result:" | awk -F'[ ;]' '{p+=$4; f+=$6} END {print "passed="p, "failed="f}'
 git add -A
 git commit -m "feat(app): perspective sliders in the Geometry tool, and the rail renamed"
@@ -1233,7 +1238,7 @@ Remove the "Perspective correction (M3.2's remaining slice)" bullet from `docs/B
 
 ```bash
 cargo fmt --check && echo "fmt ok"
-cargo clippy --all-targets --all-features > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
+cargo clippy --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1; echo "clippy exit: $?"
 cargo test --all 2>&1 | grep "test result:" | awk -F'[ ;]' '{p+=$4; f+=$6} END {print "passed="p, "failed="f}'
 git add -A
 git commit -m "docs: perspective correction shipped; M3.2's manual half closed"
