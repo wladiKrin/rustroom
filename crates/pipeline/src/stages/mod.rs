@@ -9,6 +9,7 @@ pub mod local_contrast;
 pub mod mask;
 pub mod noise_reduction;
 pub mod output_transform;
+pub mod perspective;
 pub mod saturation;
 pub mod sharpening;
 pub mod tone_curve;

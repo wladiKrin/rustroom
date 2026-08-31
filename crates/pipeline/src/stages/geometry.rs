@@ -75,7 +75,7 @@ impl PipelineStage for GeometryStage {
 }
 
 /// Bilinearly sample `src` at fractional (sx, sy); out-of-bounds reads as black.
-fn sample_bilinear(src: &ImageBuf, sx: f32, sy: f32) -> [f32; 3] {
+pub(crate) fn sample_bilinear(src: &ImageBuf, sx: f32, sy: f32) -> [f32; 3] {
     let w = src.width() as i32;
     let h = src.height() as i32;
     let x0 = sx.floor() as i32;

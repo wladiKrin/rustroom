@@ -140,6 +140,7 @@ pub struct Region {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PrefixStepKey {
     LensCorrection(edit_model::LensCorrection),
+    Perspective(edit_model::Perspective),
     Geometry(edit_model::Geometry),
     NoiseReduction(edit_model::NoiseReduction),
     Dehaze(edit_model::Dehaze),
@@ -182,6 +183,17 @@ pub fn build_prefix_steps(
                 )),
             });
         }
+    }
+
+    // ⚠ Between lens correction and geometry: after the optics, before the crop. See the
+    // stage's own module docs for why that order is forced rather than chosen.
+    if edits.perspective.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::Perspective(edits.perspective),
+            stage: Box::new(stages::perspective::PerspectiveStage::new(
+                edits.perspective,
+            )),
+        });
     }
 
     // Geometry runs next, so all adjustments operate on the final cropped pixels.
@@ -765,10 +777,10 @@ mod tests {
         };
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None);
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None);
-        assert_eq!(steps_a.len(), 3);
+        assert_eq!(steps_a.len(), 4);
 
         // Same up to and including noise reduction...
-        for n in 0..=2 {
+        for n in 0..=3 {
             assert_eq!(
                 PrefixKey::upto(&steps_a, n, RenderScale::FULL),
                 PrefixKey::upto(&steps_b, n, RenderScale::FULL),
@@ -777,8 +789,8 @@ mod tests {
         }
         // ...and different once dehaze has run.
         assert_ne!(
-            PrefixKey::upto(&steps_a, 3, RenderScale::FULL),
-            PrefixKey::upto(&steps_b, 3, RenderScale::FULL)
+            PrefixKey::upto(&steps_a, 4, RenderScale::FULL),
+            PrefixKey::upto(&steps_b, 4, RenderScale::FULL)
         );
 
         // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
@@ -819,13 +831,16 @@ mod tests {
     }
 
     #[test]
-    fn the_prefix_holds_geometry_noise_reduction_and_dehaze() {
+    fn the_prefix_holds_perspective_geometry_noise_reduction_and_dehaze() {
         // The tripwire: if a stage is later inserted into the prefix region, this fails and
         // forces PrefixKey to be updated with its parameters.
+        //
+        // ⚠ No lens profile is supplied here, so `lens_correction` is absent by construction —
+        // the prefix starts at perspective.
         let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
         assert_eq!(
             prefix.stage_names(),
-            vec!["geometry", "noise_reduction", "dehaze"]
+            vec!["perspective", "geometry", "noise_reduction", "dehaze"]
         );
         for name in tail.stage_names() {
             assert!(
@@ -862,13 +877,23 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            3,
-            "all three prefix stages should be active"
+            4,
+            "all four prefix stages should be active"
         );
 
         let variants = [
             (
                 0,
+                Edits {
+                    perspective: edit_model::Perspective {
+                        vertical: 70.0,
+                        ..Default::default()
+                    },
+                    ..base.clone()
+                },
+            ),
+            (
+                1,
                 Edits {
                     geometry: edit_model::Geometry {
                         angle: 7.0,
@@ -878,7 +903,7 @@ mod tests {
                 },
             ),
             (
-                1,
+                2,
                 Edits {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 80.0,
@@ -889,7 +914,7 @@ mod tests {
                 },
             ),
             (
-                2,
+                3,
                 Edits {
                     dehaze: edit_model::Dehaze { amount: 90.0 },
                     ..base.clone()
@@ -898,7 +923,7 @@ mod tests {
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..3 {
+            for i in 0..4 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
