@@ -27,7 +27,7 @@ impl Tool {
     pub fn label(self) -> &'static str {
         match self {
             Self::Edit => "Edit",
-            Self::Crop => "Crop",
+            Self::Crop => "Geometry",
             Self::Masks => "Masks",
             Self::Presets => "Presets",
         }

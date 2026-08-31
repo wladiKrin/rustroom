@@ -28,7 +28,16 @@ pub fn show(
     // its effect.
     if lens_profile_found && s.edits.lens_correction.distortion {
         ui.label("Lens");
-        ed.slider(ui, &mut s.edits.lens_correction.scale, 0.0..=100.0, "Scale");
+        // ⚠ "Lens scale" here, plain "Scale" in the Edit panel's Lens section — the same field,
+        // labelled to disambiguate only in the one view where a *second* Scale slider (the
+        // perspective one below) is on screen at the same time. Two adjacent sliders both called
+        // "Scale" is ambiguous once the headings have scrolled out of view.
+        ed.slider(
+            ui,
+            &mut s.edits.lens_correction.scale,
+            0.0..=100.0,
+            "Lens scale",
+        );
         ui.separator();
     }
 
@@ -103,12 +112,33 @@ pub fn show(
     ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Straighten");
 
     ui.separator();
+    // ⚠ Here rather than in the Edit panel because this is the only view that can judge it: crop
+    // mode previews the *uncropped* frame, which is where the empty corners a keystone opens are
+    // visible at all. The Lens `Scale` slider above is here for the identical reason.
+    //
+    // ⚠ "Scale" therefore appears twice when a lens profile is present — once under Lens, once
+    // here. They are different corrections with different autoscales, disambiguated by their
+    // headings, and Lightroom likewise has one in Lens Corrections and one in Transform.
+    ui.label("Perspective");
+    let p = &mut s.edits.perspective;
+    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical");
+    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal");
+    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect");
+    ed.slider(ui, &mut p.scale, 0.0..=100.0, "Scale");
+
+    ui.separator();
     // ⚠ Scoped to the Geometry group, the same rule the Edit tool's reset follows: under an
     // exclusive panel each tool resets its own domain and nothing else. Targeted by the named
     // `GEOMETRY_GROUP` rather than a literal index.
+    //
+    // ⚠⚠ **Anything added to `GEOMETRY_GROUP` must be named in the hover text below**, or this
+    // button silently resets something it does not mention. Perspective joining the group is
+    // exactly what made the previous text ("the crop, the straighten angle and any rotation or
+    // flip") wrong — the same failure as the "Reset adjustments" text that enumerated five panel
+    // sections and went stale when a sixth arrived.
     if ui
-        .button("Reset crop")
-        .on_hover_text("Resets the crop, the straighten angle and any rotation or flip. Leaves the adjustments and any masks alone.")
+        .button("Reset geometry")
+        .on_hover_text("Resets the crop, straighten, rotation, flip and perspective. Leaves the adjustments and any masks alone.")
         .clicked()
     {
         s.edits.merge_from(
@@ -238,7 +268,7 @@ mod tests {
             s.edits.lens_correction.distortion = distortion;
             let mut aspect = None;
             let mut ed = Edited::default();
-            test_ui::find(&ctx, "Scale", |ui| {
+            test_ui::find(&ctx, "Lens scale", |ui| {
                 show(ui, &mut s, &mut aspect, lens, &mut ed);
             })
             .is_some()
@@ -249,5 +279,69 @@ mod tests {
         );
         assert!(!seen(false, true), "no profile, no slider");
         assert!(!seen(true, false), "distortion off, no slider");
+    }
+
+    /// ⚠⚠ The two Scale sliders must stay distinguishable. They are different corrections with
+    /// different autoscales, and once the "Lens" and "Perspective" headings have scrolled out of
+    /// view two sliders both called "Scale" say nothing about which is which.
+    #[test]
+    fn the_lens_scale_and_the_perspective_scale_have_different_labels() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        s.edits.lens_correction.distortion = true;
+        let mut aspect = None;
+        let mut ed = Edited::default();
+        let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut s, &mut aspect, true, &mut ed);
+        });
+        let scales: Vec<&String> = found
+            .iter()
+            .map(|(l, _)| l)
+            .filter(|l| l.contains("cale"))
+            .collect();
+        assert_eq!(scales.len(), 2, "expected exactly two, got {scales:?}");
+        assert_ne!(scales[0], scales[1], "both are called the same thing");
+    }
+
+    /// ⚠ That the sliders are actually drawn. A section added to the wrong branch compiles, runs,
+    /// and is simply never on screen — which no other test in this file would notice.
+    #[test]
+    fn the_perspective_sliders_are_drawn() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut ed = Edited::default();
+        let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut s, &mut aspect, false, &mut ed);
+        });
+        for want in ["Vertical", "Horizontal", "Aspect", "Scale"] {
+            assert!(
+                found.iter().any(|(label, _)| label.contains(want)),
+                "no “{want}” slider in the Geometry tool; found {:?}",
+                found.iter().map(|(l, _)| l).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// ⚠ The rail must say what the tool now does. Asserted on `Tool::label` rather than by
+    /// finding the widget, because the rail is drawn by a different module entirely.
+    #[test]
+    fn the_rail_calls_the_crop_tool_geometry() {
+        assert_eq!(rustroom_app::tool::Tool::Crop.label(), "Geometry");
+    }
+
+    /// ⚠⚠ The reset button covers the whole Geometry group, perspective included. Without this
+    /// the button's promise is only checked by reading its hover text.
+    #[test]
+    fn resetting_the_geometry_clears_the_perspective_too() {
+        let mut s = session();
+        s.edits.geometry.crop = asymmetric();
+        s.edits.perspective = edit_model::Perspective {
+            vertical: 40.0,
+            ..Default::default()
+        };
+        click_in_panel("Reset geometry", &mut s, false);
+        assert_eq!(s.edits.perspective, edit_model::Perspective::default());
+        assert_eq!(s.edits.geometry, edit_model::Geometry::default());
     }
 }
