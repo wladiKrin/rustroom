@@ -8,6 +8,7 @@
 //! — so a value that cannot exist cannot be chosen.
 
 use crate::modals::{dialog, Modal};
+use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
 use rustroom_app::rule::{Cmp, Criterion};
@@ -306,127 +307,130 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut save = false;
     let mut cancel = false;
 
-    let dismissed = dialog(ctx, "edit_rule", &format!("Rule for “{name}”"), |ui| {
-        if unsupported {
-            // ⚠⚠ Declining to edit, never starting from empty. An empty form that replaced a
-            // working rule on Save is exactly the data loss the refusal exists to prevent.
-            crate::theme::hint(
-                ui,
-                "This rule uses nesting the editor cannot show, so it is left alone. \
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "edit_rule",
+        &format!("Rule for “{name}”"),
+        theme::DialogSize::Wide,
+        |ui| {
+            if unsupported {
+                // ⚠⚠ Declining to edit, never starting from empty. An empty form that replaced a
+                // working rule on Save is exactly the data loss the refusal exists to prevent.
+                crate::theme::hint(
+                    ui,
+                    "This rule uses nesting the editor cannot show, so it is left alone. \
                  Edit it in the catalog's JSON, or delete it and save a new one.",
-            );
-            ui.separator();
-            if ui.button("Close").clicked() {
-                cancel = true;
+                );
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    cancel = true;
+                }
+                return;
             }
-            return;
-        }
 
-        ui.horizontal(|ui| {
-            ui.label("Match");
-            egui::ComboBox::from_id_salt("match")
-                .selected_text(form.match_.label())
-                .width(70.0)
-                .show_ui(ui, |ui| {
-                    for m in Match::ALL {
-                        ui.selectable_value(&mut form.match_, m, m.label());
-                    }
-                });
-            ui.label("of:");
-        });
-        ui.separator();
-
-        egui::ScrollArea::vertical()
-            .max_height(360.0)
-            .show(ui, |ui| {
-                let mut drop_row: Option<usize> = None;
-                for (ri, row) in form.rows.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        if ui.button("×").on_hover_text("Remove").clicked() {
-                            drop_row = Some(ri);
+            ui.horizontal(|ui| {
+                ui.label("Match");
+                egui::ComboBox::from_id_salt("match")
+                    .selected_text(form.match_.label())
+                    .width(70.0)
+                    .show_ui(ui, |ui| {
+                        for m in Match::ALL {
+                            ui.selectable_value(&mut form.match_, m, m.label());
                         }
-                        // The kind dropdown replaces every value with a prototype of the new kind.
-                        let current = row
-                            .values
-                            .first()
-                            .map(|c| c.kind())
-                            .unwrap_or("—")
-                            .to_string();
-                        egui::ComboBox::from_id_salt(("kind", ri))
-                            .selected_text(&current)
-                            .width(130.0)
-                            .show_ui(ui, |ui| {
-                                // ⚠⚠ Grouped under headings — sixteen flat entries is more than
-                                // a dropdown can be scanned for. ⚠ The groups come from
-                                // `Criterion::group`, beside the criteria themselves, so a new
-                                // criterion cannot land in a heading the editor does not draw.
-                                let protos = prototypes();
-                                for g in Criterion::GROUPS {
-                                    let mut first = true;
-                                    for proto in protos.iter().filter(|p| p.group() == g) {
-                                        if first {
-                                            if g != Criterion::GROUPS[0] {
-                                                ui.separator();
-                                            }
-                                            ui.label(egui::RichText::new(g).weak().small());
-                                            first = false;
+                    });
+                ui.label("of:");
+            });
+            ui.separator();
+
+            let mut drop_row: Option<usize> = None;
+            for (ri, row) in form.rows.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.button("×").on_hover_text("Remove").clicked() {
+                        drop_row = Some(ri);
+                    }
+                    // The kind dropdown replaces every value with a prototype of the new kind.
+                    let current = row
+                        .values
+                        .first()
+                        .map(|c| c.kind())
+                        .unwrap_or("—")
+                        .to_string();
+                    egui::ComboBox::from_id_salt(("kind", ri))
+                        .selected_text(&current)
+                        .width(130.0)
+                        .show_ui(ui, |ui| {
+                            // ⚠⚠ Grouped under headings — sixteen flat entries is more than
+                            // a dropdown can be scanned for. ⚠ The groups come from
+                            // `Criterion::group`, beside the criteria themselves, so a new
+                            // criterion cannot land in a heading the editor does not draw.
+                            let protos = prototypes();
+                            for g in Criterion::GROUPS {
+                                let mut first = true;
+                                for proto in protos.iter().filter(|p| p.group() == g) {
+                                    if first {
+                                        if g != Criterion::GROUPS[0] {
+                                            ui.separator();
                                         }
-                                        if ui
-                                            .selectable_label(proto.kind() == current, proto.kind())
-                                            .clicked()
-                                        {
-                                            // ⚠ Changing the kind resets the values: a Rating
-                                            // cannot carry a Camera's string, and keeping a stale
-                                            // value would be a criterion nobody chose.
-                                            row.values = vec![proto.clone()];
-                                        }
+                                        ui.label(egui::RichText::new(g).weak().small());
+                                        first = false;
+                                    }
+                                    if ui
+                                        .selectable_label(proto.kind() == current, proto.kind())
+                                        .clicked()
+                                    {
+                                        // ⚠ Changing the kind resets the values: a Rating
+                                        // cannot carry a Camera's string, and keeping a stale
+                                        // value would be a criterion nobody chose.
+                                        row.values = vec![proto.clone()];
                                     }
                                 }
-                            });
-                    });
-                    let mut drop_val: Option<usize> = None;
-                    for (vi, c) in row.values.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.add_space(24.0);
-                            if vi > 0 {
-                                ui.label(egui::RichText::new("or").weak());
-                            }
-                            value_widget(ui, ("v", ri, vi), c, &lists);
-                            if row_len_gt_one(vi) && ui.button("×").clicked() {
-                                drop_val = Some(vi);
                             }
                         });
-                    }
-                    if let Some(vi) = drop_val {
-                        row.values.remove(vi);
-                    }
+                });
+                let mut drop_val: Option<usize> = None;
+                for (vi, c) in row.values.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.add_space(24.0);
-                        // ⚠ A second value on a row is what makes `Any([Is, Is])` reachable from the
-                        // UI, rather than only from a captured filter.
-                        if ui.small_button("+ or").clicked() {
-                            if let Some(last) = row.values.last().cloned() {
-                                row.values.push(last);
-                            }
+                        if vi > 0 {
+                            ui.label(egui::RichText::new("or").weak());
+                        }
+                        value_widget(ui, ("v", ri, vi), c, &lists);
+                        if row_len_gt_one(vi) && ui.button("×").clicked() {
+                            drop_val = Some(vi);
                         }
                     });
-                    ui.separator();
                 }
-                if let Some(ri) = drop_row {
-                    form.rows.remove(ri);
+                if let Some(vi) = drop_val {
+                    row.values.remove(vi);
                 }
-                if ui.button("+ Add criterion").clicked() {
-                    form.rows.push(Row {
-                        values: vec![prototypes()[0].clone()],
-                    });
-                }
-            });
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    // ⚠ A second value on a row is what makes `Any([Is, Is])` reachable from the
+                    // UI, rather than only from a captured filter.
+                    if ui.small_button("+ or").clicked() {
+                        if let Some(last) = row.values.last().cloned() {
+                            row.values.push(last);
+                        }
+                    }
+                });
+                ui.separator();
+            }
+            if let Some(ri) = drop_row {
+                form.rows.remove(ri);
+            }
+            if ui.button("+ Add criterion").clicked() {
+                form.rows.push(Row {
+                    values: vec![prototypes()[0].clone()],
+                });
+            }
 
-        ui.separator();
-        let (yes, no) = crate::theme::button_row(ui, "Save", true, "Cancel");
-        save = yes;
-        cancel = no;
-    });
+            ui.separator();
+            let (yes, no) = crate::theme::button_row(ui, "Save", true, "Cancel");
+            save = yes;
+            cancel = no;
+        },
+    );
 
     if save {
         app.save_rule(ctx, id, &name, &form);

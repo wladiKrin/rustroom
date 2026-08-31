@@ -17,121 +17,128 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let os_manages_colour = app.os_manages_colour;
     let mut close = false;
 
-    let dismissed = dialog(ctx, "settings", "Settings", |ui| {
-        ui.checkbox(&mut confirm, "Confirm before deleting a preset");
-        ui.separator();
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "settings",
+        "Settings",
+        theme::DialogSize::Standard,
+        |ui| {
+            ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+            ui.separator();
 
-        ui.horizontal(|ui| {
-            ui.label("Theme");
-            egui::ComboBox::from_id_salt("theme_pick")
-                .selected_text(theme_choice.label())
-                .show_ui(ui, |ui| {
-                    for t in ThemeChoice::ALL {
-                        ui.selectable_value(&mut theme_choice, t, t.label());
-                    }
-                });
-        });
-        ui.horizontal(|ui| {
-            ui.label("Accent");
-            egui::ComboBox::from_id_salt("accent_pick")
-                .selected_text(accent.label())
-                .show_ui(ui, |ui| {
-                    for a in Accent::ALL {
-                        ui.selectable_value(&mut accent, a, a.label());
-                    }
-                });
-        });
-        theme::hint(
-            ui,
-            "Dark is the default because a light surround changes how you judge exposure. \
-             The accent marks active controls; Neutral turns it off.",
-        );
-        ui.separator();
-
-        // ⚠ A **runtime** branch, not `#[cfg]`, so both halves compile on every platform. The
-        // menu-bar work shipped a `#[cfg]`-gated UI branch that the developer never compiled and
-        // Linux CI never exercised, leaving both halves unverified by whoever was looking.
-        if os_manages_colour {
-            // ⚠ A note, not a disabled dropdown. There is nothing to choose: the OS is using the
-            // display's calibrated profile and following the window between monitors, which no
-            // value here could improve on.
             ui.horizontal(|ui| {
-                ui.label("Display");
-                ui.label("handled by macOS");
-            });
-            theme::hint(
-                ui,
-                "Your display's own colour profile is applied by the system, including any \
-                 calibration, and it follows the window if you move it to another monitor.",
-            );
-        } else {
-            ui.horizontal(|ui| {
-                ui.label("Display");
-                egui::ComboBox::from_id_salt("display_space_pick")
-                    .selected_text(display_space.label())
+                ui.label("Theme");
+                egui::ComboBox::from_id_salt("theme_pick")
+                    .selected_text(theme_choice.label())
                     .show_ui(ui, |ui| {
-                        // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, so offering it is
-                        // a pure footgun.
-                        for s in color::OutputSpace::DISPLAYS {
-                            ui.selectable_value(&mut display_space, s, s.label());
+                        for t in ThemeChoice::ALL {
+                            ui.selectable_value(&mut theme_choice, t, t.label());
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Accent");
+                egui::ComboBox::from_id_salt("accent_pick")
+                    .selected_text(accent.label())
+                    .show_ui(ui, |ui| {
+                        for a in Accent::ALL {
+                            ui.selectable_value(&mut accent, a, a.label());
                         }
                     });
             });
             theme::hint(
                 ui,
-                "The primaries of your monitor. Most are sRGB; recent Apple displays and many \
+                "Dark is the default because a light surround changes how you judge exposure. \
+             The accent marks active controls; Neutral turns it off.",
+            );
+            ui.separator();
+
+            // ⚠ A **runtime** branch, not `#[cfg]`, so both halves compile on every platform. The
+            // menu-bar work shipped a `#[cfg]`-gated UI branch that the developer never compiled and
+            // Linux CI never exercised, leaving both halves unverified by whoever was looking.
+            if os_manages_colour {
+                // ⚠ A note, not a disabled dropdown. There is nothing to choose: the OS is using the
+                // display's calibrated profile and following the window between monitors, which no
+                // value here could improve on.
+                ui.horizontal(|ui| {
+                    ui.label("Display");
+                    ui.label("handled by macOS");
+                });
+                theme::hint(
+                    ui,
+                    "Your display's own colour profile is applied by the system, including any \
+                 calibration, and it follows the window if you move it to another monitor.",
+                );
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("Display");
+                    egui::ComboBox::from_id_salt("display_space_pick")
+                        .selected_text(display_space.label())
+                        .show_ui(ui, |ui| {
+                            // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, so offering it is
+                            // a pure footgun.
+                            for s in color::OutputSpace::DISPLAYS {
+                                ui.selectable_value(&mut display_space, s, s.label());
+                            }
+                        });
+                });
+                theme::hint(
+                    ui,
+                    "The primaries of your monitor. Most are sRGB; recent Apple displays and many \
                  laptops are Display P3. Affects only what you see — never an export, and never \
                  the histogram.",
-            );
-        }
-        ui.separator();
+                );
+            }
+            ui.separator();
 
-        ui.horizontal(|ui| {
-            ui.label("1:1 view quality");
-            egui::ComboBox::from_id_salt("view_demosaic_pick")
-                .selected_text(tier.label())
-                .show_ui(ui, |ui| {
-                    for d in raw_decode::Demosaic::ALL {
-                        ui.selectable_value(&mut tier, d, d.label());
-                    }
-                });
-            theme::hint(ui, view_quality_hint(tier));
-        });
-        // ⚠ Not decoration. Unlike the export setting, this cost is *recurring*: the
-        // full-resolution decode is eager, so a slower tier is paid on every photo you
-        // stop on. The dialog is the only place a user would find that out.
-        theme::hint(
-            ui,
-            "RAW only, and separate from the export setting. Sets the demosaic used \
+            ui.horizontal(|ui| {
+                ui.label("1:1 view quality");
+                egui::ComboBox::from_id_salt("view_demosaic_pick")
+                    .selected_text(tier.label())
+                    .show_ui(ui, |ui| {
+                        for d in raw_decode::Demosaic::ALL {
+                            ui.selectable_value(&mut tier, d, d.label());
+                        }
+                    });
+                theme::hint(ui, view_quality_hint(tier));
+            });
+            // ⚠ Not decoration. Unlike the export setting, this cost is *recurring*: the
+            // full-resolution decode is eager, so a slower tier is paid on every photo you
+            // stop on. The dialog is the only place a user would find that out.
+            theme::hint(
+                ui,
+                "RAW only, and separate from the export setting. Sets the demosaic used \
              for the zoomed view. A slower tier costs that much extra on every photo \
              you stop on, not just on export — the full-resolution decode starts on \
              its own. The measured difference is small, which is why the default is \
              Fast. Changing this re-decodes the open photo.",
-        );
+            );
 
-        ui.separator();
+            ui.separator();
 
-        ui.horizontal(|ui| {
-            ui.label("Pan with");
-            egui::ComboBox::from_id_salt("pan_drag_pick")
-                .selected_text(pan_drag.label())
-                .show_ui(ui, |ui| {
-                    for b in PanDrag::ALL {
-                        ui.selectable_value(&mut pan_drag, b, b.label());
-                    }
-                });
-        });
-        theme::hint(
-            ui,
-            "Scrolling and two-finger swipe always pan — this is the extra drag gesture, \
+            ui.horizontal(|ui| {
+                ui.label("Pan with");
+                egui::ComboBox::from_id_salt("pan_drag_pick")
+                    .selected_text(pan_drag.label())
+                    .show_ui(ui, |ui| {
+                        for b in PanDrag::ALL {
+                            ui.selectable_value(&mut pan_drag, b, b.label());
+                        }
+                    });
+            });
+            theme::hint(
+                ui,
+                "Scrolling and two-finger swipe always pan — this is the extra drag gesture, \
              for when a middle button is missing or broken.",
-        );
+            );
 
-        ui.separator();
-        if ui.button("Close").clicked() {
-            close = true;
-        }
-    });
+            ui.separator();
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        },
+    );
     close |= dismissed;
 
     if confirm != app.settings.confirm_preset_delete {

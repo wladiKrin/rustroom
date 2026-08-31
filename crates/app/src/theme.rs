@@ -185,6 +185,79 @@ pub fn caption(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }
 
+/// How wide a dialog wants to be.
+///
+/// ⚠⚠ **`egui::Modal` has no width knob at all** — its only sizing surface is `frame` and `area`,
+/// so width comes entirely from content. That is *why* every dialog in this app was a different
+/// width. The class is the app's own answer, named at the call site and resolved here.
+///
+/// ⚠ Three rather than one, because a two-button "Delete preset?" at the rule editor's width reads
+/// as padding rather than design. Three rather than two, because Settings and Information want to
+/// sit between a confirmation and the widest thing in the app.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DialogSize {
+    /// A confirmation: a sentence and two buttons.
+    Compact,
+    /// A form: a handful of labelled controls.
+    Standard,
+    /// Dense or long content — a rule, a shortcut list, a metadata table.
+    Wide,
+}
+
+impl DialogSize {
+    /// Every class, narrowest first. ⚠ The tests iterate this, so a variant missing from it is
+    /// unguarded.
+    ///
+    /// ⚠ `#[cfg(test)]` because `theme` is a **binary** module, where a `pub` item with no
+    /// production caller is a `dead_code` error under `clippy -D warnings` — the same reason
+    /// `base_fill` below lives in the test module. Nothing in production needs to enumerate the
+    /// classes; each call site names exactly one.
+    #[cfg(test)]
+    pub const ALL: [DialogSize; 3] = [Self::Compact, Self::Standard, Self::Wide];
+
+    /// The smallest this class may be dragged to.
+    ///
+    /// ⚠ A floor, not a target: the width is what the class actually asserts, and the height only
+    /// stops a dialog being dragged shut.
+    pub fn min(self) -> (f32, f32) {
+        match self {
+            Self::Compact => (300.0, 80.0),
+            Self::Standard => (400.0, 120.0),
+            Self::Wide => (520.0, 200.0),
+        }
+    }
+
+    /// The size a dialog of this class opens at when it has never been resized.
+    pub fn default_size(self) -> (f32, f32) {
+        match self {
+            Self::Compact => (340.0, 140.0),
+            Self::Standard => (480.0, 320.0),
+            Self::Wide => (640.0, 480.0),
+        }
+    }
+}
+
+/// The inner margin every dialog's frame gets.
+///
+/// ⚠⚠ **`egui::Modal`'s default frame is `Frame::popup`, whose inner margin is
+/// `style.spacing.menu_margin` — `Margin::same(6)`.** That is egui's default, not a choice this
+/// project made, and it is the bulk of the reported "very small and cramped".
+///
+/// ⚠ Applied per modal rather than by raising `menu_margin` in [`tune`], which is shared with
+/// every real context menu and would fatten those too.
+pub const DIALOG_MARGIN: i8 = 14;
+
+/// The frame a dialog is drawn in.
+///
+/// ⚠ `style_of(ctx.theme())`, not `global_style()`: a frame's fill, stroke and shadow are all
+/// theme-dependent, and this app tunes dark and light **separately** — see [`apply`]. The global
+/// style would give light mode the wrong frame. (`Context::style()` no longer exists in egui
+/// 0.35; `Modal`'s own default uses the `Ui`'s style, which is not available before the modal
+/// opens.)
+pub fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
+    egui::Frame::popup(&ctx.style_of(ctx.theme())).inner_margin(DIALOG_MARGIN)
+}
+
 /// The trailing confirm/dismiss button pair. Returns `(confirmed, dismissed)`.
 ///
 /// ⚠ This **encodes the order the dialogs already use** — confirm first, dismiss second — it
@@ -391,6 +464,29 @@ mod tests {
         assert!(
             ctx.fonts_mut(|f| f.has_glyph(&id, 'A')),
             "lost the Latin font"
+        );
+    }
+
+    /// ⚠ A table test over **every** variant, so a fourth class cannot ship inconsistent.
+    #[test]
+    fn every_dialog_class_defaults_to_at_least_its_own_minimum() {
+        for class in DialogSize::ALL {
+            let (min_w, min_h) = class.min();
+            let (def_w, def_h) = class.default_size();
+            assert!(
+                def_w >= min_w && def_h >= min_h,
+                "{class:?} defaults to {def_w}x{def_h}, below its minimum {min_w}x{min_h}"
+            );
+        }
+    }
+
+    /// ⚠ The classes must actually be ordered, or naming one at a call site means nothing.
+    #[test]
+    fn the_dialog_classes_get_wider_in_order() {
+        let w: Vec<f32> = DialogSize::ALL.iter().map(|c| c.min().0).collect();
+        assert!(
+            w.windows(2).all(|p| p[0] < p[1]),
+            "minimum widths must strictly increase, got {w:?}"
         );
     }
 }

@@ -13,14 +13,21 @@ pub fn paste(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut close = false;
     let mut paste = false;
 
-    let dismissed = dialog(ctx, "paste_settings", "Paste settings", |ui| {
-        ui.label("Apply:");
-        edit_group_checkboxes(ui, &mut groups);
-        ui.separator();
-        let (confirmed, dismissed) = theme::button_row(ui, "Paste", true, "Cancel");
-        paste |= confirmed;
-        close |= dismissed;
-    });
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "paste_settings",
+        "Paste settings",
+        theme::DialogSize::Standard,
+        |ui| {
+            ui.label("Apply:");
+            edit_group_checkboxes(ui, &mut groups);
+            ui.separator();
+            let (confirmed, dismissed) = theme::button_row(ui, "Paste", true, "Cancel");
+            paste |= confirmed;
+            close |= dismissed;
+        },
+    );
     close |= dismissed;
 
     app.paste_groups = groups;
@@ -43,14 +50,21 @@ pub fn sync(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut close = false;
     let mut run = false;
 
-    let dismissed = dialog(ctx, "sync_settings", "Sync settings", |ui| {
-        ui.label(format!("Apply to {count} other selected photos:"));
-        edit_group_checkboxes(ui, &mut groups);
-        ui.separator();
-        let (confirmed, dismissed) = theme::button_row(ui, "Sync", true, "Cancel");
-        run |= confirmed;
-        close |= dismissed;
-    });
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "sync_settings",
+        "Sync settings",
+        theme::DialogSize::Standard,
+        |ui| {
+            ui.label(format!("Apply to {count} other selected photos:"));
+            edit_group_checkboxes(ui, &mut groups);
+            ui.separator();
+            let (confirmed, dismissed) = theme::button_row(ui, "Sync", true, "Cancel");
+            run |= confirmed;
+            close |= dismissed;
+        },
+    );
     close |= dismissed;
 
     app.sync_groups = groups;

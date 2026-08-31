@@ -36,7 +36,7 @@ pub mod presets;
 pub mod rule_edit;
 pub mod settings;
 
-use crate::RustroomApp;
+use crate::{theme, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
 
@@ -46,20 +46,66 @@ use eframe::egui;
 /// ⚠ `egui::Modal`, not `egui::Window`: a Window opens at the top-left and is genuinely easy
 /// to miss, while a Modal centres on the viewport, dims the backdrop and blocks clicks behind
 /// it.
+///
+/// ⚠⚠ **This is the single place dialog sizing lives.** Fourteen dialogs each choosing their own
+/// width is how they became inconsistent and cramped; a call site names a [`theme::DialogSize`]
+/// and nothing else.
+///
+/// ⚠⚠ **The dialog stays centred as it grows**, because `Modal` anchors `Align2::CENTER_CENTER`.
+/// The corner handle therefore drifts from the pointer at half rate. That is inherent to a centred
+/// modal and cannot be fixed without giving up the centring, which was the deliberate choice over
+/// `egui::Window`.
+///
+/// ⚠ The size is measured as the content `Ui`'s available size on its **first line** — the
+/// `Resize`'s own `content_ui`, whose extent is the same quantity `default_size` sets. Feeding
+/// back the same quantity is what makes the round trip unable to drift. It is measured rather than
+/// read from `egui::Resize::State`, whose `desired_size` is `pub(crate)`.
 pub fn dialog<R>(
     ctx: &egui::Context,
+    settings: &mut rustroom_app::settings::Settings,
     id: &str,
     title: &str,
+    size: theme::DialogSize,
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) -> bool {
-    egui::Modal::new(egui::Id::new(id))
+    let min = size.min();
+    let seed = settings.dialog_size(id, min, size.default_size());
+    // ⚠ Bounded by the live viewport, so a size chosen on a large monitor is clamped rather than
+    // stranding the dialog off-screen on a small one.
+    // ⚠ `viewport_rect`, not `screen_rect` — renamed in egui 0.35.
+    let vp = ctx.viewport_rect().size();
+    let max = (vp.x * 0.8, vp.y * 0.8);
+    let mut measured = seed;
+
+    let backdrop = egui::Modal::new(egui::Id::new(id))
+        .frame(theme::dialog_frame(ctx))
         .show(ctx, |ui| {
-            ui.heading(title);
-            ui.separator();
-            content(ui);
+            egui::Resize::default()
+                .id_salt(id)
+                .default_size(seed)
+                .min_size(min)
+                .max_size(max)
+                .resizable(true)
+                .show(ui, |ui| {
+                    measured = (ui.available_width(), ui.available_height());
+                    ui.heading(title);
+                    ui.separator();
+                    // ⚠ The content scrolls, so a long rule or preset list can never push the
+                    // dialog past the bottom of the screen. ⚠ The buttons scroll **with** it:
+                    // `dialog` does not own the button row, and pinning it means restructuring
+                    // every call site. They stay reachable, which is the bug being fixed.
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            content(ui);
+                        });
+                });
         })
         .backdrop_response
-        .clicked()
+        .clicked();
+
+    settings.remember_dialog_size(id, measured);
+    backdrop
 }
 
 /// Which modal dialog is open. At most one at a time, so this is an enum rather than a
@@ -209,21 +255,28 @@ fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut confirmed = false;
     let mut cancelled = false;
 
-    let dismissed = dialog(ctx, "confirm_forget_folder", "Forget folder", |ui| {
-        ui.label(format!("Forget “{}”?", path.display()));
-        crate::theme::hint(
-            ui,
-            &format!(
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "confirm_forget_folder",
+        "Forget folder",
+        theme::DialogSize::Compact,
+        |ui| {
+            ui.label(format!("Forget “{}”?", path.display()));
+            crate::theme::hint(
+                ui,
+                &format!(
                 "Removes {count} photos from the catalog, with their ratings, flags, labels and \
                  keywords. No files are deleted and no edits are lost — re-opening the folder \
                  catalogues it again."
             ),
-        );
-        ui.separator();
-        let (yes, no) = crate::theme::button_row(ui, "Forget", true, "Cancel");
-        confirmed = yes;
-        cancelled = no;
-    });
+            );
+            ui.separator();
+            let (yes, no) = crate::theme::button_row(ui, "Forget", true, "Cancel");
+            confirmed = yes;
+            cancelled = no;
+        },
+    );
 
     // Clicking outside is a cancel, as in every other confirmation here.
     if confirmed {
@@ -241,35 +294,42 @@ fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
 /// the first time a shortcut moves.
 fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut close = false;
-    egui::Modal::new(egui::Id::new("shortcuts")).show(ctx, |ui| {
-        ui.heading("Keyboard shortcuts");
-        egui::ScrollArea::vertical()
-            .max_height(420.0)
-            .show(ui, |ui| {
-                for section in rustroom_app::menu::model() {
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(section.title).strong());
-                    for item in section.items {
-                        if let rustroom_app::menu::Item::Action {
-                            label,
-                            shortcut: Some(sc),
-                            ..
-                        } = item
-                        {
-                            ui.horizontal(|ui| {
-                                ui.label(label);
-                                crate::theme::hint(ui, &sc.label());
-                            });
-                        }
+    // ⚠ Through the shared funnel like every other dialog. It built its own `egui::Modal` before,
+    // which meant it missed the frame padding and the sizing entirely — and it is one of the
+    // dialogs that most wants to be Wide and scrollable.
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "shortcuts",
+        "Keyboard shortcuts",
+        theme::DialogSize::Wide,
+        |ui| {
+            // ⚠ The inner `ScrollArea` is gone: `dialog` provides one, and nesting two vertical
+            // scroll areas makes them fight over the wheel.
+            for section in rustroom_app::menu::model() {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(section.title).strong());
+                for item in section.items {
+                    if let rustroom_app::menu::Item::Action {
+                        label,
+                        shortcut: Some(sc),
+                        ..
+                    } = item
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            theme::hint(ui, &sc.label());
+                        });
                     }
                 }
-            });
-        ui.separator();
-        if ui.button("Close").clicked() {
-            close = true;
-        }
-    });
-    if close {
+            }
+            ui.separator();
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        },
+    );
+    if close || dismissed {
         app.modal = Modal::None;
     }
 }
@@ -277,15 +337,60 @@ fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
 /// The about box.
 fn about(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut close = false;
-    egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
-        ui.heading("Rustroom");
-        crate::theme::hint(ui, "An open-source RAW photo editor.");
-        ui.separator();
-        if ui.button("Close").clicked() {
-            close = true;
-        }
-    });
-    if close {
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "about",
+        "Rustroom",
+        // ⚠ `Compact` despite being a "form-ish" dialog: it is two lines and a Close button, and
+        // `Standard` would be mostly empty.
+        theme::DialogSize::Compact,
+        |ui| {
+            theme::hint(ui, "An open-source RAW photo editor.");
+            ui.separator();
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        },
+    );
+    if close || dismissed {
         app.modal = Modal::None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::theme::DialogSize;
+
+    /// Every dialog id in the app, with the class it uses.
+    ///
+    /// ⚠ **A documentation test, and it is worth saying so rather than overselling it.** It pins
+    /// the roster and that the ids are unique — it does **not** verify the wiring, which is
+    /// appearance and is checked by hand with the app running. What it does catch is a dialog
+    /// added with a duplicate id, which would make two dialogs share a persisted size and an
+    /// `egui::Resize` state.
+    #[test]
+    fn every_dialog_has_a_class_and_the_ids_are_unique() {
+        let dialogs: [(&str, DialogSize); 14] = [
+            ("save_preset", DialogSize::Standard),
+            ("confirm_delete", DialogSize::Compact),
+            ("paste_settings", DialogSize::Standard),
+            ("sync_settings", DialogSize::Standard),
+            ("export_settings", DialogSize::Standard),
+            ("save_export_preset", DialogSize::Standard),
+            ("confirm_delete_export", DialogSize::Compact),
+            ("export_collision", DialogSize::Standard),
+            ("confirm_forget_folder", DialogSize::Compact),
+            ("photo_info", DialogSize::Wide),
+            ("edit_rule", DialogSize::Wide),
+            ("settings", DialogSize::Standard),
+            ("shortcuts", DialogSize::Wide),
+            ("about", DialogSize::Compact),
+        ];
+        let mut ids: Vec<&str> = dialogs.iter().map(|(i, _)| *i).collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "every dialog id must be unique");
     }
 }

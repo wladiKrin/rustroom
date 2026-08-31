@@ -3,6 +3,7 @@
 //! ⚠ The formatting lives in pure functions below so it can be tested; the dialog itself is glue.
 
 use crate::modals::{dialog, Modal};
+use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
 
@@ -112,107 +113,110 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let size = std::fs::metadata(&id.path).ok().map(|m| m.len() as i64);
 
     let mut close = false;
-    let dismissed = dialog(ctx, "photo_info", "Information", |ui| {
-        egui::ScrollArea::vertical()
-            .max_height(460.0)
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("File").strong());
-                row(ui, "Name", &shown);
-                row(ui, "Path", &id.path.to_string_lossy());
-                row(ui, "Copy", &id.copy.to_string());
-                row(
-                    ui,
-                    "Size",
-                    &size.map(size_text).unwrap_or_else(|| "—".into()),
-                );
-                ui.separator();
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "photo_info",
+        "Information",
+        theme::DialogSize::Wide,
+        |ui| {
+            ui.label(egui::RichText::new("File").strong());
+            row(ui, "Name", &shown);
+            row(ui, "Path", &id.path.to_string_lossy());
+            row(ui, "Copy", &id.copy.to_string());
+            row(
+                ui,
+                "Size",
+                &size.map(size_text).unwrap_or_else(|| "—".into()),
+            );
+            ui.separator();
 
-                ui.label(egui::RichText::new("Image").strong());
-                if dims == (0, 0) {
-                    row(ui, "Dimensions", "—");
+            ui.label(egui::RichText::new("Image").strong());
+            if dims == (0, 0) {
+                row(ui, "Dimensions", "—");
+            } else {
+                row(ui, "Dimensions", &format!("{} × {}", dims.0, dims.1));
+                let mp = dims.0 as f64 * dims.1 as f64 / 1_000_000.0;
+                row(ui, "Megapixels", &format!("{mp:.1} MP"));
+                let orient = if dims.0 > dims.1 {
+                    "Landscape"
+                } else if dims.1 > dims.0 {
+                    "Portrait"
                 } else {
-                    row(ui, "Dimensions", &format!("{} × {}", dims.0, dims.1));
-                    let mp = dims.0 as f64 * dims.1 as f64 / 1_000_000.0;
-                    row(ui, "Megapixels", &format!("{mp:.1} MP"));
-                    let orient = if dims.0 > dims.1 {
-                        "Landscape"
-                    } else if dims.1 > dims.0 {
-                        "Portrait"
-                    } else {
-                        "Square"
-                    };
-                    row(ui, "Orientation", orient);
-                }
-                ui.separator();
+                    "Square"
+                };
+                row(ui, "Orientation", orient);
+            }
+            ui.separator();
 
-                ui.label(egui::RichText::new("Capture").strong());
-                row(ui, "Taken", &taken_text(capture.taken));
-                row(ui, "Camera", &opt_text(capture.camera.as_deref()));
-                row(ui, "Lens", &opt_text(capture.lens.as_deref()));
-                row(ui, "ISO", &opt_text(capture.iso));
-                row(
-                    ui,
-                    "Shutter",
-                    &capture
-                        .shutter
-                        .map(shutter_text)
-                        .unwrap_or_else(|| "—".into()),
-                );
-                row(
-                    ui,
-                    "Aperture",
-                    &capture
-                        .aperture
-                        .map(|a| format!("f/{a}"))
-                        .unwrap_or_else(|| "—".into()),
-                );
-                row(
-                    ui,
-                    "Focal length",
-                    &capture
-                        .focal_len
-                        .map(|f| format!("{f} mm"))
-                        .unwrap_or_else(|| "—".into()),
-                );
-                ui.separator();
+            ui.label(egui::RichText::new("Capture").strong());
+            row(ui, "Taken", &taken_text(capture.taken));
+            row(ui, "Camera", &opt_text(capture.camera.as_deref()));
+            row(ui, "Lens", &opt_text(capture.lens.as_deref()));
+            row(ui, "ISO", &opt_text(capture.iso));
+            row(
+                ui,
+                "Shutter",
+                &capture
+                    .shutter
+                    .map(shutter_text)
+                    .unwrap_or_else(|| "—".into()),
+            );
+            row(
+                ui,
+                "Aperture",
+                &capture
+                    .aperture
+                    .map(|a| format!("f/{a}"))
+                    .unwrap_or_else(|| "—".into()),
+            );
+            row(
+                ui,
+                "Focal length",
+                &capture
+                    .focal_len
+                    .map(|f| format!("{f} mm"))
+                    .unwrap_or_else(|| "—".into()),
+            );
+            ui.separator();
 
-                ui.label(egui::RichText::new("Marks").strong());
-                row(
-                    ui,
-                    "Rating",
-                    &if marks.rating == 0 {
-                        "—".to_string()
-                    } else {
-                        "★".repeat(marks.rating as usize)
-                    },
-                );
-                row(
-                    ui,
-                    "Flag",
-                    match marks.flag {
-                        catalog::db::Flag::Pick => "⚑ Picked",
-                        catalog::db::Flag::Reject => "× Rejected",
-                        catalog::db::Flag::None => "—",
-                    },
-                );
-                row(
-                    ui,
-                    "Colour",
-                    &if marks.label == 0 {
-                        "—".to_string()
-                    } else {
-                        ["", "Red", "Blue", "Yellow", "Green"]
-                            .get(marks.label as usize)
-                            .unwrap_or(&"—")
-                            .to_string()
-                    },
-                );
-            });
-        ui.separator();
-        if ui.button("Close").clicked() {
-            close = true;
-        }
-    });
+            ui.label(egui::RichText::new("Marks").strong());
+            row(
+                ui,
+                "Rating",
+                &if marks.rating == 0 {
+                    "—".to_string()
+                } else {
+                    "★".repeat(marks.rating as usize)
+                },
+            );
+            row(
+                ui,
+                "Flag",
+                match marks.flag {
+                    catalog::db::Flag::Pick => "⚑ Picked",
+                    catalog::db::Flag::Reject => "× Rejected",
+                    catalog::db::Flag::None => "—",
+                },
+            );
+            row(
+                ui,
+                "Colour",
+                &if marks.label == 0 {
+                    "—".to_string()
+                } else {
+                    ["", "Red", "Blue", "Yellow", "Green"]
+                        .get(marks.label as usize)
+                        .unwrap_or(&"—")
+                        .to_string()
+                },
+            );
+            ui.separator();
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        },
+    );
 
     if close || dismissed {
         app.modal = Modal::None;

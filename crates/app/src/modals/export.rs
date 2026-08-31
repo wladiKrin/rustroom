@@ -30,117 +30,124 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     let presets = app.export_preset_list.clone();
     let selected = app.selected_export_preset.clone();
 
-    let dismissed = dialog(ctx, "export_settings", "Export", |ui| {
-        ui.label(format!("Export {count} photos as JPEG."));
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("export_preset_pick")
-                .selected_text(selected.clone().unwrap_or_else(|| "Preset…".into()))
-                .show_ui(ui, |ui| {
-                    for p in &presets {
-                        let is_sel = selected.as_deref() == Some(p.name.as_str());
-                        if ui.selectable_label(is_sel, &p.name).clicked() {
-                            // Fills every field below, which is what keeps a preset's
-                            // destination change visible rather than hidden.
-                            picked = Some((p.name.clone(), p.options.clone()));
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "export_settings",
+        "Export",
+        theme::DialogSize::Standard,
+        |ui| {
+            ui.label(format!("Export {count} photos as JPEG."));
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("export_preset_pick")
+                    .selected_text(selected.clone().unwrap_or_else(|| "Preset…".into()))
+                    .show_ui(ui, |ui| {
+                        for p in &presets {
+                            let is_sel = selected.as_deref() == Some(p.name.as_str());
+                            if ui.selectable_label(is_sel, &p.name).clicked() {
+                                // Fills every field below, which is what keeps a preset's
+                                // destination change visible rather than hidden.
+                                picked = Some((p.name.clone(), p.options.clone()));
+                            }
                         }
-                    }
-                });
-            if ui.button("Save as…").clicked() {
-                save_as = true;
+                    });
+                if ui.button("Save as…").clicked() {
+                    save_as = true;
+                }
+                let can_delete = selected.is_some();
+                if ui
+                    .add_enabled(can_delete, egui::Button::new("Delete"))
+                    .clicked()
+                {
+                    delete_selected = true;
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Destination…").clicked() {
+                    pick_dir = true;
+                }
+                let shown = if opts.dest_dir.as_os_str().is_empty() {
+                    "(none chosen)".to_string()
+                } else if opts.dest_dir.is_dir() {
+                    opts.dest_dir.display().to_string()
+                } else {
+                    // A preset can carry a folder that has since gone — an unplugged drive,
+                    // or a preset from another machine. Say so rather than failing per photo.
+                    format!("{} (missing)", opts.dest_dir.display())
+                };
+                ui.label(shown);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Format");
+                egui::ComboBox::from_id_salt("format_pick")
+                    .selected_text(opts.format.label())
+                    .show_ui(ui, |ui| {
+                        for f in export::ExportFormat::ALL {
+                            ui.selectable_value(&mut opts.format, f, f.label());
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Colour space");
+                egui::ComboBox::from_id_salt("space_pick")
+                    .selected_text(opts.space.label())
+                    .show_ui(ui, |ui| {
+                        for s in color::OutputSpace::ALL {
+                            ui.selectable_value(&mut opts.space, s, s.label());
+                        }
+                    });
+            });
+            // ⚠ Warn, never block — see `banding_warning`. Placed under the two controls it is
+            // about, so the fix ("use 16-bit") is one glance from the Format dropdown.
+            if let Some(msg) = banding_warning(opts.space, opts.format) {
+                theme::hint(ui, msg);
             }
-            let can_delete = selected.is_some();
-            if ui
-                .add_enabled(can_delete, egui::Button::new("Delete"))
-                .clicked()
-            {
-                delete_selected = true;
-            }
-        });
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("Destination…").clicked() {
-                pick_dir = true;
-            }
-            let shown = if opts.dest_dir.as_os_str().is_empty() {
-                "(none chosen)".to_string()
-            } else if opts.dest_dir.is_dir() {
-                opts.dest_dir.display().to_string()
+
+            // Greyed out rather than hidden for the non-lossy formats: the value is still
+            // there and returns when JPEG is reselected — the same treatment NR's Detail and
+            // Sharpening's Masking get for being inert.
+            ui.add_enabled(
+                opts.format.is_lossy(),
+                egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
+            );
+
+            let mut resize = opts.max_edge.is_some();
+            ui.checkbox(&mut resize, "Fit within a long edge");
+            if resize {
+                let mut edge = opts.max_edge.unwrap_or(2048);
+                ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
+                opts.max_edge = Some(edge);
             } else {
-                // A preset can carry a folder that has since gone — an unplugged drive,
-                // or a preset from another machine. Say so rather than failing per photo.
-                format!("{} (missing)", opts.dest_dir.display())
-            };
-            ui.label(shown);
-        });
-        ui.horizontal(|ui| {
-            ui.label("Format");
-            egui::ComboBox::from_id_salt("format_pick")
-                .selected_text(opts.format.label())
-                .show_ui(ui, |ui| {
-                    for f in export::ExportFormat::ALL {
-                        ui.selectable_value(&mut opts.format, f, f.label());
-                    }
-                });
-        });
-        ui.horizontal(|ui| {
-            ui.label("Colour space");
-            egui::ComboBox::from_id_salt("space_pick")
-                .selected_text(opts.space.label())
-                .show_ui(ui, |ui| {
-                    for s in color::OutputSpace::ALL {
-                        ui.selectable_value(&mut opts.space, s, s.label());
-                    }
-                });
-        });
-        // ⚠ Warn, never block — see `banding_warning`. Placed under the two controls it is
-        // about, so the fix ("use 16-bit") is one glance from the Format dropdown.
-        if let Some(msg) = banding_warning(opts.space, opts.format) {
-            theme::hint(ui, msg);
-        }
+                opts.max_edge = None;
+            }
 
-        // Greyed out rather than hidden for the non-lossy formats: the value is still
-        // there and returns when JPEG is reselected — the same treatment NR's Detail and
-        // Sharpening's Masking get for being inert.
-        ui.add_enabled(
-            opts.format.is_lossy(),
-            egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
-        );
-
-        let mut resize = opts.max_edge.is_some();
-        ui.checkbox(&mut resize, "Fit within a long edge");
-        if resize {
-            let mut edge = opts.max_edge.unwrap_or(2048);
-            ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
-            opts.max_edge = Some(edge);
-        } else {
-            opts.max_edge = None;
-        }
-
-        ui.horizontal(|ui| {
-            ui.label("Demosaic");
-            egui::ComboBox::from_id_salt("demosaic_pick")
-                .selected_text(opts.demosaic.label())
-                .show_ui(ui, |ui| {
-                    for d in raw_decode::Demosaic::ALL {
-                        ui.selectable_value(&mut opts.demosaic, d, d.label());
-                    }
-                });
-        });
-        // ⚠ Not decoration. This is the one export control whose effect cannot be
-        // previewed, and the dialog is the only place a user would find that out.
-        theme::hint(
-            ui,
-            "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
+            ui.horizontal(|ui| {
+                ui.label("Demosaic");
+                egui::ComboBox::from_id_salt("demosaic_pick")
+                    .selected_text(opts.demosaic.label())
+                    .show_ui(ui, |ui| {
+                        for d in raw_decode::Demosaic::ALL {
+                            ui.selectable_value(&mut opts.demosaic, d, d.label());
+                        }
+                    });
+            });
+            // ⚠ Not decoration. This is the one export control whose effect cannot be
+            // previewed, and the dialog is the only place a user would find that out.
+            theme::hint(
+                ui,
+                "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
              Independent of the 1:1 view's own quality setting, so judging this \
              means exporting a frame at two settings and comparing crops.",
-        );
+            );
 
-        ui.separator();
-        let ready = destination_ready(&opts.dest_dir);
-        let (confirmed, dismissed) = theme::button_row(ui, "Export", ready, "Cancel");
-        start |= confirmed;
-        close |= dismissed;
-    });
+            ui.separator();
+            let ready = destination_ready(&opts.dest_dir);
+            let (confirmed, dismissed) = theme::button_row(ui, "Export", ready, "Cancel");
+            start |= confirmed;
+            close |= dismissed;
+        },
+    );
 
     if pick_dir {
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -188,13 +195,20 @@ pub fn save_preset(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut name = name.clone();
     let mut save = false;
     let mut close = false;
-    let dismissed = dialog(ctx, "save_export_preset", "Save export preset", |ui| {
-        ui.text_edit_singleline(&mut name);
-        let (confirmed, dismissed) =
-            theme::button_row(ui, "Save", !name.trim().is_empty(), "Cancel");
-        save |= confirmed;
-        close |= dismissed;
-    });
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "save_export_preset",
+        "Save export preset",
+        theme::DialogSize::Standard,
+        |ui| {
+            ui.text_edit_singleline(&mut name);
+            let (confirmed, dismissed) =
+                theme::button_row(ui, "Save", !name.trim().is_empty(), "Cancel");
+            save |= confirmed;
+            close |= dismissed;
+        },
+    );
     if save {
         let preset = ExportPreset {
             name: name.clone(),
@@ -233,21 +247,28 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut dont_ask = *dont_ask_again;
     let mut outcome: Option<ConfirmOutcome> = None;
 
-    let dismissed = dialog(ctx, "confirm_delete_export", "Delete export preset", |ui| {
-        ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
-        theme::hint(ui, "This cannot be undone — export presets have no trash.");
-        ui.checkbox(&mut dont_ask, "Don't ask again");
-        ui.separator();
-        let (confirmed, dismissed) = theme::button_row(ui, "Delete", true, "Cancel");
-        if confirmed {
-            outcome = Some(ConfirmOutcome::Confirmed {
-                suppress_future: dont_ask,
-            });
-        }
-        if dismissed {
-            outcome = Some(ConfirmOutcome::Cancelled);
-        }
-    });
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "confirm_delete_export",
+        "Delete export preset",
+        theme::DialogSize::Compact,
+        |ui| {
+            ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
+            theme::hint(ui, "This cannot be undone — export presets have no trash.");
+            ui.checkbox(&mut dont_ask, "Don't ask again");
+            ui.separator();
+            let (confirmed, dismissed) = theme::button_row(ui, "Delete", true, "Cancel");
+            if confirmed {
+                outcome = Some(ConfirmOutcome::Confirmed {
+                    suppress_future: dont_ask,
+                });
+            }
+            if dismissed {
+                outcome = Some(ConfirmOutcome::Cancelled);
+            }
+        },
+    );
     // Clicking outside is a cancel — and therefore discards the tick too.
     if dismissed {
         outcome = Some(ConfirmOutcome::Cancelled);
@@ -287,28 +308,35 @@ pub fn collision(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut apply_all = app.export_apply_all;
     let mut decision: Option<Decision> = None;
 
-    let dismissed = dialog(ctx, "export_collision", "File already exists", |ui| {
-        ui.label(format!("“{name}” is already in the destination folder."));
-        ui.checkbox(&mut apply_all, "Apply to all remaining");
-        ui.separator();
-        ui.horizontal(|ui| {
-            for (label, collision) in [
-                ("Skip", Collision::Skip),
-                ("Overwrite", Collision::Overwrite),
-                ("Keep both", Collision::KeepBoth),
-            ] {
-                if ui.button(label).clicked() {
-                    decision = Some(Decision::Resolve {
-                        collision,
-                        apply_to_all: apply_all,
-                    });
+    let dismissed = dialog(
+        ctx,
+        &mut app.settings,
+        "export_collision",
+        "File already exists",
+        theme::DialogSize::Standard,
+        |ui| {
+            ui.label(format!("“{name}” is already in the destination folder."));
+            ui.checkbox(&mut apply_all, "Apply to all remaining");
+            ui.separator();
+            ui.horizontal(|ui| {
+                for (label, collision) in [
+                    ("Skip", Collision::Skip),
+                    ("Overwrite", Collision::Overwrite),
+                    ("Keep both", Collision::KeepBoth),
+                ] {
+                    if ui.button(label).clicked() {
+                        decision = Some(Decision::Resolve {
+                            collision,
+                            apply_to_all: apply_all,
+                        });
+                    }
                 }
-            }
-            if ui.button("Cancel export").clicked() {
-                decision = Some(Decision::Cancel);
-            }
-        });
-    });
+                if ui.button("Cancel export").clicked() {
+                    decision = Some(Decision::Cancel);
+                }
+            });
+        },
+    );
 
     app.export_apply_all = apply_all;
     // ⚠ Dismissing by clicking outside cancels the run — and `Decision::Cancel` carries
