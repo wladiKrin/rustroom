@@ -73,7 +73,7 @@ note, and `RadialGradient::default` and `ColorGrading::default` before it.
 `scale` is a *modifier*: dragging it alone must not insert a stage that would only resample the
 image for nothing. The rule `NoiseReduction`, `Vignette` and `Sharpening` already follow.
 
-**Edit group: Geometry** (index 5, `GEOMETRY_GROUP`), which defaults **off** for presets, paste
+**Edit group: Geometry** (`GEOMETRY_GROUP`, index 6), which defaults **off** for presets, paste
 and sync — a keystone framed for one composition is meaningless on another. ⚠ Three exhaustive
 constructs make that grouping a compile error until it is decided: `Edits::merge_from`'s
 destructure, `pipeline::all_edits`, `edit_model::all_nonneutral`, and `edit_clipboard`'s payload
