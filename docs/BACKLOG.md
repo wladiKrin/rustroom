@@ -362,28 +362,6 @@ to an AI assistant, not to a contributor**, and it is enormous.
 3. **Small labelled issues.** Several already exist in this file.
 
 
-## Rearranging the Library panel's sections (recorded 2026-08-27 — asked for in use)
-
-**Status:** 🟡 wanted, small-to-medium, no design question. Asked as *"it would be nice to be able
-to rearrange the left outer panel, e.g. by dragging folders below collections."*
-
-The five sections — Folders, Collections, Smart collections, Keywords, Dates — are collapsible and
-persisted (`Settings::panel_sections`), but their **order is literal code**: five `section(..)`
-calls in `collections_panel::show`.
-
-⚠⚠ **The blocker is not the drag; it is that the sections are not data.** Each body is a distinct
-closure over different `app` fields, so there is no list to permute. Making it draggable means
-first making the order a value — `Vec<PanelSection>` in `Settings`, with a `match` from the enum
-to the body — and only then adding the gesture. The `match` is what keeps the bodies as they are.
-
-⚠ **A latent trap the reordering already sprang once:** `picked` and `selected` used to be locals
-of the Collections block that the Keywords block happened to see, because they were sequential
-statements in one closure. Moving Smart between them broke it, and the compiler caught it. Anything
-shared between sections must be read **before** the panel, or the order cannot be a value at all.
-
-⚠ egui's `dnd_drag_source` / `dnd_drop_zone` exist and are the right primitives; nothing needs
-writing from scratch.
-
 ## Undo for catalog deletions (recorded 2026-08-27 — asked for in use)
 
 **Status:** 🟡 wanted, and it is a **design question**, not only effort. Asked as *"it should have
