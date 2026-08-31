@@ -128,9 +128,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // two differ on any cropped photo — and feeding the rendered size back
                     // in compounds the crop every frame. See `view_region::fit_cap`.
                     let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
-                    // Geometry mode pins the fit rung: the overlay is drawn against the
+                    // Geometry mode pins the fit rung: the crop overlay is drawn against the
                     // whole image and placed by the fit-mode maths.
-                    let rung = if tool.is_geometry() {
+                    //
+                    // ⚠⚠ **Guide Mode is the exception and unpins it**, because placing an
+                    // endpoint exactly on a building edge needs real pixels — at fit resolution
+                    // you are aiming at a blur. It can afford to: the guide overlay is anchored
+                    // to `frame_rect`, so it survives a region render, which is precisely what
+                    // the crop overlay cannot do.
+                    let rung = if tool.is_geometry() && !s.show_guides {
                         fit_cap
                     } else {
                         view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom)
@@ -237,7 +243,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             // gesture — and the crop rectangle is invisible here anyway, since
                             // the preview resets the crop.
                             if s.show_guides {
-                                let d = draw_guide_overlay(ui, s, &resp, img_rect);
+                                let d = draw_guide_overlay(ui, s, &resp, frame_rect, img_rect);
                                 if d != GuideDrag::None {
                                     guide_drag = d;
                                 }
@@ -270,7 +276,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // zooming or panning underneath it would misplace it. This gate was
                     // previously the `else` of the geometry branch; it must survive the
                     // change to a per-tool match.
-                    if !tool.is_geometry() {
+                    // ⚠ Guide Mode zooms and pans like the ordinary tools; only the crop
+                    // rectangle needs the view held still.
+                    if !tool.is_geometry() || s.show_guides {
                         // Zoom first, then pan: the anchor correction below depends on the
                         // new zoom, and the other order would anchor against a stale factor.
                         //
@@ -397,11 +405,17 @@ fn draw_guide_overlay(
     ui: &egui::Ui,
     s: &mut Session,
     resp: &egui::Response,
+    frame_rect: egui::Rect,
     img_rect: egui::Rect,
 ) -> GuideDrag {
     use pipeline::perspective::guides::{self, Family, Guide};
 
-    let aspect = img_rect.width() / img_rect.height().max(1.0);
+    // ⚠⚠ **Every coordinate here is against `frame_rect`, never `img_rect`** — the rule the mask
+    // overlay already carries, and for the same reason: once zoomed, `img_rect` covers only the
+    // *rendered slice*, so guides placed against it drift with the view while panning. ⚠ And the
+    // aspect must come from the frame too: **a region's aspect is not the frame's**, and taking it
+    // from `img_rect` silently skews the solve at any zoom.
+    let aspect = frame_rect.width() / frame_rect.height().max(1.0);
     // ⚠⚠ The transform the pixels are taking right now. Guides are stored on the **raw** frame, so
     // they must be mapped through it to stay on the features they were traced onto — that is what
     // makes a live solve usable rather than disorienting.
@@ -420,10 +434,11 @@ fn draw_guide_overlay(
 
     let to_screen = |n: [f32; 2]| {
         egui::pos2(
-            img_rect.left() + n[0] * img_rect.width(),
-            img_rect.top() + n[1] * img_rect.height(),
+            frame_rect.left() + n[0] * frame_rect.width(),
+            frame_rect.top() + n[1] * frame_rect.height(),
         )
     };
+    // ⚠ `img_rect` is still the right *clip*: there is no photograph outside it to annotate.
     let marks = ui.painter_at(canvas_geom::overlay_clip(img_rect));
     let halo = egui::Color32::from_black_alpha(180);
     for (g, (a, b)) in s.guides.iter().zip(&shown) {
@@ -442,10 +457,12 @@ fn draw_guide_overlay(
         }
     }
 
+    // ⚠ Clamped to the frame, so a drag that leaves the picture pins the endpoint to its edge
+    // rather than placing a guide somewhere that does not exist.
     let norm = |p: egui::Pos2| {
         [
-            ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0),
-            ((p.y - img_rect.top()) / img_rect.height()).clamp(0.0, 1.0),
+            ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0),
+            ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0),
         ]
     };
 
