@@ -147,16 +147,17 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
   **forward** distortion map and the `lensfun` crate exposes only the inverse, so it means an
   iterative solve per stroke point. Deferred on the grounds that lens corrections are enabled once,
   early, not toggled mid-edit.
-- **Guided perspective control points** (recorded 2026-08-31, after the manual sliders shipped).
-  Drag 2–4 lines onto edges that should be vertical or horizontal and let lensfun solve, instead
-  of judging by eye. ⚠ **This is the half `mod_pc` actually serves** —
-  `enable_perspective_correction(x, y, d)` takes 4–8 pixel coordinates and runs a Jacobi SVD; the
-  slider half could not use it at all. Two facts already established, so nobody re-derives them:
-  `build_perspective_state` is a **public free function** taking normalised coordinates
-  (`mod_pc.rs:546`), so it needs no `Modifier` and therefore **no matched lens profile**; and **at
-  8 control points lensfun estimates the focal length itself** (`mod_pc.rs:341-348`), so it works
-  on unprofiled lenses and on JPEGs. ⚠ The cost is a new canvas overlay with drag handles — the
-  half this project's record says is expensive and defect-prone.
+- **Automatic vertical detection** (recorded 2026-08-31, the last slice of perspective). Find the
+  lines a guided correction would need, without the user drawing them. ⚠ Needs a **Hough
+  transform** over an edge map — a new image-analysis subsystem, not a UI job — and it still needs
+  the manual controls underneath it for when the detection is wrong. ⚠ The solve itself is already
+  built and is a pure function: `pipeline::perspective::guides::solve` takes two vanishing points,
+  so detection only has to produce those.
+
+  ⚠⚠ **A correction to what this entry used to say:** it claimed guided *"is the half `mod_pc`
+  actually serves"*. Guided shipped **without lensfun at all** — `mod_pc` returns a matrix built
+  from its own estimated focal length, which cannot be decomposed exactly into our fixed-`F_NORM`
+  sliders, while solving in our own model is closed-form. Do not send the next reader to that API.
 
 - **A better interpolator for the geometric stages** (recorded 2026-08-31). ⚠⚠ **This is the
   larger win and it was found by accident** while measuring something else. Mean-absolute-Laplacian
