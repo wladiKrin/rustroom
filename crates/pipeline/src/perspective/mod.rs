@@ -596,3 +596,5 @@ mod tests {
         assert_eq!(Homography::fill_scale(&p, ASPECT), 1.0);
     }
 }
+
+pub mod guides;
