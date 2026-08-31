@@ -9,7 +9,9 @@
 use std::time::Instant;
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: bench_thumb_render <raw>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: bench_thumb_render <raw>");
     let path = std::path::Path::new(&path);
     let edits = edit_model::Edits {
         saturation: -100.0,
@@ -35,7 +37,7 @@ fn main() {
     let extract = t.elapsed();
     let t = Instant::now();
     let mut buf = core_image::ImageBuf::new(thumb.width, thumb.height);
-    for (i, px) in thumb.rgba.chunks_exact(4).enumerate() {
+    for (i, px) in thumb.rgba.as_chunks::<4>().0.iter().enumerate() {
         let d = buf.data_mut();
         for c in 0..3 {
             d[i * 3 + c] = color::srgb_to_linear(px[c] as f32 / 255.0);
@@ -73,7 +75,10 @@ fn main() {
         (b - decoded).as_secs_f64() * 1000.0
     );
 
-    println!("\nB is {:.1}x the cost of A.", b.as_secs_f64() / a.as_secs_f64());
+    println!(
+        "\nB is {:.1}x the cost of A.",
+        b.as_secs_f64() / a.as_secs_f64()
+    );
 
     // Write both so the *fidelity* question can be judged by looking, not by argument.
     let dir = std::env::args().nth(2).unwrap_or_else(|| ".".into());
