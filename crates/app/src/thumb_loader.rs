@@ -281,6 +281,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     /// Collect results until `want` of them have arrived or the deadline passes.
     fn collect(loader: &ThumbLoader, want: usize) -> Vec<ThumbResult> {
@@ -600,5 +601,167 @@ mod tests {
         };
         convert_thumb(&mut t, color::OutputSpace::Srgb);
         assert_eq!(t.rgba, original);
+    }
+
+    /// ⚠⚠ **The edits must reach the render fn.** Without this the loader would compile, run, and
+    /// render every thumbnail neutral — the feature silently absent, with every other test green.
+    #[test]
+    fn the_requested_edits_reach_the_loader() {
+        let seen = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let s = seen.clone();
+        let loader = ThumbLoader::with_loader(
+            Arc::new(move |req: &ThumbRequest| {
+                s.lock().unwrap().push(req.edits.exposure);
+                None
+            }),
+            1,
+            color::OutputSpace::Srgb,
+            || {},
+        );
+        loader.want(&[ThumbRequest {
+            id: PhotoId::original(path_of(0)),
+            edits: Edits {
+                exposure: 1.5,
+                ..Default::default()
+            },
+        }]);
+        let _ = collect(&loader, 1);
+        assert_eq!(seen.lock().unwrap().as_slice(), &[1.5]);
+    }
+
+    /// ⚠ Two renders of one photo with different edits are two jobs. De-duplicating on the photo
+    /// alone would drop the newer one and leave a stale thumbnail on screen for good.
+    #[test]
+    fn the_same_photo_with_different_edits_is_two_jobs() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let c = n.clone();
+        let loader = ThumbLoader::with_loader(
+            Arc::new(move |_: &ThumbRequest| {
+                c.fetch_add(1, Ordering::SeqCst);
+                None
+            }),
+            1,
+            color::OutputSpace::Srgb,
+            || {},
+        );
+        let id = PhotoId::original(path_of(0));
+        loader.want(&[
+            ThumbRequest {
+                id: id.clone(),
+                edits: Edits::default(),
+            },
+            ThumbRequest {
+                id,
+                edits: Edits {
+                    exposure: 1.0,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let _ = collect(&loader, 2);
+        assert_eq!(n.load(Ordering::SeqCst), 2);
+    }
+
+    /// ⚠ A neutral photo skips the pipeline entirely — the common case on a first folder open,
+    /// where paying a round trip 830 times for a no-op would be pure waste.
+    #[test]
+    fn neutral_edits_return_the_embedded_thumbnail_unchanged() {
+        let thumb = Thumbnail {
+            width: 2,
+            height: 1,
+            rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+        };
+        let out = render_edits(thumb.clone(), &Edits::default());
+        assert_eq!(out.width, 2);
+        assert_eq!(out.height, 1);
+    }
+
+    /// ⚠⚠ **A crop changes the thumbnail's dimensions**, and they must come from the *rendered*
+    /// image rather than the input — reusing the input's would paint a cropped photo into the
+    /// original's rect and skew it.
+    #[test]
+    fn a_crop_changes_the_rendered_thumbnails_dimensions() {
+        let thumb = Thumbnail {
+            width: 40,
+            height: 20,
+            rgba: vec![128; 40 * 20 * 4],
+        };
+        let mut edits = Edits::default();
+        edits.geometry.crop.right = 0.5;
+        let out = render_edits(thumb, &edits);
+        assert!(
+            out.width < 40,
+            "a half-width crop must narrow the thumbnail, got {}",
+            out.width
+        );
+        assert_eq!(out.rgba.len(), out.width * out.height * 4);
+    }
+
+    /// ⚠⚠ **The only end-to-end proof that edits reach the pixels**, and it exists because the
+    /// obvious sabotage — `load_thumbnail` returning the extracted preview unrendered — was
+    /// *inert* against every other test in this file. The feature would have been silently
+    /// absent with a green suite.
+    ///
+    /// ⚠ It needs a real file on disk, since `load_thumbnail` goes through `image_decode`. A
+    /// saturated PNG written by `export::save` is the cheapest one available, and no image
+    /// fixture has to be checked in.
+    #[test]
+    fn a_saturation_edit_really_reaches_the_pixels() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustroom_thumbrender_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("red.png");
+
+        // A strongly red image, so a monochrome conversion is unmistakable.
+        let mut buf = core_image::ImageBuf::new(8, 8);
+        for px in buf.data_mut().as_chunks_mut::<3>().0 {
+            px[0] = 0.8;
+            px[1] = 0.05;
+            px[2] = 0.05;
+        }
+        export::save(
+            &buf,
+            &path,
+            export::ExportFormat::Png8,
+            92,
+            color::OutputSpace::Srgb,
+        )
+        .unwrap();
+
+        let neutral = load_thumbnail(&ThumbRequest {
+            id: PhotoId::original(path.clone()),
+            edits: Edits::default(),
+        })
+        .expect("the PNG must load");
+        let mono = load_thumbnail(&ThumbRequest {
+            id: PhotoId::original(path),
+            edits: Edits {
+                saturation: -100.0,
+                ..Default::default()
+            },
+        })
+        .expect("the PNG must load");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let spread = |t: &Thumbnail| {
+            let p = &t.rgba[..3];
+            p.iter().max().unwrap() - p.iter().min().unwrap()
+        };
+        assert!(
+            spread(&neutral) > 40,
+            "fixture check: the source really is coloured, spread {}",
+            spread(&neutral)
+        );
+        assert!(
+            spread(&mono) <= 2,
+            "-100 saturation must reach the pixels, but the render still has a spread of {}",
+            spread(&mono)
+        );
     }
 }
