@@ -4258,4 +4258,40 @@ mod tests {
         assert_eq!(sc.name_of(1), Some("Warm"));
         assert_eq!(sc.name_of(2), None, "an unnamed snapshot names nothing");
     }
+
+    /// ⚠⚠ **Two guides per family are required, and the sabotage step is what forced this test.**
+    /// A single line has no vanishing point at all, so one guide must leave the edits alone rather
+    /// than solving from nothing — and nothing covered that until a sabotage making one guide
+    /// sufficient went **uncaught**.
+    #[test]
+    fn one_guide_solves_nothing_and_two_solve_something() {
+        use pipeline::perspective::guides::Guide;
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+
+        let push = |app: &mut RustroomApp, from: [f32; 2], to: [f32; 2]| {
+            app.session
+                .as_mut()
+                .unwrap()
+                .guides
+                .push(Guide { from, to });
+        };
+        // One converging vertical: no vanishing point, so nothing to solve.
+        push(&mut app, [0.2, 0.0], [0.35, 1.0]);
+        assert!(!app.solve_guides(), "one guide must not change the edits");
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.perspective,
+            edit_model::Perspective::default()
+        );
+
+        // A second, converging on the first, gives one.
+        push(&mut app, [0.8, 0.0], [0.65, 1.0]);
+        assert!(app.solve_guides(), "two guides must solve");
+        assert_ne!(
+            app.session.as_ref().unwrap().edits.perspective.vertical,
+            0.0,
+            "the vertical slider should have moved"
+        );
+    }
 }

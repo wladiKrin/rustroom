@@ -222,8 +222,37 @@ mod tests {
         assert!(cross.abs() < 1e-3, "not parallel after solving: {cross}");
     }
 
-    /// ⚠ Both families together must engage **both** angles. A solver that quietly ignored the
-    /// horizontal family would still pass every test above.
+    /// ⚠⚠ **The two-family round trip, and the sabotage step is what forced it.** An earlier
+    /// version only asserted that both angles were non-zero — which a solver with the *wrong
+    /// numerator* passes happily, because a wrong angle is still an angle. Swapping `(b − d)` for
+    /// `(a − c)` in the yaw formula was **not caught** by that test at all.
+    ///
+    /// This derives the vanishing points from a known rotation instead. Both families become
+    /// parallel exactly when their ray satisfies `−cθ·sφ·x + sθ·y + cθ·cφ·f = 0` — a *line* of
+    /// vanishing points, so any two distinct points on it are a valid `(vertical, horizontal)`
+    /// pair. Solving them must return the angles that drew the line.
+    #[test]
+    fn the_solver_recovers_both_angles_from_the_vanishing_points_they_produce() {
+        for (want_p, want_y) in [(0.25f32, -0.3f32), (-0.2, 0.35), (0.4, 0.15)] {
+            let (sp, cp) = want_p.sin_cos();
+            let (sy, cy) = want_y.sin_cos();
+            // x on the vanishing line for a given y.
+            let x_at = |y: f32| (sp * y + cp * cy * F_NORM) / (cp * sy);
+            let (b, d) = (-4.0f32, 2.0f32);
+            let (pitch, yaw, _) = solve(Some((x_at(b), b)), Some((x_at(d), d)));
+            assert!(
+                (pitch - want_p).abs() < 1e-3,
+                "wanted pitch {want_p}, got {pitch}"
+            );
+            assert!(
+                (yaw - want_y).abs() < 1e-3,
+                "wanted yaw {want_y}, got {yaw}"
+            );
+        }
+    }
+
+    /// ⚠ Both families together must engage **both** angles — kept alongside the round trip
+    /// above because it states the weaker property in a form that reads at a glance.
     #[test]
     fn a_horizontal_family_engages_the_yaw() {
         let (pitch, yaw, _) = solve(Some((0.5, -6.0)), Some((7.0, 0.4)));
