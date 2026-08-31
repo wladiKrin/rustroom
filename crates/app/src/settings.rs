@@ -224,6 +224,21 @@ pub struct Settings {
     /// missing field already falls back to this struct's `Default`. A field-level one would use
     /// `u32`'s own default of `0` instead, silently giving every existing user a collapsed strip.
     pub snapshot_strip_height: u32,
+    /// Sizes the user has dragged dialogs to, keyed by the dialog's id.
+    ///
+    /// ⚠ `[u32; 2]`, not floats: `Settings` derives `Eq`, which no float satisfies — the reasoning
+    /// `library_cell` and `snapshot_strip_height` already carry.
+    ///
+    /// ⚠ `BTreeMap` so the file has a stable order and a diff of it is readable — the reason
+    /// `camera_profiles` is one.
+    ///
+    /// ⚠ Persisted at all because **egui's own `Resize` state dies with the process**: this app
+    /// implements no `eframe::App::save`. The panel-sections work established that a control whose
+    /// state does not survive a restart is worth very little.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field comes from `Settings::default()` — an empty map.
+    pub dialog_sizes: std::collections::BTreeMap<String, [u32; 2]>,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -242,6 +257,12 @@ pub const DEFAULT_STRIP_HEIGHT: u32 = 110;
 /// additionally caps itself at half the live panel height, so a shrunken window clamps further.
 pub const STRIP_HEIGHT_RANGE: (u32, u32) = (28, 400);
 
+/// The largest a dialog may be *stored* as, in points.
+///
+/// ⚠ A ceiling on the stored value only. The dialog additionally clamps itself to 80% of the live
+/// viewport, so a size chosen on a large monitor cannot strand it off-screen on a small one.
+pub const MAX_DIALOG_EDGE: f32 = 2000.0;
+
 impl Settings {
     /// The grid cell size in points, guaranteed usable.
     pub fn clamped_cell(&self) -> f32 {
@@ -252,6 +273,38 @@ impl Settings {
     pub fn clamped_strip_height(&self) -> f32 {
         self.snapshot_strip_height
             .clamp(STRIP_HEIGHT_RANGE.0, STRIP_HEIGHT_RANGE.1) as f32
+    }
+
+    /// The size dialog `id` should open at: what it was dragged to, else `default`, clamped.
+    ///
+    /// ⚠ Clamped rather than trusted — the settings file is user-editable, and a zero width would
+    /// make a dialog unreachable. `clamped_cell`'s rule.
+    pub fn dialog_size(&self, id: &str, min: (f32, f32), default: (f32, f32)) -> (f32, f32) {
+        let (w, h) = match self.dialog_sizes.get(id) {
+            Some([w, h]) => (*w as f32, *h as f32),
+            None => default,
+        };
+        (
+            w.clamp(min.0, MAX_DIALOG_EDGE),
+            h.clamp(min.1, MAX_DIALOG_EDGE),
+        )
+    }
+
+    /// Record the size dialog `id` is currently at.
+    ///
+    /// ⚠ In memory only — the **file** is written when the dialog closes, by `modals::draw`. A
+    /// resize runs at 60 Hz and the settings file is not a place to write sixty times a second:
+    /// the `apply_view_demosaic` rule.
+    pub fn remember_dialog_size(&mut self, id: &str, size: (f32, f32)) {
+        let v = [
+            size.0.round().max(0.0) as u32,
+            size.1.round().max(0.0) as u32,
+        ];
+        // ⚠ Only on a real change, so a dialog merely being open does not dirty the settings and
+        // cause a needless file write when it closes.
+        if self.dialog_sizes.get(id) != Some(&v) {
+            self.dialog_sizes.insert(id.to_string(), v);
+        }
     }
 
     /// The cell size after a pinch or ctrl+scroll of `factor`.
@@ -316,6 +369,7 @@ impl Default for Settings {
             library_cell: DEFAULT_CELL,
             panel_sections: PanelSections::default(),
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
+            dialog_sizes: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -694,6 +748,8 @@ mod tests {
             // Likewise non-default, and inside `STRIP_HEIGHT_RANGE` so `clamped_strip_height`
             // cannot mask a field that failed to round-trip.
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT + 20,
+            // Non-default so a field re-defaulted on load cannot pass.
+            dialog_sizes: std::collections::BTreeMap::from([("x".to_string(), [500u32, 300u32])]),
             // Non-default in both directions, so a re-defaulted field cannot pass.
             panel_sections: PanelSections {
                 folders: true,
@@ -1197,5 +1253,57 @@ mod tests {
     fn the_default_strip_height_is_within_its_own_range() {
         assert!(DEFAULT_STRIP_HEIGHT >= STRIP_HEIGHT_RANGE.0);
         assert!(DEFAULT_STRIP_HEIGHT <= STRIP_HEIGHT_RANGE.1);
+    }
+
+    /// ⚠ `SettingsStore::load` is infallible, so one unparseable field silently reverts **every**
+    /// setting. The sibling of `a_settings_file_from_before_the_snapshot_strip_still_loads`.
+    #[test]
+    fn a_settings_file_from_before_dialog_sizes_still_loads() {
+        let f = TempFile::new("predialogsizes");
+        std::fs::write(&f.0, r#"{"library_cell":200}"#).unwrap();
+        let got = SettingsStore::new(f.0.clone()).load();
+        assert_eq!(got.library_cell, 200, "the stored field must survive");
+        assert!(
+            got.dialog_sizes.is_empty(),
+            "and an absent map must read as empty, not fail the whole parse"
+        );
+    }
+
+    /// ⚠ The file is user-editable and a zero width would make a dialog unreachable, so a stored
+    /// size is clamped rather than trusted — `clamped_cell`'s rule.
+    #[test]
+    fn a_nonsense_stored_dialog_size_is_clamped_into_the_classs_range() {
+        let mut s = Settings::default();
+        s.dialog_sizes.insert("x".into(), [0, 0]);
+        assert_eq!(
+            s.dialog_size("x", (400.0, 120.0), (480.0, 320.0)),
+            (400.0, 120.0),
+            "clamped up to the class minimum"
+        );
+
+        s.dialog_sizes.insert("x".into(), [99_999, 99_999]);
+        let (w, h) = s.dialog_size("x", (400.0, 120.0), (480.0, 320.0));
+        assert!(w <= MAX_DIALOG_EDGE && h <= MAX_DIALOG_EDGE, "clamped down");
+    }
+
+    /// An unresized dialog gets its class default, not zero.
+    #[test]
+    fn an_unresized_dialog_gets_its_class_default() {
+        let s = Settings::default();
+        assert_eq!(
+            s.dialog_size("never", (400.0, 120.0), (480.0, 320.0)),
+            (480.0, 320.0)
+        );
+    }
+
+    /// A remembered size is returned as stored.
+    #[test]
+    fn a_remembered_dialog_size_comes_back() {
+        let mut s = Settings::default();
+        s.remember_dialog_size("x", (612.0, 400.0));
+        assert_eq!(
+            s.dialog_size("x", (400.0, 120.0), (480.0, 320.0)),
+            (612.0, 400.0)
+        );
     }
 }
