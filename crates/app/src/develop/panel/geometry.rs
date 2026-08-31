@@ -120,6 +120,14 @@ pub fn show(
     // here. They are different corrections with different autoscales, disambiguated by their
     // headings, and Lightroom likewise has one in Lens Corrections and one in Transform.
     ui.label("Perspective");
+    // ⚠⚠ Captured before the sliders so an *manual* edit to one of the three values a guide solve
+    // owns can be told from the solve's own write. The panel is drawn **before** the canvas, so
+    // this frame's solve has not happened yet and cannot be mistaken for a hand edit.
+    let solved_before = (
+        s.edits.perspective.vertical,
+        s.edits.perspective.horizontal,
+        s.edits.geometry.angle,
+    );
     let p = &mut s.edits.perspective;
     ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical")
         .on_hover_text(
@@ -149,15 +157,32 @@ pub fn show(
              corners remain.",
         );
 
+    // ⚠⚠ **Editing by hand throws the guides away, because the solve no longer describes what
+    // you see.** Only the three values a solve *writes* count — Vertical, Horizontal and
+    // Straighten. Aspect and Scale are untouched by a solve, so adjusting them keeps the guides,
+    // which is the difference between "you overrode the answer" and "you framed it differently".
+    if (
+        s.edits.perspective.vertical,
+        s.edits.perspective.horizontal,
+        s.edits.geometry.angle,
+    ) != solved_before
+        && !s.guides.is_empty()
+    {
+        s.guides.clear();
+        s.active_guide = None;
+    }
+
+    ui.separator();
+    ui.label("Guides");
     ui.horizontal(|ui| {
         // ⚠ The toggle deliberately does **not** disable the sliders above. They are the *output*
         // of a solve, and watching them move is what explains where the numbers came from.
         if ui
-            .toggle_value(&mut s.show_guides, "Guides")
+            .toggle_value(&mut s.show_guides, "Guide Mode")
             .on_hover_text(
                 "Draw a line along something that should be vertical or horizontal — a door \
-                 frame, a roofline. Two of a kind solve the tilt and set the sliders below, live \
-                 as you drag. Right-click a line to remove it.",
+                 frame, a roofline. Two of a kind solve the tilt when you let go. Right-click a \
+                 line to remove it.",
             )
             .changed()
         {
@@ -173,6 +198,11 @@ pub fn show(
             s.active_guide = None;
         }
     });
+    crate::theme::hint(
+        ui,
+        "Two lines of a kind set the tilt. Editing Vertical, Horizontal or Straighten by hand \
+         clears them.",
+    );
 
     ui.separator();
     // ⚠ Scoped to the Geometry group, the same rule the Edit tool's reset follows: under an
@@ -448,7 +478,7 @@ mod tests {
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             show(ui, &mut s, &mut aspect, false, &mut ed);
         });
-        for want in ["Guides", "Clear"] {
+        for want in ["Guide Mode", "Clear"] {
             assert!(
                 found.iter().any(|(l, _)| l.contains(want)),
                 "no “{want}” control; found {:?}",
@@ -497,5 +527,55 @@ mod tests {
             edit_model::CropRect::default(),
             "only the crop is reset, so the whole frame shows under the overlay"
         );
+    }
+
+    /// ⚠⚠ **Editing by hand throws the guides away**, because the solve no longer describes what
+    /// is on screen. Driven through the real panel rather than by poking the flag, so the
+    /// before/after capture is what is under test.
+    #[test]
+    fn editing_the_solved_sliders_by_hand_clears_the_guides() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        s.guides.push(pipeline::perspective::guides::Guide {
+            from: [0.1, 0.1],
+            to: [0.2, 0.9],
+        });
+        // One frame with nothing touched: the guides must survive it.
+        let (mut aspect, mut ed) = (None, Edited::default());
+        let _ = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut s, &mut aspect, false, &mut ed);
+        });
+        assert_eq!(s.guides.len(), 1, "an untouched frame must not clear them");
+
+        // ⚠ The edit has to happen **inside** the panel body, through the real widget. Setting
+        // the field beforehand does not clear — and must not: the solve itself writes that field
+        // from outside, as does a paste, and neither is someone overriding the answer.
+        s.edits.perspective.vertical = 60.0;
+        // Clicking a slider's centre sets it to the middle of its range, i.e. 0 here.
+        click_in_panel("Vertical", &mut s, false);
+        assert_ne!(s.edits.perspective.vertical, 60.0, "the click must move it");
+        assert!(s.guides.is_empty(), "a hand edit must clear them");
+    }
+
+    /// ⚠ The other half: Aspect and Scale are **not** written by a solve, so adjusting them is
+    /// "you framed it differently", not "you overrode the answer". A rule that cleared on any
+    /// perspective change would fail this.
+    #[test]
+    fn adjusting_aspect_or_scale_keeps_the_guides() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        s.guides.push(pipeline::perspective::guides::Guide {
+            from: [0.1, 0.1],
+            to: [0.2, 0.9],
+        });
+        let (mut aspect, mut ed) = (None, Edited::default());
+        for change in [10.0f32, -40.0] {
+            s.edits.perspective.aspect = change;
+            s.edits.perspective.scale = change;
+            let _ = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                show(ui, &mut s, &mut aspect, false, &mut ed);
+            });
+        }
+        assert_eq!(s.guides.len(), 1, "Aspect and Scale must not clear them");
     }
 }

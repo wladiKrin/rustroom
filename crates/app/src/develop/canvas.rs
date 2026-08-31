@@ -324,21 +324,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
             }
         }
     });
-    if guide_drag != GuideDrag::None {
-        // ⚠ Solved on **every** frame of the drag so the correction is visible as you trace, but
-        // recorded only on release: one gesture, one Ctrl+Z, the rule every drag here follows.
-        let changed = app.solve_guides();
-        if changed {
-            if let Some(s) = app.session.as_mut() {
-                s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
-            }
+    // ⚠ Solved on **release only**, so the image is frozen for the whole drag. One gesture, one
+    // Ctrl+Z, the rule every drag here follows.
+    if guide_drag == GuideDrag::Settled && app.solve_guides() {
+        if let Some(s) = app.session.as_mut() {
+            s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+            s.history.push(s.edits.clone());
         }
-        if guide_drag == GuideDrag::Settled && changed {
-            if let Some(s) = app.session.as_mut() {
-                s.history.push(s.edits.clone());
-            }
-            photo_edited = true;
-        }
+        photo_edited = true;
     }
     photo_edited
 }
@@ -387,12 +380,12 @@ const GUIDE_GRAB: f32 = 0.03;
 
 /// What a frame of guide interaction produced.
 ///
-/// ⚠ `Live` and `Settled` both re-solve; only `Settled` records a history entry, so a whole drag
-/// is one Ctrl+Z — the rule every drag in this app follows.
+/// ⚠⚠ Only `Settled` re-solves. `Dragging` exists so the caller knows a gesture is in progress
+/// and can leave the edits — and therefore the image — **frozen** until it ends.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GuideDrag {
     None,
-    Live,
+    Dragging,
     Settled,
 }
 
@@ -494,9 +487,13 @@ fn draw_guide_overlay(
                         g.to = raw;
                     }
                 }
-                // ⚠⚠ **Solve every frame, not only on release.** Without it the sub-mode feels
-                // inert: you draw, let go, and nothing visibly happens until you toggle out.
-                out = GuideDrag::Live;
+                // ⚠⚠ **Deliberately NOT solved here.** Re-solving every frame was built and
+                // rejected in use — reported as "jiggling too much": the whole photo shifts under
+                // the cursor on every pixel of movement, and with two guides in play a small
+                // nudge swings the correction hard. Leaving the edits alone freezes the image,
+                // and because the guides are drawn through those same edits the frozen transform
+                // holds them still too. The dragged endpoint follows the cursor exactly.
+                out = GuideDrag::Dragging;
             }
         }
         if resp.drag_stopped() {

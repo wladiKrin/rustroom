@@ -4283,4 +4283,32 @@ mod tests {
             "the vertical slider should have moved"
         );
     }
+
+    /// ⚠⚠ **Guides survive a trip to another tool and back.** They live on `Session`, which is
+    /// per-photo, while `Tool` lives on `RustroomApp` — so nothing in a tool switch can touch
+    /// them. Asserted rather than assumed, because "it happens to work" and "it is guaranteed"
+    /// look identical until someone adds a reset.
+    #[test]
+    fn guides_survive_switching_tools() {
+        use pipeline::perspective::guides::Guide;
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+
+        app.tool = rustroom_app::tool::Tool::Crop;
+        let s = app.session.as_mut().unwrap();
+        s.show_guides = true;
+        s.guides.push(Guide {
+            from: [0.2, 0.0],
+            to: [0.35, 1.0],
+        });
+
+        app.tool = rustroom_app::tool::Tool::Edit;
+        app.tool = rustroom_app::tool::Tool::Masks;
+        app.tool = rustroom_app::tool::Tool::Crop;
+
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.guides.len(), 1, "the guide should still be there");
+        assert!(s.show_guides, "and the sub-mode should still be on");
+    }
 }
