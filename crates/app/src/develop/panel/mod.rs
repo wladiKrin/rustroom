@@ -44,10 +44,13 @@ impl Edited {
         value: &mut f32,
         range: std::ops::RangeInclusive<f32>,
         label: &str,
-    ) {
+    ) -> egui::Response {
         let r = ui.add(egui::Slider::new(value, range).text(label));
         self.changed |= r.changed();
         self.settled |= r.drag_stopped();
+        // ⚠ Returned so a caller can attach hover text. Every existing call site ignores it,
+        // which is why this was additive rather than a new `slider_hint` beside it.
+        r
     }
 
     /// A discrete act — a button, a checkbox, a preset click.

@@ -121,10 +121,31 @@ pub fn show(
     // headings, and Lightroom likewise has one in Lens Corrections and one in Transform.
     ui.label("Perspective");
     let p = &mut s.edits.perspective;
-    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical");
-    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal");
-    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect");
-    ed.slider(ui, &mut p.scale, 0.0..=100.0, "Scale");
+    ed.slider(ui, &mut p.vertical, -100.0..=100.0, "Vertical")
+        .on_hover_text(
+            "Keystone about the horizontal axis — for a subject leaning back or forward.",
+        );
+    ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal")
+        .on_hover_text("Keystone about the vertical axis — for a subject turned left or right.");
+    // ⚠⚠ The glyphs are the whole point of this label. A single bipolar Aspect slider was
+    // reported as confusing precisely because "Aspect" says nothing about which end does what,
+    // and `⬍ ⬌` names both ends at a glance — the same two glyphs the flip buttons above use, so
+    // they already mean "vertical" and "horizontal" in this panel.
+    //
+    // ⚠ It stays ONE slider rather than two: the two directions are `diag(s, 1/s)`, inverses of
+    // one quantity rather than independent axes. Two sliders would be `diag(a, b)`, which factors
+    // into a uniform scale × an aspect ratio — so the extra freedom **is** the Scale slider below,
+    // and the same look would be reachable two ways. `Orientation`'s single `mirror` flag exists
+    // for exactly that reason.
+    //
+    // ⚠ `↔` and `↕` are ABSENT from every bundled font and would render as tofu boxes — probed,
+    // not assumed. `⬌ ⬍ ‹ › « »` are present.
+    ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌")
+        .on_hover_text("Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.");
+    ed.slider(ui, &mut p.scale, 0.0..=100.0, "Scale")
+        .on_hover_text(
+            "Zooms in to hide the empty corners the correction opens. 0 shows the whole frame.",
+        );
 
     ui.separator();
     // ⚠ Scoped to the Geometry group, the same rule the Edit tool's reset follows: under an
@@ -343,5 +364,50 @@ mod tests {
         click_in_panel("Reset geometry", &mut s, false);
         assert_eq!(s.edits.perspective, edit_model::Perspective::default());
         assert_eq!(s.edits.geometry, edit_model::Geometry::default());
+    }
+
+    /// ⚠⚠ `↔` and `↕` — the obvious choice — are **absent from every bundled font** and would
+    /// have shipped as tofu boxes, invisible to every other test. Probed before choosing, which
+    /// is the fourth time that has paid off here after the rail's four glyphs, the mark badges
+    /// and the keyword checkmarks.
+    #[test]
+    fn every_perspective_glyph_is_renderable() {
+        let ctx = test_ui::ctx();
+        // ⚠ Both lines are load-bearing, and leaving them out is why this test failed first.
+        // Without `install_fonts` it asks about egui's *defaults*, which production no longer
+        // uses; and `has_glyph` needs a frame to have run, because a fresh context has not built
+        // its atlas and answers about nothing.
+        crate::theme::install_fonts(&ctx);
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        for g in ['⬍', '⬌'] {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyph(&id, g)),
+                "{g} (U+{:04X}) is not in any bundled font and would render as a tofu box",
+                g as u32
+            );
+        }
+    }
+
+    /// ⚠ The Aspect label must name both directions. "Aspect" alone was reported as confusing
+    /// precisely because it says nothing about which end does what.
+    #[test]
+    fn the_aspect_slider_names_both_directions() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut ed = Edited::default();
+        let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut s, &mut aspect, false, &mut ed);
+        });
+        let label = found
+            .iter()
+            .map(|(l, _)| l)
+            .find(|l| l.contains("Aspect"))
+            .expect("no Aspect slider");
+        assert!(
+            label.contains('⬍') && label.contains('⬌'),
+            "the Aspect label names neither direction: {label:?}"
+        );
     }
 }
