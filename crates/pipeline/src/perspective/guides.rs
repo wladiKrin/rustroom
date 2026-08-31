@@ -67,12 +67,15 @@ pub fn vanishing_point(a: &Guide, b: &Guide) -> Option<(f32, f32)> {
     Some(v)
 }
 
-/// The rotation a set of guides asks for: `(pitch, yaw, roll)` in radians.
+/// The pitch and yaw two vanishing points ask for, in radians.
+///
+/// ⚠ Both points are in **centred** coordinates — `x` in ±aspect, `y` in ±1, the space
+/// [`super::Homography`] works in. [`solve`] converts for you; this is the bare maths.
 ///
 /// ⚠⚠ The maths: our rotation's bottom row is `[−cθ·sφ, sθ, cθ·cφ]`, and a family becomes parallel
 /// exactly when `(R · ray)_z = 0` for its vanishing-point ray `(x, y, f)`. Two families give two
 /// equations in two unknowns, in closed form.
-pub fn solve(vert: Option<(f32, f32)>, horz: Option<(f32, f32)>) -> (f32, f32, f32) {
+pub fn solve_angles(vert: Option<(f32, f32)>, horz: Option<(f32, f32)>) -> (f32, f32) {
     let f = F_NORM;
     let (pitch, yaw) = match (vert, horz) {
         (Some((a, b)), Some((c, d))) => {
@@ -94,7 +97,7 @@ pub fn solve(vert: Option<(f32, f32)>, horz: Option<(f32, f32)>) -> (f32, f32, f
         (None, Some((c, _))) => (0.0, -solve_one(c, f)),
         (None, None) => (0.0, 0.0),
     };
-    (pitch, yaw, roll_for(vert, horz, pitch, yaw, f))
+    (pitch, yaw)
 }
 
 /// `tan θ = −f / v` — the one-family solution.
@@ -105,36 +108,81 @@ fn solve_one(v: f32, f: f32) -> f32 {
     (-f / v).atan()
 }
 
-/// The residual roll, in radians, to hand to Straighten.
+/// The rotation a set of guides asks for: `(pitch, yaw, roll)` in radians.
 ///
-/// ⚠ After `R` the vanishing-point ray has `z = 0` by construction, so it is a direction *in the
-/// image plane*. The angle between it and screen-vertical (or -horizontal) is what is left over,
-/// and correcting it is exactly what the Straighten slider does — so guided levels the horizon
-/// too, as Lightroom's Upright does.
-fn roll_for(
-    vert: Option<(f32, f32)>,
-    horz: Option<(f32, f32)>,
-    pitch: f32,
-    yaw: f32,
-    f: f32,
-) -> f32 {
-    let rotate = |r: (f32, f32, f32)| -> (f32, f32) {
-        let (sp, cp) = pitch.sin_cos();
-        let (sy, cy) = yaw.sin_cos();
-        // R = R_pitch · R_yaw, applied to the ray.
-        let (x, y, z) = (cy * r.0 + sy * r.2, r.1, -sy * r.0 + cy * r.2);
-        (x, cp * y - sp * z)
+/// Guides are in `[0, 1]` frame coordinates; `aspect` is width over height.
+///
+/// ⚠⚠ **The conversion to centred coordinates happens HERE, and getting it wrong was a real bug.**
+/// [`solve_angles`] assumes `x ∈ ±aspect`, `y ∈ ±1` with `f = F_NORM`, while a guide is stored in
+/// `[0, 1]` — where the half-height is 0.5 rather than 1. Feeding one to the other put the
+/// vanishing point in the wrong space and produced a correction that was merely *plausible*.
+///
+/// ⚠⚠ **The roll is measured from the guides' own directions, not from the vanishing point.**
+/// They agree in exact arithmetic — a corrected line's direction *is* the corrected
+/// vanishing-point ray — but the vanishing point of two nearly-parallel lines sits enormously far
+/// away and moves wildly for a pixel of drawing error, so a roll taken from it is ill-conditioned
+/// exactly when the correction is gentlest. Reported in use as the image coming out rotated so
+/// that carefully drawn vertical guides ended up not vertical at all.
+pub fn solve(vert: &[Guide], horz: &[Guide], aspect: f32) -> (f32, f32, f32) {
+    let centred = |p: [f32; 2]| ((p[0] - 0.5) * 2.0 * aspect, (p[1] - 0.5) * 2.0);
+    let vp = |gs: &[Guide]| -> Option<(f32, f32)> {
+        // ⚠ Two are required: one line has no vanishing point at all.
+        let (a, b) = (gs.first()?, gs.get(1)?);
+        let to_c = |g: &Guide| Guide {
+            from: [centred(g.from).0, centred(g.from).1],
+            to: [centred(g.to).0, centred(g.to).1],
+        };
+        vanishing_point(&to_c(a), &to_c(b))
     };
-    if let Some((a, b)) = vert {
-        let (x, y) = rotate((a, b, f));
-        // Screen-vertical is (0, ±1); the residual is how far the direction leans off it.
-        -x.atan2(y.abs().max(DET_EPS))
-    } else if let Some((c, d)) = horz {
-        let (x, y) = rotate((c, d, f));
-        y.atan2(x.abs().max(DET_EPS))
-    } else {
-        0.0
-    }
+    let (pitch, yaw) = solve_angles(vp(vert), vp(horz));
+
+    // The transform the pitch and yaw alone produce; the guides' directions are measured through
+    // it, which is what is left for the roll to remove.
+    let h = super::Homography::from_angles(pitch, yaw, 1.0, 1.0);
+    let mean_angle = |gs: &[Guide], vertical: bool| -> Option<f32> {
+        // ⚠⚠ **Two, like everything else here** — even though a *single* line does determine the
+        // roll on its own (levelling one line is exactly what a ruler tool does). Allowing it
+        // would make one guide rotate the photo while two rotate *and* de-keystone it, so the
+        // first line would do something and the second something else. One rule: two of a kind,
+        // or nothing. Solving roll from one guide is a reasonable feature and deliberately not
+        // smuggled in here.
+        if gs.len() < 2 {
+            return None;
+        }
+        let mut sum = 0.0f32;
+        let mut n = 0u32;
+        for g in gs {
+            let a = h.output_of(centred(g.from));
+            let b = h.output_of(centred(g.to));
+            let (mut dx, mut dy) = (b.0 - a.0, b.1 - a.1);
+            if dx * dx + dy * dy < DET_EPS {
+                continue;
+            }
+            // ⚠⚠ A line has no direction, only an orientation: it is the same line drawn either
+            // way. Without folding both into one half-plane, two guides traced in opposite
+            // directions average to roughly a right angle — garbage.
+            if (vertical && dy < 0.0) || (!vertical && dx < 0.0) {
+                dx = -dx;
+                dy = -dy;
+            }
+            sum += if vertical {
+                dx.atan2(dy)
+            } else {
+                -dy.atan2(dx)
+            };
+            n += 1;
+        }
+        (n > 0).then(|| sum / n as f32)
+    };
+    // ⚠ Verticals first: if both families are drawn they agree, and if only one is drawn it is
+    // the one that has an opinion.
+    let roll = mean_angle(vert, true)
+        .or_else(|| mean_angle(horz, false))
+        .unwrap_or(0.0);
+    // ⚠ **+roll, not −roll.** Rotating a direction by ψ takes its angle-from-vertical `a` to
+    // `a − ψ`, so zeroing it needs ψ = a. The opposite sign doubles the lean instead of removing
+    // it, and the test above is what settles it rather than this comment.
+    (pitch, yaw, roll)
 }
 
 /// Where a guide point drawn on the **raw** frame appears once the correction is applied.
@@ -192,7 +240,7 @@ mod tests {
             vanishing_point(&g([-1.0, -1.0], [-1.0, 1.0]), &g([1.0, -1.0], [1.0, 1.0])),
             None
         );
-        assert_eq!(solve(None, None), (0.0, 0.0, 0.0));
+        assert_eq!(solve_angles(None, None), (0.0, 0.0));
     }
 
     #[test]
@@ -218,7 +266,7 @@ mod tests {
             // A world-vertical family under pitch `want` vanishes where (R·ray)_z = 0, i.e. at
             // y = −f / tan(want). Derived here, independently of the solver.
             let vv = (0.0, -F_NORM / want.tan());
-            let (pitch, yaw, _) = solve(Some(vv), None);
+            let (pitch, yaw) = solve_angles(Some(vv), None);
             assert!(
                 (pitch - want).abs() < 1e-3,
                 "wanted pitch {want}, got {pitch}"
@@ -234,7 +282,7 @@ mod tests {
         let a = g([-1.0, -1.0], [-0.4, 1.0]);
         let b = g([1.0, -1.0], [0.4, 1.0]);
         let vv = vanishing_point(&a, &b).expect("converging");
-        let (pitch, yaw, _) = solve(Some(vv), None);
+        let (pitch, yaw) = solve_angles(Some(vv), None);
         let h = Homography::from_angles(pitch, yaw, 1.0, 1.0);
         let dir = |gu: &Guide| {
             let p = h.output_of((gu.from[0], gu.from[1]));
@@ -266,7 +314,7 @@ mod tests {
             // x on the vanishing line for a given y.
             let x_at = |y: f32| (sp * y + cp * cy * F_NORM) / (cp * sy);
             let (b, d) = (-4.0f32, 2.0f32);
-            let (pitch, yaw, _) = solve(Some((x_at(b), b)), Some((x_at(d), d)));
+            let (pitch, yaw) = solve_angles(Some((x_at(b), b)), Some((x_at(d), d)));
             assert!(
                 (pitch - want_p).abs() < 1e-3,
                 "wanted pitch {want_p}, got {pitch}"
@@ -282,27 +330,79 @@ mod tests {
     /// above because it states the weaker property in a form that reads at a glance.
     #[test]
     fn a_horizontal_family_engages_the_yaw() {
-        let (pitch, yaw, _) = solve(Some((0.5, -6.0)), Some((7.0, 0.4)));
+        let (pitch, yaw) = solve_angles(Some((0.5, -6.0)), Some((7.0, 0.4)));
         assert!(pitch.abs() > 1e-3, "pitch should be engaged, got {pitch}");
         assert!(yaw.abs() > 1e-3, "yaw should be engaged, got {yaw}");
     }
 
-    /// ⚠ A tilted family asks for roll; a symmetric one asks for none. Both halves, because a
-    /// roll term stuck at zero and one that always fires are equally wrong.
+    /// ⚠⚠ **The property the whole feature exists for, and the one a user actually checks:**
+    /// after solving, the lines you drew along the building's edges come out **vertical** — not
+    /// merely parallel to each other. Reported in use as the image being rotated so that
+    /// carefully drawn vertical guides ended up not vertical at all.
+    ///
+    /// ⚠ Asserted through `to_frame`, the same mapping the canvas draws with, so this measures
+    /// what is on screen rather than an intermediate.
     #[test]
-    fn a_tilted_family_asks_for_roll_and_a_symmetric_one_does_not() {
-        let straight = vanishing_point(&g([-1.0, -1.0], [-0.4, 1.0]), &g([1.0, -1.0], [0.4, 1.0]))
-            .expect("converging");
-        let (_, _, roll) = solve(Some(straight), None);
-        assert!(
-            roll.abs() < 1e-3,
-            "a symmetric family needs no roll: {roll}"
-        );
+    fn the_guides_end_up_vertical_after_the_solve() {
+        const ASPECT: f32 = 1.5;
+        // A leaning, converging pair — off-centre, so a naive roll term has something to get
+        // wrong, and asymmetric, so "it happened to be symmetric" cannot explain a pass.
+        let gs = vec![g([0.18, 0.05], [0.30, 0.95]), g([0.55, 0.05], [0.52, 0.95])];
+        let (pitch, yaw, roll) = solve(&gs, &[], ASPECT);
+        let h = Homography::from_angles(pitch, yaw, 1.0, 1.0);
+        for gu in &gs {
+            let a = to_frame(gu.from, &h, roll, ASPECT);
+            let b = to_frame(gu.to, &h, roll, ASPECT);
+            // Vertical on screen means no horizontal run. In [0,1] frame units, scale x by the
+            // aspect so the comparison is in the same units both ways.
+            let (dx, dy) = ((b[0] - a[0]) * ASPECT, b[1] - a[1]);
+            assert!(
+                dx.abs() < 0.01 * dy.abs().max(1e-6),
+                "guide {gu:?} came out at dx {dx}, dy {dy} — not vertical"
+            );
+        }
+    }
 
-        let tilted = vanishing_point(&g([-1.0, -1.0], [0.2, 1.0]), &g([1.0, -1.0], [1.4, 1.0]))
-            .expect("converging");
-        let (_, _, roll) = solve(Some(tilted), None);
-        assert!(roll.abs() > 1e-3, "a leaning family needs roll: {roll}");
+    /// ⚠ The complement: without the correction those same guides are visibly *not* vertical, or
+    /// the test above is measuring nothing.
+    #[test]
+    fn the_guides_are_not_vertical_before_the_solve() {
+        const ASPECT: f32 = 1.5;
+        let gu = g([0.18, 0.05], [0.30, 0.95]);
+        let h = Homography::from_angles(0.0, 0.0, 1.0, 1.0);
+        let a = to_frame(gu.from, &h, 0.0, ASPECT);
+        let b = to_frame(gu.to, &h, 0.0, ASPECT);
+        let (dx, dy) = ((b[0] - a[0]) * ASPECT, b[1] - a[1]);
+        assert!(dx.abs() > 0.05 * dy.abs(), "fixture check: it must lean");
+    }
+
+    /// ⚠⚠ **A line has no direction, only an orientation.** Drawing the second guide bottom-to-top
+    /// instead of top-to-bottom must not change the answer — without folding both into one
+    /// half-plane before averaging, two guides traced in opposite directions average to roughly a
+    /// right angle.
+    #[test]
+    fn drawing_a_guide_the_other_way_round_changes_nothing() {
+        const ASPECT: f32 = 1.5;
+        let a = g([0.18, 0.05], [0.30, 0.95]);
+        let b = g([0.55, 0.05], [0.52, 0.95]);
+        let flipped = g(b.to, b.from);
+        let one = solve(&[a, b], &[], ASPECT);
+        let two = solve(&[a, flipped], &[], ASPECT);
+        assert!(
+            (one.2 - two.2).abs() < 1e-4,
+            "roll differed: {} vs {}",
+            one.2,
+            two.2
+        );
+    }
+
+    /// ⚠ A symmetric pair needs no roll — the other half, since a roll stuck at zero and one that
+    /// always fires are equally wrong.
+    #[test]
+    fn a_symmetric_pair_asks_for_no_roll() {
+        let gs = vec![g([0.3, 0.05], [0.38, 0.95]), g([0.7, 0.05], [0.62, 0.95])];
+        let (_, _, roll) = solve(&gs, &[], 1.5);
+        assert!(roll.abs() < 1e-3, "a symmetric pair needs no roll: {roll}");
     }
 
     /// ⚠ The pair must be exact inverses, or a dragged endpoint drifts away from the cursor a

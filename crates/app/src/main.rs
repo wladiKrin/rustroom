@@ -763,16 +763,21 @@ impl RustroomApp {
         let Some(s) = self.session.as_mut() else {
             return false;
         };
-        let of = |f: Family| -> Option<(f32, f32)> {
-            let mut it = s.guides.iter().filter(|g| g.family() == f);
-            match (it.next(), it.next()) {
-                // ⚠ Two are required. A single line has no vanishing point at all, so one guide
-                // must leave the edits alone rather than solving from nothing.
-                (Some(a), Some(b)) => guides::vanishing_point(a, b),
-                _ => None,
-            }
+        let of = |f: Family| -> Vec<guides::Guide> {
+            // ⚠ At most two per family: the solve is exactly determined, not a least-squares fit.
+            s.guides
+                .iter()
+                .copied()
+                .filter(|g| g.family() == f)
+                .take(2)
+                .collect()
         };
-        let (pitch, yaw, roll) = guides::solve(of(Family::Vertical), of(Family::Horizontal));
+        // ⚠⚠ The **frame** aspect, not the sensor's: guides are in `[0, 1]` of the displayed
+        // frame, and `solve` converts them to the centred, half-height units the maths needs.
+        // Getting that conversion wrong is what made an earlier version merely plausible.
+        let aspect = s.fit_image_size.x / s.fit_image_size.y.max(1.0);
+        let (pitch, yaw, roll) =
+            guides::solve(&of(Family::Vertical), &of(Family::Horizontal), aspect);
         let to_slider = |rad: f32| {
             (rad.to_degrees() / pipeline::perspective::MAX_ANGLE_DEG * 100.0).clamp(-100.0, 100.0)
         };
