@@ -700,6 +700,115 @@ mod tests {
         assert_eq!(jpeg_size(&dest), (40, 20));
     }
 
+    /// A hard vertical edge on a mid-grey field, big enough to hold a watermark.
+    fn edged(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(x, y, if x < w / 2 { [0.20; 3] } else { [0.55; 3] });
+            }
+        }
+        img
+    }
+
+    /// Export `edged` twice — once neutral, once with `tweak` applied to the options — and
+    /// report the written bytes of each.
+    ///
+    /// ⚠⚠ **THESE THREE TESTS EXIST BECAUSE THREE SABOTAGES WENT UNCAUGHT.** Deleting each of
+    /// `export_one`'s three new calls left the entire suite green: `export::metadata`,
+    /// `export::watermark` and `export::output_sharpen` are all thoroughly tested *in their own
+    /// crate*, and nothing anywhere asserted that the export path actually reaches them. That is
+    /// the "feature silently absent" failure this project has already shipped once, in
+    /// edit-accurate thumbnails.
+    fn exported_with(tag: &str, tweak: impl FnOnce(&mut ExportOptions)) -> (Vec<u8>, Vec<u8>) {
+        // ⚠ TIFF, not JPEG: a lossy encoder quantizes a faint watermark or a one-pixel sharpen
+        // halo into the same blocks, so "the bytes differ" would be measuring the encoder.
+        let d = TempDir::new(tag);
+        let mut base = opts(&d, None);
+        base.format = ExportFormat::Tiff8;
+        let plain = d.0.join("plain.tif");
+        export_one(
+            edged(160, 120),
+            &Edits::default(),
+            &plain,
+            &base,
+            pipeline::Resampler::default(),
+        )
+        .unwrap();
+        let mut changed = base.clone();
+        tweak(&mut changed);
+        let other = d.0.join("other.tif");
+        export_one(
+            edged(160, 120),
+            &Edits::default(),
+            &other,
+            &changed,
+            pipeline::Resampler::default(),
+        )
+        .unwrap();
+        (
+            std::fs::read(&plain).unwrap(),
+            std::fs::read(&other).unwrap(),
+        )
+    }
+
+    /// The decoded pixels of a written file.
+    fn pixels(bytes: &[u8]) -> Vec<u8> {
+        image::load_from_memory(bytes).unwrap().to_rgb8().into_raw()
+    }
+
+    #[test]
+    fn an_export_carries_its_metadata() {
+        let (plain, tagged) = exported_with("e2e_meta", |o| {
+            o.metadata.copyright = "(c) 2026 Rustroom".into()
+        });
+        let needle = b"(c) 2026 Rustroom";
+        assert!(
+            !plain.windows(needle.len()).any(|w| w == needle),
+            "fixture check: the neutral export already carried it"
+        );
+        assert!(
+            tagged.windows(needle.len()).any(|w| w == needle),
+            "the copyright never reached the file"
+        );
+        // ⚠ And only the container moved: metadata is written after the encode, so it cannot
+        // change what the photograph looks like.
+        assert_eq!(
+            pixels(&plain),
+            pixels(&tagged),
+            "the metadata moved a pixel"
+        );
+    }
+
+    #[test]
+    fn an_export_carries_its_watermark() {
+        let (plain, marked) = exported_with("e2e_mark", |o| o.watermark.text = "Rustroom".into());
+        assert_ne!(
+            pixels(&plain),
+            pixels(&marked),
+            "the watermark never reached the pixels"
+        );
+    }
+
+    #[test]
+    fn an_export_carries_its_output_sharpening() {
+        let (plain, sharp) = exported_with("e2e_sharp", |o| o.output_sharpening.amount = 100);
+        let (a, b) = (pixels(&plain), pixels(&sharp));
+        assert_ne!(a, b, "output sharpening never reached the pixels");
+        // ⚠ And it is *sharpening*, not a global lift: the flat halves must be untouched while
+        // the edge moves. Without this the test would pass for any change at all — including a
+        // watermark, which is the other thing this call site could have been wired to.
+        let at = |v: &[u8], x: usize| v[(60 * 160 + x) * 3] as i32;
+        assert_eq!(at(&a, 5), at(&b, 5), "the flat left half moved");
+        assert_eq!(at(&a, 155), at(&b, 155), "the flat right half moved");
+        assert!(
+            at(&b, 80) > at(&a, 80) && at(&b, 79) < at(&a, 79),
+            "no overshoot/undershoot at the edge: {:?} vs {:?}",
+            (at(&a, 79), at(&a, 80)),
+            (at(&b, 79), at(&b, 80))
+        );
+    }
+
     #[test]
     fn an_unwritable_destination_is_an_error_not_a_panic() {
         let d = TempDir::new("one_bad");
