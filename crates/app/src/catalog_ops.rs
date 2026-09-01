@@ -5,7 +5,12 @@
 //! catalog is absent — a database that will not open must never stop you editing
 //! photographs, because edits live in the sidecars and do not need it.
 
-use crate::*;
+use crate::{LibrarySource, RustroomApp};
+use catalog::snapshot::CatalogSnapshot;
+use eframe::egui;
+use rustroom_app::action_log::ActionKind;
+use rustroom_app::photo_id::PhotoId;
+use std::path::PathBuf;
 
 impl RustroomApp {
     /// Show every photo taken in a calendar period.
