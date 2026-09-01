@@ -216,7 +216,7 @@ pub fn library_of(n: usize) -> Library {
 
 /// A decoded buffer with no libraw, no disk and no GPU behind it.
 ///
-/// Lives here rather than in one module's `mod tests` because `session_flow` and `copies`
+/// Lives here rather than in one module's `mod tests` because `session_flow` and `snapshots`
 /// both drive the real `finalize_session` with it.
 pub fn fake_decode() -> std::sync::Arc<Decoded> {
     std::sync::Arc::new(Decoded {

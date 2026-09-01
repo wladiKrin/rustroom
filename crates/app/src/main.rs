@@ -1,3 +1,29 @@
+//! The application's state and its bootstrap — and **nothing else**.
+//!
+//! ⚠⚠ `main.rs` reached 4,375 lines one reasonable-seeming addition at a time. The rule that
+//! replaced it: **this file holds the type definitions, `RustroomApp::new` and `fn main`.**
+//! Behaviour lives in a topic module beside it. An inherent impl only has to be in the same
+//! *crate*, not the same module, so a method moves with `self` staying `self` and no call site
+//! changes — which is why there is no excuse for adding one here.
+//!
+//! | Where | What |
+//! |---|---|
+//! | [`session_flow`] | opening a photo, the decode handover, the full-resolution upgrade, the per-frame pumps |
+//! | [`sources`] | folders, All Photos, collections, keywords |
+//! | [`smart_sources`] | the two query-driven sources: dates and smart collections |
+//! | [`library_state`] | the loaded library's derived state, sorting and rebuilds |
+//! | [`catalog_ops`] | keywords, collection membership, marks, rules, restoring a deletion |
+//! | [`copies`] / [`snapshots`] | virtual copies and naming / named saved states |
+//! | [`transfer`] | copy/paste, presets and sync |
+//! | [`export_flow`] | driving the export worker |
+//! | [`undo`] | walking the action log |
+//! | [`settings_apply`] | applying a settings change to the running app |
+//! | [`interaction`] | tool, rotate, arrow and guide gestures |
+//! | [`decode`] | decoding a file, and the workers that do it off the UI thread |
+//!
+//! egui lives in the bin modules only — `theme`, `modals`, `develop`, `library`, `filmstrip`,
+//! `thumb`, `shell`. Anything testable without a window belongs in the lib (`lib.rs`).
+
 use catalog::snapshot::CatalogSnapshot;
 use edit_model::EditGroups;
 use edit_model::Edits;
@@ -634,8 +660,6 @@ fn preview_edits(edits: &Edits, tool: Tool) -> Edits {
     }
     e
 }
-
-impl RustroomApp {}
 
 /// The four rectangles of `outer` that lie outside `inner` (for dimming).
 fn rects_around(outer: egui::Rect, inner: egui::Rect) -> [egui::Rect; 4] {
