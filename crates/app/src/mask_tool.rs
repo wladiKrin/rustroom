@@ -67,6 +67,10 @@ pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> 
         // the observation that shapes 3.1c-B's canvas work: painting is the interaction, and
         // there is nothing to drag.
         Mask::Brush(_) => None,
+        // ⚠ A luminance range has no handles for a stronger reason than the brush: it has no
+        // *position* whatsoever. It selects tones, so nothing about it can be anywhere on the
+        // canvas, and its two sliders are the whole of its interaction.
+        Mask::Luminance(_) => None,
     }
 }
 

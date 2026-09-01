@@ -31,7 +31,10 @@ pub struct BrushTool<'a> {
 /// header is a nesting level this rework exists to remove.
 pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut Edited) {
     let mut added: Option<edit_model::Mask> = None;
-    ui.horizontal(|ui| {
+    // ⚠ `horizontal_wrapped`, not `horizontal`: a fourth button does not fit the panel's ~240 pt
+    // and a plain `horizontal` row overflows rather than wrapping, so the last one is clipped
+    // where nothing announces it is there.
+    ui.horizontal_wrapped(|ui| {
         if ui.button("Add graduated filter").clicked() {
             added = Some(edit_model::Mask::Linear(edit_model::LinearGradient {
                 // A visible default: top to bottom across the middle
@@ -54,6 +57,14 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
             // is usually the shape being reached for.
             added = Some(edit_model::Mask::Radial(
                 edit_model::RadialGradient::default(),
+            ));
+        }
+        if ui.button("Add luminance range").clicked() {
+            // ⚠ The hand-written `Default`: the darker half with a soft shoulder. Visible
+            // immediately and one click of Invert from the highlights, where a full-range
+            // default would be indistinguishable from a global adjustment.
+            added = Some(edit_model::Mask::Luminance(
+                edit_model::LuminanceRange::default(),
             ));
         }
     });
@@ -108,6 +119,23 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
             }
             if let edit_model::Mask::Radial(r) = &mut m.mask {
                 ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
+            }
+            if let edit_model::Mask::Luminance(r) = &mut m.mask {
+                // ⚠⚠ **These sliders are the whole of this mask's interaction — there is nothing
+                // on the canvas.** A range mask is not a shape: it has no position, so no handle
+                // and no boundary can be drawn for it. See `mask_overlay::paint_mask` for why a
+                // coverage tint would be misleading rather than merely absent.
+                ed.slider(ui, &mut r.low, 0.0..=100.0, "Range low");
+                ed.slider(ui, &mut r.high, 0.0..=100.0, "Range high");
+                // ⚠ Named "Feather" like the radial's and the vignette's, and a smoothstep like
+                // both, so the app has one idiom for "soften this edge" rather than three.
+                ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
+                theme::hint(
+                    ui,
+                    "Selects tones by brightness — 0 is black, 100 is white, the \
+                     same scale as the histogram. Feather widens the range with a \
+                     soft shoulder either side.",
+                );
             }
             if matches!(m.mask, edit_model::Mask::Brush(_)) {
                 // ⚠ Brush settings live on the app, not on the mask: they are
@@ -221,6 +249,7 @@ mod tests {
             ("Add graduated filter", "Linear"),
             ("Add brush", "Brush"),
             ("Add radial filter", "Radial"),
+            ("Add luminance range", "Luminance"),
         ] {
             let mut s = session();
             click_in_panel(label, &mut s);
@@ -229,6 +258,7 @@ mod tests {
                 edit_model::Mask::Linear(_) => "Linear",
                 edit_model::Mask::Radial(_) => "Radial",
                 edit_model::Mask::Brush(_) => "Brush",
+                edit_model::Mask::Luminance(_) => "Luminance",
             };
             assert_eq!(got, want, "{label} added the wrong kind");
         }
@@ -278,6 +308,154 @@ mod tests {
             s.active_mask_handle.is_none(),
             "and no drag handle left behind"
         );
+    }
+
+    /// Drag the widget labelled `label` to the right, and report what the panel recorded.
+    ///
+    /// ⚠⚠ **A drag, not a click, and that was found the hard way.** `test_ui::click` presses and
+    /// releases at one point; an `egui::Slider` built with `.text(..)` spans a rail, a numeric
+    /// box and the caption, so its accesskit centre need not land on the rail at all and the
+    /// value does not move. A drag engages it wherever it starts.
+    ///
+    /// ⚠ Five passes, the count `test_support::drag_through` established: `Response` state is
+    /// per-frame, and a harness that moves the pointer on the same pass as the press produces a
+    /// gesture that grabs nothing while looking exactly like one that works.
+    fn drag_in_panel(label: &str, s: &mut Session) -> Edited {
+        let ctx = test_ui::ctx();
+        let mut ed = Edited::default();
+        let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
+        let (mut erase, mut tint) = (false, true);
+        let mut body = |ui: &mut egui::Ui, ed: &mut Edited| {
+            show(
+                ui,
+                s,
+                BrushTool {
+                    size: &mut size,
+                    hardness: &mut hardness,
+                    flow: &mut flow,
+                    erase: &mut erase,
+                    show_tint: &mut tint,
+                },
+                ed,
+            );
+        };
+        let from =
+            test_ui::labelled_centres(&ctx, Vec::new(), |ui| body(ui, &mut Edited::default()))
+                .into_iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, p)| p)
+                .unwrap_or_else(|| panic!("no widget labelled {label:?} was drawn"));
+        let to = from + egui::vec2(120.0, 0.0);
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(from)],
+            vec![press(from, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![press(to, false)],
+            Vec::new(),
+        ] {
+            let mut pass = Edited::default();
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(test_ui::screen()),
+                    events,
+                    ..Default::default()
+                },
+                |ui| body(ui, &mut pass),
+            );
+            ed.changed |= pass.changed;
+            ed.settled |= pass.settled;
+        }
+        ed
+    }
+
+    /// Every widget label the panel draws for `s`, laid out once.
+    fn labels_in_panel(s: &mut Session) -> Vec<String> {
+        let ctx = test_ui::ctx();
+        let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
+        let (mut erase, mut tint) = (false, true);
+        test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            let mut ed = Edited::default();
+            show(
+                ui,
+                s,
+                BrushTool {
+                    size: &mut size,
+                    hardness: &mut hardness,
+                    flow: &mut flow,
+                    erase: &mut erase,
+                    show_tint: &mut tint,
+                },
+                &mut ed,
+            );
+        })
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect()
+    }
+
+    #[test]
+    fn a_selected_luminance_mask_shows_its_range_and_a_radial_does_not() {
+        // ⚠⚠ **Both halves, and the pair is what makes the test mean anything.** Sliders that
+        // never appear and sliders that always appear are equally wrong, and a test asserting
+        // only the first passes against a panel that draws them for every mask — where "Range
+        // low" beside a radial's ellipse controls nothing at all.
+        //
+        // ⚠ These three sliders are the *whole* interaction for this mask: there is nothing on
+        // the canvas to drag, so a panel that failed to draw them would leave it unusable rather
+        // than merely inconvenient.
+        let mut s = session();
+        click_in_panel("Add luminance range", &mut s);
+        let shown = labels_in_panel(&mut s);
+        for want in ["Range low", "Range high", "Feather"] {
+            assert!(
+                shown.iter().any(|l| l == want),
+                "a selected luminance mask must offer {want}; got {shown:?}"
+            );
+        }
+
+        let mut s = session();
+        click_in_panel("Add radial filter", &mut s);
+        let shown = labels_in_panel(&mut s);
+        assert!(
+            !shown.iter().any(|l| l == "Range low"),
+            "a radial mask must not offer a luminance range; got {shown:?}"
+        );
+        assert!(
+            shown.iter().any(|l| l == "Feather"),
+            "but it keeps its own feather; got {shown:?}"
+        );
+    }
+
+    #[test]
+    fn the_range_sliders_are_wired_to_the_mask() {
+        // ⚠⚠ **Added because the sabotage step showed the test above could not see this.**
+        // Pointing the sliders at a clone (`&mut m.mask.clone()`) leaves every label drawn and
+        // every assertion about *presence* green, while the panel edits a temporary and the mask
+        // never moves — the exact "a test names a bug it cannot detect" shape, and here it would
+        // ship as three controls that visibly do nothing.
+        let mut s = session();
+        click_in_panel("Add luminance range", &mut s);
+        let before = match s.edits.masks[0].mask {
+            edit_model::Mask::Luminance(r) => r,
+            ref other => panic!("expected a luminance mask, got {other:?}"),
+        };
+        let ed = drag_in_panel("Range high", &mut s);
+        let after = match s.edits.masks[0].mask {
+            edit_model::Mask::Luminance(r) => r,
+            ref other => panic!("expected a luminance mask, got {other:?}"),
+        };
+        assert_ne!(
+            after.high, before.high,
+            "the slider must edit the mask itself, not a copy of it"
+        );
+        assert_eq!(after.low, before.low, "and only the one it names");
+        assert!(ed.changed, "and it must re-request the preview");
     }
 
     #[test]

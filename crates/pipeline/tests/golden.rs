@@ -966,6 +966,175 @@ fn golden_mask_brush_flow_buildup() {
     );
 }
 
+/// Four tinted ramps whose **luminances differ strongly while their positions do not**.
+///
+/// ⚠⚠ This is the whole point of the chart, and no existing one has the property. A luminance
+/// mask on a chart of uniform lightness is invisible; on a single ramp it is indistinguishable
+/// from a horizontal gradient mask. Here the same `x` sits at a different lightness in every band
+/// — measured across the ramp: gray spans about 8..76, green 6..68, red 3..50, blue 2..44 — so a
+/// band of `[20, 50]` selects a *different portion of each row*, which a positional mask cannot do
+/// and which is plainly visible in the reference.
+///
+/// ⚠ Tinted rather than pure primaries, so **no channel is ever 0**. `chart()`'s primaries pin two
+/// channels at 0 in three of its four bands, and a reference already pinned cannot discriminate
+/// what a mask does there — the weakness M3.1b's radial golden and 3.1a's linear one each had to
+/// be regenerated for.
+///
+/// ⚠⚠ **The ramp's top is 0.53, not 1.0, and the number was arrived at by measurement.** The
+/// hazard is specific to a *luminance* mask and is the mirror of the usual one: the blue band has
+/// a **high channel value at a low lightness**, so a band chosen to select shadows selects the
+/// blue band's brightest samples too, and +0.55 EV pinned 68 of them at 255. A ramp reaching 1.0
+/// is safe for a positional mask and is not safe here.
+///
+/// ⚠ `set_srgb` takes **linear** sRGB, as `chart()` does and `hue_sweep_chart` makes explicit by
+/// calling `srgb_to_linear` first. Reading it as display-referred is what produced the clipping
+/// above: the intended top of 0.88 encoded to 241, not to 224.
+fn luminance_chart() -> ImageBuf {
+    let mut img = ImageBuf::new(W, H);
+    for y in 0..H {
+        let band = y * 4 / H; // 0..3
+        for x in 0..W {
+            let v = 0.006 + (x as f32 / (W - 1) as f32) * 0.526;
+            let t = v * 0.25;
+            let px = match band {
+                0 => [v, v, v],
+                1 => [v, t, t],
+                2 => [t, v, t],
+                _ => [t, t, v],
+            };
+            set_srgb(&mut img, x, y, px);
+        }
+    }
+    img
+}
+
+/// The two luminance-mask goldens, as one table.
+///
+/// ⚠ One list with two consumers — the golden tests and the discrimination guard below — for the
+/// reason [`grading_cases`] gives: two copies of an edit set let the reference and the guard drift
+/// apart, and the guard would then be measuring an image no reference contains.
+fn luminance_mask_cases() -> Vec<(&'static str, Edits)> {
+    let masked = |r: edit_model::LuminanceRange, a: edit_model::LocalAdjustments| Edits {
+        masks: vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Luminance(r),
+            adjustments: a,
+        }],
+        ..Edits::default()
+    };
+    vec![
+        (
+            // "Lift the shadows and lower midtones" — full coverage over lightness 20..50 with a
+            // 15-point smoothstep shoulder either side, so the reference records the *ramp* and
+            // not merely a step.
+            //
+            // ⚠ +0.55 EV, the value M3.1b settled on for the same reason: at +1.0 the brightest
+            // covered samples pin at 255 and the reference can no longer tell full coverage from
+            // any greater value.
+            "mask_luminance_shadows",
+            masked(
+                edit_model::LuminanceRange {
+                    low: 30.0,
+                    high: 55.0,
+                    feather: 30.0,
+                    invert: false,
+                },
+                edit_model::LocalAdjustments {
+                    exposure: 0.55,
+                    ..Default::default()
+                },
+            ),
+        ),
+        (
+            // The inverted case with a different payload, so the pair covers `invert` and a
+            // second stage inside the mask — the split `mask_radial_inverted_saturation` makes.
+            "mask_luminance_inverted_highlights",
+            masked(
+                edit_model::LuminanceRange {
+                    low: 30.0,
+                    high: 55.0,
+                    feather: 30.0,
+                    invert: true,
+                },
+                edit_model::LocalAdjustments {
+                    saturation: -100.0,
+                    exposure: -0.5,
+                    ..Default::default()
+                },
+            ),
+        ),
+    ]
+}
+
+fn luminance_mask_case(name: &str) -> Edits {
+    luminance_mask_cases()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .unwrap_or_else(|| panic!("no luminance-mask case named {name}"))
+        .1
+}
+
+#[test]
+fn golden_mask_luminance_shadows() {
+    check_golden_with(
+        "mask_luminance_shadows",
+        &luminance_mask_case("mask_luminance_shadows"),
+        luminance_chart(),
+    );
+}
+
+#[test]
+fn golden_mask_luminance_inverted_highlights() {
+    check_golden_with(
+        "mask_luminance_inverted_highlights",
+        &luminance_mask_case("mask_luminance_inverted_highlights"),
+        luminance_chart(),
+    );
+}
+
+/// ⚠⚠ **Measured, not eyeballed** — clipping is invisible to the eye and fatal to a reference's
+/// discriminating power, and this project has regenerated two mask goldens for exactly that.
+///
+/// Three properties, and the third is the one specific to a *range* mask:
+/// 1. nothing pins at 0 or 255, so every sample encodes what the mask actually did;
+/// 2. a substantial share of samples **differ** from the unmasked render, so the reference would
+///    move if the mask stopped working;
+/// 3. a substantial share **do not**, which is what makes it a selection rather than a global
+///    adjustment — a mask covering everything would satisfy (2) alone and be indistinguishable
+///    from moving the Exposure slider.
+#[test]
+fn the_luminance_mask_goldens_discriminate() {
+    let neutral =
+        to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(luminance_chart()));
+    for (name, edits) in luminance_mask_cases() {
+        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(luminance_chart()));
+        let hi = bytes.iter().filter(|&&c| c == 255).count();
+        let lo = bytes.iter().filter(|&&c| c == 0).count();
+        assert!(
+            hi == 0 && lo == 0,
+            "{name}: {hi} samples clipped high, {lo} clipped low — the golden cannot \
+             discriminate where it is pinned"
+        );
+        let moved = bytes.iter().zip(&neutral).filter(|(a, b)| a != b).count();
+        let total = bytes.len();
+        assert!(
+            moved * 5 >= total,
+            "{name}: only {moved}/{total} samples differ from the unmasked render — too few to \
+             witness a change"
+        );
+        // ⚠ Asserted as "enough samples are UNTOUCHED" rather than as an upper bound on `moved`,
+        // because `moved` counts a one-level partial change the same as a full one — with a
+        // smoothstep shoulder spanning 15 lightness points, most of the chart is touched *a
+        // little*. What distinguishes a selection from a global adjustment is that a real region
+        // comes back byte-identical, which is what this measures. Measured: 428 and 1680 of 3072.
+        let untouched = total - moved;
+        assert!(
+            untouched * 20 >= total,
+            "{name}: only {untouched}/{total} samples are untouched — the mask is covering \
+             everything, which a global adjustment would do too"
+        );
+    }
+}
+
 #[test]
 fn golden_output_p3() {
     check_golden_in_space(

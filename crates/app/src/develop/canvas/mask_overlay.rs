@@ -290,6 +290,22 @@ fn paint_mask(
                 paint_tint(painter, b, geometry, frame_rect);
             }
         }
+        // ⚠⚠ **A selected luminance range draws NOTHING, and that is a decision rather than an
+        // omission.** It is not a shape: it has no position, no handles and no boundary anywhere
+        // on the canvas, so there is no annotation to place. Its feedback is the two sliders in
+        // the panel and the rendered image itself.
+        //
+        // ⚠ A coverage tint was considered and rejected as **actively misleading**, not merely
+        // expensive. The tint machinery (`mask_tint`) rasterizes from a brush's *strokes*, which
+        // are geometry the canvas holds; a range mask's coverage is a function of the photograph's
+        // own pixels, and the only pixels the canvas has are the **rendered texture — which
+        // already has this mask's adjustment applied**. Tinting from those would show the mask
+        // selecting the tones it has just moved, i.e. exactly the "mask chasing its own effect"
+        // failure that `CoverageSource::Range` keys on `base` to avoid, made visible and wrong.
+        //
+        // Doing it honestly needs coverage computed against the *pre-mask* buffer, which lives on
+        // the render worker — a real feature, and a different one.
+        edit_model::Mask::Luminance(_) => {}
     }
 }
 
