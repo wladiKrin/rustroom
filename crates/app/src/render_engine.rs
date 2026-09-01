@@ -736,6 +736,57 @@ mod tests {
         Arc::new(img)
     }
 
+    /// ⚠⚠ **That `FrameSpec.resampler` actually reaches `build_prefix_steps`.** Every other
+    /// test in this file passes the same kernel on both sides of whatever it compares — a
+    /// cached frame against a cold one, a region against the whole — so `render_cached`
+    /// substituting a constant for `spec.resampler` leaves all of them green *and* leaves the
+    /// setting inert. Requests being issued proves nothing about which kernel ran.
+    #[test]
+    fn the_frame_spec_resampler_reaches_the_render() {
+        // ⚠ A hard edge, not flat grey: `tiny()` is uniform, and every kernel agrees exactly on
+        // a uniform image. That fixture cannot see this bug.
+        let mut img = ImageBuf::new(32, 32);
+        for y in 0..32 {
+            for x in 0..32 {
+                let v = if (x / 4) % 2 == 0 { 0.05 } else { 0.9 };
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let buf = Arc::new(img);
+        let edits = Edits {
+            geometry: edit_model::Geometry {
+                angle: 5.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let render = |k| {
+            render_cached(
+                &buf,
+                &edits,
+                FrameSpec {
+                    max_dim: 32,
+                    region: None,
+                    display_space: color::OutputSpace::Srgb,
+                    resampler: k,
+                },
+                1.0,
+                None,
+                // ⚠ A fresh cache each time, or the second call would legitimately hit the
+                // first's checkpoint and the test would be asserting about caching instead.
+                &mut PrefixCache::default(),
+                &mut BrushCache::default(),
+            )
+            .0
+            .rgba
+        };
+        assert_ne!(
+            render(pipeline::Resampler::Bilinear),
+            render(pipeline::Resampler::Lanczos3),
+            "the kernel in the spec never reached the pipeline"
+        );
+    }
+
     fn wait_for_frame(engine: &RenderEngine) -> RenderedFrame {
         for _ in 0..200 {
             if let Some(f) = engine.poll_latest() {

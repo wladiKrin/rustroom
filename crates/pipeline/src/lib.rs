@@ -809,6 +809,45 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **That the wrapper entry points do not quietly substitute the default.** Every
+    /// production render outside the engine goes through `build_pipeline_with` or
+    /// `build_pipeline_to` — the canvas's `render_once`, every thumbnail, every export — and
+    /// hardcoding `Resampler::default()` in either leaves all 49 goldens green, because the
+    /// goldens ask for the default anyway. Nothing else in the suite can see it.
+    #[test]
+    fn the_pipeline_builders_honour_the_kernel_they_are_handed() {
+        // ⚠ A hard edge, not a ramp: every kernel reproduces a linear ramp almost exactly.
+        let mut src = ImageBuf::new(48, 48);
+        for y in 0..48 {
+            for x in 0..48 {
+                let v = if (x / 6) % 2 == 0 { 0.05 } else { 0.9 };
+                src.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let edits = Edits {
+            geometry: edit_model::Geometry {
+                angle: 4.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let with = |k| build_pipeline_with(&edits, RenderScale::FULL, k).run(src.clone());
+        let to = |k| {
+            build_pipeline_to(&edits, RenderScale::FULL, color::OutputSpace::Srgb, k)
+                .run(src.clone())
+        };
+        assert_ne!(
+            with(Resampler::Bilinear).data(),
+            with(Resampler::Lanczos3).data(),
+            "build_pipeline_with ignored its kernel"
+        );
+        assert_ne!(
+            to(Resampler::Bilinear).data(),
+            to(Resampler::Lanczos3).data(),
+            "build_pipeline_to ignored its kernel"
+        );
+    }
+
     /// ⚠⚠ **What makes the resampler a live setting rather than one needing a restart.** The
     /// kernel lives in `Settings`, not in `Edits`, so nothing else in the key can notice it
     /// change — and a served checkpoint rendered with the old kernel is exactly how a control
