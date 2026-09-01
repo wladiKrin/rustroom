@@ -336,27 +336,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // optional: the Library has an editable filename field and a new-collection field,
             // and a bare `5` typed into either must not rate a photo. This project has recorded
             // that hazard twice.
-            for (c, key) in [
-                ('0', egui::Key::Num0),
-                ('1', egui::Key::Num1),
-                ('2', egui::Key::Num2),
-                ('3', egui::Key::Num3),
-                ('4', egui::Key::Num4),
-                ('5', egui::Key::Num5),
-                ('6', egui::Key::Num6),
-                ('7', egui::Key::Num7),
-                ('8', egui::Key::Num8),
-                ('9', egui::Key::Num9),
-                ('p', egui::Key::P),
-                ('x', egui::Key::X),
-                ('u', egui::Key::U),
-            ] {
-                // ⚠ No modifier: ⌘X is cut and ⌘A is select-all. A culling key is bare or it is
-                // not a culling key.
-                if i.key_pressed(key) && !i.modifiers.any() {
-                    mark = rustroom_app::marks::action_for(c);
-                }
-            }
+            //
+            // ⚠ The key table lives in `interaction::culling_key`, shared with Compare and
+            // Survey, so the three views cannot drift about what a digit means.
+            mark = crate::interaction::culling_key(i);
         });
 
         // ⚠ How many rows of prefetch to keep resident beyond the drawn ones. Latency, not

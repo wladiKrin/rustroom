@@ -10,6 +10,43 @@ use rustroom_app::format_filter;
 use rustroom_app::selection::Selection;
 use rustroom_app::tool::Tool;
 
+/// Every bare culling key, and the egui key it is pressed with.
+///
+/// ⚠ **One table, three views.** The grid, Compare and Survey all cull, and three copies of
+/// this list is how two of them come to disagree about whether `9` is a colour label.
+const CULLING_KEYS: [(char, egui::Key); 13] = [
+    ('0', egui::Key::Num0),
+    ('1', egui::Key::Num1),
+    ('2', egui::Key::Num2),
+    ('3', egui::Key::Num3),
+    ('4', egui::Key::Num4),
+    ('5', egui::Key::Num5),
+    ('6', egui::Key::Num6),
+    ('7', egui::Key::Num7),
+    ('8', egui::Key::Num8),
+    ('9', egui::Key::Num9),
+    ('p', egui::Key::P),
+    ('x', egui::Key::X),
+    ('u', egui::Key::U),
+];
+
+/// The culling action this frame's keys ask for, if any.
+///
+/// ⚠ **No modifier**, deliberately: ⌘X is cut and ⌘A is select-all. A culling key is bare or
+/// it is not a culling key.
+///
+/// ⚠ The caller must still gate on `memory().focused()` — this reads raw key state and knows
+/// nothing about the search field or the rename field a digit might be typed into.
+pub(crate) fn culling_key(i: &egui::InputState) -> Option<rustroom_app::marks::MarkAction> {
+    if i.modifiers.any() {
+        return None;
+    }
+    CULLING_KEYS
+        .iter()
+        .find(|(_, key)| i.key_pressed(*key))
+        .and_then(|(c, _)| rustroom_app::marks::action_for(*c))
+}
+
 /// Apply a click to the selection according to its modifiers. Returns whether this was a
 /// plain click, which is the only gesture that moves the active photo — and therefore the
 /// only one the filmstrip turns into an open.
