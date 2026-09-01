@@ -1,7 +1,8 @@
 //! The Settings window.
 
 use super::dialog;
-use crate::{theme, view_quality_hint, Modal, RustroomApp};
+use crate::decode::view_quality_hint;
+use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::settings::{Accent, PanDrag, ThemeChoice};
 

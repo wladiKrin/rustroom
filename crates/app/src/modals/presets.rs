@@ -1,7 +1,8 @@
 //! Develop-preset dialogs: saving one, and confirming a deletion.
 
 use super::dialog;
-use crate::{edit_group_checkboxes, theme, Modal, RustroomApp};
+use crate::transfer::edit_group_checkboxes;
+use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::presets::Preset;
 use rustroom_app::settings::ConfirmOutcome;

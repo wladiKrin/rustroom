@@ -1,7 +1,8 @@
 //! Dialogs that move edits between photos: paste, and sync.
 
 use super::dialog;
-use crate::{edit_group_checkboxes, paste_status, theme, Modal, RustroomApp};
+use crate::transfer::{edit_group_checkboxes, paste_status};
+use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 
 /// The "Paste…" dialog: which groups this paste applies.

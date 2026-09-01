@@ -1,6 +1,7 @@
 //! The Library grid: a page of thumbnails, filtered by format, with selection.
 
-use crate::{apply_click, name_edit, thumb, RustroomApp};
+use crate::interaction::apply_click;
+use crate::{name_edit, thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::format_filter;
 use rustroom_app::photo_id::PhotoId;

@@ -5,7 +5,8 @@
 //! makes it shrink back every frame. Applies to any future resizable panel whose content does
 //! not fill the resize axis.
 
-use crate::{apply_click, thumb, RustroomApp};
+use crate::interaction::apply_click;
+use crate::{thumb, RustroomApp};
 use eframe::egui;
 use rustroom_app::thumb_loader::ThumbRequest;
 

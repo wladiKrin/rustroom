@@ -213,3 +213,24 @@ pub fn library_of(n: usize) -> Library {
     lib.refilter(&Default::default());
     lib
 }
+
+/// A decoded buffer with no libraw, no disk and no GPU behind it.
+///
+/// Lives here rather than in one module's `mod tests` because `session_flow` and `snapshots`
+/// both drive the real `finalize_session` with it.
+pub fn fake_decode() -> std::sync::Arc<Decoded> {
+    std::sync::Arc::new(Decoded {
+        buffer: buffer(8, 4),
+        label: "Test Camera".to_string(),
+        baseline: rustroom_app::render_engine::RenderedFrame {
+            width: 8,
+            height: 4,
+            rgba: vec![0; 8 * 4 * 4],
+            region: None,
+            hist: [[0; 256]; 3],
+            max_dim: 8,
+        },
+        source_scale: 1.0,
+        lens: LensFacts::default(),
+    })
+}
