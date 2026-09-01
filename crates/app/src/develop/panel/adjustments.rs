@@ -1,6 +1,7 @@
 //! The five edit-group sections of the Develop panel.
 
 use crate::develop::panel::color_wheel;
+use crate::develop::panel::tone_curve;
 use crate::develop::panel::Edited;
 use edit_model::HslBand;
 use eframe::egui;
@@ -148,6 +149,13 @@ pub fn show(
             "Clarity",
         );
         ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze");
+        // ⚠ Last in the section, and a hairline rather than a header — `tone_curve` belongs to
+        // the `Tone` edit group, and a header here would put the panel and the Sync dialog out
+        // of step, which is the ambiguity this section structure exists to remove. It comes
+        // after the sliders because that is the order the decisions are made in: set the tone
+        // broadly, then refine its shape.
+        ui.separator();
+        tone_curve::show(ui, &mut edits.tone_curve, ed);
     });
 
     section(ui, SECTIONS[2], false, |ui| {

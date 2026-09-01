@@ -6,6 +6,7 @@ pub mod geometry;
 pub mod masks;
 pub mod presets;
 pub mod snapshots;
+pub mod tone_curve;
 
 use crate::name_edit;
 use crate::{theme, RustroomApp};
