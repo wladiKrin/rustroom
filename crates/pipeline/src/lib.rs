@@ -75,14 +75,6 @@ impl RenderScale {
     }
 }
 
-/// What the wrapper entry points resample with — the ones the goldens, the examples and the
-/// debug tools call.
-///
-/// ⚠ Bilinear rather than [`Resampler::default`] **for one commit only**, so that threading the
-/// kernel through the three stages provably moves no pixel: all 49 goldens must still pass. The
-/// commit that adopts Catmull-Rom flips this and regenerates the references that resample.
-const LEGACY_RESAMPLER: Resampler = Resampler::Bilinear;
-
 /// One stage of the develop pipeline. Pure: no shared state, independently testable.
 /// (A future GPU stage implements the same trait — the seam for the Phase 5 port.)
 pub trait PipelineStage: Send + Sync {
@@ -353,7 +345,7 @@ pub fn build_pipeline_split_in_region(
         None,
         color::OutputSpace::Srgb,
         None,
-        LEGACY_RESAMPLER,
+        Resampler::default(),
     )
 }
 
@@ -486,11 +478,11 @@ pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pip
 /// full-resolution original. A stage is added only when its params are non-neutral; the
 /// output transform is always last.
 ///
-/// ⚠ Resamples with [`LEGACY_RESAMPLER`]. Every **production** render goes through
+/// ⚠ Resamples with [`Resampler::default`]. Every **production** render goes through
 /// [`build_pipeline_with`] instead, so the user's choice reaches it; this wrapper exists so the
 /// goldens, the examples and the debug tools compile untouched — the `Region` precedent.
 pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
-    build_pipeline_with(edits, scale, LEGACY_RESAMPLER)
+    build_pipeline_with(edits, scale, Resampler::default())
 }
 
 /// As [`build_pipeline`], resampling with the caller's chosen kernel.

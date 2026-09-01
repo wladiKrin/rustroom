@@ -10,12 +10,13 @@ use edit_model::{
 };
 use pipeline::{build_pipeline, RenderScale, Resampler};
 
-/// What every golden renders with.
+/// What every golden renders with — the shipping kernel.
 ///
 /// ⚠ One constant rather than `Resampler::default()` at each site, so the day the shipping
 /// kernel changes again the references move by editing **one line** — and the diff says which
-/// commit did it.
-const RESAMPLER: Resampler = Resampler::Bilinear;
+/// commit did it. That is exactly how they moved when Catmull-Rom replaced bilinear: only the
+/// six references that actually resample changed, which is what proved the change was scoped.
+const RESAMPLER: Resampler = Resampler::CatmullRom;
 use std::path::PathBuf;
 
 const W: usize = 64;
