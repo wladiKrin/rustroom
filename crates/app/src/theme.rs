@@ -150,6 +150,17 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
 }
 
+/// A [`hint`] that says what is *wrong* with what was typed.
+///
+/// ⚠ Same size as a hint and a different colour, because it sits in the same place under the
+/// same control — a validation message that looked identical to an explanation would be read as
+/// one. ⚠ `error_fg_color` rather than a constant: this app tunes dark and light separately, and
+/// a hardcoded red is the mistake the crop overlay's fixed colours already document.
+pub fn error_hint(ui: &mut egui::Ui, text: &str) {
+    let colour = ui.visuals().error_fg_color;
+    ui.label(egui::RichText::new(text).small().color(colour));
+}
+
 /// The "there is nothing here yet" line filling an empty canvas or grid.
 ///
 /// ⚠⚠ **`selectable(false)` is the whole reason this exists.** egui's labels are selectable by

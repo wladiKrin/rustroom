@@ -309,6 +309,17 @@ pub fn destination_ready(dir: &Path) -> bool {
     !dir.as_os_str().is_empty() && dir.is_dir()
 }
 
+/// Whether a run can start at all: a usable destination, and a template that parses.
+///
+/// ⚠ A pure function rather than a condition inside the egui closure, for `destination_ready`'s
+/// own reason — that is what makes "Export goes dark when the template is wrong" something a test
+/// can see rather than something to verify by clicking. ⚠ And it is the place any *later*
+/// pre-flight check belongs (a subfolder that will not sanitize, say), so the dialog keeps asking
+/// one question.
+pub fn can_export(opts: &ExportOptions) -> bool {
+    destination_ready(&opts.dest_dir) && Template::parse(&opts.filename_template).is_ok()
+}
+
 /// The render scale a `max_edge` cap implies for a source whose long edge is `source_long`.
 ///
 /// Mirrors `render_engine::render_scale`, with `source_scale` fixed at 1.0 because an export
@@ -792,6 +803,35 @@ mod tests {
                 "copy {copy}"
             );
         }
+    }
+
+    #[test]
+    fn a_run_needs_both_a_destination_and_a_template_that_parses() {
+        // ⚠⚠ Each half asserted with the *other* half valid, which is what makes this two
+        // properties rather than one. A version that only looked at the destination would pass
+        // any test that varied the destination alone — and would ship a dialog whose Export
+        // button stays lit over a typo.
+        let d = TempDir::new("can_export");
+        let good = templated(&d, "{name}-{seq:3}");
+        assert!(can_export(&good));
+        assert!(
+            !can_export(&ExportOptions {
+                filename_template: "{camrea}".into(),
+                ..good.clone()
+            }),
+            "an unknown token must stop the run"
+        );
+        assert!(
+            !can_export(&ExportOptions {
+                dest_dir: PathBuf::new(),
+                ..good.clone()
+            }),
+            "an unset destination must stop the run"
+        );
+        assert!(!can_export(&ExportOptions {
+            dest_dir: d.0.join("gone"),
+            ..good
+        }));
     }
 
     #[test]
