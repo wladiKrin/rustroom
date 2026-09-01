@@ -40,7 +40,7 @@ impl RustroomApp {
                 let id = e.id.clone();
                 // ⚠ The name comes from the *entry*, so it is whatever the Library is showing —
                 // including a rename made this session that has not been re-scanned.
-                let name = e.name.clone();
+                let name = e.label.clone();
                 let edits = match &open {
                     Some((oid, edits)) if *oid == id => edits.clone(),
                     // ⚠ `load_copy`, not `load`: two copies of one file have different edits, and

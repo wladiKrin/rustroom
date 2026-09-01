@@ -204,7 +204,7 @@ pub fn apply_cell_action(
                 .library
                 .as_ref()
                 .and_then(|l| l.entries.get(index))
-                .map(|e| e.label())
+                .map(|e| e.caption())
                 .unwrap_or_default();
             app.rename_draft = Some((id, shown));
         }
@@ -455,7 +455,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 ui,
                                                 &e.id,
                                                 &e.file_name,
-                                                e.name.as_deref(),
+                                                e.label.as_deref(),
                                                 rename_draft,
                                                 name_size,
                                             ) {

@@ -182,8 +182,13 @@ impl LibraryFilter {
             // matching that would mean searching for what a copy is *called* and not finding it —
             // precisely the bug that made copy names invisible in the grid, where the Library was
             // the last consumer bypassing this shared rule.
-            let shown = entries::shown_name(&entry.file_name, entry.id.copy, entry.name.as_deref());
-            if !shown.to_lowercase().contains(&self.text.to_lowercase()) {
+            // ⚠ Caption **or** label: M6.0 made them two strings, and a photo is findable by
+            // whichever one the user remembers. Matching only the caption would make a copy
+            // labelled "B&W" unsearchable by that name.
+            let needle = self.text.to_lowercase();
+            let caption = entries::caption(&entry.file_name, entry.id.copy).to_lowercase();
+            let label = entry.label.as_deref().unwrap_or_default().to_lowercase();
+            if !caption.contains(&needle) && !label.contains(&needle) {
                 return false;
             }
         }
@@ -225,7 +230,7 @@ mod tests {
         PhotoEntry {
             id: PhotoId::new(PathBuf::from(format!("/x/{name}")), copy),
             file_name: name.to_string(),
-            name: copy_name.map(str::to_string),
+            label: copy_name.map(str::to_string),
             edits: Default::default(),
         }
     }
@@ -275,39 +280,63 @@ mod tests {
 
     #[test]
     fn text_matches_a_copys_own_name_not_the_files() {
-        // ⚠⚠ Matches `entries::shown_name`, the one rule the Library caption, the rename field and
-        // the default export name already share. Matching `file_name` instead would mean
-        // searching for what a copy is *called* and not finding it.
-        let warm = entry("DSCF6223.RAF", 2, Some("Warm.RAF"));
+        // ⚠⚠ Caption **or** label. Before M6.0 a copy's own name *replaced* the caption, so the
+        // file's name deliberately did not match it; now they are two strings and either one
+        // finds the photo. That is the point — a copy is findable by what it is called *and* by
+        // which photograph it came from.
+        let warm = entry("DSCF6223.RAF", 2, Some("Warm"));
         let f = LibraryFilter {
             text: "warm".into(),
             ..Default::default()
         };
         assert!(
             f.matches(&warm, Marks::default(), &Capture::default()),
-            "a copy's own name must match"
+            "a copy's label must match"
         );
 
-        // And the file's name must NOT match a named copy, since that is not what it is called.
         let g = LibraryFilter {
             text: "dscf".into(),
             ..Default::default()
         };
-        assert!(!g.matches(&warm, Marks::default(), &Capture::default()));
+        assert!(
+            g.matches(&warm, Marks::default(), &Capture::default()),
+            "and so must the file's name it is captioned with"
+        );
+
+        let h = LibraryFilter {
+            text: "sepia".into(),
+            ..Default::default()
+        };
+        assert!(
+            !h.matches(&warm, Marks::default(), &Capture::default()),
+            "an unrelated term must still not match"
+        );
     }
 
     #[test]
-    fn an_unnamed_copys_derived_name_matches() {
-        // An unnamed copy is shown as `{stem}_{copy}.{ext}` — derived, never stored.
-        let f = LibraryFilter {
-            text: "_1".into(),
+    fn an_unlabelled_copy_matches_its_file_name_but_not_its_number() {
+        // ⚠⚠ Replaces `an_unnamed_copys_derived_name_matches`. That test searched `_1`, which
+        // worked because an unnamed copy was *shown* as `DSCF6223_1.RAF`. M6.0 removes the
+        // derived filename, so `_1` matches nothing.
+        //
+        // ⚠ And the copy **number** is deliberately not searchable either: the filter matches the
+        // stored label, not the rendered badge. The badge shows "1" so you can see which copy it
+        // is; searching "1" would match every first copy in the catalogue, which is noise. Only a
+        // label someone actually chose is a search term.
+        let e = entry("DSCF6223.RAF", 1, None);
+        let by_file = LibraryFilter {
+            text: "dscf6223".into(),
             ..Default::default()
         };
-        assert!(f.matches(
-            &entry("DSCF6223.RAF", 1, None),
-            Marks::default(),
-            &Capture::default()
-        ));
+        assert!(by_file.matches(&e, Marks::default(), &Capture::default()));
+        let by_number = LibraryFilter {
+            text: "1".into(),
+            ..Default::default()
+        };
+        assert!(
+            !by_number.matches(&e, Marks::default(), &Capture::default()),
+            "the badge number is shown, not searched"
+        );
     }
 
     fn stars(list: &[u8]) -> RatingSet {

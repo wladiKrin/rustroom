@@ -16,9 +16,11 @@ pub struct PhotoEntry {
     pub id: PhotoId,
     /// The file's own name, shared by every copy of it.
     pub file_name: String,
-    /// This copy's own name, when it has one. Always `None` on the original, whose name *is*
-    /// `file_name`.
-    pub name: Option<String>,
+    /// This copy's label, when it has one — "B&W", "Client crop".
+    ///
+    /// ⚠ **Not a filename**, and any copy may carry one including the original. See
+    /// `sidecar::CopyEntry::label`.
+    pub label: Option<String>,
     /// This copy's stored edits, read from the sidecar when the row was built.
     ///
     /// ⚠ Carried so a thumbnail can be *rendered* with them without re-reading the sidecar per
@@ -32,34 +34,37 @@ pub struct PhotoEntry {
 }
 
 impl PhotoEntry {
-    /// What the grid, filmstrip and Develop footer show.
-    ///
-    /// ⚠⚠ **A copy shows its own name, not the file's name plus a marker.** An unnamed copy's
-    /// name is `{stem}_{copy}.{ext}` — a whole filename, derived rather than stored, and exactly
-    /// what it will export as. So the label, the editable field and the export filename are one
-    /// string, and cannot drift apart.
-    ///
-    /// ⚠ There is exactly one editable name per row, and *which* name it is depends on the row:
-    /// the original's is the filename on disk, a copy's is this. That asymmetry is the feature —
-    /// a copy has no file of its own, so renaming one used to rename the shared file and drag
-    /// every other copy along with it.
-    pub fn label(&self) -> String {
-        shown_name(&self.file_name, self.id.copy, self.name.as_deref())
+    /// The caption printed under this row.
+    pub fn caption(&self) -> String {
+        caption(&self.file_name, self.id.copy)
+    }
+
+    /// This row's badge text, if it has one — see [`label_of`].
+    pub fn badge(&self) -> Option<String> {
+        label_of(self.id.copy, self.label.as_deref())
     }
 }
 
-/// What a photo is called, from its file's name, its copy number and its own name.
+/// What the Library grid, the filmstrip and the Develop footer print under a photo.
 ///
-/// ⚠ **One implementation, three consumers**: the Library caption, the editable field in both
-/// views, and the export filename's default all come from here. They had briefly grown two
-/// copies of this rule, which is precisely how the grid ended up showing a file's name where a
-/// copy's name belonged.
-pub fn shown_name(file_name: &str, copy: u32, name: Option<&str>) -> String {
-    match (copy, name) {
-        // ⚠ Copy 0 *is* the file, so its name is the filename and a stored one is ignored.
-        (0, _) => file_name.to_string(),
-        (_, Some(n)) => n.to_string(),
-        (c, None) => crate::file_rename::default_copy_name(file_name, c),
+/// ⚠⚠ **The file's own name, on every row including a copy's.** One rule, no special case —
+/// which is what lets a copy show which photograph it belongs to. Before M6.0 a copy showed its
+/// *own* name instead, so a labelled copy gave no sign of where it came from.
+///
+/// A copy's own text lives in [`label_of`] and is drawn in the badge.
+pub fn caption(file_name: &str, _copy: u32) -> String {
+    file_name.to_string()
+}
+
+/// What the copy badge carries: the label, else the copy number, else nothing.
+///
+/// ⚠ The ordering is the whole rule, and step 1 applies to **copy 0 too** — a labelled original
+/// badges "Colour". Only an *unlabelled* original has nothing to say.
+pub fn label_of(copy: u32, label: Option<&str>) -> Option<String> {
+    match (copy, label) {
+        (_, Some(l)) if !l.is_empty() => Some(l.to_string()),
+        (0, _) => None,
+        (c, _) => Some(c.to_string()),
     }
 }
 
@@ -84,11 +89,9 @@ pub fn build(scan: &[CatalogEntry], load: impl Fn(&Path) -> Sidecar) -> Vec<Phot
             out.push(PhotoEntry {
                 id: PhotoId::new(e.path.clone(), n),
                 file_name: e.file_name.clone(),
-                // ⚠ Never on the original: copy 0's name is the file's, and holding a second one
-                // beside it would be two names for one thing.
-                name: (n != 0)
-                    .then(|| s.label_of(n).map(str::to_string))
-                    .flatten(),
+                // ⚠ Any copy may carry a label, the original included — a label is not a
+                // filename, so the copy-0 exception that used to sit here has no premise left.
+                label: s.label_of(n).map(str::to_string),
                 // ⚠ `Edits::default()` for a row the sidecar does not mention — the original of
                 // an unedited photo, which is neutral by definition.
                 edits: s.get(n).map(|c| c.edits.clone()).unwrap_or_default(),
@@ -177,89 +180,93 @@ mod tests {
     }
 
     #[test]
-    fn the_label_is_the_filename_plus_the_copy_number() {
-        // ⚠ One number used everywhere: the identity, the default label and the default export
-        // name are the same value. The original carries no number at all.
+    fn every_copy_is_captioned_with_the_file_name() {
+        // ⚠⚠ Replaces `the_label_is_the_filename_plus_the_copy_number`, which asserted the rule
+        // M6.0 removes. A copy used to be captioned `a_1.RAF` — its own derived filename — so it
+        // gave no sign of which photograph it came from. The number moved to the badge.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, None), copy(1, None), copy(2, None)],
             copy_hwm: 0,
         });
-        assert_eq!(got[0].label(), "a.RAF");
-        assert_eq!(got[1].label(), "a_1.RAF");
-        assert_eq!(got[2].label(), "a_2.RAF");
+        assert_eq!(got[0].caption(), "a.RAF");
+        assert_eq!(got[1].caption(), "a.RAF");
+        assert_eq!(got[2].caption(), "a.RAF");
+        assert_eq!(
+            got[0].badge(),
+            None,
+            "an unlabelled original has nothing to badge"
+        );
+        assert_eq!(got[1].badge(), Some("1".into()));
+        assert_eq!(got[2].badge(), Some("2".into()));
     }
 
     #[test]
-    fn renaming_the_file_moves_every_unnamed_copy_with_it() {
+    fn renaming_the_file_moves_every_copy_with_it() {
         // ⚠⚠ The bug this pins: after renaming the original, only *some* copies appeared to
-        // follow. Every unnamed copy derives its name from the file's, so they must all move
-        // together — and a named one must not, because its name is its own.
-        let before = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![
+        // follow. Under M6.0 the caption is the file's name, so **every** copy follows including
+        // a labelled one — its label is not a filename and is unaffected by the rename.
+        let cs = || {
+            vec![
                 copy(0, None),
                 copy(1, None),
                 copy(2, None),
                 copy(3, Some("Warm")),
-            ],
+            ]
+        };
+        let before = build(&scan(&["a.RAF"]), |_| Sidecar {
+            copies: cs(),
             copy_hwm: 0,
         });
         let after = build(&scan(&["b.RAF"]), |_| Sidecar {
-            copies: vec![
-                copy(0, None),
-                copy(1, None),
-                copy(2, None),
-                copy(3, Some("Warm")),
-            ],
+            copies: cs(),
             copy_hwm: 0,
         });
-        let labels = |v: &[PhotoEntry]| v.iter().map(|e| e.label()).collect::<Vec<_>>();
-        assert_eq!(labels(&before), ["a.RAF", "a_1.RAF", "a_2.RAF", "Warm"]);
+        let caps = |v: &[PhotoEntry]| v.iter().map(|e| e.caption()).collect::<Vec<_>>();
+        assert_eq!(caps(&before), ["a.RAF", "a.RAF", "a.RAF", "a.RAF"]);
+        assert_eq!(caps(&after), ["b.RAF", "b.RAF", "b.RAF", "b.RAF"]);
+        let badges = |v: &[PhotoEntry]| v.iter().map(|e| e.badge()).collect::<Vec<_>>();
         assert_eq!(
-            labels(&after),
-            ["b.RAF", "b_1.RAF", "b_2.RAF", "Warm"],
-            "every unnamed copy follows the file; the named one keeps its own name"
+            badges(&after),
+            [
+                None,
+                Some("1".into()),
+                Some("2".into()),
+                Some("Warm".into())
+            ],
+            "the label survives a file rename; the numbers are unchanged"
         );
     }
 
     #[test]
-    fn an_unnamed_copy_is_labelled_like_a_filename() {
-        // ⚠ Not "a.RAF / 1". The label *is* what the copy exports as, so it reads as a filename.
-        let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(0, None), copy(1, None)],
-            copy_hwm: 0,
-        });
-        assert_eq!(got[0].label(), "a.RAF");
-        assert_eq!(got[1].label(), "a_1.RAF");
-    }
-
-    #[test]
-    fn a_named_copy_shows_its_name_instead_of_its_number() {
+    fn a_labelled_copy_badges_its_label_instead_of_its_number() {
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
             copies: vec![copy(0, None), copy(1, None), copy(2, Some("B&W"))],
             copy_hwm: 0,
         });
         assert_eq!(
-            got[1].label(),
-            "a_1.RAF",
-            "unnamed falls back to the number"
+            got[1].badge(),
+            Some("1".into()),
+            "unlabelled falls back to the number"
         );
-        assert_eq!(got[2].label(), "B&W");
-        assert!(
-            !got[2].label().contains("a.RAF"),
-            "the name replaces the filename, it does not extend it"
+        assert_eq!(got[2].badge(), Some("B&W".into()));
+        assert_eq!(
+            got[2].caption(),
+            "a.RAF",
+            "the label goes in the badge; it does not replace the caption"
         );
     }
 
     #[test]
-    fn the_original_never_carries_a_copy_name() {
-        // ⚠ Copy 0 *is* the file, so its name is the filename. A name stored against it — which a
-        // hand-edited sidecar can hold — must not become a second name shown beside the first.
+    fn the_original_may_carry_a_label_too() {
+        // ⚠⚠ Replaces `the_original_never_carries_a_copy_name`. That exception existed because a
+        // copy-0 "name" would have been a second filename; a label is not a filename, so the
+        // premise is gone and "Colour / B&W" is expressible.
         let got = build(&scan(&["a.RAF"]), |_| Sidecar {
-            copies: vec![copy(0, Some("nonsense")), copy(1, Some("B&W"))],
+            copies: vec![copy(0, Some("Colour")), copy(1, Some("B&W"))],
             copy_hwm: 0,
         });
-        assert_eq!(got[0].name, None);
-        assert_eq!(got[0].label(), "a.RAF");
-        assert_eq!(got[1].name.as_deref(), Some("B&W"));
+        assert_eq!(got[0].caption(), "a.RAF");
+        assert_eq!(got[0].badge(), Some("Colour".into()));
+        assert_eq!(got[1].badge(), Some("B&W".into()));
     }
 }

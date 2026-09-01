@@ -47,7 +47,7 @@ pub fn caption_or_field(
     let font = egui::FontId::proportional(size);
     let editing = draft.as_ref().is_some_and(|(d, _)| d == id);
     if !editing {
-        let shown = entries::shown_name(file_name, id.copy, name);
+        let shown = entries::caption(file_name, id.copy);
         let r = ui.add(
             egui::Label::new(egui::RichText::new(shown.clone()).font(font))
                 .sense(egui::Sense::click()),
@@ -119,7 +119,7 @@ pub fn field(
     let default = file_rename::default_copy_name(file_name, id.copy);
     // ⚠ The same function the Library caption uses, so the field can never show a name
     // different from the one beside it.
-    let current = entries::shown_name(file_name, id.copy, name);
+    let current = entries::caption(file_name, id.copy);
 
     // ⚠ A draft belonging to a *different* photo is discarded, not shown. Without this the last
     // name typed followed you to every photo you opened afterwards.
@@ -296,8 +296,8 @@ mod tests {
         let (id, text) = draft.expect("a draft was started");
         assert_eq!(id, photo());
         assert_eq!(
-            text, "a_1.RAF",
-            "pre-filled with the name it already has, not blank"
+            text, "a.RAF",
+            "pre-filled with the file name it is captioned with, not blank"
         );
     }
 

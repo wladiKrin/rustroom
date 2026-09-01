@@ -93,7 +93,7 @@ impl RustroomApp {
     pub(crate) fn copy_name_of(&self, id: &PhotoId) -> Option<String> {
         if let Some(lib) = &self.library {
             if let Some(e) = lib.entries.iter().find(|e| e.id == *id) {
-                return e.name.clone();
+                return e.label.clone();
             }
         }
         sidecar::load_all(&id.path)
@@ -132,7 +132,7 @@ impl RustroomApp {
         if let Some(lib) = self.library.as_mut() {
             for e in lib.entries.iter_mut() {
                 if e.id == *id {
-                    e.name = name.clone();
+                    e.label = name.clone();
                 }
             }
         }

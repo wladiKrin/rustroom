@@ -106,7 +106,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         .library
         .as_ref()
         .and_then(|l| l.entries.iter().find(|e| e.id == id).cloned());
-    let shown = entry.as_ref().map(|e| e.label()).unwrap_or_else(|| {
+    let shown = entry.as_ref().map(|e| e.caption()).unwrap_or_else(|| {
         id.path
             .file_name()
             .unwrap_or_default()

@@ -108,7 +108,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 // ⚠ `label()`, never `file_name` — the one rule the Library
                                 // caption, the rename field and the default export name share.
                                 // The grid needs no hover: it draws the caption already.
-                                .on_hover_text(lib.entries[i].label());
+                                .on_hover_text(lib.entries[i].caption());
                                 thumb::selection_border(
                                     ui,
                                     resp.rect,

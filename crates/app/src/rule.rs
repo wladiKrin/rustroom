@@ -204,12 +204,11 @@ impl Criterion {
                 .taken
                 .is_some_and(|t| in_period(t, *year, *month, *day)),
             Criterion::Text(q) => {
-                let shown = entries::shown_name(
-                    &f.entry.file_name,
-                    f.entry.id.copy,
-                    f.entry.name.as_deref(),
-                );
-                shown.to_lowercase().contains(&q.to_lowercase())
+                // ⚠ Caption **or** label — see `LibraryFilter::matches` for why.
+                let needle = q.to_lowercase();
+                let caption = entries::caption(&f.entry.file_name, f.entry.id.copy).to_lowercase();
+                let label = f.entry.label.as_deref().unwrap_or_default().to_lowercase();
+                caption.contains(&needle) || label.contains(&needle)
             }
             Criterion::Rating { op, value } => op.holds(f.marks.rating as f64, *value as f64),
             Criterion::Flag(want) => f.marks.flag == *want,
@@ -268,7 +267,7 @@ mod tests {
         PhotoEntry {
             id: PhotoId::new(PathBuf::from(format!("/x/{name}")), 0),
             file_name: name.to_string(),
-            name: None,
+            label: None,
             edits: Default::default(),
         }
     }
@@ -408,15 +407,17 @@ mod tests {
     }
 
     #[test]
-    fn text_matches_the_shown_name_and_format_the_extension() {
-        // ⚠ `shown_name`, not `file_name` — a named copy must be findable by what it is called.
+    fn text_matches_the_caption_or_the_label_and_format_the_extension() {
+        // ⚠ Both, since M6.0: a copy is findable by its label *and* by the file it came from.
+        // This assertion was `!...("dscf")` before, because a copy's name replaced its caption.
         let mut e = entry("DSCF6223.RAF");
         e.id = PhotoId::new(PathBuf::from("/x/DSCF6223.RAF"), 2);
-        e.name = Some("Warm.RAF".into());
+        e.label = Some("Warm".into());
         let c = Capture::default();
         let f = facts(&e, &c);
         assert!(Criterion::Text("warm".into()).matches(&f));
-        assert!(!Criterion::Text("dscf".into()).matches(&f));
+        assert!(Criterion::Text("dscf".into()).matches(&f));
+        assert!(!Criterion::Text("sepia".into()).matches(&f));
         assert!(Criterion::Format("raf".into()).matches(&f));
         assert!(!Criterion::Format("jpg".into()).matches(&f));
     }
