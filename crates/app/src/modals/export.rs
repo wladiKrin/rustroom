@@ -78,6 +78,23 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                 };
                 ui.label(shown);
             });
+
+            // ─── M6.1 sections ───────────────────────────────────────────────────────────
+            //
+            // ⚠⚠ Naming is here, between the destination and the output format, because *where
+            // the file goes* and *what it is called* are one question. The four sections below
+            // it are the seam M6.1b–e drop into; their `ExportOptions` fields already exist,
+            // defaulted and inert, so each can be built without touching this file's neighbours
+            // or the struct every one of them would otherwise contend for.
+            //
+            // ⚠ Deliberately **no inert widgets** for the four not yet built: a copyright field
+            // that silently writes nothing is worse than an absent one, because it looks like a
+            // feature. A section appears when it works.
+            //
+            //   M6.1b — Metadata:  opts.metadata.{copyright, creator, caption}
+            //   M6.1c — Watermark: opts.watermark.text
+            //   M6.1d — Output sharpening: opts.output_sharpening.amount
+            //   M6.1e — Delivery:  opts.delivery.{subfolder, then}
             // ⚠⚠ **Only these two.** `Demosaic` further down is also a labelled control, but it
             // is separated from these by the banding hint, the quality slider, the long-edge
             // checkbox and its slider — folding it in here would **reorder the dialog** and
