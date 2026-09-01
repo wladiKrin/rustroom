@@ -6,7 +6,14 @@
 //! ⚠ `marks` is keyed by [`PhotoId`] and `captures` by path, because a rating is per copy
 //! and capture metadata is per file; both are read once per rebuild, never per cell.
 
-use crate::*;
+use crate::{Library, RustroomApp};
+use edit_model::Edits;
+use rustroom_app::entries;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
+use rustroom_app::thumb_key::ThumbKey;
+use rustroom_app::thumb_loader::ThumbRequest;
+use std::path::PathBuf;
 
 /// The modification time `collections::scan_of` used to read for itself.
 ///
