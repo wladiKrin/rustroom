@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod format_arg;
+mod resampler_arg;
 mod space_arg;
 
 /// What `--quality` means when it is not given. Only JPEG reads it.
@@ -47,6 +48,10 @@ enum Command {
         /// Output colour space: srgb, p3, adobergb, prophoto. Omitted = srgb.
         #[arg(long)]
         space: Option<String>,
+        /// Resampling kernel for straighten, perspective and lens correction:
+        /// bilinear, mitchell, catmullrom, lanczos3. Omitted = catmullrom.
+        #[arg(long)]
+        resampler: Option<String>,
     },
 }
 
@@ -62,6 +67,7 @@ fn main() -> Result<()> {
             quality,
             demosaic,
             space,
+            resampler,
         } => render(
             &input,
             &output,
@@ -70,6 +76,7 @@ fn main() -> Result<()> {
             quality,
             &demosaic,
             space.as_deref(),
+            resampler.as_deref(),
         ),
     }
 }
@@ -101,6 +108,7 @@ fn decode(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render(
     input: &Path,
     output: &Path,
@@ -109,6 +117,7 @@ fn render(
     quality: Option<u8>,
     demosaic: &str,
     space: Option<&str>,
+    resampler: Option<&str>,
 ) -> Result<()> {
     // Resolved before the decode, so a bad --format fails in milliseconds rather than after
     // a multi-second decode and render.
@@ -116,6 +125,12 @@ fn render(
     let space = match space {
         Some(s) => space_arg::parse(s)?,
         None => color::OutputSpace::Srgb,
+    };
+    // ⚠ Defaults to whatever the GUI ships, so the CLI and the GUI agree on a photo neither has
+    // been told anything about — the property `Edits::default()` already has.
+    let resampler = match resampler {
+        Some(s) => resampler_arg::parse(s)?,
+        None => pipeline::Resampler::default(),
     };
     // ⚠ Warn, never block. Banding in 8-bit is a real hazard for ProPhoto and ordinary practice
     // for the other spaces — see `OutputSpace::warns_in_8_bit`.
@@ -202,7 +217,7 @@ fn render(
         None,
         space,
         lens,
-        pipeline::Resampler::Bilinear,
+        resampler,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

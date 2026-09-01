@@ -195,6 +195,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         opened_at: std::time::Instant::now(),
         render_rung: 0,
         display_space: color::OutputSpace::Srgb,
+        resampler: pipeline::Resampler::default(),
     });
 }
 
@@ -220,7 +221,11 @@ pub fn library_of(n: usize) -> Library {
         cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
         last_want: Vec::new(),
         selection: Selection::default(),
-        loader: ThumbLoader::new(color::OutputSpace::Srgb, || {}),
+        loader: ThumbLoader::new(
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+            || {},
+        ),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
         captures: std::collections::HashMap::new(),

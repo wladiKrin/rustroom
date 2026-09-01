@@ -348,6 +348,7 @@ pub fn export_one(
     edits: &Edits,
     dest: &Path,
     opts: &ExportOptions,
+    resampler: pipeline::Resampler,
 ) -> Result<(), String> {
     let source_long = image.width().max(image.height());
     let scaled = match opts.max_edge {
@@ -355,9 +356,7 @@ pub fn export_one(
         None => image,
     };
     let scale = scale_for(source_long, opts.max_edge);
-    let rendered =
-        pipeline::build_pipeline_to(edits, scale, opts.space, pipeline::Resampler::Bilinear)
-            .run(scaled);
+    let rendered = pipeline::build_pipeline_to(edits, scale, opts.space, resampler).run(scaled);
     export::save(&rendered, dest, opts.format, opts.quality, opts.space).map_err(|e| e.to_string())
 }
 
@@ -378,17 +377,24 @@ impl ExportWorker {
     /// `cancel` is an input rather than something built here so that a test can flip it from
     /// *inside* the injected decode fn, which is the only way to exercise the mid-photo
     /// cancel check deterministically.
+    ///
+    /// ⚠ `resampler` is a parameter rather than a field of [`ExportOptions`], and that is the
+    /// whole reason there is one setting instead of two: in `ExportOptions` it would be saved
+    /// into every export preset, so a preset could disagree with the preview about which kernel
+    /// the photograph is rendered with. Two facts that can disagree.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
         cancel: Arc<AtomicBool>,
+        resampler: pipeline::Resampler,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
         let flag = cancel.clone();
         std::thread::spawn(move || {
-            run(jobs, opts, decode, event_tx, decision_rx, flag);
+            run(jobs, opts, decode, event_tx, decision_rx, flag, resampler);
         });
         Self {
             events,
@@ -418,6 +424,7 @@ impl ExportWorker {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     jobs: Vec<ExportJob>,
     opts: ExportOptions,
@@ -425,6 +432,7 @@ fn run(
     events: Sender<ExportEvent>,
     decisions: Receiver<Decision>,
     cancel: Arc<AtomicBool>,
+    resampler: pipeline::Resampler,
 ) {
     let total = jobs.len();
     let mut report = ExportReport::default();
@@ -547,7 +555,7 @@ fn run(
             break;
         }
 
-        match decoded.and_then(|img| export_one(img, &edits, &dest, &opts)) {
+        match decoded.and_then(|img| export_one(img, &edits, &dest, &opts, resampler)) {
             Ok(()) => {
                 report.exported += 1;
                 claimed.insert(dest);
@@ -659,7 +667,14 @@ mod tests {
     fn export_one_writes_a_jpeg_at_full_size_without_a_cap() {
         let d = TempDir::new("one_full");
         let dest = d.0.join("a.jpg");
-        export_one(flat(40, 20), &Edits::default(), &dest, &opts(&d, None)).unwrap();
+        export_one(
+            flat(40, 20),
+            &Edits::default(),
+            &dest,
+            &opts(&d, None),
+            pipeline::Resampler::default(),
+        )
+        .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
     }
 
@@ -667,7 +682,14 @@ mod tests {
     fn the_long_edge_cap_is_honoured() {
         let d = TempDir::new("one_cap");
         let dest = d.0.join("a.jpg");
-        export_one(flat(40, 20), &Edits::default(), &dest, &opts(&d, Some(10))).unwrap();
+        export_one(
+            flat(40, 20),
+            &Edits::default(),
+            &dest,
+            &opts(&d, Some(10)),
+            pipeline::Resampler::default(),
+        )
+        .unwrap();
         assert_eq!(jpeg_size(&dest), (10, 5));
     }
 
@@ -676,7 +698,14 @@ mod tests {
         // `downscale_to` never upscales; the export must not either.
         let d = TempDir::new("one_big_cap");
         let dest = d.0.join("a.jpg");
-        export_one(flat(40, 20), &Edits::default(), &dest, &opts(&d, Some(999))).unwrap();
+        export_one(
+            flat(40, 20),
+            &Edits::default(),
+            &dest,
+            &opts(&d, Some(999)),
+            pipeline::Resampler::default(),
+        )
+        .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
     }
 
@@ -684,7 +713,14 @@ mod tests {
     fn an_unwritable_destination_is_an_error_not_a_panic() {
         let d = TempDir::new("one_bad");
         let dest = d.0.join("no_such_dir").join("a.jpg");
-        assert!(export_one(flat(4, 4), &Edits::default(), &dest, &opts(&d, None)).is_err());
+        assert!(export_one(
+            flat(4, 4),
+            &Edits::default(),
+            &dest,
+            &opts(&d, None),
+            pipeline::Resampler::default()
+        )
+        .is_err());
     }
 
     #[test]
@@ -708,7 +744,13 @@ mod tests {
         answer: Vec<Decision>,
         decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
     ) -> (ExportReport, Vec<ExportEvent>) {
-        let worker = ExportWorker::spawn(jobs, opts, decode, Arc::new(AtomicBool::new(false)));
+        let worker = ExportWorker::spawn(
+            jobs,
+            opts,
+            decode,
+            Arc::new(AtomicBool::new(false)),
+            pipeline::Resampler::default(),
+        );
         let mut answers = answer.into_iter();
         let mut events = Vec::new();
         let mut report = ExportReport::default();
@@ -1168,6 +1210,7 @@ mod tests {
             opts(&d, None),
             ok_decode(),
             Arc::new(AtomicBool::new(true)),
+            pipeline::Resampler::default(),
         );
         let report = finished(&worker);
         assert!(report.cancelled);
@@ -1196,6 +1239,7 @@ mod tests {
                 Ok(flat(8, 4))
             },
             Arc::new(AtomicBool::new(false)),
+            pipeline::Resampler::default(),
         );
 
         started_rx.recv().expect("worker never reached a decode");
@@ -1234,6 +1278,7 @@ mod tests {
                 Ok(flat(8, 4))
             },
             flag,
+            pipeline::Resampler::default(),
         );
 
         let mut report = ExportReport::default();

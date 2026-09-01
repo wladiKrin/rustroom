@@ -11,9 +11,23 @@ fn main() {
     let buf = decoded.image;
     let edits = edit_model::Edits::default();
 
-    let srgb = render_once(&buf, &edits, 1600, 0.5, color::OutputSpace::Srgb);
+    let srgb = render_once(
+        &buf,
+        &edits,
+        1600,
+        0.5,
+        color::OutputSpace::Srgb,
+        pipeline::Resampler::default(),
+    );
     for space in [color::OutputSpace::DisplayP3, color::OutputSpace::AdobeRgb] {
-        let other = render_once(&buf, &edits, 1600, 0.5, space);
+        let other = render_once(
+            &buf,
+            &edits,
+            1600,
+            0.5,
+            space,
+            pipeline::Resampler::default(),
+        );
         let mut max = 0i32;
         let mut sum = 0i64;
         let mut over4 = 0usize;

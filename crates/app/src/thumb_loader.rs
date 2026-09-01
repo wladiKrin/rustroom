@@ -75,7 +75,7 @@ pub fn worker_count() -> usize {
 /// in the grid** — the headroom is gone before the pipeline sees it. Shadows compress the same
 /// way, and the thumbnail shows the camera's rendering plus your edits rather than Rustroom's own
 /// render.
-fn load_thumbnail(req: &ThumbRequest) -> Option<Thumbnail> {
+fn load_thumbnail(req: &ThumbRequest, resampler: pipeline::Resampler) -> Option<Thumbnail> {
     let path = req.id.path.as_path();
     let thumb = if catalog::is_raw(path) {
         raw_decode::extract_thumbnail(path).ok()?
@@ -87,7 +87,7 @@ fn load_thumbnail(req: &ThumbRequest) -> Option<Thumbnail> {
         // than paying it 830 times for a no-op.
         return Some(thumb);
     }
-    Some(render_edits(thumb, &req.edits))
+    Some(render_edits(thumb, &req.edits, resampler))
 }
 
 /// Run the pipeline over an already-extracted thumbnail.
@@ -98,7 +98,7 @@ fn load_thumbnail(req: &ThumbRequest) -> Option<Thumbnail> {
 ///
 /// ⚠ The output dimensions come from the rendered image, **not** from the input — a crop changes
 /// them, and reusing the input's would paint a cropped photo into the original's rect and skew it.
-fn render_edits(thumb: Thumbnail, edits: &Edits) -> Thumbnail {
+fn render_edits(thumb: Thumbnail, edits: &Edits, resampler: pipeline::Resampler) -> Thumbnail {
     let mut buf = core_image::ImageBuf::new(thumb.width, thumb.height);
     {
         let d = buf.data_mut();
@@ -118,7 +118,8 @@ fn render_edits(thumb: Thumbnail, edits: &Edits) -> Thumbnail {
     // ⚠ It bit only *edited* photos, because a neutral one takes the early return above and never
     // reaches the pipeline at all — which made the effect look arbitrary rather than systematic.
     let buf = buf.map_pixels(color::srgb_to_prophoto);
-    let out = pipeline::build_pipeline(edits, pipeline::RenderScale::new(1.0)).run(buf);
+    let out =
+        pipeline::build_pipeline_with(edits, pipeline::RenderScale::new(1.0), resampler).run(buf);
     Thumbnail {
         width: out.width(),
         height: out.height(),
@@ -161,10 +162,15 @@ impl ThumbLoader {
     /// `on_progress` is called after each thumbnail (e.g. `ctx.request_repaint`).
     pub fn new(
         display_space: color::OutputSpace,
+        resampler: pipeline::Resampler,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         Self::with_loader(
-            Arc::new(load_thumbnail),
+            // ⚠ Captured rather than read per request: `ThumbRequest` is what the UI asks for
+            // and has no business carrying a rendering preference. Changing the setting
+            // rebuilds the loader, which is also what drops the thumbnails rendered with the
+            // old kernel — `apply_display_space`'s shape, for its reason.
+            Arc::new(move |r: &ThumbRequest| load_thumbnail(r, resampler)),
             worker_count(),
             display_space,
             on_progress,
@@ -293,6 +299,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
+    /// `load_thumbnail` with the shipping kernel — the tests using it are about edits reaching
+    /// the pixels, not about which kernel read them.
+    fn load_thumbnail_default(req: &ThumbRequest) -> Option<Thumbnail> {
+        load_thumbnail(req, pipeline::Resampler::default())
+    }
+
     /// Collect results until `want` of them have arrived or the deadline passes.
     fn collect(loader: &ThumbLoader, want: usize) -> Vec<ThumbResult> {
         let mut results = Vec::new();
@@ -326,7 +338,11 @@ mod tests {
     #[test]
     fn streams_results_keyed_by_path_even_on_failure() {
         // Non-existent files fail extraction -> thumb is None, but a result still streams.
-        let loader = ThumbLoader::new(color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::new(
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+            || {},
+        );
         loader.want(&paths(2));
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);
@@ -681,7 +697,11 @@ mod tests {
             height: 1,
             rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
         };
-        let out = render_edits(thumb.clone(), &Edits::default());
+        let out = render_edits(
+            thumb.clone(),
+            &Edits::default(),
+            pipeline::Resampler::default(),
+        );
         assert_eq!(out.width, 2);
         assert_eq!(out.height, 1);
     }
@@ -698,7 +718,7 @@ mod tests {
         };
         let mut edits = Edits::default();
         edits.geometry.crop.right = 0.5;
-        let out = render_edits(thumb, &edits);
+        let out = render_edits(thumb, &edits, pipeline::Resampler::default());
         assert!(
             out.width < 40,
             "a half-width crop must narrow the thumbnail, got {}",
@@ -744,12 +764,12 @@ mod tests {
         )
         .unwrap();
 
-        let neutral = load_thumbnail(&ThumbRequest {
+        let neutral = load_thumbnail_default(&ThumbRequest {
             id: PhotoId::original(path.clone()),
             edits: Edits::default(),
         })
         .expect("the PNG must load");
-        let mono = load_thumbnail(&ThumbRequest {
+        let mono = load_thumbnail_default(&ThumbRequest {
             id: PhotoId::original(path),
             edits: Edits {
                 saturation: -100.0,
@@ -822,6 +842,7 @@ mod tests {
                 exposure: 0.01,
                 ..Default::default()
             },
+            pipeline::Resampler::default(),
         );
         let after = spread(&after.rgba);
         assert!(

@@ -817,6 +817,50 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **What makes the resampler a live setting rather than one needing a restart.** The
+    /// kernel lives in `Settings`, not in `Edits`, so nothing else in the key can notice it
+    /// change — and a served checkpoint rendered with the old kernel is exactly how a control
+    /// comes to look inert. `apply_camera_profile` had to clear `BufferCache` by hand for the
+    /// same hazard; keying it makes the invalidation structural instead.
+    ///
+    /// ⚠ And the *other half*, which is the reason it is on the steps rather than beside
+    /// `scale`: on a photo that resamples nothing, changing the kernel must invalidate nothing.
+    #[test]
+    fn the_resampler_changes_the_key_only_when_something_resamples() {
+        let straightened = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_ne!(
+            PrefixKey::new(&straightened, RenderScale::FULL, Resampler::Bilinear),
+            PrefixKey::new(&straightened, RenderScale::FULL, Resampler::Lanczos3),
+            "a straighten resamples, so its checkpoint depends on the kernel"
+        );
+
+        // ⚠ Not `Edits::default()`: a *fully neutral* photo has an empty prefix, so the keys
+        // would agree whatever the rule. This one has a live prefix stage that resamples
+        // nothing, which is the case the assertion is actually about.
+        let denoised = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 50.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !build_prefix_steps(&denoised, RenderScale::FULL, None, Resampler::Bilinear).is_empty(),
+            "fixture check: this photo must have a prefix stage to key at all"
+        );
+        assert_eq!(
+            PrefixKey::new(&denoised, RenderScale::FULL, Resampler::Bilinear),
+            PrefixKey::new(&denoised, RenderScale::FULL, Resampler::Lanczos3),
+            "nothing resamples here, so the kernel must not invalidate the checkpoint"
+        );
+    }
+
     #[test]
     fn a_truncated_prefix_key_ignores_the_stages_below_it() {
         // The whole feature rests on this: two edit sets that agree on the first n prefix

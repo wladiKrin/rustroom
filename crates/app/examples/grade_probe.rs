@@ -34,8 +34,22 @@ fn main() {
         ..Default::default()
     };
 
-    let a = render_once(&buf, &neutral, 1600, 0.5, color::OutputSpace::Srgb);
-    let b = render_once(&buf, &graded, 1600, 0.5, color::OutputSpace::Srgb);
+    let a = render_once(
+        &buf,
+        &neutral,
+        1600,
+        0.5,
+        color::OutputSpace::Srgb,
+        pipeline::Resampler::default(),
+    );
+    let b = render_once(
+        &buf,
+        &graded,
+        1600,
+        0.5,
+        color::OutputSpace::Srgb,
+        pipeline::Resampler::default(),
+    );
 
     // (name, lower bound) over the 8-bit mean of the *neutral* render.
     let bands = [("shadow", 0u32), ("mid", 70), ("high", 170)];

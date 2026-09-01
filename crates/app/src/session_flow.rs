@@ -76,6 +76,7 @@ impl Session {
                 max_dim,
                 region,
                 display_space: self.display_space,
+                resampler: self.resampler,
             },
         );
     }
@@ -285,6 +286,7 @@ impl RustroomApp {
                 display_space: self
                     .settings
                     .effective_display_space(self.os_manages_colour),
+                resampler: self.settings.resampler,
             },
         );
         // Non-RAW formats are decoded at full size, so their buffer is already the real thing.
@@ -294,6 +296,7 @@ impl RustroomApp {
             display_space: self
                 .settings
                 .effective_display_space(self.os_manages_colour),
+            resampler: self.settings.resampler,
             path,
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session

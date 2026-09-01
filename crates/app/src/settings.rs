@@ -5,6 +5,7 @@
 //! particular are fiddly to save and restore, and that belongs in whatever spec needs them.
 
 use crate::batch_export::ExportOptions;
+use pipeline::Resampler;
 use raw_decode::Demosaic;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -153,6 +154,20 @@ pub struct Settings {
     /// Defaults to `Fast`, which is what `DecodeOptions::linear_scene()` already hardcodes, so
     /// nobody who ignores this setting sees any change.
     pub view_demosaic: Demosaic,
+    /// Which kernel the three resampling stages read pixels with — straighten, perspective and
+    /// lens correction.
+    ///
+    /// ⚠⚠ **One setting for the preview *and* the export, deliberately unlike `view_demosaic`.**
+    /// That one has to be separate because the preview skips demosaic entirely, so there is no
+    /// value it could share. The resampler runs identically in both, so a second setting would
+    /// be a gratuitous way to make the preview lie about the file.
+    ///
+    /// ⚠ Not an `Edits` field: it is a rendering-quality preference rather than part of the
+    /// photograph's description, so it must not travel with a paste, a preset, a sync or a
+    /// sidecar. Two photographers can disagree about it and still exchange edits.
+    ///
+    /// Defaults to Catmull-Rom, chosen from measurement — see `pipeline::resample`.
+    pub resampler: Resampler,
     /// Camera model → the `.dcp` profile chosen for it.
     ///
     /// ⚠ Keyed by **model**, not by photo: a profile is a calibration of the body. Per-photo is a
@@ -404,6 +419,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
+            resampler: Resampler::default(),
             camera_profiles: std::collections::BTreeMap::new(),
             display_space: color::OutputSpace::default(),
             theme: ThemeChoice::default(),
@@ -826,6 +842,8 @@ mod tests {
             // exhaustive is what makes a new `Settings` field a compile error here, forcing
             // a decision about whether the round trip should carry it.
             view_demosaic: Demosaic::Better,
+            // Non-default, so a field re-defaulted on load cannot pass this round trip.
+            resampler: Resampler::Lanczos3,
             display_space: color::OutputSpace::DisplayP3,
             camera_profiles: std::collections::BTreeMap::new(),
             theme: ThemeChoice::System,
@@ -914,6 +932,34 @@ mod tests {
         };
         store.save(&s).unwrap();
         assert_eq!(store.load().view_demosaic, raw_decode::Demosaic::Best);
+    }
+
+    /// ⚠ `load()` is infallible, so an unparseable field does not surface an error — it silently
+    /// reverts *every* setting. A new field must be fillable by `#[serde(default)]`, which is
+    /// what the container-level attribute on `Settings` is for.
+    ///
+    /// ⚠ The assertion is on the **value**, not merely that the load succeeded: a resampler
+    /// arriving as bilinear would quietly hand every existing user the old, softer kernel and
+    /// the feature would look like it had never shipped.
+    #[test]
+    fn a_settings_file_from_before_the_resampler_still_loads_and_gets_catmull_rom() {
+        let f = TempFile::new("resampler_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert_eq!(loaded.resampler, Resampler::CatmullRom);
+    }
+
+    #[test]
+    fn the_resampler_round_trips_through_a_file() {
+        let f = TempFile::new("resampler_rt");
+        let store = SettingsStore::new(f.0.clone());
+        let s = Settings {
+            resampler: Resampler::Bilinear,
+            ..Default::default()
+        };
+        store.save(&s).unwrap();
+        assert_eq!(store.load().resampler, Resampler::Bilinear);
     }
 
     /// A unique temp file path for one test, removed on drop.

@@ -148,6 +148,13 @@ impl DecodeWorker {
                     req.max_dim,
                     source_scale,
                     color::OutputSpace::Srgb,
+                    // ⚠ The kernel is irrelevant here and provably so, not merely by
+                    // assumption: `Edits::default()` activates no geometry, no perspective and
+                    // no lens correction, so `build_prefix_steps` produces no resampling stage
+                    // at all. The parameter is passed rather than the function reaching for a
+                    // constant, so that a baseline rendered with *real* edits one day would
+                    // have to decide.
+                    pipeline::Resampler::default(),
                 );
                 Arc::new(Decoded {
                     buffer,
