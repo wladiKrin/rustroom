@@ -24,39 +24,27 @@
 //! egui lives in the bin modules only — `theme`, `modals`, `develop`, `library`, `filmstrip`,
 //! `thumb`, `shell`. Anything testable without a window belongs in the lib (`lib.rs`).
 
-use catalog::snapshot::CatalogSnapshot;
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
-use rustroom_app::action_log::{ActionKind, ActionLog, SyncAction};
-use rustroom_app::batch_export::{
-    ExportEvent, ExportJob, ExportOptions, ExportReport, ExportWorker,
-};
+use rustroom_app::action_log::ActionLog;
+use rustroom_app::batch_export::{ExportOptions, ExportWorker};
 use rustroom_app::buffer_cache::BufferCache;
 use rustroom_app::crop_tool;
-use rustroom_app::decode_worker::{DecodeWorker, Decoded, LensFacts};
-use rustroom_app::edit_clipboard;
+use rustroom_app::decode_worker::{DecodeWorker, LensFacts};
 use rustroom_app::edit_history::HistoryStash;
-use rustroom_app::entries::{self, PhotoEntry};
+use rustroom_app::entries::PhotoEntry;
 use rustroom_app::export_presets::{ExportPreset, ExportPresetStore};
-use rustroom_app::file_rename;
-use rustroom_app::format_filter;
-use rustroom_app::full_res;
 use rustroom_app::history::History;
 use rustroom_app::mask_tool;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::presets::{Preset, PresetStore};
-use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
+use rustroom_app::render_engine::{RegionRect, RenderEngine};
 use rustroom_app::selection::Selection;
-use rustroom_app::settings::{Accent, Settings, SettingsStore, ThemeChoice};
-use rustroom_app::sidecar;
-use rustroom_app::sync;
-use rustroom_app::thumb_key::ThumbKey;
+use rustroom_app::settings::{Settings, SettingsStore};
 use rustroom_app::thumb_loader::{ThumbLoader, ThumbRequest};
 use rustroom_app::tool::Tool;
-use rustroom_app::view_region;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod catalog_ops;
@@ -92,7 +80,7 @@ mod thumb;
 mod transfer;
 mod undo;
 
-use decode::{decode_for_edit, decode_for_export, full_res_worker};
+use decode::{decode_for_edit, full_res_worker};
 use modals::Modal;
 
 const PREVIEW_MAX_DIM: usize = 1600;
