@@ -42,7 +42,7 @@ const GUIDE_HALO_WIDTH: f32 = 2.0;
 ///
 /// ⚠ Both alphas are below the crop border's. A grid drawn at full strength over the picture is
 /// the complaint people have about grids, and the guide is meant to be readable *past*.
-fn draw_guides(painter: &egui::Painter, rect: egui::Rect, guide: CompositionGuide) {
+pub(super) fn draw_guides(painter: &egui::Painter, rect: egui::Rect, guide: CompositionGuide) {
     if rect.width() <= f32::EPSILON || rect.height() <= f32::EPSILON {
         return;
     }
@@ -74,19 +74,12 @@ fn draw_guides(painter: &egui::Painter, rect: egui::Rect, guide: CompositionGuid
 ///
 /// Returns whether a drag settled into a new history entry, so the caller can treat that as
 /// a photo edit — it is one of the two places a photo edit is committed.
-pub(super) fn draw_crop_overlay(
-    ui: &egui::Ui,
-    s: &mut Session,
-    resp: &egui::Response,
-    img_rect: egui::Rect,
-    crop_aspect: Option<f32>,
-    guide: CompositionGuide,
-) -> bool {
-    // ⚠ Normalized here, from the *baseline* texture, because that is the same source the
-    // Crop panel uses to pick its presets. Two different aspect sources would disagree on any
-    // photo whose preview and baseline differ, and the crop would drift as you dragged.
-    let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
-    let norm_aspect = crop_aspect.map(|a| a / img_aspect);
+/// The crop rectangle's position on screen.
+///
+/// ⚠ Extracted so `canvas::show` places the guides against the **same** rect the overlay draws,
+/// rather than recomputing it. Two computations of one rectangle is exactly how the crop border
+/// and the guides would come to disagree by a pixel, with nothing to say which was right.
+pub(super) fn crop_screen_rect(s: &Session, img_rect: egui::Rect) -> egui::Rect {
     let g = s.edits.geometry.crop;
     let to_screen = |nx: f32, ny: f32| {
         egui::pos2(
@@ -94,8 +87,24 @@ pub(super) fn draw_crop_overlay(
             img_rect.top() + ny * img_rect.height(),
         )
     };
-    let crop_rect =
-        egui::Rect::from_min_max(to_screen(g.left, g.top), to_screen(g.right, g.bottom));
+    egui::Rect::from_min_max(to_screen(g.left, g.top), to_screen(g.right, g.bottom))
+}
+
+pub(super) fn draw_crop_overlay(
+    ui: &egui::Ui,
+    s: &mut Session,
+    resp: &egui::Response,
+    img_rect: egui::Rect,
+    crop_aspect: Option<f32>,
+) -> bool {
+    // ⚠ Normalized here, from the *baseline* texture, because that is the same source the
+    // Crop panel uses to pick its presets. Two different aspect sources would disagree on any
+    // photo whose preview and baseline differ, and the crop would drift as you dragged.
+    let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
+    let norm_aspect = crop_aspect.map(|a| a / img_aspect);
+    // ⚠ Both the crop border and the composition guides are placed from this one function, so
+    // they cannot drift apart by a pixel.
+    let crop_rect = crop_screen_rect(s, img_rect);
 
     let painter = ui.painter_at(img_rect);
     let dim = egui::Color32::from_black_alpha(140);
@@ -121,11 +130,10 @@ pub(super) fn draw_crop_overlay(
     // ⚠ The crop overlay was already painted by hand with fixed colours and deliberately does not
     // follow the accent; this keeps that, rather than introducing a second rule.
     let mark = egui::Color32::from_rgb(255, 60, 60);
-    // ⚠ Drawn **before** the border and the brackets, so the controls sit on top of the guides
-    // rather than under them. It also puts the guides in the wider `marks` clip: a diagonal
-    // reaches the crop's corners, and at a full-frame crop those are the image's own edges,
-    // where a tight clip would shave half the stroke off — the bug `overlay_clip` exists for.
-    draw_guides(&marks, crop_rect, guide);
+    // ⚠⚠ The guides are **no longer drawn here.** They moved to `canvas::show` so every tool
+    // gets them, not only Crop — the View menu entry and the `O` key did nothing in the other
+    // three. Crop still passes the **crop rect**, because the preview strips the crop and that
+    // rect is the photograph-to-be.
     marks.rect_stroke(
         crop_rect,
         egui::CornerRadius::ZERO,
