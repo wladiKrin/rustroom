@@ -3,7 +3,10 @@
 //! ⚠ This is a **trait impl moved to another module of the same crate**, which Rust allows —
 //! so unlike every other move in this refactor, `self` stays `self` and the body is verbatim.
 
-use crate::{commands, develop, library, menu_bar, modals, AppView, RustroomApp, PREVIEW_MAX_DIM};
+use crate::{
+    commands, develop, library, menu_bar, modals, multi, AppView, LibraryMode, RustroomApp,
+    PREVIEW_MAX_DIM,
+};
 use eframe::egui;
 use rustroom_app::icons;
 use rustroom_app::menu::{self, Command};
@@ -206,6 +209,12 @@ impl eframe::App for RustroomApp {
                 // in Library.
                 if self.view == AppView::Library && self.library.is_some() {
                     ui.separator();
+                    // ⚠ A visible control, not keys alone. `C` and `N` are the fast route and
+                    // are what a photographer culling a shoot will use — but a feature reachable
+                    // only by a key nothing on screen mentions is a feature nobody finds, and
+                    // the Filter button's `Filter: ` prefix exists for the same reason.
+                    mode_switch(ui, &mut self.library_mode);
+                    ui.separator();
                     search_field(self, ui);
                     // ⚠ Beside the search field, not in the right-aligned cluster. They are one
                     // idea — "narrow what I am looking at" — and splitting them across the row put
@@ -257,7 +266,14 @@ impl eframe::App for RustroomApp {
                 // the central panel takes what is left, so the collections panel must be drawn
                 // *before* the grid.
                 crate::collections_panel::show(self, ui, &ctx);
-                library::show(self, ui, &ctx);
+                // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
+                // a mode that silently shows the grid — the rule `commands::execute`'s match
+                // already follows.
+                match self.library_mode {
+                    LibraryMode::Grid => library::show(self, ui, &ctx),
+                    LibraryMode::Compare => multi::compare::show(self, ui, &ctx),
+                    LibraryMode::Survey => multi::survey::show(self, ui, &ctx),
+                }
             }
         }
 
@@ -324,6 +340,7 @@ fn egui_key(c: char) -> Option<egui::Key> {
         'V' => egui::Key::V,
         'G' => egui::Key::G,
         'D' => egui::Key::D,
+        'N' => egui::Key::N,
         '+' => egui::Key::Plus,
         '-' => egui::Key::Minus,
         '0' => egui::Key::Num0,
@@ -351,6 +368,27 @@ fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.selectable_value(view, AppView::Library, "  Library  ");
         ui.selectable_value(view, AppView::Develop, "  Develop  ");
+    });
+}
+
+/// The Grid / Compare / Survey switch, built exactly like [`view_switch`].
+///
+/// ⚠ A *second* segmented control rather than three more segments on the first one: Library and
+/// Develop are modules and these are layouts within one of them, and flattening the two would
+/// say that leaving Compare for Develop is the same kind of move as leaving Compare for the
+/// grid. It is shown only in Library, where the distinction is visible.
+fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        // ⚠ The chord is in the hover text rather than the label: a segment reading "Grid (G)"
+        // is a third of it punctuation, and the Keyboard-shortcuts dialog is generated from the
+        // menu model so it already lists all three.
+        ui.selectable_value(mode, LibraryMode::Grid, " Grid ")
+            .on_hover_text("Thumbnails (G)");
+        ui.selectable_value(mode, LibraryMode::Compare, " Compare ")
+            .on_hover_text("Two photos side by side (C)");
+        ui.selectable_value(mode, LibraryMode::Survey, " Survey ")
+            .on_hover_text("The whole selection at once (N)");
     });
 }
 
@@ -829,5 +867,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Press one bare key and return what `pressed_command` made of it.
+    fn bare(k: egui::Key) -> Option<menu::Command> {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: k,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut got = None;
+        let _ = ctx.run_ui(input, |ui| {
+            got = pressed_command(ui.ctx());
+        });
+        got
+    }
+
+    #[test]
+    fn a_bare_c_really_reaches_the_dispatcher() {
+        // ⚠⚠ **The one fact this feature could not be built on faith.** `egui-winit` matches the
+        // clipboard chords *first* and pushes `Event::Copy` **instead of** a `Key` event, so
+        // `key_pressed(Key::C)` can never see ⌘C — a trap this codebase has already paid for.
+        // Reading its source settles the other half: `is_copy_command` is
+        // `modifiers.command && key == C`, so a **bare** C is untouched. This asserts our end of
+        // it — that the bare chord is not skipped by `pressed_command`'s own ⌘C/⌘V exclusion,
+        // which tests `sc.cmd` and would swallow both if it tested only the character.
+        assert_eq!(bare(egui::Key::C), Some(menu::Command::ShowCompare));
+        assert_eq!(bare(egui::Key::N), Some(menu::Command::ShowSurvey));
+    }
+
+    #[test]
+    fn a_bare_key_is_ignored_while_a_text_field_has_focus() {
+        // ⚠ The guard on the guard: `C` and `N` are ordinary characters, so without this the
+        // Library's search field would jump to Compare on every "c" typed into it. Asserted
+        // through the *same* function, or it would be a test about a different code path.
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("a text field")));
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::C,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut got = None;
+        let _ = ctx.run_ui(input, |ui| {
+            got = pressed_command(ui.ctx());
+        });
+        assert_eq!(got, None, "a bare C typed into a field switched view");
     }
 }

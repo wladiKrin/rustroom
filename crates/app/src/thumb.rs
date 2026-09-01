@@ -128,10 +128,29 @@ pub fn cell(
     // ⚠ Painted into the **allocated** rect rather than allocating more: the cell's geometry must
     // not depend on whether a photo happens to be marked, or marked photos would resize their
     // cells — the reflow bug the filmstrip already paid for.
+    paint_marks(&ui.painter_at(rect), rect, marks, box_size.y * 0.09);
+
+    resp
+}
+
+/// Draw a photo's stars, flag and colour label into `rect`.
+///
+/// ⚠ Extracted from [`cell`] so Compare and Survey draw the *same* badges rather than growing
+/// a second set — the rule `cell_menu`, `name_edit` and `apply_cell_action` already follow.
+/// The glyphs and the four label colours are decisions with reasons, recorded below, and a
+/// second copy is where they quietly become five colours and a tick nobody can render.
+///
+/// `nominal` is the badge size before clamping — the caller's cell height times a fraction —
+/// so a tile several hundred points tall does not get a badge to match.
+pub(crate) fn paint_marks(
+    p: &egui::Painter,
+    rect: egui::Rect,
+    marks: catalog::db::Marks,
+    nominal: f32,
+) {
     if !marks.is_empty() {
-        let p = ui.painter_at(rect);
         let pad = 3.0;
-        let size = (box_size.y * 0.09).clamp(7.0, 13.0);
+        let size = nominal.clamp(7.0, 13.0);
         let mut x = rect.left() + pad;
         let y = rect.bottom() - pad - size;
         for _ in 0..marks.rating {
@@ -187,8 +206,6 @@ pub fn cell(
             );
         }
     }
-
-    resp
 }
 
 #[cfg(test)]

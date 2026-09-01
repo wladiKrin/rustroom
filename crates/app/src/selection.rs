@@ -69,6 +69,24 @@ impl Selection {
         self.anchor = Some(i);
     }
 
+    /// Make an **already-selected** photo the active one, leaving the set alone.
+    ///
+    /// ⚠⚠ This exists for Survey, where the selection is the *content of the view* rather than a
+    /// target set: clicking a tile there must move the focus without collapsing the survey to
+    /// one photo, which is what [`Selection::click`] would do. Returns whether it moved.
+    ///
+    /// ⚠ It refuses an unselected index rather than selecting it, which is what keeps the
+    /// invariant — an active photo is always selected — true by construction rather than by the
+    /// caller remembering.
+    pub fn focus(&mut self, i: usize) -> bool {
+        if !self.set.contains(&i) {
+            return false;
+        }
+        self.active = Some(i);
+        self.anchor = Some(i);
+        true
+    }
+
     /// Shift-click: the inclusive range from the anchor to `i`.
     ///
     /// The active photo is re-inserted afterwards because a preceding Cmd-click can have
@@ -171,6 +189,31 @@ mod tests {
 
     fn items(s: &Selection) -> Vec<usize> {
         s.iter().collect()
+    }
+
+    #[test]
+    fn focusing_a_selected_photo_moves_the_active_one_and_keeps_the_set() {
+        // ⚠⚠ The whole reason `focus` is not `click`: in Survey the selection *is* what the view
+        // is showing, so moving the focus must not collapse it to one photo.
+        let mut s = Selection::default();
+        s.select_indices(&[1, 3, 5]);
+        assert!(s.focus(5));
+        assert_eq!(s.active(), Some(5));
+        assert_eq!(items(&s), vec![1, 3, 5], "the survey lost its other photos");
+        check(&s);
+    }
+
+    #[test]
+    fn focusing_an_unselected_photo_is_refused() {
+        // ⚠ Refused rather than selecting it, which is what makes the invariant hold by
+        // construction. Accepting it would leave an active photo outside the set — the state
+        // every other method in this file exists to prevent.
+        let mut s = Selection::default();
+        s.select_indices(&[1, 3]);
+        assert!(!s.focus(9));
+        assert_eq!(s.active(), Some(1));
+        assert_eq!(items(&s), vec![1, 3]);
+        check(&s);
     }
 
     #[test]

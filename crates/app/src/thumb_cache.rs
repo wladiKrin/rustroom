@@ -36,7 +36,10 @@ pub const THUMB_BUDGET_BYTES: usize = 512 * 1024 * 1024;
 
 /// A typical thumbnail, measured: 415 RAF previews came to 276 MB, and 830 mixed RAF+JPEG ones
 /// to 552 MB — 0.665 MB apiece both times.
-const TYPICAL_THUMB_BYTES: usize = 700 * 1024;
+///
+/// ⚠ `pub` so `tile_layout` can bound Survey's tile count against the budget in the same
+/// compile-time way. A second copy of a *measured* number is a copy that drifts.
+pub const TYPICAL_THUMB_BYTES: usize = 700 * 1024;
 
 // ⚠ **Module-level** compile-time guards, not associated ones. An associated `const` inside an
 // `impl` is only evaluated where it is used, so `PrefixCache`'s first attempt at exactly this

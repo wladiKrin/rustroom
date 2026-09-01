@@ -9,7 +9,7 @@
 //! *requests and state*, never on rendered pixels.
 
 use crate::modals::Modal;
-use crate::{AppView, Library, LibrarySource, RustroomApp, Session, BUFFER_CACHE_CAP};
+use crate::{AppView, Library, LibraryMode, LibrarySource, RustroomApp, Session, BUFFER_CACHE_CAP};
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
@@ -99,6 +99,10 @@ pub fn for_test() -> RustroomApp {
         camera_profiles_cache: Vec::new(),
         os_manages_colour: false,
         view: AppView::Develop,
+        // ⚠ The grid, not `Default::default()` spelled out — a test that has not said otherwise
+        // is looking at the ordinary Library.
+        library_mode: LibraryMode::Grid,
+        compare_candidate: None,
         last_view: AppView::Develop,
         library: None,
         session: None,
@@ -231,6 +235,28 @@ pub fn library_of(n: usize) -> Library {
     };
     lib.refilter(&Default::default());
     lib
+}
+
+/// Register the loaded library's folder and photos in the app's catalog.
+///
+/// ⚠⚠ **A test that rates a synthetic library and reads the marks back needs this, or it cannot
+/// see what it names.** `Catalog::set_marks` looks the photo up first and *returns early* when
+/// there is no row — so on an uncatalogued library it silently does nothing, and `reload_marks`
+/// then reads nothing back. The assertion fails against perfectly correct rating code, which is
+/// exactly the wrong place to be looking.
+pub fn catalog_library(app: &mut RustroomApp) {
+    let Some(lib) = app.library.as_ref() else {
+        return;
+    };
+    let Some(dir) = lib.entries.first().and_then(|e| e.id.path.parent()) else {
+        return;
+    };
+    if let Some(cat) = &app.catalog {
+        // ⚠ The files do not exist, and that is fine: `sync_folder` records whatever the
+        // filesystem reports and never refuses a missing one — the same "absence is not
+        // deletion" rule it follows in production.
+        let _ = cat.sync_folder(dir, &lib.scan);
+    }
 }
 
 /// A decoded buffer with no libraw, no disk and no GPU behind it.

@@ -376,11 +376,29 @@ impl RustroomApp {
                     .collect()
             })
             .unwrap_or_default();
+        self.apply_mark_to(&chosen, action);
+    }
+
+    /// Mark exactly these photos.
+    ///
+    /// ⚠⚠ **Compare and Survey cull one tile, where the grid culls the whole selection — and
+    /// that asymmetry is deliberate rather than an oversight.** In the grid the selection *is*
+    /// the target set, so "rate what I picked" is right. In Survey the selection is the
+    /// *content of the view*, so rating it whole would rate every photo you were choosing
+    /// between; and in Compare the point of the view is to judge one frame against another, so
+    /// a key that rated both says nothing. [`apply_mark`] is the selection-wide case expressed
+    /// through this one, so the two cannot drift about what a rating does once its targets are
+    /// chosen.
+    pub(crate) fn apply_mark_to(
+        &mut self,
+        chosen: &[PhotoId],
+        action: rustroom_app::marks::MarkAction,
+    ) {
         if chosen.is_empty() {
             return;
         }
         if let Some(cat) = &self.catalog {
-            for id in &chosen {
+            for id in chosen {
                 let now = cat.marks(&id.path, id.copy).unwrap_or_default();
                 let next = rustroom_app::marks::apply(now, action);
                 let _ = cat.set_marks(&id.path, id.copy, next);
