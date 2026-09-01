@@ -93,11 +93,29 @@ impl eframe::App for RustroomApp {
                 //
                 // It is still not derived from a rendered size feeding back: `fit_cap` and
                 // `frame.max_dim` are both caps, and neither comes from `fit_image_size`.
+                //
+                // ⚠⚠ **A REGION frame updates this too, and restricting it to whole-image frames
+                // was a real bug.** A region frame carries `full_w`/`full_h` — the post-geometry
+                // dimensions it was cut from — which is the *same quantity*, as the `rendered_long`
+                // line below already relies on. While every render happened to be whole-image at
+                // the fit rung the restriction was harmless; Guide Mode unpinned that rung, so a
+                // zoomed session could render nothing but regions and this would never refresh.
+                //
+                // ⚠ The symptom was precise and is worth keeping: entering geometry mode **with a
+                // crop applied** resets the crop for the preview, so the frame becomes larger —
+                // but with only region frames arriving, `fit_image_size` still described the
+                // *cropped* frame. `frame_rect` was therefore the wrong size and the guide overlay
+                // sat slightly off, correcting itself the moment you zoomed out far enough for a
+                // whole-image frame to land. Reported as the line moving a bit at full zoom and
+                // being right again when zoomed out.
                 let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
-                if frame.region.is_none() && frame.max_dim > 0 {
+                if frame.max_dim > 0 {
                     let ratio = fit_cap as f32 / frame.max_dim as f32;
-                    s.fit_image_size =
-                        egui::vec2(frame.width as f32 * ratio, frame.height as f32 * ratio);
+                    let (fw, fh) = frame
+                        .region
+                        .map(|r| (r.full_w, r.full_h))
+                        .unwrap_or((frame.width, frame.height));
+                    s.fit_image_size = egui::vec2(fw as f32 * ratio, fh as f32 * ratio);
                 }
                 // A region frame carries the full post-geometry dimensions it was cut from,
                 // so this is exact either way.
