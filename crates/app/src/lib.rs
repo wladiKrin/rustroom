@@ -5,6 +5,7 @@ pub mod batch_export;
 pub mod brush_tool;
 pub mod buffer_cache;
 pub mod collections;
+pub mod composition_guides;
 pub mod crop_tool;
 pub mod date_tree;
 pub mod decode_worker;

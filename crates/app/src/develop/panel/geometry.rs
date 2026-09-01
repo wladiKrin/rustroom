@@ -7,6 +7,7 @@
 use crate::develop::panel::Edited;
 use crate::Session;
 use eframe::egui;
+use rustroom_app::composition_guides::CompositionGuide;
 use rustroom_app::crop_tool;
 
 /// Draw the geometry controls. The caller decides whether geometry mode is on.
@@ -14,6 +15,7 @@ pub fn show(
     ui: &mut egui::Ui,
     s: &mut Session,
     crop_aspect: &mut Option<f32>,
+    composition_guide: &mut CompositionGuide,
     lens_profile_found: bool,
     ed: &mut Edited,
 ) {
@@ -109,6 +111,47 @@ pub fn show(
             }
         }
     });
+    // ⚠⚠ Labelled **Composition**, never "Guide" — this panel already has a "Guide Mode" toggle
+    // further down for the *perspective* guides you trace onto a building, and two unrelated
+    // controls sharing a word in one panel is how someone learns the wrong model. The menu item
+    // and the shortcuts dialog say "Composition guide" for the same reason.
+    //
+    // ⚠⚠ **`selectable_label`s, not a `ComboBox` — and the deciding reason was found by writing
+    // the test.** A `ComboBox` allocates raw space and paints its selected text by hand
+    // (`combo_box.rs`: `allocate_space` then `ui.interact`), so it **sets no AccessKit label at
+    // all** and `test_ui` cannot see it — an *interactive* widget that is nonetheless
+    // unfindable, which is a different hole from the documented "a plain `ui.label` produces no
+    // node". That would have left the one control this feature adds untestable, so the guard
+    // against it shipping absent could not exist. It is also the boundary CLAUDE.md names for
+    // adopting `egui_kittest` rather than reimplementing.
+    //
+    // ⚠ Independently the better control: chips are the idiom the aspect row directly above
+    // already uses, every option is visible without opening anything, and picking one is a
+    // single click where a combo costs two. `horizontal_wrapped` is what lets the full names
+    // stay — a 240 pt panel takes them over two lines rather than forcing a second, shorter
+    // vocabulary for the same five things.
+    //
+    // ⚠ It changes no `Edits`, so it must **not** touch `ed`: the guide is a view preference,
+    // not part of the photograph, so it neither re-renders nor pushes a history entry. The
+    // caller persists it, guarded on an actual change.
+    //
+    // ⚠ The shortcut is **hover text on the row**, not a `theme::hint` line under it. This panel
+    // already scrolls, and a permanent line of prose for a chord the View menu and the generated
+    // Keyboard-shortcuts dialog both list is not worth a row of it — the perspective sliders
+    // below carry their explanations the same way.
+    ui.label("Composition");
+    ui.horizontal_wrapped(|ui| {
+        for g in CompositionGuide::ALL {
+            if ui
+                .selectable_label(*composition_guide == g, g.label())
+                .clicked()
+            {
+                *composition_guide = g;
+            }
+        }
+    })
+    .response
+    .on_hover_text("Drawn inside the crop rectangle. Press O to cycle.");
     ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Straighten");
 
     ui.separator();
@@ -273,9 +316,78 @@ mod tests {
         let mut aspect = None;
         test_ui::click(&ctx, label, |ui| {
             ed = Edited::default();
-            show(ui, s, &mut aspect, lens, &mut ed);
+            show(
+                ui,
+                s,
+                &mut aspect,
+                &mut CompositionGuide::Off,
+                lens,
+                &mut ed,
+            );
         });
         ed
+    }
+
+    #[test]
+    fn every_composition_guide_has_a_chip_in_the_panel() {
+        // ⚠⚠ The guard against the control shipping *absent*, which is the failure mode a pure
+        // `composition_guides` test structurally cannot see: delete the chips and every one of
+        // those tests stays green while the panel offers no way to pick a guide at all.
+        //
+        // ⚠ Stated over `ALL`, so a sixth guide reachable only from the keyboard is a failure
+        // rather than something nobody notices — the rule
+        // `every_tool_is_reachable_from_the_photo_menu` already follows.
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut guide = CompositionGuide::Off;
+        let labels: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            let mut ed = Edited::default();
+            show(ui, &mut s, &mut aspect, &mut guide, false, &mut ed);
+        })
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
+
+        for g in CompositionGuide::ALL {
+            assert!(
+                labels.iter().any(|l| l == g.label()),
+                "{g:?} has no chip; drawn: {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clicking_a_composition_chip_selects_that_guide() {
+        // ⚠ The other half: a chip that is drawn but wired to nothing looks identical in the
+        // test above. ⚠ And it clicks a guide that is **not** the one already set, or a control
+        // that ignored the click entirely would pass.
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut guide = CompositionGuide::Off;
+        test_ui::click(&ctx, CompositionGuide::Diagonals.label(), |ui| {
+            let mut ed = Edited::default();
+            show(ui, &mut s, &mut aspect, &mut guide, false, &mut ed);
+        });
+        assert_eq!(guide, CompositionGuide::Diagonals);
+    }
+
+    #[test]
+    fn drawing_the_composition_control_is_not_a_photo_edit() {
+        // ⚠ The guide is a view preference, so merely drawing its control must leave `Edited`
+        // alone — otherwise the panel would re-render the frame and push a history entry on
+        // every pass, which reads as the photo changing by itself.
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut guide = CompositionGuide::Grid;
+        let mut ed = Edited::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ed = Edited::default();
+            show(ui, &mut s, &mut aspect, &mut guide, false, &mut ed);
+        });
+        assert!(!ed.changed && !ed.settled, "the guide is not an edit");
     }
 
     #[test]
@@ -347,7 +459,14 @@ mod tests {
             let mut aspect = None;
             let mut ed = Edited::default();
             test_ui::find(&ctx, "Lens scale", |ui| {
-                show(ui, &mut s, &mut aspect, lens, &mut ed);
+                show(
+                    ui,
+                    &mut s,
+                    &mut aspect,
+                    &mut CompositionGuide::Off,
+                    lens,
+                    &mut ed,
+                );
             })
             .is_some()
         };
@@ -370,7 +489,14 @@ mod tests {
         let mut aspect = None;
         let mut ed = Edited::default();
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut s, &mut aspect, true, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut CompositionGuide::Off,
+                true,
+                &mut ed,
+            );
         });
         let scales: Vec<&String> = found
             .iter()
@@ -390,7 +516,14 @@ mod tests {
         let mut aspect = None;
         let mut ed = Edited::default();
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut s, &mut aspect, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+            );
         });
         for want in ["Vertical", "Horizontal", "Aspect", "Scale"] {
             assert!(
@@ -455,7 +588,14 @@ mod tests {
         let mut aspect = None;
         let mut ed = Edited::default();
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut s, &mut aspect, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+            );
         });
         let label = found
             .iter()
@@ -476,7 +616,14 @@ mod tests {
         let mut s = session();
         let (mut aspect, mut ed) = (None, Edited::default());
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut s, &mut aspect, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+            );
         });
         for want in ["Guide Mode", "Clear"] {
             assert!(
@@ -543,7 +690,14 @@ mod tests {
         // One frame with nothing touched: the guides must survive it.
         let (mut aspect, mut ed) = (None, Edited::default());
         let _ = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            show(ui, &mut s, &mut aspect, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+            );
         });
         assert_eq!(s.guides.len(), 1, "an untouched frame must not clear them");
 
@@ -573,7 +727,14 @@ mod tests {
             s.edits.perspective.aspect = change;
             s.edits.perspective.scale = change;
             let _ = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-                show(ui, &mut s, &mut aspect, false, &mut ed);
+                show(
+                    ui,
+                    &mut s,
+                    &mut aspect,
+                    &mut CompositionGuide::Off,
+                    false,
+                    &mut ed,
+                );
             });
         }
         assert_eq!(s.guides.len(), 1, "Aspect and Scale must not clear them");

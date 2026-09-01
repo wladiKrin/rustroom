@@ -93,6 +93,16 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
         Command::ToggleMaskOverlay => app.show_mask_tint = !app.show_mask_tint,
+        // ⚠ Persisted immediately rather than on quit. This is one enum in a tiny file, the key
+        // is pressed a handful of times a session, and the same `save_settings` the panel's
+        // dropdown calls — one write path, so the two controls cannot disagree about what is
+        // stored. Not the `apply_view_demosaic` hazard: this runs on a *keypress*, not in a body
+        // that re-runs sixty times a second.
+        Command::CycleCompositionGuide => {
+            app.settings.composition_guide = app.settings.composition_guide.next();
+            app.status = format!("Guide: {}", app.settings.composition_guide.label());
+            app.save_settings();
+        }
         // ⚠ Delegates rather than setting `app.tool` here: `select_tool` owns the re-render
         // decision, and duplicating it in this arm is how the rail and the menu drift apart.
         Command::SelectTool(t) => app.select_tool(t),
@@ -109,4 +119,75 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
     }
     // ⚠ No catch-all arm above. A new `Command` must fail to compile here rather than becoming
     // a menu item that silently does nothing — that is the whole reason this enum exists.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustroom_app::composition_guides::CompositionGuide;
+
+    #[test]
+    fn the_guide_key_cycles_the_setting_and_persists_it() {
+        // ⚠ **Both**, in one test, because either alone is a half-feature: a cycle that does not
+        // persist forgets your choice on every launch — the reason `PanelSections` is stored in
+        // `Settings` at all — and a persist that does not cycle stores the same value forever.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        assert_eq!(app.settings.composition_guide, CompositionGuide::Off);
+
+        execute(&mut app, &ctx, Command::CycleCompositionGuide);
+        assert_eq!(app.settings.composition_guide, CompositionGuide::Thirds);
+        execute(&mut app, &ctx, Command::CycleCompositionGuide);
+        assert_eq!(
+            app.settings.composition_guide,
+            CompositionGuide::GoldenRatio
+        );
+
+        assert_eq!(
+            app.settings_store.load().composition_guide,
+            CompositionGuide::GoldenRatio,
+            "the choice must reach the settings file, not only memory"
+        );
+    }
+
+    #[test]
+    fn the_guide_key_says_what_it_did() {
+        // ⚠⚠ The key is **not** gated to the Develop view, so it can be pressed in the Library
+        // where the crop overlay does not exist and nothing on screen would change. The status
+        // line is the only feedback there, and without it the key reads as broken.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        execute(&mut app, &ctx, Command::CycleCompositionGuide);
+        assert!(
+            app.status.contains(CompositionGuide::Thirds.label()),
+            "the status line must name the guide; got {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn cycling_the_guide_is_not_a_photo_edit() {
+        // ⚠ A view preference is not part of the photograph, so it must push no history entry —
+        // `selected_mask`'s rule. Without this, a future implementation that routed the guide
+        // through `Edits` would make Ctrl+Z undo a *guide change* instead of a real edit, and
+        // nothing else here would notice.
+        //
+        // ⚠⚠ **The obvious sabotage for this is inert, and knowing why is the point.** Adding
+        // `s.history.push(s.edits.clone())` to the arm leaves this green, because `History::push`
+        // is a documented no-op when the value is unchanged — so "did it push?" is only visible
+        // when the pushed value *differs*. The sabotage that fails it nudges `exposure` first.
+        // Any real regression here does change the edits, which is why the test still earns its
+        // place; a version asserting `history.len()` would not have been stronger.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        assert!(!app.session.as_ref().unwrap().history.can_undo());
+
+        execute(&mut app, &ctx, Command::CycleCompositionGuide);
+
+        assert!(
+            !app.session.as_ref().unwrap().history.can_undo(),
+            "changing the guide must not become an undo step"
+        );
+    }
 }

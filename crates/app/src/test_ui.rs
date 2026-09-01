@@ -13,8 +13,21 @@
 use eframe::egui;
 
 /// The screen rect every headless harness uses.
+///
+/// ⚠⚠ **Tall enough that a whole panel fits, which 300 pt no longer was.** These harnesses draw
+/// a panel body into a *root* `Ui` with no scroll area, so a widget laid out past the bottom of
+/// this rect is simply outside the window: `find` still reports its bounds from AccessKit — so
+/// nothing panics — but `click` then presses a point egui ignores, and the test reads as "the
+/// button did nothing". That is exactly how it failed when the Geometry panel grew by two rows:
+/// `resetting_the_geometry_clears_the_perspective_too` broke while the button it clicks was
+/// untouched. In production that panel is inside an `egui::ScrollArea`, so its length is not a
+/// constraint on anything — a taller harness screen is the accurate model of "the user scrolled
+/// to it", not a workaround.
+///
+/// ⚠ Deliberately separate from `develop::canvas::test_support::screen`, which stays 400×300:
+/// the canvas tests derive real image placement from it, so its size is part of what they test.
 pub fn screen() -> egui::Rect {
-    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 700.0))
 }
 
 /// A context with AccessKit on, which is what makes [`find`] work.

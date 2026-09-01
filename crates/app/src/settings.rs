@@ -249,6 +249,19 @@ pub struct Settings {
     /// ⚠ A `Vec` rather than `[PanelSection; 5]` precisely because `settings.json` is
     /// hand-editable and can hold any list at all.
     pub panel_order: Vec<PanelSection>,
+    /// Which compositional overlay the crop rectangle carries.
+    ///
+    /// ⚠ Persisted for the reason `panel_sections` is: this app implements no
+    /// `eframe::App::save`, so anything left to egui's own memory dies with the process — and a
+    /// guide you have to re-pick on every launch is worth very little.
+    ///
+    /// ⚠ Defaults to [`CompositionGuide::Off`], and that is a *value* the tests assert rather
+    /// than a mechanism. An overlay drawn over every photograph by default is a change nobody
+    /// asked for.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field already falls back to this struct's `Default`.
+    pub composition_guide: crate::composition_guides::CompositionGuide,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -403,6 +416,7 @@ impl Default for Settings {
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),
             panel_order: PanelSection::ALL.to_vec(),
+            composition_guide: crate::composition_guides::CompositionGuide::Off,
         }
     }
 }
@@ -651,6 +665,23 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_file_from_before_the_composition_guide_still_loads() {
+        // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
+        // *every* setting — which is why each new field needs this.
+        let f = TempFile::new("composition_guide_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        // ⚠ Asserted as a **value**. An overlay appearing over every photograph on upgrade is a
+        // change nobody asked for, and only the value can say the default is the quiet one.
+        assert_eq!(
+            loaded.composition_guide,
+            crate::composition_guides::CompositionGuide::Off,
+            "an absent guide must default to Off, not to an overlay"
+        );
+    }
+
+    #[test]
     fn a_settings_file_from_before_the_panel_sections_still_loads() {
         // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
         // *every* setting — which is why each new field needs this.
@@ -822,6 +853,8 @@ mod tests {
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is
             // what proves it round-trips rather than being re-defaulted.
             auto_lens_correction: false,
+            // Non-default so a field re-defaulted on load cannot pass.
+            composition_guide: crate::composition_guides::CompositionGuide::Thirds,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,

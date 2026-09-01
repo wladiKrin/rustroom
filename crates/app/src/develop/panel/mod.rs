@@ -76,6 +76,12 @@ impl Edited {
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
     let mut rename: Option<name_edit::Rename> = None;
+    // ⚠ Captured so the settings file is written **once, on an actual change**, after the panel
+    // closes. The Crop tool's dropdown edits `app.settings.composition_guide` in place — a
+    // disjoint field, so the borrow is legal — but `save_settings` takes `&mut app` whole, and
+    // this body runs every frame: writing unconditionally would rewrite the file sixty times a
+    // second, the `apply_view_demosaic` rule.
+    let guide_before = app.settings.composition_guide;
     egui::Panel::right("panel")
         .default_size(240.0)
         .show(ui, |ui| {
@@ -177,7 +183,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         }
                         Tool::Crop => {
                             let found = s.lens.shot.is_some();
-                            geometry::show(ui, s, &mut app.crop_aspect, found, &mut ed)
+                            geometry::show(
+                                ui,
+                                s,
+                                &mut app.crop_aspect,
+                                &mut app.settings.composition_guide,
+                                found,
+                                &mut ed,
+                            )
                         }
                         Tool::Masks => masks::show(
                             ui,
@@ -230,6 +243,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 }
             });
         });
+
+    // ⚠ Guarded on an actual change, and outside the closure — see `guide_before`.
+    if app.settings.composition_guide != guide_before {
+        app.save_settings();
+    }
 
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
     // rebuilds the Library, both of which need `&mut app` while the closure still holds
