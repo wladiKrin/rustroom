@@ -4,7 +4,19 @@
 //! — and one application path, `apply_to_selection`, so a paste, a preset click and a sync
 //! cannot come to disagree about what they transfer.
 
-use crate::*;
+use crate::develop;
+use crate::modals::Modal;
+use crate::RustroomApp;
+use edit_model::EditGroups;
+use edit_model::Edits;
+use eframe::egui;
+use rustroom_app::action_log::{ActionKind, SyncAction};
+use rustroom_app::edit_clipboard;
+use rustroom_app::history::History;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
+use rustroom_app::sync;
+use std::path::PathBuf;
 
 /// How a paste reports what it did. Shared by the Ctrl+V path and the "Paste…" dialog so
 /// the two cannot describe the same work differently.
