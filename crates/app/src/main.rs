@@ -53,6 +53,7 @@ mod native_menu;
 mod session_flow;
 mod settings_apply;
 mod shell;
+mod snapshots;
 mod sources;
 #[cfg(test)]
 mod test_app;
