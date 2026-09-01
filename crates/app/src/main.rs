@@ -45,6 +45,7 @@ mod export_flow;
 mod filmstrip;
 mod interaction;
 mod library;
+mod library_state;
 mod menu_bar;
 mod modals;
 mod name_edit;
@@ -53,6 +54,7 @@ mod native_menu;
 mod session_flow;
 mod settings_apply;
 mod shell;
+mod smart_sources;
 mod snapshots;
 mod sources;
 #[cfg(test)]
