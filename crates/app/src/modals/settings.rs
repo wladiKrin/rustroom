@@ -10,6 +10,7 @@ use rustroom_app::settings::{Accent, PanDrag, ThemeChoice};
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut confirm = app.settings.confirm_preset_delete;
     let mut tier = app.settings.view_demosaic;
+    let mut resampler = app.settings.resampler;
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
     let mut pan_drag = app.settings.pan_drag;
@@ -126,6 +127,30 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.separator();
 
             ui.horizontal(|ui| {
+                ui.label("Resampling");
+                egui::ComboBox::from_id_salt("resampler_pick")
+                    .selected_text(resampler.label())
+                    .show_ui(ui, |ui| {
+                        for k in pipeline::Resampler::ALL {
+                            ui.selectable_value(&mut resampler, k, k.label());
+                        }
+                    });
+                // ⚠ Per-kernel, from `Resampler::hint`. The names are accurate but mean nothing
+                // to a photographer on their own, so the trade has to be spelled out.
+                theme::hint(ui, resampler.hint());
+            });
+            theme::hint(
+                ui,
+                "How pixels are read when straightening, correcting perspective or applying a \
+             lens profile — the only three things that resample. One setting for the preview \
+             and the export, so what you judge is what you get. Sharper kernels recover detail \
+             a bilinear pass throws away and ring slightly on hard edges; bilinear is the only \
+             one that provably cannot, and is what Rustroom used before.",
+            );
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
                 ui.label("Pan with");
                 egui::ComboBox::from_id_salt("pan_drag_pick")
                     .selected_text(pan_drag.label())
@@ -162,6 +187,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     if tier != app.settings.view_demosaic {
         app.apply_view_demosaic(tier, ctx);
+    }
+    // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
+    // rebuilds the thumbnail loader and re-renders. Unguarded it would reload the whole folder's
+    // thumbnails sixty times a second — the `apply_view_demosaic` rule.
+    if resampler != app.settings.resampler {
+        app.apply_resampler(resampler, ctx);
     }
     // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
     // rebuilds the thumbnail loader and re-renders, so an unguarded call would reload the whole

@@ -22,9 +22,14 @@ impl BrushCoverage {
     }
 }
 pub mod perspective;
+/// ⚠ Its own module rather than a section of [`spatial`]: that one holds *separable blur*
+/// primitives (box, Gaussian, guided) and is already 889 lines. A resampling kernel reads at a
+/// fractional coordinate, which is a different operation with a different API.
+pub mod resample;
 pub mod spatial;
 mod stages;
 
+pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::ContrastStage;
 pub use stages::dehaze::DehazeStage;
@@ -137,11 +142,21 @@ pub struct Region {
 /// a prefix stage missing from a cache key means the preview cache serves stale pixels with
 /// nothing failing, and this is the guard that makes forgetting impossible rather than merely
 /// caught by a test.
+///
+/// ⚠⚠ The three **resampling** stages carry the [`Resampler`] as well as their edits, and it is
+/// not decoration: the kernel is a `Settings` choice rather than an `Edits` field, so nothing
+/// else in the key can see it change. Without it, switching the setting mid-session would serve
+/// checkpoints rendered with the old kernel and the control would look inert — the failure
+/// `apply_camera_profile` had to clear `BufferCache` for, solved here structurally instead.
+///
+/// ⚠ Deliberately **not** a field of [`PrefixKey`] beside `scale`: on a photo with no geometry,
+/// no perspective and no lens profile nothing resamples, so changing the kernel must invalidate
+/// nothing. Putting it on the steps that actually use it is what gives that for free.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PrefixStepKey {
-    LensCorrection(edit_model::LensCorrection),
-    Perspective(edit_model::Perspective),
-    Geometry(edit_model::Geometry),
+    LensCorrection(edit_model::LensCorrection, Resampler),
+    Perspective(edit_model::Perspective, Resampler),
+    Geometry(edit_model::Geometry, Resampler),
     NoiseReduction(edit_model::NoiseReduction),
     Dehaze(edit_model::Dehaze),
 }
@@ -162,6 +177,7 @@ pub fn build_prefix_steps(
     edits: &Edits,
     scale: RenderScale,
     lens: Option<lens_profile::LensShot>,
+    resampler: Resampler,
 ) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
@@ -171,7 +187,7 @@ pub fn build_prefix_steps(
     if edits.lens_correction.is_active() {
         if let Some(c) = lens {
             steps.push(PrefixStep {
-                key: PrefixStepKey::LensCorrection(edits.lens_correction),
+                key: PrefixStepKey::LensCorrection(edits.lens_correction, resampler),
                 stage: Box::new(LensCorrectionStage::new(
                     c,
                     lens_profile::Corrections {
@@ -180,6 +196,7 @@ pub fn build_prefix_steps(
                         vignetting: edits.lens_correction.vignetting,
                         scale: edits.lens_correction.scale,
                     },
+                    resampler,
                 )),
             });
         }
@@ -189,9 +206,10 @@ pub fn build_prefix_steps(
     // stage's own module docs for why that order is forced rather than chosen.
     if edits.perspective.is_active() {
         steps.push(PrefixStep {
-            key: PrefixStepKey::Perspective(edits.perspective),
+            key: PrefixStepKey::Perspective(edits.perspective, resampler),
             stage: Box::new(stages::perspective::PerspectiveStage::new(
                 edits.perspective,
+                resampler,
             )),
         });
     }
@@ -199,8 +217,8 @@ pub fn build_prefix_steps(
     // Geometry runs next, so all adjustments operate on the final cropped pixels.
     if edits.geometry != edit_model::Geometry::default() {
         steps.push(PrefixStep {
-            key: PrefixStepKey::Geometry(edits.geometry),
-            stage: Box::new(GeometryStage::new(&edits.geometry)),
+            key: PrefixStepKey::Geometry(edits.geometry, resampler),
+            stage: Box::new(GeometryStage::new(&edits.geometry, resampler)),
         });
     }
 
@@ -250,13 +268,13 @@ pub struct PrefixKey {
 
 impl PrefixKey {
     /// The key for the output of the *whole* prefix.
-    pub fn new(edits: &Edits, scale: RenderScale) -> Self {
+    pub fn new(edits: &Edits, scale: RenderScale, resampler: Resampler) -> Self {
         // ⚠ `None` is correct and must not be "fixed": the key is derived from the *edits*, and
         // `PrefixStepKey::LensCorrection` carries them. A corrector is needed to build the stage,
         // never to key it. Consequence, stated rather than discovered: with no corrector the step
         // is skipped, so this key can be one entry longer than the real prefix — harmless,
         // because whether a corrector exists is constant for a photo and the engine is per photo.
-        let steps = build_prefix_steps(edits, scale, None);
+        let steps = build_prefix_steps(edits, scale, None, resampler);
         Self::upto(&steps, steps.len(), scale)
     }
 
@@ -327,6 +345,7 @@ pub fn build_pipeline_split_in_region(
         None,
         color::OutputSpace::Srgb,
         None,
+        Resampler::default(),
     )
 }
 
@@ -341,10 +360,11 @@ pub fn build_pipeline_split_in_region_with_brush(
     brush: Option<&BrushCoverage>,
     space: color::OutputSpace,
     lens: Option<lens_profile::LensShot>,
+    resampler: Resampler,
 ) -> (Pipeline, Pipeline) {
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
-    let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale, lens)
+    let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale, lens, resampler)
         .into_iter()
         .map(|s| s.stage)
         .collect();
@@ -457,22 +477,33 @@ pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pip
 /// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
 /// full-resolution original. A stage is added only when its params are non-neutral; the
 /// output transform is always last.
+///
+/// ⚠ Resamples with [`Resampler::default`]. Every **production** render goes through
+/// [`build_pipeline_with`] instead, so the user's choice reaches it; this wrapper exists so the
+/// goldens, the examples and the debug tools compile untouched — the `Region` precedent.
 pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
-    let (prefix, tail) = build_pipeline_split(edits, scale);
-    let mut stages = prefix.into_stages();
-    stages.extend(tail.into_stages());
-    Pipeline::new(stages)
+    build_pipeline_with(edits, scale, Resampler::default())
+}
+
+/// As [`build_pipeline`], resampling with the caller's chosen kernel.
+pub fn build_pipeline_with(edits: &Edits, scale: RenderScale, resampler: Resampler) -> Pipeline {
+    build_pipeline_to(edits, scale, color::OutputSpace::Srgb, resampler)
 }
 
 /// As [`build_pipeline`], writing to `space` rather than sRGB.
 ///
 /// ⚠ Additive with a delegating wrapper — the `Region` precedent, which gave that work zero
 /// call-site churn. Only export and `rustroom render` call this; the preview goes through
-/// [`build_pipeline`] and stays sRGB, because the display is assumed sRGB until a display
+/// [`build_pipeline_with`] and stays sRGB, because the display is assumed sRGB until a display
 /// profile exists.
-pub fn build_pipeline_to(edits: &Edits, scale: RenderScale, space: color::OutputSpace) -> Pipeline {
+pub fn build_pipeline_to(
+    edits: &Edits,
+    scale: RenderScale,
+    space: color::OutputSpace,
+    resampler: Resampler,
+) -> Pipeline {
     let (prefix, tail) =
-        build_pipeline_split_in_region_with_brush(edits, scale, None, None, space, None);
+        build_pipeline_split_in_region_with_brush(edits, scale, None, None, space, None, resampler);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
@@ -635,7 +666,7 @@ mod tests {
         // If a field is added to the prefix without being added to PrefixKey, the cache
         // would silently serve stale pixels; this is what stands in the way.
         let base = Edits::default();
-        let k = PrefixKey::new(&base, RenderScale::FULL);
+        let k = PrefixKey::new(&base, RenderScale::FULL, Resampler::default());
 
         let mut hsl = edit_model::Hsl::default();
         hsl.bands[3].hue = 40.0;
@@ -726,7 +757,7 @@ mod tests {
         ];
         for e in downstream {
             assert_eq!(
-                PrefixKey::new(&e, RenderScale::FULL),
+                PrefixKey::new(&e, RenderScale::FULL, Resampler::default()),
                 k,
                 "a downstream field changed the prefix key"
             );
@@ -736,7 +767,7 @@ mod tests {
     #[test]
     fn prefix_key_changes_with_prefix_fields_and_scale() {
         let base = Edits::default();
-        let k = PrefixKey::new(&base, RenderScale::FULL);
+        let k = PrefixKey::new(&base, RenderScale::FULL, Resampler::default());
 
         let geo = Edits {
             geometry: edit_model::Geometry {
@@ -745,7 +776,10 @@ mod tests {
             },
             ..base.clone()
         };
-        assert_ne!(PrefixKey::new(&geo, RenderScale::FULL), k);
+        assert_ne!(
+            PrefixKey::new(&geo, RenderScale::FULL, Resampler::default()),
+            k
+        );
 
         let nr = Edits {
             noise_reduction: edit_model::NoiseReduction {
@@ -754,16 +788,108 @@ mod tests {
             },
             ..base.clone()
         };
-        assert_ne!(PrefixKey::new(&nr, RenderScale::FULL), k);
+        assert_ne!(
+            PrefixKey::new(&nr, RenderScale::FULL, Resampler::default()),
+            k
+        );
 
         let dh = Edits {
             dehaze: edit_model::Dehaze { amount: 40.0 },
             ..base.clone()
         };
-        assert_ne!(PrefixKey::new(&dh, RenderScale::FULL), k);
+        assert_ne!(
+            PrefixKey::new(&dh, RenderScale::FULL, Resampler::default()),
+            k
+        );
 
         // Scale changes the noise-reduction radii, so it belongs in the key.
-        assert_ne!(PrefixKey::new(&base, RenderScale::new(0.25)), k);
+        assert_ne!(
+            PrefixKey::new(&base, RenderScale::new(0.25), Resampler::default()),
+            k
+        );
+    }
+
+    /// ⚠⚠ **That the wrapper entry points do not quietly substitute the default.** Every
+    /// production render outside the engine goes through `build_pipeline_with` or
+    /// `build_pipeline_to` — the canvas's `render_once`, every thumbnail, every export — and
+    /// hardcoding `Resampler::default()` in either leaves all 49 goldens green, because the
+    /// goldens ask for the default anyway. Nothing else in the suite can see it.
+    #[test]
+    fn the_pipeline_builders_honour_the_kernel_they_are_handed() {
+        // ⚠ A hard edge, not a ramp: every kernel reproduces a linear ramp almost exactly.
+        let mut src = ImageBuf::new(48, 48);
+        for y in 0..48 {
+            for x in 0..48 {
+                let v = if (x / 6) % 2 == 0 { 0.05 } else { 0.9 };
+                src.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let edits = Edits {
+            geometry: edit_model::Geometry {
+                angle: 4.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let with = |k| build_pipeline_with(&edits, RenderScale::FULL, k).run(src.clone());
+        let to = |k| {
+            build_pipeline_to(&edits, RenderScale::FULL, color::OutputSpace::Srgb, k)
+                .run(src.clone())
+        };
+        assert_ne!(
+            with(Resampler::Bilinear).data(),
+            with(Resampler::Lanczos3).data(),
+            "build_pipeline_with ignored its kernel"
+        );
+        assert_ne!(
+            to(Resampler::Bilinear).data(),
+            to(Resampler::Lanczos3).data(),
+            "build_pipeline_to ignored its kernel"
+        );
+    }
+
+    /// ⚠⚠ **What makes the resampler a live setting rather than one needing a restart.** The
+    /// kernel lives in `Settings`, not in `Edits`, so nothing else in the key can notice it
+    /// change — and a served checkpoint rendered with the old kernel is exactly how a control
+    /// comes to look inert. `apply_camera_profile` had to clear `BufferCache` by hand for the
+    /// same hazard; keying it makes the invalidation structural instead.
+    ///
+    /// ⚠ And the *other half*, which is the reason it is on the steps rather than beside
+    /// `scale`: on a photo that resamples nothing, changing the kernel must invalidate nothing.
+    #[test]
+    fn the_resampler_changes_the_key_only_when_something_resamples() {
+        let straightened = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_ne!(
+            PrefixKey::new(&straightened, RenderScale::FULL, Resampler::Bilinear),
+            PrefixKey::new(&straightened, RenderScale::FULL, Resampler::Lanczos3),
+            "a straighten resamples, so its checkpoint depends on the kernel"
+        );
+
+        // ⚠ Not `Edits::default()`: a *fully neutral* photo has an empty prefix, so the keys
+        // would agree whatever the rule. This one has a live prefix stage that resamples
+        // nothing, which is the case the assertion is actually about.
+        let denoised = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 50.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !build_prefix_steps(&denoised, RenderScale::FULL, None, Resampler::Bilinear).is_empty(),
+            "fixture check: this photo must have a prefix stage to key at all"
+        );
+        assert_eq!(
+            PrefixKey::new(&denoised, RenderScale::FULL, Resampler::Bilinear),
+            PrefixKey::new(&denoised, RenderScale::FULL, Resampler::Lanczos3),
+            "nothing resamples here, so the kernel must not invalidate the checkpoint"
+        );
     }
 
     #[test]
@@ -775,8 +901,8 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 95.0 },
             ..a.clone()
         };
-        let steps_a = build_prefix_steps(&a, RenderScale::FULL, None);
-        let steps_b = build_prefix_steps(&b, RenderScale::FULL, None);
+        let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default());
+        let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default());
         assert_eq!(steps_a.len(), 4);
 
         // Same up to and including noise reduction...
@@ -795,7 +921,7 @@ mod tests {
 
         // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
         assert_eq!(
-            PrefixKey::new(&a, RenderScale::FULL),
+            PrefixKey::new(&a, RenderScale::FULL, Resampler::default()),
             PrefixKey::upto(&steps_a, steps_a.len(), RenderScale::FULL)
         );
 
@@ -856,7 +982,7 @@ mod tests {
         // build_pipeline_split_in_region is defined through build_prefix_steps, so the two
         // cannot drift: a stage added to one appears in the other.
         for edits in [Edits::default(), all_edits()] {
-            let steps = build_prefix_steps(&edits, RenderScale::FULL, None);
+            let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default());
             let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
             let from_steps: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
             assert_eq!(from_steps, prefix.stage_names());
@@ -869,7 +995,7 @@ mod tests {
         // stages shared a key, a checkpoint would be reused across a change that altered it.
         let base = all_edits();
         let keys = |e: &Edits| -> Vec<PrefixStepKey> {
-            build_prefix_steps(e, RenderScale::FULL, None)
+            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default())
                 .iter()
                 .map(|s| s.key)
                 .collect()
@@ -1401,7 +1527,12 @@ mod tests {
             },
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&edits, RenderScale::FULL, test_corrector());
+        let steps = build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            test_corrector(),
+            Resampler::default(),
+        );
         let names: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
         assert_eq!(names, vec!["lens_correction", "geometry"]);
     }
@@ -1416,7 +1547,9 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert!(build_prefix_steps(&edits, RenderScale::FULL, None).is_empty());
+        assert!(
+            build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default()).is_empty()
+        );
     }
 
     #[test]
@@ -1428,6 +1561,12 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert!(build_prefix_steps(&edits, RenderScale::FULL, test_corrector()).is_empty());
+        assert!(build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            test_corrector(),
+            Resampler::default()
+        )
+        .is_empty());
     }
 }

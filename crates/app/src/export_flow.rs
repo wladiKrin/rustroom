@@ -94,6 +94,9 @@ impl RustroomApp {
             // would want per-file lookup, which is noted as a limitation rather than guessed at.
             move |p: &std::path::Path| decode_for_export(p, demosaic, export_profile.clone()),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            // ⚠ From `Settings`, never from `opts`: the kernel is one choice shared with the
+            // preview, so an export preset must not be able to carry a different one.
+            self.settings.resampler,
         ));
     }
 

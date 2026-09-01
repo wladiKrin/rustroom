@@ -4,37 +4,26 @@
 //! the uncropped, unrotated sensor frame. Being in the prefix also means it always runs
 //! whole-buffer, so it needs no `Region` and no kernel margin despite being a spatial resample.
 
+use crate::resample::{self, Resampler, Weights};
 use crate::PipelineStage;
 use core_image::ImageBuf;
 use lens_profile::{Corrections, Corrector, LensShot};
 
-/// Bilinearly sample `src` at fractional `(sx, sy)`, one channel; outside the frame reads black.
-///
-/// ⚠ Per channel rather than per pixel, because TCA gives each channel its own source point.
-fn sample_channel(src: &ImageBuf, sx: f32, sy: f32, ch: usize) -> f32 {
-    let (w, h) = (src.width() as i32, src.height() as i32);
-    let (x0, y0) = (sx.floor() as i32, sy.floor() as i32);
-    let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
-    let at = |x: i32, y: i32| -> f32 {
-        if x < 0 || y < 0 || x >= w || y >= h {
-            0.0
-        } else {
-            src.pixel(x as usize, y as usize)[ch]
-        }
-    };
-    let top = at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx;
-    let bot = at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx;
-    top * (1.0 - fy) + bot * fy
-}
-
 pub struct LensCorrectionStage {
     lens: LensShot,
     want: Corrections,
+    /// ⚠ Built once here rather than per pixel — and this stage samples **three times** per
+    /// pixel, once per channel, so rebuilding it inline would be three times as wasteful again.
+    weights: Weights,
 }
 
 impl LensCorrectionStage {
-    pub fn new(lens: LensShot, want: Corrections) -> Self {
-        Self { lens, want }
+    pub fn new(lens: LensShot, want: Corrections, resampler: Resampler) -> Self {
+        Self {
+            lens,
+            want,
+            weights: Weights::new(resampler),
+        }
     }
 
     /// The correction for an image of these dimensions.
@@ -68,11 +57,90 @@ impl PipelineStage for LensCorrectionStage {
                 let gain = corrector.gain(fx, fy);
                 let mut px = [0.0f32; 3];
                 for (ch, p) in px.iter_mut().enumerate() {
-                    *p = sample_channel(&image, src[ch][0], src[ch][1], ch) * gain;
+                    // ⚠ Per channel, because TCA gives each channel its own source point —
+                    // which is why `resample` has a second entry point at all.
+                    *p =
+                        resample::sample_channel(&image, src[ch][0], src[ch][1], ch, &self.weights)
+                            * gain;
                 }
                 out.set_pixel(x, y, px);
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A synthetic lens with coefficients chosen here rather than read from the bundled
+    /// database — the seam that makes lens correction testable in CI at all, since a real
+    /// profile needs a real camera and lens. Mirrors the golden harness's fixture.
+    fn lens_shot() -> LensShot {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/>
+                    <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let profile = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
+        LensShot {
+            profile,
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        }
+    }
+
+    /// A hard grid, not a smooth ramp: every kernel reproduces a linear ramp almost exactly, so
+    /// a ramp cannot tell two kernels apart.
+    fn grid(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = if x % 8 < 2 || y % 8 < 2 { 0.9 } else { 0.1 };
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        img
+    }
+
+    /// ⚠⚠ **THE SECOND SAMPLER.** This stage does not go through `GeometryStage`'s sampler — it
+    /// has its own per-channel entry point — so a resampler setting honoured by geometry alone
+    /// would leave the pass every RAW actually pays still on bilinear, lens correction being on
+    /// by default. That is the half of this feature most easily shipped missing.
+    #[test]
+    fn the_lens_correction_honours_the_chosen_resampler() {
+        let src = grid(64, 64);
+        let want = Corrections {
+            distortion: true,
+            tca: true,
+            vignetting: false,
+            scale: 0.0,
+        };
+        let corrected = |k| LensCorrectionStage::new(lens_shot(), want, k).apply(src.clone());
+        let bilinear = corrected(Resampler::Bilinear);
+        assert_ne!(
+            bilinear.data(),
+            src.data(),
+            "fixture check: the correction must actually move pixels"
+        );
+        for k in Resampler::ALL {
+            if k == Resampler::Bilinear {
+                continue;
+            }
+            assert_ne!(
+                corrected(k).data(),
+                bilinear.data(),
+                "{k:?} rendered identically to bilinear"
+            );
+        }
     }
 }

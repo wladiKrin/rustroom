@@ -3,7 +3,7 @@
 
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::{build_pipeline, build_prefix_steps, PrefixKey, Region, RenderScale};
+use pipeline::{build_prefix_steps, PrefixKey, Region, RenderScale};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -56,12 +56,12 @@ impl RegionRect {
     }
 }
 
-/// What frame to produce: the working resolution, the visible sub-rect, and the display's
-/// primaries.
+/// What frame to produce: the working resolution, the visible sub-rect, the display's
+/// primaries, and the resampling kernel.
 ///
-/// Grouped because the three travel together the whole way from a request to `pack`, and
-/// threading them individually pushed `render_cached` past clippy's argument limit — which was
-/// a fair complaint rather than a lint to silence.
+/// Grouped because they travel together the whole way from a request to `pack`, and threading
+/// them individually pushed `render_cached` past clippy's argument limit — which was a fair
+/// complaint rather than a lint to silence.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameSpec {
     pub max_dim: usize,
@@ -69,6 +69,13 @@ pub struct FrameSpec {
     /// ⚠ Applied in `pack`, *after* the pipeline — never as a pipeline stage, or the histogram
     /// becomes display-referred. See the spec.
     pub display_space: color::OutputSpace,
+    /// ⚠⚠ Per **request**, not captured at `RenderEngine::new` the way `lens` is — and the
+    /// difference is not stylistic. A lens profile cannot vary within one engine's life,
+    /// because the engine is rebuilt per photo; the resampler is a global setting the user can
+    /// change with a photo open. Passing it per request is what lets the change take effect on
+    /// the next render with no engine rebuild — and because the three resampling
+    /// `PrefixStepKey`s carry it, a stale checkpoint is an ordinary cache miss.
+    pub resampler: pipeline::Resampler,
 }
 
 impl FrameSpec {
@@ -85,6 +92,7 @@ impl FrameSpec {
             max_dim,
             region: None,
             display_space: color::OutputSpace::Srgb,
+            resampler: pipeline::Resampler::default(),
         }
     }
 }
@@ -570,6 +578,7 @@ fn render_cached(
         max_dim,
         region,
         display_space,
+        resampler,
     } = spec;
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
@@ -582,7 +591,7 @@ fn render_cached(
     // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
     // A missing profile — an unlisted lens, or a JPEG — skips the stage silently, which is the
     // ordinary case and needs no special-casing anywhere else.
-    let steps = build_prefix_steps(edits, scale, lens);
+    let steps = build_prefix_steps(edits, scale, lens, resampler);
     let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
     let tier_at = |n: usize| {
         if n == steps.len() {
@@ -677,6 +686,9 @@ fn render_cached(
         // Lens correction lives in the *prefix*, which this call discards — only the tail is
         // wanted here. `None` is therefore correct rather than provisional.
         None,
+        // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this is
+        // carried for consistency rather than because it changes a pixel here.
+        resampler,
     );
     (pack(tail.run(input), region, max_dim, display_space), ran)
 }
@@ -694,6 +706,7 @@ pub fn render_once(
     max_dim: usize,
     source_scale: f32,
     display_space: color::OutputSpace,
+    resampler: pipeline::Resampler,
 ) -> RenderedFrame {
     let preview = buffer.downscale_to(max_dim);
     let scale = render_scale(
@@ -702,7 +715,7 @@ pub fn render_once(
         source_scale,
     );
     pack(
-        build_pipeline(edits, scale).run(preview),
+        pipeline::build_pipeline_with(edits, scale, resampler).run(preview),
         None,
         max_dim,
         display_space,
@@ -721,6 +734,57 @@ mod tests {
             }
         }
         Arc::new(img)
+    }
+
+    /// ⚠⚠ **That `FrameSpec.resampler` actually reaches `build_prefix_steps`.** Every other
+    /// test in this file passes the same kernel on both sides of whatever it compares — a
+    /// cached frame against a cold one, a region against the whole — so `render_cached`
+    /// substituting a constant for `spec.resampler` leaves all of them green *and* leaves the
+    /// setting inert. Requests being issued proves nothing about which kernel ran.
+    #[test]
+    fn the_frame_spec_resampler_reaches_the_render() {
+        // ⚠ A hard edge, not flat grey: `tiny()` is uniform, and every kernel agrees exactly on
+        // a uniform image. That fixture cannot see this bug.
+        let mut img = ImageBuf::new(32, 32);
+        for y in 0..32 {
+            for x in 0..32 {
+                let v = if (x / 4) % 2 == 0 { 0.05 } else { 0.9 };
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let buf = Arc::new(img);
+        let edits = Edits {
+            geometry: edit_model::Geometry {
+                angle: 5.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let render = |k| {
+            render_cached(
+                &buf,
+                &edits,
+                FrameSpec {
+                    max_dim: 32,
+                    region: None,
+                    display_space: color::OutputSpace::Srgb,
+                    resampler: k,
+                },
+                1.0,
+                None,
+                // ⚠ A fresh cache each time, or the second call would legitimately hit the
+                // first's checkpoint and the test would be asserting about caching instead.
+                &mut PrefixCache::default(),
+                &mut BrushCache::default(),
+            )
+            .0
+            .rgba
+        };
+        assert_ne!(
+            render(pipeline::Resampler::Bilinear),
+            render(pipeline::Resampler::Lanczos3),
+            "the kernel in the spec never reached the pipeline"
+        );
     }
 
     fn wait_for_frame(engine: &RenderEngine) -> RenderedFrame {
@@ -940,7 +1004,15 @@ mod tests {
         assert_eq!(ran, 0, "the post-NR checkpoint is now the final one");
         assert_eq!(
             got.rgba,
-            render_once(&buf, &without, 8, 1.0, color::OutputSpace::Srgb).rgba
+            render_once(
+                &buf,
+                &without,
+                8,
+                1.0,
+                color::OutputSpace::Srgb,
+                pipeline::Resampler::default()
+            )
+            .rgba
         );
 
         // ...and it must have been *promoted* into the protected tier, not left in the
@@ -968,7 +1040,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        (PrefixKey::new(&e, RenderScale::FULL), tag)
+        (
+            PrefixKey::new(&e, RenderScale::FULL, pipeline::Resampler::Bilinear),
+            tag,
+        )
     }
 
     #[test]
@@ -1180,6 +1255,7 @@ mod tests {
                 max_dim: n,
                 region: Some(RegionRect { x, y, w, h }),
                 display_space: color::OutputSpace::Srgb,
+                resampler: pipeline::Resampler::default(),
             },
             1.0,
             None,
@@ -1227,7 +1303,12 @@ mod tests {
         for max_dim in [8usize, 16] {
             let scale = render_scale(16, rendered_long_edge(16, max_dim), 1.0);
             assert!(
-                cache.get(&(PrefixKey::new(&e, scale), max_dim)).is_some(),
+                cache
+                    .get(&(
+                        PrefixKey::new(&e, scale, pipeline::Resampler::Bilinear),
+                        max_dim
+                    ))
+                    .is_some(),
                 "max_dim {max_dim} was evicted"
             );
         }
@@ -1268,6 +1349,7 @@ mod tests {
                     h: 999,
                 }),
                 display_space: color::OutputSpace::Srgb,
+                resampler: pipeline::Resampler::default(),
             },
             1.0,
             None,
@@ -1310,11 +1392,26 @@ mod tests {
         }; // first prefix stage
 
         // Guard against the whole test passing trivially: these must actually differ.
-        let cold_a = render_once(&buf, &a, 8, 1.0, color::OutputSpace::Srgb);
+        let cold_a = render_once(
+            &buf,
+            &a,
+            8,
+            1.0,
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+        );
         for (name, other) in [("b", &b), ("c", &c), ("d", &d), ("e", &e)] {
             assert_ne!(
                 cold_a.rgba,
-                render_once(&buf, other, 8, 1.0, color::OutputSpace::Srgb).rgba,
+                render_once(
+                    &buf,
+                    other,
+                    8,
+                    1.0,
+                    color::OutputSpace::Srgb,
+                    pipeline::Resampler::default()
+                )
+                .rgba,
                 "edit set {name} renders identically to a — the test proves nothing"
             );
         }
@@ -1323,7 +1420,14 @@ mod tests {
         for (i, ed) in [&a, &a, &b, &c, &a, &d, &e, &a, &c].iter().enumerate() {
             engine.request((*ed).clone(), FrameSpec::fit(8));
             let got = wait_for_frame(&engine);
-            let cold = render_once(&buf, ed, 8, 1.0, color::OutputSpace::Srgb);
+            let cold = render_once(
+                &buf,
+                ed,
+                8,
+                1.0,
+                color::OutputSpace::Srgb,
+                pipeline::Resampler::default(),
+            );
             assert_eq!(got.rgba, cold.rgba, "frame {i} differs from a cold render");
         }
     }
@@ -1385,7 +1489,14 @@ mod tests {
     #[test]
     fn render_once_matches_expected_gray() {
         let img = tiny();
-        let f = render_once(&img, &Edits::default(), 4, 1.0, color::OutputSpace::Srgb);
+        let f = render_once(
+            &img,
+            &Edits::default(),
+            4,
+            1.0,
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+        );
         assert_eq!((f.width, f.height), (4, 4));
         assert!(f.rgba[0] > 180 && f.rgba[0] < 195);
     }
@@ -1515,13 +1626,21 @@ mod tests {
         buf.set_pixel(0, 0, color::srgb_to_prophoto([0.9, 0.1, 0.1]));
         buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
 
-        let srgb = render_once(&buf, &Edits::default(), 2, 1.0, color::OutputSpace::Srgb);
+        let srgb = render_once(
+            &buf,
+            &Edits::default(),
+            2,
+            1.0,
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+        );
         let p3 = render_once(
             &buf,
             &Edits::default(),
             2,
             1.0,
             color::OutputSpace::DisplayP3,
+            pipeline::Resampler::default(),
         );
 
         assert_ne!(srgb.rgba, p3.rgba, "the display space did not reach `pack`");
@@ -1546,13 +1665,21 @@ mod tests {
         buf.set_pixel(0, 0, color::srgb_to_prophoto([0.95, 0.15, 0.1]));
         buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
 
-        let srgb = render_once(&buf, &Edits::default(), 2, 1.0, color::OutputSpace::Srgb);
+        let srgb = render_once(
+            &buf,
+            &Edits::default(),
+            2,
+            1.0,
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+        );
         let p3 = render_once(
             &buf,
             &Edits::default(),
             2,
             1.0,
             color::OutputSpace::DisplayP3,
+            pipeline::Resampler::default(),
         );
 
         assert_ne!(
@@ -1578,6 +1705,7 @@ mod tests {
             max_dim: 64,
             region: None,
             display_space: color::OutputSpace::Srgb,
+            resampler: pipeline::Resampler::default(),
         };
         let engine = RenderEngine::new(Arc::new(ImageBuf::new(4, 2)), 1.0, None, || {});
         assert_eq!(engine.requests_issued(), 0, "nothing asked for yet");

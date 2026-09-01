@@ -56,7 +56,9 @@ impl RustroomApp {
             .effective_display_space(self.os_manages_colour);
         if let Some(lib) = self.library.as_mut() {
             let ctx2 = ctx.clone();
-            lib.loader = ThumbLoader::new(space, move || ctx2.request_repaint());
+            lib.loader = ThumbLoader::new(space, self.settings.resampler, move || {
+                ctx2.request_repaint()
+            });
             // ⚠ Every cached thumbnail was converted at load, so they all describe the old space.
             lib.cache.clear();
             // ⚠ And the want-list, or `sync_thumb_window` compares against a list that is now
@@ -68,6 +70,44 @@ impl RustroomApp {
         let tool = self.tool;
         if let Some(s) = self.session.as_mut() {
             s.display_space = space;
+            let edits = s.view_edits(tool);
+            let (max_dim, region) = (s.render_max_dim(), s.requested_region);
+            s.request(edits, max_dim, region);
+        }
+    }
+
+    /// Adopt a new resampling kernel: persist it, reload the thumbnails, and re-render the open
+    /// photo so the change is visible immediately rather than deferred to the next photo.
+    ///
+    /// ⚠⚠ **Nothing is decoded and no render engine is rebuilt**, unlike `apply_camera_profile`
+    /// and `apply_view_demosaic`. The kernel travels in `FrameSpec` and is carried by the three
+    /// resampling `PrefixStepKey`s, so a checkpoint rendered with the old one is an ordinary
+    /// cache miss. That is the whole payoff of keying it rather than capturing it.
+    ///
+    /// ⚠ Thumbnails are a different matter: they are rendered **at load** and cached by
+    /// `(PhotoId, edits)`, which cannot see this change — so the loader is rebuilt and the cache
+    /// dropped, exactly as `apply_display_space` does and for the same reason.
+    pub(crate) fn apply_resampler(&mut self, resampler: pipeline::Resampler, ctx: &egui::Context) {
+        self.settings.resampler = resampler;
+        self.save_settings();
+        if let Some(lib) = self.library.as_mut() {
+            let ctx2 = ctx.clone();
+            // ⚠ The *effective* space, not `settings.display_space`: if the OS is managing
+            // colour this is `Srgb` whatever the dropdown says, and rebuilding the loader with
+            // the raw setting would start double-converting every thumbnail.
+            let space = self
+                .settings
+                .effective_display_space(self.os_manages_colour);
+            lib.loader = ThumbLoader::new(space, resampler, move || ctx2.request_repaint());
+            lib.cache.clear();
+            // ⚠ And the want-list, or `sync_thumb_window` compares against a list that is now
+            // satisfied by nothing and never re-asks.
+            lib.last_want.clear();
+        }
+        // ⚠ Written on the session first: `Session::request` reads it on the way through.
+        let tool = self.tool;
+        if let Some(s) = self.session.as_mut() {
+            s.resampler = resampler;
             let edits = s.view_edits(tool);
             let (max_dim, region) = (s.render_max_dim(), s.requested_region);
             s.request(edits, max_dim, region);
@@ -145,5 +185,50 @@ impl RustroomApp {
                 s.buffer_is_full_res = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_app::{for_test, open_test_photo, TestDir};
+    use rustroom_app::settings::SettingsStore;
+
+    /// ⚠⚠ **Three things at once, and the third is the one that shipped broken elsewhere.** The
+    /// display-space setting looked inert for a day because it was written but nothing
+    /// *re-rendered* — every call site read correctly in isolation. `requests_issued` exists so
+    /// that "the value changed but nobody asked for a frame" leaves a trace.
+    ///
+    /// ⚠ The session's own copy is asserted separately from `Settings`: `Session::request` is
+    /// the funnel every render goes through and it reads `s.resampler`, so writing only the
+    /// settings would leave the *next* render on the old kernel with nothing failing.
+    #[test]
+    fn adopting_a_resampler_persists_it_and_re_renders() {
+        let dir = TestDir::new("apply_resampler");
+        let ctx = egui::Context::default();
+        let mut app = for_test();
+        app.settings_store = SettingsStore::new(dir.0.join("settings.json"));
+        open_test_photo(&mut app, &ctx, 8, 4);
+
+        let before = app.session.as_ref().unwrap().engine.requests_issued();
+        app.apply_resampler(pipeline::Resampler::Lanczos3, &ctx);
+
+        assert_eq!(app.settings.resampler, pipeline::Resampler::Lanczos3);
+        assert_eq!(
+            SettingsStore::new(dir.0.join("settings.json"))
+                .load()
+                .resampler,
+            pipeline::Resampler::Lanczos3,
+            "the choice must survive a restart"
+        );
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(
+            s.resampler,
+            pipeline::Resampler::Lanczos3,
+            "Session::request reads this, so the next render would otherwise use the old kernel"
+        );
+        assert!(
+            s.engine.requests_issued() > before,
+            "the change must ask for a frame, or it looks inert until an unrelated edit"
+        );
     }
 }

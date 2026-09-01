@@ -182,6 +182,7 @@ fn main() {
                 PREVIEW_MAX_DIM,
                 scale,
                 color::OutputSpace::Srgb,
+                pipeline::Resampler::default(),
             );
             let ms = t.elapsed().as_secs_f64() * 1000.0;
             std::hint::black_box(&f);
@@ -302,7 +303,7 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&heavy, sc, None);
+        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear);
         let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
         println!("\n  prefix steps: {}", steps.len());
 

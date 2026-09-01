@@ -641,6 +641,12 @@ pub struct Session {
     /// render goes through — has no access to `RustroomApp`. `apply_display_space` writes it on
     /// the open session so a change takes effect without reopening the photo.
     display_space: color::OutputSpace,
+    /// The resampling kernel, copied from `Settings` when the session opens.
+    ///
+    /// ⚠ Held here for the same reason `display_space` is: `Session::request` is the one funnel
+    /// every render goes through and it cannot reach `RustroomApp`. `apply_resampler` writes it
+    /// on the open session so a change takes effect without reopening the photo.
+    resampler: pipeline::Resampler,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so

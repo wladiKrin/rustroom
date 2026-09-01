@@ -144,7 +144,10 @@ mod tests {
     fn run(g: &Geometry, w: usize, h: usize, sx: usize, sy: usize) -> (usize, usize, f32, f32) {
         let mut img = ImageBuf::new(w, h);
         img.set_pixel(sx, sy, [1.0, 1.0, 1.0]);
-        let out = GeometryStage::new(g).apply(img);
+        // ⚠ Bilinear, not the default: this test finds the *brightest* pixel a single white
+        // sample landed on, and an overshooting kernel puts negative lobes around it.
+        // `FrameMap`'s agreement with the geometry stage is about coordinates, not kernels.
+        let out = GeometryStage::new(g, crate::Resampler::Bilinear).apply(img);
         let (mut best, mut bx, mut by) = (0.0f32, 0usize, 0usize);
         for y in 0..out.height() {
             for x in 0..out.width() {
