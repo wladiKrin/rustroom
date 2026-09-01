@@ -6,7 +6,10 @@
 //! genuinely changes the edits. That independence is what stops a snapshot vanishing
 //! silently.
 
-use crate::*;
+use crate::RustroomApp;
+use rustroom_app::action_log::ActionKind;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
 
 impl RustroomApp {
     /// Save the open copy's current edits as a new snapshot.
@@ -218,6 +221,8 @@ impl RustroomApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{test_app, test_ui};
+    use std::path::{Path, PathBuf};
 
     /// An app with a real file and a real sidecar behind the open session, so the snapshot
     /// methods have something to write to.
