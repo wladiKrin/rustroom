@@ -35,6 +35,7 @@ pub enum Command {
     ToggleBeforeAfter,
     ToggleFilmstrip,
     ToggleMaskOverlay,
+    CycleCompositionGuide,
     SelectTool(Tool),
     RotateLeft,
     RotateRight,
@@ -204,6 +205,14 @@ pub fn model() -> Vec<Section> {
                 Item::Separator,
                 action("Filmstrip", Command::ToggleFilmstrip, None),
                 action("Show mask overlay", Command::ToggleMaskOverlay, None),
+                // ⚠ A **bare** key, so it never becomes a native accelerator — see
+                // `safe_as_native_accelerator`. `O` is Lightroom's, which is the whole argument
+                // for it; ⌘O is Open file and the two chords are distinct.
+                action(
+                    "Composition guide",
+                    Command::CycleCompositionGuide,
+                    Some(Shortcut::bare('O')),
+                ),
             ],
         },
         Section {
@@ -330,6 +339,10 @@ mod tests {
             Shortcut::bare('G'),
             Shortcut::bare('1'),
             Shortcut::bare('\\'),
+            // ⚠ The composition-guide key. Bare, so every `o` typed into the Save-preset name
+            // field would be swallowed if this ever became native — and ⌘O below must stay safe,
+            // so the two cases share a character and differ only in the modifier.
+            Shortcut::bare('O'),
             Shortcut::cmd('Z'),
             Shortcut::cmd('C'),
             Shortcut::cmd('V'),

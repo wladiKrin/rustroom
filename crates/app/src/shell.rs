@@ -747,6 +747,67 @@ mod tests {
     }
     use super::*;
 
+    /// One press of a bare, unmodified key.
+    fn bare_key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_composition_guide_key_is_gated_on_nothing_having_focus() {
+        // ⚠⚠ **Both halves, and neither is optional.** A gate that never lets the key through
+        // and one that never blocks it are equally wrong, and only the pair can tell them
+        // apart — the rule `a_bare_keyword_is_deleted_without_a_dialog_and_a_parent_is_not`
+        // already follows. `O` is bare, so a text field must swallow it: the Save-preset name
+        // field and the Library search box are both one keystroke away.
+        let ctx = egui::Context::default();
+
+        let mut unfocused = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![bare_key(egui::Key::O)],
+                ..Default::default()
+            },
+            |_ui| unfocused = pressed_command(&ctx),
+        );
+        assert_eq!(
+            unfocused,
+            Some(Command::CycleCompositionGuide),
+            "with nothing focused, O must reach the command"
+        );
+
+        // Give a text field the focus, then press the same key again.
+        let mut text = String::new();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut text))
+                .request_focus();
+        });
+        let mut focused = Some(Command::CycleCompositionGuide);
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![bare_key(egui::Key::O)],
+                ..Default::default()
+            },
+            |ui| {
+                // ⚠ Read **before** the field is drawn, deliberately. A `TextEdit` consumes the
+                // key events it handles, so reading afterwards would pass even with the focus
+                // gate deleted — it would be testing egui's consumption, not our guard. The
+                // field is still added, so egui does not drop its focus at the end of the pass.
+                focused = pressed_command(&ctx);
+                ui.add(egui::TextEdit::singleline(&mut text));
+            },
+        );
+        assert_eq!(
+            focused, None,
+            "a key typed into a text field must not reach a command"
+        );
+    }
+
     #[test]
     fn every_shortcut_maps_to_an_egui_key() {
         // ⚠ A chord in the model with no egui key is a menu item whose shortcut silently does
