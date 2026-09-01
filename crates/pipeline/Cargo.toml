@@ -10,6 +10,11 @@ color = { path = "../color" }
 lens-profile = { path = "../lens-profile" }
 edit-model = { path = "../edit-model" }
 rayon.workspace = true
+# ⚠ For `Resampler` alone: it is a rendering preference persisted in the app's `settings.json`,
+# and the type belongs beside the kernels it names. Same trade `raw-decode` makes for `Demosaic`
+# — a mirror enum in `app` would be a second copy of the mapping, and a mapping that exists
+# twice is one that will disagree.
+serde = { workspace = true }
 
 [dev-dependencies]
 color = { path = "../color" }

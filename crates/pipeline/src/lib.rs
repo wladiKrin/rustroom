@@ -22,9 +22,14 @@ impl BrushCoverage {
     }
 }
 pub mod perspective;
+/// ⚠ Its own module rather than a section of [`spatial`]: that one holds *separable blur*
+/// primitives (box, Gaussian, guided) and is already 889 lines. A resampling kernel reads at a
+/// fractional coordinate, which is a different operation with a different API.
+pub mod resample;
 pub mod spatial;
 mod stages;
 
+pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::ContrastStage;
 pub use stages::dehaze::DehazeStage;
