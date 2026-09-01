@@ -979,6 +979,21 @@ mod tests {
         let s: Sidecar = serde_json::from_str(json).expect("must parse");
         assert_eq!(s.copies[0].label.as_deref(), Some("DSC"));
     }
+
+    /// ⚠⚠ Copy 0 may be labelled, and it must **persist**. `set_copy_name` refused the original
+    /// outright, because a copy-0 "name" would have been a second filename beside the real one.
+    /// A label is not a filename, so the refusal has no premise left and "Colour" beside "B&W"
+    /// is expressible.
+    #[test]
+    fn a_label_on_the_original_round_trips() {
+        let mut s = Sidecar::default();
+        s.set_label(0, Some("Colour".into()));
+        s.set_label(1, Some("B&W".into()));
+        let json = serde_json::to_string(&s).expect("serialises");
+        let back: Sidecar = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back.label_of(0), Some("Colour"));
+        assert_eq!(back.label_of(1), Some("B&W"));
+    }
 }
 
 #[cfg(test)]

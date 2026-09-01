@@ -293,6 +293,13 @@ struct RustroomApp {
     /// reported as "now every photo shows the name I changed". Pairing the text with its photo
     /// makes that unrepresentable rather than something to remember to clear.
     rename_draft: Option<(PhotoId, String)>,
+    /// The label being typed, if any — a scratch draft exactly like `rename_draft`.
+    ///
+    /// ⚠⚠ **Separate from `rename_draft` on purpose.** One draft serving both jobs, with its
+    /// meaning depending on whether the row was a copy, is the defect underneath every problem
+    /// M6.0 fixes: a label and a filename are different strings with different rules, and copy 0
+    /// carrying both leaves nothing for the old inference to key on.
+    label_draft: Option<(PhotoId, String)>,
     /// The snapshot row being renamed, and what has been typed into it.
     ///
     /// ⚠ A scratch draft, exactly like `rename_draft`: writing through on every keystroke would
@@ -492,6 +499,7 @@ impl RustroomApp {
             new_keyword: String::new(),
             new_keyword_parent: None,
             rename_draft: None,
+            label_draft: None,
             snapshot_rename: None,
             panel_drag: None,
             cell_zoom_pending: false,

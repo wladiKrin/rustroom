@@ -103,42 +103,41 @@ impl RustroomApp {
 
     /// Rename a **virtual copy** — its own label, which is not a file.
     ///
-    /// ⚠ Writes only this copy's `name`; the file, the other copies and every `Edits` are left
-    /// alone. Undo and redo both come through here with the two names swapped, so the directions
+    /// ⚠ Writes only this copy's `label`; the file, the other copies and every `Edits` are left
+    /// alone. Undo and redo both come through here with the two labels swapped, so the directions
     /// cannot drift apart — the same shape `rename_file` uses.
-    pub(crate) fn set_copy_name(&mut self, id: &PhotoId, name: Option<String>) -> bool {
-        // ⚠ Copy 0 *is* the file; its name is the filename, and storing a second one beside it
-        // would be two names for one photo.
-        if id.is_original() {
-            return false;
-        }
+    ///
+    /// ⚠⚠ **Copy 0 is allowed**, unlike the `set_copy_name` this replaces. That refusal existed
+    /// because a copy-0 "name" would have been a second filename beside the real one; a label is
+    /// not a filename, so the premise is gone and "Colour" beside "B&W" is expressible.
+    pub(crate) fn set_label(&mut self, id: &PhotoId, label: Option<String>) -> bool {
         // ⚠ Read-modify-write of the whole envelope: the file's other copies live in the same
         // sidecar and must survive.
         let mut sidecar = sidecar::load_all(&id.path);
-        sidecar.set_label(id.copy, name.clone());
+        sidecar.set_label(id.copy, label.clone());
         if let Err(e) = sidecar::persist_all(&id.path, &sidecar) {
-            self.status = format!("Could not rename the copy: {e}");
+            self.status = format!("Could not label the copy: {e}");
             return false;
         }
         if let Some(s) = self.session.as_mut() {
             if s.path == id.path && s.copy == id.copy {
-                s.name = name.clone();
+                s.name = label.clone();
             }
         }
-        // ⚠ The draft is dropped whatever happens: undo writes a name the field is not showing,
+        // ⚠ The draft is dropped whatever happens: undo writes a label the field is not showing,
         // and a stale draft would paint over it.
-        self.rename_draft = None;
+        self.label_draft = None;
         self.snapshot_rename = None;
         if let Some(lib) = self.library.as_mut() {
             for e in lib.entries.iter_mut() {
                 if e.id == *id {
-                    e.label = name.clone();
+                    e.label = label.clone();
                 }
             }
         }
-        self.status = match &name {
-            Some(n) => format!("Renamed copy {} to {n}", id.copy),
-            None => format!("Cleared the name of copy {}", id.copy),
+        self.status = match &label {
+            Some(n) => format!("Labelled copy {} \"{n}\"", id.copy),
+            None => format!("Cleared the label of copy {}", id.copy),
         };
         true
     }
@@ -148,7 +147,7 @@ impl RustroomApp {
     /// ⚠ Every copy of the file follows, because copies are versions *of* that file and it has
     /// one name. That is exactly why this is reachable **only from the original**: renaming from
     /// a copy would drag every sibling copy along with it, which is how it was first built and
-    /// was reported as surprising. A copy renames itself instead — `set_copy_name`.
+    /// was reported as surprising. A copy carries a label instead — `set_label`.
     pub(crate) fn rename_file(&mut self, ctx: &egui::Context, from: &Path, to: &Path) -> bool {
         if from == to {
             return false;

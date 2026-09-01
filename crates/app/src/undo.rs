@@ -31,7 +31,7 @@ impl RustroomApp {
                 self.rename_file(ctx, &to, &from);
             }
             ActionKind::CopyRename { id, from, to: _ } => {
-                self.set_copy_name(&id, from);
+                self.set_label(&id, from);
             }
             ActionKind::CopyDelete { path, entry } => {
                 // ⚠ Read-modify-write: other copies of this file are in the same sidecar and
@@ -126,7 +126,7 @@ impl RustroomApp {
                 self.rename_file(ctx, &from, &to);
             }
             ActionKind::CopyRename { id, from: _, to } => {
-                self.set_copy_name(&id, to);
+                self.set_label(&id, to);
             }
             ActionKind::CopyDelete { path, entry } => {
                 let mut sidecar = sidecar::load_all(&path);

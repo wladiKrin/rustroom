@@ -200,7 +200,7 @@ pub fn commit(app: &mut RustroomApp, ctx: &egui::Context, id: &PhotoId, rename: 
         }
         Rename::Copy(to) => {
             let from = app.copy_name_of(id);
-            if app.set_copy_name(id, to.clone()) {
+            if app.set_label(id, to.clone()) {
                 // ⚠ Scoped to its copy, unlike a file rename: the photo still exists at the same
                 // path, so `reachable` can compare against it.
                 app.actions.push(
