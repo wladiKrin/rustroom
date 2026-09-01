@@ -99,6 +99,23 @@ the previous one.**
 **Merge order within a wave: the owner of the most contended surface merges first.** Everyone else
 rebases onto it. Merging the isolated tracks first only means the contended one rebases against more.
 
+**⚠⚠ AGENTS SHARE `/tmp` AND THE SCRATCHPAD, AND THIS PRODUCES FALSE READINGS THAT LOOK LIKE
+CATASTROPHES.** On 2026-09-01 two concurrent agents both wrote `/tmp/t.log`; one read the other's
+run and saw **901 passed** where its own was 1501, which reads as a massive regression. The
+orchestrator hit the same thing from the other side — `/tmp/t.log` on `main` had been overwritten by
+an agent, giving **1495** where the true count was **1475**, and several minutes went into explaining
+a number that was never real. A generic `sabotage.sh` in the shared scratchpad was also silently
+replaced mid-run by another agent's version that `cd`s elsewhere.
+
+**Every dispatch prompt must require unique filenames** — `/tmp/<something>-<agent-suffix>.log` —
+and the orchestrator must do the same for its own runs. ⚠ This is the same family as the
+`${PIPESTATUS[0]}` trap: **a number that is real, but not a measurement of what you think you
+measured.** Neither shows up as an error.
+
+⚠ A second consequence, which cost a wrong conclusion here: **`git diff main..HEAD` on an agent
+branch is misleading once another branch has merged**, because it shows the *other* branch's changes
+as differences. Use `git merge-base main HEAD` to check what an agent actually touched.
+
 **Between waves:** merge everything, run the full suite once on the merged result, and *then* dispatch
 the next wave. ⚠ A green run in each worktree is not evidence about the merge — three of this
 project's recorded bugs were interactions between separately-correct changes.
@@ -111,7 +128,7 @@ project's recorded bugs were interactions between separately-correct changes.
 | --- | --- | --- | --- | --- |
 | **W0** ✅ | **Split `canvas.rs`** — done 2026-09-01 | **Split `main.rs`** — done 2026-09-01 | — | — |
 | **W1** ✅ | M5.1a tone curve + monotone spline | M6.1 seam + filename templating | M7.3a measured → **M7.3 shipped as a Settings choice** | M5.5a crop guides → now **View-wide** |
-| **W2** | M5.2 WB Kelvin *(owns `edit-model`)* | M6.1b/c/d metadata, watermark, output sharpening | M7.1a luminance mask *(owns `Mask`)* | M6.5a/b compare + survey |
+| **W2** 🟡 | M5.2 WB Kelvin — **specced, implementing** | M6.1b/c/d — **running** | M7.1a luminance mask ✅ | M6.5a/b compare + survey ✅ |
 | **W3** | M5.3a spot headless *(owns `Edits` + stage order)* | M6.3 XMP *(owns schema **v6**)* | M5.4 auto tone | M7.6 tool gaps |
 | **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
 
