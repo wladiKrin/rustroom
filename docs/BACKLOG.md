@@ -13,6 +13,47 @@ lives in `CLAUDE.md`. This file is for things consciously left undone.
 
 ---
 
+---
+
+## ⚠⚠ 2026-09-01 — most of this file is now scheduled
+
+The roadmap was re-planned on 2026-09-01 (see `03-plan-of-action.md` and `PARALLEL-WORK.md`). Items
+below that were "deferred" are now **milestones with an order**, and this table is the map. An entry
+still carries the reasoning that matters — read the entry, then build it under its milestone number.
+
+| Backlog entry | Now |
+| --- | --- |
+| Creative 3-D LUTs | **M7.5** — ⚠ unblocked by **M5.4b**, not before |
+| `ProfileToneCurve` / `ProfileLookTable` | **answered by M5.4b** — the same display-rendering question |
+| Soft-proofing · gamut mapping / rendering intents | **M6.4** |
+| EXIF/IPTC metadata editing | **M6.2** — ⚠ its blocker dissolves at export scope; see below |
+| Export filename templating · output/print sharpening | **M6.1a** / **M6.1d** |
+| Mask intersection and subtraction | **M7.1c** |
+| A better interpolator for the geometric stages | **M7.3a** — ⚠ the highest-value entry in this file |
+| Fuse perspective into `GeometryStage` | **M7.3b** |
+| Automatic vertical detection (Hough) | **M7.4** |
+| Auto-mask brush · dehaze bright subjects · negative Texture · Clarity halos · grading in masks | **M7.6** |
+| Lens correction row batching · sequential export · incremental splatting | **M8.1** |
+| On-disk thumbnail cache | **M8.2** |
+| `main.rs` is too large | **W0** — with `canvas.rs`, before Phase 5 |
+| The in-window menu bar has never been run | **M9.2** |
+| Immich integration | **M9.1** |
+| Contributor-facing documentation | **M9.3** |
+| A plugin system | **M9.5** |
+
+⚠⚠ **One entry changed shape rather than being scheduled: EXIF/IPTC editing.** It was blocked on
+"modify the original" versus "a second XMP sidecar". **Writing metadata only into the *exported*
+file is neither** — the original is untouched, no new sidecar exists, and it is exactly what M6.1b
+needs anyway. Metadata is edited in the catalog and embedded at export; XMP sidecars become M6.3's
+problem, where they belong. **The design question that blocked this is answered; do not re-open it.**
+
+Not scheduled, and deliberately: the two C2/C3 colour-management oracle notes, per-photo camera
+profile, `CameraCalibration`, brush-strokes-shift-under-lens-correction, presets import/export,
+user-defined shortcuts, the accent colour reaching hand-painted widgets, subfolders, vertical
+filmstrip, and the nicer decode placeholder. These stay here as recorded reasoning.
+
+---
+
 ## Blocked on a design question
 
 These are **not** small jobs waiting for a free afternoon. Each needs a decision made before any
@@ -202,9 +243,8 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 
 ## App and UI
 
-- **`main.rs` is still ~1,345 lines** — state types, decode functions and lifecycle orchestration. A
-  plausible third split, deliberately not proposed: unlike the canvas split, it is not where the
-  next feature lands. Do it when it hurts.
+- **`main.rs` is ~4,375 lines** (⚠ the figure here read 1,345 until 2026-09-01 and was badly stale) — state types, decode functions and lifecycle orchestration. A
+  plausible third split, **now scheduled as W0**: with four agents working concurrently it hurts.
 - **The in-window menu bar has never been run**, only unit-tested — there is no Linux machine here
   and macOS never shows it. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
   Relatedly, **`native_menu.rs` can rot silently**, since CI never compiles it.
