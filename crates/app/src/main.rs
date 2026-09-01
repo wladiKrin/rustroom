@@ -631,6 +631,18 @@ pub struct Session {
     /// the sidecar, never travel with a paste, preset or sync, and reset on a photo switch. That
     /// is what makes "solve into the sliders" one representation rather than two.
     guides: Vec<pipeline::perspective::guides::Guide>,
+    /// The perspective and straighten the **visible** texture was rendered with, and the pair the
+    /// newest request will produce.
+    ///
+    /// ⚠⚠ Two, not one: a render is asynchronous, so "what was asked for" and "what is showing"
+    /// genuinely differ for as long as it takes. The guide overlay is drawn against `shown_geo`,
+    /// so a guide stays on the feature it was traced onto until the image actually catches up —
+    /// which at native zoom is hundreds of milliseconds, because perspective is a *prefix* stage
+    /// and changing it drops the prefix cache.
+    shown_geo: (edit_model::Perspective, f32),
+    /// ⚠ A `Cell` so `request` can stay `&self`. It is called from places already holding a
+    /// shared borrow of the session, and `&mut self` there is an `E0502`.
+    pending_geo: std::cell::Cell<(edit_model::Perspective, f32)>,
     /// Whether the Guides sub-mode of the Geometry tool is on.
     ///
     /// ⚠ On `Session` rather than `RustroomApp`, beside the guides themselves — which is what
@@ -701,6 +713,12 @@ impl Session {
     /// Send a render request. A one-line delegate: it no longer routes anywhere, but "every
     /// render request goes through one place" is worth keeping.
     fn request(&self, edits: Edits, max_dim: usize, region: Option<RegionRect>) {
+        // ⚠⚠ Recorded so the guide overlay can be drawn against what is **on screen** rather than
+        // what has just been asked for. Perspective is a *prefix* stage, so changing it drops the
+        // prefix cache — at native zoom the re-render costs hundreds of milliseconds, during which
+        // the guides would sit at their new positions over the previous image.
+        self.pending_geo
+            .set((edits.perspective, edits.geometry.angle));
         self.engine.request(
             edits,
             FrameSpec {
@@ -1888,6 +1906,8 @@ impl RustroomApp {
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,
+            shown_geo: (edit_model::Perspective::default(), 0.0),
+            pending_geo: std::cell::Cell::new((edit_model::Perspective::default(), 0.0)),
             show_guides: false,
             rendered_region: None,
             requested_region: None,
@@ -4315,5 +4335,41 @@ mod tests {
         let s = app.session.as_ref().unwrap();
         assert_eq!(s.guides.len(), 1, "the guide should still be there");
         assert!(s.show_guides, "and the sub-mode should still be on");
+    }
+
+    /// ⚠⚠ **Requesting a render must not move the guide overlay.** `shown_geo` describes the
+    /// texture on screen and may only advance when a frame actually lands; `pending_geo` is what
+    /// was asked for. Collapsing the two puts guides at their new positions over the previous
+    /// image — reported as the line jumping on release when fully zoomed in, where a perspective
+    /// change drops the prefix cache and the re-render takes hundreds of milliseconds.
+    #[test]
+    fn a_render_request_records_what_was_asked_for_without_moving_the_overlay() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+        let s = app.session.as_mut().unwrap();
+        s.shown_geo = (edit_model::Perspective::default(), 0.0);
+
+        let mut e = s.edits.clone();
+        e.perspective.vertical = 40.0;
+        e.geometry.angle = 2.5;
+        s.request(e, 512, None);
+
+        assert_eq!(
+            s.pending_geo.get(),
+            (
+                edit_model::Perspective {
+                    vertical: 40.0,
+                    ..Default::default()
+                },
+                2.5
+            ),
+            "the request must be recorded"
+        );
+        assert_eq!(
+            s.shown_geo,
+            (edit_model::Perspective::default(), 0.0),
+            "but what is on screen has not changed yet"
+        );
     }
 }

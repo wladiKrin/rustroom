@@ -166,6 +166,8 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         selected_mask: None,
         guides: Vec::new(),
         active_guide: None,
+        shown_geo: (edit_model::Perspective::default(), 0.0),
+        pending_geo: std::cell::Cell::new((edit_model::Perspective::default(), 0.0)),
         show_guides: false,
         active_mask_handle: None,
         rendered_region: None,

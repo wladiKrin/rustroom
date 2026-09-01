@@ -106,6 +106,9 @@ impl eframe::App for RustroomApp {
                     .map(|r| r.full_w.max(r.full_h))
                     .unwrap_or(frame.width.max(frame.height))
                     as f32;
+                // ⚠ The overlay may now describe this frame. The engine coalesces superseded
+                // requests, so the frame that lands is the newest one asked for.
+                s.shown_geo = s.pending_geo.get();
             }
         }
 
