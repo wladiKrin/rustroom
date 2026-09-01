@@ -33,6 +33,32 @@ enum CoverageSource {
         /// than erroring, which is why the key must never lose them.
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
     },
+    /// A luminance range — a pure function of the **pixel's value**.
+    ///
+    /// ⚠⚠ The third kind, and the reason this enum earns its keep a second time. Analytic masks
+    /// answer from `(u, v)` and a brush answers from a rasterized buffer; a range mask needs the
+    /// sample, which `apply`'s `map_pixels_xy` closure already has in hand. Widening
+    /// `Mask::analytic_coverage` to take a pixel would churn every variant for one that wants it.
+    ///
+    /// ⚠ **Keyed on the `base` pixel — the value *before* this mask's own adjustment.** Reading
+    /// the adjusted one would make the mask chase its own effect: lifting the shadows moves them
+    /// out of the band that selected them, so the correction would fade as it applied.
+    ///
+    /// ⚠ A colour range (M7.1b) is the same *kind* and would join here as a sibling variant.
+    Range(edit_model::LuminanceRange),
+}
+
+/// Display-referred lightness of a working-space pixel, in 0..=100.
+///
+/// ⚠ **`color::luminance` is the one luminance rule in this codebase** — it returns ProPhoto's Y,
+/// which is real physical luminance and therefore agrees with Rec.709 for real colours. A
+/// hand-rolled weight triple here would be invisible per stage and wrong everywhere.
+///
+/// ⚠ `linear_to_srgb` clamps its input to `[0, 1]`, which is exactly the *index* clamp a range
+/// mask wants and never touches the pixel itself: a specular highlight still selects at the top of
+/// the scale while keeping every bit of its headroom for the adjustment that follows.
+fn lightness(rgb: [f32; 3]) -> f32 {
+    color::linear_to_srgb(color::luminance(rgb)) * 100.0
 }
 
 pub struct MaskStage {
@@ -66,13 +92,21 @@ impl MaskStage {
         // No spatial sub-stage yet: every adjustment a mask can carry is per-pixel. The stroke
         // radius scales through `FrameMap`, not through this.
         let _ = scale;
+        // ⚠⚠ **Exhaustive on purpose — a catch-all here is a trap.** It used to read
+        // `other => Analytic(other.clone())`, so a new variant whose `analytic_coverage` returns
+        // `None` would fall through to `unwrap_or(0.0)` and produce a mask covering **nothing**,
+        // silently. That is precisely the failure `analytic_coverage`'s `Option` exists to make
+        // impossible, defeated one layer up. Adding a variant is now a compile error here.
         let source = match &masked.mask {
             edit_model::Mask::Brush(b) => CoverageSource::Painted {
                 brush: b.clone(),
                 geometry: *geometry,
                 prebuilt,
             },
-            other => CoverageSource::Analytic(other.clone()),
+            edit_model::Mask::Luminance(r) => CoverageSource::Range(*r),
+            m @ (edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_)) => {
+                CoverageSource::Analytic(m.clone())
+            }
         };
         Self {
             source,
@@ -107,7 +141,9 @@ impl PipelineStage for MaskStage {
         // region-sized raster would move under panning — the same class of bug the mask overlay
         // hit in 3.1a.
         let coverage = match &self.source {
-            CoverageSource::Analytic(_) => None,
+            // ⚠ Neither of these rasterizes anything: one answers from the position, the other
+            // from the pixel, both inside the loop below.
+            CoverageSource::Analytic(_) | CoverageSource::Range(_) => None,
             CoverageSource::Painted {
                 prebuilt: Some(c), ..
             } => Some(std::sync::Arc::clone(c)),
@@ -156,6 +192,9 @@ impl PipelineStage for MaskStage {
                 (CoverageSource::Analytic(m), _) => {
                     m.analytic_coverage(u, v, aspect).unwrap_or(0.0)
                 }
+                // ⚠ `base`, never `adjusted`. A mask keyed on its own output chases its effect:
+                // lifting the shadows moves them out of the band that selected them.
+                (CoverageSource::Range(r), _) => r.coverage(lightness(base)),
                 // ⚠ Indexed by FRAME pixel, not by the region-relative `(x, y)`.
                 (CoverageSource::Painted { .. }, Some(cov)) => {
                     cov.at(x0 + x, y0 + y) as f32 / 255.0
@@ -359,6 +398,219 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A vertical lightness ramp: black at the top, white at the bottom, in the working space.
+    ///
+    /// ⚠⚠ **A uniform buffer cannot see a luminance mask at all** — every pixel selects
+    /// identically, so a wrong band, a wrong feather and a deleted stage are indistinguishable.
+    /// `flat()` is exactly the fixture where this feature's bugs are inert, which is why every
+    /// test below uses this one instead.
+    fn ramp(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            // Authored as a *display-referred* value and decoded, so a row's index maps directly
+            // onto the lightness the mask is specified in.
+            let l = y as f32 / (h - 1) as f32;
+            let v = color::srgb_to_prophoto([
+                color::srgb_to_linear(l),
+                color::srgb_to_linear(l),
+                color::srgb_to_linear(l),
+            ]);
+            for x in 0..w {
+                img.set_pixel(x, y, v);
+            }
+        }
+        img
+    }
+
+    fn ranged(r: edit_model::LuminanceRange) -> MaskedAdjustment {
+        MaskedAdjustment {
+            mask: Mask::Luminance(r),
+            adjustments: LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// The lightness the stage itself would compute for a rendered row — the same rule, so the
+    /// tests below cannot drift from the implementation's idea of where a band sits.
+    fn row_lightness(img: &ImageBuf, y: usize) -> f32 {
+        super::lightness(img.pixel(0, y))
+    }
+
+    #[test]
+    fn a_luminance_range_lifts_only_the_tones_inside_its_band() {
+        // 64 rows of a black-to-white ramp; the band selects the darker third with a hard edge.
+        let src = ramp(4, 64);
+        let m = ranged(edit_model::LuminanceRange {
+            low: 0.0,
+            high: 33.0,
+            feather: 0.0,
+            invert: false,
+        });
+        let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
+
+        let mut lifted = 0;
+        let mut untouched = 0;
+        for y in 0..64 {
+            let l = row_lightness(&src, y);
+            let before = src.pixel(0, y)[1];
+            let after = out.pixel(0, y)[1];
+            if l <= 32.0 {
+                // +1 EV doubles a linear sample. Row 0 is exactly black and cannot double, so it
+                // is excluded from the count rather than from the assertion.
+                assert!(
+                    after >= before * 1.999 - 1e-6,
+                    "row {y} (l={l:.1}) is inside the band and must be lifted: {before} -> {after}"
+                );
+                if before > 1e-5 {
+                    lifted += 1;
+                }
+            } else if l >= 34.0 {
+                assert_eq!(
+                    after, before,
+                    "row {y} (l={l:.1}) is outside the band and must be untouched"
+                );
+                untouched += 1;
+            }
+        }
+        // ⚠ Both counts asserted: a stage that lifted *everything* and one that lifted nothing
+        // are equally wrong, and only the pair distinguishes them.
+        assert!(
+            lifted >= 10,
+            "the band must actually contain tones: {lifted}"
+        );
+        assert!(
+            untouched >= 30,
+            "and plenty must sit outside it: {untouched}"
+        );
+    }
+
+    #[test]
+    fn the_band_is_selected_on_the_pixel_before_the_adjustment() {
+        // ⚠⚠ The load-bearing test of the whole feature. Keyed on the *adjusted* pixel, a +1 EV
+        // lift moves a shadow out of the band that selected it, so its own correction fades away
+        // — a mask chasing its own effect. Concretely: the strongest lift keys on `base`, so a
+        // row well inside the band comes back at exactly 2x. Keyed on `adjusted` it would come
+        // back at something between 1x and 2x, and the closer to the band's top edge the worse.
+        let src = ramp(4, 64);
+        let m = ranged(edit_model::LuminanceRange {
+            low: 0.0,
+            high: 40.0,
+            feather: 0.0,
+            invert: false,
+        });
+        let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
+
+        // The brightest row still comfortably inside the band — where the two rules diverge most,
+        // because +1 EV is exactly what pushes it out.
+        let y = (0..64)
+            .rfind(|&y| row_lightness(&src, y) <= 39.0)
+            .expect("the fixture must contain rows inside the band");
+        let before = src.pixel(0, y)[1];
+        let after = out.pixel(0, y)[1];
+        assert!(
+            (after / before - 2.0).abs() < 1e-3,
+            "row {y} must get the FULL lift, not a faded one: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn feather_produces_a_partial_lift_between_the_extremes() {
+        // A soft band must actually blend, not merely widen. Asserted as a strict ordering across
+        // three rows rather than against a magic number, so it survives any retune of the ramp's
+        // shape while still failing if the shoulder collapses to a step.
+        let src = ramp(4, 64);
+        let m = ranged(edit_model::LuminanceRange {
+            low: 0.0,
+            high: 40.0,
+            feather: 40.0, // ramp half-width = 20 lightness points, so 40..60 is the shoulder
+            invert: false,
+        });
+        let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
+
+        let ratio = |y: usize| out.pixel(0, y)[1] / src.pixel(0, y)[1];
+        let inside = (0..64).find(|&y| row_lightness(&src, y) >= 20.0).unwrap();
+        let middle = (0..64).find(|&y| row_lightness(&src, y) >= 50.0).unwrap();
+        let outside = (0..64).find(|&y| row_lightness(&src, y) >= 65.0).unwrap();
+
+        assert!(
+            (ratio(inside) - 2.0).abs() < 1e-3,
+            "inside the band: {}",
+            ratio(inside)
+        );
+        assert!(
+            (ratio(outside) - 1.0).abs() < 1e-3,
+            "past the shoulder: {}",
+            ratio(outside)
+        );
+        let mid = ratio(middle);
+        assert!(
+            mid > 1.2 && mid < 1.8,
+            "mid-shoulder must be partial, not either extreme: {mid}"
+        );
+    }
+
+    #[test]
+    fn a_luminance_range_in_a_region_matches_the_same_part_of_the_whole() {
+        // Coverage is a function of the pixel, so it is region-independent by construction — but
+        // that is exactly the sort of claim that stops being true when someone reaches for `u`/`v`
+        // inside the arm. Same guard the analytic and brush masks each carry.
+        let m = ranged(edit_model::LuminanceRange {
+            low: 10.0,
+            high: 70.0,
+            feather: 30.0,
+            invert: false,
+        });
+        let whole = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(ramp(32, 64));
+        let region = Region {
+            full_w: 32,
+            full_h: 64,
+            x0: 8,
+            y0: 20,
+        };
+        let part = MaskStage::new_in_region(
+            &m,
+            RenderScale::FULL,
+            Some(region),
+            &Geometry::default(),
+            None,
+        )
+        .apply(ramp(32, 64).crop(8, 20, 16, 24));
+        for y in 0..24 {
+            for x in 0..16 {
+                assert_eq!(
+                    part.pixel(x, y),
+                    whole.pixel(8 + x, 20 + y),
+                    "at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_inverted_luminance_range_lifts_everything_outside_the_band() {
+        let src = ramp(4, 64);
+        let m = ranged(edit_model::LuminanceRange {
+            low: 0.0,
+            high: 40.0,
+            feather: 0.0,
+            invert: true,
+        });
+        let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
+        let dark = (0..64).find(|&y| row_lightness(&src, y) >= 20.0).unwrap();
+        let light = (0..64).find(|&y| row_lightness(&src, y) >= 60.0).unwrap();
+        assert_eq!(
+            out.pixel(0, dark),
+            src.pixel(0, dark),
+            "the band itself is now excluded"
+        );
+        assert!(
+            out.pixel(0, light)[1] / src.pixel(0, light)[1] > 1.9,
+            "and everything outside it is lifted"
+        );
     }
 
     #[test]

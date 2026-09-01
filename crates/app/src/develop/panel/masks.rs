@@ -229,6 +229,7 @@ mod tests {
                 edit_model::Mask::Linear(_) => "Linear",
                 edit_model::Mask::Radial(_) => "Radial",
                 edit_model::Mask::Brush(_) => "Brush",
+                edit_model::Mask::Luminance(_) => "Luminance",
             };
             assert_eq!(got, want, "{label} added the wrong kind");
         }
