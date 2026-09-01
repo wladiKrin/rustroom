@@ -6,7 +6,13 @@
 //! the undo log still holds it — see `Sidecar::copy_hwm`. Snapshots number the same way and live
 //! in [`crate::snapshots`].
 
-use crate::*;
+use crate::{LibrarySource, RustroomApp};
+use eframe::egui;
+use rustroom_app::action_log::ActionKind;
+use rustroom_app::file_rename;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
+use std::path::Path;
 
 impl RustroomApp {
     /// Duplicate the open photo as a new virtual copy, and open it.
