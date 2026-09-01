@@ -10,7 +10,6 @@
 //! identity of an unnamed virtual copy. Those two numbering schemes are deliberately separate —
 //! see `dest_for`'s doc — and the template is a **third** thing that must not merge with either.
 
-use crate::photo_id::PhotoId;
 use crate::safe_name;
 
 /// The template every export used before templating existed, and the default.
@@ -133,7 +132,7 @@ pub struct NameFacts<'a> {
     /// `0` for the original.
     pub copy: u32,
     /// This copy's own name, when it has one.
-    pub copy_name: Option<&'a str>,
+    pub copy_label: Option<&'a str>,
     /// 1-based position in this export run.
     pub seq: usize,
     /// Capture time as **naive wall-clock** seconds — the catalog's own convention, so no
@@ -225,8 +224,9 @@ impl Template {
             .collect();
         let out = safe_name::sanitize(&joined);
         if out.is_empty() {
-            // The same fallback `dest_for` has always had, reached the same way.
-            PhotoId::export_stem(facts.file_stem, facts.copy, facts.copy_name)
+            // ⚠ The file's own stem. `export_stem` is gone; a template that renders to nothing
+            // still has to produce a filename, and the stem is the only thing always available.
+            facts.file_stem.to_string()
         } else {
             out
         }
@@ -287,15 +287,12 @@ fn parse_token(body: &str) -> Result<Token, TemplateError> {
 /// One token's value, or `None` when this photo has nothing to put there.
 fn resolve(token: Token, facts: &NameFacts) -> Option<String> {
     match token {
-        // ⚠⚠ `export_stem`, never `file_name`: it *is* `entries::shown_name`'s rule minus the
-        // extension, so the Library caption, the rename field and the export filename stay one
-        // string. The Library was once the last consumer bypassing that rule, and the result was
-        // copy names that could not appear at all.
-        Token::Name => Some(PhotoId::export_stem(
-            facts.file_stem,
-            facts.copy,
-            facts.copy_name,
-        )),
+        // ⚠⚠ The **bare file stem**, carrying no copy identity — so `{name}` and `{copy}` are
+        // orthogonal and `{name}_{copy}` reads correctly instead of doubling. ⚠ A template of
+        // bare `{name}` therefore gives every copy of a file the same base, and only `-N`
+        // de-duplication keeps their exports apart; that is why `DEFAULT_FILENAME_TEMPLATE` is
+        // `{name}_{copy}` rather than `{name}`.
+        Token::Name => Some(facts.file_stem.to_string()),
         // Never absent: a position in a list always exists.
         Token::Seq { width } => Some(format!("{:0width$}", facts.seq, width = width)),
         // ⚠ `from_timestamp` reads the stored value as UTC, which is exactly what returns the
@@ -305,19 +302,14 @@ fn resolve(token: Token, facts: &NameFacts) -> Option<String> {
             chrono::DateTime::from_timestamp(s, 0).map(|d| d.format("%Y-%m-%d").to_string())
         }),
         Token::Camera => non_blank(facts.camera),
-        // ⚠ Empty on the original, which is not a copy of anything — so `{name}_{copy}` reads as
-        // `DSCF1234` there rather than `DSCF1234_0`, and the separator goes with it.
-        Token::Copy => match facts.copy {
-            0 => None,
-            n => Some(match non_blank(facts.copy_name) {
-                // ⚠ The extension is dropped, exactly as `export_stem` drops it: the field shows
-                // a whole filename, so a name usually carries one, and the export format is what
-                // decides the real extension.
-                Some(name) => name
-                    .rsplit_once('.')
-                    .map_or(name.clone(), |(b, _)| b.into()),
-                None => n.to_string(),
-            }),
+        // ⚠ The ordering is the whole rule, and step 1 applies to copy 0 too: a **labelled**
+        // original contributes "Colour", which `export_stem` could not express at all because it
+        // returned early for copy 0. Only an *unlabelled* original is absent, and its adjacent
+        // separator then collapses.
+        Token::Copy => match (facts.copy, non_blank(facts.copy_label)) {
+            (_, Some(l)) => Some(l),
+            (0, _) => None,
+            (c, _) => Some(c.to_string()),
         },
     }
 }
@@ -337,7 +329,7 @@ mod tests {
         NameFacts {
             file_stem: "DSCF1234",
             copy: 0,
-            copy_name: None,
+            copy_label: None,
             seq: 7,
             // 2026-08-27 10:00:00, as naive wall-clock seconds.
             taken: Some(1_787_824_800),
@@ -347,25 +339,6 @@ mod tests {
 
     fn render(src: &str, f: &NameFacts) -> String {
         Template::parse(src).expect("should parse").render(f)
-    }
-
-    #[test]
-    fn the_default_template_reproduces_the_old_naming() {
-        // ⚠⚠ The property the whole feature rests on: everyone who never opens the naming field
-        // gets byte-identical filenames. `dest_for` has always produced `export_stem`, so the
-        // default must too — for an original, an unnamed copy and a named one alike.
-        for (copy, name) in [(0, None), (2, None), (3, Some("Warm"))] {
-            let f = NameFacts {
-                copy,
-                copy_name: name,
-                ..facts()
-            };
-            assert_eq!(
-                render(DEFAULT, &f),
-                PhotoId::export_stem(f.file_stem, copy, name),
-                "copy {copy}"
-            );
-        }
     }
 
     #[test]
@@ -468,29 +441,31 @@ mod tests {
     }
 
     #[test]
-    fn the_original_contributes_no_copy_part() {
-        let f = facts();
-        assert_eq!(f.copy, 0);
+    fn an_unlabelled_original_contributes_no_copy_part() {
+        // ⚠ The separator collapses with it, so `{name}_{copy}` is plain `DSCF1234`.
+        let f = NameFacts {
+            file_stem: "DSCF1234",
+            copy: 0,
+            copy_label: None,
+            ..facts()
+        };
         assert_eq!(render("{name}_{copy}", &f), "DSCF1234");
-        assert_eq!(
-            render("{name}_{copy}", &NameFacts { copy: 2, ..f }),
-            "DSCF1234_2_2",
-            "a copy's own default name already carries its number, so both show"
-        );
     }
 
     #[test]
-    fn a_named_copy_contributes_its_name_without_an_extension() {
+    fn a_labelled_copy_contributes_its_label_to_the_copy_token() {
+        // ⚠⚠ Replaces `a_named_copy_contributes_its_name_without_an_extension`, which asserted
+        // that `{name}` returned the *copy's* name. Under M6.0 `{name}` is the bare stem and the
+        // label belongs to `{copy}` — the two are orthogonal, which is the whole point.
         let f = NameFacts {
+            file_stem: "DSCF1234",
             copy: 2,
-            copy_name: Some("Warm.RAF"),
+            copy_label: Some("Warm"),
             ..facts()
         };
         assert_eq!(render("{copy}", &f), "Warm");
-        assert_eq!(render("{name}", &f), "Warm", "the name replaces the stem");
+        assert_eq!(render("{name}", &f), "DSCF1234");
     }
-
-    // ─── the guards ──────────────────────────────────────────────────────────────────────
 
     #[test]
     fn a_template_that_renders_to_nothing_falls_back_to_the_name() {
@@ -612,5 +587,77 @@ mod tests {
             ..facts()
         });
         assert_eq!((a.as_str(), b.as_str()), ("a-001", "b-002"));
+    }
+
+    /// ⚠⚠ The default template must reproduce the old naming for **unlabelled** copies, byte for
+    /// byte — that is what makes this change invisible to every existing export.
+    #[test]
+    fn the_default_template_reproduces_the_old_naming_for_unlabelled_copies() {
+        let f = NameFacts {
+            file_stem: "DSCF1234",
+            copy: 0,
+            copy_label: None,
+            ..facts()
+        };
+        assert_eq!(render(DEFAULT, &f), "DSCF1234");
+        let f2 = NameFacts { copy: 2, ..f };
+        assert_eq!(render(DEFAULT, &f2), "DSCF1234_2");
+    }
+
+    /// ⚠⚠ This is what proves the old rule was **generalised, not dropped**: "a copy's name is
+    /// its export name" is now expressible as the template `{copy}`.
+    #[test]
+    fn the_copy_token_alone_reproduces_the_old_named_copy_export() {
+        let f = NameFacts {
+            file_stem: "DSCF1234",
+            copy: 2,
+            copy_label: Some("Warm"),
+            ..facts()
+        };
+        assert_eq!(render("{copy}", &f), "Warm");
+    }
+
+    #[test]
+    fn name_is_the_bare_stem_and_carries_no_copy_identity() {
+        let f = NameFacts {
+            file_stem: "DSCF1234",
+            copy: 2,
+            copy_label: Some("Warm"),
+            ..facts()
+        };
+        assert_eq!(render("{name}", &f), "DSCF1234");
+        assert_eq!(render("{name}_{copy}", &f), "DSCF1234_Warm");
+    }
+
+    /// ⚠ A labelled copy 0 contributes its label — the case `export_stem` could not express at
+    /// all, because it returned early for the original.
+    #[test]
+    fn a_labelled_original_contributes_its_label() {
+        let f = NameFacts {
+            file_stem: "DSCF1234",
+            copy: 0,
+            copy_label: Some("Colour"),
+            ..facts()
+        };
+        assert_eq!(render("{name}_{copy}", &f), "DSCF1234_Colour");
+    }
+
+    /// ⚠⚠ Carried over from the deleted `an_export_name_cannot_escape_its_directory`, which
+    /// guarded `export_stem`. The label is free text that reaches a path, so the guard must
+    /// follow it here — but note the inversion M6.0 makes: only the **filename** is sanitized,
+    /// while the label itself keeps what the user typed.
+    #[test]
+    fn a_label_never_escapes_into_the_path() {
+        for evil in ["../../evil", "a/b"] {
+            let f = NameFacts {
+                file_stem: "DSCF1234",
+                copy: 1,
+                copy_label: Some(evil),
+                ..facts()
+            };
+            let out = render("{name}_{copy}", &f);
+            assert!(!out.contains('/'), "a label reached the path: {out}");
+            assert!(!out.contains(".."), "a label reached the path: {out}");
+        }
     }
 }

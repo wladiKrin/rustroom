@@ -31,7 +31,7 @@ impl SampleName {
         NameFacts {
             file_stem: &self.file_stem,
             copy: self.copy,
-            copy_name: self.copy_name.as_deref(),
+            copy_label: self.copy_name.as_deref(),
             seq: 1,
             taken: self.taken,
             camera: self.camera.as_deref(),

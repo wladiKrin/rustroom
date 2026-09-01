@@ -151,7 +151,7 @@ pub enum PostExportAction {
 ///
 /// ⚠ It must render to exactly what `dest_for` produces, so an existing user's next export is
 /// byte-identical — see `the_default_template_reproduces_the_old_naming`.
-pub const DEFAULT_FILENAME_TEMPLATE: &str = "{name}";
+pub const DEFAULT_FILENAME_TEMPLATE: &str = "{name}_{copy}";
 
 /// The banding warning for a space/format pair, or `None` when there is nothing to say.
 ///
@@ -271,14 +271,15 @@ pub fn dest_for(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
-    // ⚠ A named copy exports under its **own** name, which replaces the file's stem rather than
-    // extending it. The copy number stays the identity; the name is an explicit override.
-    dest_named(
-        dir,
-        &PhotoId::export_stem(stem, copy, copy_name),
-        dedup,
-        format,
-    )
+    // ⚠ The default template, so this legacy entry point and the templated path cannot disagree
+    // about what a copy is called. `export_stem` is gone.
+    let base = Template::default().render(&NameFacts {
+        file_stem: stem,
+        copy,
+        copy_label: copy_name,
+        ..NameFacts::default()
+    });
+    dest_named(dir, &base, dedup, format)
 }
 
 /// Where an export lands, given the base name already chosen for it.
@@ -465,7 +466,7 @@ fn run(
                 .and_then(|s| s.to_str())
                 .unwrap_or("export"),
             copy: id.copy,
-            copy_name: name.as_deref(),
+            copy_label: name.as_deref(),
             seq: done + 1,
             taken: capture.taken,
             camera: capture.camera.as_deref(),
@@ -785,7 +786,7 @@ mod tests {
             let base = crate::filename_template::Template::default().render(&NameFacts {
                 file_stem: "a",
                 copy,
-                copy_name: name,
+                copy_label: name,
                 seq: 1,
                 taken: None,
                 camera: None,
@@ -1383,10 +1384,13 @@ mod tests {
     }
 
     #[test]
-    fn a_named_copy_exports_under_its_name_not_its_number() {
-        // ⚠⚠ The name *replaces* the file's stem; it is not appended to it. Controlling the
-        // export filename is what naming a copy is for, and `DSCF6223_Warm.jpg` would mean a copy
-        // could never have a name of its own.
+    fn a_labelled_copy_exports_with_its_label_beside_the_file_name() {
+        // ⚠⚠ M6.0 reverses what this test used to assert. The label used to *replace* the stem,
+        // giving `Warm.jpg`, because the name **was** the export filename. Now the default
+        // template is `{name}_{copy}`, so the export keeps the photograph it came from.
+        //
+        // ⚠ The old behaviour is not lost: it is the template `{copy}`, which
+        // `the_copy_token_alone_reproduces_the_old_named_copy_export` pins.
         let dir = std::path::PathBuf::from("/out");
         assert_eq!(
             dest_for(
@@ -1397,25 +1401,26 @@ mod tests {
                 0,
                 ExportFormat::Jpeg
             ),
-            dir.join("Warm.jpg")
+            dir.join("DSCF6223_Warm.jpg")
         );
     }
 
     #[test]
-    fn a_name_on_the_original_is_ignored_by_export_naming() {
-        // ⚠ Copy 0 *is* the file, so its name is the filename. A name stored against it — which a
-        // hand-edited sidecar can hold — must never suffix the export.
+    fn a_label_on_the_original_reaches_the_export_too() {
+        // ⚠⚠ Also reversed by M6.0, and deliberately. Copy 0 could not be labelled at all before,
+        // because a "name" on it would have been a second filename. A label is not a filename, so
+        // the original can be "Colour" beside its "B&W" copy — and that must reach the export.
         let dir = std::path::PathBuf::from("/out");
         assert_eq!(
             dest_for(
                 &dir,
                 Path::new("/in/a.RAF"),
                 0,
-                Some("nonsense"),
+                Some("Colour"),
                 0,
                 ExportFormat::Jpeg
             ),
-            dir.join("a.jpg")
+            dir.join("a_Colour.jpg")
         );
     }
 
@@ -1441,8 +1446,8 @@ mod tests {
             1,
             ExportFormat::Jpeg,
         );
-        assert_eq!(first, dir.join("Warm.jpg"));
-        assert_eq!(second, dir.join("Warm-1.jpg"));
+        assert_eq!(first, dir.join("a_Warm.jpg"));
+        assert_eq!(second, dir.join("a_Warm-1.jpg"));
         assert_ne!(first, second);
     }
 
