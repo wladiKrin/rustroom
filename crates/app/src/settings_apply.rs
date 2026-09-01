@@ -4,7 +4,14 @@
 //! which runs **every frame it is open** — so each one is guarded on an actual change by
 //! its caller. Writing the settings file per frame is the `apply_view_demosaic` mistake.
 
-use crate::*;
+use crate::decode::{decode_for_edit, full_res_worker};
+use crate::theme;
+use crate::{RustroomApp, MAX_CONCURRENT_DECODES};
+use eframe::egui;
+use rustroom_app::decode_worker::DecodeWorker;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::settings::{Accent, ThemeChoice};
+use rustroom_app::thumb_loader::ThumbLoader;
 
 impl RustroomApp {
     /// Persist the settings, surfacing a failure in the status line rather than silently.
