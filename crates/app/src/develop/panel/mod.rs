@@ -216,28 +216,32 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     }
 
                     ui.separator();
-                    // The filename first: which photo this is matters more than what shot it,
-                    // and the panel scrolls, so it belongs above the metadata. ⚠ It is a field,
-                    // not a label — this is where a photo is renamed.
+                    // ⚠⚠ The **filename**, as a caption — not a field. Renaming the file is the
+                    // Library caption's job; this panel edits the *label*, below. One control per
+                    // string, which is the whole of M6.0.
+                    theme::caption(ui, &file_rename::field_text(&s.path));
+                    // ⚠ The label field is the discoverable home for a label. The badge in the
+                    // grid is the other, and a badge is small — this is why there are two entry
+                    // points for one string, which is acceptable precisely *because* it is one
+                    // string. Contrast the Presets panel, removed for being two homes for one
+                    // feature.
                     rename = name_edit::field(
                         ui,
-                        &PhotoId::new(s.path.clone(), s.copy),
-                        &file_rename::field_text(&s.path),
-                        s.name.as_deref(),
-                        &mut app.rename_draft,
+                        name_edit::NameField {
+                            id: &PhotoId::new(s.path.clone(), s.copy),
+                            file_name: &file_rename::field_text(&s.path),
+                            label: s.name.as_deref(),
+                            mode: name_edit::Editing::Label,
+                        },
+                        &mut app.label_draft,
                         egui::TextStyle::Body.resolve(ui.style()),
                         // ⚠ Never autofocus: this field is on screen the whole time, so grabbing
                         // focus would hand it every keystroke the moment a photo opened.
                         false,
                     );
-                    // ⚠ On a copy the field above holds the *copy's* name, so the file it belongs
-                    // to has to be said somewhere — without it two copies of different files
-                    // called "Warm" would read identically.
+                    theme::hint(ui, "Label — what this version is called");
                     if s.copy != 0 {
-                        theme::caption(
-                            ui,
-                            &format!("Copy {} of {}", s.copy, file_rename::field_text(&s.path)),
-                        );
+                        theme::caption(ui, &format!("Copy {}", s.copy));
                     }
                     theme::caption(ui, &s.make_model);
                 }

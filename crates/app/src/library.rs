@@ -231,6 +231,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
     let mut rename: Option<(PhotoId, name_edit::Rename)> = None;
+    // ⚠ Collected inside the grid closure and applied after it: opening a draft writes
+    // `app.label_draft`, which the closure cannot reach while it holds `&mut app.library`.
+    let mut badge_clicked: Option<(PhotoId, String)> = None;
     // ⚠ Declared out here, like `open_index` and `rename`: applying it needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`.
     let mut mark: Option<rustroom_app::marks::MarkAction> = None;
@@ -261,6 +264,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Borrowed out of `app` up front, because the grid closure already holds `&mut app.library`
     // and the two are disjoint fields — which the borrow checker only accepts when it can see so.
     let rename_draft = &mut app.rename_draft;
+    let label_draft = &mut app.label_draft;
     // ⚠ Same reason: the context menu reads the catalog while the closure holds `&mut
     // app.library`, and the borrow checker only accepts that when the two fields are visibly
     // disjoint.
@@ -443,22 +447,65 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     .unwrap_or_default(),
                                             );
                                             let e = &lib.entries[i];
-                                            // ⚠⚠ `label()`, not `file_name`. Every copy of a file
-                                            // has the same `file_name`, so the grid showed
-                                            // identical captions and a copy's own name could
-                                            // never appear in it at all.
+                                            // ⚠⚠ Clicking the **badge** opens the label draft,
+                                            // clicking the **caption** opens the file-rename
+                                            // draft: each affordance edits the string drawn at
+                                            // that spot. That is M6.0's rule, and it is what
+                                            // replaced one field whose meaning depended on
+                                            // whether the row happened to be a copy.
+                                            if let Some(br) = thumb::badge_rect(ui) {
+                                                let bresp = ui.interact(
+                                                    br,
+                                                    ui.id().with("badge_click"),
+                                                    egui::Sense::click(),
+                                                );
+                                                if bresp.clicked() {
+                                                    badge_clicked = Some((
+                                                        e.id.clone(),
+                                                        e.label.clone().unwrap_or_default(),
+                                                    ));
+                                                }
+                                                if bresp.hovered() {
+                                                    ui.ctx()
+                                                        .set_cursor_icon(egui::CursorIcon::Text);
+                                                }
+                                            }
+                                            // ⚠ The caption is the file's name.
                                             //
                                             // ⚠ Only the **active** row is editable. A text field
                                             // in every cell would fight the click that selects a
                                             // photo, and would put hundreds of them on screen.
-                                            if let Some(r) = name_edit::caption_or_field(
-                                                ui,
-                                                &e.id,
-                                                &e.file_name,
-                                                e.label.as_deref(),
-                                                rename_draft,
-                                                name_size,
-                                            ) {
+                                            // ⚠⚠ One field, and which string it edits depends on
+                                            // which affordance opened it — the badge or the
+                                            // caption. Two fields in a cell would fight for the
+                                            // same space and the same click.
+                                            let editing_label = label_draft
+                                                .as_ref()
+                                                .is_some_and(|(d, _)| *d == e.id);
+                                            let r = if editing_label {
+                                                name_edit::field(
+                                                    ui,
+                                                    name_edit::NameField {
+                                                        id: &e.id,
+                                                        file_name: &e.file_name,
+                                                        label: e.label.as_deref(),
+                                                        mode: name_edit::Editing::Label,
+                                                    },
+                                                    label_draft,
+                                                    egui::FontId::proportional(name_size),
+                                                    true,
+                                                )
+                                            } else {
+                                                name_edit::caption_or_field(
+                                                    ui,
+                                                    &e.id,
+                                                    &e.file_name,
+                                                    e.label.as_deref(),
+                                                    rename_draft,
+                                                    name_size,
+                                                )
+                                            };
+                                            if let Some(r) = r {
                                                 rename = Some((e.id.clone(), r));
                                             }
                                         });
@@ -530,6 +577,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     if let Some(a) = mark {
         app.apply_mark(a);
+    }
+    if let Some((id, text)) = badge_clicked {
+        // ⚠ Opening the label draft closes any file-rename draft: two open fields in one cell
+        // would both claim the same space, and the second would be invisible.
+        app.rename_draft = None;
+        app.label_draft = Some((id, text));
     }
     if let Some((id, r)) = rename {
         name_edit::commit(app, ctx, &id, r);

@@ -17,10 +17,13 @@ use rustroom_app::file_rename;
 use rustroom_app::photo_id::PhotoId;
 use std::path::PathBuf;
 
-/// What the name field committed: a file on disk, or one copy's own name.
+/// What the name field committed: a file on disk, or one copy's label.
+#[derive(Debug, PartialEq, Eq)]
 pub enum Rename {
+    /// Rename the file on disk. Every copy of it follows.
     File(PathBuf),
-    Copy(Option<String>),
+    /// Set this copy's label. `None` clears it, so the badge falls back to the copy number.
+    Label(Option<String>),
 }
 
 /// A name shown as a plain caption until it is clicked, then edited in place.
@@ -57,7 +60,18 @@ pub fn caption_or_field(
         }
         return None;
     }
-    field(ui, id, file_name, name, draft, font, true)
+    field(
+        ui,
+        NameField {
+            id,
+            file_name,
+            label: name,
+            mode: Editing::FileName,
+        },
+        draft,
+        font,
+        true,
+    )
 }
 
 /// An editable name, drawn as a text field.
@@ -106,20 +120,51 @@ pub fn commit_gesture(ui: &mut egui::Ui, r: &egui::Response, autofocus: bool) ->
     r.lost_focus() || (r.has_focus() && entered)
 }
 
+/// Which string a name field is editing.
+///
+/// ⚠⚠ The field used to infer this from the copy number — filename on the original, name on a
+/// copy. That inference is what made one control mean two things, and M6.0 removed its last
+/// basis: copy 0 now carries **both** a filename and a label, so nothing distinguishes them but
+/// an explicit choice.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Editing {
+    /// The file on disk. Every copy follows, since they share it.
+    FileName,
+    /// This copy's label. Never a path, never sanitized here.
+    Label,
+}
+
+/// Which photo a name field is for, and which of its two strings it edits.
+///
+/// ⚠ A struct rather than four more parameters, and clippy is right to ask: `field` reached eight.
+/// The same answer `FrameSpec` gave when `render_cached` reached the same limit — the body
+/// destructures it on the first line, so it reads exactly as before.
+pub struct NameField<'a> {
+    pub id: &'a PhotoId,
+    pub file_name: &'a str,
+    pub label: Option<&'a str>,
+    pub mode: Editing,
+}
+
 pub fn field(
     ui: &mut egui::Ui,
-    id: &PhotoId,
-    file_name: &str,
-    name: Option<&str>,
+    spec: NameField<'_>,
     draft: &mut Option<(PhotoId, String)>,
     font: egui::FontId,
     autofocus: bool,
 ) -> Option<Rename> {
-    let on_copy = !id.is_original();
-    let default = file_rename::default_copy_name(file_name, id.copy);
-    // ⚠ The same function the Library caption uses, so the field can never show a name
-    // different from the one beside it.
-    let current = entries::caption(file_name, id.copy);
+    let NameField {
+        id,
+        file_name,
+        label,
+        mode,
+    } = spec;
+    // ⚠ What the field shows is what the user is editing — the caption beside it, or the badge
+    // above it. Showing one and committing the other is the bug M6.0 exists to remove.
+    let current = match mode {
+        Editing::FileName => entries::caption(file_name, id.copy),
+        Editing::Label => label.unwrap_or_default().to_string(),
+    };
 
     // ⚠ A draft belonging to a *different* photo is discarded, not shown. Without this the last
     // name typed followed you to every photo you opened afterwards.
@@ -161,13 +206,15 @@ pub fn field(
             // ⚠ Nothing typed, nothing recorded — or Ctrl+Z would appear to do nothing.
             return None;
         }
-        if on_copy {
+        if mode == Editing::Label {
             let trimmed = typed.trim();
-            // ⚠ Typing the default back, or clearing the field, stores `None` rather than that
-            // literal string. `None` is what makes an unnamed copy *follow* a later rename of its
-            // file; freezing the derived name would silently strand it on the old stem.
-            let to = (!trimmed.is_empty() && trimmed != default).then(|| trimmed.to_string());
-            return (to.as_deref() != name).then_some(Rename::Copy(to));
+            // ⚠ Clearing the field, or typing back the copy number the badge already shows,
+            // stores `None` rather than that literal. `None` is what keeps an unlabelled copy
+            // following its number; freezing "2" as a label would look identical and then not
+            // move if the copy were ever renumbered by `Reindex`.
+            let derived = id.copy.to_string();
+            let to = (!trimmed.is_empty() && trimmed != derived).then(|| trimmed.to_string());
+            return (to.as_deref() != label).then_some(Rename::Label(to));
         }
         // ⚠ A refusal leaves the file alone and the field resets to the real name, so an empty
         // or unusable entry can never look like it worked.
@@ -198,7 +245,7 @@ pub fn commit(app: &mut RustroomApp, ctx: &egui::Context, id: &PhotoId, rename: 
                 app.actions.push(ActionKind::Rename { from, to }, None);
             }
         }
-        Rename::Copy(to) => {
+        Rename::Label(to) => {
             let from = app.copy_name_of(id);
             if app.set_label(id, to.clone()) {
                 // ⚠ Scoped to its copy, unlike a file rename: the photo still exists at the same
@@ -310,5 +357,45 @@ mod tests {
             !run(false, &mut draft),
             "another photo's draft must not put this row into edit mode"
         );
+    }
+
+    /// ⚠⚠ The label field's own commit rule, which differs from the filename field's on purpose.
+    /// Typing back the copy number the badge already shows stores `None`, so the copy keeps
+    /// *following* its number rather than freezing "2" as a literal label — which would look
+    /// identical and then not move if `Reindex` ever renumbered it.
+    #[test]
+    fn typing_the_copy_number_back_clears_the_label() {
+        let id = PhotoId::new(PathBuf::from("/x/a.RAF"), 2);
+        // A label field showing "2" for copy 2 is showing the derived value, not a stored one.
+        assert_eq!(
+            label_commit(&id, "2", Some("Warm")),
+            Some(Rename::Label(None))
+        );
+        assert_eq!(
+            label_commit(&id, "  ", Some("Warm")),
+            Some(Rename::Label(None)),
+            "clearing the field clears the label"
+        );
+        assert_eq!(
+            label_commit(&id, "B&W", Some("Warm")),
+            Some(Rename::Label(Some("B&W".into()))),
+            "a real label is kept exactly as typed, ampersand and all"
+        );
+        assert_eq!(
+            label_commit(&id, "Warm", Some("Warm")),
+            None,
+            "unchanged commits nothing, or Ctrl+Z would appear to do nothing"
+        );
+    }
+
+    /// The decision `field` makes on commit in `Editing::Label`, without a `Ui`.
+    fn label_commit(id: &PhotoId, typed: &str, current: Option<&str>) -> Option<Rename> {
+        if typed == current.unwrap_or_default() {
+            return None;
+        }
+        let trimmed = typed.trim();
+        let derived = id.copy.to_string();
+        let to = (!trimmed.is_empty() && trimmed != derived).then(|| trimmed.to_string());
+        (to.as_deref() != current).then_some(Rename::Label(to))
     }
 }

@@ -55,6 +55,17 @@ pub fn selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected:
 /// camera's embedded JPEG, not a render of the edits. The badge and the label are therefore the
 /// *only* things distinguishing them, which is the accepted limitation in the spec and the reason
 /// edit-accurate thumbnails are backlogged.
+/// Where the last badge `cell` drew for this `Ui` landed, if any.
+///
+/// ⚠ Keyed on the `Ui`'s id, so it is per cell rather than per frame — the grid draws hundreds.
+pub fn badge_rect(ui: &egui::Ui) -> Option<egui::Rect> {
+    ui.ctx().memory(|m| m.data.get_temp(badge_id(ui)))
+}
+
+fn badge_id(ui: &egui::Ui) -> egui::Id {
+    ui.id().with("thumb_badge_rect")
+}
+
 pub fn cell(
     ui: &mut egui::Ui,
     box_size: egui::Vec2,
@@ -98,6 +109,11 @@ pub fn cell(
         );
         let size = egui::vec2((galley.size().x + 6.0).max(17.0), 13.0);
         let badge_rect = egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), size);
+        // ⚠ Published through egui's memory rather than the return type: `cell` already returns
+        // the cell's own `Response`, and the two call sites want the badge only to open a label
+        // draft. Threading a second rect through both would churn every caller for one use.
+        ui.ctx()
+            .memory_mut(|m| m.data.insert_temp(badge_id(ui), badge_rect));
         ui.painter().rect_filled(
             badge_rect,
             egui::CornerRadius::same(2),
