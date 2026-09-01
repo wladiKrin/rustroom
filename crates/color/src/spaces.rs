@@ -68,6 +68,20 @@ pub const SRGB_TO_ADOBE_RGB: [[f32; 3]; 3] = [
     [0.0000000000, 0.0411619485, 0.9588380515],
 ];
 
+/// Linear sRGB → XYZ (D65).
+///
+/// ⚠ Derived from the sRGB primaries and the D65 white point rather than transcribed, then checked
+/// against the standard values — the same treatment the ProPhoto pair got, which is what showed a
+/// 1e-4 difference there to be rounding rather than error.
+///
+/// ⚠ Its middle row is **Rec.709's** luminance weights, which is why it is not interchangeable with
+/// `crate::luminance` — that one is ProPhoto's Y, for the working space.
+pub const SRGB_TO_XYZ: [[f32; 3]; 3] = [
+    [0.4123908, 0.3575843, 0.1804808],
+    [0.2126390, 0.7151687, 0.0721923],
+    [0.0193308, 0.1191948, 0.9505322],
+];
+
 /// XYZ (D50) → linear ProPhoto (ROMM).
 ///
 /// ⚠ **No chromatic adaptation, and that is not an omission.** ProPhoto *is* a D50 space, so a
@@ -167,5 +181,20 @@ mod tests {
         assert!(v.iter().any(|x| *x < 0.0), "negatives were clamped away");
         let v = prophoto_to_srgb([2.0, 2.0, 2.0]);
         assert!(v[0] > 1.5, "values above 1.0 were clamped away: {v:?}");
+    }
+}
+
+#[cfg(test)]
+mod srgb_xyz_tests {
+    use super::*;
+
+    /// ⚠ White is the one input that catches a transposed or mis-scaled matrix, because every row
+    /// contributes to it. D65's XYZ is (0.95047, 1.0, 1.08883).
+    #[test]
+    fn srgb_white_maps_to_d65() {
+        let w = apply(&SRGB_TO_XYZ, [1.0, 1.0, 1.0]);
+        assert!((w[0] - 0.95047).abs() < 1e-3, "X was {}", w[0]);
+        assert!((w[1] - 1.0).abs() < 1e-3, "Y was {}", w[1]);
+        assert!((w[2] - 1.08883).abs() < 1e-3, "Z was {}", w[2]);
     }
 }

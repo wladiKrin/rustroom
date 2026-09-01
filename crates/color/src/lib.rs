@@ -9,6 +9,7 @@ pub mod huesatmap;
 pub mod oklab;
 pub mod output_space;
 pub mod spaces;
+pub mod wb;
 pub use oklab::{linear_srgb_to_oklab, oklab_to_linear_srgb};
 pub use output_space::OutputSpace;
 pub use spaces::{prophoto_to_srgb, srgb_to_prophoto};
