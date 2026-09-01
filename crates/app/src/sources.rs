@@ -9,7 +9,14 @@
 //! [`crate::library_state`].
 
 use crate::library_state::fs_modified;
-use crate::*;
+use crate::{AppView, Library, LibrarySource, RustroomApp};
+use eframe::egui;
+use rustroom_app::action_log::ActionKind;
+use rustroom_app::entries;
+use rustroom_app::selection::Selection;
+use rustroom_app::sidecar;
+use rustroom_app::thumb_loader::ThumbLoader;
+use std::path::PathBuf;
 
 impl RustroomApp {
     pub(crate) fn open_folder(&mut self, ctx: &egui::Context) {
@@ -336,6 +343,7 @@ impl RustroomApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{test_app, test_ui};
 
     #[test]
     fn the_filter_survives_a_source_switch() {
