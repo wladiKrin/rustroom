@@ -113,6 +113,48 @@ pub struct LensShot {
     pub shot: Shot,
 }
 
+/// One row's worth of correction, reused across rows.
+///
+/// ⚠ Exists so the per-row lensfun buffers are allocated **once per worker** rather than once
+/// per row: the stage parallelises with `for_each_init`, which calls the initialiser once per
+/// rayon job and not once per item. Allocating inside [`Corrector::fill_row`] would have meant
+/// zeroing ~100 KB per row for no purpose.
+pub struct RowMap {
+    width: usize,
+    /// `[xR, yR, xG, yG, xB, yB]` per pixel — lensfun's own subpixel layout, so
+    /// `apply_subpixel_distortion` writes straight into it.
+    src: Vec<f32>,
+    gain: Vec<f32>,
+    /// The pre-TCA source position per pixel, `[x, y]`.
+    geo: Vec<f32>,
+}
+
+impl RowMap {
+    pub fn new(width: usize) -> Self {
+        Self {
+            width,
+            src: vec![0.0; 6 * width],
+            gain: vec![1.0; width],
+            geo: vec![0.0; 2 * width],
+        }
+    }
+
+    /// Where output pixel `x` of this row comes from, per channel.
+    pub fn source(&self, x: usize) -> [[f32; 2]; 3] {
+        let o = 6 * x;
+        [
+            [self.src[o], self.src[o + 1]],
+            [self.src[o + 2], self.src[o + 3]],
+            [self.src[o + 4], self.src[o + 5]],
+        ]
+    }
+
+    /// The vignetting gain at output pixel `x` of this row.
+    pub fn gain(&self, x: usize) -> f32 {
+        self.gain[x]
+    }
+}
+
 /// A built correction for one profile, one shot and one image size.
 pub struct Corrector {
     modifier: Modifier,
@@ -227,6 +269,90 @@ impl Corrector {
             one[0]
         } else {
             1.0
+        }
+    }
+
+    /// Fill `map` with the source coordinates and vignetting gains for output row `y`.
+    ///
+    /// ⚠⚠ **One lensfun call per row instead of three per pixel, and that is the whole point.**
+    /// Every one of these entry points takes `width`/`rows` and is built to fill a row; calling
+    /// them with a 1×1 grid per pixel pays the per-call setup — normalisation constants, the
+    /// `Option` unwrap, the kernel dispatch — once per pixel rather than once per row. Measured
+    /// on a 3200×2136 render of an X-T4 frame, the per-pixel form costs 400 ms of an 1178 ms
+    /// prefix.
+    ///
+    /// ⚠ The batch is equivalent to the per-pixel path **only while `applied_scale == 1.0`**,
+    /// because the API steps x by exactly one output pixel while [`Self::scaled`] steps by
+    /// `1/applied_scale`. That is the default — the Scale slider sits at 0 — and therefore the
+    /// case every RAW pays; above it this falls back to the per-pixel path rather than being
+    /// silently wrong. `a_scaled_row_matches_the_per_pixel_source` pins that the two agree, so
+    /// the fast path cannot diverge unnoticed.
+    pub fn fill_row(&self, y: usize, map: &mut RowMap) {
+        let w = map.width;
+        if w == 0 {
+            return;
+        }
+        if self.applied_scale != 1.0 {
+            for x in 0..w {
+                let s = self.source(x as f32, y as f32);
+                for (ch, sc) in s.iter().enumerate() {
+                    map.src[6 * x + 2 * ch] = sc[0];
+                    map.src[6 * x + 2 * ch + 1] = sc[1];
+                }
+                map.gain[x] = self.gain(x as f32, y as f32);
+            }
+            return;
+        }
+
+        let yf = y as f32;
+
+        // Where each output pixel reads from before TCA: the distorted position, or itself.
+        let distorted = self.has_distortion
+            && self
+                .modifier
+                .apply_geometry_distortion(0.0, yf, w, 1, &mut map.geo);
+        if !distorted {
+            for x in 0..w {
+                map.geo[2 * x] = x as f32;
+                map.geo[2 * x + 1] = yf;
+            }
+        }
+
+        // TCA writes all three channels straight into `src`, which is why the scratch is laid
+        // out `[xR, yR, xG, yG, xB, yB]` per pixel — lensfun's own layout, so no copy.
+        if self.has_tca
+            && self
+                .modifier
+                .apply_subpixel_distortion(0.0, yf, w, 1, &mut map.src)
+        {
+            // ⚠ Summed as displacements, not composed — see [`Self::source`] for why.
+            for x in 0..w {
+                let (px, py) = (x as f32, yf);
+                let (bx, by) = (map.geo[2 * x], map.geo[2 * x + 1]);
+                for ch in 0..3 {
+                    // ⚠ `base + (tca - p)`, associated exactly as [`Self::source`] does it.
+                    // The mathematically equal `tca + (base - p)` rounds differently and the
+                    // two forms disagree in the last ulp, which is enough to move a golden.
+                    map.src[6 * x + 2 * ch] = bx + (map.src[6 * x + 2 * ch] - px);
+                    map.src[6 * x + 2 * ch + 1] = by + (map.src[6 * x + 2 * ch + 1] - py);
+                }
+            }
+        } else {
+            for x in 0..w {
+                let (bx, by) = (map.geo[2 * x], map.geo[2 * x + 1]);
+                for ch in 0..3 {
+                    map.src[6 * x + 2 * ch] = bx;
+                    map.src[6 * x + 2 * ch + 1] = by;
+                }
+            }
+        }
+
+        map.gain.fill(1.0);
+        if self.has_vignetting {
+            // The buffer is already all ones, so the multiply leaves the gain itself behind.
+            let _ = self
+                .modifier
+                .apply_color_modification_f32(&mut map.gain, 0.0, yf, w, 1, 1);
         }
     }
 
@@ -405,6 +531,106 @@ mod tests {
         vignetting: true,
         scale: 0.0,
     };
+
+    /// The per-pixel form is the reference the row form has to reproduce; if it does not, every
+    /// RAW renders differently while nothing else in the suite notices.
+    ///
+    /// ⚠ Sources compare **exactly** — the geometry and TCA kernels do the same arithmetic
+    /// whatever the batch width. Gains do not: `apply_color_modification` advances r² by an
+    /// incremental update along the row rather than recomputing it, so a batched row accumulates
+    /// f32 rounding that `w` separate one-pixel calls cannot. That is upstream's own behaviour —
+    /// lensfun always processes a row — so the batched value is the *more* faithful one.
+    #[test]
+    fn a_row_matches_the_per_pixel_source_and_gain() {
+        // ⚠ The `want` variants are not padding. Each correction has its own branch in
+        // `fill_row`, and with all three on the branches for a *missing* one are unreachable —
+        // in particular the identity fill that stands in when there is no distortion pass, which
+        // an all-on fixture cannot reach and therefore cannot test. The panel has three
+        // independent checkboxes, so every one of these is an ordinary setting.
+        let wants = [
+            ALL,
+            Corrections {
+                distortion: false,
+                ..ALL
+            },
+            Corrections { tca: false, ..ALL },
+            Corrections {
+                vignetting: false,
+                ..ALL
+            },
+        ];
+        for (distortion, want) in [BARREL, PINCUSHION, NO_DISTORTION]
+            .into_iter()
+            .flat_map(|d| wants.into_iter().map(move |w| (d, w)))
+        {
+            let c = corrector(distortion, want);
+            assert_eq!(
+                c.applied_scale(),
+                1.0,
+                "the fast path is the one under test"
+            );
+            let mut map = RowMap::new(400);
+            for y in [0, 1, 150, 299] {
+                c.fill_row(y, &mut map);
+                for x in 0..400 {
+                    assert_eq!(
+                        map.source(x),
+                        c.source(x as f32, y as f32),
+                        "source at ({x}, {y})"
+                    );
+                    let want = c.gain(x as f32, y as f32);
+                    // 5e-5 against a measured worst case of 1.0e-5 on this fixture — loose
+                    // enough for the accumulation, far tighter than any structural error (a
+                    // wrong offset or a missed multiply) could hide in.
+                    assert!(
+                        (map.gain(x) - want).abs() < 5e-5,
+                        "gain at ({x}, {y}): {} vs {want}",
+                        map.gain(x)
+                    );
+                }
+            }
+        }
+    }
+
+    /// ⚠⚠ **The guard on the fast path, and the only test that can see it removed.** The batch
+    /// steps x by exactly one output pixel; [`Corrector::scaled`] steps by `1/applied_scale`, so
+    /// with the Scale slider up the two describe different points. Dropping the
+    /// `applied_scale != 1.0` fallback leaves every scaled render reading from the wrong place —
+    /// a smooth, plausible-looking image that is simply not the correction asked for.
+    #[test]
+    fn a_scaled_row_matches_the_per_pixel_source() {
+        let c = corrector(
+            PINCUSHION,
+            Corrections {
+                scale: 100.0,
+                ..ALL
+            },
+        );
+        assert!(
+            c.applied_scale() > 1.001,
+            "fixture check: the scale really is in force ({})",
+            c.applied_scale()
+        );
+        let mut map = RowMap::new(400);
+        for y in [0, 150, 299] {
+            c.fill_row(y, &mut map);
+            for x in 0..400 {
+                assert_eq!(
+                    map.source(x),
+                    c.source(x as f32, y as f32),
+                    "source at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    /// A zero-width row is reachable from a degenerate render and must not index out of bounds.
+    #[test]
+    fn an_empty_row_is_harmless() {
+        let c = corrector(BARREL, ALL);
+        let mut map = RowMap::new(0);
+        c.fill_row(0, &mut map);
+    }
 
     #[test]
     fn a_zero_coefficient_lens_maps_every_pixel_to_itself() {

@@ -7,7 +7,8 @@
 use crate::resample::{self, Resampler, Weights};
 use crate::PipelineStage;
 use core_image::ImageBuf;
-use lens_profile::{Corrections, Corrector, LensShot};
+use lens_profile::{Corrections, Corrector, LensShot, RowMap};
+use rayon::prelude::*;
 
 pub struct LensCorrectionStage {
     lens: LensShot,
@@ -49,24 +50,42 @@ impl PipelineStage for LensCorrectionStage {
         let Some(corrector) = self.corrector(w, h) else {
             return image;
         };
-        let mut out = ImageBuf::new(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let (fx, fy) = (x as f32, y as f32);
-                let src = corrector.source(fx, fy);
-                let gain = corrector.gain(fx, fy);
-                let mut px = [0.0f32; 3];
-                for (ch, p) in px.iter_mut().enumerate() {
-                    // ⚠ Per channel, because TCA gives each channel its own source point —
-                    // which is why `resample` has a second entry point at all.
-                    *p =
-                        resample::sample_channel(&image, src[ch][0], src[ch][1], ch, &self.weights)
-                            * gain;
-                }
-                out.set_pixel(x, y, px);
-            }
+        const CH: usize = ImageBuf::CHANNELS;
+        let stride = w * CH;
+        let mut data = vec![0.0f32; w * h * CH];
+        if stride == 0 {
+            // `par_chunks_exact_mut(0)` panics.
+            return ImageBuf::from_vec(w, h, data);
         }
-        out
+        // ⚠ Parallel over **output** rows, which is sound because this is a gather: an output
+        // pixel reads the whole source and writes only itself. Bit-identical to the sequential
+        // form, which is what lets the goldens stand as the check on it.
+        //
+        // ⚠ `for_each_init` rather than `for_each`: the initialiser runs once per rayon job, so
+        // one `RowMap` is allocated per worker and reused down its rows. Allocating per row
+        // would mean zeroing the scratch millions of times over a full-resolution render.
+        data.par_chunks_exact_mut(stride).enumerate().for_each_init(
+            || RowMap::new(w),
+            |map, (y, orow)| {
+                corrector.fill_row(y, map);
+                for (x, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
+                    let src = map.source(x);
+                    let gain = map.gain(x);
+                    for (ch, p) in out.iter_mut().enumerate() {
+                        // ⚠ Per channel, because TCA gives each channel its own source point —
+                        // which is why `resample` has a second entry point at all.
+                        *p = resample::sample_channel(
+                            &image,
+                            src[ch][0],
+                            src[ch][1],
+                            ch,
+                            &self.weights,
+                        ) * gain;
+                    }
+                }
+            },
+        );
+        ImageBuf::from_vec(w, h, data)
     }
 }
 

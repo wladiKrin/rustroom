@@ -67,10 +67,7 @@ fn main() {
         buf.height(),
         (fit_cap * 2).min(buffer_long)
     );
-    println!(
-        "lens: {:?}",
-        lens_name
-    );
+    println!("lens: {:?}", lens_name);
 
     // ⚠⚠ Lens corrections ON, as the GUI has them. `Edits::default()` is strictly neutral and
     // leaves them off; `Settings.auto_lens_correction` (default on) turns them on for any photo
@@ -103,14 +100,16 @@ fn main() {
 
     for (label, max_dim) in [
         ("fit rung   (what Crop mode pins to)", fit_cap),
-        ("next rung  (what a 50% crop climbs to)", (fit_cap * 2).min(buffer_long)),
+        (
+            "next rung  (what a 50% crop climbs to)",
+            (fit_cap * 2).min(buffer_long),
+        ),
     ] {
         println!("\n=== {label}: max_dim {max_dim} ===");
-        let scale =
-            RenderScale::new(max_dim as f32 / buffer_long as f32);
+        let scale = RenderScale::new(max_dim as f32 / buffer_long as f32);
 
         // Prefix and tail separately, so the cost can be attributed.
-        let ((prefix, tail), build_ms) = best_of(3, || {
+        let ((_prefix, _tail), build_ms) = best_of(3, || {
             pipeline::build_pipeline_split_in_region_with_brush(
                 &cropped,
                 scale,
@@ -121,7 +120,9 @@ fn main() {
                 Resampler::default(),
             )
         });
-        let (src, down_ms) = best_of(3, || core_image::ImageBuf::clone(&buf).downscale_to(max_dim));
+        let (src, down_ms) = best_of(3, || {
+            core_image::ImageBuf::clone(&buf).downscale_to(max_dim)
+        });
         println!(
             "  downscale_to      {down_ms:8.1} ms   -> {}x{}",
             src.width(),
@@ -129,7 +130,11 @@ fn main() {
         );
 
         let (mid, prefix_ms) = best_of(3, || prefix_run(&cropped, scale, &lens, max_dim, &buf));
-        println!("  PREFIX (cold)     {prefix_ms:8.1} ms   -> {}x{}", mid.width(), mid.height());
+        println!(
+            "  PREFIX (cold)     {prefix_ms:8.1} ms   -> {}x{}",
+            mid.width(),
+            mid.height()
+        );
 
         let (_, tail_ms) = best_of(5, || {
             let (_, t) = pipeline::build_pipeline_split_in_region_with_brush(
@@ -145,7 +150,6 @@ fn main() {
         });
         println!("  TAIL  (per slider){tail_ms:8.1} ms   <- this is what a warm cache costs");
         println!("  build_pipeline    {build_ms:8.1} ms");
-        let _ = tail;
     }
 
     println!(
