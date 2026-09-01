@@ -62,6 +62,7 @@ mod library;
 mod library_state;
 mod menu_bar;
 mod modals;
+mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -114,6 +115,26 @@ enum AppView {
     #[default]
     Library,
     Develop,
+}
+
+/// Which of the Library's three layouts is on screen.
+///
+/// ⚠⚠ **A mode within Library, not a fourth `AppView`.** Library and Develop are *modules* —
+/// the segmented switch names them and every module-level control in the toolbar is gated on
+/// them. Compare and Survey are ways of looking at the same browsing source, so they compose
+/// with the search field, the filters and the sort order rather than replacing them, and `G`
+/// returns to the grid without leaving the module. Lightroom's own G/E/C/N are modes of its
+/// Library module for exactly this reason.
+///
+/// ⚠ `Copy`, like `AppView`, so the toolbar's segmented control can hold one by value.
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+enum LibraryMode {
+    #[default]
+    Grid,
+    /// Two photos side by side: a reference and a candidate being judged against it.
+    Compare,
+    /// The whole selection at once, tiled to fill the view.
+    Survey,
 }
 
 /// Browsing state for an opened folder.
@@ -228,6 +249,17 @@ struct RustroomApp {
     /// and keeping it a value means both branches compile on every platform.
     os_manages_colour: bool,
     view: AppView,
+    /// Which Library layout is on screen — the grid, Compare or Survey.
+    library_mode: LibraryMode,
+    /// The photo Compare shows beside the reference.
+    ///
+    /// ⚠⚠ A `PhotoId` rather than an index, and **resolved every frame** through
+    /// `compare_pair::candidate` rather than trusted. Indices shift under a sort, a filter, a
+    /// rebuild and a copy being created; an id that no longer names a visible row simply falls
+    /// back to the next candidate. That is why no rebuild path has to remember to clear this —
+    /// the alternative is an invalidation hook at every one of them, and the one that forgets
+    /// shows the wrong photograph.
+    compare_candidate: Option<PhotoId>,
     /// The view as of the previous frame, so a switch can be noticed.
     ///
     /// ⚠ An edge detector, not a second source of truth: it is only ever compared against
@@ -466,6 +498,8 @@ impl RustroomApp {
             camera_profiles_cache: Vec::new(),
             os_manages_colour,
             view: AppView::default(),
+            library_mode: LibraryMode::default(),
+            compare_candidate: None,
             last_view: AppView::default(),
             library: None,
             session: None,

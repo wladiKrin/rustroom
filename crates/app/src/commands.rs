@@ -5,7 +5,7 @@
 //! menu item and its shortcut drifting apart, which is exactly what happened with the old Copy
 //! button and Ctrl+C before they were made to share a code path.
 
-use crate::{modals::Modal, AppView, RustroomApp, PREVIEW_MAX_DIM};
+use crate::{modals::Modal, AppView, LibraryMode, RustroomApp, PREVIEW_MAX_DIM};
 use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::menu::Command;
@@ -55,8 +55,27 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ResetAdjustments => app.reset_adjustments(),
-        Command::ShowLibrary => app.view = AppView::Library,
+        // ⚠ `G` is Grid, not merely Library: it is the way back out of Compare and Survey, so
+        // it must reset the mode as well as the module or the key would appear to do nothing
+        // from the two views that most need an exit.
+        Command::ShowLibrary => {
+            app.view = AppView::Library;
+            app.library_mode = LibraryMode::Grid;
+        }
         Command::ShowDevelop => app.view = AppView::Develop,
+        // ⚠ Both set the module too, so `C` from Develop lands somewhere rather than changing
+        // a mode nothing is showing. ⚠ The candidate is deliberately **not** cleared: it is
+        // resolved against the pool every frame, so a stale one is already harmless, and
+        // clearing it would throw away the candidate you were mid-way through choosing every
+        // time you dipped into Develop to look closer.
+        Command::ShowCompare => {
+            app.view = AppView::Library;
+            app.library_mode = LibraryMode::Compare;
+        }
+        Command::ShowSurvey => {
+            app.view = AppView::Library;
+            app.library_mode = LibraryMode::Survey;
+        }
         Command::ZoomIn => zoom_by(app, ZOOM_STEP),
         Command::ZoomOut => zoom_by(app, 1.0 / ZOOM_STEP),
         Command::FitView => {

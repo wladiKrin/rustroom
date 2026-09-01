@@ -28,6 +28,8 @@ pub enum Command {
     ResetAdjustments,
     ShowLibrary,
     ShowDevelop,
+    ShowCompare,
+    ShowSurvey,
     ZoomIn,
     ZoomOut,
     FitView,
@@ -192,6 +194,14 @@ pub fn model() -> Vec<Section> {
             items: vec![
                 action("Library", Command::ShowLibrary, Some(Shortcut::bare('G'))),
                 action("Develop", Command::ShowDevelop, Some(Shortcut::bare('D'))),
+                // ⚠⚠ Bare `C` is safe, and that was **verified in egui-winit's source** rather
+                // than assumed. `is_copy_command` is `modifiers.command && key == C`, so only
+                // the ⌘C chord is swallowed into `Event::Copy`; a bare `C` emits an ordinary
+                // `Event::Key`. Being bare, neither ever becomes a native accelerator — see
+                // `safe_as_native_accelerator` — so neither can steal a character typed into
+                // the search field or the new-collection field.
+                action("Compare", Command::ShowCompare, Some(Shortcut::bare('C'))),
+                action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
                 Item::Separator,
                 action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
                 action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),
@@ -343,6 +353,11 @@ mod tests {
             // field would be swallowed if this ever became native — and ⌘O below must stay safe,
             // so the two cases share a character and differ only in the modifier.
             Shortcut::bare('O'),
+            // ⚠ Compare and Survey. Bare `C` shares its character with ⌘C, which is a *text*
+            // chord and unsafe for the other reason — so this pair covers both halves of the
+            // rule at once.
+            Shortcut::bare('C'),
+            Shortcut::bare('N'),
             Shortcut::cmd('Z'),
             Shortcut::cmd('C'),
             Shortcut::cmd('V'),
