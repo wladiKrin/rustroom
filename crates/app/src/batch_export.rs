@@ -82,49 +82,26 @@ pub struct ExportOptions {
     /// ⚠ The default renders to exactly what `dest_for` produced before templating existed, so
     /// nothing about an existing export changes until someone edits this.
     pub filename_template: String,
-    /// IPTC/XMP fields to write into the exported file. **M6.1b — stored, not yet written.**
+    /// IPTC/XMP fields to write into the exported file. **M6.1b, live.**
+    ///
+    /// ⚠ Written **into the export only** — the original is never opened for writing. See
+    /// `export::metadata`, which carries why that dissolved the backlog's design conflict.
     pub metadata: ExportMetadata,
-    /// A visible watermark laid over the exported image. **M6.1c — stored, not yet drawn.**
+    /// A visible watermark laid over the exported image. **M6.1c, live.**
     pub watermark: Watermark,
-    /// Sharpening applied for the output medium, after any resize. **M6.1d — stored, inert.**
+    /// Sharpening applied for the output medium, after any resize. **M6.1d, live.**
     pub output_sharpening: OutputSharpening,
     /// Where the files land and what happens afterwards. **M6.1e — stored, inert.**
     pub delivery: Delivery,
 }
 
-/// Rights and description to write into every exported file.
-///
-/// ⚠ Empty means "write nothing", not "write an empty string" — a blank copyright tag is worse
-/// than an absent one. **M6.1b owns this type**; add fields here rather than to `ExportOptions`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ExportMetadata {
-    pub copyright: String,
-    pub creator: String,
-    pub caption: String,
-}
-
-/// A visible mark laid over the exported image.
-///
-/// ⚠ Empty text means no watermark, which is what makes the default inert. **M6.1c owns this
-/// type** — position, opacity, size and an image watermark all belong here, not on
-/// `ExportOptions`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Watermark {
-    pub text: String,
-}
-
-/// Sharpening for the output medium, applied after the resize rather than in the pipeline.
-///
-/// ⚠ `0` is off, which is what makes the default inert. **M6.1d owns this type** — the medium
-/// (screen / matte / glossy) and the radius model belong here.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct OutputSharpening {
-    /// 0..=100. `0` means the stage is not inserted at all.
-    pub amount: u8,
-}
+// ⚠⚠ These three **live in the `export` crate** (M6.1b/c/d) and are re-exported here, so no call
+// site churned. They belong beside `save`: one is byte surgery on the container `save` has just
+// written, and the other two act on the buffer `save` is about to quantize. None of them has
+// anything to do with the batch loop, and putting them there would have left the CLI unable to
+// reach any of it. Re-exported rather than written `export::…` at every use site, because they
+// are `ExportOptions` fields first.
+pub use export::{ExportMetadata, OutputSharpening, Watermark, WatermarkCorner};
 
 /// Where the files land inside the destination, and what happens once the run finishes.
 ///
@@ -356,8 +333,22 @@ pub fn export_one(
         None => image,
     };
     let scale = scale_for(source_long, opts.max_edge);
-    let rendered = pipeline::build_pipeline_to(edits, scale, opts.space, resampler).run(scaled);
-    export::save(&rendered, dest, opts.format, opts.quality, opts.space).map_err(|e| e.to_string())
+    let mut rendered = pipeline::build_pipeline_to(edits, scale, opts.space, resampler).run(scaled);
+
+    // ⚠⚠ **THE ORDER OF THESE THREE IS THE FEATURE, NOT AN ARRANGEMENT.**
+    //
+    // Output sharpening goes **first**, because it exists to put back the edge the resize took
+    // and must therefore measure the photograph — a watermark laid down first would be a hard
+    // white edge for it to ring around. Both act on the display-encoded buffer, which is what
+    // the pipeline has just handed back; see each module for why that is right for it.
+    //
+    // The metadata goes **last**, after the encode, because it is surgery on the container
+    // rather than on the pixels. It cannot change what the photograph looks like.
+    export::output_sharpen::apply(&mut rendered, &opts.output_sharpening);
+    export::watermark::apply(&mut rendered, &opts.watermark);
+    export::save(&rendered, dest, opts.format, opts.quality, opts.space)
+        .map_err(|e| e.to_string())?;
+    export::metadata::embed(dest, opts.format, &opts.metadata).map_err(|e| e.to_string())
 }
 
 /// A running batch export.
@@ -1348,6 +1339,10 @@ mod tests {
         // comparisons above.
         assert!(opts.metadata.copyright.is_empty() && opts.metadata.creator.is_empty());
         assert!(opts.watermark.text.is_empty(), "no watermark by default");
+        // ⚠ And its *other* fields are not zero — `Watermark::default` is hand-written for
+        // exactly that reason. A derived one would hand this options file a zero-height, fully
+        // transparent mark, which the four `== Default::default()` comparisons above cannot see.
+        assert_eq!((opts.watermark.size, opts.watermark.opacity), (3, 70));
         assert_eq!(opts.output_sharpening.amount, 0, "no output sharpening");
         assert!(opts.delivery.subfolder.is_empty(), "straight into dest_dir");
         assert_eq!(opts.delivery.then, PostExportAction::Nothing);
@@ -1366,6 +1361,9 @@ mod tests {
             },
             watermark: Watermark {
                 text: "rustroom".into(),
+                corner: WatermarkCorner::TopLeft,
+                size: 7,
+                opacity: 40,
             },
             output_sharpening: OutputSharpening { amount: 40 },
             delivery: Delivery {
