@@ -110,7 +110,7 @@ project's recorded bugs were interactions between separately-correct changes.
 | | A | B | C | D |
 | --- | --- | --- | --- | --- |
 | **W0** ✅ | **Split `canvas.rs`** — done 2026-09-01 | **Split `main.rs`** — done 2026-09-01 | — | — |
-| **W1** | M5.1a tone curve widget | M6.1 seam + filename templating | **M7.3a interpolator** *(owns goldens)* | M5.5a crop guides |
+| **W1** | M5.1a tone curve widget + monotone spline *(**owns goldens** — moves `golden_scurve`)* | M6.1 seam + filename templating | M7.3a interpolator — **measure and report only**, moves no golden | M5.5a crop guides |
 | **W2** | M5.2 WB Kelvin *(owns `edit-model`)* | M6.1b/c/d metadata, watermark, output sharpening | M7.1a luminance mask *(owns `Mask`)* | M6.5a/b compare + survey |
 | **W3** | M5.3a spot headless *(owns `Edits` + stage order)* | M6.3 XMP *(owns schema **v6**)* | M5.4 auto tone | M7.6 tool gaps |
 | **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
@@ -219,6 +219,18 @@ Stated so nobody tries:
 - **A design question.** M5.4b (where a display rendering lives) and M5.2's sidecar migration each
   need a decision before any code, and the decision cannot be split across agents. Brainstorm those
   in the main session first, then dispatch the implementation.
+
+  ⚠⚠ **AND THE MECHANICAL REASON THIS MATTERS: A BACKGROUND AGENT HAS NO CHANNEL TO THE USER.**
+  `AskUserQuestion` belongs to the orchestrating session, not to a subagent. An agent that meets a
+  design question can only **stop and report it**; the loop back is *agent stops → orchestrator
+  relays → user answers → orchestrator re-messages the agent, which resumes with its context intact*.
+  That works, and it stalls one branch for a full round trip while the other three run ahead. ⚠ So
+  **settle the decisions before dispatch** — and where a decision genuinely needs evidence first,
+  scope that agent to **measure and report** rather than to build, which turns an accidental stall
+  into a planned checkpoint. M7.3a in W1 is exactly that shape (user's call, 2026-09-01).
+- ⚠ **Never let an agent decide a question you would have wanted asked.** An agent given an open
+  design choice does not stall — it picks one silently and the choice ships. That is the failure
+  mode this section exists to prevent, and it is worse than the stall.
 - **The merge itself.** Reviewing four branches is one person's job.
 - **Anything whose "Done when" is a judgement about a photograph.** M5.4, M7.3 and M8.4 all end in
   looking at an image and deciding. An agent can produce the comparison; it should not sign it off.
