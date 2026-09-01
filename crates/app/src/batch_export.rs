@@ -9,6 +9,7 @@
 //! naming, collisions, cancellation, progress, the failure path — is testable with no image
 //! fixtures at all.
 
+use crate::filename_template::{NameFacts, Template};
 use crate::photo_id::PhotoId;
 use core_image::ImageBuf;
 use edit_model::Edits;
@@ -31,6 +32,12 @@ pub struct ExportJob {
     /// This copy's name, when it has one. `None` on an original, which has no such name.
     pub name: Option<String>,
     pub edits: Edits,
+    /// What the catalog knows about how the shot was taken, for `{date}` and `{camera}`.
+    ///
+    /// ⚠ Carried like the name and the edits, and for the same reason: the worker runs on its
+    /// own thread and has no catalog connection. ⚠ An all-`None` `Capture` is the ordinary answer
+    /// for a file with no EXIF and for single-file mode, where there is no Library to ask.
+    pub capture: core_image::Capture,
 }
 
 /// What to export, and how.
@@ -264,14 +271,28 @@ pub fn dest_for(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
-    let ext = format.extension();
     // ⚠ A named copy exports under its **own** name, which replaces the file's stem rather than
     // extending it. The copy number stays the identity; the name is an explicit override.
-    let stem = PhotoId::export_stem(stem, copy, copy_name);
+    dest_named(
+        dir,
+        &PhotoId::export_stem(stem, copy, copy_name),
+        dedup,
+        format,
+    )
+}
+
+/// Where an export lands, given the base name already chosen for it.
+///
+/// ⚠ This is the half that owns the **de-duplication** suffix and the extension, and nothing
+/// else. Splitting it out is what lets a filename template decide the base without learning
+/// about `-N` — which must stay separate from both `_N` (copy identity) and the template, for
+/// the reasons [`dest_for`] gives.
+pub fn dest_named(dir: &Path, base: &str, dedup: usize, format: ExportFormat) -> PathBuf {
+    let ext = format.extension();
     let name = if dedup == 0 {
-        format!("{stem}.{ext}")
+        format!("{base}.{ext}")
     } else {
-        format!("{stem}-{dedup}.{ext}")
+        format!("{base}-{dedup}.{ext}")
     };
     dir.join(name)
 }
@@ -397,26 +418,48 @@ fn run(
     // (`a.RAF`, `a.jpg`) would silently overwrite each other in an empty folder.
     let mut claimed: HashSet<PathBuf> = HashSet::new();
     let mut remembered: Option<Collision> = None;
+    // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
+    // the default rather than failing the run: the dialog refuses to start an export with an
+    // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
+    // the old way beats no folder at all.
+    let template = Template::parse(&opts.filename_template).unwrap_or_default();
 
     if events.send(ExportEvent::Started { total }).is_err() {
         return;
     }
 
-    for (done, ExportJob { id, name, edits }) in jobs.into_iter().enumerate() {
+    for (
+        done,
+        ExportJob {
+            id,
+            name,
+            edits,
+            capture,
+        },
+    ) in jobs.into_iter().enumerate()
+    {
         let source = id.path.clone();
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             break;
         }
 
-        let mut dest = dest_for(
-            &opts.dest_dir,
-            &source,
-            id.copy,
-            name.as_deref(),
-            0,
-            opts.format,
-        );
+        // ⚠ `{seq}` is 1-based and positional in the job list, which is the order the Library is
+        // showing. It is assigned here, *before* the collision check, so a skipped photo does not
+        // renumber the ones after it — a name is a property of the photo, not of what happened to
+        // its neighbours.
+        let base = template.render(&NameFacts {
+            file_stem: source
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("export"),
+            copy: id.copy,
+            copy_name: name.as_deref(),
+            seq: done + 1,
+            taken: capture.taken,
+            camera: capture.camera.as_deref(),
+        });
+        let mut dest = dest_named(&opts.dest_dir, &base, 0, opts.format);
         if claimed.contains(&dest) || dest.exists() {
             let collision = match remembered {
                 Some(c) => c,
@@ -460,14 +503,9 @@ fn run(
                 Collision::KeepBoth => {
                     let mut i = 1;
                     loop {
-                        let candidate = dest_for(
-                            &opts.dest_dir,
-                            &source,
-                            id.copy,
-                            name.as_deref(),
-                            i,
-                            opts.format,
-                        );
+                        // ⚠ The *same* base, so "Keep both" appends `-N` to whatever the
+                        // template produced rather than quietly falling back to the old naming.
+                        let candidate = dest_named(&opts.dest_dir, &base, i, opts.format);
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -688,12 +726,166 @@ mod tests {
                 id: PhotoId::original(dir.0.join(n)),
                 name: None,
                 edits: Edits::default(),
+                capture: core_image::Capture::default(),
             })
             .collect()
     }
 
     fn ok_decode() -> impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static {
         |_: &Path| Ok(flat(8, 4))
+    }
+
+    /// Jobs carrying capture metadata, for the tokens that come from the catalog.
+    fn jobs_with(dir: &TempDir, files: &[(&str, core_image::Capture)]) -> Vec<ExportJob> {
+        files
+            .iter()
+            .map(|(n, c)| ExportJob {
+                id: PhotoId::original(dir.0.join(n)),
+                name: None,
+                edits: Edits::default(),
+                capture: c.clone(),
+            })
+            .collect()
+    }
+
+    /// 2026-08-27 10:00:00 as naive wall-clock seconds, on an X-T4.
+    fn shot() -> core_image::Capture {
+        core_image::Capture {
+            taken: Some(1_787_824_800),
+            camera: Some("FUJIFILM X-T4".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn templated(dir: &TempDir, template: &str) -> ExportOptions {
+        ExportOptions {
+            filename_template: template.to_string(),
+            ..opts(dir, None)
+        }
+    }
+
+    #[test]
+    fn the_default_base_is_what_dest_for_has_always_produced() {
+        // ⚠⚠ The regression guard for the whole feature: `dest_for` is now defined *through*
+        // `dest_named`, so the two cannot drift — and the default template renders to the same
+        // base, which is what makes an existing user's next export byte-identical.
+        let dir = PathBuf::from("/out");
+        for (copy, name) in [(0u32, None), (2, None), (3, Some("Warm"))] {
+            let base = crate::filename_template::Template::default().render(&NameFacts {
+                file_stem: "a",
+                copy,
+                copy_name: name,
+                seq: 1,
+                taken: None,
+                camera: None,
+            });
+            assert_eq!(
+                dest_named(&dir, &base, 0, ExportFormat::Jpeg),
+                dest_for(
+                    &dir,
+                    Path::new("/in/a.RAF"),
+                    copy,
+                    name,
+                    0,
+                    ExportFormat::Jpeg
+                ),
+                "copy {copy}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_template_names_the_files_it_writes() {
+        // End to end through the worker, because the tokens being right says nothing about the
+        // worker reaching for them — the sabotage that skipped rendering entirely left every
+        // `filename_template` unit test green.
+        let d = TempDir::new("template_names");
+        let (report, _) = run_export(
+            jobs_with(&d, &[("a.RAF", shot()), ("b.RAF", shot())]),
+            templated(&d, "{date}_{seq:3}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("2026-08-27_001.jpg").exists());
+        assert!(d.0.join("2026-08-27_002.jpg").exists());
+        assert!(!d.0.join("a.jpg").exists(), "the old naming must be gone");
+    }
+
+    #[test]
+    fn seq_starts_at_one_and_follows_the_job_order() {
+        // ⚠ 1-based and positional in the list the caller handed over, which is the order the
+        // Library is showing. A 0-based `{seq}` would put `000` on the first photo of every run.
+        let d = TempDir::new("template_seq");
+        let (report, _) = run_export(
+            jobs(&d, &["z.RAF", "a.RAF", "m.RAF"]),
+            templated(&d, "{seq:2}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 3);
+        for n in ["01.jpg", "02.jpg", "03.jpg"] {
+            assert!(d.0.join(n).exists(), "{n} missing");
+        }
+        assert!(!d.0.join("00.jpg").exists(), "the run starts at 1");
+    }
+
+    #[test]
+    fn a_photo_with_no_camera_leaves_no_dangling_separator() {
+        // ⚠⚠ Ordinary rather than exotic: two of the author's own exported JPEGs carry no EXIF at
+        // all, so a mixed selection hits both branches of the collapsing rule in one run.
+        let d = TempDir::new("template_absent");
+        let (report, _) = run_export(
+            jobs_with(
+                &d,
+                &[("a.RAF", shot()), ("b.jpg", core_image::Capture::default())],
+            ),
+            templated(&d, "{name}-{camera}-{seq:2}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("a-FUJIFILM X-T4-01.jpg").exists());
+        assert!(
+            d.0.join("b-02.jpg").exists(),
+            "the file with no camera keeps one separator, not two"
+        );
+        assert!(!d.0.join("b--02.jpg").exists());
+    }
+
+    #[test]
+    fn a_template_that_will_not_parse_falls_back_to_the_old_naming() {
+        // ⚠ The dialog refuses to start an export with an invalid template, so the only way here
+        // is a hand-edited preset file. A folder named the old way beats no folder at all — and
+        // beats a folder of files called `{camrea}`.
+        let d = TempDir::new("template_bad");
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF"]),
+            templated(&d, "{camrea}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 1);
+        assert!(d.0.join("a.jpg").exists());
+    }
+
+    #[test]
+    fn keep_both_appends_its_suffix_to_the_templated_name() {
+        // ⚠⚠ The template is a **third** number and must not merge with `-N` (de-duplication) or
+        // `_N` (copy identity). A template that drops `{name}` makes two photos want one name,
+        // which is exactly when `-N` has to still work.
+        let d = TempDir::new("template_dedup");
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            templated(&d, "shoot"),
+            vec![Decision::Resolve {
+                collision: Collision::KeepBoth,
+                apply_to_all: true,
+            }],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("shoot.jpg").exists() && d.0.join("shoot-1.jpg").exists());
     }
 
     #[test]

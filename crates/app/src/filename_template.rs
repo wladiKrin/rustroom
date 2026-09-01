@@ -313,7 +313,9 @@ fn resolve(token: Token, facts: &NameFacts) -> Option<String> {
                 // ⚠ The extension is dropped, exactly as `export_stem` drops it: the field shows
                 // a whole filename, so a name usually carries one, and the export format is what
                 // decides the real extension.
-                Some(name) => name.rsplit_once('.').map_or(name.clone(), |(b, _)| b.into()),
+                Some(name) => name
+                    .rsplit_once('.')
+                    .map_or(name.clone(), |(b, _)| b.into()),
                 None => n.to_string(),
             }),
         },
@@ -386,7 +388,11 @@ mod tests {
     fn seq_is_zero_padded_to_the_width_asked_for() {
         let f = facts();
         assert_eq!(render("{seq:3}", &f), "007");
-        assert_eq!(render("{seq:1}", &f), "7", "a width below the number is a no-op");
+        assert_eq!(
+            render("{seq:1}", &f),
+            "7",
+            "a width below the number is a no-op"
+        );
         assert_eq!(render("{seq:0}", &f), "7");
         let big = NameFacts { seq: 1234, ..f };
         assert_eq!(
@@ -498,7 +504,11 @@ mod tests {
         // falls back and a literal `---` does not. That asymmetry is `sanitize`'s, not this
         // module's, and the first version of this test asserted the opposite about correct code.
         assert_eq!(render("   ", &f), "DSCF1234");
-        assert_eq!(render("---", &f), "---", "a typed literal is a legitimate name");
+        assert_eq!(
+            render("---", &f),
+            "---",
+            "a typed literal is a legitimate name"
+        );
     }
 
     #[test]
@@ -525,7 +535,10 @@ mod tests {
 
     #[test]
     fn an_unclosed_brace_is_reported() {
-        assert_eq!(Template::parse("{name").unwrap_err(), TemplateError::Unclosed);
+        assert_eq!(
+            Template::parse("{name").unwrap_err(),
+            TemplateError::Unclosed
+        );
         assert_eq!(
             Template::parse("a-{seq:3").unwrap_err(),
             TemplateError::Unclosed
@@ -573,7 +586,10 @@ mod tests {
         // makes the list a promise rather than a string.
         let list = token_list();
         for n in Token::NAMES {
-            assert!(list.contains(&format!("{{{n}}}")), "{n} missing from {list}");
+            assert!(
+                list.contains(&format!("{{{n}}}")),
+                "{n} missing from {list}"
+            );
             assert!(
                 Template::parse(&format!("{{{n}}}")).is_ok(),
                 "{n} is listed but does not parse"
