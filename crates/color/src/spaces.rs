@@ -82,6 +82,24 @@ pub const SRGB_TO_XYZ: [[f32; 3]; 3] = [
     [0.0193308, 0.1191948, 0.9505322],
 ];
 
+/// Linear ProPhoto (the working space) → XYZ, **D65-referred**.
+///
+/// ⚠⚠ **D65, not ProPhoto's native D50, and that is the whole point of having it.** Composed as
+/// `SRGB_TO_XYZ · PROPHOTO_TO_SRGB`, so it lands in the same XYZ frame as [`SRGB_TO_XYZ`] — which
+/// is what makes "equal RGB in the working buffer" mean D65, the white a viewer actually sees
+/// after the output transform's Bradford step. Verified: `[1, 1, 1]` maps to `(0.9505, 1.0,
+/// 1.0891)`, i.e. xy `(0.31270, 0.32900)` against published D65 `(0.31272, 0.32903)`.
+///
+/// ⚠ Do **not** substitute the inverse of [`XYZ_D50_TO_PROPHOTO`]: that is the same space in a D50
+/// frame, where the buffer's neutral reads as 5003 K instead of 6504 K. Both are correct
+/// statements about ProPhoto; only this one answers "what illuminant does a neutral pixel show as
+/// on screen", which is what a Kelvin slider is about.
+pub const PROPHOTO_TO_XYZ: [[f32; 3]; 3] = [
+    [0.7555608, 0.1127667, 0.0821283],
+    [0.2683191, 0.7151304, 0.0165505],
+    [0.0039137, -0.0129316, 1.0980757],
+];
+
 /// XYZ (D50) → linear ProPhoto (ROMM).
 ///
 /// ⚠ **No chromatic adaptation, and that is not an omission.** ProPhoto *is* a D50 space, so a
@@ -118,6 +136,40 @@ pub fn srgb_to_prophoto(c: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ The one property [`PROPHOTO_TO_XYZ`] exists for: a neutral pixel in the working buffer
+    /// is **D65**, because the output transform's Bradford step is what a viewer's white actually
+    /// is. Everything the Kelvin slider means rests on this — get the frame wrong and the
+    /// slider's no-op point moves to 5003 K without anything else failing.
+    #[test]
+    fn the_working_space_neutral_is_d65() {
+        let w = apply(&PROPHOTO_TO_XYZ, [1.0, 1.0, 1.0]);
+        let s: f32 = w.iter().sum();
+        let (x, y) = (w[0] / s, w[1] / s);
+        assert!((x - 0.31272).abs() < 0.001, "D65 x was {x}");
+        assert!((y - 0.32903).abs() < 0.001, "D65 y was {y}");
+    }
+
+    /// It is the composition, not a fresh derivation — so if either half is ever re-derived this
+    /// fails rather than drifting silently.
+    #[test]
+    fn prophoto_to_xyz_is_the_composition_of_its_halves() {
+        for c in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.3, 0.6, 0.2],
+        ] {
+            let direct = apply(&PROPHOTO_TO_XYZ, c);
+            let via = apply(&SRGB_TO_XYZ, apply(&PROPHOTO_TO_SRGB, c));
+            for i in 0..3 {
+                assert!(
+                    (direct[i] - via[i]).abs() < 1e-6,
+                    "{c:?}: {direct:?} vs {via:?}"
+                );
+            }
+        }
+    }
 
     fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < tol)
