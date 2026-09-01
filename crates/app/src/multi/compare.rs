@@ -38,6 +38,17 @@ struct Outcome {
     to_grid: bool,
 }
 
+/// The line under the two photos.
+///
+/// ⚠⚠ Named rather than inline **so the glyph probe can reach it**. Its arrows shipped as tofu
+/// boxes because they were chosen without checking — the fifth time this project has done that,
+/// after the rail's four glyphs, the mark badges, the keyword checkmarks and the perspective
+/// arrows. A literal inside a `RichText::new(..)` call cannot be probed by a test.
+///
+/// ⚠ `<-` and `->` as ASCII, not `←`/`→`: neither arrow is in any bundled font.
+const INSTRUCTION: &str =
+    "<- -> change the candidate · Enter promotes it · digits, P, X and U rate it";
+
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Hoisted before any `&mut app.*`: `live_edits` takes `&self`, so it borrows the whole of
     // `app` and cannot follow a mutable borrow of one field. The grid records the same rule.
@@ -115,14 +126,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         // ── Draw ─────────────────────────────────────────────────────────────────────────
-        ui.label(
-            egui::RichText::new(
-                "← → change the candidate · Enter promotes it · digits, P, X and U rate it \
-                 · double-click to open",
-            )
-            .small()
-            .weak(),
-        );
+        ui.label(egui::RichText::new(INSTRUCTION).small().weak());
 
         let stage = multi::stage(ui);
         // ⚠ `pair`, never `survey(2, ..)`: Compare is side by side at every window shape,
@@ -476,6 +480,27 @@ mod tests {
             assert!(
                 lib.visible.contains(&row),
                 "row {row} is hidden by the filter and Compare showed it anyway"
+            );
+        }
+    }
+
+    /// ⚠⚠ **Probe before choosing, never after.** This project has shipped tofu boxes four times
+    /// — the rail's four glyphs, the mark badges, the keyword checkmarks and the perspective
+    /// arrows — and this instruction line made it five: `←` and `→` were chosen without checking
+    /// and rendered as empty squares. Reported in use.
+    #[test]
+    fn every_compare_glyph_is_renderable() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        // ⚠ A frame must run first: a fresh `Context` has not built its atlas, so it answers
+        // about egui's defaults rather than the stack production actually uses.
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        let id = egui::FontId::proportional(14.0);
+        for c in INSTRUCTION.chars().filter(|c| !c.is_ascii()) {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyph(&id, c)),
+                "{c:?} (U+{:04X}) is in no bundled font and will draw as a tofu box",
+                c as u32
             );
         }
     }
