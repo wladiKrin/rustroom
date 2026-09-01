@@ -13,6 +13,7 @@ pub mod edit_history;
 pub mod entries;
 pub mod export_presets;
 pub mod file_rename;
+pub mod filename_template;
 pub mod format_filter;
 pub mod full_res;
 pub mod histogram;

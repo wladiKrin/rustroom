@@ -21,13 +21,15 @@ impl RustroomApp {
             .map(|s| (PhotoId::new(s.path.clone(), s.copy), s.edits.clone()));
         let Some(lib) = &self.library else {
             // ⚠ Single-file mode has no Library, hence no entry to read a name from — and no way
-            // to make a copy either, so the open photo is always the original.
+            // to make a copy either, so the open photo is always the original. ⚠ It has no
+            // catalog either, so `{date}` and `{camera}` are absent and collapse away.
             return open
                 .into_iter()
                 .map(|(id, edits)| ExportJob {
                     id,
                     name: None,
                     edits,
+                    capture: core_image::Capture::default(),
                 })
                 .collect();
         };
@@ -45,7 +47,16 @@ impl RustroomApp {
                     // loading the file would export both of them identically.
                     _ => sidecar::load_copy(&id.path, id.copy).unwrap_or_default(),
                 };
-                ExportJob { id, name, edits }
+                // ⚠ Keyed by **path**, because capture metadata describes the exposure and every
+                // copy of a file shares it — the split `Library.captures` already documents. An
+                // uncatalogued or EXIF-less file gets the default, which the template collapses.
+                let capture = lib.captures.get(&id.path).cloned().unwrap_or_default();
+                ExportJob {
+                    id,
+                    name,
+                    edits,
+                    capture,
+                }
             })
             .collect()
     }
@@ -145,5 +156,42 @@ impl RustroomApp {
         if self.exporter.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// ⚠⚠ The half of the filename template no unit test in `batch_export` can see: the tokens
+    /// being right says nothing about anything **reaching** for the catalog's answer. Stubbing
+    /// this to `Capture::default()` leaves every `filename_template` test green while `{date}`
+    /// and `{camera}` silently collapse away on every photo — the feature absent, not wrong.
+    #[test]
+    fn a_jobs_capture_comes_from_the_library() {
+        let mut app = crate::test_app::for_test();
+        let mut lib = crate::test_app::library_of(2);
+        let path = lib.entries[1].id.path.clone();
+        lib.captures.insert(
+            path.clone(),
+            core_image::Capture {
+                taken: Some(1_787_824_800),
+                camera: Some("FUJIFILM X-T4".to_string()),
+                ..Default::default()
+            },
+        );
+        lib.selection.select_indices(&[0, 1]);
+        app.library = Some(lib);
+
+        let jobs = app.export_jobs();
+
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(
+            jobs[1].capture.camera.as_deref(),
+            Some("FUJIFILM X-T4"),
+            "the catalog's camera must reach the worker"
+        );
+        assert_eq!(jobs[1].capture.taken, Some(1_787_824_800));
+        // ⚠ The other half: a photo the catalog knows nothing about is the *ordinary* case, and
+        // must be an empty capture rather than the previous photo's.
+        assert_eq!(jobs[0].capture, core_image::Capture::default());
     }
 }

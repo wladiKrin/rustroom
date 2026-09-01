@@ -7,16 +7,59 @@
 use super::dialog;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::batch_export::{
-    banding_warning, destination_ready, Collision, Decision, ExportOptions,
-};
+use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
 use rustroom_app::export_presets::ExportPreset;
+use rustroom_app::filename_template::{token_list, NameFacts, Template};
 use rustroom_app::settings::ConfirmOutcome;
+
+/// The first photo of the run, as the filename preview needs it.
+///
+/// ⚠ Owned strings rather than borrows: it is read *inside* the dialog closure, which cannot
+/// hold a borrow of `app` — see the note where it is built.
+struct SampleName {
+    file_stem: String,
+    copy: u32,
+    copy_name: Option<String>,
+    taken: Option<i64>,
+    camera: Option<String>,
+}
+
+impl SampleName {
+    /// ⚠ `seq: 1` because this *is* the first photo, so the preview is the real answer rather
+    /// than an illustration.
+    fn facts(&self) -> NameFacts<'_> {
+        NameFacts {
+            file_stem: &self.file_stem,
+            copy: self.copy,
+            copy_name: self.copy_name.as_deref(),
+            seq: 1,
+            taken: self.taken,
+            camera: self.camera.as_deref(),
+        }
+    }
+}
 
 /// Where and how to export the selection.
 pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut opts = app.export_draft.clone();
-    let count = app.export_jobs().len();
+    let jobs = app.export_jobs();
+    let count = jobs.len();
+    // ⚠ Taken **before** the closure, which already borrows `app` through `dialog` — the borrow
+    // shape this file's own comment says has cost a compile error here twice. It is the first
+    // photo of the run, so its `{seq}` is 1 and the preview says what will actually be written.
+    let sample = jobs.first().map(|j| SampleName {
+        file_stem: j
+            .id
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("export")
+            .to_string(),
+        copy: j.id.copy,
+        copy_name: j.name.clone(),
+        taken: j.capture.taken,
+        camera: j.capture.camera.clone(),
+    });
     let mut close = false;
     let mut start = false;
     // egui has no folder field, so the picker writes into a local and the label shows it.
@@ -78,6 +121,55 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                 };
                 ui.label(shown);
             });
+
+            // ─── M6.1 sections ───────────────────────────────────────────────────────────
+            //
+            // ⚠⚠ Naming is here, between the destination and the output format, because *where
+            // the file goes* and *what it is called* are one question. The four sections below
+            // it are the seam M6.1b–e drop into; their `ExportOptions` fields already exist,
+            // defaulted and inert, so each can be built without touching this file's neighbours
+            // or the struct every one of them would otherwise contend for.
+            //
+            // ⚠ Deliberately **no inert widgets** for the four not yet built: a copyright field
+            // that silently writes nothing is worse than an absent one, because it looks like a
+            // feature. A section appears when it works.
+            //
+            //   M6.1b — Metadata:  opts.metadata.{copyright, creator, caption}
+            //   M6.1c — Watermark: opts.watermark.text
+            //   M6.1d — Output sharpening: opts.output_sharpening.amount
+            //   M6.1e — Delivery:  opts.delivery.{subfolder, then}
+            ui.horizontal(|ui| {
+                ui.label("Filename");
+                ui.text_edit_singleline(&mut opts.filename_template);
+            });
+            // ⚠ Always shown, and built from `Token::NAMES` rather than written out here: a
+            // reference listing a token the parser does not have is worse than none, the rule
+            // the Keyboard-shortcuts dialog already follows.
+            theme::hint(
+                ui,
+                &format!("{} — {{seq:3}} pads to three digits", token_list()),
+            );
+            match Template::parse(&opts.filename_template) {
+                // ⚠ The preview is what makes the absent-value rule visible: a template naming a
+                // token this photo has nothing for otherwise reads as "why did my dash vanish".
+                // It is also where `-N` and `_N` are visibly *not* part of the template.
+                Ok(t) => {
+                    if let Some(s) = &sample {
+                        theme::hint(
+                            ui,
+                            &format!(
+                                "First file: {}.{}",
+                                t.render(&s.facts()),
+                                opts.format.extension()
+                            ),
+                        );
+                    }
+                }
+                // ⚠⚠ Reported, and Export goes dark while it stands. A typo must not export a
+                // folder of files all called the same thing — which is what dropping an unknown
+                // token silently would produce, collided into one by `-N`.
+                Err(e) => theme::error_hint(ui, &e.to_string()),
+            }
             // ⚠⚠ **Only these two.** `Demosaic` further down is also a labelled control, but it
             // is separated from these by the banding hint, the quality slider, the long-edge
             // checkbox and its slider — folding it in here would **reorder the dialog** and
@@ -155,8 +247,10 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
             );
 
             ui.separator();
-            let ready = destination_ready(&opts.dest_dir);
-            let (confirmed, dismissed) = theme::button_row(ui, "Export", ready, "Cancel");
+            // ⚠ Both halves, checked before the run rather than per photo — the reason
+            // `destination_ready` exists, applied to the other thing knowable up front.
+            let (confirmed, dismissed) =
+                theme::button_row(ui, "Export", can_export(&opts), "Cancel");
             start |= confirmed;
             close |= dismissed;
         },
@@ -366,6 +460,46 @@ pub fn collision(app: &mut RustroomApp, ctx: &egui::Context) {
         // rather than leaving a progress line up until the worker's Finished arrives.
         if d == Decision::Cancel {
             app.cancel_export();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{test_app, test_ui};
+
+    /// Draw the export dialog once with `template` set, and report every widget label it drew.
+    fn labels(template: &str) -> Vec<String> {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.export_draft.filename_template = template.to_string();
+        // Selecting a photo gives the preview a sample to render, which is the line that would
+        // panic if `NameFacts` were built from a borrow the closure cannot hold.
+        app.library = Some(test_app::library_of(2));
+        app.library.as_mut().unwrap().selection.select_indices(&[0]);
+        test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect()
+    }
+
+    #[test]
+    fn an_invalid_template_leaves_export_on_screen_rather_than_hiding_it() {
+        // ⚠ This project's convention: a control that cannot be used goes **dark, not away** — a
+        // menu or a dialog that changes shape is harder to learn than one that greys out. So the
+        // guard against a typo must not be "the button vanished", which reads as a crash.
+        //
+        // ⚠ It also exercises the whole dialog body under both branches, which is the only
+        // headless coverage available here: `theme::hint` is a plain `ui.label`, and a plain
+        // label produces **no AccessKit node**, so neither the preview nor the error message can
+        // be read back. Stated rather than papered over with a test that appears to check them.
+        for t in ["{name}", "{camrea}", "{seq", "{name:2}"] {
+            let drawn = labels(t);
+            assert!(
+                drawn.iter().any(|l| l == "Export"),
+                "Export missing for template {t:?}: {drawn:?}"
+            );
+            assert!(drawn.iter().any(|l| l == "Cancel"), "{t:?}");
         }
     }
 }

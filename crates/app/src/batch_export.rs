@@ -9,6 +9,7 @@
 //! naming, collisions, cancellation, progress, the failure path — is testable with no image
 //! fixtures at all.
 
+use crate::filename_template::{NameFacts, Template};
 use crate::photo_id::PhotoId;
 use core_image::ImageBuf;
 use edit_model::Edits;
@@ -31,6 +32,12 @@ pub struct ExportJob {
     /// This copy's name, when it has one. `None` on an original, which has no such name.
     pub name: Option<String>,
     pub edits: Edits,
+    /// What the catalog knows about how the shot was taken, for `{date}` and `{camera}`.
+    ///
+    /// ⚠ Carried like the name and the edits, and for the same reason: the worker runs on its
+    /// own thread and has no catalog connection. ⚠ An all-`None` `Capture` is the ordinary answer
+    /// for a file with no EXIF and for single-file mode, where there is no Library to ask.
+    pub capture: core_image::Capture,
 }
 
 /// What to export, and how.
@@ -59,7 +66,92 @@ pub struct ExportOptions {
     /// carries a *container-level* one, so a missing field already falls back to this struct's
     /// `Default` — adding it per field implies a guarantee it is not the source of.
     pub space: color::OutputSpace,
+
+    // ─── M6.1: what turns an export into a deliverable ────────────────────────────────────
+    //
+    // ⚠⚠ The five fields below are **one seam, landed together and deliberately**, so that the
+    // sub-features can be built independently without each having to edit this struct — which
+    // is the shared surface every one of them would otherwise contend for. Four of them are
+    // *inert* today: they are stored, defaulted, round-tripped and read by nothing.
+    //
+    // ⚠ Every one defaults to "do nothing", so an existing user's next export is unchanged.
+    // The container-level `#[serde(default)]` means an `ExportOptions` written before any of
+    // them still loads — `an_options_file_from_before_the_delivery_fields_still_loads`.
+    /// The base filename, as a template — see [`crate::filename_template`]. **M6.1a, live.**
+    ///
+    /// ⚠ The default renders to exactly what `dest_for` produced before templating existed, so
+    /// nothing about an existing export changes until someone edits this.
+    pub filename_template: String,
+    /// IPTC/XMP fields to write into the exported file. **M6.1b — stored, not yet written.**
+    pub metadata: ExportMetadata,
+    /// A visible watermark laid over the exported image. **M6.1c — stored, not yet drawn.**
+    pub watermark: Watermark,
+    /// Sharpening applied for the output medium, after any resize. **M6.1d — stored, inert.**
+    pub output_sharpening: OutputSharpening,
+    /// Where the files land and what happens afterwards. **M6.1e — stored, inert.**
+    pub delivery: Delivery,
 }
+
+/// Rights and description to write into every exported file.
+///
+/// ⚠ Empty means "write nothing", not "write an empty string" — a blank copyright tag is worse
+/// than an absent one. **M6.1b owns this type**; add fields here rather than to `ExportOptions`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportMetadata {
+    pub copyright: String,
+    pub creator: String,
+    pub caption: String,
+}
+
+/// A visible mark laid over the exported image.
+///
+/// ⚠ Empty text means no watermark, which is what makes the default inert. **M6.1c owns this
+/// type** — position, opacity, size and an image watermark all belong here, not on
+/// `ExportOptions`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Watermark {
+    pub text: String,
+}
+
+/// Sharpening for the output medium, applied after the resize rather than in the pipeline.
+///
+/// ⚠ `0` is off, which is what makes the default inert. **M6.1d owns this type** — the medium
+/// (screen / matte / glossy) and the radius model belong here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputSharpening {
+    /// 0..=100. `0` means the stage is not inserted at all.
+    pub amount: u8,
+}
+
+/// Where the files land inside the destination, and what happens once the run finishes.
+///
+/// ⚠ An empty `subfolder` means "straight into the destination". **M6.1e owns this type.**
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Delivery {
+    /// Created under `dest_dir` if non-empty. ⚠ Must go through `safe_name`, like every other
+    /// typed string that reaches the filesystem.
+    pub subfolder: String,
+    pub then: PostExportAction,
+}
+
+/// What to do when a run finishes. ⚠ **M6.1e owns this** — append variants, never insert.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PostExportAction {
+    /// The behaviour every export has had until now.
+    #[default]
+    Nothing,
+    RevealInFileManager,
+}
+
+/// The template every export used before templating existed, and the default.
+///
+/// ⚠ It must render to exactly what `dest_for` produces, so an existing user's next export is
+/// byte-identical — see `the_default_template_reproduces_the_old_naming`.
+pub const DEFAULT_FILENAME_TEMPLATE: &str = "{name}";
 
 /// The banding warning for a space/format pair, or `None` when there is nothing to say.
 ///
@@ -91,6 +183,14 @@ impl Default for ExportOptions {
             demosaic: raw_decode::Demosaic::default(),
             format: ExportFormat::default(),
             space: color::OutputSpace::default(),
+            // ⚠ Not `String::default()`. The neutral filename template is `{name}`, which is
+            // what reproduces the naming every export had before templating; an empty template
+            // would fall back to the stem too, but only by accident rather than by rule.
+            filename_template: DEFAULT_FILENAME_TEMPLATE.to_string(),
+            metadata: ExportMetadata::default(),
+            watermark: Watermark::default(),
+            output_sharpening: OutputSharpening::default(),
+            delivery: Delivery::default(),
         }
     }
 }
@@ -171,14 +271,28 @@ pub fn dest_for(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("export");
-    let ext = format.extension();
     // ⚠ A named copy exports under its **own** name, which replaces the file's stem rather than
     // extending it. The copy number stays the identity; the name is an explicit override.
-    let stem = PhotoId::export_stem(stem, copy, copy_name);
+    dest_named(
+        dir,
+        &PhotoId::export_stem(stem, copy, copy_name),
+        dedup,
+        format,
+    )
+}
+
+/// Where an export lands, given the base name already chosen for it.
+///
+/// ⚠ This is the half that owns the **de-duplication** suffix and the extension, and nothing
+/// else. Splitting it out is what lets a filename template decide the base without learning
+/// about `-N` — which must stay separate from both `_N` (copy identity) and the template, for
+/// the reasons [`dest_for`] gives.
+pub fn dest_named(dir: &Path, base: &str, dedup: usize, format: ExportFormat) -> PathBuf {
+    let ext = format.extension();
     let name = if dedup == 0 {
-        format!("{stem}.{ext}")
+        format!("{base}.{ext}")
     } else {
-        format!("{stem}-{dedup}.{ext}")
+        format!("{base}-{dedup}.{ext}")
     };
     dir.join(name)
 }
@@ -193,6 +307,17 @@ pub fn dest_for(
 /// afterwards is a poor trade when the answer is knowable up front.
 pub fn destination_ready(dir: &Path) -> bool {
     !dir.as_os_str().is_empty() && dir.is_dir()
+}
+
+/// Whether a run can start at all: a usable destination, and a template that parses.
+///
+/// ⚠ A pure function rather than a condition inside the egui closure, for `destination_ready`'s
+/// own reason — that is what makes "Export goes dark when the template is wrong" something a test
+/// can see rather than something to verify by clicking. ⚠ And it is the place any *later*
+/// pre-flight check belongs (a subfolder that will not sanitize, say), so the dialog keeps asking
+/// one question.
+pub fn can_export(opts: &ExportOptions) -> bool {
+    destination_ready(&opts.dest_dir) && Template::parse(&opts.filename_template).is_ok()
 }
 
 /// The render scale a `max_edge` cap implies for a source whose long edge is `source_long`.
@@ -304,26 +429,48 @@ fn run(
     // (`a.RAF`, `a.jpg`) would silently overwrite each other in an empty folder.
     let mut claimed: HashSet<PathBuf> = HashSet::new();
     let mut remembered: Option<Collision> = None;
+    // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
+    // the default rather than failing the run: the dialog refuses to start an export with an
+    // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
+    // the old way beats no folder at all.
+    let template = Template::parse(&opts.filename_template).unwrap_or_default();
 
     if events.send(ExportEvent::Started { total }).is_err() {
         return;
     }
 
-    for (done, ExportJob { id, name, edits }) in jobs.into_iter().enumerate() {
+    for (
+        done,
+        ExportJob {
+            id,
+            name,
+            edits,
+            capture,
+        },
+    ) in jobs.into_iter().enumerate()
+    {
         let source = id.path.clone();
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             break;
         }
 
-        let mut dest = dest_for(
-            &opts.dest_dir,
-            &source,
-            id.copy,
-            name.as_deref(),
-            0,
-            opts.format,
-        );
+        // ⚠ `{seq}` is 1-based and positional in the job list, which is the order the Library is
+        // showing. It is assigned here, *before* the collision check, so a skipped photo does not
+        // renumber the ones after it — a name is a property of the photo, not of what happened to
+        // its neighbours.
+        let base = template.render(&NameFacts {
+            file_stem: source
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("export"),
+            copy: id.copy,
+            copy_name: name.as_deref(),
+            seq: done + 1,
+            taken: capture.taken,
+            camera: capture.camera.as_deref(),
+        });
+        let mut dest = dest_named(&opts.dest_dir, &base, 0, opts.format);
         if claimed.contains(&dest) || dest.exists() {
             let collision = match remembered {
                 Some(c) => c,
@@ -367,14 +514,9 @@ fn run(
                 Collision::KeepBoth => {
                     let mut i = 1;
                     loop {
-                        let candidate = dest_for(
-                            &opts.dest_dir,
-                            &source,
-                            id.copy,
-                            name.as_deref(),
-                            i,
-                            opts.format,
-                        );
+                        // ⚠ The *same* base, so "Keep both" appends `-N` to whatever the
+                        // template produced rather than quietly falling back to the old naming.
+                        let candidate = dest_named(&opts.dest_dir, &base, i, opts.format);
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -595,12 +737,195 @@ mod tests {
                 id: PhotoId::original(dir.0.join(n)),
                 name: None,
                 edits: Edits::default(),
+                capture: core_image::Capture::default(),
             })
             .collect()
     }
 
     fn ok_decode() -> impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static {
         |_: &Path| Ok(flat(8, 4))
+    }
+
+    /// Jobs carrying capture metadata, for the tokens that come from the catalog.
+    fn jobs_with(dir: &TempDir, files: &[(&str, core_image::Capture)]) -> Vec<ExportJob> {
+        files
+            .iter()
+            .map(|(n, c)| ExportJob {
+                id: PhotoId::original(dir.0.join(n)),
+                name: None,
+                edits: Edits::default(),
+                capture: c.clone(),
+            })
+            .collect()
+    }
+
+    /// 2026-08-27 10:00:00 as naive wall-clock seconds, on an X-T4.
+    fn shot() -> core_image::Capture {
+        core_image::Capture {
+            taken: Some(1_787_824_800),
+            camera: Some("FUJIFILM X-T4".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn templated(dir: &TempDir, template: &str) -> ExportOptions {
+        ExportOptions {
+            filename_template: template.to_string(),
+            ..opts(dir, None)
+        }
+    }
+
+    #[test]
+    fn the_default_base_is_what_dest_for_has_always_produced() {
+        // ⚠⚠ The regression guard for the whole feature: `dest_for` is now defined *through*
+        // `dest_named`, so the two cannot drift — and the default template renders to the same
+        // base, which is what makes an existing user's next export byte-identical.
+        let dir = PathBuf::from("/out");
+        for (copy, name) in [(0u32, None), (2, None), (3, Some("Warm"))] {
+            let base = crate::filename_template::Template::default().render(&NameFacts {
+                file_stem: "a",
+                copy,
+                copy_name: name,
+                seq: 1,
+                taken: None,
+                camera: None,
+            });
+            assert_eq!(
+                dest_named(&dir, &base, 0, ExportFormat::Jpeg),
+                dest_for(
+                    &dir,
+                    Path::new("/in/a.RAF"),
+                    copy,
+                    name,
+                    0,
+                    ExportFormat::Jpeg
+                ),
+                "copy {copy}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_needs_both_a_destination_and_a_template_that_parses() {
+        // ⚠⚠ Each half asserted with the *other* half valid, which is what makes this two
+        // properties rather than one. A version that only looked at the destination would pass
+        // any test that varied the destination alone — and would ship a dialog whose Export
+        // button stays lit over a typo.
+        let d = TempDir::new("can_export");
+        let good = templated(&d, "{name}-{seq:3}");
+        assert!(can_export(&good));
+        assert!(
+            !can_export(&ExportOptions {
+                filename_template: "{camrea}".into(),
+                ..good.clone()
+            }),
+            "an unknown token must stop the run"
+        );
+        assert!(
+            !can_export(&ExportOptions {
+                dest_dir: PathBuf::new(),
+                ..good.clone()
+            }),
+            "an unset destination must stop the run"
+        );
+        assert!(!can_export(&ExportOptions {
+            dest_dir: d.0.join("gone"),
+            ..good
+        }));
+    }
+
+    #[test]
+    fn a_template_names_the_files_it_writes() {
+        // End to end through the worker, because the tokens being right says nothing about the
+        // worker reaching for them — the sabotage that skipped rendering entirely left every
+        // `filename_template` unit test green.
+        let d = TempDir::new("template_names");
+        let (report, _) = run_export(
+            jobs_with(&d, &[("a.RAF", shot()), ("b.RAF", shot())]),
+            templated(&d, "{date}_{seq:3}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("2026-08-27_001.jpg").exists());
+        assert!(d.0.join("2026-08-27_002.jpg").exists());
+        assert!(!d.0.join("a.jpg").exists(), "the old naming must be gone");
+    }
+
+    #[test]
+    fn seq_starts_at_one_and_follows_the_job_order() {
+        // ⚠ 1-based and positional in the list the caller handed over, which is the order the
+        // Library is showing. A 0-based `{seq}` would put `000` on the first photo of every run.
+        let d = TempDir::new("template_seq");
+        let (report, _) = run_export(
+            jobs(&d, &["z.RAF", "a.RAF", "m.RAF"]),
+            templated(&d, "{seq:2}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 3);
+        for n in ["01.jpg", "02.jpg", "03.jpg"] {
+            assert!(d.0.join(n).exists(), "{n} missing");
+        }
+        assert!(!d.0.join("00.jpg").exists(), "the run starts at 1");
+    }
+
+    #[test]
+    fn a_photo_with_no_camera_leaves_no_dangling_separator() {
+        // ⚠⚠ Ordinary rather than exotic: two of the author's own exported JPEGs carry no EXIF at
+        // all, so a mixed selection hits both branches of the collapsing rule in one run.
+        let d = TempDir::new("template_absent");
+        let (report, _) = run_export(
+            jobs_with(
+                &d,
+                &[("a.RAF", shot()), ("b.jpg", core_image::Capture::default())],
+            ),
+            templated(&d, "{name}-{camera}-{seq:2}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("a-FUJIFILM X-T4-01.jpg").exists());
+        assert!(
+            d.0.join("b-02.jpg").exists(),
+            "the file with no camera keeps one separator, not two"
+        );
+        assert!(!d.0.join("b--02.jpg").exists());
+    }
+
+    #[test]
+    fn a_template_that_will_not_parse_falls_back_to_the_old_naming() {
+        // ⚠ The dialog refuses to start an export with an invalid template, so the only way here
+        // is a hand-edited preset file. A folder named the old way beats no folder at all — and
+        // beats a folder of files called `{camrea}`.
+        let d = TempDir::new("template_bad");
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF"]),
+            templated(&d, "{camrea}"),
+            vec![],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 1);
+        assert!(d.0.join("a.jpg").exists());
+    }
+
+    #[test]
+    fn keep_both_appends_its_suffix_to_the_templated_name() {
+        // ⚠⚠ The template is a **third** number and must not merge with `-N` (de-duplication) or
+        // `_N` (copy identity). A template that drops `{name}` makes two photos want one name,
+        // which is exactly when `-N` has to still work.
+        let d = TempDir::new("template_dedup");
+        let (report, _) = run_export(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            templated(&d, "shoot"),
+            vec![Decision::Resolve {
+                collision: Collision::KeepBoth,
+                apply_to_all: true,
+            }],
+            ok_decode(),
+        );
+        assert_eq!(report.exported, 2);
+        assert!(d.0.join("shoot.jpg").exists() && d.0.join("shoot-1.jpg").exists());
     }
 
     #[test]
@@ -947,6 +1272,63 @@ mod tests {
         let opts: ExportOptions = serde_json::from_str(json).expect("older options should load");
         assert_eq!(opts.space, color::OutputSpace::Srgb);
         assert_eq!(opts.quality, 90);
+    }
+
+    #[test]
+    fn an_options_file_from_before_the_delivery_fields_still_loads() {
+        // ⚠⚠ `SettingsStore::load()` is infallible, so one field that fails to parse silently
+        // reverts *every* setting. The container-level `#[serde(default)]` is what prevents
+        // that — this is the exact JSON an export written before M6.1 produced.
+        //
+        // ⚠ And what this really discriminates is the **values**: each of the five must default
+        // to "do nothing", or an existing user's next export would silently gain a watermark, a
+        // subfolder, or a different filename. Sabotaging `Default` on any one of them fails here.
+        let json = r#"{"dest_dir":"/tmp","quality":90,"max_edge":null,
+                       "demosaic":"Fast","format":"Jpeg","space":"Srgb"}"#;
+        let opts: ExportOptions = serde_json::from_str(json).expect("older options should load");
+        assert_eq!(opts.quality, 90, "the fields that were there still load");
+        assert_eq!(
+            opts.filename_template, DEFAULT_FILENAME_TEMPLATE,
+            "an absent template means the naming every export already had"
+        );
+        assert_eq!(opts.metadata, ExportMetadata::default());
+        assert_eq!(opts.watermark, Watermark::default());
+        assert_eq!(opts.output_sharpening, OutputSharpening::default());
+        assert_eq!(opts.delivery, Delivery::default());
+        // Spelled out rather than left to `Default`, because "the default is inert" is the
+        // property, and a `Default` that stopped being inert would still satisfy the four
+        // comparisons above.
+        assert!(opts.metadata.copyright.is_empty() && opts.metadata.creator.is_empty());
+        assert!(opts.watermark.text.is_empty(), "no watermark by default");
+        assert_eq!(opts.output_sharpening.amount, 0, "no output sharpening");
+        assert!(opts.delivery.subfolder.is_empty(), "straight into dest_dir");
+        assert_eq!(opts.delivery.then, PostExportAction::Nothing);
+    }
+
+    #[test]
+    fn the_delivery_fields_round_trip() {
+        // A preset carries `ExportOptions` whole, so anything that does not survive serde is a
+        // setting the user appears to have made and did not.
+        let opts = ExportOptions {
+            filename_template: "{date}-{seq:3}".to_string(),
+            metadata: ExportMetadata {
+                copyright: "© 2026".into(),
+                creator: "W".into(),
+                caption: "c".into(),
+            },
+            watermark: Watermark {
+                text: "rustroom".into(),
+            },
+            output_sharpening: OutputSharpening { amount: 40 },
+            delivery: Delivery {
+                subfolder: "web".into(),
+                then: PostExportAction::RevealInFileManager,
+            },
+            ..ExportOptions::default()
+        };
+        let round: ExportOptions =
+            serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        assert_eq!(round, opts);
     }
 
     #[test]
