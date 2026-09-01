@@ -3,7 +3,13 @@
 //!
 //! Split out of `main.rs` unchanged.
 
-use crate::*;
+use crate::decode::decode_for_export;
+use crate::RustroomApp;
+use eframe::egui;
+use rustroom_app::batch_export::{ExportEvent, ExportJob, ExportReport, ExportWorker};
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
+use std::time::Duration;
 
 impl RustroomApp {
     /// Sources and edits for a batch export: every selected photo, using the open photo's
