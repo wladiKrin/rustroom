@@ -37,18 +37,26 @@ pub(crate) fn before_edits(edits: &Edits) -> Edits {
 impl Session {
     /// The working resolution for a re-render driven from a panel rather than the canvas.
     ///
-    /// ⚠ **Derived from `requested_region`, not stored beside it.** A stored rung and a stored
-    /// region are two facts that can disagree, and when they did — `pump_full_res` clears the
-    /// region but the canvas had left a native rung — a panel edit issued a *whole-image
-    /// render at a native rung*. That poisoned the cached fit size and made the photo open
-    /// zoomed absurdly far out, unrecoverably. Deriving one from the other makes the
-    /// disagreement unrepresentable.
+    /// **The rung the canvas last chose**, whatever it was.
+    ///
+    /// ⚠⚠ This used to fall back to `fit_cap()` whenever `requested_region` was `None`, on the
+    /// reasoning that a stored rung and a stored region are two facts that can disagree. The
+    /// reasoning was right about the hazard and wrong about the remedy, because **"no region"
+    /// stopped implying "the fit rung"** the moment the fit clamp was removed: once `fit` may
+    /// exceed 1.0 the *whole image* can be visible at a native rung, and the canvas then stores
+    /// `render_rung = 3200` with `requested_region = None`.
+    ///
+    /// ⚠ Reported in use: crop a photo, move any slider, and the image goes soft. A crop makes
+    /// the image smaller, so `fit` is larger and the ladder climbs — while the whole cropped
+    /// frame still fits on screen, so there is no region. The slider then re-rendered at half the
+    /// resolution the canvas was displaying, and the canvas would not correct it, because from
+    /// its side neither the rung nor the region had changed. Nudging the zoom crossed a rung
+    /// boundary and put it right until the next slider move.
+    ///
+    /// ⚠ The original hazard is still handled, at its source: `pump_full_res` clears the region
+    /// **and** resets this rung, so the two cannot drift apart there either.
     pub(crate) fn render_max_dim(&self) -> usize {
-        if self.requested_region.is_some() {
-            self.render_rung
-        } else {
-            self.fit_cap()
-        }
+        self.render_rung
     }
 
     /// The ladder's base rung for this session's buffer.
@@ -332,7 +340,9 @@ impl RustroomApp {
             buffer_long,
             buffer_is_full_res,
             opened_at: Instant::now(),
-            render_rung: PREVIEW_MAX_DIM,
+            // ⚠ `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the
+            // cap, and this value is now what every panel-driven render asks for.
+            render_rung: view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM),
         });
         self.status.clear();
     }
@@ -404,7 +414,7 @@ impl RustroomApp {
                     // re-request against the new resolution.
                     s.rendered_region = None;
                     s.requested_region = None;
-                    s.render_rung = PREVIEW_MAX_DIM;
+                    s.render_rung = s.fit_cap();
                     // ⚠ Ask for a frame explicitly. At the fit rung the canvas would otherwise
                     // see an unchanged rung and a covered region and request nothing at all —
                     // leaving the old buffer's texture on screen, so the upgrade would be
@@ -639,5 +649,42 @@ mod tests {
             (edit_model::Perspective::default(), 0.0),
             "but what is on screen has not changed yet"
         );
+    }
+
+    /// ⚠⚠ **The regression this shipped, reported in use 2026-09-01: crop a photo, move a slider,
+    /// and the image goes soft until you nudge the zoom.**
+    ///
+    /// `render_max_dim` used to return `fit_cap()` whenever `requested_region` was `None`, on the
+    /// reasoning that "no region" meant "the fit rung". That stopped being true when the fit
+    /// clamp was removed: once `fit` may exceed 1.0 the **whole image** can be visible at a
+    /// native rung. A crop makes the image smaller, so `fit` is larger and the ladder climbs,
+    /// while the whole cropped frame still fits on screen — so the canvas stores a native rung
+    /// with no region, and every panel-driven render then asked for half the resolution being
+    /// displayed.
+    ///
+    /// ⚠ The canvas could not correct it: from its side neither the rung nor the region had
+    /// changed, so it re-requested nothing. That is why it persisted until a zoom crossed a rung
+    /// boundary.
+    #[test]
+    fn a_panel_render_uses_the_rung_the_canvas_chose_even_with_no_region() {
+        let ctx = egui::Context::default();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 1200, 900);
+        let s = app.session.as_mut().expect("a session");
+        let fit = s.fit_cap();
+
+        // What the canvas stores for a cropped photo whose whole frame is still on screen.
+        s.requested_region = None;
+        s.render_rung = fit * 2;
+
+        assert_eq!(
+            s.render_max_dim(),
+            fit * 2,
+            "a panel edit must re-render at the rung on screen, not fall back to the fit cap"
+        );
+
+        // And the ordinary fit case is unchanged.
+        s.render_rung = fit;
+        assert_eq!(s.render_max_dim(), fit);
     }
 }

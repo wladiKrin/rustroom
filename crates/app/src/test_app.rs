@@ -193,7 +193,9 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         buffer_long: w.max(h),
         buffer_is_full_res: true,
         opened_at: std::time::Instant::now(),
-        render_rung: 0,
+        // ⚠ The fit cap, as a real session starts. `render_max_dim` returns this now, so a
+        // zero here would make every panel-driven render ask for nothing.
+        render_rung: w.max(h).min(crate::PREVIEW_MAX_DIM),
         display_space: color::OutputSpace::Srgb,
         resampler: pipeline::Resampler::default(),
     });
