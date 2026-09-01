@@ -145,7 +145,12 @@ impl ToneCurveStage {
         Self { lut }
     }
 
-    fn sample(&self, v: f32) -> f32 {
+    /// The curve's output for one input sample, straight out of the LUT.
+    ///
+    /// ⚠ Public so the panel's curve widget can *plot the function this stage applies* rather
+    /// than re-deriving it — two implementations of one curve is how a preview stops being
+    /// evidence about the render.
+    pub fn sample(&self, v: f32) -> f32 {
         let v = v.clamp(0.0, 1.0);
         let pos = v * (LUT_SIZE - 1) as f32;
         let i = pos.floor() as usize;
