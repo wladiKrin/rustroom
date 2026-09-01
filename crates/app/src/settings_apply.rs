@@ -56,9 +56,7 @@ impl RustroomApp {
             .effective_display_space(self.os_manages_colour);
         if let Some(lib) = self.library.as_mut() {
             let ctx2 = ctx.clone();
-            lib.loader = ThumbLoader::new(space, self.settings.resampler, move || {
-                ctx2.request_repaint()
-            });
+            lib.loader = ThumbLoader::new(space, move || ctx2.request_repaint());
             // ⚠ Every cached thumbnail was converted at load, so they all describe the old space.
             lib.cache.clear();
             // ⚠ And the want-list, or `sync_thumb_window` compares against a list that is now
@@ -87,23 +85,13 @@ impl RustroomApp {
     /// ⚠ Thumbnails are a different matter: they are rendered **at load** and cached by
     /// `(PhotoId, edits)`, which cannot see this change — so the loader is rebuilt and the cache
     /// dropped, exactly as `apply_display_space` does and for the same reason.
-    pub(crate) fn apply_resampler(&mut self, resampler: pipeline::Resampler, ctx: &egui::Context) {
+    pub(crate) fn apply_resampler(&mut self, resampler: pipeline::Resampler) {
         self.settings.resampler = resampler;
         self.save_settings();
-        if let Some(lib) = self.library.as_mut() {
-            let ctx2 = ctx.clone();
-            // ⚠ The *effective* space, not `settings.display_space`: if the OS is managing
-            // colour this is `Srgb` whatever the dropdown says, and rebuilding the loader with
-            // the raw setting would start double-converting every thumbnail.
-            let space = self
-                .settings
-                .effective_display_space(self.os_manages_colour);
-            lib.loader = ThumbLoader::new(space, resampler, move || ctx2.request_repaint());
-            lib.cache.clear();
-            // ⚠ And the want-list, or `sync_thumb_window` compares against a list that is now
-            // satisfied by nothing and never re-asks.
-            lib.last_want.clear();
-        }
+        // ⚠⚠ The thumbnail loader is deliberately **not** rebuilt. Thumbnails always render
+        // with the default resampler (see `ThumbLoader::new`), so a kernel change costs nothing
+        // here — where rebuilding would drop the whole folder's cache for a difference invisible
+        // at 512 px.
         // ⚠ Written on the session first: `Session::request` reads it on the way through.
         let tool = self.tool;
         if let Some(s) = self.session.as_mut() {
@@ -210,7 +198,7 @@ mod tests {
         open_test_photo(&mut app, &ctx, 8, 4);
 
         let before = app.session.as_ref().unwrap().engine.requests_issued();
-        app.apply_resampler(pipeline::Resampler::Lanczos3, &ctx);
+        app.apply_resampler(pipeline::Resampler::Lanczos3);
 
         assert_eq!(app.settings.resampler, pipeline::Resampler::Lanczos3);
         assert_eq!(

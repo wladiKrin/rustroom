@@ -239,6 +239,15 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 - **Demosaic is ~93% of a full-resolution decode**, and the Phase 5 `wgpu` port would **not** fix it
   — that time is inside libraw's `dcraw_process`, entirely upstream of the stages wgpu would touch.
 
+- **⚠ Exports are not bit-reproducible across runs** (found 2026-09-01 while validating M7.3).
+  lcms2 stamps a **creation date** into every ICC profile it builds, so two renders of the same
+  photo with the same settings differ by **one byte** in the profile header — offset 74 in a JPEG.
+  Harmless in itself, and worth recording because of what it costs: **"did this change move any
+  pixel?" cannot be answered with `cmp` on exported files.** Only the goldens can answer it, and
+  only because they store no profile. ⚠ Fixing it means zeroing or pinning that field when the
+  profile is built in `export::srgb_icc` and its siblings; check first whether a zeroed date makes
+  any consumer unhappy.
+
 ---
 
 ## App and UI

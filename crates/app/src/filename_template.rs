@@ -108,6 +108,31 @@ pub fn token_list() -> String {
         .join(" ")
 }
 
+/// Each token paired with what it puts in the filename, for the export dialog.
+///
+/// ⚠⚠ The descriptions live **beside the tokens**, not in the dialog, for the reason
+/// `Token::NAMES` already does: a sixth token cannot then ship with no explanation, and the
+/// wording cannot drift from what `resolve` actually does.
+///
+/// ⚠ `{copy}` gets the longest line on purpose — it was the one reported as unclear, and it is
+/// the only token whose *absence* changes the text around it.
+pub fn token_help() -> [(&'static str, &'static str); 5] {
+    [
+        ("{name}", "the file's own name, without its extension"),
+        (
+            "{seq}",
+            "position in this export, from 1 — {seq:3} pads it to 001",
+        ),
+        ("{date}", "when the photo was taken, as YYYY-MM-DD"),
+        ("{camera}", "the camera that took it"),
+        (
+            "{copy}",
+            "a virtual copy's label, or its number when unlabelled. Empty on the original — and \
+             the separator next to it disappears with it, so {name}_{copy} is just the filename",
+        ),
+    ]
+}
+
 /// A parsed filename template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
@@ -658,6 +683,20 @@ mod tests {
             let out = render("{name}_{copy}", &f);
             assert!(!out.contains('/'), "a label reached the path: {out}");
             assert!(!out.contains(".."), "a label reached the path: {out}");
+        }
+    }
+
+    /// ⚠ Every token must have an explanation, or a sixth one ships with no description and the
+    /// dialog silently stops being a reference. The pairing is what `Token::NAMES` exists for.
+    #[test]
+    fn every_token_is_explained() {
+        let help = token_help();
+        assert_eq!(help.len(), Token::NAMES.len());
+        for name in Token::NAMES {
+            let want = format!("{{{name}}}");
+            let row = help.iter().find(|(t, _)| *t == want);
+            let (_, what) = row.unwrap_or_else(|| panic!("no explanation for {want}"));
+            assert!(!what.is_empty(), "{want} has an empty explanation");
         }
     }
 }

@@ -162,15 +162,16 @@ impl ThumbLoader {
     /// `on_progress` is called after each thumbnail (e.g. `ctx.request_repaint`).
     pub fn new(
         display_space: color::OutputSpace,
-        resampler: pipeline::Resampler,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         Self::with_loader(
-            // ⚠ Captured rather than read per request: `ThumbRequest` is what the UI asks for
-            // and has no business carrying a rendering preference. Changing the setting
-            // rebuilds the loader, which is also what drops the thumbnails rendered with the
-            // old kernel — `apply_display_space`'s shape, for its reason.
-            Arc::new(move |r: &ThumbRequest| load_thumbnail(r, resampler)),
+            // ⚠⚠ Thumbnails always use the **default** resampler, deliberately, and do not follow
+            // `Settings.resampler` (user's call, 2026-09-01). Honouring it was tried first and is
+            // pure cost: the difference between kernels is **invisible at 512 px**, while changing
+            // the setting would rebuild the loader and drop the whole folder's thumbnail cache —
+            // ~41 ms × N, about 34 s on an 830-photo folder. The setting is about what you judge
+            // at 1:1, which is where it can be seen.
+            Arc::new(move |r: &ThumbRequest| load_thumbnail(r, pipeline::Resampler::default())),
             worker_count(),
             display_space,
             on_progress,
@@ -338,11 +339,7 @@ mod tests {
     #[test]
     fn streams_results_keyed_by_path_even_on_failure() {
         // Non-existent files fail extraction -> thumb is None, but a result still streams.
-        let loader = ThumbLoader::new(
-            color::OutputSpace::Srgb,
-            pipeline::Resampler::default(),
-            || {},
-        );
+        let loader = ThumbLoader::new(color::OutputSpace::Srgb, || {});
         loader.want(&paths(2));
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);

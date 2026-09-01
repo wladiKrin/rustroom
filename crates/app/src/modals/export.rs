@@ -9,7 +9,7 @@ use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
 use rustroom_app::export_presets::ExportPreset;
-use rustroom_app::filename_template::{token_list, NameFacts, Template};
+use rustroom_app::filename_template::{NameFacts, Template};
 use rustroom_app::settings::ConfirmOutcome;
 
 /// The first photo of the run, as the filename preview needs it.
@@ -145,10 +145,19 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
             // ⚠ Always shown, and built from `Token::NAMES` rather than written out here: a
             // reference listing a token the parser does not have is worse than none, the rule
             // the Keyboard-shortcuts dialog already follows.
-            theme::hint(
-                ui,
-                &format!("{} — {{seq:3}} pads to three digits", token_list()),
-            );
+            egui::Grid::new("export_token_help")
+                .num_columns(2)
+                .spacing([10.0, 2.0])
+                .show(ui, |ui| {
+                    // ⚠ A grid rather than one comma-separated line: the tokens are not
+                    // self-explanatory — `{copy}` in particular was reported as unclear — and a
+                    // list of names without meanings is a reference only for whoever wrote it.
+                    for (tok, what) in rustroom_app::filename_template::token_help() {
+                        theme::hint(ui, tok);
+                        theme::hint(ui, what);
+                        ui.end_row();
+                    }
+                });
             match Template::parse(&opts.filename_template) {
                 // ⚠ The preview is what makes the absent-value rule visible: a template naming a
                 // token this photo has nothing for otherwise reads as "why did my dash vanish".

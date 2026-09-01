@@ -18,8 +18,11 @@ const CROP_BRACKET_ARM: f32 = 22.0;
 /// ⚠ Thinner than the crop border's 1.5 over 4.0. A guide is a reference you look *through*,
 /// and four lines the weight of the control would compete with the photograph rather than help
 /// you read it.
-const GUIDE_WIDTH: f32 = 1.0;
-const GUIDE_HALO_WIDTH: f32 = 2.5;
+///
+/// ⚠ Thinned from 1.0/2.5 and greyed from white on 2026-09-01, reported in use as "slightly too
+/// thick/white". A guide only has to be *followable*; at white it read as part of the image.
+const GUIDE_WIDTH: f32 = 0.8;
+const GUIDE_HALO_WIDTH: f32 = 2.0;
 
 /// Draw the compositional guides inside `rect`.
 ///
@@ -44,7 +47,12 @@ fn draw_guides(painter: &egui::Painter, rect: egui::Rect, guide: CompositionGuid
         return;
     }
     let halo = egui::Stroke::new(GUIDE_HALO_WIDTH, egui::Color32::from_black_alpha(110));
-    let line = egui::Stroke::new(GUIDE_WIDTH, egui::Color32::from_white_alpha(190));
+    // ⚠ Grey rather than white, and the halo stays: the pair is what makes a guide legible on
+    // snow *and* in shadow, which neither alone manages.
+    let line = egui::Stroke::new(
+        GUIDE_WIDTH,
+        egui::Color32::from_rgba_unmultiplied(190, 190, 190, 150),
+    );
     // ⚠ The crop's **screen** aspect, which is its pixel aspect: `img_rect` carries the image's
     // own shape, so a fraction of it is a fraction of the real photograph. Taking the aspect
     // from the normalised crop rect instead would call every 3:2 crop square.

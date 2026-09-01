@@ -192,7 +192,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     // rebuilds the thumbnail loader and re-renders. Unguarded it would reload the whole folder's
     // thumbnails sixty times a second — the `apply_view_demosaic` rule.
     if resampler != app.settings.resampler {
-        app.apply_resampler(resampler, ctx);
+        app.apply_resampler(resampler);
     }
     // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
     // rebuilds the thumbnail loader and re-renders, so an unguarded call would reload the whole
