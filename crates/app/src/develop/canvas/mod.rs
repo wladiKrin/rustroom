@@ -42,6 +42,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     let app_pan_drag = app.settings.pan_drag;
     // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
     // mutable borrow.
+    // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
+    // mutable borrow. `CompositionGuide` is `Copy`, so this is a copy rather than a borrow.
+    let app_guide = app.settings.composition_guide;
     let app_brush_size = app.brush_size;
     let app_brush_hardness = app.brush_hardness;
     let app_brush_erase = app.brush_erase;
@@ -200,8 +203,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     guide_drag = d;
                                 }
                             } else {
-                                photo_edited |=
-                                    draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
+                                photo_edited |= draw_crop_overlay(
+                                    ui,
+                                    s,
+                                    &resp,
+                                    img_rect,
+                                    app.crop_aspect,
+                                    app_guide,
+                                );
                             }
                         }
                         Tool::Masks => {
