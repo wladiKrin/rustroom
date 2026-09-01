@@ -98,7 +98,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     lib.cache
                                         .get(&lib.thumb_request(i, live.as_ref()).key())
                                         .or_else(|| lib.cache.get_stale(&lib.entries[i].id)),
-                                    lib.entries[i].id.copy,
+                                    lib.entries[i].badge().as_deref(),
                                     lib.marks
                                         .get(&lib.entries[i].id)
                                         .copied()

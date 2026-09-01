@@ -49,7 +49,7 @@ pub fn selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected:
 /// would swallow the click: both rects are distance 0 from the pointer and egui breaks that
 /// tie by registration order. The grid then responded only on the grey margin around the
 /// image. `clicking_a_library_grid_thumbnail_opens_it` pins it.
-/// `copy` badges the cell when non-zero.
+/// `badge` labels the cell when present — the copy's label, else its number.
 ///
 /// ⚠ Copies of one file show a **pixel-identical** thumbnail — Library thumbnails are the
 /// camera's embedded JPEG, not a render of the edits. The badge and the label are therefore the
@@ -59,7 +59,7 @@ pub fn cell(
     ui: &mut egui::Ui,
     box_size: egui::Vec2,
     thumb: Option<&egui::TextureHandle>,
-    copy: u32,
+    badge: Option<&str>,
     marks: catalog::db::Marks,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
@@ -83,19 +83,29 @@ pub fn cell(
             );
         }
     }
-    if copy != 0 {
-        let badge =
-            egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), egui::vec2(17.0, 13.0));
+    if let Some(text) = badge {
+        // ⚠ Sized to its text, not fixed: a badge used to hold only a copy number, and a label
+        // like "Client crop" would have overflowed a 17 pt box. Capped at half the cell so a long
+        // label cannot cover the photograph, and elided rather than clipped so the truncation is
+        // visible as truncation.
+        let font = egui::FontId::proportional(9.0);
+        let max_w = (box_size.x * 0.5).max(17.0);
+        let galley = ui.painter().layout(
+            text.to_string(),
+            font.clone(),
+            ui.visuals().extreme_bg_color,
+            max_w - 6.0,
+        );
+        let size = egui::vec2((galley.size().x + 6.0).max(17.0), 13.0);
+        let badge_rect = egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), size);
         ui.painter().rect_filled(
-            badge,
+            badge_rect,
             egui::CornerRadius::same(2),
             ui.visuals().selection.bg_fill,
         );
-        ui.painter().text(
-            badge.center(),
-            egui::Align2::CENTER_CENTER,
-            copy.to_string(),
-            egui::FontId::proportional(9.0),
+        ui.painter().galley(
+            badge_rect.center() - galley.size() / 2.0,
+            galley,
             ui.visuals().extreme_bg_color,
         );
     }
@@ -214,9 +224,15 @@ mod tests {
                         .rect
                         .width()
                     } else {
-                        cell(ui, box_size, tex.as_ref(), 0, catalog::db::Marks::default())
-                            .rect
-                            .width()
+                        cell(
+                            ui,
+                            box_size,
+                            tex.as_ref(),
+                            None,
+                            catalog::db::Marks::default(),
+                        )
+                        .rect
+                        .width()
                     };
                     widths.push(w);
                 }
@@ -270,7 +286,13 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell(ui, box_size, tex.as_ref(), 0, catalog::db::Marks::default());
+                        cell(
+                            ui,
+                            box_size,
+                            tex.as_ref(),
+                            None,
+                            catalog::db::Marks::default(),
+                        );
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                     });
                 })
@@ -330,7 +352,13 @@ mod tests {
                     .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                         ui.set_min_size(egui::vec2(CELL, CELL));
                         ui.vertical_centered(|ui| {
-                            cell(ui, box_size, Some(&tex), 0, catalog::db::Marks::default());
+                            cell(
+                                ui,
+                                box_size,
+                                Some(&tex),
+                                None,
+                                catalog::db::Marks::default(),
+                            );
                             ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         });
                     })
@@ -394,8 +422,14 @@ mod tests {
             let _ = ctx.run_ui(input, |ui| {
                 ui.horizontal(|ui| {
                     for i in 0..3 {
-                        let resp = cell(ui, box_size, Some(&tex), 0, catalog::db::Marks::default())
-                            .interact(egui::Sense::click());
+                        let resp = cell(
+                            ui,
+                            box_size,
+                            Some(&tex),
+                            None,
+                            catalog::db::Marks::default(),
+                        )
+                        .interact(egui::Sense::click());
                         if i == 0 {
                             origin = resp.rect.min;
                             if pass == 2 && resp.clicked() {

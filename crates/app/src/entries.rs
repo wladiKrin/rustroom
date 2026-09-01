@@ -269,4 +269,16 @@ mod tests {
         assert_eq!(got[0].badge(), Some("Colour".into()));
         assert_eq!(got[1].badge(), Some("B&W".into()));
     }
+
+    #[test]
+    fn a_labelled_copy_captions_with_its_file_name_and_badges_its_label() {
+        // ⚠ The pair that matters: the caption says which photograph, the badge says which
+        // version. Before M6.0 one string tried to do both and the caption lost.
+        let got = build(&scan(&["DSCF1234.RAF"]), |_| Sidecar {
+            copies: vec![copy(0, None), copy(2, Some("B&W"))],
+            copy_hwm: 0,
+        });
+        assert_eq!(got[1].caption(), "DSCF1234.RAF");
+        assert_eq!(got[1].badge(), Some("B&W".into()));
+    }
 }
