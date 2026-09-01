@@ -110,7 +110,7 @@ project's recorded bugs were interactions between separately-correct changes.
 | | A | B | C | D |
 | --- | --- | --- | --- | --- |
 | **W0** ✅ | **Split `canvas.rs`** — done 2026-09-01 | **Split `main.rs`** — done 2026-09-01 | — | — |
-| **W1** | M5.1a tone curve widget + monotone spline *(**owns goldens** — moves `golden_scurve`)* | M6.1 seam + filename templating | M7.3a interpolator — **measure and report only**, moves no golden | M5.5a crop guides |
+| **W1** ✅ | M5.1a tone curve + monotone spline *(moved `golden_scurve`)* | M6.1 seam + filename templating | M7.3a — measured, **awaiting the kernel choice** | M5.5a crop guides |
 | **W2** | M5.2 WB Kelvin *(owns `edit-model`)* | M6.1b/c/d metadata, watermark, output sharpening | M7.1a luminance mask *(owns `Mask`)* | M6.5a/b compare + survey |
 | **W3** | M5.3a spot headless *(owns `Edits` + stage order)* | M6.3 XMP *(owns schema **v6**)* | M5.4 auto tone | M7.6 tool gaps |
 | **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
@@ -138,14 +138,21 @@ the **merged** result, not merely in each worktree.
 
 **Three findings worth carrying into the next wave:**
 
-1. **⚠⚠ `${PIPESTATUS[0]}` IS BASH; THIS SHELL IS ZSH, AND IT EXPANDS TO NOTHING — so a check that
+1. **⚠⚠ A SABOTAGE MUST BE CONFIRMED TO HAVE *RUN*, NOT MERELY COMPILED.** The old rule here was
+   "check that a `test result:` line appears, because a sabotage that fails to compile looks like
+   one that passes". **That is not enough** — a filter matching no test also prints that line, with
+   `0 passed; 0 failed; N filtered out`, and reads as success. Assert **`ran = passed + failed ≥ 1`**.
+   Bitten twice on 2026-09-01: once from a mistyped module path, once because `name_edit` is a
+   **bin** module and `--lib` cannot see it. ⚠ When in doubt, `cargo test --all -- --list | grep
+   <name>` tells you the real path and target.
+2. **⚠⚠ `${PIPESTATUS[0]}` IS BASH; THIS SHELL IS ZSH, AND IT EXPANDS TO NOTHING — so a check that
    prints `EXIT: ` reads as a pass.** This is a *third* variant of a trap already recorded twice in
    `CLAUDE.md` (a `clippy | grep` pipeline reporting grep's status; a sabotage harness grepping for
    the wrong line shape). **Redirect to a file and test `$?` directly**, never through a pipeline:
    `cargo clippy ... > /tmp/c.log 2>&1; echo "EXIT=$?"`. In zsh the array is `$pipestatus`.
-2. **A refactor that changes the test count moved behaviour.** "Unchanged at 1322" is the assertion,
+3. **A refactor that changes the test count moved behaviour.** "Unchanged at 1322" is the assertion,
    not "still green".
-3. **Diff the `⚠` comments, not just the code.** This project encodes its findings in them; a move
+4. **Diff the `⚠` comments, not just the code.** This project encodes its findings in them; a move
    can drop one silently and no test will notice. `grep "⚠" | sort` on both sides, then `comm`.
    The canvas split lost none of its 113.
 
