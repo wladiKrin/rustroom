@@ -234,11 +234,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             // ⚠ Registered *after* the canvas response, which is what makes it
                             // win the click: egui breaks a hit-test tie by registration order,
                             // taking the last one as the one on top.
-                            let pick = ui.interact(
-                                img_rect,
-                                ui.id().with("wb_eyedropper"),
-                                egui::Sense::click(),
-                            );
+                            //
+                            // ⚠ `Crosshair` because egui's `CursorIcon` has no pipette — the
+                            // set maps onto the OS cursors, and neither winit nor CSS defines
+                            // one. Crosshair is the conventional stand-in for a colour pick and
+                            // is what makes the armed state visible where the pointer actually
+                            // is, rather than only in the panel.
+                            let pick = ui
+                                .interact(
+                                    img_rect,
+                                    ui.id().with("wb_eyedropper"),
+                                    egui::Sense::click(),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::Crosshair);
                             photo_edited |= pick_white_balance(s, &pick, frame_rect, tool);
                         }
                         Tool::Edit | Tool::Presets => {}

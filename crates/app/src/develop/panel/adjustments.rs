@@ -144,11 +144,61 @@ pub(crate) fn white_balance(
     picking: Option<&mut bool>,
     ed: &mut Edited,
 ) {
-    ui.horizontal_wrapped(|ui| {
+    // ⚠⚠ **The sliders are ALWAYS drawn, and Temp shows the baseline while `kelvin` is `None`.**
+    // An earlier version hid the slider behind a "Set a temperature" button, on the reasoning that
+    // a photo following its file has no number to show. In use that reads as the control being
+    // absent rather than as a state. Showing the *effective* temperature is both honest — it is
+    // what the photo is balanced to — and self-explanatory: drag it and it becomes yours.
+    //
+    // ⚠ `None` survives until the slider is actually moved, which is what keeps the photo
+    // following its file. Merely *looking* at the panel must not freeze a number nobody chose.
+    //
+    // Mireds ascend as Kelvin descends, so the slider is drawn over the *reciprocal* and the range
+    // reads warm-on-the-left the way every other temperature control does.
+    let mut mired = 1.0e6 / wb_tool::effective_kelvin(wb, baseline);
+    let r = ui.add(
+        egui::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
+            .custom_formatter(|m, _| format!("{:.0} K", 1.0e6 / m))
+            .custom_parser(|s| {
+                s.trim()
+                    .trim_end_matches(['K', 'k', ' '])
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|k| *k > 0.0)
+                    .map(|k| 1.0e6 / k)
+            })
+            .text("Temp"),
+    );
+    if r.changed() {
+        wb.kelvin = Some(1.0e6 / mired);
+    }
+    ed.absorb(&r);
+    ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint");
+
+    if let Some(picking) = picking {
+        // ⚠ A toggle, not a button: an armed eyedropper changes what a click on the canvas does,
+        // and a mode you cannot see is the complaint the crop aspect lock was fixed for. The
+        // canvas puts a crosshair under the pointer while it is on, which is the other half of
+        // saying so.
+        if ui
+            .selectable_label(*picking, "Pick a neutral")
+            .on_hover_text("Click something in the photo that should be grey")
+            .clicked()
+        {
+            *picking = !*picking;
+        }
+    }
+
+    // ⚠⚠ **A menu, not a row of chips.** The presets used to sit above the sliders, which made
+    // the *named* illuminants look like the primary control and the temperature like a detail —
+    // backwards. They are shortcuts that move the slider, so they belong behind one word.
+    ui.menu_button("Presets", |ui| {
         for p in WbPreset::ALL {
-            // ⚠ `selectable_label`, not a button: a preset that has been applied and one that has
-            // not must look different, or the control is invisible state — the complaint the crop
-            // aspect lock was fixed for.
+            // ⚠ `selectable_label`, not a button: which preset a photo is sitting on is real
+            // state, and a menu that gives no sign of it makes you guess.
+            //
+            // ⚠ The match is on the **effective** temperature, so a slider dragged onto a
+            // preset's value lights that preset up. That is honest — the two are the same edit.
             let on = match p.kelvin() {
                 None => wb.kelvin.is_none(),
                 Some(k) => wb.kelvin.is_some_and(|v| (v - k).abs() < 0.5),
@@ -158,55 +208,9 @@ pub(crate) fn white_balance(
                 ed.mark_changed();
             }
         }
-    });
-
-    // Mireds ascend as Kelvin descends, so the slider is drawn over the *reciprocal* and the
-    // range reads warm-on-the-left the way every other temperature control does.
-    let mut mired = 1.0e6 / wb.kelvin.unwrap_or(baseline.kelvin);
-    if wb.kelvin.is_some() {
-        let r = ui.add(
-            egui::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
-                .custom_formatter(|m, _| format!("{:.0} K", 1.0e6 / m))
-                .custom_parser(|s| {
-                    s.trim()
-                        .trim_end_matches(['K', 'k', ' '])
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|k| *k > 0.0)
-                        .map(|k| 1.0e6 / k)
-                })
-                .text("Temp"),
-        );
-        if r.changed() {
-            wb.kelvin = Some(1.0e6 / mired);
-        }
-        ed.absorb(&r);
-    } else {
-        // ⚠ Shown rather than hidden, so the section is not empty on an untouched photo and the
-        // way in is obvious. Clicking it adopts the baseline, which is a no-op render and
-        // therefore an honest starting point.
-        if ui
-            .button("Set a temperature")
-            .on_hover_text("Start from what this photo is already balanced to")
-            .clicked()
-        {
-            wb.kelvin = Some(baseline.kelvin);
-            ed.mark_changed();
-        }
-    }
-    ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint");
-
-    if let Some(picking) = picking {
-        // ⚠ A toggle, not a button: an armed eyedropper changes what a click on the canvas
-        // does, and a mode you cannot see is the complaint the crop aspect lock was fixed for.
-        if ui
-            .selectable_label(*picking, "Pick a neutral")
-            .on_hover_text("Click something in the photo that should be grey")
-            .clicked()
-        {
-            *picking = !*picking;
-        }
-    }
+    })
+    .response
+    .on_hover_text("Named illuminants — each one just moves the Temp slider");
 }
 
 /// 2000 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
@@ -395,6 +399,32 @@ fn section(ui: &mut egui::Ui, s: Section, open_by_default: bool, body: impl FnOn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ **Drawing the panel must not freeze a temperature.** The slider is always visible and
+    /// shows the baseline while `kelvin` is `None`, so the obvious implementation — write the
+    /// slider's value back every frame — would turn "this photo follows its file" into a hard
+    /// number the moment anybody opened the panel, on every photo, with nothing to notice it.
+    /// Only `changed()` may commit.
+    #[test]
+    fn merely_drawing_the_panel_leaves_the_temperature_following_the_file() {
+        let ctx = crate::test_ui::ctx();
+        let mut wb = edit_model::WhiteBalance::default();
+        let base = color::wb::Illuminant::new(4200.0, 0.0);
+        for _ in 0..3 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::test_ui::screen()),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut ed = Edited::default();
+                    white_balance(ui, &mut wb, base, None, &mut ed);
+                    assert!(!ed.changed, "drawing the panel reported an edit");
+                },
+            );
+        }
+        assert_eq!(wb.kelvin, None, "the panel froze a temperature nobody set");
+    }
 
     #[test]
     fn each_channel_edits_its_own_field() {

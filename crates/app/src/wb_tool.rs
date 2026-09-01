@@ -51,16 +51,36 @@ impl WbPreset {
     /// The temperature this preset declares, or `None` for As Shot.
     ///
     /// Conventional values, the ones every raw converter uses.
+    ///
+    /// ⚠⚠ **Every preset must name a DISTINCT temperature, and Flash originally did not.** It
+    /// shared Daylight's 5500 K, so clicking either lit up both — reported as "I don't understand
+    /// what flash is doing, pressing it also always activates daylight". Two controls that cannot
+    /// be told apart are worse than one, because you assume you have misunderstood something.
+    /// 5600 K is the correct value anyway: it is the electronic-flash and daylight-film standard,
+    /// where 5500 K is Adobe's daylight figure. `every_preset_names_a_distinct_temperature` is
+    /// the standing guard.
     pub fn kelvin(self) -> Option<f32> {
         match self {
             WbPreset::AsShot => None,
-            WbPreset::Daylight | WbPreset::Flash => Some(5500.0),
+            WbPreset::Daylight => Some(5500.0),
+            WbPreset::Flash => Some(5600.0),
             WbPreset::Cloudy => Some(6500.0),
             WbPreset::Shade => Some(7500.0),
             WbPreset::Tungsten => Some(2850.0),
             WbPreset::Fluorescent => Some(3800.0),
         }
     }
+}
+
+/// The temperature the Temp slider shows: the declared one, or the file's own baseline.
+///
+/// ⚠⚠ **This is the whole reason the slider can be always visible.** It shows what the photo is
+/// *effectively* balanced to, so an untouched photo reads its own as-shot value rather than a
+/// constant — a tungsten frame opening at 6504 K would make the number meaningless. ⚠ Reading it
+/// must not *store* it: `None` survives until the slider is actually moved, or merely opening the
+/// panel would freeze a value nobody chose on every photo.
+pub fn effective_kelvin(wb: &WhiteBalance, baseline: Illuminant) -> f32 {
+    wb.kelvin.unwrap_or(baseline.kelvin)
 }
 
 /// Apply a preset to a white balance.
@@ -112,6 +132,25 @@ pub fn solve_pick(rgb: [f32; 3], baseline: Illuminant) -> WhiteBalance {
 mod tests {
     use super::*;
 
+    /// ⚠ An unset white balance reads its own file's temperature, not a constant — otherwise a
+    /// tungsten frame opens showing 6504 K and the number tells you nothing.
+    #[test]
+    fn an_unset_temperature_reads_the_files_own_baseline() {
+        let wb = WhiteBalance::default();
+        assert_eq!(effective_kelvin(&wb, Illuminant::new(3100.0, 0.0)), 3100.0);
+        assert_eq!(effective_kelvin(&wb, Illuminant::new(9000.0, 0.0)), 9000.0);
+    }
+
+    /// ⚠ And a declared one wins over the baseline, or the slider would ignore what you set.
+    #[test]
+    fn a_declared_temperature_wins_over_the_baseline() {
+        let wb = WhiteBalance {
+            kelvin: Some(4200.0),
+            tint: 0.0,
+        };
+        assert_eq!(effective_kelvin(&wb, Illuminant::new(3100.0, 0.0)), 4200.0);
+    }
+
     /// ⚠ As Shot must store `None`. Freezing the number is the failure this test exists for, and
     /// it would look completely correct until the photo was re-decoded.
     #[test]
@@ -137,6 +176,24 @@ mod tests {
                 _ => assert!(wb.kelvin.is_some(), "{p:?} set no temperature"),
             }
         }
+    }
+
+    /// ⚠⚠ **Two presets at the same temperature are indistinguishable in the panel**, because the
+    /// selection highlight can only compare the value they set. Flash and Daylight both sat at
+    /// 5500 K and both lit up together, which is how this was reported. A count of distinct
+    /// values is the only assertion that can see it — checking that each preset *has* a
+    /// temperature, which the test below does, cannot.
+    #[test]
+    fn every_preset_names_a_distinct_temperature() {
+        let mut seen: Vec<f32> = WbPreset::ALL.iter().filter_map(|p| p.kelvin()).collect();
+        let total = seen.len();
+        seen.sort_by(|a, b| a.partial_cmp(b).expect("no NaN in a preset table"));
+        seen.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+        assert_eq!(
+            seen.len(),
+            total,
+            "two presets share a temperature and would light up together"
+        );
     }
 
     /// ⚠ A preset leaves the tint alone — it declares a temperature, not a whole white balance.
