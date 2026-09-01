@@ -7,10 +7,28 @@ license.workspace = true
 [dependencies]
 color = { path = "../color" }
 core-image = { path = "../core-image" }
+# ⚠ For `spatial::gaussian_blur` alone, read-only — see `output_sharpen`. Reusing the renderer's
+# own separable blur beats a second one here: a second Gaussian in this repository is a second
+# set of border rules to keep in step. ⚠ It inverts the obvious layering (an encoder depending
+# on a renderer) and is acyclic — `pipeline` has never depended on `export`.
+pipeline = { path = "../pipeline" }
 image = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 lcms2 = { workspace = true }
+# ⚠ For the PNG `iTXt` chunk's checksum alone — see `metadata::png_with_xmp`. **Already in this
+# tree** via `png`/`flate2`, so it costs no new compile unit, no C library and no CI change; the
+# same property that made pure-Rust `lensfun` and `kamadak-exif` acceptable. Hand-rolling CRC-32
+# is a dozen lines, and a hand-rolled checksum is a thing to get silently wrong.
+crc32fast = "1"
+# ⚠ Rasterizing the watermark's glyphs. Pure Rust, Apache-2.0, already in the tree via `epaint`.
+ab_glyph = "0.2"
+# ⚠⚠ **A DATA-ONLY CRATE — font bytes and nothing else, with zero dependencies of its own.** It
+# lives in the egui repository, which is why it *looks* like a GUI dependency and is not: there
+# is no code in it to depend on, and this crate's "zero GUI dependency" rule is about egui, not
+# about who publishes a `static [u8]`. Chosen over vendoring a font because it is already in this
+# tree at exactly our version, so it adds nothing to the binary that was not already there.
+epaint_default_fonts = "0.35"
 
 [dev-dependencies]
 serde_json = { workspace = true }

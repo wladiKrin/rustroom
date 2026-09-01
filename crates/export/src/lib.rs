@@ -1,5 +1,13 @@
 //! Encode a display-referred (sRGB, 0..=1) `ImageBuf` to an image file.
 
+pub mod metadata;
+pub mod output_sharpen;
+pub mod watermark;
+
+pub use metadata::ExportMetadata;
+pub use output_sharpen::OutputSharpening;
+pub use watermark::{Watermark, WatermarkCorner};
+
 use core_image::ImageBuf;
 use image::{ExtendedColorType, ImageEncoder};
 use serde::{Deserialize, Serialize};
@@ -9,6 +17,11 @@ use std::path::Path;
 pub enum ExportError {
     #[error("image encoding failed: {0}")]
     Encode(#[from] image::ImageError),
+    /// A container this crate wrote turned out not to have the shape it must have, or the
+    /// metadata does not fit in it. ⚠ Its own variant rather than a stringly `Encode`, because
+    /// nothing here went through `image` — the file is edited byte by byte.
+    #[error("could not write metadata: {0}")]
+    Metadata(String),
 }
 
 /// Quantize a display-encoded image to interleaved 8-bit RGB, clamping to `[0, 1]`.

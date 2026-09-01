@@ -1383,10 +1383,14 @@ dependencies = [
 name = "export"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "color 0.1.0",
  "core-image",
+ "crc32fast",
+ "epaint_default_fonts",
  "image",
  "lcms2",
+ "pipeline",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

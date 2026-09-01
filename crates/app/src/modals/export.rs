@@ -8,6 +8,7 @@ use super::dialog;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
+use rustroom_app::batch_export::{Watermark, WatermarkCorner};
 use rustroom_app::export_presets::ExportPreset;
 use rustroom_app::filename_template::{NameFacts, Template};
 use rustroom_app::settings::ConfirmOutcome;
@@ -37,6 +38,107 @@ impl SampleName {
             camera: self.camera.as_deref(),
         }
     }
+}
+
+/// The three sections that turn an export into a deliverable.
+///
+/// ⚠ Extracted from [`settings`] rather than written inline: that function had reached ~360
+/// lines, and this repository's record is that every oversized file got there one
+/// reasonable-seeming addition at a time. ⚠ It takes `&mut ExportOptions` and no `app`, which
+/// is what lets it sit outside the dialog closure's borrow — the shape this file's own
+/// comments say has cost a compile error here twice.
+fn delivery_sections(ui: &mut egui::Ui, opts: &mut ExportOptions) {
+    ui.separator();
+    // ⚠⚠ **Collapsed by default, all three.** They are the sections most exports never
+    // touch, and the dialog was reported as cramped once already; five always-open
+    // sections is how it got that way the first time. ⚠ Each header says whether it is
+    // *doing* something, so a collapsed section can never be hidden state — the failure
+    // the crop aspect lock and the `Filter:` button were each fixed for.
+    let on = |b: bool| if b { " ·" } else { "" };
+
+    egui::CollapsingHeader::new(format!("Metadata{}", on(!opts.metadata.is_empty())))
+        .id_salt("export_metadata")
+        .show(ui, |ui| {
+            egui::Grid::new("export_metadata_grid")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Copyright");
+                    ui.text_edit_singleline(&mut opts.metadata.copyright);
+                    ui.end_row();
+                    ui.label("Creator");
+                    ui.text_edit_singleline(&mut opts.metadata.creator);
+                    ui.end_row();
+                    ui.label("Caption");
+                    ui.text_edit_singleline(&mut opts.metadata.caption);
+                    ui.end_row();
+                });
+            // ⚠ The load-bearing sentence in this whole dialog. Rustroom's promise is
+            // that it never writes to the negative, and a field marked "Copyright" is
+            // exactly where someone would expect it to break that promise.
+            theme::hint(
+                ui,
+                "Written into the exported file as XMP. The original is never modified. \
+                 Leave a field empty to write nothing for it.",
+            );
+        });
+
+    egui::CollapsingHeader::new(format!("Watermark{}", on(opts.watermark.is_active())))
+        .id_salt("export_watermark")
+        .show(ui, |ui| {
+            egui::Grid::new("export_watermark_grid")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("Text");
+                    ui.text_edit_singleline(&mut opts.watermark.text);
+                    ui.end_row();
+                    ui.label("Corner");
+                    egui::ComboBox::from_id_salt("watermark_corner")
+                        .selected_text(opts.watermark.corner.label())
+                        // ⚠ Built from `WatermarkCorner::ALL`, never written out here,
+                        // so a fifth corner cannot land in a list this dialog does not
+                        // show — the rule `Tool::ALL` and `FlagSet::ALL` already follow.
+                        .show_ui(ui, |ui| {
+                            for c in WatermarkCorner::ALL {
+                                ui.selectable_value(&mut opts.watermark.corner, c, c.label());
+                            }
+                        });
+                    ui.end_row();
+                });
+            let (lo, hi) = Watermark::SIZE_RANGE;
+            ui.add(
+                egui::Slider::new(&mut opts.watermark.size, lo..=hi).text("Size (% of long edge)"),
+            );
+            ui.add(egui::Slider::new(&mut opts.watermark.opacity, 0..=100).text("Opacity"));
+            // ⚠ Not decoration: the size is a *fraction*, which is the only thing that
+            // makes one preset usable at 800 px and at 6000 — and it is exactly the
+            // behaviour someone would otherwise report as the slider being ignored.
+            theme::hint(
+                ui,
+                "Scales with the exported image, so one setting suits every output size. \
+                 Skipped on a file too small to hold it.",
+            );
+        });
+
+    egui::CollapsingHeader::new(format!(
+        "Output sharpening{}",
+        on(opts.output_sharpening.is_active())
+    ))
+    .id_salt("export_sharpening")
+    .show(ui, |ui| {
+        ui.add(egui::Slider::new(&mut opts.output_sharpening.amount, 0..=100).text("Amount"));
+        // ⚠ The one thing a user cannot work out from the slider: this is *not* the
+        // Detail panel's Sharpening, it stacks on top of it, and it exists because the
+        // resize happens before the pipeline. Same reason the Demosaic hint above says
+        // what it says.
+        theme::hint(
+            ui,
+            "Applied to the finished file at a fixed radius, on top of the Detail \
+             panel's sharpening — it puts back the edge a resize takes. Not shown in \
+             the preview.",
+        );
+    });
 }
 
 /// Where and how to export the selection.
@@ -130,13 +232,10 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
             // defaulted and inert, so each can be built without touching this file's neighbours
             // or the struct every one of them would otherwise contend for.
             //
-            // ⚠ Deliberately **no inert widgets** for the four not yet built: a copyright field
+            // ⚠ Deliberately **no inert widgets** for the one not yet built: a copyright field
             // that silently writes nothing is worse than an absent one, because it looks like a
             // feature. A section appears when it works.
             //
-            //   M6.1b — Metadata:  opts.metadata.{copyright, creator, caption}
-            //   M6.1c — Watermark: opts.watermark.text
-            //   M6.1d — Output sharpening: opts.output_sharpening.amount
             //   M6.1e — Delivery:  opts.delivery.{subfolder, then}
             ui.horizontal(|ui| {
                 ui.label("Filename");
@@ -254,6 +353,9 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
              Independent of the 1:1 view's own quality setting, so judging this \
              means exporting a frame at two settings and comparing crops.",
             );
+
+            ui.separator();
+            delivery_sections(ui, &mut opts);
 
             ui.separator();
             // ⚠ Both halves, checked before the run rather than per photo — the reason
@@ -479,13 +581,18 @@ mod tests {
 
     /// Draw the export dialog once with `template` set, and report every widget label it drew.
     fn labels(template: &str) -> Vec<String> {
+        with_app(|app| app.export_draft.filename_template = template.to_string())
+    }
+
+    /// Draw the dialog once after `setup` has adjusted the app, and report every widget label.
+    fn with_app(setup: impl FnOnce(&mut crate::RustroomApp)) -> Vec<String> {
         let ctx = test_ui::ctx();
         let mut app = test_app::for_test();
-        app.export_draft.filename_template = template.to_string();
         // Selecting a photo gives the preview a sample to render, which is the line that would
         // panic if `NameFacts` were built from a borrow the closure cannot hold.
         app.library = Some(test_app::library_of(2));
         app.library.as_mut().unwrap().selection.select_indices(&[0]);
+        setup(&mut app);
         test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
             .into_iter()
             .map(|(l, _)| l)
@@ -509,6 +616,49 @@ mod tests {
                 "Export missing for template {t:?}: {drawn:?}"
             );
             assert!(drawn.iter().any(|l| l == "Cancel"), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn the_three_delivery_sections_are_offered() {
+        // ⚠ A `CollapsingHeader` *is* an interactive widget, so unlike `theme::hint` it does
+        // produce an AccessKit node and can be read back. That is the whole of what is testable
+        // here — the fields inside it are only drawn once it is opened.
+        let drawn = with_app(|_| {});
+        for want in ["Metadata", "Watermark", "Output sharpening"] {
+            assert!(
+                drawn.iter().any(|l| l.starts_with(want)),
+                "{want} section missing: {drawn:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_section_that_is_doing_something_says_so_in_its_header() {
+        // ⚠⚠ **The guard against invisible state**, and the reason the marker exists at all:
+        // these sections are collapsed by default, so a watermark set once and forgotten would
+        // otherwise appear on every export with nothing on screen to say so. Same failure the
+        // crop aspect lock and the `Filter:` button were each fixed for.
+        //
+        // ⚠ Both directions are asserted. A marker that is always on and one that is never on
+        // are equally useless, and only the pair distinguishes them.
+        let idle = with_app(|_| {});
+        assert!(
+            idle.iter().any(|l| l == "Metadata"),
+            "an untouched section must carry no marker: {idle:?}"
+        );
+
+        let busy = with_app(|app| {
+            app.export_draft.metadata.copyright = "(c) 2026".into();
+            app.export_draft.watermark.text = "rustroom".into();
+            app.export_draft.output_sharpening.amount = 40;
+        });
+        for want in ["Metadata", "Watermark", "Output sharpening"] {
+            assert!(
+                busy.iter()
+                    .any(|l| l.starts_with(want) && l.len() > want.len()),
+                "{want} is active and its header does not say so: {busy:?}"
+            );
         }
     }
 }
