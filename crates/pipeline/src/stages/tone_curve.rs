@@ -85,6 +85,31 @@ impl Spline {
     }
 }
 
+/// The Fritsch–Butland tangent at an end of the curve.
+///
+/// `h_near`/`d_near` describe the interval touching the endpoint, `h_far`/`d_far` the one beyond
+/// it. The unclamped value is the slope of the parabola through the three points; the two guards
+/// are what keep it inside the monotone region, and without them this formula can overshoot where
+/// the naive one-sided slope could not.
+fn end_tangent(h_near: f32, h_far: f32, d_near: f32, d_far: f32) -> f32 {
+    let denom = h_near + h_far;
+    if denom.abs() < X_EPS {
+        return d_near;
+    }
+    let m = ((2.0 * h_near + h_far) * d_near - h_near * d_far) / denom;
+    // ⚠ Pointing against its own secant would put an extremum in the first segment — the
+    // contrast reversal the whole interpolant exists to prevent.
+    if m * d_near <= 0.0 {
+        return 0.0;
+    }
+    // ⚠ At a turning point the parabola can be far steeper than the data supports; 3× is the
+    // standard bound, the same factor the interior clipping loop below enforces.
+    if d_near * d_far <= 0.0 && m.abs() > 3.0 * d_near.abs() {
+        return 3.0 * d_near;
+    }
+    m
+}
+
 /// Fritsch–Carlson tangents for `pts` (sorted, x-distinct).
 fn tangents(pts: &[[f32; 2]]) -> Vec<f32> {
     let n = pts.len();
@@ -95,13 +120,37 @@ fn tangents(pts: &[[f32; 2]]) -> Vec<f32> {
         .map(|i| (pts[i + 1][1] - pts[i][1]) / (pts[i + 1][0] - pts[i][0]))
         .collect();
 
-    // Start from the average of the two adjacent secants; each endpoint takes the one secant
-    // it has.
+    // Start from the average of the two adjacent secants.
     let mut m = vec![0.0f32; n];
-    m[0] = d[0];
-    m[n - 1] = d[n - 2];
     for i in 1..n - 1 {
         m[i] = 0.5 * (d[i - 1] + d[i]);
+    }
+
+    // ⚠⚠ **The endpoints use the three-point formula, not the one secant they have.** The naive
+    // `m[0] = d[0]` is what `pchip` calls the one-sided slope, and on a tone curve it feels
+    // wrong in a specific way, reported in use: with three points the curve then leaves (0,0)
+    // along the *straight chord* to the dragged point, so the whole first segment goes flat and
+    // every bit of curvature piles up at the point. Dragging one control moves the far end's
+    // shape as much as its own neighbourhood — "wonky" was the word.
+    //
+    // This is the Fritsch–Butland endpoint, the one SciPy's `pchip` and MATLAB use: quadratic
+    // through the first three points, so the slope accounts for the *second* interval and the
+    // curve enters and leaves with the shape the points actually imply.
+    //
+    // ⚠ It needs three points. With exactly two, both tangents stay the single secant — which is
+    // what keeps a two-point curve bit-for-bit the straight line the old piecewise-linear
+    // implementation drew, including the identity.
+    if n == 2 {
+        m[0] = d[0];
+        m[1] = d[0];
+    } else {
+        m[0] = end_tangent(pts[1][0] - pts[0][0], pts[2][0] - pts[1][0], d[0], d[1]);
+        m[n - 1] = end_tangent(
+            pts[n - 1][0] - pts[n - 2][0],
+            pts[n - 2][0] - pts[n - 3][0],
+            d[n - 2],
+            d[n - 3],
+        );
     }
 
     // ⚠ The clipping loop is the whole of the monotonicity guarantee — delete it and this is
@@ -309,6 +358,73 @@ mod tests {
         for i in 0..=20 {
             let x = 0.3 + (i as f32 / 20.0) * 0.4;
             assert!((s.sample(x) - 0.6).abs() < 2e-3, "x={x} -> {}", s.sample(x));
+        }
+    }
+
+    /// ⚠⚠ The fix for "the endpoints feel wonky", reported in use 2026-09-01.
+    ///
+    /// With the naive one-sided slope `m[0] = d[0]`, a three-point curve leaves (0,0) along the
+    /// **straight chord** to the dragged point — so the first segment is dead straight and all
+    /// the curvature piles up at the point. This asserts the endpoint tangent is *not* that
+    /// chord, and that the curve genuinely bends in the first segment.
+    #[test]
+    fn the_endpoints_do_not_leave_along_the_bare_chord() {
+        let pts = [[0.0, 0.0], [0.5, 0.75], [1.0, 1.0]];
+        let m = tangents(&pts);
+        let chord = 0.75 / 0.5;
+        assert!(
+            (m[0] - chord).abs() > 0.1,
+            "endpoint tangent {} is still the chord {chord}",
+            m[0]
+        );
+
+        // The visible consequence: the first segment must bow away from its chord.
+        let sp = Spline::new(&pts);
+        let x = 0.25;
+        let on_chord = chord * x;
+        assert!(
+            (sp.eval(x) - on_chord).abs() > 0.01,
+            "the first segment is still straight: {} vs chord {on_chord}",
+            sp.eval(x)
+        );
+    }
+
+    /// ⚠ The three-point endpoint can overshoot where the one-sided slope could not, so its two
+    /// guards are load-bearing. A curve that turns sharply at the end is where they bite.
+    #[test]
+    fn the_endpoint_formula_still_cannot_overshoot() {
+        for pts in [
+            vec![[0.0, 0.0], [0.1, 0.9], [1.0, 1.0]],
+            vec![[0.0, 0.0], [0.9, 0.1], [1.0, 1.0]],
+            vec![[0.0, 0.0], [0.05, 0.02], [0.95, 0.99], [1.0, 1.0]],
+        ] {
+            let sp = Spline::new(&pts);
+            for i in 0..=1000 {
+                let x = i as f32 / 1000.0;
+                let y = sp.eval(x);
+                assert!(
+                    (-1e-5..=1.0 + 1e-5).contains(&y),
+                    "overshoot at x={x}: y={y} for {pts:?}"
+                );
+            }
+            // And monotone: a tone curve that reverses is a contrast reversal.
+            let mut prev = sp.eval(0.0);
+            for i in 1..=1000 {
+                let y = sp.eval(i as f32 / 1000.0);
+                assert!(y >= prev - 1e-5, "reversal at {i} for {pts:?}");
+                prev = y;
+            }
+        }
+    }
+
+    /// ⚠ The property that keeps every existing two-point sidecar byte-identical: with two points
+    /// Hermite must reduce **exactly** to the straight line, so the endpoint formula is skipped.
+    #[test]
+    fn two_points_still_reduce_to_the_exact_straight_line() {
+        let sp = Spline::new(&[[0.0, 0.2], [1.0, 0.8]]);
+        for i in 0..=100 {
+            let x = i as f32 / 100.0;
+            assert!((sp.eval(x) - (0.2 + 0.6 * x)).abs() < 1e-6, "at x={x}");
         }
     }
 }
