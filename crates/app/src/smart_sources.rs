@@ -8,7 +8,12 @@
 //! own name from the sidecar.
 
 use crate::library_state::fs_modified;
-use crate::*;
+use crate::{LibrarySource, RustroomApp};
+use eframe::egui;
+use rustroom_app::entries;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
+use std::path::PathBuf;
 
 impl RustroomApp {
     pub(crate) fn open_periods(
