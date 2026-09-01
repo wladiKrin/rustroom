@@ -8,8 +8,23 @@
 //! ⚠ The render engine's worker thread really does spawn. Tests must never wait on it: assert on
 //! *requests and state*, never on rendered pixels.
 
-use crate::*;
+use crate::modals::Modal;
+use crate::{AppView, Library, LibrarySource, RustroomApp, Session, BUFFER_CACHE_CAP};
+use edit_model::EditGroups;
+use edit_model::Edits;
 use eframe::egui;
+use rustroom_app::action_log::ActionLog;
+use rustroom_app::batch_export::ExportOptions;
+use rustroom_app::buffer_cache::BufferCache;
+use rustroom_app::decode_worker::{DecodeWorker, Decoded, LensFacts};
+use rustroom_app::edit_history::HistoryStash;
+use rustroom_app::export_presets::ExportPresetStore;
+use rustroom_app::history::History;
+use rustroom_app::presets::PresetStore;
+use rustroom_app::render_engine::RenderEngine;
+use rustroom_app::selection::Selection;
+use rustroom_app::settings::{Settings, SettingsStore};
+use rustroom_app::thumb_loader::ThumbLoader;
 
 /// A temp directory that removes itself.
 ///
