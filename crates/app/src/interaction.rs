@@ -3,7 +3,12 @@
 //!
 //! Split out of `main.rs` unchanged.
 
-use crate::*;
+use crate::RustroomApp;
+use eframe::egui;
+use rustroom_app::action_log::ActionKind;
+use rustroom_app::format_filter;
+use rustroom_app::selection::Selection;
+use rustroom_app::tool::Tool;
 
 /// Apply a click to the selection according to its modifiers. Returns whether this was a
 /// plain click, which is the only gesture that moves the active photo — and therefore the
