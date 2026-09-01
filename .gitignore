@@ -13,3 +13,6 @@ Cargo.lock.orig
 # visual-companion brainstorm scratch
 /.superpowers/
 .superpowers/
+
+# Agent worktrees (parallel-work sessions) — never part of the repo
+.claude/worktrees/

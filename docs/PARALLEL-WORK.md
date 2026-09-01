@@ -109,19 +109,55 @@ project's recorded bugs were interactions between separately-correct changes.
 
 | | A | B | C | D |
 | --- | --- | --- | --- | --- |
-| **W0** | **Split `canvas.rs` and `main.rs`** — prep, run alone | — | — | — |
+| **W0** ✅ | **Split `canvas.rs`** — done 2026-09-01 | **Split `main.rs`** — done 2026-09-01 | — | — |
 | **W1** | M5.1a tone curve widget | M6.1 seam + filename templating | **M7.3a interpolator** *(owns goldens)* | M5.5a crop guides |
 | **W2** | M5.2 WB Kelvin *(owns `edit-model`)* | M6.1b/c/d metadata, watermark, output sharpening | M7.1a luminance mask *(owns `Mask`)* | M6.5a/b compare + survey |
 | **W3** | M5.3a spot headless *(owns `Edits` + stage order)* | M6.3 XMP *(owns schema **v6**)* | M5.4 auto tone | M7.6 tool gaps |
 | **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
 
-**Why W0 exists.** `canvas.rs` is 1,890 lines and is wanted by **six** milestones; `main.rs` is 4,375
-and is touched by any new tool or modal. They are the two biggest serialisation points in the plan,
-and Wave 4 is entirely canvas work that would otherwise queue behind itself. Splitting them first is
-a pure refactor with the headless canvas fixture already in place to prove it moved no behaviour.
+**Why W0 existed.** `canvas.rs` was 1,890 lines and wanted by **six** milestones; `main.rs` was 4,375
+and touched by any new tool or modal. They were the two biggest serialisation points in the plan, and
+Wave 4 is entirely canvas work that would otherwise have queued behind itself.
 
-⚠ `main.rs` at 4,375 lines: the backlog says to split it "when it hurts". With four agents in it, it
-hurts.
+### ⚠⚠ What W0 proved, and the recipe to reuse
+
+**Two agents refactored 6,265 lines concurrently and the merge had ZERO conflicts.** That was not
+luck; it came from one constraint given to both, and it generalises:
+
+> **Type *definitions* stay put; only `impl` blocks and free functions move.**
+
+An inherent impl only has to be in the same **crate**, not the same module, so ~90 methods left
+`main.rs` with `self` staying `self` and no call-site churn — while `develop/canvas.rs`'s
+`use crate::RustroomApp` kept resolving, which is what let the other agent work in the same tree at
+the same time. ⚠ **When two tracks must touch related code, look for the constraint that makes their
+files disjoint rather than assuming they must be serialised.**
+
+Result: `canvas.rs` → 7 modules (largest 439); `main.rs` **4,375 → 681**, with 13 new modules.
+1322 tests before and after, 49 goldens untouched, `fmt`/`clippy -D warnings`/`test --all` green on
+the **merged** result, not merely in each worktree.
+
+**Three findings worth carrying into the next wave:**
+
+1. **⚠⚠ `${PIPESTATUS[0]}` IS BASH; THIS SHELL IS ZSH, AND IT EXPANDS TO NOTHING — so a check that
+   prints `EXIT: ` reads as a pass.** This is a *third* variant of a trap already recorded twice in
+   `CLAUDE.md` (a `clippy | grep` pipeline reporting grep's status; a sabotage harness grepping for
+   the wrong line shape). **Redirect to a file and test `$?` directly**, never through a pipeline:
+   `cargo clippy ... > /tmp/c.log 2>&1; echo "EXIT=$?"`. In zsh the array is `$pipestatus`.
+2. **A refactor that changes the test count moved behaviour.** "Unchanged at 1322" is the assertion,
+   not "still green".
+3. **Diff the `⚠` comments, not just the code.** This project encodes its findings in them; a move
+   can drop one silently and no test will notice. `grep "⚠" | sort` on both sides, then `comm`.
+   The canvas split lost none of its 113.
+
+⚠ **`mask_overlay.rs` (439) is the next file to watch** — both **M7.1a** (luminance mask, W2) and
+**M5.3b** (spot canvas, W4) land in it. It has room now and will not after two more features.
+
+⚠ **Two deliberate compromises made by the `main.rs` split**, worth knowing before building on it:
+every moved method is now `pub(crate)` (a private `fn` in an inherent impl is visible only in its own
+module and descendants, so moving it out of the root would have broken every caller), and each new
+module opens with `use crate::*;` rather than an explicit import list — the glob is what makes the
+move *provably* behaviour-preserving, since an explicit list can silently change which name resolves.
+Tightening those is optional cleanup, not a bug.
 
 **Why M7.3 is in W1 and alone with the goldens.** It moves all 49 references. Nothing else in W1
 touches a golden.
