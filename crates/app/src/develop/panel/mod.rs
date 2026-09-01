@@ -54,6 +54,22 @@ impl Edited {
         r
     }
 
+    /// Record a discrete control's use — a button, a preset — as one settled edit.
+    ///
+    /// ⚠ Both flags, not just `changed`: a click has no drag to stop, so without `settled` the
+    /// edit would reach the pixels and never reach the undo stack.
+    pub fn mark_changed(&mut self) {
+        self.changed = true;
+        self.settled = true;
+    }
+
+    /// Fold a `Response` from a widget this helper did not build, e.g. one with a custom
+    /// formatter. Same accounting as [`Self::slider`].
+    pub fn absorb(&mut self, r: &egui::Response) {
+        self.changed |= r.changed();
+        self.settled |= r.drag_stopped();
+    }
+
     /// A discrete act — a button, a checkbox, a preset click.
     ///
     /// ⚠ Both flags, unlike a slider: a press is a complete act, so it is one history entry
@@ -146,8 +162,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &mut s.edits,
                                 &mut app.hsl_channel,
                                 &mut app.grade_range,
-                                s.lens.name.as_deref(),
-                                s.lens.shot.is_some(),
+                                adjustments::SourceInfo {
+                                    lens: s.lens.name.as_deref(),
+                                    lens_profile_found: s.lens.shot.is_some(),
+                                    wb_baseline: s.wb_baseline,
+                                },
+                                Some(&mut s.picking_wb),
                                 &mut ed,
                             );
                             ui.separator();

@@ -6,7 +6,7 @@
 
 use crate::MAX_CONCURRENT_FULL_DECODES;
 use eframe::egui;
-use rustroom_app::decode_worker::{DecodeWorker, LensFacts};
+use rustroom_app::decode_worker::{DecodeWorker, LensFacts, SourceFacts};
 
 /// Decode a file for editing (half-size for RAW; full decode for images) into a linear
 /// `ImageBuf`, a display label, and the buffer's size relative to a full-resolution
@@ -14,7 +14,7 @@ use rustroom_app::decode_worker::{DecodeWorker, LensFacts};
 pub(crate) fn decode_for_edit(
     path: &std::path::Path,
     profile: Option<std::path::PathBuf>,
-) -> Result<(core_image::ImageBuf, String, f32, LensFacts), String> {
+) -> Result<(core_image::ImageBuf, SourceFacts), String> {
     if catalog::is_raw(path) {
         let opts = raw_decode::DecodeOptions {
             camera_profile: profile,
@@ -23,7 +23,18 @@ pub(crate) fn decode_for_edit(
         let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
         let label = format!("{} {}", d.metadata.make, d.metadata.model);
         let lens = resolve_lens(&d.metadata);
-        Ok((d.image, label, opts.source_scale(), lens))
+        Ok((
+            d.image,
+            SourceFacts {
+                label,
+                source_scale: opts.source_scale(),
+                lens,
+                // ⚠ The camera's own as-shot white, which is where the Kelvin slider's zero point
+                // sits for this photo. A file that records no usable multipliers falls back to
+                // D65, the same answer a JPEG gets — a right answer, not a degraded one.
+                wb_baseline: d.metadata.as_shot.unwrap_or_default(),
+            },
+        ))
     } else {
         let d = image_decode::decode(path).map_err(|e| e.to_string())?;
         let ext = path
@@ -34,9 +45,14 @@ pub(crate) fn decode_for_edit(
         // Non-RAW formats are decoded at full size, and carry no lens metadata.
         Ok((
             d.image,
-            format!("{ext} {}×{}", d.width, d.height),
-            1.0,
-            LensFacts::default(),
+            SourceFacts {
+                label: format!("{ext} {}×{}", d.width, d.height),
+                source_scale: 1.0,
+                lens: LensFacts::default(),
+                // A file the camera has already balanced: a neutral object in it reads as equal
+                // RGB, so its baseline *is* sRGB's white point.
+                ..SourceFacts::default()
+            },
         ))
     }
 }
@@ -95,7 +111,7 @@ pub(crate) fn decode_full_res(
     path: &std::path::Path,
     tier: raw_decode::Demosaic,
     profile: Option<std::path::PathBuf>,
-) -> Result<(core_image::ImageBuf, String, f32, LensFacts), String> {
+) -> Result<(core_image::ImageBuf, SourceFacts), String> {
     let opts = raw_decode::DecodeOptions {
         demosaic: tier,
         camera_profile: profile,
@@ -104,7 +120,15 @@ pub(crate) fn decode_full_res(
     let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
     let label = format!("{} {}", d.metadata.make, d.metadata.model);
     let lens = resolve_lens(&d.metadata);
-    Ok((d.image, label, opts.source_scale(), lens))
+    Ok((
+        d.image,
+        SourceFacts {
+            label,
+            source_scale: opts.source_scale(),
+            lens,
+            wb_baseline: d.metadata.as_shot.unwrap_or_default(),
+        },
+    ))
 }
 
 /// Build the full-resolution decode worker for `tier`.
@@ -133,11 +157,17 @@ pub(crate) fn full_res_worker(
 }
 
 /// Full-resolution decode for export. Dispatches by file kind.
+///
+/// ⚠⚠ Returns the white-balance baseline alongside the pixels, because a Kelvin in the sidecar is
+/// meaningless without the illuminant it was set against — and a batch export decodes each file
+/// itself rather than borrowing the open session's. Drop it and every exported RAW gets D65's
+/// gains where the preview used the camera's own, so **the file would not match what was on
+/// screen**.
 pub(crate) fn decode_for_export(
     path: &std::path::Path,
     demosaic: raw_decode::Demosaic,
     profile: Option<std::path::PathBuf>,
-) -> Result<core_image::ImageBuf, String> {
+) -> Result<(core_image::ImageBuf, color::wb::Illuminant), String> {
     if catalog::is_raw(path) {
         raw_decode::decode_raw(
             path,
@@ -147,11 +177,11 @@ pub(crate) fn decode_for_export(
                 ..raw_decode::DecodeOptions::linear_scene()
             },
         )
-        .map(|d| d.image)
+        .map(|d| (d.image, d.metadata.as_shot.unwrap_or_default()))
         .map_err(|e| e.to_string())
     } else {
         image_decode::decode(path)
-            .map(|d| d.image)
+            .map(|d| (d.image, color::wb::Illuminant::default()))
             .map_err(|e| e.to_string())
     }
 }
@@ -187,9 +217,11 @@ mod tests {
             return;
         };
         let p = std::path::Path::new(&path);
-        let (half, _, half_scale, _) = decode_for_edit(p, None).expect("half decode");
-        let (full, _, full_scale, _) =
+        let (half, half_facts) = decode_for_edit(p, None).expect("half decode");
+        let half_scale = half_facts.source_scale;
+        let (full, full_facts) =
             decode_full_res(p, raw_decode::Demosaic::default(), None).expect("full decode");
+        let full_scale = full_facts.source_scale;
         assert_eq!(half_scale, 0.5);
         assert_eq!(full_scale, 1.0);
         // libraw's half-size path halves each dimension, rounding down.

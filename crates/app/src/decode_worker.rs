@@ -38,6 +38,24 @@ pub struct Decoded {
     pub source_scale: f32,
     /// The lens, and whether a profile matched it.
     pub lens: LensFacts,
+    /// The illuminant the decode left the picture balanced to — the zero point of the Kelvin
+    /// slider. D65 for anything that is not a RAW, which is what a camera JPEG genuinely is.
+    pub wb_baseline: color::wb::Illuminant,
+}
+
+/// What a decode reports about a file beyond its pixels.
+///
+/// ⚠ A struct rather than a tuple's tail because it reached four members and grew a fifth here;
+/// a positional `f32` beside an `Illuminant` is exactly the argument that gets passed in the
+/// wrong order with nothing to notice.
+#[derive(Clone, Default)]
+pub struct SourceFacts {
+    /// Display label, e.g. "Fujifilm X-T4" or "JPEG 6000×4000".
+    pub label: String,
+    /// Size of the buffer relative to a full-resolution decode.
+    pub source_scale: f32,
+    pub lens: LensFacts,
+    pub wb_baseline: color::wb::Illuminant,
 }
 
 /// The outcome of one decode request.
@@ -50,8 +68,7 @@ pub struct DecodeResult {
 
 /// Decodes a file into a linear editing buffer, a display label, and the buffer's size
 /// relative to a full-resolution decode of the same file (0.5 for half-size RAW).
-type DecodeFn =
-    Arc<dyn Fn(&Path) -> Result<(ImageBuf, String, f32, LensFacts), String> + Send + Sync>;
+type DecodeFn = Arc<dyn Fn(&Path) -> Result<(ImageBuf, SourceFacts), String> + Send + Sync>;
 
 struct Request {
     seq: u64,
@@ -76,10 +93,7 @@ impl DecodeWorker {
     /// `decode` is injected so tests can drive the worker without libraw. `on_done` runs on
     /// the worker thread after each result (e.g. `ctx.request_repaint`).
     pub fn new(
-        decode: impl Fn(&Path) -> Result<(ImageBuf, String, f32, LensFacts), String>
-            + Send
-            + Sync
-            + 'static,
+        decode: impl Fn(&Path) -> Result<(ImageBuf, SourceFacts), String> + Send + Sync + 'static,
         max_concurrent: usize,
         on_done: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -137,7 +151,8 @@ impl DecodeWorker {
         let tx = self.res_tx.clone();
         self.in_flight += 1;
         std::thread::spawn(move || {
-            let outcome = decode(&req.path).map(|(image, label, source_scale, lens)| {
+            let outcome = decode(&req.path).map(|(image, facts)| {
+                let source_scale = facts.source_scale;
                 let buffer = Arc::new(image);
                 // ⚠ `Srgb` regardless of the display setting: this baseline texture is never drawn.
                 // `show_before` is an ordinary render now, and the baseline survives only for
@@ -158,10 +173,11 @@ impl DecodeWorker {
                 );
                 Arc::new(Decoded {
                     buffer,
-                    label,
+                    label: facts.label,
                     baseline,
                     source_scale,
-                    lens,
+                    lens: facts.lens,
+                    wb_baseline: facts.wb_baseline,
                 })
             });
             let _ = tx.send(DecodeResult {
@@ -180,14 +196,21 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    fn tiny_decode(_path: &Path) -> Result<(ImageBuf, String, f32, LensFacts), String> {
+    fn tiny_decode(_path: &Path) -> Result<(ImageBuf, SourceFacts), String> {
         let mut img = ImageBuf::new(8, 8);
         for y in 0..8 {
             for x in 0..8 {
                 img.set_pixel(x, y, [0.5, 0.5, 0.5]);
             }
         }
-        Ok((img, "FAKE".to_string(), 1.0, LensFacts::default()))
+        Ok((
+            img,
+            SourceFacts {
+                label: "FAKE".to_string(),
+                source_scale: 1.0,
+                ..SourceFacts::default()
+            },
+        ))
     }
 
     /// Poll until `n` results have arrived (or 5 s elapse).

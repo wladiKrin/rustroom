@@ -54,6 +54,15 @@ pub struct RawMetadata {
     pub model: String,
     /// `None` when the file records no usable lens name.
     pub lens: Option<LensMetadata>,
+    /// The illuminant the decode balanced the picture to — the camera's own as-shot white.
+    ///
+    /// ⚠⚠ **This is the zero point of the Kelvin slider, and it is a fact about the file rather
+    /// than a choice.** libraw applies `cam_mul` during `dcraw_process`, so a neutral object comes
+    /// out as equal RGB in the working space; the temperature that neutrality corresponds to is
+    /// this. `None` on any path that cannot recover it, and the caller then falls back to D65 —
+    /// which is what a JPEG's baseline genuinely is, so the fallback is a right answer and not a
+    /// degraded one.
+    pub as_shot: Option<color::wb::Illuminant>,
 }
 
 /// A fully decoded RAW: demosaiced RGB plus metadata.
@@ -312,6 +321,44 @@ mod tests {
         // variant would silently reset a saved preset to the default.
         assert_eq!(serde_json::to_string(&Demosaic::Fast).unwrap(), "\"Fast\"");
         assert_eq!(serde_json::to_string(&Demosaic::Best).unwrap(), "\"Best\"");
+    }
+
+    /// ⚠ The one test that can see the as-shot solve against a *real* camera rather than a
+    /// synthetic matrix. It is deliberately loose — a plausible daylight range — because the
+    /// point is that the number is a temperature at all, not that it is one particular value:
+    /// the DNG solve behind it carries McCamy's ~2% approximation and the file's own
+    /// multipliers, neither of which this test should be pinning.
+    ///
+    /// ⚠ Requires `RAW_FIXTURE`; without it this **skips**, so a green CI run is no evidence.
+    #[test]
+    fn a_raw_reports_the_illuminant_it_was_balanced_to() {
+        let Some(path) = fixture() else {
+            eprintln!("skipping: set RAW_FIXTURE=/abs/path/to.raw to run this test");
+            return;
+        };
+        let d = decode_raw(&path, &DecodeOptions::preview()).expect("decodes");
+        let i = d
+            .metadata
+            .as_shot
+            .expect("a RAW knows what it was balanced to");
+        assert!(
+            (1500.0..=15000.0).contains(&i.kelvin),
+            "{}K is not a temperature any camera balanced to",
+            i.kelvin
+        );
+        // ⚠⚠ **The assertion that catches the wrong matrix.** A camera's as-shot neutral is a
+        // real light, and real lights — daylight, tungsten, even fluorescent — sit close to the
+        // locus. Solving from `rgb_cam` instead of `cam_xyz` lands **0.084 off it, a tint of
+        // 140 on a ±100 control**, and still produces a perfectly plausible-looking Kelvin. Only
+        // the distance sees it.
+        assert!(
+            i.tint.abs() < 60.0,
+            "{:.0}K tint {:.1} is too far off the locus to be a real illuminant — \
+             this is what solving from the wrong matrix looks like",
+            i.kelvin,
+            i.tint
+        );
+        eprintln!("as shot: {:.0}K, tint {:.1}", i.kelvin, i.tint);
     }
 
     #[test]

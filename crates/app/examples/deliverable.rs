@@ -78,6 +78,7 @@ fn main() {
             &dest,
             &o,
             pipeline::Resampler::default(),
+            color::wb::Illuminant::default(),
         ) {
             Ok(()) => println!("wrote {}", dest.display()),
             Err(e) => println!("FAILED {}: {e}", dest.display()),

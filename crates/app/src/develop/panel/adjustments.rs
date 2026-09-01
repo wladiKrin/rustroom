@@ -5,6 +5,7 @@ use crate::develop::panel::tone_curve;
 use crate::develop::panel::Edited;
 use edit_model::HslBand;
 use eframe::egui;
+use rustroom_app::wb_tool::{self, WbPreset};
 
 /// Which of an [`HslBand`]'s three values the HSL selector is showing.
 ///
@@ -109,20 +110,128 @@ pub const SECTIONS: [Section; 6] = [
 /// caller holds `&mut app.session` at the same time, and Rust's disjoint field borrows make
 /// two separate `&mut` parameters legal where a closure capturing `app` twice is `E0499`.
 /// That is the second reason this file exists.
+/// What the panel needs to know about the file behind the edits.
+///
+/// ⚠ A struct because `show` reached eight arguments and clippy's `too_many_arguments` objected —
+/// the fourth time this project has answered that with a params struct, after `FrameSpec`,
+/// `NameField` and `RenderSpec`. Every time the note was that clippy was right. It groups the
+/// three things that are facts about the *source* rather than about the edits.
+pub struct SourceInfo<'a> {
+    /// The lens the shot was taken with, whether or not a profile matched it.
+    pub lens: Option<&'a str>,
+    pub lens_profile_found: bool,
+    /// The illuminant the decode left the photo balanced to.
+    pub wb_baseline: color::wb::Illuminant,
+}
+
+/// The white-balance controls: a temperature, a tint, and the named illuminants.
+///
+/// ⚠⚠ **The Kelvin slider is only drawn once a temperature exists**, and its absence is the
+/// control for "As Shot": a photo following its file has no number to show, and inventing one
+/// would freeze the value the moment anybody touched the slider. The As Shot button is how you
+/// get back.
+///
+/// ⚠ The slider is **linear in mireds**, not in Kelvin. Equal steps in mireds are equal
+/// perceptual steps, so a Kelvin-linear slider spends most of its travel in the blues where
+/// nothing changes and crams the whole tungsten range into its first few pixels.
+pub(crate) fn white_balance(
+    ui: &mut egui::Ui,
+    wb: &mut edit_model::WhiteBalance,
+    baseline: color::wb::Illuminant,
+    // ⚠ `Option`, not a scratch `&mut false`: a mask has no eyedropper, because solving one
+    // against a region is a different question from solving it against the frame. `None` says
+    // that rather than drawing a control that quietly does nothing.
+    picking: Option<&mut bool>,
+    ed: &mut Edited,
+) {
+    ui.horizontal_wrapped(|ui| {
+        for p in WbPreset::ALL {
+            // ⚠ `selectable_label`, not a button: a preset that has been applied and one that has
+            // not must look different, or the control is invisible state — the complaint the crop
+            // aspect lock was fixed for.
+            let on = match p.kelvin() {
+                None => wb.kelvin.is_none(),
+                Some(k) => wb.kelvin.is_some_and(|v| (v - k).abs() < 0.5),
+            };
+            if ui.selectable_label(on, p.label()).clicked() {
+                wb_tool::apply_preset(wb, p);
+                ed.mark_changed();
+            }
+        }
+    });
+
+    // Mireds ascend as Kelvin descends, so the slider is drawn over the *reciprocal* and the
+    // range reads warm-on-the-left the way every other temperature control does.
+    let mut mired = 1.0e6 / wb.kelvin.unwrap_or(baseline.kelvin);
+    if wb.kelvin.is_some() {
+        let r = ui.add(
+            egui::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
+                .custom_formatter(|m, _| format!("{:.0} K", 1.0e6 / m))
+                .custom_parser(|s| {
+                    s.trim()
+                        .trim_end_matches(['K', 'k', ' '])
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|k| *k > 0.0)
+                        .map(|k| 1.0e6 / k)
+                })
+                .text("Temp"),
+        );
+        if r.changed() {
+            wb.kelvin = Some(1.0e6 / mired);
+        }
+        ed.absorb(&r);
+    } else {
+        // ⚠ Shown rather than hidden, so the section is not empty on an untouched photo and the
+        // way in is obvious. Clicking it adopts the baseline, which is a no-op render and
+        // therefore an honest starting point.
+        if ui
+            .button("Set a temperature")
+            .on_hover_text("Start from what this photo is already balanced to")
+            .clicked()
+        {
+            wb.kelvin = Some(baseline.kelvin);
+            ed.mark_changed();
+        }
+    }
+    ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint");
+
+    if let Some(picking) = picking {
+        // ⚠ A toggle, not a button: an armed eyedropper changes what a click on the canvas
+        // does, and a mode you cannot see is the complaint the crop aspect lock was fixed for.
+        if ui
+            .selectable_label(*picking, "Pick a neutral")
+            .on_hover_text("Click something in the photo that should be grey")
+            .clicked()
+        {
+            *picking = !*picking;
+        }
+    }
+}
+
+/// 2000 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
+/// disagree about which end is warm.
+const MIRED_MIN: f32 = 1.0e6 / 25000.0;
+const MIRED_MAX: f32 = 1.0e6 / 2000.0;
+
 pub fn show(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
     hsl_channel: &mut HslChannel,
     grade_range: &mut color_wheel::GradeRange,
-    lens: Option<&str>,
-    lens_profile_found: bool,
+    source: SourceInfo<'_>,
+    picking: Option<&mut bool>,
     ed: &mut Edited,
 ) {
+    let SourceInfo {
+        lens,
+        lens_profile_found,
+        wb_baseline: baseline,
+    } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
     // that opens with 30 sliders showing is the problem this section structure removes.
     section(ui, SECTIONS[0], true, |ui| {
-        ed.slider(ui, &mut edits.white_balance.temp, -100.0..=100.0, "Temp");
-        ed.slider(ui, &mut edits.white_balance.tint, -100.0..=100.0, "Tint");
+        white_balance(ui, &mut edits.white_balance, baseline, picking, ed);
     });
 
     section(ui, SECTIONS[1], true, |ui| {

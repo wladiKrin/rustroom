@@ -177,6 +177,15 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
     // out identical whatever `output_color` is set to, because dcraw applies the output space
     // separately as `out_cam = out_rgb[output] × rgb_cam`. `camera_to_prophoto` supplies that
     // second half from our own matrices.
+    let as_shot = {
+        let c = &raw.as_mut().color;
+        let mut cam_xyz = [[0.0f32; 3]; 3];
+        for (i, row) in cam_xyz.iter_mut().enumerate() {
+            row.copy_from_slice(&c.cam_xyz[i][..3]);
+        }
+        as_shot_illuminant(&cam_xyz, [c.cam_mul[0], c.cam_mul[1], c.cam_mul[2]])
+    };
+
     let image = if opts.camera_native {
         let (m, hue_sat) = {
             let c = &raw.as_mut().color;
@@ -230,9 +239,38 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedRaw, D
                 })
             }
         },
+        as_shot,
     };
 
     Ok(DecodedRaw { image, metadata })
+}
+
+/// The illuminant the camera balanced to, from the multipliers libraw applied.
+///
+/// ⚠⚠ **The neutral is the RECIPROCAL of `cam_mul`.** The multipliers scale each channel *up* so
+/// that a neutral object comes out neutral, so the object's own camera reading is `1/cam_mul`.
+/// Getting this the right way round is the difference between solving for the scene's light and
+/// solving for its opposite — the identical note `profile_transform` already carries.
+///
+/// ⚠⚠ **`cam_xyz` (XYZ → camera), NOT `rgb_cam` — and using the wrong one is not obviously
+/// wrong.** `rgb_cam` maps camera → sRGB **with the white balance already applied**, which is
+/// exactly why every one of its rows sums to 1: a balanced neutral goes to a balanced neutral. Put
+/// `1/cam_mul` through it and the sensor's own green dominance is counted twice. Measured on a
+/// real X-T4 frame, that route lands **0.084 off the daylight locus — a tint of 140 on a ±100
+/// control** — where `cam_xyz` gives 4762 K at 0.015 off, a plausible illuminant. This is the
+/// same matrix and the same reciprocal the DNG spec uses, and that `profile_transform` above
+/// already solves against.
+fn as_shot_illuminant(cam_xyz: &[[f32; 3]; 3], cam_mul: [f32; 3]) -> Option<color::wb::Illuminant> {
+    if cam_mul.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return None;
+    }
+    let neutral = [1.0 / cam_mul[0], 1.0 / cam_mul[1], 1.0 / cam_mul[2]];
+    let xyz = color::spaces::apply(&color::camera::invert(cam_xyz)?, neutral);
+    let sum = xyz[0] + xyz[1] + xyz[2];
+    if !sum.is_finite() || sum.abs() < 1e-9 {
+        return None;
+    }
+    Some(color::wb::solve_xy((xyz[0] / sum, xyz[1] / sum)))
 }
 
 /// Apply libraw's camera orientation code to an embedded thumbnail.
@@ -282,6 +320,59 @@ fn apply_flip(img: image::DynamicImage, flip: i32) -> image::DynamicImage {
 mod tests {
     use super::*;
     use image::{DynamicImage, Rgb, RgbImage};
+
+    /// A camera whose native space *is* sRGB — so the fixture's numbers mean something rather
+    /// than being an arbitrary matrix — and whose multipliers are equal. Its neutral is then
+    /// sRGB's own white, D65. ⚠ It is what makes the fallback for a file with no usable
+    /// multipliers a *right answer* rather than a degraded one.
+    fn srgb_camera() -> [[f32; 3]; 3] {
+        color::camera::invert(&color::spaces::SRGB_TO_XYZ).expect("invertible")
+    }
+
+    #[test]
+    fn equal_multipliers_on_an_srgb_camera_are_d65() {
+        let i = as_shot_illuminant(&srgb_camera(), [1.0, 1.0, 1.0]).expect("solves");
+        assert!((i.kelvin - 6504.0).abs() < 300.0, "got {}K", i.kelvin);
+        assert!(i.tint.abs() < 5.0, "got tint {}", i.tint);
+    }
+
+    /// A degenerate matrix must degrade to the D65 fallback rather than producing NaN.
+    #[test]
+    fn a_singular_camera_matrix_gives_no_illuminant() {
+        let flat = [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]];
+        assert!(as_shot_illuminant(&flat, [1.0, 1.0, 1.0]).is_none());
+    }
+
+    /// ⚠⚠ **The reciprocal, pinned by direction rather than by value.** Under warm light the
+    /// sensor sees plenty of red, so the camera's red multiplier is *small* — and the neutral it
+    /// implies must therefore be a warm, low-Kelvin illuminant. Take `cam_mul` the right way up
+    /// instead of its reciprocal and this comes out the other way, which still looks like a
+    /// working temperature readout.
+    #[test]
+    fn a_small_red_multiplier_means_warm_light() {
+        let warm = as_shot_illuminant(&srgb_camera(), [1.0, 1.6, 3.0]).expect("solves");
+        let cool = as_shot_illuminant(&srgb_camera(), [3.0, 1.6, 1.0]).expect("solves");
+        assert!(
+            warm.kelvin < 4000.0,
+            "a small red multiplier is warm light, got {}K",
+            warm.kelvin
+        );
+        assert!(
+            cool.kelvin > 8000.0,
+            "a large red multiplier is cool light, got {}K",
+            cool.kelvin
+        );
+    }
+
+    /// A zero or negative multiplier would divide by zero; a file that records none must degrade
+    /// to the D65 fallback rather than producing an absurd temperature.
+    #[test]
+    fn unusable_multipliers_give_no_illuminant() {
+        let m = srgb_camera();
+        assert!(as_shot_illuminant(&m, [0.0, 1.0, 1.0]).is_none());
+        assert!(as_shot_illuminant(&m, [1.0, -1.0, 1.0]).is_none());
+        assert!(as_shot_illuminant(&m, [1.0, f32::NAN, 1.0]).is_none());
+    }
 
     /// 2x1 image: left pixel red, right pixel blue.
     fn wide() -> DynamicImage {

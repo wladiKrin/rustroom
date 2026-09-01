@@ -596,6 +596,30 @@ pub struct Session {
     /// commonest reason the controls do nothing, and the only way to act on it is to be told
     /// which name failed.
     lens: LensFacts,
+    /// The editing buffer, shared with the render worker.
+    ///
+    /// ⚠ Kept **only** so the white-balance eyedropper can read a pixel *before* any stage has
+    /// touched it: sampling the rendered texture would chase its own correction, since that
+    /// texture already has the white balance applied. An `Arc` clone costs nothing — the worker
+    /// owns the same allocation.
+    ///
+    /// ⚠ It must be replaced at the full-resolution handover along with `engine`, or the
+    /// eyedropper would read the half-size buffer at full-resolution coordinates.
+    buffer: std::sync::Arc<core_image::ImageBuf>,
+    /// The eyedropper is armed: the next click on the canvas sets the white balance.
+    ///
+    /// ⚠ View state on the session, never in `Edits` — arming a tool is not part of the
+    /// photograph's description, so it must not reach the sidecar or travel with a paste. The
+    /// rule `selected_mask` and `show_guides` already follow.
+    picking_wb: bool,
+    /// The illuminant the decode left this photo balanced to — the Kelvin slider's zero point.
+    ///
+    /// ⚠⚠ Kept on the session for the same reason `lens` is: it is a fact about the file that
+    /// cannot change within one session, and **it must survive the full-resolution handover** or
+    /// the white balance would silently shift the moment the upgrade lands. It also has to reach
+    /// export, since a Kelvin in the sidecar means nothing without the baseline it was set
+    /// against.
+    wb_baseline: color::wb::Illuminant,
     zoom: f32,
     /// The scale that fits `fit_image_size` into the canvas, as of the last frame.
     ///

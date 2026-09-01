@@ -82,15 +82,22 @@ fn texture(ctx: &egui::Context, name: &str, w: usize, h: usize) -> egui::Texture
 /// ⚠ Takes no `Context`: nothing here needs one. `open_test_photo` does, for the textures.
 pub fn for_test() -> RustroomApp {
     let dir = TestDir::new("app");
-    let stub =
-        |_: &std::path::Path| -> Result<(core_image::ImageBuf, String, f32, LensFacts), String> {
-            Ok((
-                core_image::ImageBuf::new(8, 4),
-                "test".to_string(),
-                1.0,
-                LensFacts::default(),
-            ))
-        };
+    let stub = |_: &std::path::Path| -> Result<
+        (
+            core_image::ImageBuf,
+            rustroom_app::decode_worker::SourceFacts,
+        ),
+        String,
+    > {
+        Ok((
+            core_image::ImageBuf::new(8, 4),
+            rustroom_app::decode_worker::SourceFacts {
+                label: "test".to_string(),
+                source_scale: 1.0,
+                ..Default::default()
+            },
+        ))
+    };
     RustroomApp {
         // ⚠ A real scanner, with a reader that never runs: nothing queues work in these tests, so
         // its workers park immediately and cost nothing.
@@ -164,8 +171,11 @@ pub fn for_test() -> RustroomApp {
 /// a logic bug and is a fixture bug.
 pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: usize) {
     let buf = buffer(w, h);
-    let engine = RenderEngine::new(buf, 1.0, None, || {});
+    let engine = RenderEngine::new(buf.clone(), 1.0, None, Default::default(), || {});
     app.session = Some(Session {
+        wb_baseline: color::wb::Illuminant::default(),
+        buffer: buf,
+        picking_wb: false,
         path: std::path::PathBuf::from("/test/a.RAF"),
         copy: 0,
         name: None,
@@ -277,5 +287,6 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
         },
         source_scale: 1.0,
         lens: LensFacts::default(),
+        wb_baseline: color::wb::Illuminant::default(),
     })
 }

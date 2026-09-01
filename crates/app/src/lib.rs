@@ -45,3 +45,4 @@ pub mod tile_layout;
 pub mod tone_curve_tool;
 pub mod tool;
 pub mod view_region;
+pub mod wb_tool;

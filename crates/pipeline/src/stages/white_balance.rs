@@ -1,28 +1,22 @@
 use crate::PipelineStage;
 use core_image::ImageBuf;
-use edit_model::WhiteBalance;
 
-/// Creative white balance: temp/tint -> luminance-normalized per-channel gains.
+/// Per-channel gains applied in the working space.
+///
+/// ⚠⚠ **Takes gains, not a `WhiteBalance`.** Turning Kelvin into gains needs an illuminant
+/// *baseline*, and the baseline is a fact about the source — the as-shot temperature for a RAW,
+/// D65 for a JPEG — which `pipeline` is source-agnostic about by rule. The conversion therefore
+/// happens in `color::wb::adaptation_gains`, called by whoever builds the pipeline and handed the
+/// baseline through `RenderSpec`.
+///
+/// ⚠ The gains are already luminance-normalised by the time they arrive, so a white-balance change
+/// moves colour and not brightness. Do not normalise again here.
 pub struct WhiteBalanceStage {
     gains: [f32; 3],
 }
 
 impl WhiteBalanceStage {
-    pub fn new(wb: &WhiteBalance) -> Self {
-        let t = wb.temp / 100.0;
-        let g = wb.tint / 100.0;
-        // Raw gains: warmer -> more R, less B; magenta(+tint) -> less G.
-        let mut gains = [1.0 + 0.4 * t, 1.0 - 0.3 * g, 1.0 - 0.4 * t];
-        // Normalize so a neutral gray keeps its luminance (WB shifts color, not brightness).
-        // ⚠ The luminance of white *after* the gains — i.e. of the pixel [1,1,1] scaled by
-        // them — used to renormalise so a white-balance change does not alter brightness. It is
-        // a pixel, not a coefficient list, which is why `luminance` is the right call here.
-        let lum = color::luminance(gains);
-        if lum > 1e-6 {
-            for c in &mut gains {
-                *c /= lum;
-            }
-        }
+    pub fn new(gains: [f32; 3]) -> Self {
         Self { gains }
     }
 }
@@ -42,39 +36,24 @@ impl PipelineStage for WhiteBalanceStage {
 mod tests {
     use super::*;
 
+    /// ⚠ Unit gains must be **bit-exactly** the identity, or a photo whose white balance is at its
+    /// baseline is not neutral and every golden moves.
     #[test]
-    fn neutral_wb_is_identity() {
-        let s = WhiteBalanceStage::new(&WhiteBalance::default());
-        let mut img = ImageBuf::new(1, 1);
+    fn unit_gains_are_exactly_the_identity() {
+        let s = WhiteBalanceStage::new([1.0, 1.0, 1.0]);
+        let mut img = ImageBuf::new(2, 1);
         img.set_pixel(0, 0, [0.2, 0.5, 0.8]);
-        let out = s.apply(img);
-        let [r, g, b] = out.pixel(0, 0);
-        assert!((r - 0.2).abs() < 1e-5 && (g - 0.5).abs() < 1e-5 && (b - 0.8).abs() < 1e-5);
+        img.set_pixel(1, 0, [1.7, 0.0, 0.33]);
+        let out = s.apply(img.clone());
+        assert_eq!(out.data(), img.data());
     }
 
     #[test]
-    fn warming_raises_red_lowers_blue() {
-        let s = WhiteBalanceStage::new(&WhiteBalance {
-            temp: 50.0,
-            tint: 0.0,
-        });
-        assert!(s.gains[0] > s.gains[2]);
-    }
-
-    #[test]
-    fn neutral_gray_preserves_luminance() {
-        let s = WhiteBalanceStage::new(&WhiteBalance {
-            temp: 60.0,
-            tint: -20.0,
-        });
-        let gray = [0.5, 0.5, 0.5];
-        let scaled = [
-            gray[0] * s.gains[0],
-            gray[1] * s.gains[1],
-            gray[2] * s.gains[2],
-        ];
-        let out_lum: f32 = color::luminance(scaled);
-        let in_lum: f32 = color::luminance(gray);
-        assert!((out_lum - in_lum).abs() < 1e-4);
+    fn the_gains_reach_every_channel() {
+        let s = WhiteBalanceStage::new([2.0, 0.5, 4.0]);
+        let mut img = ImageBuf::new(1, 1);
+        img.set_pixel(0, 0, [0.1, 0.2, 0.05]);
+        let [r, g, b] = s.apply(img).pixel(0, 0);
+        assert!((r - 0.2).abs() < 1e-6 && (g - 0.1).abs() < 1e-6 && (b - 0.2).abs() < 1e-6);
     }
 }

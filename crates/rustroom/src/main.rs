@@ -215,9 +215,14 @@ fn render(
         pipeline::RenderScale::FULL,
         None,
         None,
-        space,
+        pipeline::RenderSpec {
+            space,
+            resampler,
+            // ⚠ The white-balance baseline the decode left the picture at. Without it a Kelvin in
+            // the sidecar would mean one thing in the GUI and another from the CLI.
+            baseline: decoded.metadata.as_shot.unwrap_or_default(),
+        },
         lens,
-        resampler,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

@@ -290,6 +290,35 @@ impl PrefixKey {
     }
 }
 
+/// The per-render parameters that are not part of [`Edits`].
+///
+/// ⚠ A struct because the builder reached eight arguments and clippy's `too_many_arguments`
+/// objected — the third time this project has answered that with a params struct, after
+/// `FrameSpec` and `NameField`. Both times the note was that clippy was right, not a lint to
+/// silence. The body destructures it, so it reads as before.
+///
+/// ⚠⚠ `baseline` is **the illuminant the source is already balanced to**, and it is the one field
+/// here that is a fact about the file rather than a choice: the as-shot temperature for a RAW,
+/// D65 for a JPEG the camera has already balanced. Its default is D65, which is not a fallback —
+/// it is the right answer for every non-RAW file, and for a synthetic buffer with no camera at
+/// all, which is what keeps the goldens untouched.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderSpec {
+    pub space: color::OutputSpace,
+    pub resampler: Resampler,
+    pub baseline: color::wb::Illuminant,
+}
+
+impl Default for RenderSpec {
+    fn default() -> Self {
+        Self {
+            space: color::OutputSpace::Srgb,
+            resampler: Resampler::default(),
+            baseline: color::wb::Illuminant::default(),
+        }
+    }
+}
+
 /// Build the per-pixel stages for one set of adjustments.
 ///
 /// ⚠ **One list, two consumers**: the global tail calls it with the values from `Edits`, and
@@ -297,10 +326,21 @@ impl PrefixKey {
 /// same guard [`build_prefix_steps`] provides for the prefix, and the reason `LocalAdjustments`
 /// repeating field *names* from `Edits` is harmless: the duplication that would actually hurt
 /// is this logic, and it exists once.
-fn per_pixel_stages(a: &edit_model::LocalAdjustments) -> Vec<Box<dyn PipelineStage>> {
+fn per_pixel_stages(
+    a: &edit_model::LocalAdjustments,
+    baseline: color::wb::Illuminant,
+) -> Vec<Box<dyn PipelineStage>> {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
-    if a.white_balance != edit_model::WhiteBalance::default() {
-        out.push(Box::new(WhiteBalanceStage::new(&a.white_balance)));
+    if a.white_balance.is_active() {
+        let wb = &a.white_balance;
+        // ⚠ `None` means the source's own baseline, so declaring it changes nothing — and the
+        // cheapest way to be *exactly* neutral is to insert no stage rather than to trust the
+        // arithmetic to land on [1, 1, 1]. Tint alone still needs a temperature to sit at, and
+        // the baseline is the only one that leaves the temperature axis untouched.
+        let declared = color::wb::Illuminant::new(wb.kelvin.unwrap_or(baseline.kelvin), wb.tint);
+        out.push(Box::new(WhiteBalanceStage::new(
+            color::wb::adaptation_gains(declared, baseline, &color::spaces::PROPHOTO_TO_XYZ),
+        )));
     }
     if a.exposure != 0.0 {
         out.push(Box::new(ExposureStage::new(a.exposure)));
@@ -343,9 +383,8 @@ pub fn build_pipeline_split_in_region(
         scale,
         region,
         None,
-        color::OutputSpace::Srgb,
+        RenderSpec::default(),
         None,
-        Resampler::default(),
     )
 }
 
@@ -358,10 +397,14 @@ pub fn build_pipeline_split_in_region_with_brush(
     scale: RenderScale,
     region: Option<Region>,
     brush: Option<&BrushCoverage>,
-    space: color::OutputSpace,
+    spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
-    resampler: Resampler,
 ) -> (Pipeline, Pipeline) {
+    let RenderSpec {
+        space,
+        resampler,
+        baseline,
+    } = spec;
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
     let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale, lens, resampler)
@@ -375,17 +418,20 @@ pub fn build_pipeline_split_in_region_with_brush(
     // would silently move it earlier and change every golden. Inside a mask there is no tone
     // curve, so ordering within `per_pixel_stages` is the whole story and saturation belongs
     // in it.
-    let mut tail: Vec<Box<dyn PipelineStage>> = per_pixel_stages(&edit_model::LocalAdjustments {
-        white_balance: edits.white_balance,
-        exposure: edits.exposure,
-        contrast: edits.contrast,
-        highlights: edits.highlights,
-        shadows: edits.shadows,
-        whites: edits.whites,
-        blacks: edits.blacks,
-        saturation: 0.0,
-        vibrance: 0.0,
-    });
+    let mut tail: Vec<Box<dyn PipelineStage>> = per_pixel_stages(
+        &edit_model::LocalAdjustments {
+            white_balance: edits.white_balance,
+            exposure: edits.exposure,
+            contrast: edits.contrast,
+            highlights: edits.highlights,
+            shadows: edits.shadows,
+            whites: edits.whites,
+            blacks: edits.blacks,
+            saturation: 0.0,
+            vibrance: 0.0,
+        },
+        baseline,
+    );
     if !edits.tone_curve.points.is_empty() {
         tail.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
     }
@@ -442,6 +488,7 @@ pub fn build_pipeline_split_in_region_with_brush(
                 region,
                 &edits.geometry,
                 brush.and_then(|b| b.get(i)),
+                baseline,
             )));
         }
     }
@@ -502,8 +549,22 @@ pub fn build_pipeline_to(
     space: color::OutputSpace,
     resampler: Resampler,
 ) -> Pipeline {
+    build_pipeline_spec(
+        edits,
+        scale,
+        RenderSpec {
+            space,
+            resampler,
+            ..RenderSpec::default()
+        },
+    )
+}
+
+/// As [`build_pipeline_to`], with the whole [`RenderSpec`] — which is what an export of a RAW
+/// needs, since only it knows the file's white-balance baseline.
+pub fn build_pipeline_spec(edits: &Edits, scale: RenderScale, spec: RenderSpec) -> Pipeline {
     let (prefix, tail) =
-        build_pipeline_split_in_region_with_brush(edits, scale, None, None, space, None, resampler);
+        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
@@ -577,7 +638,7 @@ mod tests {
         hsl.bands[0].saturation = 20.0;
         Edits {
             white_balance: edit_model::WhiteBalance {
-                temp: 10.0,
+                kelvin: Some(4000.0),
                 tint: 5.0,
             },
             exposure: 0.5,
@@ -673,7 +734,7 @@ mod tests {
         let downstream = [
             Edits {
                 white_balance: edit_model::WhiteBalance {
-                    temp: 50.0,
+                    kelvin: Some(3500.0),
                     tint: -20.0,
                 },
                 ..base.clone()
@@ -1213,7 +1274,7 @@ mod tests {
                 ..Default::default()
             },
             white_balance: edit_model::WhiteBalance {
-                temp: 20.0,
+                kelvin: Some(4500.0),
                 ..Default::default()
             },
             exposure: 1.0,

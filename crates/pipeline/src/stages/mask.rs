@@ -72,9 +72,20 @@ pub struct MaskStage {
 }
 
 impl MaskStage {
-    /// For a render covering the whole frame.
+    /// For a render covering the whole frame, against the default white-balance baseline.
+    ///
+    /// ⚠ D65 is the right baseline for a buffer with no camera behind it — a synthetic chart, a
+    /// JPEG — which is every caller of this convenience. Production goes through
+    /// [`Self::new_in_region`] and passes the source's own.
     pub fn new(masked: &MaskedAdjustment, scale: RenderScale, geometry: &Geometry) -> Self {
-        Self::new_in_region(masked, scale, None, geometry, None)
+        Self::new_in_region(
+            masked,
+            scale,
+            None,
+            geometry,
+            None,
+            color::wb::Illuminant::default(),
+        )
     }
 
     /// For a render covering only part of the frame — coverage is still measured against the
@@ -88,6 +99,7 @@ impl MaskStage {
         region: Option<Region>,
         geometry: &Geometry,
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+        baseline: color::wb::Illuminant,
     ) -> Self {
         // No spatial sub-stage yet: every adjustment a mask can carry is per-pixel. The stroke
         // radius scales through `FrameMap`, not through this.
@@ -110,7 +122,7 @@ impl MaskStage {
         };
         Self {
             source,
-            stages: per_pixel_stages(&masked.adjustments),
+            stages: per_pixel_stages(&masked.adjustments, baseline),
             region,
         }
     }
@@ -297,6 +309,7 @@ mod tests {
             Some(region),
             &Geometry::default(),
             None,
+            color::wb::Illuminant::default(),
         )
         .apply(flat(rw, rh));
 
@@ -387,6 +400,7 @@ mod tests {
             Some(region),
             &Geometry::default(),
             None,
+            color::wb::Illuminant::default(),
         )
         .apply(flat(20, 20));
         for y in 0..20 {
@@ -577,6 +591,7 @@ mod tests {
             Some(region),
             &Geometry::default(),
             None,
+            color::wb::Illuminant::default(),
         )
         .apply(ramp(32, 64).crop(8, 20, 16, 24));
         for y in 0..24 {

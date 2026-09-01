@@ -275,6 +275,7 @@ impl RustroomApp {
             decoded.buffer.clone(),
             decoded.source_scale,
             decoded.lens.shot.clone(),
+            decoded.wb_baseline,
             move || ctx2.request_repaint(),
         );
         let buffer_long = decoded.buffer.width().max(decoded.buffer.height());
@@ -318,6 +319,9 @@ impl RustroomApp {
             hist: [[0; 256]; 3],
             make_model: decoded.label.clone(),
             lens: decoded.lens.clone(),
+            wb_baseline: decoded.wb_baseline,
+            buffer: decoded.buffer.clone(),
+            picking_wb: false,
             zoom: 1.0,
             fit_scale: 1.0,
             pan: egui::Vec2::ZERO,
@@ -405,8 +409,15 @@ impl RustroomApp {
                         // ⚠ The profile must be carried across the full-resolution handover, or
                         // corrections would silently switch off the moment the upgrade lands.
                         s.lens.shot.clone(),
+                        // ⚠ Carried across the handover for the same reason the profile is: a
+                        // baseline that reverted to D65 here would shift the white balance of
+                        // every RAW the moment the full-resolution decode landed.
+                        s.wb_baseline,
                         move || ctx2.request_repaint(),
                     );
+                    // ⚠ Replaced with the engine's, or the eyedropper would read the half-size
+                    // buffer at full-resolution coordinates.
+                    s.buffer = decoded.buffer.clone();
                     s.buffer_is_full_res = true;
                     // ⚠ Load-bearing. Region rects are in *rendered* pixels, and those
                     // coordinates change with the buffer — reusing them would describe the

@@ -30,6 +30,9 @@ pub struct BrushTool<'a> {
 /// ⚠ No `CollapsingHeader` of its own — the panel supplies the heading. A header inside a
 /// header is a nesting level this rework exists to remove.
 pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut Edited) {
+    // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
+    // nothing and keeps the later mutable borrows disjoint.
+    let baseline = s.wb_baseline;
     let mut added: Option<edit_model::Mask> = None;
     // ⚠ `horizontal_wrapped`, not `horizontal`: a fourth button does not fit the panel's ~240 pt
     // and a plain `horizontal` row overflows rather than wrapping, so the last one is clipped
@@ -155,8 +158,10 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
             }
             ui.separator();
             let a = &mut m.adjustments;
-            ed.slider(ui, &mut a.white_balance.temp, -100.0..=100.0, "Temp");
-            ed.slider(ui, &mut a.white_balance.tint, -100.0..=100.0, "Tint");
+            // ⚠ The same control as the global one, and the same baseline: a mask declares the
+            // light *this region* was under, measured against what the whole photo is balanced
+            // to. Two different meanings for one number is how they drift.
+            super::adjustments::white_balance(ui, &mut a.white_balance, baseline, None, ed);
             ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
             ed.slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
             ed.slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");

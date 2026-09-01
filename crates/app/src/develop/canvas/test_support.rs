@@ -98,3 +98,34 @@ pub(super) fn drag_through(
 
 /// The pass on which the pointer moves with the button down — i.e. the drag itself.
 pub(super) const DRAG_PASS: usize = 2;
+
+/// Drive `show` through a press → release **at one point**, i.e. an ordinary click.
+///
+/// ⚠ Not a zero-length `drag_through`: egui reports `clicked()` only for a press-release that
+/// never became a drag, so the pointer must not move between the two. Five passes for the same
+/// reason the drag harness has them — a release is only known on its own pass, and what it
+/// triggers cannot be observed until the frame after.
+pub(super) fn click_through(app: &mut RustroomApp, ctx: &egui::Context, at: egui::Pos2) {
+    for pass in 0..5 {
+        let mut events = vec![egui::Event::PointerMoved(at)];
+        if pass == 1 || pass == 2 {
+            events.push(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: pass == 1,
+                modifiers: Default::default(),
+            });
+        }
+        let c = ctx.clone();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen()),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+    }
+}

@@ -224,6 +224,23 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 tool,
                             );
                         }
+                        Tool::Edit if s.picking_wb => {
+                            // ⚠⚠ **A second, click-sensing interaction rather than changing the
+                            // canvas's own sense.** Making `resp` `click_and_drag` does give
+                            // `clicked()`, and it also changes when egui promotes a press to a
+                            // drag — which broke both mask-drag tests outright. This one exists
+                            // only while the eyedropper is armed, so no other gesture can see it.
+                            //
+                            // ⚠ Registered *after* the canvas response, which is what makes it
+                            // win the click: egui breaks a hit-test tie by registration order,
+                            // taking the last one as the one on top.
+                            let pick = ui.interact(
+                                img_rect,
+                                ui.id().with("wb_eyedropper"),
+                                egui::Sense::click(),
+                            );
+                            photo_edited |= pick_white_balance(s, &pick, frame_rect, tool);
+                        }
                         Tool::Edit | Tool::Presets => {}
                     }
 
@@ -359,10 +376,110 @@ fn draw_pending_canvas(ui: &mut egui::Ui, pending: &PendingOpen, session: Option
     }
 }
 
+/// Set the white balance from a pixel the user clicked.
+///
+/// ⚠⚠ **Reads the DECODE BUFFER, not the rendered texture.** The texture already has the white
+/// balance applied, so solving from it would make the eyedropper chase its own correction: pick a
+/// grey, the picture shifts, pick the same grey again and it shifts further. The same trap the
+/// luminance range mask keys on `base` to avoid.
+///
+/// ⚠ The click is mapped through `FrameMap`, which un-does orientation, straighten and crop — so
+/// it works on a cropped, rotated photo. It does **not** un-do lens correction or perspective,
+/// which is the caveat the brush already carries: a few pixels of displacement, and this averages
+/// a patch anyway.
+fn pick_white_balance(
+    s: &mut Session,
+    resp: &egui::Response,
+    frame_rect: egui::Rect,
+    tool: Tool,
+) -> bool {
+    if !resp.clicked() {
+        return false;
+    }
+    let Some(p) = resp.interact_pointer_pos() else {
+        return false;
+    };
+    let map = pipeline::brush::FrameMap::new(
+        &s.edits.geometry,
+        frame_rect.width() as usize,
+        frame_rect.height() as usize,
+    );
+    let [u, v] = map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top());
+    let (bw, bh) = (s.buffer.width(), s.buffer.height());
+    if bw == 0 || bh == 0 || !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+        return false;
+    }
+    // ⚠ A patch, not one pixel. A single sample is sensor noise, and the whole point of clicking
+    // a grey card is to average over it — every eyedropper in every editor does this.
+    let cx = ((u * bw as f32) as usize).min(bw - 1);
+    let cy = ((v * bh as f32) as usize).min(bh - 1);
+    let r = 2usize;
+    let (mut acc, mut n) = ([0.0f32; 3], 0.0f32);
+    for y in cy.saturating_sub(r)..=(cy + r).min(bh - 1) {
+        for x in cx.saturating_sub(r)..=(cx + r).min(bw - 1) {
+            let px = s.buffer.pixel(x, y);
+            for (a, v) in acc.iter_mut().zip(px) {
+                *a += v;
+            }
+            n += 1.0;
+        }
+    }
+    if n == 0.0 {
+        return false;
+    }
+    let mean = [acc[0] / n, acc[1] / n, acc[2] / n];
+    s.edits.white_balance = rustroom_app::wb_tool::solve_pick(mean, s.wb_baseline);
+    // ⚠ Disarmed after one pick: an eyedropper that stayed armed would turn every subsequent
+    // click — including one meant to select a mask or to dismiss something — into a white-balance
+    // change. Lightroom's behaves the same way.
+    s.picking_wb = false;
+    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::test_support::screen;
     use eframe::egui;
+
+    /// ⚠⚠ The wiring test, and it is the half this project has repeatedly shipped broken: the
+    /// solve has its own unit tests, but nothing else can see that a click on the canvas ever
+    /// reaches it. Arming the eyedropper and clicking must change `Edits`.
+    #[test]
+    fn an_armed_eyedropper_sets_the_white_balance_from_a_click() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.picking_wb = true;
+            assert_eq!(s.edits.white_balance, edit_model::WhiteBalance::default());
+        }
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let s = app.session.as_ref().expect("a session");
+        assert!(
+            s.edits.white_balance.kelvin.is_some(),
+            "the click set no temperature"
+        );
+        // ⚠ And it disarms, or every later click — one meant to select a mask, or to dismiss
+        // something — would silently re-set the white balance.
+        assert!(!s.picking_wb, "the eyedropper stayed armed after a pick");
+    }
+
+    /// ⚠ The guard on the guard: "a click changed the edits" means nothing unless a click with
+    /// the eyedropper **off** leaves them alone. Without this, a `pick_white_balance` that ran
+    /// unconditionally would pass the test above.
+    #[test]
+    fn a_click_without_the_eyedropper_leaves_the_white_balance_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(s.edits.white_balance, edit_model::WhiteBalance::default());
+    }
 
     #[test]
     fn the_fixture_opens_a_photo_and_the_canvas_draws_it() {

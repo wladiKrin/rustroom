@@ -326,6 +326,7 @@ pub fn export_one(
     dest: &Path,
     opts: &ExportOptions,
     resampler: pipeline::Resampler,
+    wb_baseline: color::wb::Illuminant,
 ) -> Result<(), String> {
     let source_long = image.width().max(image.height());
     let scaled = match opts.max_edge {
@@ -333,7 +334,16 @@ pub fn export_one(
         None => image,
     };
     let scale = scale_for(source_long, opts.max_edge);
-    let mut rendered = pipeline::build_pipeline_to(edits, scale, opts.space, resampler).run(scaled);
+    let mut rendered = pipeline::build_pipeline_spec(
+        edits,
+        scale,
+        pipeline::RenderSpec {
+            space: opts.space,
+            resampler,
+            baseline: wb_baseline,
+        },
+    )
+    .run(scaled);
 
     // ⚠⚠ **THE ORDER OF THESE THREE IS THE FEATURE, NOT AN ARRANGEMENT.**
     //
@@ -377,7 +387,7 @@ impl ExportWorker {
     pub fn spawn(
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
-        decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
+        decode: impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String> + Send + 'static,
         cancel: Arc<AtomicBool>,
         resampler: pipeline::Resampler,
     ) -> Self {
@@ -419,7 +429,7 @@ impl ExportWorker {
 fn run(
     jobs: Vec<ExportJob>,
     opts: ExportOptions,
-    decode: impl Fn(&Path) -> Result<ImageBuf, String>,
+    decode: impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String>,
     events: Sender<ExportEvent>,
     decisions: Receiver<Decision>,
     cancel: Arc<AtomicBool>,
@@ -546,7 +556,9 @@ fn run(
             break;
         }
 
-        match decoded.and_then(|img| export_one(img, &edits, &dest, &opts, resampler)) {
+        match decoded
+            .and_then(|(img, baseline)| export_one(img, &edits, &dest, &opts, resampler, baseline))
+        {
             Ok(()) => {
                 report.exported += 1;
                 claimed.insert(dest);
@@ -664,6 +676,7 @@ mod tests {
             &dest,
             &opts(&d, None),
             pipeline::Resampler::default(),
+            color::wb::Illuminant::default(),
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -679,6 +692,7 @@ mod tests {
             &dest,
             &opts(&d, Some(10)),
             pipeline::Resampler::default(),
+            color::wb::Illuminant::default(),
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (10, 5));
@@ -695,6 +709,7 @@ mod tests {
             &dest,
             &opts(&d, Some(999)),
             pipeline::Resampler::default(),
+            color::wb::Illuminant::default(),
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -733,6 +748,7 @@ mod tests {
             &plain,
             &base,
             pipeline::Resampler::default(),
+            color::wb::Illuminant::default(),
         )
         .unwrap();
         let mut changed = base.clone();
@@ -744,6 +760,7 @@ mod tests {
             &other,
             &changed,
             pipeline::Resampler::default(),
+            color::wb::Illuminant::default(),
         )
         .unwrap();
         (
@@ -818,7 +835,8 @@ mod tests {
             &Edits::default(),
             &dest,
             &opts(&d, None),
-            pipeline::Resampler::default()
+            pipeline::Resampler::default(),
+            color::wb::Illuminant::default()
         )
         .is_err());
     }
@@ -842,7 +860,7 @@ mod tests {
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
         answer: Vec<Decision>,
-        decode: impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static,
+        decode: impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String> + Send + 'static,
     ) -> (ExportReport, Vec<ExportEvent>) {
         let worker = ExportWorker::spawn(
             jobs,
@@ -887,8 +905,9 @@ mod tests {
             .collect()
     }
 
-    fn ok_decode() -> impl Fn(&Path) -> Result<ImageBuf, String> + Send + 'static {
-        |_: &Path| Ok(flat(8, 4))
+    fn ok_decode(
+    ) -> impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String> + Send + 'static {
+        |_: &Path| Ok((flat(8, 4), color::wb::Illuminant::default()))
     }
 
     /// Jobs carrying capture metadata, for the tokens that come from the catalog.
@@ -1252,7 +1271,7 @@ mod tests {
                 if p.to_string_lossy().contains("bad") {
                     Err("no".to_string())
                 } else {
-                    Ok(flat(8, 4))
+                    Ok((flat(8, 4), color::wb::Illuminant::default()))
                 }
             },
         );
@@ -1336,7 +1355,7 @@ mod tests {
             move |_: &Path| {
                 let _ = started_tx.send(());
                 let _ = resume_rx.recv();
-                Ok(flat(8, 4))
+                Ok((flat(8, 4), color::wb::Illuminant::default()))
             },
             Arc::new(AtomicBool::new(false)),
             pipeline::Resampler::default(),
@@ -1375,7 +1394,7 @@ mod tests {
             opts(&d, None),
             move |_: &Path| {
                 in_decode.store(true, Ordering::Relaxed);
-                Ok(flat(8, 4))
+                Ok((flat(8, 4), color::wb::Illuminant::default()))
             },
             flag,
             pipeline::Resampler::default(),

@@ -94,7 +94,7 @@ mod tests {
         let rich = Edits {
             version: 0,
             white_balance: edit_model::WhiteBalance {
-                temp: 20.0,
+                kelvin: Some(4200.0),
                 tint: -5.0,
             },
             exposure: 0.75,

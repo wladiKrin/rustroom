@@ -355,13 +355,23 @@ fn golden_exposure_plus1() {
     )
 }
 
+/// ⚠⚠ **Re-authored, not regenerated, when white balance became Kelvin.** Its `temp: 60` had no
+/// Kelvin equivalent — the old model's coefficients were hand-chosen and traced a different
+/// surface in gain space — so regenerating would have baked whatever the new code happens to do
+/// into the reference.
+///
+/// ⚠ 5200 K against the 6504 K baseline, and the value was **measured rather than eyeballed**: it
+/// newly pins exactly 116 of 3072 samples, the same as the reference it replaces, while moving
+/// 2412 samples where the old one moved 2008. A warmer choice reads more obviously as warm and
+/// buys it by clipping — 3200 K pins 360 — and a clipped sample cannot tell this effect from a
+/// stronger one, which is the whole discriminating power of a golden.
 #[test]
 fn golden_warm_wb() {
     check_golden(
         "warm_wb",
         &Edits {
             white_balance: WhiteBalance {
-                temp: 60.0,
+                kelvin: Some(5200.0),
                 tint: 0.0,
             },
             ..Edits::default()
@@ -410,8 +420,12 @@ fn golden_combined() {
     check_golden(
         "combined",
         &Edits {
+            // ⚠ Re-authored with `warm_wb`, and swept the same way: at 3600 K this newly pins
+            // 696 samples against the previous reference's 620, which is as close as the sweep
+            // gets — the clipping here is driven by the exposure and contrast beside it rather
+            // than by the white balance, and barely moves across the whole Kelvin range.
             white_balance: WhiteBalance {
-                temp: 30.0,
+                kelvin: Some(3600.0),
                 tint: -10.0,
             },
             exposure: 0.5,
@@ -1354,9 +1368,11 @@ fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
         RenderScale::FULL,
         None,
         None,
-        color::OutputSpace::Srgb,
+        pipeline::RenderSpec {
+            resampler: RESAMPLER,
+            ..pipeline::RenderSpec::default()
+        },
         Some(lens_shot()),
-        RESAMPLER,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

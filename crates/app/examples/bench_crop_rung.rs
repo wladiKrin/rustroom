@@ -9,7 +9,7 @@
 //! Run: `cargo run --release -p app --example bench_crop_rung <raw>`
 
 use edit_model::{CropRect, Edits, Geometry};
-use pipeline::{RenderScale, Resampler};
+use pipeline::RenderScale;
 use std::time::Instant;
 
 const PREVIEW_MAX_DIM: usize = 1600;
@@ -115,9 +115,8 @@ fn main() {
                 scale,
                 None,
                 None,
-                color::OutputSpace::Srgb,
+                pipeline::RenderSpec::default(),
                 lens.clone(),
-                Resampler::default(),
             )
         });
         let (src, down_ms) = best_of(3, || {
@@ -142,9 +141,8 @@ fn main() {
                 scale,
                 None,
                 None,
-                color::OutputSpace::Srgb,
+                pipeline::RenderSpec::default(),
                 lens.clone(),
-                Resampler::default(),
             );
             t.run(mid.clone())
         });
@@ -170,9 +168,8 @@ fn prefix_run(
         scale,
         None,
         None,
-        color::OutputSpace::Srgb,
+        pipeline::RenderSpec::default(),
         lens.clone(),
-        Resampler::default(),
     );
     prefix.run(core_image::ImageBuf::clone(buf).downscale_to(max_dim))
 }

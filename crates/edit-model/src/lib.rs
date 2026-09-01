@@ -4,14 +4,31 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Creative white balance layered on the camera WB. `temp`/`tint` in ~[-100, 100], 0 = neutral.
+/// White balance as an absolute instrument: the illuminant declared for the scene.
+///
+/// ⚠⚠ `kelvin: None` is **the file's own baseline** — the as-shot temperature for a RAW, D65 for a
+/// JPEG the camera has already balanced. That is what keeps `Edits::default()` neutral without
+/// this type knowing which kind of file it describes, which is the rule the whole golden harness
+/// rests on.
+///
+/// ⚠ It replaces a relative `temp`/`tint` pair whose coefficients were chosen by hand, and which
+/// therefore described a *shift* rather than a *target* — so a white balance copied or synced
+/// between two photos meant nothing. A legacy `temp` key is ignored by serde; every one of the 49
+/// real copies stored 0.0, so nothing was converted because nothing had ever been set.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WhiteBalance {
-    /// Positive = warmer (more red, less blue).
-    pub temp: f32,
-    /// Positive = magenta, negative = green.
+    /// Kelvin. `None` = the file's own baseline.
+    pub kelvin: Option<f32>,
+    /// Green–magenta, perpendicular to the locus. Positive = magenta, negative = green.
     pub tint: f32,
+}
+
+impl WhiteBalance {
+    /// True when this changes pixels — the rule `NoiseReduction::is_active` established.
+    pub fn is_active(&self) -> bool {
+        self.kelvin.is_some() || self.tint != 0.0
+    }
 }
 
 /// A point tone curve. Empty (or absent) = identity. Points are (x, y) in [0, 1].
@@ -1847,7 +1864,7 @@ mod tests {
         Edits {
             version: 7,
             white_balance: WhiteBalance {
-                temp: 10.0,
+                kelvin: Some(4000.0),
                 tint: 5.0,
             },
             exposure: 0.5,

@@ -136,6 +136,7 @@ impl RenderEngine {
         buffer: Arc<ImageBuf>,
         source_scale: f32,
         lens: Option<lens_profile::LensShot>,
+        wb_baseline: color::wb::Illuminant,
         on_done: impl Fn() + Send + 'static,
     ) -> Self {
         let (req_tx, req_rx) = channel::<Request>();
@@ -161,6 +162,7 @@ impl RenderEngine {
                     req.spec,
                     source_scale,
                     lens.clone(),
+                    wb_baseline,
                     &mut cache,
                     &mut brush_cache,
                 );
@@ -570,6 +572,7 @@ fn render_cached(
     spec: FrameSpec,
     source_scale: f32,
     lens: Option<lens_profile::LensShot>,
+    wb_baseline: color::wb::Illuminant,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, usize) {
@@ -680,15 +683,18 @@ fn render_cached(
         scale,
         region,
         Some(&coverage),
-        // ⚠ The **pipeline** is always sRGB. The display transform is a post-step in `pack`,
-        // deliberately outside the pipeline so the histogram stays image-referred.
-        color::OutputSpace::Srgb,
+        pipeline::RenderSpec {
+            // ⚠ The **pipeline** is always sRGB. The display transform is a post-step in `pack`,
+            // deliberately outside the pipeline so the histogram stays image-referred.
+            space: color::OutputSpace::Srgb,
+            // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this is
+            // carried for consistency rather than because it changes a pixel here.
+            resampler,
+            baseline: wb_baseline,
+        },
         // Lens correction lives in the *prefix*, which this call discards — only the tail is
         // wanted here. `None` is therefore correct rather than provisional.
         None,
-        // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this is
-        // carried for consistency rather than because it changes a pixel here.
-        resampler,
     );
     (pack(tail.run(input), region, max_dim, display_space), ran)
 }
@@ -772,6 +778,7 @@ mod tests {
                 },
                 1.0,
                 None,
+                color::wb::Illuminant::default(),
                 // ⚠ A fresh cache each time, or the second call would legitimately hit the
                 // first's checkpoint and the test would be asserting about caching instead.
                 &mut PrefixCache::default(),
@@ -855,6 +862,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -866,6 +874,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -882,6 +891,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -898,6 +908,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -912,7 +923,16 @@ mod tests {
             },
             ..base.clone()
         };
-        let (_, ran) = render_cached(&buf, &nr, FrameSpec::fit(8), 1.0, None, &mut cache, &mut bc);
+        let (_, ran) = render_cached(
+            &buf,
+            &nr,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            &mut cache,
+            &mut bc,
+        );
         assert_eq!(ran, 2, "an NR change must resume after geometry");
 
         // Geometry is first, so everything re-runs — but the downscale is still reused.
@@ -929,6 +949,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -951,6 +972,7 @@ mod tests {
             FrameSpec::fit(16),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut native,
             &mut bc,
         );
@@ -961,7 +983,16 @@ mod tests {
         );
 
         let mut fit = PrefixCache::default();
-        render_cached(&buf, &base, FrameSpec::fit(8), 1.0, None, &mut fit, &mut bc);
+        render_cached(
+            &buf,
+            &base,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            &mut fit,
+            &mut bc,
+        );
         assert_eq!(
             fit.mid_len(),
             3,
@@ -984,6 +1015,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -998,6 +1030,7 @@ mod tests {
             FrameSpec::fit(8),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -1215,6 +1248,7 @@ mod tests {
             FrameSpec::fit(n),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1231,6 +1265,7 @@ mod tests {
             FrameSpec::fit(n),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1259,6 +1294,7 @@ mod tests {
             },
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1296,8 +1332,26 @@ mod tests {
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
 
-        render_cached(&buf, &e, FrameSpec::fit(8), 1.0, None, &mut cache, &mut bc); // "fit"
-        render_cached(&buf, &e, FrameSpec::fit(16), 1.0, None, &mut cache, &mut bc); // "native"
+        render_cached(
+            &buf,
+            &e,
+            FrameSpec::fit(8),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            &mut cache,
+            &mut bc,
+        ); // "fit"
+        render_cached(
+            &buf,
+            &e,
+            FrameSpec::fit(16),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            &mut cache,
+            &mut bc,
+        ); // "native"
         assert_eq!(cache.final_len(), 2, "both modes should stay cached");
 
         for max_dim in [8usize, 16] {
@@ -1327,6 +1381,7 @@ mod tests {
             FrameSpec::fit(16),
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut cache,
             &mut bc,
         );
@@ -1353,6 +1408,7 @@ mod tests {
             },
             1.0,
             None,
+            color::wb::Illuminant::default(),
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1416,7 +1472,13 @@ mod tests {
             );
         }
 
-        let engine = RenderEngine::new(buf.clone(), 1.0, None, || {});
+        let engine = RenderEngine::new(
+            buf.clone(),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            || {},
+        );
         for (i, ed) in [&a, &a, &b, &c, &a, &d, &e, &a, &c].iter().enumerate() {
             engine.request((*ed).clone(), FrameSpec::fit(8));
             let got = wait_for_frame(&engine);
@@ -1462,7 +1524,7 @@ mod tests {
 
     #[test]
     fn produces_rgba_frame_of_expected_size() {
-        let engine = RenderEngine::new(tiny(), 1.0, None, || {});
+        let engine = RenderEngine::new(tiny(), 1.0, None, color::wb::Illuminant::default(), || {});
         engine.request(Edits::default(), FrameSpec::fit(4)); // downscale 8 -> 4
         let f = wait_for_frame(&engine);
         assert_eq!((f.width, f.height), (4, 4));
@@ -1474,7 +1536,7 @@ mod tests {
 
     #[test]
     fn exposure_brightens() {
-        let engine = RenderEngine::new(tiny(), 1.0, None, || {});
+        let engine = RenderEngine::new(tiny(), 1.0, None, color::wb::Illuminant::default(), || {});
         engine.request(
             Edits {
                 exposure: 2.0,
@@ -1707,7 +1769,13 @@ mod tests {
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
         };
-        let engine = RenderEngine::new(Arc::new(ImageBuf::new(4, 2)), 1.0, None, || {});
+        let engine = RenderEngine::new(
+            Arc::new(ImageBuf::new(4, 2)),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            || {},
+        );
         assert_eq!(engine.requests_issued(), 0, "nothing asked for yet");
 
         engine.request(Edits::default(), spec());
