@@ -4,7 +4,9 @@
 //! Split out of `main.rs` unchanged. Everything here is a free function: nothing in this
 //! module touches `RustroomApp`, which is what lets the decode workers capture it.
 
-use crate::*;
+use crate::MAX_CONCURRENT_FULL_DECODES;
+use eframe::egui;
+use rustroom_app::decode_worker::{DecodeWorker, LensFacts};
 
 /// Decode a file for editing (half-size for RAW; full decode for images) into a linear
 /// `ImageBuf`, a display label, and the buffer's size relative to a full-resolution
