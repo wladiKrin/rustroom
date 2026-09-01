@@ -239,7 +239,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         // focus would hand it every keystroke the moment a photo opened.
                         false,
                     );
-                    theme::hint(ui, "Label — what this version is called");
                     if s.copy != 0 {
                         theme::caption(ui, &format!("Copy {}", s.copy));
                     }

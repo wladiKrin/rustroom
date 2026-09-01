@@ -66,8 +66,23 @@ fn section<R>(
     });
     let (_toggle, header_response, _body) = header.body(body);
     let title_response = header_response.inner;
+    // ⚠⚠ Clicking the title must do exactly what clicking the arrow does. This used to flip
+    // `*open` directly instead, which left the panel with **two click targets that disagreed**:
+    // the arrow toggled egui's visual state and never the stored flag, while the title toggled
+    // the stored flag and never the visual. Collapsing by the arrow therefore looked right and
+    // sprang open on the next launch, because nothing had been persisted.
     if title_response.clicked() {
-        *open = !*open;
+        if let Some(mut st) = egui::collapsing_header::CollapsingState::load(ui.ctx(), state_id) {
+            st.toggle(ui);
+            st.store(ui.ctx());
+        }
+    }
+    // ⚠ egui owns the state *within* a session — it is what the arrow writes, and what the
+    // animation reads — so the flag mirrors it rather than competing with it. Reading it back
+    // here is what makes both affordances persist. In memory every frame is free; the **file**
+    // write stays gated on an actual change, at the end of `show`.
+    if let Some(st) = egui::collapsing_header::CollapsingState::load(ui.ctx(), state_id) {
+        *open = st.is_open();
     }
     title_response
 }
@@ -751,5 +766,42 @@ mod tests {
     #[test]
     fn drawing_the_section_alone_does_not_toggle_it() {
         assert!(click_title(Vec::new(), true), "no click, no change");
+    }
+
+    /// ⚠⚠ **The arrow, which the title test above structurally cannot see — and which is the
+    /// affordance a user actually reaches for.** It was broken and shipped: egui's own toggle
+    /// flipped the visual state and never touched the flag, so a section collapsed by the arrow
+    /// looked collapsed for the rest of the session and sprang open on the next launch, because
+    /// nothing was ever persisted. Reported in use, 2026-09-01.
+    ///
+    /// ⚠ The two affordances now go through one path — the title toggles egui's state and the
+    /// flag mirrors it — so this test and the title test are the two halves of one rule.
+    #[test]
+    fn clicking_the_arrow_also_persists_the_open_flag() {
+        // The arrow is the leftmost thing in the header, left of the title.
+        let at = egui::pos2(12.0, 12.0);
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        assert!(
+            !click_title(events.clone(), true),
+            "collapsing with the arrow must persist, not only change what is drawn"
+        );
+        assert!(
+            click_title(events, false),
+            "and expanding with it must persist too"
+        );
     }
 }
