@@ -103,6 +103,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if let Some(e) = lib.entries.get(f) {
                     out.mark = Some((e.id.clone(), a));
                 }
+                // ⚠⚠ **Rejecting takes the photo off the wall, and that is what Survey is for.**
+                // Without it the view is a smaller Library grid — reported as "I don't get the
+                // point of survey". Culling is a subtractive act: the wall shrinks as you
+                // reject, and what is left when you stop is the keeper. Nothing is deleted; the
+                // photo is still in the folder, still rejected, and `X` again in the grid
+                // un-rejects it.
+                if a == rustroom_app::marks::MarkAction::Flag(catalog::db::Flag::Reject) {
+                    out.drop = Some(f);
+                }
             }
         });
 
@@ -111,13 +120,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // ⚠ Said out loud rather than silently truncated. A survey that showed 24 of 57
             // without saying so reads as photos having gone missing.
             format!(
-                "Showing {} of {total} selected · click a photo to focus it · × removes it \
-                 from the survey",
+                "Showing {} of {total} selected · click a photo to focus it · X rejects and \
+                 takes it off the wall · × removes it without rejecting",
                 rows.len()
             )
         } else {
-            "Click a photo to focus it · digits, P, X and U rate it · × removes it from the \
-             survey · Enter opens it"
+            "Click a photo to focus it · digits rate · P picks · X rejects and takes it off \
+             the wall · × removes it without rejecting · Enter opens it"
                 .to_string()
         };
         ui.label(egui::RichText::new(hint).small().weak());
@@ -201,6 +210,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some((id, action)) = out.mark {
         app.apply_mark_to(&[id], action);
     }
+    // ⚠ **After the mark, never before.** `drop_from_survey` moves the focus off the photo, and
+    // the mark is addressed to the photo that *was* focused — reversed, a reject would land on
+    // whichever tile the focus had just moved to.
     if let Some(row) = out.drop {
         drop_from_survey(app, row);
     }
@@ -284,6 +296,51 @@ mod tests {
         lib.selection.select_indices(selected);
         app.library = Some(lib);
         app
+    }
+
+    /// ⚠⚠ **The act that makes Survey a culling view rather than a smaller grid.** Rejecting a
+    /// photo takes it off the wall, so the survey shrinks toward the keeper as you work.
+    #[test]
+    fn rejecting_a_photo_takes_it_off_the_wall() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(50, &[2, 5, 9]);
+        frame(&mut app, &ctx, Vec::new());
+        {
+            let lib = app.library.as_mut().unwrap();
+            lib.selection.focus(5);
+        }
+        frame(&mut app, &ctx, vec![key(egui::Key::X)]);
+        let lib = app.library.as_ref().unwrap();
+        assert!(
+            !lib.selection.contains(5),
+            "the rejected photo is still on the wall"
+        );
+        assert!(
+            lib.selection.contains(2) && lib.selection.contains(9),
+            "rejecting one photo removed the others"
+        );
+    }
+
+    /// ⚠ The other half, and the one a "does X drop it?" test cannot see: **rating must not
+    /// drop.** A star is a judgement you go on to compare against the others, so a survey that
+    /// emptied itself as you rated would destroy the very set you were choosing within.
+    #[test]
+    fn rating_a_photo_leaves_it_on_the_wall() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(50, &[2, 5, 9]);
+        frame(&mut app, &ctx, Vec::new());
+        {
+            let lib = app.library.as_mut().unwrap();
+            lib.selection.focus(5);
+        }
+        for k in [egui::Key::Num3, egui::Key::P, egui::Key::U] {
+            frame(&mut app, &ctx, vec![key(k)]);
+            let lib = app.library.as_ref().unwrap();
+            assert!(
+                lib.selection.contains(5),
+                "{k:?} took the photo off the wall"
+            );
+        }
     }
 
     #[test]

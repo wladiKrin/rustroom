@@ -54,6 +54,33 @@ pub(crate) fn photo_tile(
     marks: catalog::db::Marks,
     focused: bool,
 ) -> egui::Response {
+    photo_tile_scaled(ui, rect, id, tex, caption, marks, focused, MAX_UPSCALE)
+}
+
+/// How far a thumbnail may be magnified to fill its tile.
+///
+/// ⚠⚠ **Not 1.0, and that was the bug.** `photo_tile` originally refused to upscale at all —
+/// `thumb::cell`'s rule, so a grid thumbnail is never magnified into softness. But a Survey of
+/// three photos gives each a tile several hundred points across, and a 512 px thumbnail then sat
+/// small in the middle of it with grey all round. Reported as "the images are quite small".
+///
+/// ⚠ A survey is judged for **composition and expression**, not for sharpness — that is what
+/// Compare is for, and Compare draws from real decodes rather than from this. So filling the tile
+/// is the right trade here and would be the wrong one in the grid. 2.0 rather than unbounded
+/// because past it a 512 px thumbnail is more artifact than photograph.
+const MAX_UPSCALE: f32 = 2.0;
+
+#[allow(clippy::too_many_arguments)]
+fn photo_tile_scaled(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    tex: Option<&egui::TextureHandle>,
+    caption: &str,
+    marks: catalog::db::Marks,
+    focused: bool,
+    max_upscale: f32,
+) -> egui::Response {
     let resp = ui.interact(rect, id, egui::Sense::click());
     let p = ui.painter_at(rect);
 
@@ -69,11 +96,13 @@ pub(crate) fn photo_tile(
     );
     match tex {
         Some(t) => {
-            // Fit without upscaling, then centre — `thumb::cell`'s rule, so a thumbnail is
-            // never magnified into softness just because a tile is large.
+            // Fit, then centre. Magnified up to `max_upscale` so a large tile is filled rather
+            // than holding a small photo in a field of grey — see that constant for the trade.
             let size = t.size_vec2();
             if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
-                let scale = (img.width() / size.x).min(img.height() / size.y).min(1.0);
+                let scale = (img.width() / size.x)
+                    .min(img.height() / size.y)
+                    .min(max_upscale);
                 egui::Image::new(t)
                     .paint_at(ui, egui::Rect::from_center_size(img.center(), size * scale));
             }
