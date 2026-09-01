@@ -4,7 +4,13 @@
 //! must stay so — several `ActionKind`s call one function with the arguments swapped
 //! precisely so the two directions cannot drift.
 
-use crate::*;
+use crate::RustroomApp;
+use eframe::egui;
+use rustroom_app::action_log::ActionKind;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::sidecar;
+use rustroom_app::sync;
+use std::path::PathBuf;
 
 impl RustroomApp {
     /// Undo the most recent action, whichever kind it was.
