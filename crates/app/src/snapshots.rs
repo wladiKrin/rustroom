@@ -201,7 +201,7 @@ impl RustroomApp {
         let mut sidecar = sidecar::load_all(&path);
         let copy = sidecar.next_copy();
         sidecar.set_edits(copy, edits);
-        sidecar.set_name(copy, name);
+        sidecar.set_label(copy, name);
         if let Err(e) = sidecar::persist_all(&path, &sidecar) {
             self.status = format!("Could not create a copy: {e}");
             return;
@@ -465,7 +465,7 @@ mod tests {
         app.copy_from_snapshot(&ctx, 2);
 
         let sc = rustroom_app::sidecar::load_all(&photo);
-        assert_eq!(sc.name_of(1), Some("Warm"));
-        assert_eq!(sc.name_of(2), None, "an unnamed snapshot names nothing");
+        assert_eq!(sc.label_of(1), Some("Warm"));
+        assert_eq!(sc.label_of(2), None, "an unnamed snapshot names nothing");
     }
 }

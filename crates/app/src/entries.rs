@@ -86,7 +86,9 @@ pub fn build(scan: &[CatalogEntry], load: impl Fn(&Path) -> Sidecar) -> Vec<Phot
                 file_name: e.file_name.clone(),
                 // ⚠ Never on the original: copy 0's name is the file's, and holding a second one
                 // beside it would be two names for one thing.
-                name: (n != 0).then(|| s.name_of(n).map(str::to_string)).flatten(),
+                name: (n != 0)
+                    .then(|| s.label_of(n).map(str::to_string))
+                    .flatten(),
                 // ⚠ `Edits::default()` for a row the sidecar does not mention — the original of
                 // an unedited photo, which is neutral by definition.
                 edits: s.get(n).map(|c| c.edits.clone()).unwrap_or_default(),
@@ -117,7 +119,7 @@ mod tests {
     fn copy(n: u32, name: Option<&str>) -> CopyEntry {
         CopyEntry {
             copy: n,
-            name: name.map(str::to_string),
+            label: name.map(str::to_string),
             edits: Edits::default(),
             snapshots: Vec::new(),
             snapshot_hwm: 0,

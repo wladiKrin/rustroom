@@ -99,17 +99,22 @@ impl Snapshot {
 pub struct CopyEntry {
     /// `0` is the original; copies are numbered from 1 and never reused.
     pub copy: u32,
-    /// What this copy is called, when it has been given a name.
+    /// A short human label for this version — "B&W", "Client crop".
+    ///
+    /// ⚠⚠ **NOT a filename.** No extension, never sanitized, never reaches a path. `None`
+    /// renders as the copy number. This field *was* the export filename, which is why it used
+    /// to carry an extension and have to be path-safe; M6.1a's template took that job, so the
+    /// premise is gone. See `docs/superpowers/specs/2026-09-01-copy-labels-design.md`.
     ///
     /// ⚠⚠ **Envelope metadata, never an `Edits` field, and that is load-bearing.** In `Edits` it
     /// would need an edit group and would then **travel with a paste, a preset or a sync** —
     /// pasting a B&W recipe onto another photo would rename it "B&W" — and "Reset adjustments"
-    /// would wipe it. The cost is that `History<Edits>` cannot undo it, which is why renaming
+    /// would wipe it. The cost is that `History<Edits>` cannot undo it, which is why relabelling
     /// gets its own `ActionKind`.
     ///
-    /// ⚠ Only copies carry one. Copy 0 *is* the file, so its name is the filename on disk.
-    #[serde(default)]
-    pub name: Option<String>,
+    /// ⚠ `alias = "name"` is what makes every sidecar written before 2026-09-01 load unchanged.
+    #[serde(default, alias = "name")]
+    pub label: Option<String>,
     #[serde(default)]
     pub edits: Edits,
     /// This copy's named saved states, oldest first.
@@ -228,7 +233,7 @@ impl Sidecar {
             }
             None => self.copies.push(CopyEntry {
                 copy,
-                name: None,
+                label: None,
                 edits: Edits::default(),
                 snapshots: vec![snapshot],
                 snapshot_hwm: n,
@@ -270,7 +275,7 @@ impl Sidecar {
             Some(c) => c.edits = edits,
             None => self.copies.push(CopyEntry {
                 copy,
-                name: None,
+                label: None,
                 edits,
                 snapshots: Vec::new(),
                 snapshot_hwm: 0,
@@ -279,16 +284,16 @@ impl Sidecar {
         self.copies.sort_by_key(|c| c.copy);
     }
 
-    /// Replace (or add) one copy's name, leaving its edits alone.
-    pub fn set_name(&mut self, copy: u32, name: Option<String>) {
+    /// Replace (or add) one copy's label, leaving its edits alone.
+    pub fn set_label(&mut self, copy: u32, label: Option<String>) {
         // ⚠ Raised here rather than at the call sites, so every route that brings a copy into
         // existence keeps the mark true without having to remember to.
         self.copy_hwm = self.copy_hwm.max(copy);
         match self.copies.iter_mut().find(|c| c.copy == copy) {
-            Some(c) => c.name = name,
+            Some(c) => c.label = label,
             None => self.copies.push(CopyEntry {
                 copy,
-                name,
+                label,
                 edits: Edits::default(),
                 snapshots: Vec::new(),
                 snapshot_hwm: 0,
@@ -348,8 +353,8 @@ impl Sidecar {
         moves
     }
 
-    pub fn name_of(&self, copy: u32) -> Option<&str> {
-        self.get(copy).and_then(|c| c.name.as_deref())
+    pub fn label_of(&self, copy: u32) -> Option<&str> {
+        self.get(copy).and_then(|c| c.label.as_deref())
     }
 
     /// Whether this sidecar is worth writing at all.
@@ -366,7 +371,7 @@ impl Sidecar {
             // sidecar and every snapshot in it.
             [only] => {
                 only.copy == 0
-                    && only.name.is_none()
+                    && only.label.is_none()
                     && only.edits == Edits::default()
                     && only.snapshots.is_empty()
             }
@@ -403,6 +408,40 @@ pub fn edited_at(photo: &Path) -> Option<std::time::SystemTime> {
 /// Explicit dispatch is immune to that combination, which is why it is worth the four extra
 /// lines. The same class of trap already cost this project a test that passed while reading
 /// nothing (`an_existing_linear_sidecar_still_loads`, M3.1b).
+/// A stored label, with the values nobody chose removed.
+///
+/// ⚠⚠ Rule 1 exists because of real data: of three named copies in the author's folders, two
+/// stored the *derived default* (`"DSCF6712_1.RAF"`), frozen because the old field displayed a
+/// whole filename and committing it wrote that string back. Those are not labels.
+///
+/// ⚠ It is safe in the case that looks risky — if someone typed the default deliberately, this is
+/// indistinguishable from the accident, and the rendered outcome is identical because the badge
+/// shows the number either way.
+///
+/// ⚠ Deliberately **not** "strip a leading `{stem}_` prefix": same visible outcome by a rule that
+/// can be wrong, since it would mangle a genuine label beginning with the stem.
+pub fn normalise_label(file_name: &str, copy: u32, stored: Option<&str>) -> Option<String> {
+    let stored = stored?;
+    let bare = strip_extension(stored);
+    if copy != 0 {
+        let derived = crate::file_rename::default_copy_name(file_name, copy);
+        if stored == derived || bare == strip_extension(&derived) {
+            return None;
+        }
+    }
+    if bare.is_empty() {
+        return None;
+    }
+    Some(bare.to_string())
+}
+
+fn strip_extension(s: &str) -> &str {
+    match s.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem,
+        _ => s,
+    }
+}
+
 pub fn load_all(photo: &Path) -> Sidecar {
     let Ok(text) = std::fs::read_to_string(path(photo)) else {
         return Sidecar::default();
@@ -411,14 +450,24 @@ pub fn load_all(photo: &Path) -> Sidecar {
         return Sidecar::default();
     };
     if value.get("copies").is_some() {
-        serde_json::from_value(value).unwrap_or_default()
+        let mut s: Sidecar = serde_json::from_value(value).unwrap_or_default();
+        // ⚠ Applied on read rather than as a migration pass: no version bump, no backfill, and
+        // the value normalises on the next write.
+        let file_name = photo
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for c in &mut s.copies {
+            c.label = normalise_label(&file_name, c.copy, c.label.as_deref());
+        }
+        s
     } else {
         // Legacy: the whole file is one bare `Edits`, which is copy 0.
         match serde_json::from_value::<Edits>(value) {
             Ok(edits) => Sidecar {
                 copies: vec![CopyEntry {
                     copy: 0,
-                    name: None,
+                    label: None,
                     edits,
                     // A sidecar this old predates snapshots by definition.
                     snapshots: Vec::new(),
@@ -612,7 +661,7 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
-                    name: None,
+                    label: None,
                     edits: Edits {
                         exposure: 0.5,
                         ..Edits::default()
@@ -622,7 +671,7 @@ mod tests {
                 },
                 CopyEntry {
                     copy: 3,
-                    name: None,
+                    label: None,
                     edits: Edits {
                         saturation: -100.0,
                         ..Edits::default()
@@ -735,7 +784,7 @@ mod tests {
         for n in 0..=2 {
             s.copies.push(CopyEntry {
                 copy: n,
-                name: None,
+                label: None,
                 edits: Edits::default(),
                 snapshots: Vec::new(),
                 snapshot_hwm: 0,
@@ -753,7 +802,7 @@ mod tests {
         assert!(s.is_neutral(), "empty");
         s.copies.push(CopyEntry {
             copy: 0,
-            name: None,
+            label: None,
             edits: Edits::default(),
             snapshots: Vec::new(),
             snapshot_hwm: 0,
@@ -764,14 +813,14 @@ mod tests {
             copies: vec![
                 CopyEntry {
                     copy: 0,
-                    name: None,
+                    label: None,
                     edits: Edits::default(),
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
                 },
                 CopyEntry {
                     copy: 1,
-                    name: None,
+                    label: None,
                     edits: Edits::default(),
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
@@ -789,7 +838,7 @@ mod tests {
                 copies: vec![
                     CopyEntry {
                         copy: 0,
-                        name: None,
+                        label: None,
                         edits: Edits {
                             exposure: e0,
                             ..Edits::default()
@@ -799,7 +848,7 @@ mod tests {
                     },
                     CopyEntry {
                         copy: 1,
-                        name: None,
+                        label: None,
                         edits: Edits {
                             exposure: e1,
                             ..Edits::default()
@@ -879,6 +928,57 @@ mod tests {
         assert_eq!(load_copy(&photo, 1).unwrap().exposure, 2.0);
         assert!(load_copy(&photo, 9).is_none(), "an absent copy is None");
     }
+    /// ⚠⚠ The two arms of the read rule, and the first is the one that matters. Real sidecars in
+    /// the author's folders stored `"DSCF6712_1.RAF"` — the *derived default*, frozen because the
+    /// field displayed a whole filename and committing it wrote that string back. A label nobody
+    /// chose must not survive as one.
+    #[test]
+    fn a_stored_derived_default_reads_as_unlabelled() {
+        assert_eq!(
+            normalise_label("DSCF6712.RAF", 1, Some("DSCF6712_1.RAF")),
+            None
+        );
+        // The same string without its extension is equally derived.
+        assert_eq!(normalise_label("DSCF6712.RAF", 1, Some("DSCF6712_1")), None);
+    }
+
+    #[test]
+    fn a_real_label_survives_with_any_extension_stripped() {
+        assert_eq!(
+            normalise_label("DSCF6237.RAF", 1, Some("DSC")),
+            Some("DSC".into())
+        );
+        assert_eq!(
+            normalise_label("DSCF6237.RAF", 1, Some("Warm.RAF")),
+            Some("Warm".into())
+        );
+    }
+
+    /// ⚠ A label test needs a labelled *and* an unlabelled case: a fixture with only one cannot
+    /// tell "label-or-number" from "number always".
+    #[test]
+    fn an_absent_label_stays_absent() {
+        assert_eq!(normalise_label("DSCF6237.RAF", 1, None), None);
+        assert_eq!(normalise_label("DSCF6237.RAF", 0, None), None);
+    }
+
+    /// ⚠ Copy 0 may be labelled now, so the derived-default rule must not fire on it — there is
+    /// no derived default for the original, whose name is simply the file's.
+    #[test]
+    fn copy_zero_keeps_a_label() {
+        assert_eq!(
+            normalise_label("DSCF6237.RAF", 0, Some("Colour")),
+            Some("Colour".into())
+        );
+    }
+
+    /// The `serde` alias is what lets every sidecar written before this change load unchanged.
+    #[test]
+    fn a_sidecar_written_with_name_still_loads() {
+        let json = r#"{"copies":[{"copy":1,"name":"DSC","edits":{}}],"copy_hwm":1}"#;
+        let s: Sidecar = serde_json::from_str(json).expect("must parse");
+        assert_eq!(s.copies[0].label.as_deref(), Some("DSC"));
+    }
 }
 
 #[cfg(test)]
@@ -902,11 +1002,11 @@ mod naming_tests {
         s.set_edits(1, edited(2.0));
         s.set_edits(2, edited(3.0));
 
-        s.set_name(1, Some("Warm".into()));
+        s.set_label(1, Some("Warm".into()));
 
-        assert_eq!(s.name_of(1), Some("Warm"));
-        assert_eq!(s.name_of(0), None, "the original is untouched");
-        assert_eq!(s.name_of(2), None, "so is the sibling");
+        assert_eq!(s.label_of(1), Some("Warm"));
+        assert_eq!(s.label_of(0), None, "the original is untouched");
+        assert_eq!(s.label_of(2), None, "so is the sibling");
         assert_eq!(s.get(0).unwrap().edits, edited(1.0));
         assert_eq!(
             s.get(1).unwrap().edits,
@@ -920,9 +1020,9 @@ mod naming_tests {
     fn clearing_a_name_puts_the_copy_back_to_its_number() {
         let mut s = Sidecar::default();
         s.set_edits(1, edited(2.0));
-        s.set_name(1, Some("Warm".into()));
-        s.set_name(1, None);
-        assert_eq!(s.name_of(1), None);
+        s.set_label(1, Some("Warm".into()));
+        s.set_label(1, None);
+        assert_eq!(s.label_of(1), None);
         assert_eq!(
             s.get(1).unwrap().edits,
             edited(2.0),
@@ -935,7 +1035,7 @@ mod naming_tests {
         // ⚠ Otherwise naming a copy and then resetting it would delete the copy, because
         // `persist_all` removes a sidecar it considers neutral.
         let mut s = Sidecar::default();
-        s.set_name(0, Some("named".into()));
+        s.set_label(0, Some("named".into()));
         assert!(
             !s.is_neutral(),
             "a name is worth a file even with neutral edits"
@@ -947,9 +1047,9 @@ mod naming_tests {
         // ⚠ Every slider drag calls `set_edits`. Clearing the name there would erase it on the
         // next keystroke after renaming — invisible until the export came out wrong.
         let mut s = Sidecar::default();
-        s.set_name(1, Some("Warm".into()));
+        s.set_label(1, Some("Warm".into()));
         s.set_edits(1, edited(2.0));
-        assert_eq!(s.name_of(1), Some("Warm"));
+        assert_eq!(s.label_of(1), Some("Warm"));
     }
 }
 
@@ -1008,7 +1108,7 @@ mod compact_tests {
         let mut s = Sidecar::default();
         s.set_edits(3, edited(3.0));
         s.set_edits(7, edited(7.0));
-        s.set_name(7, Some("Warm".into()));
+        s.set_label(7, Some("Warm".into()));
         s.set_edits(5, edited(5.0));
 
         assert_eq!(s.compact(), vec![(3, 1), (5, 2), (7, 3)]);
@@ -1017,7 +1117,7 @@ mod compact_tests {
         assert_eq!(s.get(2).unwrap().edits, edited(5.0));
         assert_eq!(s.get(3).unwrap().edits, edited(7.0));
         assert_eq!(
-            s.name_of(3),
+            s.label_of(3),
             Some("Warm"),
             "a named copy keeps its name, so its export filename does not move"
         );

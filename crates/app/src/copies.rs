@@ -97,7 +97,7 @@ impl RustroomApp {
             }
         }
         sidecar::load_all(&id.path)
-            .name_of(id.copy)
+            .label_of(id.copy)
             .map(str::to_string)
     }
 
@@ -115,7 +115,7 @@ impl RustroomApp {
         // ⚠ Read-modify-write of the whole envelope: the file's other copies live in the same
         // sidecar and must survive.
         let mut sidecar = sidecar::load_all(&id.path);
-        sidecar.set_name(id.copy, name.clone());
+        sidecar.set_label(id.copy, name.clone());
         if let Err(e) = sidecar::persist_all(&id.path, &sidecar) {
             self.status = format!("Could not rename the copy: {e}");
             return false;

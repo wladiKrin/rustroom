@@ -298,7 +298,7 @@ impl RustroomApp {
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session
             // opened without a Library (single-file mode) still knows its own name.
-            name: envelope.name_of(id.copy).map(str::to_string),
+            name: envelope.label_of(id.copy).map(str::to_string),
             snapshots: envelope.snapshots_of(id.copy).to_vec(),
             engine,
             edits,
@@ -542,7 +542,7 @@ mod tests {
 
         let mut sc = rustroom_app::sidecar::Sidecar::default();
         sc.set_edits(1, Edits::default());
-        sc.set_name(1, Some("Warm".to_string()));
+        sc.set_label(1, Some("Warm".to_string()));
         sc.add_snapshot(
             1,
             rustroom_app::sidecar::Snapshot {
