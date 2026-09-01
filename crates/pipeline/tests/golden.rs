@@ -8,7 +8,14 @@ use edit_model::{
     ColorGrading, Dehaze, Edits, GradeWheel, LocalContrast, NoiseReduction, Sharpening, ToneCurve,
     Vignette, WhiteBalance,
 };
-use pipeline::{build_pipeline, RenderScale};
+use pipeline::{build_pipeline, RenderScale, Resampler};
+
+/// What every golden renders with.
+///
+/// ⚠ One constant rather than `Resampler::default()` at each site, so the day the shipping
+/// kernel changes again the references move by editing **one line** — and the diff says which
+/// commit did it.
+const RESAMPLER: Resampler = Resampler::Bilinear;
 use std::path::PathBuf;
 
 const W: usize = 64;
@@ -299,7 +306,7 @@ fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
 fn check_golden_in_space(name: &str, edits: &Edits, space: color::OutputSpace) {
     compare_or_update(
         name,
-        pipeline::build_pipeline_to(edits, RenderScale::FULL, space).run(chart()),
+        pipeline::build_pipeline_to(edits, RenderScale::FULL, space, RESAMPLER).run(chart()),
     );
 }
 
@@ -1179,6 +1186,7 @@ fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
         None,
         color::OutputSpace::Srgb,
         Some(lens_shot()),
+        RESAMPLER,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

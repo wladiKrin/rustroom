@@ -1,21 +1,25 @@
+use crate::resample::{self, Resampler, Weights};
 use crate::PipelineStage;
 use core_image::ImageBuf;
 use edit_model::{CropRect, Geometry, Orientation, Quarter};
 
-/// Orient (quarter turns and mirroring), straighten (bilinear rotation about center), then
-/// crop to a normalized rectangle.
+/// Orient (quarter turns and mirroring), straighten (a resampled rotation about the centre),
+/// then crop to a normalized rectangle.
 pub struct GeometryStage {
     orientation: Orientation,
     angle_rad: f32,
     crop: CropRect,
+    /// ⚠ Built once here rather than per pixel: the phase table costs 6144 kernel evaluations.
+    weights: Weights,
 }
 
 impl GeometryStage {
-    pub fn new(g: &Geometry) -> Self {
+    pub fn new(g: &Geometry, resampler: Resampler) -> Self {
         Self {
             orientation: g.orientation,
             angle_rad: g.angle.to_radians(),
             crop: g.crop,
+            weights: Weights::new(resampler),
         }
     }
 }
@@ -66,7 +70,7 @@ impl PipelineStage for GeometryStage {
             orient(&image, self.orientation)
         };
         let rotated = if self.angle_rad != 0.0 {
-            rotate_bilinear(&image, self.angle_rad)
+            rotate(&image, self.angle_rad, &self.weights)
         } else {
             image
         };
@@ -74,36 +78,8 @@ impl PipelineStage for GeometryStage {
     }
 }
 
-/// Bilinearly sample `src` at fractional (sx, sy); out-of-bounds reads as black.
-pub(crate) fn sample_bilinear(src: &ImageBuf, sx: f32, sy: f32) -> [f32; 3] {
-    let w = src.width() as i32;
-    let h = src.height() as i32;
-    let x0 = sx.floor() as i32;
-    let y0 = sy.floor() as i32;
-    let fx = sx - x0 as f32;
-    let fy = sy - y0 as f32;
-    let get = |xi: i32, yi: i32| -> [f32; 3] {
-        if xi < 0 || yi < 0 || xi >= w || yi >= h {
-            [0.0, 0.0, 0.0]
-        } else {
-            src.pixel(xi as usize, yi as usize)
-        }
-    };
-    let p00 = get(x0, y0);
-    let p10 = get(x0 + 1, y0);
-    let p01 = get(x0, y0 + 1);
-    let p11 = get(x0 + 1, y0 + 1);
-    let mut out = [0.0f32; 3];
-    for c in 0..3 {
-        let top = p00[c] * (1.0 - fx) + p10[c] * fx;
-        let bot = p01[c] * (1.0 - fx) + p11[c] * fx;
-        out[c] = top * (1.0 - fy) + bot * fy;
-    }
-    out
-}
-
 /// Rotate about the image center by `angle_rad`, keeping the canvas size.
-fn rotate_bilinear(src: &ImageBuf, angle_rad: f32) -> ImageBuf {
+fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
     let w = src.width();
     let h = src.height();
     let cx = (w as f32 - 1.0) / 2.0;
@@ -117,7 +93,7 @@ fn rotate_bilinear(src: &ImageBuf, angle_rad: f32) -> ImageBuf {
             // Inverse map: sample the source at -angle.
             let sx = cx + dx * cos + dy * sin;
             let sy = cy - dx * sin + dy * cos;
-            out.set_pixel(x, y, sample_bilinear(src, sx, sy));
+            out.set_pixel(x, y, resample::sample(src, sx, sy, weights));
         }
     }
     out
@@ -159,7 +135,7 @@ mod tests {
             orientation: Orientation { rotate, mirror },
             ..Default::default()
         };
-        GeometryStage::new(&g).apply(img)
+        GeometryStage::new(&g, Resampler::default()).apply(img)
     }
 
     #[test]
@@ -201,7 +177,7 @@ mod tests {
 
     #[test]
     fn zero_angle_full_crop_is_identity() {
-        let g = GeometryStage::new(&Geometry::default());
+        let g = GeometryStage::new(&Geometry::default(), Resampler::default());
         let mut img = ImageBuf::new(2, 2);
         img.set_pixel(0, 0, [0.1, 0.2, 0.3]);
         let out = g.apply(img.clone());
@@ -210,16 +186,19 @@ mod tests {
 
     #[test]
     fn crop_changes_dimensions_and_content() {
-        let g = GeometryStage::new(&Geometry {
-            orientation: Default::default(),
-            angle: 0.0,
-            crop: CropRect {
-                left: 0.5,
-                top: 0.0,
-                right: 1.0,
-                bottom: 1.0,
+        let g = GeometryStage::new(
+            &Geometry {
+                orientation: Default::default(),
+                angle: 0.0,
+                crop: CropRect {
+                    left: 0.5,
+                    top: 0.0,
+                    right: 1.0,
+                    bottom: 1.0,
+                },
             },
-        });
+            Resampler::default(),
+        );
         let mut img = ImageBuf::new(4, 2);
         for y in 0..2 {
             for x in 0..4 {
@@ -235,7 +214,7 @@ mod tests {
     fn rotate_zero_is_identity() {
         let mut img = ImageBuf::new(3, 3);
         img.set_pixel(1, 1, [0.5, 0.5, 0.5]);
-        let out = rotate_bilinear(&img, 0.0);
+        let out = rotate(&img, 0.0, &Weights::new(Resampler::default()));
         assert_eq!(out.pixel(1, 1), [0.5, 0.5, 0.5]);
     }
 
@@ -247,9 +226,50 @@ mod tests {
                 img.set_pixel(x, y, [0.4, 0.4, 0.4]);
             }
         }
-        let out = rotate_bilinear(&img, 10f32.to_radians());
+        let out = rotate(
+            &img,
+            10f32.to_radians(),
+            &Weights::new(Resampler::default()),
+        );
         assert_eq!((out.width(), out.height()), (9, 9));
         let [r, _, _] = out.pixel(4, 4);
         assert!((r - 0.4).abs() < 1e-4);
+    }
+
+    /// ⚠ That the choice actually reaches the straighten. The obvious mistake — building the
+    /// stage's `Weights` from `Resampler::default()` and ignoring the argument — leaves every
+    /// other test in this file green, because they all pass the default.
+    #[test]
+    fn the_straighten_honours_the_chosen_resampler() {
+        // ⚠ A hard edge, not a smooth ramp: every kernel reproduces a linear ramp almost
+        // exactly, so a ramp cannot tell two kernels apart.
+        let mut img = ImageBuf::new(32, 32);
+        for y in 0..32 {
+            for x in 0..32 {
+                let v = if x < 16 { 0.0 } else { 1.0 };
+                img.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let straighten = |k| {
+            GeometryStage::new(
+                &Geometry {
+                    angle: 7.0,
+                    ..Default::default()
+                },
+                k,
+            )
+            .apply(img.clone())
+        };
+        let bilinear = straighten(Resampler::Bilinear);
+        for k in Resampler::ALL {
+            if k == Resampler::Bilinear {
+                continue;
+            }
+            assert_ne!(
+                straighten(k).data(),
+                bilinear.data(),
+                "{k:?} rendered identically to bilinear"
+            );
+        }
     }
 }

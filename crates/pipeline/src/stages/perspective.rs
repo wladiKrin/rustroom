@@ -15,18 +15,23 @@
 //! documents: toggling perspective after painting shifts strokes.
 
 use crate::perspective::Homography;
-use crate::stages::geometry::sample_bilinear;
+use crate::resample::{self, Resampler, Weights};
 use crate::PipelineStage;
 use core_image::ImageBuf;
 use edit_model::Perspective;
 
 pub struct PerspectiveStage {
     params: Perspective,
+    /// ⚠ Built once here rather than per pixel, like `GeometryStage`'s.
+    weights: Weights,
 }
 
 impl PerspectiveStage {
-    pub fn new(params: Perspective) -> Self {
-        Self { params }
+    pub fn new(params: Perspective, resampler: Resampler) -> Self {
+        Self {
+            params,
+            weights: Weights::new(resampler),
+        }
     }
 }
 
@@ -54,7 +59,7 @@ impl PipelineStage for PerspectiveStage {
         let aspect = cx / cy;
         let hom = Homography::from_edits(&self.params, aspect);
 
-        // ⚠ Sequential, mirroring `rotate_bilinear` in the sibling stage rather than reaching for
+        // ⚠ Sequential, mirroring `geometry::rotate` in the sibling stage rather than reaching for
         // rayon. Geometry's whole-buffer rotation measures 203 ms at full resolution and nobody
         // has complained; matching it keeps the two readable side by side. If this ever needs to
         // be faster, both should move together.
@@ -63,7 +68,8 @@ impl PipelineStage for PerspectiveStage {
             for x in 0..w {
                 let n = ((x as f32 - cx) / cy, (y as f32 - cy) / cy);
                 let s = hom.source_of(n);
-                out.set_pixel(x, y, sample_bilinear(&image, cx + s.0 * cy, cy + s.1 * cy));
+                let px = resample::sample(&image, cx + s.0 * cy, cy + s.1 * cy, &self.weights);
+                out.set_pixel(x, y, px);
             }
         }
         out
@@ -91,7 +97,8 @@ mod tests {
     #[test]
     fn a_neutral_perspective_reproduces_the_image_exactly() {
         let src = ramp(37, 23);
-        let out = PerspectiveStage::new(Perspective::default()).apply(src.clone());
+        let out =
+            PerspectiveStage::new(Perspective::default(), Resampler::default()).apply(src.clone());
         assert_eq!(out, src);
     }
 
@@ -100,10 +107,13 @@ mod tests {
     #[test]
     fn a_keystone_really_moves_the_pixels() {
         let src = ramp(64, 48);
-        let out = PerspectiveStage::new(Perspective {
-            vertical: 50.0,
-            ..Default::default()
-        })
+        let out = PerspectiveStage::new(
+            Perspective {
+                vertical: 50.0,
+                ..Default::default()
+            },
+            Resampler::default(),
+        )
         .apply(src.clone());
         assert_ne!(out, src);
         assert_eq!((out.width(), out.height()), (src.width(), src.height()));
@@ -114,12 +124,15 @@ mod tests {
     #[test]
     fn the_canvas_size_is_unchanged_by_a_strong_correction() {
         for (w, h) in [(64, 48), (48, 64), (2, 2)] {
-            let out = PerspectiveStage::new(Perspective {
-                vertical: 100.0,
-                horizontal: -100.0,
-                aspect: 80.0,
-                scale: 0.0,
-            })
+            let out = PerspectiveStage::new(
+                Perspective {
+                    vertical: 100.0,
+                    horizontal: -100.0,
+                    aspect: 80.0,
+                    scale: 0.0,
+                },
+                Resampler::default(),
+            )
             .apply(ramp(w, h));
             assert_eq!((out.width(), out.height()), (w, h));
         }
@@ -129,11 +142,50 @@ mod tests {
     #[test]
     fn a_one_pixel_image_passes_through() {
         let src = ImageBuf::new(1, 1);
-        let out = PerspectiveStage::new(Perspective {
-            vertical: 50.0,
-            ..Default::default()
-        })
+        let out = PerspectiveStage::new(
+            Perspective {
+                vertical: 50.0,
+                ..Default::default()
+            },
+            Resampler::default(),
+        )
         .apply(src.clone());
         assert_eq!(out, src);
+    }
+
+    /// ⚠ That the choice reaches this stage too. Lens correction, geometry and perspective each
+    /// build their own `Weights`, so each needs its own guard — one of the three honouring the
+    /// setting says nothing about the other two.
+    #[test]
+    fn the_keystone_honours_the_chosen_resampler() {
+        // ⚠ A hard edge, not `ramp`: every kernel reproduces a linear ramp almost exactly.
+        let mut src = ImageBuf::new(48, 48);
+        for y in 0..48 {
+            for x in 0..48 {
+                let v = if (x / 4) % 2 == 0 { 0.0 } else { 1.0 };
+                src.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let keystone = |k| {
+            PerspectiveStage::new(
+                Perspective {
+                    vertical: 40.0,
+                    ..Default::default()
+                },
+                k,
+            )
+            .apply(src.clone())
+        };
+        let bilinear = keystone(Resampler::Bilinear);
+        for k in Resampler::ALL {
+            if k == Resampler::Bilinear {
+                continue;
+            }
+            assert_ne!(
+                keystone(k).data(),
+                bilinear.data(),
+                "{k:?} rendered identically to bilinear"
+            );
+        }
     }
 }

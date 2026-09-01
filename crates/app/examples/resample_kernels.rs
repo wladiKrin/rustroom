@@ -666,10 +666,15 @@ fn main() {
     // worth reading. Run on a crop, because the full frame is not needed to prove agreement.
     let probe = src.crop(1200, 800, 512, 512);
     let mine = rotate(&probe, angle, Kernel::Bilinear, None);
-    let theirs = pipeline::GeometryStage::new(&Geometry {
-        angle: ANGLE_DEG,
-        ..Default::default()
-    })
+    let theirs = pipeline::GeometryStage::new(
+        &Geometry {
+            angle: ANGLE_DEG,
+            ..Default::default()
+        },
+        // ⚠ Bilinear explicitly: the replica above is being checked against the *shipping*
+        // sampler this example measured, not against whatever the default has since become.
+        pipeline::Resampler::Bilinear,
+    )
     .apply(probe.clone());
     let mut worst = 0.0f32;
     for y in 0..mine.height() {

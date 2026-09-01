@@ -355,7 +355,9 @@ pub fn export_one(
         None => image,
     };
     let scale = scale_for(source_long, opts.max_edge);
-    let rendered = pipeline::build_pipeline_to(edits, scale, opts.space).run(scaled);
+    let rendered =
+        pipeline::build_pipeline_to(edits, scale, opts.space, pipeline::Resampler::Bilinear)
+            .run(scaled);
     export::save(&rendered, dest, opts.format, opts.quality, opts.space).map_err(|e| e.to_string())
 }
 

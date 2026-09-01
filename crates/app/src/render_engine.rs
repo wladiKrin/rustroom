@@ -582,7 +582,7 @@ fn render_cached(
     // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
     // A missing profile — an unlisted lens, or a JPEG — skips the stage silently, which is the
     // ordinary case and needs no special-casing anywhere else.
-    let steps = build_prefix_steps(edits, scale, lens);
+    let steps = build_prefix_steps(edits, scale, lens, pipeline::Resampler::Bilinear);
     let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
     let tier_at = |n: usize| {
         if n == steps.len() {
@@ -677,6 +677,7 @@ fn render_cached(
         // Lens correction lives in the *prefix*, which this call discards — only the tail is
         // wanted here. `None` is therefore correct rather than provisional.
         None,
+        pipeline::Resampler::Bilinear,
     );
     (pack(tail.run(input), region, max_dim, display_space), ran)
 }
@@ -968,7 +969,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        (PrefixKey::new(&e, RenderScale::FULL), tag)
+        (
+            PrefixKey::new(&e, RenderScale::FULL, pipeline::Resampler::Bilinear),
+            tag,
+        )
     }
 
     #[test]
@@ -1227,7 +1231,12 @@ mod tests {
         for max_dim in [8usize, 16] {
             let scale = render_scale(16, rendered_long_edge(16, max_dim), 1.0);
             assert!(
-                cache.get(&(PrefixKey::new(&e, scale), max_dim)).is_some(),
+                cache
+                    .get(&(
+                        PrefixKey::new(&e, scale, pipeline::Resampler::Bilinear),
+                        max_dim
+                    ))
+                    .is_some(),
                 "max_dim {max_dim} was evicted"
             );
         }

@@ -202,6 +202,7 @@ fn render(
         None,
         space,
         lens,
+        pipeline::Resampler::Bilinear,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
