@@ -4,7 +4,23 @@
 //! Split out of `main.rs` unchanged. ⚠ `Session` still means "fully decoded" — the
 //! half-open state lives in [`PendingOpen`], and nothing downstream knows about it.
 
-use crate::*;
+use crate::{
+    preview_edits, AppView, PendingOpen, RustroomApp, Session, DECODE_DEBOUNCE, PREVIEW_MAX_DIM,
+};
+use edit_model::EditGroups;
+use edit_model::Edits;
+use eframe::egui;
+use rustroom_app::decode_worker::Decoded;
+use rustroom_app::full_res;
+use rustroom_app::history::History;
+use rustroom_app::photo_id::PhotoId;
+use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
+use rustroom_app::sidecar;
+use rustroom_app::tool::Tool;
+use rustroom_app::view_region;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 
 /// The photo as it was before any adjustment, at the **current framing**.
 ///
@@ -490,6 +506,7 @@ impl RustroomApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{test_app, test_ui};
 
     #[test]
     fn the_before_view_keeps_the_geometry_and_drops_the_adjustments() {
