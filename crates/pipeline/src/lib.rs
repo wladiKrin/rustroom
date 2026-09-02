@@ -153,10 +153,14 @@ pub struct Region {
 /// ⚠ Deliberately **not** a field of [`PrefixKey`] beside `scale`: on a photo with no geometry,
 /// no perspective and no lens profile nothing resamples, so changing the kernel must invalidate
 /// nothing. Putting it on the steps that actually use it is what gives that for free.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// ⚠ **No longer `Copy`**, because a spot list is a `Vec`. `PrefixKey::upto` clones instead —
+/// a handful of five-field structs per render, against re-running lens correction.
+#[derive(Debug, Clone, PartialEq)]
 pub enum PrefixStepKey {
     LensCorrection(edit_model::LensCorrection, Resampler),
     Perspective(edit_model::Perspective, Resampler),
+    SpotRemoval(Vec<edit_model::Spot>),
     Geometry(edit_model::Geometry, Resampler),
     NoiseReduction(edit_model::NoiseReduction),
     Dehaze(edit_model::Dehaze),
@@ -212,6 +216,16 @@ pub fn build_prefix_steps(
                 edits.perspective,
                 resampler,
             )),
+        });
+    }
+
+    // ⚠ Between perspective and geometry, i.e. on `GeometryStage`'s **input** — the space brush
+    // strokes are anchored in. A spot is content-referred, so anchoring it here is what makes
+    // "the patch survives a crop" free. See the stage's module docs.
+    if !edits.spots.is_empty() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::SpotRemoval(edits.spots.clone()),
+            stage: Box::new(SpotRemovalStage::new(&edits.spots)),
         });
     }
 
@@ -285,7 +299,10 @@ impl PrefixKey {
     /// the end saturates, so a caller cannot key a checkpoint that does not exist.
     pub fn upto(steps: &[PrefixStep], n: usize, scale: RenderScale) -> Self {
         Self {
-            steps: steps[..n.min(steps.len())].iter().map(|s| s.key).collect(),
+            steps: steps[..n.min(steps.len())]
+                .iter()
+                .map(|s| s.key.clone())
+                .collect(),
             scale: scale.get(),
         }
     }
@@ -972,10 +989,10 @@ mod tests {
         };
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default());
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default());
-        assert_eq!(steps_a.len(), 4);
+        assert_eq!(steps_a.len(), 5);
 
         // Same up to and including noise reduction...
-        for n in 0..=3 {
+        for n in 0..=4 {
             assert_eq!(
                 PrefixKey::upto(&steps_a, n, RenderScale::FULL),
                 PrefixKey::upto(&steps_b, n, RenderScale::FULL),
@@ -984,8 +1001,8 @@ mod tests {
         }
         // ...and different once dehaze has run.
         assert_ne!(
-            PrefixKey::upto(&steps_a, 4, RenderScale::FULL),
-            PrefixKey::upto(&steps_b, 4, RenderScale::FULL)
+            PrefixKey::upto(&steps_a, 5, RenderScale::FULL),
+            PrefixKey::upto(&steps_b, 5, RenderScale::FULL)
         );
 
         // The full key is the deepest truncation, so `new` and `upto` cannot disagree.
@@ -1026,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn the_prefix_holds_perspective_geometry_noise_reduction_and_dehaze() {
+    fn the_prefix_holds_perspective_spots_geometry_noise_reduction_and_dehaze() {
         // The tripwire: if a stage is later inserted into the prefix region, this fails and
         // forces PrefixKey to be updated with its parameters.
         //
@@ -1035,7 +1052,13 @@ mod tests {
         let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
         assert_eq!(
             prefix.stage_names(),
-            vec!["perspective", "geometry", "noise_reduction", "dehaze"]
+            vec![
+                "perspective",
+                "spot_removal",
+                "geometry",
+                "noise_reduction",
+                "dehaze"
+            ]
         );
         for name in tail.stage_names() {
             assert!(
@@ -1066,14 +1089,14 @@ mod tests {
         let keys = |e: &Edits| -> Vec<PrefixStepKey> {
             build_prefix_steps(e, RenderScale::FULL, None, Resampler::default())
                 .iter()
-                .map(|s| s.key)
+                .map(|s| s.key.clone())
                 .collect()
         };
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            4,
-            "all four prefix stages should be active"
+            5,
+            "all five prefix stages should be active"
         );
 
         let variants = [
@@ -1090,6 +1113,19 @@ mod tests {
             (
                 1,
                 Edits {
+                    spots: vec![edit_model::Spot {
+                        centre: [0.7, 0.7],
+                        source: [0.2, 0.2],
+                        radius: 0.09,
+                        feather: 10.0,
+                        mode: edit_model::SpotMode::Clone,
+                    }],
+                    ..base.clone()
+                },
+            ),
+            (
+                2,
+                Edits {
                     geometry: edit_model::Geometry {
                         angle: 7.0,
                         ..Default::default()
@@ -1098,7 +1134,7 @@ mod tests {
                 },
             ),
             (
-                2,
+                3,
                 Edits {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 80.0,
@@ -1109,7 +1145,7 @@ mod tests {
                 },
             ),
             (
-                3,
+                4,
                 Edits {
                     dehaze: edit_model::Dehaze { amount: 90.0 },
                     ..base.clone()
@@ -1118,7 +1154,7 @@ mod tests {
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..4 {
+            for i in 0..5 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -1637,5 +1673,95 @@ mod tests {
             Resampler::default()
         )
         .is_empty());
+    }
+
+    /// ⚠ Neutral must be **bit-exact, not trusted** — the `kelvin: None` rule, and the reason
+    /// every existing golden stays byte-identical through this feature.
+    #[test]
+    fn no_spots_means_no_stage() {
+        let edits = Edits::default();
+        let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default());
+        assert!(steps.is_empty());
+        assert!(!build_pipeline(&edits, RenderScale::FULL)
+            .stage_names()
+            .contains(&"spot_removal"));
+
+        // And an empty list on an otherwise busy edit set inserts nothing either.
+        let busy = Edits {
+            exposure: 0.5,
+            spots: Vec::new(),
+            ..Edits::default()
+        };
+        assert!(!build_pipeline(&busy, RenderScale::FULL)
+            .stage_names()
+            .contains(&"spot_removal"));
+    }
+
+    /// ⚠⚠ The property the placement exists for, in the shape of the brush's real-`.RAF`
+    /// validation: a spot is anchored in `GeometryStage`'s **input**, so cropping afterwards
+    /// must land the patch on the same source content. Rendering the crop's window out of the
+    /// uncropped render must equal the cropped render, bit for bit.
+    ///
+    /// ⚠ It fails if the stage is moved after geometry: the normalised centre would then refer
+    /// to the cropped frame and the patch would slide.
+    #[test]
+    fn a_spot_survives_a_crop() {
+        const W: usize = 64;
+        const H: usize = 64;
+        let mut img = ImageBuf::new(W, H);
+        for y in 0..H {
+            for x in 0..W {
+                img.set_pixel(
+                    x,
+                    y,
+                    [
+                        x as f32 / W as f32,
+                        y as f32 / H as f32,
+                        ((x * y) % 5) as f32 / 5.0,
+                    ],
+                );
+            }
+        }
+        let spot = edit_model::Spot {
+            centre: [0.5, 0.5],
+            source: [0.25, 0.25],
+            radius: 0.125,
+            feather: 0.0,
+            mode: edit_model::SpotMode::Clone,
+        };
+        // A quarter-frame crop whose window still contains the whole patch.
+        let crop = edit_model::CropRect {
+            left: 0.25,
+            top: 0.25,
+            right: 0.75,
+            bottom: 0.75,
+        };
+        let uncropped = Edits {
+            spots: vec![spot],
+            ..Edits::default()
+        };
+        let cropped = Edits {
+            geometry: edit_model::Geometry {
+                crop,
+                ..Default::default()
+            },
+            ..uncropped.clone()
+        };
+
+        let whole = build_pipeline(&uncropped, RenderScale::FULL).run(img.clone());
+        let part = build_pipeline(&cropped, RenderScale::FULL).run(img.clone());
+        let (x0, y0) = (W / 4, H / 4);
+        let window = whole.crop(x0, y0, W / 2, H / 2);
+        assert_eq!(window.width(), part.width());
+        assert_eq!(window.height(), part.height());
+
+        // Guard against passing trivially: the patch must genuinely change these pixels.
+        let neutral = build_pipeline(&Edits::default(), RenderScale::FULL).run(img);
+        assert_ne!(
+            neutral.crop(x0, y0, W / 2, H / 2).data(),
+            part.data(),
+            "the spot must actually alter the cropped window"
+        );
+        assert_eq!(window.data(), part.data());
     }
 }
