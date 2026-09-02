@@ -2,11 +2,19 @@
 //!
 //! ⚠⚠ **A sigmoid in log-exposure, and the measurement is why.** The camera's own transfer was
 //! measured by pairing a scene-linear decode against the embedded JPEG of the same frame
-//! (`curve_probe`): it **crushes** below ~0.01 (0.19–0.33×) and **lifts** hard above (1.5–2.3×).
-//! That is a true S-curve, and it rules out the compressive family this was going to use — a
-//! curve like `x^c/(x^c + k)` has a *monotone* log-log slope, so matching the 0.19× toe forces
-//! `c ≈ 1.67`, which then gives 1.18× at 0.09 where the camera gives 2.28×. It can crush or
-//! lift; it cannot do both.
+//! (`curve_probe`, 7 X-T4 frames pooled). Anchored at middle grey it **crushes** below (0.02× at
+//! −4 EV, 0.28× at −2.25) and **rolls off** above (0.79× at +2.25), with the ratio peaking at 1.0
+//! *at grey*. That non-monotone ratio is the whole shape, and it rules out the compressive family
+//! this was going to use: `x^c/(x^c + k)` and every power curve have a *monotone* log-log slope,
+//! so anchored at grey they can crush the toe or roll the shoulder, never both.
+//!
+//! ⚠⚠ **A FIRST MEASUREMENT SAID THE CAMERA *LIFTS* THE MIDTONES 1.5–2.3×, AND THAT WAS THE
+//! METERING, NOT THE CURVE.** It pooled frames raw. Each frame's JPEG carries that frame's own
+//! exposure decision, and across these 7 frames the camera metered up by **+0.88 to +1.57 EV** —
+//! which is exactly the lift the first pass attributed to the transfer. Rescaling each frame so
+//! its own grey point lands on [`GREY`] removes it, and what is left never exceeds 1.0×. **The
+//! 0.69 EV spread between frames is also the evidence for the split below**: no fixed curve can
+//! encode a decision that moves 0.69 EV from frame to frame.
 //!
 //! ⚠⚠ **The stage owns the SHAPE and not the LEVEL.** A camera's JPEG brightness includes its own
 //! per-frame metering decision, which no fixed curve can encode — that is Auto Tone's job
@@ -39,19 +47,34 @@ const LUT_MAX: f32 = GREY * 32.0;
 /// ⚠⚠ **Normalised into `[0, 1]` because [`Spline`] clamps its control points there.** Feeding it
 /// raw log-exposure would collapse every point onto the edges and flatten the curve to garbage.
 ///
-/// ⚠ **Provisional until the fit replaces them.** They carry the measured *shape* — a toe that
-/// crushes, a steep midtone, a shoulder — with middle grey anchored at `0.18 → 0.18`, the
-/// standard convention.
-const BUILT_IN: [[f32; 2]; 9] = [
-    [0.000, 0.000],
-    [0.154, 0.0015],
-    [0.277, 0.006],
-    [0.408, 0.035],
-    [0.538, 0.105],
-    [0.615, 0.180], // middle grey, the fixed point Auto Tone's level sits around
-    [0.731, 0.450],
-    [0.846, 0.750],
-    [1.000, 1.000],
+/// ⚠ **Measured, not chosen**, from 7 pooled X-T4 frames (`curve_probe`) — every point up to
+/// `0.750` is the median the camera actually produced at that exposure.
+///
+/// ⚠⚠ **THE TOP THREE BINS ARE DISCARDED AND THE SHOULDER IS CONSTRUCTED, because the
+/// measurement is biased exactly there.** A bin above ~+2 EV holds a growing fraction of pixels
+/// the JPEG has *clipped* to 255, which drags its median up — so the raw data appears to
+/// **steepen** toward white (slopes 3.2, 5.2, 7.0 across the last three bins), which no tone
+/// curve does. Read literally it would have given the rendering a contrast bump in the
+/// highlights. The three points above `0.750` instead continue the measured slope and roll it
+/// off monotonically to white.
+///
+/// ⚠ Consequence, stated rather than discovered: **our shoulder is gentler than the camera's.**
+/// At +2.75 EV the camera reads 0.95 (i.e. essentially clipped) where this gives ~0.68. A
+/// photograph opens with more highlight roll-off than its JPEG — deliberate for an editor, and
+/// the one place this rendering does not match the camera.
+const BUILT_IN: [[f32; 2]; 12] = [
+    [0.000, 0.0000],
+    [0.250, 0.0002], // −4.75 EV: the camera reads black from here down
+    [0.327, 0.0015],
+    [0.404, 0.0054],
+    [0.481, 0.0264],
+    [0.558, 0.0839],
+    [0.615, 0.1800], // middle grey, the fixed point Auto Tone's level sits around
+    [0.673, 0.2887],
+    [0.750, 0.4793], // +1.75 EV: the last bin the clipping bias leaves trustworthy
+    [0.820, 0.6600],
+    [0.900, 0.8300],
+    [1.000, 1.0000],
 ];
 
 pub struct DisplayRenderingStage {
@@ -158,25 +181,26 @@ mod tests {
         }
     }
 
-    /// ⚠⚠ **The shape, and the only test here that can see a curve fitted with the wrong sign or
-    /// built in linear instead of log space.** Total-and-monotone passes against a plain ramp;
-    /// this does not. The numbers are the measured camera behaviour: crush below ~0.01, lift
-    /// above.
+    /// ⚠⚠ **The shape, and the only test here that can see a curve built in linear instead of log
+    /// space, fitted with the wrong sign, or replaced by any power curve.** Total-and-monotone
+    /// passes against a plain ramp; this does not.
+    ///
+    /// The discriminating property is that the **ratio is non-monotone, peaking at grey**: it
+    /// crushes below and rolls off above. Anchored at grey, `y = GREY·(x/GREY)^c` has ratio
+    /// `(x/GREY)^(c−1)`, which is monotone for every `c` — so no power curve, and no plain gain,
+    /// can pass this.
     #[test]
-    fn the_curve_crushes_the_deep_shadows_and_lifts_the_midtones() {
+    fn the_ratio_peaks_at_grey_and_falls_away_on_both_sides() {
         let s = DisplayRenderingStage::built_in();
+        let ratio = |x: f32| s.map(x) / x;
+        let (deep, grey, high) = (ratio(0.005), ratio(GREY), ratio(2.0));
+        assert!(deep < 0.2, "the toe does not crush: {deep}");
+        assert!((grey - 1.0).abs() < 0.06, "grey is not near unity: {grey}");
+        assert!(high < 0.7, "there is no shoulder: {high}");
         assert!(
-            s.map(0.005) / 0.005 < 1.0,
-            "the toe does not crush: {}",
-            s.map(0.005) / 0.005
+            grey > 2.0 * deep && grey > 1.5 * high,
+            "the ratio is monotone, so this is a power curve: {deep} / {grey} / {high}"
         );
-        assert!(
-            s.map(0.05) / 0.05 > 1.0,
-            "the midtones are not lifted: {}",
-            s.map(0.05) / 0.05
-        );
-        // And it is a *curve*, not a gain: the two ratios differ by a wide margin.
-        assert!((s.map(0.05) / 0.05) > 2.0 * (s.map(0.005) / 0.005));
     }
 
     /// ⚠ Middle grey is the anchor the whole design hangs on — the rendering owns the shape and
