@@ -496,7 +496,7 @@ mod tests {
         );
         // ⚠ Only the leaf is *assigned*; the ancestors exist so the tree has a shape, and
         // `keyword_members` finds the photo under Europe by expanding descendants.
-        let counts = cat.keyword_counts(&[photo.clone()]).unwrap();
+        let counts = cat.keyword_counts(std::slice::from_ref(&photo)).unwrap();
         let paris = rows.iter().find(|r| r.name == "Paris").unwrap();
         let europe = rows.iter().find(|r| r.name == "Europe").unwrap();
         assert_eq!(counts.get(&paris.id), Some(&1));
@@ -676,7 +676,7 @@ mod tests {
         cat.set_xmp_mtime(&photo, now).unwrap();
 
         assert_eq!(
-            import_newer(&cat, &[photo.clone()]),
+            import_newer(&cat, std::slice::from_ref(&photo)),
             0,
             "an older sidecar was imported"
         );
@@ -684,7 +684,7 @@ mod tests {
 
         // Now somebody edits it in Lightroom, so it becomes newer than what we last saw.
         put_sidecar(&photo, 4, 60);
-        assert_eq!(import_newer(&cat, &[photo.clone()]), 1);
+        assert_eq!(import_newer(&cat, std::slice::from_ref(&photo)), 1);
         assert_eq!(cat.marks(&photo, 0).unwrap().rating, 4);
     }
 
@@ -694,7 +694,7 @@ mod tests {
         // time. Its rows carry `xmp_mtime` 0, so every sidecar is newer.
         let (_d, cat, photo) = one_raw("firstopen");
         put_sidecar(&photo, 5, 0);
-        assert_eq!(import_newer(&cat, &[photo.clone()]), 1);
+        assert_eq!(import_newer(&cat, std::slice::from_ref(&photo)), 1);
         assert_eq!(cat.marks(&photo, 0).unwrap().rating, 5);
     }
 
@@ -717,7 +717,7 @@ mod tests {
         assert!(write_for(&cat, &photo));
 
         assert_eq!(
-            import_newer(&cat, &[photo.clone()]),
+            import_newer(&cat, std::slice::from_ref(&photo)),
             0,
             "our own write imported itself back"
         );
@@ -733,7 +733,7 @@ mod tests {
     fn a_malformed_sidecar_is_skipped_rather_than_importing_or_panicking() {
         let (_d, cat, photo) = one_raw("malformed");
         std::fs::write(sidecar_path(&photo), "<a><b></a>").unwrap();
-        assert_eq!(import_newer(&cat, &[photo.clone()]), 0);
+        assert_eq!(import_newer(&cat, std::slice::from_ref(&photo)), 0);
         assert_eq!(cat.marks(&photo, 0).unwrap(), Marks::default());
         // ⚠ And it is **not** recorded as seen, so repairing the file by hand imports it on the
         // next open rather than needing the mtime bumped as well.

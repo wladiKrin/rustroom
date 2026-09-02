@@ -435,7 +435,10 @@ mod tests {
         app.open_catalog_folder(&ctx, &dir.0);
 
         let id = rustroom_app::photo_id::PhotoId::original(photo.clone());
-        app.apply_mark_to(&[id.clone()], rustroom_app::marks::MarkAction::Rating(3));
+        app.apply_mark_to(
+            std::slice::from_ref(&id),
+            rustroom_app::marks::MarkAction::Rating(3),
+        );
 
         let side = rustroom_app::xmp_sync::sidecar_path(&photo);
         let text = std::fs::read_to_string(&side).expect("no sidecar was written");

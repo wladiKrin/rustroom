@@ -166,9 +166,15 @@ fn description_attributes(
     for a in e.attributes() {
         let a = a?;
         let (ns, local) = reader.resolver().resolve_attribute(a.key);
+        // ⚠ `normalized_value`, not the deprecated `unescape_value`: it additionally normalises
+        // line endings and tabs inside an attribute the way the XML specification requires.
+        // `Implicit1_0` is the version to ask for — an XMP packet carries no XML declaration, and
+        // the specification says 1.0 is then assumed. Caught by clippy's `deprecated` lint, which
+        // a green test run says nothing about.
+        let value = || a.normalized_value(quick_xml::XmlVersion::Implicit1_0);
         match owned(&ns, local.as_ref()) {
-            Some(Owned::Rating) => out.rating = parse_rating(&a.unescape_value()?),
-            Some(Owned::Label) => out.label = Some(a.unescape_value()?.into_owned()),
+            Some(Owned::Rating) => out.rating = parse_rating(&value()?),
+            Some(Owned::Label) => out.label = Some(value()?.into_owned()),
             _ => {}
         }
     }
