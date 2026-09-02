@@ -136,6 +136,30 @@ project's recorded bugs were interactions between separately-correct changes.
 matrix* into the pipeline, but the stage runs on linear ProPhoto, so `RenderSpec` carries a
 baseline **illuminant** instead. See `CLAUDE.md`'s M5.2 section.
 
+**W3 — specced 2026-09-02, all four design forks settled by the user before dispatch.** Specs:
+`2026-09-02-spot-removal-headless-design.md` (A), `2026-09-02-xmp-interchange-design.md` (B),
+`2026-09-02-auto-tone-design.md` (C), `2026-09-02-tool-gaps-design.md` (D).
+
+| Track | Owns | Must not touch |
+| --- | --- | --- |
+| **A** M5.3a | `edit-model` (+ `Spot`, `Retouch` group, all 5 exhaustive sites), `pipeline/lib.rs` stage order + `PrefixStepKey`, new `stages/spot_removal.rs`, `golden.rs` **+2 cases appended**, 2 new PNGs | `develop/`, `Settings`, `catalog`, `local_contrast.rs`, `adjustments.rs` |
+| **B** M6.3a/b | new `crates/xmp/`, `catalog/db.rs` (**schema v6**, both drop lists), `catalog_ops.rs`, the folder-open path, `settings.rs` (+`write_xmp`) | `edit-model`, `pipeline`, `develop/`, `export/` |
+| **C** M5.4a | new `pipeline/auto_tone.rs`, the Auto button in `adjustments.rs` + `panel/mod.rs`, a probe example | `Edits` (**no new field**), stage order, goldens, `Settings`, canvas, D's files |
+| **D** M7.6 ×3 | `local_contrast.rs`, `color_grading.rs` (visibility only), `color_wheel.rs`, PNGs `clarity_plus/minus` + `texture_minus` **re-authored**, one hover string in `adjustments.rs` | `Edits`, `pipeline/lib.rs`, `golden.rs`, canvas, `dehaze.rs` |
+
+**Merge order: D → A → C → B.** D moves goldens and A adds them, so D lands first and A rebases
+onto its PNGs; C and B touch nothing the others do. The one shared file is `adjustments.rs` — C
+adds a button, D changes one hover string — which rebases trivially.
+
+⚠ **The four decisions taken (user's call, 2026-09-02), so no agent re-opens them:** A ships
+**Clone + Heal** (heal = mean-matched clone; content-aware fill stays 5.3c); B's sidecar is
+**`stem.xmp`, RAW only** (Lightroom's name; JPEG/PNG/TIFF marks stay catalog-only) and is written
+**automatically** with a `Settings` toggle, **merging** into any existing sidecar rather than
+replacing it; C is **5.4a only** — exposure/whites/blacks from percentiles, a button, not applied
+on open, the user signs off the photographs; D takes the **three items that need no `Edits`
+change** and defers grading-in-masks and auto-mask to W4 and dehaze's achromatic guard to its own
+brainstorm.
+
 **Why W0 existed.** `canvas.rs` was 1,890 lines and wanted by **six** milestones; `main.rs` was 4,375
 and touched by any new tool or modal. They were the two biggest serialisation points in the plan, and
 Wave 4 is entirely canvas work that would otherwise have queued behind itself.
