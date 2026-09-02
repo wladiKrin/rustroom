@@ -718,6 +718,13 @@ mod tests {
                     ..Default::default()
                 },
             }],
+            spots: vec![edit_model::Spot {
+                centre: [0.3, 0.4],
+                source: [0.5, 0.4],
+                radius: 0.05,
+                feather: 30.0,
+                mode: edit_model::SpotMode::Heal,
+            }],
         }
     }
 

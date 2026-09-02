@@ -430,7 +430,7 @@ impl Dehaze {
 
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
-pub const EDIT_GROUP_NAMES: [&str; 8] = [
+pub const EDIT_GROUP_NAMES: [&str; 9] = [
     "White Balance",
     "Tone",
     "Color",
@@ -439,6 +439,7 @@ pub const EDIT_GROUP_NAMES: [&str; 8] = [
     "Vignette",
     "Geometry",
     "Masks",
+    "Retouch",
 ];
 
 /// The `Geometry` group's index into [`EDIT_GROUP_NAMES`].
@@ -450,6 +451,10 @@ pub const GEOMETRY_GROUP: usize = 6;
 
 /// The `Masks` group's index into [`EDIT_GROUP_NAMES`]. See [`GEOMETRY_GROUP`].
 pub const MASKS_GROUP: usize = 7;
+
+/// The `Retouch` group's index into [`EDIT_GROUP_NAMES`] — spot removal. See
+/// [`GEOMETRY_GROUP`].
+pub const RETOUCH_GROUP: usize = 8;
 
 /// Which groups of settings a paste or a preset carries.
 ///
@@ -489,6 +494,13 @@ pub struct EditGroups {
     /// ⚠ Off by default, like `geometry` and for the same reason: a gradient positioned for
     /// one composition is meaningless on another.
     pub masks: bool,
+    /// Spot removal — clone and heal patches.
+    ///
+    /// ⚠ Off by default, like `geometry` and `masks`: the values are content-referred, and
+    /// Lightroom's Copy Settings excludes Spot Removal for the same reason it excludes the crop.
+    /// Syncing a burst with the box *ticked* is still the real use — the same sensor dust sits
+    /// at the same coordinates on every frame, which pre-geometry anchoring is what makes right.
+    pub retouch: bool,
 }
 
 impl Default for EditGroups {
@@ -502,6 +514,7 @@ impl Default for EditGroups {
             vignette: true,
             geometry: false,
             masks: false,
+            retouch: false,
         }
     }
 }
@@ -516,6 +529,7 @@ impl EditGroups {
         vignette: true,
         geometry: true,
         masks: true,
+        retouch: true,
     };
 
     pub const NONE: Self = Self {
@@ -527,6 +541,7 @@ impl EditGroups {
         vignette: false,
         geometry: false,
         masks: false,
+        retouch: false,
     };
 
     /// Only group `i`, indexed as in [`EDIT_GROUP_NAMES`].
@@ -553,6 +568,7 @@ impl EditGroups {
             5 => self.vignette,
             6 => self.geometry,
             7 => self.masks,
+            8 => self.retouch,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -571,6 +587,7 @@ impl EditGroups {
             5 => &mut self.vignette,
             6 => &mut self.geometry,
             7 => &mut self.masks,
+            8 => &mut self.retouch,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -1089,6 +1106,48 @@ impl Perspective {
     }
 }
 
+/// One retouch patch: pixels copied from `source` onto `centre`.
+///
+/// ⚠ **`centre` and `source` are in pre-geometry SOURCE normalised coordinates**, like
+/// [`BrushStroke::points`] and unlike the analytic masks. A spot is content-referred — a dust
+/// spot is on the sensor, a blemish on the subject — so it must not slide when the crop changes.
+/// `SpotRemovalStage` therefore runs on `GeometryStage`'s *input*, which is also the space
+/// `FrameMap::inverse_point` already maps a canvas click into.
+///
+/// ⚠⚠ **Stays `Copy`.** `Mask` lost `Copy` for the brush's stroke list and three call sites paid
+/// for it; a spot is five numbers and an enum.
+///
+/// ⚠ No container-level `#[serde(default)]`, deliberately: a spot with its `centre` silently
+/// defaulted to the top-left corner would be a patch nobody placed. Only `mode` is optional,
+/// because [`SpotMode`]'s `Default` says what an unstated mode means.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Spot {
+    /// Destination centre, normalised per axis over the pre-geometry frame.
+    pub centre: [f32; 2],
+    /// Source centre, same space.
+    pub source: [f32; 2],
+    /// Radius as a fraction of the pre-geometry frame's **long edge** — [`BrushStroke::radius`]'s
+    /// rule, for its reason: `centre` lives in an anisotropic space, and a radius measured
+    /// against width but compared against height would make every patch an ellipse.
+    pub radius: f32,
+    /// 0 = hard edge, 100 = the ramp runs from the centre to the rim. [`RadialGradient::feather`]'s
+    /// convention and its smoothstep.
+    pub feather: f32,
+    #[serde(default)]
+    pub mode: SpotMode,
+}
+
+/// How a [`Spot`]'s source pixels are laid onto its destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SpotMode {
+    /// Straight copy, blended by the feather.
+    Clone,
+    /// Clone with the source patch's mean RGB shifted to match the ring around the destination —
+    /// what makes a spot on a sky *disappear* rather than leave a disc of slightly different sky.
+    #[default]
+    Heal,
+}
+
 /// All edits applied to one image. Every field is neutral by default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -1126,6 +1185,8 @@ pub struct Edits {
     /// Local adjustments, each confined to a mask. Applied in order, after the global
     /// per-pixel adjustments and before the vignette.
     pub masks: Vec<MaskedAdjustment>,
+    /// Spot removal patches, applied in order on the pre-geometry frame. Empty = no stage.
+    pub spots: Vec<Spot>,
 }
 
 impl Edits {
@@ -1175,6 +1236,7 @@ impl Edits {
             vignette,
             geometry,
             masks,
+            spots,
         } = src;
 
         if groups.white_balance {
@@ -1216,6 +1278,9 @@ impl Edits {
         }
         if groups.masks {
             self.masks = masks.clone();
+        }
+        if groups.retouch {
+            self.spots = spots.clone();
         }
     }
 }
@@ -1479,6 +1544,7 @@ mod tests {
         // resets *something*.
         assert_eq!(EDIT_GROUP_NAMES[GEOMETRY_GROUP], "Geometry");
         assert_eq!(EDIT_GROUP_NAMES[MASKS_GROUP], "Masks");
+        assert_eq!(EDIT_GROUP_NAMES[RETOUCH_GROUP], "Retouch");
     }
 
     #[test]
@@ -1947,6 +2013,13 @@ mod tests {
                     exposure: 0.75,
                     ..Default::default()
                 },
+            }],
+            spots: vec![Spot {
+                centre: [0.3, 0.4],
+                source: [0.5, 0.4],
+                radius: 0.05,
+                feather: 30.0,
+                mode: SpotMode::Clone,
             }],
         }
     }
@@ -2917,5 +2990,77 @@ mod tests {
                 "group {g} ({name}) must not carry perspective"
             );
         }
+    }
+
+    /// ⚠ Both directions, `perspective_travels_on_the_geometry_group_and_no_other`'s shape: that
+    /// spots *travel* with Retouch proves the arm exists; that they travel with **no other**
+    /// group proves they were not put in two.
+    #[test]
+    fn spots_travel_on_the_retouch_group_and_no_other() {
+        let src = all_nonneutral();
+        assert!(
+            !src.spots.is_empty(),
+            "fixture check: the source carries a spot"
+        );
+        let mut with = Edits::default();
+        with.merge_from(&src, EditGroups::only(RETOUCH_GROUP));
+        assert_eq!(with.spots, src.spots);
+        assert_eq!(with.exposure, 0.0, "only the retouch group was selected");
+
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
+            if g == RETOUCH_GROUP {
+                continue;
+            }
+            let mut without = Edits::default();
+            without.merge_from(&src, EditGroups::only(g));
+            assert!(
+                without.spots.is_empty(),
+                "group {g} ({name}) must not carry spots"
+            );
+        }
+    }
+
+    #[test]
+    fn retouch_is_off_by_default_for_paste_and_presets() {
+        // ⚠ Like geometry and masks, and for the same reason: a spot's coordinates are
+        // content-referred. `ALL` must still reach it, or a ticked box could never sync it.
+        assert!(!EditGroups::default().retouch);
+        assert!(!EditGroups::default().get(RETOUCH_GROUP));
+        assert!(EditGroups::ALL.get(RETOUCH_GROUP));
+        assert!(EditGroups::only(RETOUCH_GROUP).retouch);
+    }
+
+    #[test]
+    fn a_spot_round_trips_and_an_unstated_mode_means_heal() {
+        let e = Edits {
+            spots: vec![Spot {
+                centre: [0.25, 0.75],
+                source: [0.5, 0.75],
+                radius: 0.02,
+                feather: 60.0,
+                mode: SpotMode::Clone,
+            }],
+            ..Edits::default()
+        };
+        let text = serde_json::to_string(&e).unwrap();
+        let back: Edits = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, e);
+
+        // `mode` is the one optional field; everything else a spot needs to be a spot.
+        let hand_written =
+            r#"{"spots":[{"centre":[0.1,0.2],"source":[0.3,0.2],"radius":0.01,"feather":0.0}]}"#;
+        let e: Edits = serde_json::from_str(hand_written).unwrap();
+        assert_eq!(e.spots[0].mode, SpotMode::Heal);
+        assert_eq!(e.spots[0].centre, [0.1, 0.2]);
+
+        let no_centre = r#"{"spots":[{"source":[0.3,0.2],"radius":0.01,"feather":0.0}]}"#;
+        assert!(
+            serde_json::from_str::<Edits>(no_centre).is_err(),
+            "a spot nobody placed must not be invented at the corner"
+        );
+
+        // An older sidecar has no `spots` key and must load with none.
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert!(e.spots.is_empty());
     }
 }
