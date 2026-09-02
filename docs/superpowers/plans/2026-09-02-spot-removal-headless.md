@@ -145,4 +145,41 @@ fn a_spot_round_trips_and_defaults_to_heal() { /* serde: full round trip; `mode`
 
 ## Results
 
-*(filled in as the tasks land)*
+**1627 → 1644 tests; 51 → 53 goldens.** `fmt` / `clippy --all-targets --all-features -- -D warnings` /
+`test --all` all exit 0. The 51 existing goldens are byte-identical — `git status` on the golden
+directory shows only `spot_clone.png` and `spot_heal.png`.
+
+### Real `.RAF`, `DSCF6509.RAF` (6246×4170), radius 75 px, source 2185 px away
+
+```
+ neutral  disc [0.1112 0.1125 0.1122]  ring [0.1112 0.1125 0.1127]  source [0.0922 0.0915 0.0894]
+   clone  disc [0.0921 0.0915 0.0893]  ring [0.1112 0.1125 0.1127]
+    heal  disc [0.1116 0.1128 0.1130]  ring [0.1112 0.1125 0.1127]
+```
+
+Clone lands the source's own level — **17.2% below the ring**. Heal corrects that to **within 0.4%**
+of the ring while keeping the source's texture. `cargo run --release -p app --example spot_probe`,
+kept. A hand-written sidecar through `rustroom render --edits` also renders and differs from
+neutral.
+
+### Goldens, measured
+
+`surround 167.4, heal 168.0, clone 199.8`; 724 differing samples; no sample at 0 or 255; 132
+distinct values each.
+
+### Two findings from the sabotage step
+
+1. **The golden chart's gradient had to become diagonal.** With a purely vertical ramp, forcing
+   `dx = 0` left *both* references byte-identical and the guard green — two points on the same row
+   have the same brightness, so a horizontal offset error was invisible. The spec predicted the
+   shape of this ("a clone test on a uniform source cannot see a wrong offset") and a one-axis
+   gradient is uniform along the other axis.
+2. **The heal ring must clear the blemish.** The first case used a 5 px retouch over a 6 px dust
+   spot, so the annulus `r < d ≤ 1.5r` still lay *on* the dust and heal dutifully matched the thing
+   being removed — patch 146 against a surround of 171. The radius is 9 px now.
+
+### One inert sabotage, recorded rather than papered over
+
+Deleting the degenerate-radius guard entirely leaves every test green: `coverage` already returns
+0.0 for `r <= 0.0`, NaN comparisons are all false, and a negative radius inverts the bounding box
+which `x0 > x1` rejects. The guard stays as defence in depth; the comment says so.
