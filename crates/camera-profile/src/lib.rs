@@ -57,6 +57,12 @@ pub struct CameraProfile {
     pub forward2: Option<[[f32; 3]; 3]>,
     /// The hue/saturation mapping, when the profile has one.
     pub hue_sat_map: Option<HueSatMap>,
+    /// The profile's `ProfileToneCurve` (DNG tag 50940), as `(x, y)` control points on `[0, 1]`.
+    ///
+    /// ⚠ Stored as read. Whether it is *used* is the pipeline's decision — an **identity** curve
+    /// is ignored there, because the X-T4's is exactly that and honouring it would mean no
+    /// rendering at all.
+    pub tone_curve: Option<Vec<[f32; 2]>>,
 }
 
 const COLOR_MATRIX_1: u16 = 50721;
@@ -67,6 +73,7 @@ const PROFILE_NAME: u16 = 50936;
 const HUE_SAT_MAP_DIMS: u16 = 50937;
 const HUE_SAT_MAP_DATA_1: u16 = 50938;
 const HUE_SAT_MAP_DATA_2: u16 = 50939;
+const PROFILE_TONE_CURVE: u16 = 50940;
 const FORWARD_MATRIX_1: u16 = 50964;
 const FORWARD_MATRIX_2: u16 = 50965;
 
@@ -115,6 +122,7 @@ impl CameraProfile {
         let mut mats: [Option<[[f32; 3]; 3]>; 4] = [None; 4];
         let mut hsm_dims: Option<[usize; 3]> = None;
         let mut hsm: [Option<Vec<[f32; 3]>>; 2] = [None, None];
+        let mut tone_curve: Option<Vec<[f32; 2]>> = None;
 
         // FLOAT (type 11) triples, as the HueSatMap tables are stored.
         let f32_at = |o: usize| -> Result<f32, ProfileError> {
@@ -192,6 +200,21 @@ impl CameraProfile {
                     }
                     hsm[usize::from(tag == HUE_SAT_MAP_DATA_2)] = Some(v);
                 }
+                // ⚠ Stored as read; whether it is *used* is the pipeline's decision. The X-T4's
+                // is the identity, and the pipeline ignores an identity curve rather than
+                // rendering with it — see `pipeline::is_identity`.
+                //
+                // ⚠ An odd count is **dropped** rather than erroring: a malformed curve should
+                // cost the rendering, not the whole profile. The same rule the HueSatMap's
+                // dims/length guard follows.
+                PROFILE_TONE_CURVE if cnt >= 4 && cnt.is_multiple_of(2) => {
+                    let mut v = Vec::with_capacity(cnt / 2);
+                    for i in 0..cnt / 2 {
+                        let o = payload + i * 8;
+                        v.push([f32_at(o)?, f32_at(o + 4)?]);
+                    }
+                    tone_curve = Some(v);
+                }
                 _ => {}
             }
         }
@@ -209,6 +232,7 @@ impl CameraProfile {
 
         Ok(Self {
             name,
+            tone_curve,
             illuminant1: ill1,
             illuminant2: ill2,
             color1: mats[0].ok_or(ProfileError::MissingTag(COLOR_MATRIX_1))?,
@@ -302,6 +326,97 @@ mod tests {
             CameraProfile::parse(&d),
             Err(ProfileError::NotAProfile)
         ));
+    }
+
+    /// A DCP built by hand, so tone-curve parsing runs in CI without a real profile — the
+    /// fixture that makes every other synthetic test here possible.
+    ///
+    /// `entries` are `(tag, type, count, payload_offset)`; all payloads live after the IFD.
+    fn dcp_with(entries: &[(u16, u16, u32, Vec<u8>)]) -> Vec<u8> {
+        let mut d = Vec::from(b"II");
+        d.extend_from_slice(&42u16.to_le_bytes());
+        d.extend_from_slice(&8u32.to_le_bytes());
+        d.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        // Payloads start after the IFD: 2 bytes of count, 12 per entry, 4 for the next-IFD link.
+        let mut payload_at = 10 + entries.len() * 12 + 4;
+        let mut payloads = Vec::new();
+        for (tag, typ, cnt, bytes) in entries {
+            d.extend_from_slice(&tag.to_le_bytes());
+            d.extend_from_slice(&typ.to_le_bytes());
+            d.extend_from_slice(&cnt.to_le_bytes());
+            if bytes.len() <= 4 {
+                let mut inline = bytes.clone();
+                inline.resize(4, 0);
+                d.extend_from_slice(&inline);
+            } else {
+                d.extend_from_slice(&(payload_at as u32).to_le_bytes());
+                payload_at += bytes.len();
+                payloads.push(bytes.clone());
+            }
+        }
+        d.extend_from_slice(&0u32.to_le_bytes());
+        for p in payloads {
+            d.extend_from_slice(&p);
+        }
+        d
+    }
+
+    /// A ColorMatrix1, without which `parse` refuses the file whatever else it holds.
+    fn colour_matrix_entry() -> (u16, u16, u32, Vec<u8>) {
+        let mut b = Vec::new();
+        for v in [1i32, 0, 0, 0, 1, 0, 0, 0, 1] {
+            b.extend_from_slice(&v.to_le_bytes());
+            b.extend_from_slice(&1i32.to_le_bytes());
+        }
+        (COLOR_MATRIX_1, 10, 9, b)
+    }
+
+    fn tone_curve_entry(points: &[[f32; 2]]) -> (u16, u16, u32, Vec<u8>) {
+        let mut b = Vec::new();
+        for p in points {
+            b.extend_from_slice(&p[0].to_le_bytes());
+            b.extend_from_slice(&p[1].to_le_bytes());
+        }
+        (PROFILE_TONE_CURVE, 11, (points.len() * 2) as u32, b)
+    }
+
+    #[test]
+    fn a_profile_tone_curve_is_read() {
+        let d = dcp_with(&[
+            colour_matrix_entry(),
+            tone_curve_entry(&[[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]),
+        ]);
+        let c = CameraProfile::parse(&d)
+            .expect("parses")
+            .tone_curve
+            .expect("the curve was not read");
+        assert_eq!(c.len(), 3);
+        // ⚠ Checks the *value*, not just the length: reading the pairs as (y, x) would give the
+        // right count and the wrong curve.
+        assert!((c[1][0] - 0.5).abs() < 1e-5, "wrong x: {c:?}");
+        assert!((c[1][1] - 0.7).abs() < 1e-5, "wrong y: {c:?}");
+    }
+
+    #[test]
+    fn a_profile_without_a_tone_curve_reports_none() {
+        let d = dcp_with(&[colour_matrix_entry()]);
+        assert!(CameraProfile::parse(&d)
+            .expect("parses")
+            .tone_curve
+            .is_none());
+    }
+
+    /// ⚠ An odd count is dropped rather than erroring — a malformed curve should cost the
+    /// rendering, not the whole profile. The HueSatMap's dims/length guard follows the same rule.
+    #[test]
+    fn a_malformed_tone_curve_is_dropped_rather_than_fatal() {
+        let mut b = Vec::new();
+        for v in [0.0f32, 0.0, 0.5] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        let d = dcp_with(&[colour_matrix_entry(), (PROFILE_TONE_CURVE, 11, 3, b)]);
+        let p = CameraProfile::parse(&d).expect("the profile must still parse");
+        assert!(p.tone_curve.is_none());
     }
 
     #[test]
