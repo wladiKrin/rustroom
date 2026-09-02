@@ -28,6 +28,7 @@ pub mod perspective;
 /// fractional coordinate, which is a different operation with a different API.
 pub mod resample;
 pub mod spatial;
+pub(crate) mod spline;
 mod stages;
 
 pub use resample::Resampler;
