@@ -13,6 +13,7 @@ members = [
     "crates/catalog",
     "crates/image-decode",
     "crates/lens-profile",
+    "crates/xmp",
 ]
 
 [workspace.package]
@@ -34,3 +35,4 @@ egui = "0.35"
 rfd = "0.17"
 rayon = "1"
 lcms2 = "6"
+quick-xml = "0.41"

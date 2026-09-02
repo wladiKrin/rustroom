@@ -1,0 +1,12 @@
+[package]
+name = "xmp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# ⚠ Zero GUI and zero catalog dependency, by rule — the "crate first" placement. The one
+# dependency is a pure-Rust XML tokenizer, chosen over `roxmltree` because the merge in
+# `write` has to *rewrite* a document, not only read one.
+[dependencies]
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
