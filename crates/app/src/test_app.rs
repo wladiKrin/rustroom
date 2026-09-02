@@ -106,6 +106,8 @@ pub fn for_test() -> RustroomApp {
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),
         compare_focus: 1,
+        grid_scroll: 0.0,
+        survey_scroll: 0.0,
         os_manages_colour: false,
         view: AppView::Develop,
         // ⚠ The grid, not `Default::default()` spelled out — a test that has not said otherwise

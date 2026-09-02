@@ -40,8 +40,6 @@ struct Outcome {
     focus: Option<usize>,
     /// Make this row the reference — the arrows moving the *left* pane.
     reference: Option<usize>,
-    /// Take this row out of the comparison entirely.
-    drop: Option<usize>,
     /// Leave for the grid.
     to_grid: bool,
 }
@@ -55,8 +53,8 @@ struct Outcome {
 ///
 /// ⚠ `<-` and `->` as ASCII, not `←`/`→`: neither arrow is in any bundled font.
 const INSTRUCTION: &str = "<- -> move the bordered photo · Enter or a click moves the border · \
-                           digits and X rate it · P picks it and takes it out · scroll pans and \
-                           pinch zooms, each pane on its own";
+                           digits, P, X and U rate it · scroll pans and pinch zooms, each pane \
+                           on its own";
 
 /// The photo the reference must step around: the candidate when there is one, else itself.
 ///
@@ -64,49 +62,6 @@ const INSTRUCTION: &str = "<- -> move the bordered photo · Enter or a click mov
 /// there while stepping the reference would exclude the very photo being moved and skip a slot.
 fn cand_or(candidate: Option<usize>, fallback: usize) -> usize {
     candidate.unwrap_or(fallback)
-}
-
-/// Take one photo out of the comparison.
-///
-/// ⚠⚠ `Selection::toggle` refuses to deselect the **active** photo, which is what keeps its
-/// invariant — so removing the reference has to move it first. Without that a pick on the left
-/// pane silently does nothing, which reads as the key being broken. `drop_from_survey` records
-/// the identical trap.
-fn drop_from_comparison(app: &mut RustroomApp, row: usize) {
-    let Some(lib) = app.library.as_mut() else {
-        return;
-    };
-    if !lib.selection.contains(row) {
-        return;
-    }
-    if lib.selection.active() == Some(row) {
-        let next = lib.selection.iter().find(|&i| i != row);
-        match next {
-            Some(n) => {
-                lib.selection.focus(n);
-            }
-            // ⚠ The last photo: dropping it would leave a selection with no active photo, which
-            // `Selection`'s invariant forbids. Leave it and go back to the grid — a comparison
-            // of nothing is not a state worth being in.
-            None => {
-                app.library_mode = LibraryMode::Grid;
-                return;
-            }
-        }
-    }
-    lib.selection.toggle(row);
-    // ⚠ The stored candidate is cleared when it was the photo removed, or the next frame would
-    // resolve it back out of `entries` and put it straight back on screen.
-    if app.compare_candidate.as_ref().and_then(|id| {
-        app.library
-            .as_ref()?
-            .entries
-            .iter()
-            .position(|e| &e.id == id)
-    }) == Some(row)
-    {
-        app.compare_candidate = None;
-    }
 }
 
 impl RustroomApp {
@@ -296,21 +251,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if let Some(e) = lib.entries.get(t) {
                     out.mark = Some((e.id.clone(), a));
                 }
-                // ⚠⚠ **A pick is a decision, so the photo leaves the comparison.** Compare
-                // exists to settle which of a run of near-identical frames to keep; once one is
-                // picked there is nothing left to ask about it, and leaving it in the pool means
-                // meeting it again on every pass. The subtractive act Survey's `X` already has,
-                // for the same reason — here it is `P`, because in Compare you are choosing a
-                // keeper rather than throwing away rejects.
-                //
-                // ⚠ Only when it is genuinely *in* the selection. With fewer than two photos
-                // selected the pool is the whole visible list, and there is nothing to remove it
-                // from — `compare_pair::pool` records that fallback.
-                if a == rustroom_app::marks::MarkAction::Flag(catalog::db::Flag::Pick)
-                    && lib.selection.contains(t)
-                {
-                    out.drop = Some(t);
-                }
+                // ⚠⚠ **Compare's keys mark and nothing else** (user's call, 2026-09-02). It
+                // shipped for one round with `P` also removing the photo from the comparison,
+                // which was a misreading: the subtractive act belongs to **Survey**, where the
+                // wall you are narrowing is the whole point. Compare holds two frames still and
+                // lets you decide between them; taking one away mid-comparison is the opposite
+                // of that.
             }
         });
 
@@ -474,11 +420,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 lib.selection.click(row);
             }
         }
-    }
-    // ⚠ After the mark, never before: `drop_from_comparison` moves the reference off the photo,
-    // and the mark is addressed to the one that *was* there — the rule Survey already records.
-    if let Some(row) = out.drop {
-        drop_from_comparison(app, row);
     }
     if out.to_grid {
         app.library_mode = LibraryMode::Grid;
@@ -749,57 +690,6 @@ mod tests {
             3,
             "stepping the reference collapsed the selection"
         );
-    }
-
-    /// ⚠⚠ **A pick is a decision, so the photo leaves the comparison.** Compare exists to settle
-    /// which of a run of near-identical frames to keep; leaving a picked one in the pool means
-    /// meeting it again on every pass.
-    #[test]
-    fn picking_takes_the_photo_out_of_the_comparison() {
-        let ctx = crate::test_ui::ctx();
-        let mut app = app_with(8);
-        app.library
-            .as_mut()
-            .unwrap()
-            .selection
-            .select_indices(&[1, 3, 5]);
-        app.library.as_mut().unwrap().selection.focus(1);
-        crate::test_app::catalog_library(&mut app);
-        app.compare_focus = 0;
-
-        frame(&mut app, &ctx, vec![key(egui::Key::P)]);
-
-        let lib = app.library.as_ref().unwrap();
-        assert!(
-            !lib.selection.contains(1),
-            "the picked photo is still in the comparison"
-        );
-        assert_eq!(
-            lib.marks.get(&lib.entries[1].id).map(|m| m.flag),
-            Some(catalog::db::Flag::Pick),
-            "the pick itself was lost"
-        );
-    }
-
-    /// ⚠ And **rejecting does not** remove it: in Compare you are choosing a keeper, so an `X`
-    /// is a note about a frame you are still comparing against. A test that only checked "P
-    /// removes" would pass against a version where every culling key removed.
-    #[test]
-    fn rejecting_leaves_the_photo_in_the_comparison() {
-        let ctx = crate::test_ui::ctx();
-        let mut app = app_with(8);
-        app.library
-            .as_mut()
-            .unwrap()
-            .selection
-            .select_indices(&[1, 3, 5]);
-        app.library.as_mut().unwrap().selection.focus(1);
-        crate::test_app::catalog_library(&mut app);
-        app.compare_focus = 0;
-
-        frame(&mut app, &ctx, vec![key(egui::Key::X)]);
-
-        assert!(app.library.as_ref().unwrap().selection.contains(1));
     }
 
     /// ⚠ And it is a *toggle*: press it twice and you are back where you started, which is what

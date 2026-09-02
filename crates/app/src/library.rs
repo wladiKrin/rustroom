@@ -226,6 +226,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // only what is on screen — which is also all it can cover, since it cannot leave the viewport.
     let mut cell_rects: Vec<(usize, egui::Rect)> = Vec::new();
     let mut band_started: Option<egui::Pos2> = None;
+    // Where the grid was scrolled to, read out here so it survives the closure that borrows
+    // `app.library` and can be written back after it.
+    let scroll_was = app.grid_scroll;
+    let mut scroll_now: Option<f32> = None;
     let mut bg_clicked = false;
     // ⚠ Collected here and applied after the panel closes: committing needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`. Same shape `open_index` uses.
@@ -406,166 +410,166 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // **once** and never recomputes it, which is the drift bug the filmstrip already paid
         // for: the centred photo slid away as thumbnails ahead of it loaded and reflowed the
         // content. A grid of fixed-height rows can be placed exactly instead.
-        if let Some(pos) = centre_on {
-            area = area.vertical_scroll_offset(rustroom_app::grid_nav::centre_offset(
-                pos, cols, pitch, viewport_h, rows,
-            ));
+        if let Some(offset) = centre_on.and_then(|pos| {
+            rustroom_app::grid_nav::follow_offset(pos, cols, pitch, viewport_h, rows, scroll_was)
+        }) {
+            area = area.vertical_scroll_offset(offset);
         }
-        let drawn = area
-            .show_rows(ui, cell, rows, |ui, row_range| {
-                for row in row_range.clone() {
-                    ui.horizontal(|ui| {
-                        for pos in cells_in_row(row, cols, visible.len()) {
-                            let i = visible[pos];
-                            // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
-                            // `show_rows` that counter shifts with the scroll position — it skips
-                            // `min_row` ids while each row holds `cols` widgets — which silently
-                            // kills the rename field's focus: the stale id keeps focus, so
-                            // `autofocus`'s `focused().is_none()` guard never fires and the box
-                            // goes dead. Keyed by `PhotoId`, so it is also stable across sorting
-                            // and filtering.
-                            // ⚠ Cloned rather than borrowed: the closure reads `*lib` whole (the
-                            // context menu needs the selection *and* the entries), so a live
-                            // borrow of `lib.entries` in the argument would conflict with it.
-                            let cell_id = lib.entries[i].id.clone();
-                            ui.push_id(&cell_id, |ui| {
-                                let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
-                                let resp = ui
-                                    .allocate_ui(egui::vec2(cell, cell), |ui| {
-                                        // Pin the cell to its full size. Without this
-                                        // `allocate_ui` reports only the space the content used,
-                                        // so cells varied with their thumbnail — the filmstrip's
-                                        // reflow bug in its grid form.
-                                        ui.set_min_size(egui::vec2(cell, cell));
-                                        ui.vertical_centered(|ui| {
-                                            thumb::cell(
-                                                ui,
-                                                box_size,
-                                                // ⚠ The exact render if it is there, else this
-                                                // photo's previous one — never grey while a
-                                                // re-render is in flight.
-                                                lib.cache
-                                                    .get(&lib.thumb_request(i, live.as_ref()).key())
-                                                    .or_else(|| {
-                                                        lib.cache.get_stale(&lib.entries[i].id)
-                                                    }),
-                                                lib.entries[i].badge().as_deref(),
-                                                lib.marks
-                                                    .get(&lib.entries[i].id)
-                                                    .copied()
-                                                    .unwrap_or_default(),
+        let drawn = area.show_rows(ui, cell, rows, |ui, row_range| {
+            for row in row_range.clone() {
+                ui.horizontal(|ui| {
+                    for pos in cells_in_row(row, cols, visible.len()) {
+                        let i = visible[pos];
+                        // ⚠⚠ A stable id per photo, not egui's auto-id counter. Under
+                        // `show_rows` that counter shifts with the scroll position — it skips
+                        // `min_row` ids while each row holds `cols` widgets — which silently
+                        // kills the rename field's focus: the stale id keeps focus, so
+                        // `autofocus`'s `focused().is_none()` guard never fires and the box
+                        // goes dead. Keyed by `PhotoId`, so it is also stable across sorting
+                        // and filtering.
+                        // ⚠ Cloned rather than borrowed: the closure reads `*lib` whole (the
+                        // context menu needs the selection *and* the entries), so a live
+                        // borrow of `lib.entries` in the argument would conflict with it.
+                        let cell_id = lib.entries[i].id.clone();
+                        ui.push_id(&cell_id, |ui| {
+                            let box_size = egui::vec2(cell - 12.0, (cell - 12.0) * 0.66);
+                            let resp = ui
+                                .allocate_ui(egui::vec2(cell, cell), |ui| {
+                                    // Pin the cell to its full size. Without this
+                                    // `allocate_ui` reports only the space the content used,
+                                    // so cells varied with their thumbnail — the filmstrip's
+                                    // reflow bug in its grid form.
+                                    ui.set_min_size(egui::vec2(cell, cell));
+                                    ui.vertical_centered(|ui| {
+                                        thumb::cell(
+                                            ui,
+                                            box_size,
+                                            // ⚠ The exact render if it is there, else this
+                                            // photo's previous one — never grey while a
+                                            // re-render is in flight.
+                                            lib.cache
+                                                .get(&lib.thumb_request(i, live.as_ref()).key())
+                                                .or_else(|| {
+                                                    lib.cache.get_stale(&lib.entries[i].id)
+                                                }),
+                                            lib.entries[i].badge().as_deref(),
+                                            lib.marks
+                                                .get(&lib.entries[i].id)
+                                                .copied()
+                                                .unwrap_or_default(),
+                                        );
+                                        let e = &lib.entries[i];
+                                        // ⚠⚠ Clicking the **badge** opens the label draft,
+                                        // clicking the **caption** opens the file-rename
+                                        // draft: each affordance edits the string drawn at
+                                        // that spot. That is M6.0's rule, and it is what
+                                        // replaced one field whose meaning depended on
+                                        // whether the row happened to be a copy.
+                                        if let Some(br) = thumb::badge_rect(ui) {
+                                            let bresp = ui.interact(
+                                                br,
+                                                ui.id().with("badge_click"),
+                                                egui::Sense::click(),
                                             );
-                                            let e = &lib.entries[i];
-                                            // ⚠⚠ Clicking the **badge** opens the label draft,
-                                            // clicking the **caption** opens the file-rename
-                                            // draft: each affordance edits the string drawn at
-                                            // that spot. That is M6.0's rule, and it is what
-                                            // replaced one field whose meaning depended on
-                                            // whether the row happened to be a copy.
-                                            if let Some(br) = thumb::badge_rect(ui) {
-                                                let bresp = ui.interact(
-                                                    br,
-                                                    ui.id().with("badge_click"),
-                                                    egui::Sense::click(),
-                                                );
-                                                if bresp.clicked() {
-                                                    badge_clicked = Some((
-                                                        e.id.clone(),
-                                                        e.label.clone().unwrap_or_default(),
-                                                    ));
-                                                }
-                                                if bresp.hovered() {
-                                                    ui.ctx()
-                                                        .set_cursor_icon(egui::CursorIcon::Text);
-                                                }
+                                            if bresp.clicked() {
+                                                badge_clicked = Some((
+                                                    e.id.clone(),
+                                                    e.label.clone().unwrap_or_default(),
+                                                ));
                                             }
-                                            // ⚠ The caption is the file's name.
-                                            //
-                                            // ⚠ Only the **active** row is editable. A text field
-                                            // in every cell would fight the click that selects a
-                                            // photo, and would put hundreds of them on screen.
-                                            // ⚠⚠ One field, and which string it edits depends on
-                                            // which affordance opened it — the badge or the
-                                            // caption. Two fields in a cell would fight for the
-                                            // same space and the same click.
-                                            let editing_label = label_draft
-                                                .as_ref()
-                                                .is_some_and(|(d, _)| *d == e.id);
-                                            let r = if editing_label {
-                                                name_edit::field(
-                                                    ui,
-                                                    name_edit::NameField {
-                                                        id: &e.id,
-                                                        file_name: &e.file_name,
-                                                        label: e.label.as_deref(),
-                                                        mode: name_edit::Editing::Label,
-                                                    },
-                                                    label_draft,
-                                                    egui::FontId::proportional(name_size),
-                                                    true,
-                                                )
-                                            } else {
-                                                name_edit::caption_or_field(
-                                                    ui,
-                                                    &e.id,
-                                                    &e.file_name,
-                                                    e.label.as_deref(),
-                                                    rename_draft,
-                                                    name_size,
-                                                )
-                                            };
-                                            if let Some(r) = r {
-                                                rename = Some((e.id.clone(), r));
+                                            if bresp.hovered() {
+                                                ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
                                             }
-                                        });
-                                    })
-                                    .response
-                                    // ⚠ `click_and_drag`, so a drag starting on a thumbnail can
-                                    // begin a rubber band. A plain click still reports
-                                    // `clicked()`; egui distinguishes the two.
-                                    .interact(egui::Sense::click_and_drag());
-                                cell_rects.push((i, resp.rect));
+                                        }
+                                        // ⚠ The caption is the file's name.
+                                        //
+                                        // ⚠ Only the **active** row is editable. A text field
+                                        // in every cell would fight the click that selects a
+                                        // photo, and would put hundreds of them on screen.
+                                        // ⚠⚠ One field, and which string it edits depends on
+                                        // which affordance opened it — the badge or the
+                                        // caption. Two fields in a cell would fight for the
+                                        // same space and the same click.
+                                        let editing_label =
+                                            label_draft.as_ref().is_some_and(|(d, _)| *d == e.id);
+                                        let r = if editing_label {
+                                            name_edit::field(
+                                                ui,
+                                                name_edit::NameField {
+                                                    id: &e.id,
+                                                    file_name: &e.file_name,
+                                                    label: e.label.as_deref(),
+                                                    mode: name_edit::Editing::Label,
+                                                },
+                                                label_draft,
+                                                egui::FontId::proportional(name_size),
+                                                true,
+                                            )
+                                        } else {
+                                            name_edit::caption_or_field(
+                                                ui,
+                                                &e.id,
+                                                &e.file_name,
+                                                e.label.as_deref(),
+                                                rename_draft,
+                                                name_size,
+                                            )
+                                        };
+                                        if let Some(r) = r {
+                                            rename = Some((e.id.clone(), r));
+                                        }
+                                    });
+                                })
+                                .response
+                                // ⚠ `click_and_drag`, so a drag starting on a thumbnail can
+                                // begin a rubber band. A plain click still reports
+                                // `clicked()`; egui distinguishes the two.
+                                .interact(egui::Sense::click_and_drag());
+                            cell_rects.push((i, resp.rect));
 
-                                thumb::selection_border(
-                                    ui,
-                                    resp.rect,
-                                    lib.selection.active() == Some(i),
-                                    lib.selection.contains(i),
-                                );
-                                if resp.clicked() {
-                                    let mods = ui.input(|inp| inp.modifiers);
-                                    apply_click(&mut lib.selection, i, mods);
+                            thumb::selection_border(
+                                ui,
+                                resp.rect,
+                                lib.selection.active() == Some(i),
+                                lib.selection.contains(i),
+                            );
+                            if resp.clicked() {
+                                let mods = ui.input(|inp| inp.modifiers);
+                                apply_click(&mut lib.selection, i, mods);
+                            }
+                            if resp.double_clicked() {
+                                open_index = Some(i);
+                            }
+                            // ⚠ `drag_started_by(Primary)`, never a bare `drag_started()`:
+                            // egui reports a drag for **every** button, so the pan binding
+                            // would otherwise rubber-band as it passed over the grid — the
+                            // trap the canvas-navigation work recorded.
+                            if resp.drag_started_by(egui::PointerButton::Primary) {
+                                band_started = resp.interact_pointer_pos();
+                            }
+                            // ⚠⚠ A secondary click does **not** fire `clicked()`, so the
+                            // photo is selected here explicitly — otherwise Edit and Rename
+                            // would act on whatever was selected before rather than on what
+                            // was right-clicked.
+                            resp.context_menu(|ui| {
+                                if !lib.selection.contains(i) {
+                                    menu_select = Some(i);
                                 }
-                                if resp.double_clicked() {
-                                    open_index = Some(i);
+                                let targets = menu_targets(lib, i);
+                                if let Some(a) = cell_menu(ui, catalog, &targets) {
+                                    menu = Some((i, a));
                                 }
-                                // ⚠ `drag_started_by(Primary)`, never a bare `drag_started()`:
-                                // egui reports a drag for **every** button, so the pan binding
-                                // would otherwise rubber-band as it passed over the grid — the
-                                // trap the canvas-navigation work recorded.
-                                if resp.drag_started_by(egui::PointerButton::Primary) {
-                                    band_started = resp.interact_pointer_pos();
-                                }
-                                // ⚠⚠ A secondary click does **not** fire `clicked()`, so the
-                                // photo is selected here explicitly — otherwise Edit and Rename
-                                // would act on whatever was selected before rather than on what
-                                // was right-clicked.
-                                resp.context_menu(|ui| {
-                                    if !lib.selection.contains(i) {
-                                        menu_select = Some(i);
-                                    }
-                                    let targets = menu_targets(lib, i);
-                                    if let Some(a) = cell_menu(ui, catalog, &targets) {
-                                        menu = Some((i, a));
-                                    }
-                                });
                             });
-                        }
-                    });
-                }
-                row_range
-            })
-            .inner;
+                        });
+                    }
+                });
+            }
+            row_range
+        });
+        // ⚠ Remembered for the *next* frame's follow decision: `follow_offset` has to know where
+        // the view is before the scroll area is built, and by then this frame's output is gone.
+        scroll_now = Some(drawn.state.offset.y);
+        let drawn = drawn.inner;
 
         // ⚠ The window is the drawn rows widened by the prefetch margin, mapped through
         // positions to entry indices to paths. Built after drawing so it reflects what egui
@@ -661,6 +665,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
     }
 
+    if let Some(y) = scroll_now {
+        app.grid_scroll = y;
+    }
     if let Some(i) = menu_select {
         if let Some(lib) = app.library.as_mut() {
             lib.selection.click(i);

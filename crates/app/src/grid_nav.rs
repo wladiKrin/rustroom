@@ -33,24 +33,61 @@ pub fn step_by(visible: &[usize], cur: usize, delta: i64) -> Option<usize> {
     Some(visible[target.clamp(0, last) as usize])
 }
 
-/// The vertical scroll offset that puts the row holding `pos` in the middle of the viewport.
+/// How far into the viewport a followed row is allowed to sit before the view moves, as a
+/// fraction of the viewport's height.
 ///
-/// ⚠⚠ **The clamp is what gives "unless it is near an edge" for free.** Asking for the first row
-/// to be centred would scroll to a negative offset and asking for the last would scroll past the
-/// end; clamping to the real range leaves those rows where they are and centres everything
-/// between, which is exactly the behaviour wanted and needs no special case.
+/// ⚠⚠ **A band, not a point, and the difference is the whole feel of the thing.** Centring the
+/// selection on every keypress makes the grid lurch under you — reported as feeling "very
+/// abrupt", and it is: the picture moves even when what you selected was already comfortably in
+/// view. Inside the band nothing scrolls at all; outside it, the view moves just far enough to
+/// bring the row back to the near edge of the band. That is the behaviour every file browser and
+/// text editor has, and nobody notices it, which is the point.
+pub const FOLLOW_BAND: (f32, f32) = (0.25, 0.75);
+
+/// The scroll offset that keeps the row holding `pos` inside [`FOLLOW_BAND`], or `None` when it
+/// is already there and the view should not move at all.
+///
+/// ⚠ Returning `None` rather than the current offset matters: forcing `vertical_scroll_offset`
+/// even to the value it already has pins the scroll area for that frame, which fights any
+/// smooth scrolling in flight.
+///
+/// ⚠ Clamped to the real scroll range, which is what makes the first and last rows behave: the
+/// view simply cannot move further, so they sit wherever they fall.
 ///
 /// ⚠ `row_pitch` is the row height **plus** the spacing egui adds between rows — `show_rows`
 /// adds it itself, so a pitch of the bare cell height drifts further from the truth with every
-/// row and puts the wrong photo in the middle near the bottom of a long grid.
-pub fn centre_offset(pos: usize, cols: usize, row_pitch: f32, viewport_h: f32, rows: usize) -> f32 {
-    if !row_pitch.is_finite() || row_pitch <= 0.0 || !viewport_h.is_finite() {
-        return 0.0;
+/// row and moves the view at the wrong moment near the bottom of a long grid.
+pub fn follow_offset(
+    pos: usize,
+    cols: usize,
+    row_pitch: f32,
+    viewport_h: f32,
+    rows: usize,
+    current: f32,
+) -> Option<f32> {
+    if !row_pitch.is_finite() || row_pitch <= 0.0 || !viewport_h.is_finite() || viewport_h <= 0.0 {
+        return None;
     }
+    let current = if current.is_finite() { current } else { 0.0 };
+    let max = (rows as f32 * row_pitch - viewport_h).max(0.0);
     let row = pos / cols.max(1);
-    let content = rows as f32 * row_pitch;
-    let want = row as f32 * row_pitch + row_pitch * 0.5 - viewport_h * 0.5;
-    want.clamp(0.0, (content - viewport_h).max(0.0))
+    let top = row as f32 * row_pitch;
+    let bottom = top + row_pitch;
+    let (lo, hi) = (
+        current + viewport_h * FOLLOW_BAND.0,
+        current + viewport_h * FOLLOW_BAND.1,
+    );
+    let want = if top < lo {
+        top - viewport_h * FOLLOW_BAND.0
+    } else if bottom > hi {
+        bottom - viewport_h * FOLLOW_BAND.1
+    } else {
+        return None;
+    };
+    let want = want.clamp(0.0, max);
+    // ⚠ The clamp can land back on where we already are — at the top and bottom of the grid it
+    // always does — and moving to where you already were is not a move.
+    (want != current).then_some(want)
 }
 
 #[cfg(test)]
@@ -131,45 +168,72 @@ mod tests {
         assert_eq!(step_by(&[], 0, 1), None);
     }
 
-    /// ⚠⚠ The middle rows centre, and this is the property the whole feature is.
-    #[test]
-    fn a_middle_row_is_centred() {
-        // 20 rows of 100, a 400-tall viewport. Row 10 spans 1000..1100, centre 1050; the
-        // viewport should therefore start at 1050 - 200 = 850.
-        assert_eq!(centre_offset(10 * 3, 3, 100.0, 400.0, 20), 850.0);
+    /// 20 rows of 100 in a 400-tall viewport: the band runs from `offset + 100` to
+    /// `offset + 300`.
+    fn follow(row: usize, current: f32) -> Option<f32> {
+        follow_offset(row * 3, 3, 100.0, 400.0, 20, current)
     }
 
-    /// ⚠⚠ **Near the edges it does not centre, and that falls out of the clamp rather than being
-    /// a case.** Centring the first row wants a negative offset and centring the last wants one
-    /// past the end; both are impossible, so those rows stay where they are.
+    /// ⚠⚠ **Inside the band, nothing moves.** This is the complaint that put the band here:
+    /// centring on every keypress makes the grid lurch even when what you selected was already
+    /// comfortably in view.
     #[test]
-    fn the_first_and_last_rows_stay_put() {
-        assert_eq!(centre_offset(0, 3, 100.0, 400.0, 20), 0.0);
-        assert_eq!(
-            centre_offset(1, 3, 100.0, 400.0, 20),
-            0.0,
-            "row 0 is still row 0"
-        );
-        // Content is 2000 tall in a 400 viewport, so the furthest it can scroll is 1600.
-        assert_eq!(centre_offset(19 * 3, 3, 100.0, 400.0, 20), 1600.0);
+    fn a_row_already_in_the_band_does_not_scroll() {
+        // At offset 500 the band is 600..800, so rows 6, 6.5 and 7 are all inside it.
+        assert_eq!(follow(6, 500.0), None);
+        assert_eq!(follow(7, 500.0), None);
     }
 
-    /// A grid shorter than its viewport cannot scroll at all.
+    /// ⚠ Above the band it moves **just far enough** to reach the band's top edge, not to the
+    /// centre — the minimum that puts it back in view.
+    #[test]
+    fn a_row_above_the_band_scrolls_to_its_top_edge() {
+        // At offset 500 the band starts at 600. Row 4 spans 400..500, above it.
+        // It should land at 400 - 100 = 300, where the band starts at 400 = the row's top.
+        assert_eq!(follow(4, 500.0), Some(300.0));
+    }
+
+    /// ⚠ And below the band, to its bottom edge.
+    #[test]
+    fn a_row_below_the_band_scrolls_to_its_bottom_edge() {
+        // At offset 500 the band ends at 800. Row 9 spans 900..1000, below it.
+        // It should land at 1000 - 300 = 700, where the band ends at 1000 = the row's bottom.
+        assert_eq!(follow(9, 500.0), Some(700.0));
+    }
+
+    /// ⚠⚠ **The clamp is what makes the ends behave, and it needs no special case.** The view
+    /// cannot scroll above 0 or past `content - viewport`, so the first and last rows simply sit
+    /// where they fall — and asking to move to where you already are is not a move.
+    #[test]
+    fn the_ends_clamp_and_report_no_move_when_already_there() {
+        assert_eq!(follow(0, 0.0), None, "already at the top");
+        // Content is 2000 in a 400 viewport, so 1600 is as far as it goes.
+        assert_eq!(follow(19, 1600.0), None, "already at the bottom");
+        assert_eq!(follow(19, 0.0), Some(1600.0), "must scroll to the end");
+    }
+
+    /// ⚠ A grid shorter than its viewport cannot scroll at all.
     #[test]
     fn a_short_grid_never_scrolls() {
-        assert_eq!(centre_offset(0, 3, 100.0, 400.0, 2), 0.0);
-        assert_eq!(centre_offset(5, 3, 100.0, 400.0, 2), 0.0);
+        assert_eq!(follow_offset(0, 3, 100.0, 400.0, 2, 0.0), None);
+        assert_eq!(follow_offset(5, 3, 100.0, 400.0, 2, 0.0), None);
     }
 
     /// ⚠ A degenerate pitch or viewport must not produce a NaN offset — egui would then scroll
     /// nowhere at all, and a NaN compares false against every clamp so it survives one.
     #[test]
-    fn degenerate_inputs_give_a_usable_offset() {
-        assert_eq!(centre_offset(5, 3, 0.0, 400.0, 20), 0.0);
-        assert_eq!(centre_offset(5, 3, f32::NAN, 400.0, 20), 0.0);
-        // ⚠ Zero columns is *repaired* to one rather than refused — `cols.max(1)` — so this
-        // centres position 5 as row 5 rather than returning nothing. Asserting 0.0 here was
-        // wrong about correct code: a repair that produces a usable answer is the point.
-        assert_eq!(centre_offset(5, 0, 100.0, 400.0, 20), 350.0);
+    fn degenerate_inputs_scroll_nowhere() {
+        assert_eq!(follow_offset(5, 3, 0.0, 400.0, 20, 0.0), None);
+        assert_eq!(follow_offset(5, 3, f32::NAN, 400.0, 20, 0.0), None);
+        assert_eq!(follow_offset(5, 3, 100.0, 0.0, 20, 0.0), None);
+        // ⚠ A NaN *current* offset is repaired to 0 rather than refused, so the view still
+        // follows rather than freezing — a NaN compares false against every clamp and would
+        // otherwise survive one.
+        // Position 30 is row 10, spanning 1000..1100; from a repaired offset of 0 the band ends
+        // at 300, so it lands at 1100 - 300 = 800.
+        assert_eq!(
+            follow_offset(30, 3, 100.0, 400.0, 20, f32::NAN),
+            Some(800.0)
+        );
     }
 }

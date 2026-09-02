@@ -266,6 +266,14 @@ struct RustroomApp {
     /// is a fact about the *layout* — which side you are looking at — and must survive the
     /// candidate changing under the arrow keys.
     compare_focus: usize,
+    /// Last frame's vertical scroll offset for the Library grid and for Survey.
+    ///
+    /// ⚠⚠ **Needed *before* the scroll area is built**, which is why it is remembered here rather
+    /// than read from the one being drawn: `grid_nav::follow_offset` has to know where the view
+    /// currently is to decide whether the selection is inside its band, and the answer must be
+    /// available when the area is constructed. Written back from each frame's `ScrollAreaOutput`.
+    grid_scroll: f32,
+    survey_scroll: f32,
     /// Compare's two panes, and the zoom and pan they share.
     ///
     /// ⚠ Lives on the app rather than inside the view so it survives a frame — a pane owns a
@@ -513,6 +521,8 @@ impl RustroomApp {
             library_mode: LibraryMode::default(),
             compare_candidate: None,
             compare_focus: 1,
+            grid_scroll: 0.0,
+            survey_scroll: 0.0,
             compare_view: Default::default(),
             last_view: AppView::default(),
             library: None,

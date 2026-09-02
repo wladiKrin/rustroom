@@ -30,8 +30,10 @@ struct Outcome {
     focus: Option<usize>,
     /// Drop this row from the survey.
     drop: Option<usize>,
-    /// Scroll so this *position in the survey* sits in the middle of the view.
+    /// Keep this *position in the survey* inside the follow band.
     centre_on: Option<usize>,
+    /// Where the view ended up, remembered for the next frame's follow decision.
+    scroll: Option<f32>,
     to_grid: bool,
 }
 
@@ -53,6 +55,9 @@ fn surveyed(visible: &[usize], selection: &Selection) -> Vec<usize> {
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Hoisted before any `&mut app.*` — `live_edits` borrows the whole of `app`.
     let live = app.live_edits();
+    // Where the survey was scrolled to last frame: `follow_offset` needs it *before* the scroll
+    // area is built, by which time this frame's own output does not exist yet.
+    let scroll_was = app.survey_scroll;
     let mut out = Outcome::default();
 
     // ⚠⚠ **Pinch, or ctrl/cmd+scroll, resizes the tiles — the same gesture the Library grid
@@ -146,7 +151,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // is deleted; the photo is still in the folder, still rejected, and `X` again in the
             // grid un-rejects it.
             if let (Some(a), Some(f)) = (crate::interaction::culling_key(i), focused) {
-                if a == rustroom_app::marks::MarkAction::Flag(catalog::db::Flag::Reject) {
+                // ⚠⚠ **A flag is a decision; a star is not.** `P` and `X` both take the photo off
+                // the wall, because once you have said keep-this or lose-this there is nothing
+                // left to ask about it and leaving it up means judging it again on every pass.
+                // A **rating** must not drop: a star is a judgement you go on to compare against
+                // the others, and a survey that emptied itself as you rated would destroy the
+                // very set you were choosing within.
+                if matches!(a, rustroom_app::marks::MarkAction::Flag(f2)
+                    if f2 == catalog::db::Flag::Pick || f2 == catalog::db::Flag::Reject)
+                {
                     out.drop = Some(f);
                 }
             }
@@ -155,7 +168,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // ── Draw ─────────────────────────────────────────────────────────────────────────
         ui.label(
             egui::RichText::new(
-                "Arrows move · digits rate · P picks · X rejects and takes it off the wall · \
+                "Arrows move · digits rate · P and X decide it and take it off the wall · \
                  Enter opens · pinch or ctrl+scroll resizes",
             )
             .small()
@@ -178,12 +191,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // ⚠ Pins the scrollbar to the panel edge rather than letting it track the widest
             // row — the fix the Library grid needed for the same reason.
             .auto_shrink([false, false]);
-        if let Some(pos) = out.centre_on {
-            area = area.vertical_scroll_offset(rustroom_app::grid_nav::centre_offset(
-                pos, cols, pitch, viewport_h, grid_rows,
-            ));
+        if let Some(offset) = out.centre_on.and_then(|pos| {
+            rustroom_app::grid_nav::follow_offset(
+                pos, cols, pitch, viewport_h, grid_rows, scroll_was,
+            )
+        }) {
+            area = area.vertical_scroll_offset(offset);
         }
-        area.show_rows(ui, tile_h, grid_rows, |ui, row_range| {
+        let drawn = area.show_rows(ui, tile_h, grid_rows, |ui, row_range| {
             for grid_row in row_range {
                 ui.horizontal(|ui| {
                     let first = grid_row * cols;
@@ -240,11 +255,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 });
             }
         });
+        // ⚠ Remembered for the *next* frame's follow decision — see `RustroomApp::grid_scroll`.
+        out.scroll = Some(drawn.state.offset.y);
         // ⚠⚠ Everything drawn, or `retain_window` leaves these photos unpinned and evictable
         // while they are the only thing on screen.
         lib.sync_thumb_window(&window);
     });
 
+    if let Some(y) = out.scroll {
+        app.survey_scroll = y;
+    }
     if let Some(row) = out.focus {
         if let Some(lib) = app.library.as_mut() {
             // ⚠ `focus`, never `click`: `click` replaces the selection, which *is* this view's
@@ -449,6 +469,30 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **A pick is a decision too, so it also leaves the wall** (user's call, 2026-09-02).
+    /// Once you have said keep-this there is nothing left to ask about it, and leaving it up
+    /// means judging it again on every pass.
+    #[test]
+    fn picking_a_photo_also_takes_it_off_the_wall() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(50, &[2, 5, 9]);
+        frame(&mut app, &ctx, Vec::new());
+        {
+            let lib = app.library.as_mut().unwrap();
+            lib.selection.focus(5);
+        }
+        frame(&mut app, &ctx, vec![key(egui::Key::P)]);
+        let lib = app.library.as_ref().unwrap();
+        assert!(
+            !lib.selection.contains(5),
+            "the picked photo is still on the wall"
+        );
+        assert!(
+            lib.selection.contains(2) && lib.selection.contains(9),
+            "picking one photo removed the others"
+        );
+    }
+
     /// ⚠ The other half, and the one a "does X drop it?" test cannot see: **rating must not
     /// drop.** A star is a judgement you go on to compare against the others, so a survey that
     /// emptied itself as you rated would destroy the very set you were choosing within.
@@ -461,7 +505,10 @@ mod tests {
             let lib = app.library.as_mut().unwrap();
             lib.selection.focus(5);
         }
-        for k in [egui::Key::Num3, egui::Key::P, egui::Key::U] {
+        // ⚠ `P` is **not** in this list any more: it became a decision alongside `X` and now
+        // takes the photo off the wall. `U` stays, because un-flagging *undoes* a decision — a
+        // photo you have just made undecided again belongs back on the wall.
+        for k in [egui::Key::Num3, egui::Key::Num0, egui::Key::U] {
             frame(&mut app, &ctx, vec![key(k)]);
             let lib = app.library.as_ref().unwrap();
             assert!(
