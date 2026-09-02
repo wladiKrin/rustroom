@@ -362,15 +362,12 @@ pub fn show(
         // Balance slides all three centres together. Lightroom places them the same way, below
         // the wheels rather than inside one.
         //
-        // ⚠ Separated and captioned because without it they sit flush against Hue/Saturation/
-        // Luminance, which *are* per-wheel, and nothing on screen says which is which.
+        // ⚠ Separated because without it they sit flush against Hue/Saturation/Luminance, which
+        // *are* per-wheel. A caption saying so was tried and removed (user's call, 2026-09-02) —
+        // the hairline carries it.
         ui.separator();
         ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
         ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
-        crate::theme::hint(
-            ui,
-            "Shared: these set where the three ranges meet. Global is a flat tint and is unaffected.",
-        );
     });
 
     section(ui, SECTIONS[3], false, |ui| {
