@@ -63,6 +63,12 @@ pub struct CameraProfile {
     /// is ignored there, because the X-T4's is exactly that and honouring it would mean no
     /// rendering at all.
     pub tone_curve: Option<Vec<[f32; 2]>>,
+    /// The profile's `BaselineExposure` in stops, when it carries one.
+    ///
+    /// ⚠ `None` is not zero: a profile that declares `+0.0` has made a statement, and one that
+    /// says nothing has not. The renderer falls back to its own measured constant for the
+    /// second, and must not for the first.
+    pub baseline_exposure: Option<f32>,
 }
 
 const COLOR_MATRIX_1: u16 = 50721;
@@ -73,6 +79,12 @@ const PROFILE_NAME: u16 = 50936;
 const HUE_SAT_MAP_DIMS: u16 = 50937;
 const HUE_SAT_MAP_DATA_1: u16 = 50938;
 const HUE_SAT_MAP_DATA_2: u16 = 50939;
+/// `BaselineExposure` — how far to move the zero point, in stops, before the profile's
+/// rendering is applied. A RAW's midtones sit *below* the display convention's middle grey
+/// because the metering leaves headroom above the subject for highlights, and this is the
+/// per-camera constant that puts them back. Optional in the spec, and absent from most
+/// community profiles.
+const BASELINE_EXPOSURE: u16 = 50730;
 const PROFILE_TONE_CURVE: u16 = 50940;
 const FORWARD_MATRIX_1: u16 = 50964;
 const FORWARD_MATRIX_2: u16 = 50965;
@@ -123,6 +135,7 @@ impl CameraProfile {
         let mut hsm_dims: Option<[usize; 3]> = None;
         let mut hsm: [Option<Vec<[f32; 3]>>; 2] = [None, None];
         let mut tone_curve: Option<Vec<[f32; 2]>> = None;
+        let mut baseline_exposure: Option<f32> = None;
 
         // FLOAT (type 11) triples, as the HueSatMap tables are stored.
         let f32_at = |o: usize| -> Result<f32, ProfileError> {
@@ -207,6 +220,17 @@ impl CameraProfile {
                 // ⚠ An odd count is **dropped** rather than erroring: a malformed curve should
                 // cost the rendering, not the whole profile. The same rule the HueSatMap's
                 // dims/length guard follows.
+                // SRATIONAL, so the numerator is signed — a negative baseline is legal and
+                // means "this camera's raw midtones sit *above* middle grey".
+                BASELINE_EXPOSURE if cnt == 1 => {
+                    let num = u32_at(payload)? as i32 as f32;
+                    let den = u32_at(payload + 4)? as i32 as f32;
+                    // A zero denominator is malformed; dropping it keeps the parse total rather
+                    // than producing an infinity that would black the whole image out.
+                    if den != 0.0 {
+                        baseline_exposure = Some(num / den);
+                    }
+                }
                 PROFILE_TONE_CURVE if cnt >= 4 && cnt.is_multiple_of(2) => {
                     let mut v = Vec::with_capacity(cnt / 2);
                     for i in 0..cnt / 2 {
@@ -233,6 +257,7 @@ impl CameraProfile {
         Ok(Self {
             name,
             tone_curve,
+            baseline_exposure,
             illuminant1: ill1,
             illuminant2: ill2,
             color1: mats[0].ok_or(ProfileError::MissingTag(COLOR_MATRIX_1))?,
@@ -395,6 +420,60 @@ mod tests {
         // right count and the wrong curve.
         assert!((c[1][0] - 0.5).abs() < 1e-5, "wrong x: {c:?}");
         assert!((c[1][1] - 0.7).abs() < 1e-5, "wrong y: {c:?}");
+    }
+
+    fn baseline_entry(num: i32, den: i32) -> (u16, u16, u32, Vec<u8>) {
+        let mut b = num.to_le_bytes().to_vec();
+        b.extend_from_slice(&den.to_le_bytes());
+        (BASELINE_EXPOSURE, 10, 1, b)
+    }
+
+    #[test]
+    fn a_baseline_exposure_is_read_as_stops() {
+        let d = dcp_with(&[colour_matrix_entry(), baseline_entry(5, 4)]);
+        let p = CameraProfile::parse(&d).expect("parse");
+        assert!(
+            (p.baseline_exposure.expect("baseline") - 1.25).abs() < 1e-6,
+            "got {:?}",
+            p.baseline_exposure
+        );
+    }
+
+    /// ⚠ SRATIONAL, so the numerator is signed. Read as unsigned, −1/2 comes back as roughly
+    /// +1.07e9 stops — which would black the entire image out, and no test that only ever feeds
+    /// a positive value can see it.
+    #[test]
+    fn a_negative_baseline_stays_negative() {
+        let d = dcp_with(&[colour_matrix_entry(), baseline_entry(-1, 2)]);
+        let p = CameraProfile::parse(&d).expect("parse");
+        assert!(
+            (p.baseline_exposure.expect("baseline") + 0.5).abs() < 1e-6,
+            "got {:?}",
+            p.baseline_exposure
+        );
+    }
+
+    /// ⚠⚠ `None` and `Some(0.0)` mean different things — "said nothing" against "declared no
+    /// shift" — and the renderer falls back to its own constant only for the first. A profile
+    /// without the tag must therefore report `None`, not a helpful zero.
+    #[test]
+    fn a_profile_without_a_baseline_reports_none_rather_than_zero() {
+        let d = dcp_with(&[colour_matrix_entry()]);
+        assert_eq!(
+            CameraProfile::parse(&d).expect("parse").baseline_exposure,
+            None
+        );
+    }
+
+    /// ⚠ A zero denominator is malformed; it is dropped rather than producing an infinity that
+    /// would black the image out.
+    #[test]
+    fn a_baseline_with_a_zero_denominator_is_dropped() {
+        let d = dcp_with(&[colour_matrix_entry(), baseline_entry(1, 0)]);
+        assert_eq!(
+            CameraProfile::parse(&d).expect("parse").baseline_exposure,
+            None
+        );
     }
 
     #[test]

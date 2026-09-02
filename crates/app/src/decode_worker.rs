@@ -42,7 +42,7 @@ pub struct Decoded {
     /// slider. D65 for anything that is not a RAW, which is what a camera JPEG genuinely is.
     pub wb_baseline: color::wb::Illuminant,
     /// The camera profile's tone curve, when one was loaded and it has one.
-    pub profile_curve: Option<Vec<[f32; 2]>>,
+    pub profile: ProfileParts,
     /// Whether the buffer holds **scene-referred** light.
     ///
     /// ⚠⚠ False for JPEG/PNG/TIFF, which have *already* been rendered by whatever produced them.
@@ -50,6 +50,22 @@ pub struct Decoded {
     /// camera's would render the photograph twice. The decoder is the only component that knows,
     /// so the flag rides with the decode rather than being inferred from the extension later.
     pub scene_referred: bool,
+}
+
+/// What a camera profile contributes to the display rendering, owned so the render worker can
+/// capture it.
+///
+/// ⚠ One struct rather than two fields, because the two must always travel together: a curve
+/// that arrived without its baseline would render under this renderer's own measured constant
+/// instead of the profile's, which is a wrong picture rather than an error. Grouping them also
+/// keeps `RenderEngine::new` inside clippy's argument limit.
+#[derive(Debug, Clone, Default)]
+pub struct ProfileParts {
+    /// The profile's `ProfileToneCurve`, when it has one.
+    pub curve: Option<Vec<[f32; 2]>>,
+    /// The profile's `BaselineExposure` in stops. `None` falls back to the renderer's own
+    /// measured constant; `Some(0.0)` is a profile declaring no shift, which is different.
+    pub baseline_ev: Option<f32>,
 }
 
 /// What a decode reports about a file beyond its pixels.
@@ -66,7 +82,7 @@ pub struct SourceFacts {
     pub lens: LensFacts,
     pub wb_baseline: color::wb::Illuminant,
     /// The camera profile's tone curve, when one was loaded and it has one.
-    pub profile_curve: Option<Vec<[f32; 2]>>,
+    pub profile: ProfileParts,
     /// Whether the buffer holds **scene-referred** light — see [`Decoded::scene_referred`].
     pub scene_referred: bool,
 }
@@ -201,7 +217,7 @@ impl DecodeWorker {
                     source_scale,
                     lens: facts.lens,
                     wb_baseline: facts.wb_baseline,
-                    profile_curve: facts.profile_curve,
+                    profile: facts.profile,
                     scene_referred: facts.scene_referred,
                 })
             });

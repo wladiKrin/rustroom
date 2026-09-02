@@ -98,7 +98,7 @@ mod tests {
                 max_dim: 1,
             },
             source_scale: 1.0,
-            profile_curve: None,
+            profile: Default::default(),
             scene_referred: true,
         })
     }

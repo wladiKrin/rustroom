@@ -117,7 +117,7 @@ fn main() {
                 None,
                 pipeline::RenderSpec::default(),
                 lens.clone(),
-                None,
+                pipeline::ProfileRendering::default(),
             )
         });
         let (src, down_ms) = best_of(3, || {
@@ -144,7 +144,7 @@ fn main() {
                 None,
                 pipeline::RenderSpec::default(),
                 lens.clone(),
-                None,
+                pipeline::ProfileRendering::default(),
             );
             t.run(mid.clone())
         });
@@ -172,7 +172,7 @@ fn prefix_run(
         None,
         pipeline::RenderSpec::default(),
         lens.clone(),
-        None,
+        pipeline::ProfileRendering::default(),
     );
     prefix.run(core_image::ImageBuf::clone(buf).downscale_to(max_dim))
 }

@@ -179,8 +179,8 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         buf.clone(),
         1.0,
         None,
+        color::wb::Illuminant::default(),
         Default::default(),
-        None,
         true,
         || {},
     );
@@ -300,7 +300,7 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
         source_scale: 1.0,
         lens: LensFacts::default(),
         wb_baseline: color::wb::Illuminant::default(),
-        profile_curve: None,
+        profile: Default::default(),
         scene_referred: true,
     })
 }

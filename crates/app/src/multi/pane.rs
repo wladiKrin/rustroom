@@ -50,7 +50,7 @@ impl Pane {
                 decoded.source_scale,
                 decoded.lens.shot.clone(),
                 decoded.wb_baseline,
-                decoded.profile_curve.clone(),
+                decoded.profile.clone(),
                 decoded.scene_referred,
                 move || ctx2.request_repaint(),
             ),

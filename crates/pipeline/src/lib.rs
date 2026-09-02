@@ -406,7 +406,7 @@ pub fn build_pipeline_split_in_region(
         None,
         RenderSpec::default(),
         None,
-        None,
+        ProfileRendering::default(),
     )
 }
 
@@ -418,6 +418,24 @@ pub fn build_pipeline_split_in_region(
 ///
 /// ⚠ Checked because the X-T4's `ProfileToneCurve` is exactly `[[0,0],[1,1]]`. Applying it would
 /// leave the photograph colorimetric while the setting claimed to be rendering it — the feature
+/// What a camera profile contributes to the display rendering.
+///
+/// ⚠ A struct rather than two more parameters: the builder already sits at seven, and an eighth
+/// trips `too_many_arguments` — the same answer `FrameSpec`, `NameField`, `SourceInfo`,
+/// `SourceFacts` and `RenderSpec` each gave. `Copy` despite holding a slice, because a shared
+/// reference is `Copy`, which is what lets it sit beside `RenderSpec` rather than inside it.
+#[derive(Clone, Copy, Default)]
+pub struct ProfileRendering<'a> {
+    /// The profile's `ProfileToneCurve`, when it has a usable one; else the built-in curve.
+    pub curve: Option<&'a [[f32; 2]]>,
+    /// The profile's `BaselineExposure` in stops; `None` falls back to
+    /// [`stages::display_rendering::BASELINE_EV`].
+    ///
+    /// ⚠ `None` is not `Some(0.0)`: a profile that declares no shift has made a statement, and
+    /// one that says nothing has not.
+    pub baseline_ev: Option<f32>,
+}
+
 /// silently doing nothing on real hardware.
 fn is_identity(points: &[[f32; 2]]) -> bool {
     points.len() < 2 || points.iter().all(|p| (p[0] - p[1]).abs() < 1e-4)
@@ -430,13 +448,13 @@ pub fn build_pipeline_split_in_region_with_brush(
     brush: Option<&BrushCoverage>,
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
-    // The camera profile's tone curve, when it has one.
-    //
-    // ⚠ A parameter beside `lens` rather than a `RenderSpec` field: `RenderSpec` is `Copy` and a
-    // curve is not, which is exactly why `lens` sits outside it too. An eighth parameter would
-    // trip `too_many_arguments` and want a struct; seven does not.
-    profile_curve: Option<&[[f32; 2]]>,
+    // What the camera profile contributes to the *tail*.
+    profile: ProfileRendering<'_>,
 ) -> (Pipeline, Pipeline) {
+    let ProfileRendering {
+        curve: profile_curve,
+        baseline_ev,
+    } = profile;
     let RenderSpec {
         space,
         resampler,
@@ -563,11 +581,8 @@ pub fn build_pipeline_split_in_region_with_brush(
             // literally [[0,0],[1,1]], so honouring it would produce no rendering at all —
             // indistinguishable from `None`, and the setting would silently do nothing on the
             // author's own camera.
-            let stage = match profile_curve.filter(|p| !is_identity(p)) {
-                Some(p) => DisplayRenderingStage::from_profile(p),
-                None => DisplayRenderingStage::built_in(),
-            };
-            tail.push(Box::new(stage));
+            let curve = profile_curve.filter(|p| !is_identity(p));
+            tail.push(Box::new(DisplayRenderingStage::new(curve, baseline_ev)));
         }
     }
     tail.push(Box::new(OutputTransform::new(space)));
@@ -622,8 +637,15 @@ pub fn build_pipeline_to(
 /// As [`build_pipeline_to`], with the whole [`RenderSpec`] — which is what an export of a RAW
 /// needs, since only it knows the file's white-balance baseline.
 pub fn build_pipeline_spec(edits: &Edits, scale: RenderScale, spec: RenderSpec) -> Pipeline {
-    let (prefix, tail) =
-        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None, None);
+    let (prefix, tail) = build_pipeline_split_in_region_with_brush(
+        edits,
+        scale,
+        None,
+        None,
+        spec,
+        None,
+        ProfileRendering::default(),
+    );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
@@ -749,7 +771,12 @@ mod tests {
                 None,
                 RenderSpec::default(),
                 None,
-                curve,
+                ProfileRendering {
+                    curve,
+                    // The transfer is what this test is about; a baseline shift would move the
+                    // probe along it and blur what the assertion is comparing.
+                    baseline_ev: Some(0.0),
+                },
             );
             let mut img = ImageBuf::new(1, 1);
             img.set_pixel(0, 0, [0.05, 0.05, 0.05]);

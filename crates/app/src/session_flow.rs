@@ -311,7 +311,7 @@ impl RustroomApp {
             decoded.source_scale,
             decoded.lens.shot.clone(),
             decoded.wb_baseline,
-            decoded.profile_curve.clone(),
+            decoded.profile.clone(),
             decoded.scene_referred,
             move || ctx2.request_repaint(),
         );
@@ -450,7 +450,7 @@ impl RustroomApp {
                         // baseline that reverted to D65 here would shift the white balance of
                         // every RAW the moment the full-resolution decode landed.
                         s.wb_baseline,
-                        decoded.profile_curve.clone(),
+                        decoded.profile.clone(),
                         decoded.scene_referred,
                         move || ctx2.request_repaint(),
                     );
