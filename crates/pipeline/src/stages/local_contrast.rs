@@ -14,6 +14,21 @@ pub const CLARITY_SIGMA: f32 = 40.0;
 
 /// Luma that the midtone weight peaks at: mid-gray.
 const MID_GRAY: f32 = 0.18;
+/// What fraction of Clarity survives at a hard edge — the suppressor's floor, `s` in
+/// `stages/sharpening.rs`'s Detail model.
+///
+/// A fixed constant with no slider, because Lightroom has no halo control either: this is part
+/// of what "Clarity" means rather than a decision to hand to the user.
+pub(crate) const CLARITY_HALO_FLOOR: f32 = 0.25;
+/// Coarse-band excursion at which the suppressor is half engaged.
+///
+/// ⚠ **Derived, not copied from `sharpening::HALO_KNEE` (0.05).** That knee is in luma-delta
+/// units on the *fine* band; this one measures the **coarse** band, whose excursions are far
+/// larger — on the golden chart `|d_c|` is 0.158 at the hard edge against 0.048 max / 0.017
+/// mean in the texture region. 0.08 sits between the two, so an edge is well above it and
+/// texture well below.
+pub(crate) const CLARITY_HALO_KNEE: f32 = 0.08;
+
 /// Near-black guard for the ratio. Load-bearing, exactly as in `stages/sharpening.rs`:
 /// without it a dark pixel beside a bright edge divides by ~0 and the gain explodes.
 const LUMA_EPS: f32 = 1e-3;
@@ -40,6 +55,22 @@ fn luma(px: &[f32]) -> f32 {
 fn midtone_weight(l: f32) -> f32 {
     let t = l / (l + MID_GRAY);
     4.0 * t * (1.0 - t)
+}
+
+/// Halo suppression for Clarity's coarse band: 1 for a small excursion, falling toward
+/// `floor` for a large one.
+///
+/// ⚠ **The same model `stages/sharpening.rs`'s Detail uses**, verbatim in form. `d_c` is
+/// largest exactly *at* an edge — that is what a high-pass band is — so an unsuppressed
+/// Clarity puts its strongest lift precisely where the halo is visible. Above the knee the
+/// contribution collapses toward `floor`; in texture and gentle gradients `|d_c|` is below the
+/// knee and passes at full strength.
+///
+/// The midtone weight is not enough on its own: it protects the *extremes of the tone range*,
+/// which is a different question from *how strong the local excursion is*, and a hard edge in
+/// the midtones has full weight.
+fn halo_suppression(d: f32, floor: f32) -> f32 {
+    floor + (1.0 - floor) / (1.0 + (d.abs() / CLARITY_HALO_KNEE).powi(2))
 }
 
 /// The widest neighbourhood one output pixel can depend on, in **rendered** pixels.
@@ -101,6 +132,17 @@ impl PipelineStage for LocalContrastStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
+        self.apply_with(image, CLARITY_HALO_FLOOR)
+    }
+}
+
+impl LocalContrastStage {
+    /// [`PipelineStage::apply`] with the halo suppressor's floor overridden.
+    ///
+    /// ⚠ Exists for the tests: "the suppressor cuts the overshoot" is a comparison of two
+    /// runs, and a floor of exactly 1.0 is the unsuppressed stage. Production only ever calls
+    /// it through `apply`, with [`CLARITY_HALO_FLOOR`].
+    pub(crate) fn apply_with(&self, image: ImageBuf, halo_floor: f32) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
         if w == 0 || h == 0 || !self.params.is_active() {
             return image;
@@ -134,7 +176,9 @@ impl PipelineStage for LocalContrastStage {
                 .par_iter_mut()
                 .zip(&l)
                 .zip(&base)
-                .for_each(|((d, &lv), &b)| *d += k_c * (lv - b) * midtone_weight(lv));
+                .for_each(|((d, &lv), &b)| {
+                    *d += k_c * (lv - b) * midtone_weight(lv) * halo_suppression(lv - b, halo_floor)
+                });
         }
 
         let mut data = vec![0.0f32; n * 3];
@@ -209,6 +253,123 @@ mod tests {
 
     fn run(params: LocalContrast, img: ImageBuf) -> ImageBuf {
         LocalContrastStage::new(&params, RenderScale::FULL).apply(img)
+    }
+
+    /// The stage with the halo suppressor's floor overridden — `1.0` is the unsuppressed
+    /// stage, which is what "with and without" comparisons run against.
+    fn run_with_floor(params: LocalContrast, img: ImageBuf, floor: f32) -> ImageBuf {
+        LocalContrastStage::new(&params, RenderScale::FULL).apply_with(img, floor)
+    }
+
+    /// The hard edge's first bright row in [`hard_edge`].
+    const EDGE: usize = 3 * S / 4;
+
+    /// A hard horizontal edge at three quarters height — 0.2 above, 0.6 below — like the
+    /// golden chart's. Grey, so luma is the sample value and expectations can be computed
+    /// inline.
+    fn hard_edge() -> ImageBuf {
+        let mut img = ImageBuf::new(S, S);
+        for y in 0..S {
+            for x in 0..S {
+                let v = if y < EDGE { 0.2 } else { 0.6 };
+                img.set_pixel(x, y, [v; 3]);
+            }
+        }
+        img
+    }
+
+    /// The largest excursion past the band's own value beside the edge — bright side
+    /// upward, dark side downward — over the interior columns. Each column is flat in `y`
+    /// except for the step, so the source's own value in that column *is* the band's.
+    fn edge_overshoot(out: &ImageBuf, src: &ImageBuf) -> f32 {
+        let mut worst = 0.0f32;
+        for x in 30..S - 30 {
+            for y in 0..S {
+                let (o, s) = (out.pixel(x, y)[1], src.pixel(x, y)[1]);
+                let e = if y >= EDGE { o - s } else { s - o };
+                worst = worst.max(e);
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn the_halo_suppressor_cuts_the_edge_overshoot_and_keeps_fine_texture() {
+        // ⚠ Two runs compared, not one measured: floor 1.0 is the unsuppressed stage, and
+        // "the overshoot is small" alone cannot tell a suppressor from a weak Clarity.
+        let cla = LocalContrast {
+            texture: 0.0,
+            clarity: 60.0,
+        };
+        let src = hard_edge();
+        let with = edge_overshoot(&run(cla, src.clone()), &src);
+        let without = edge_overshoot(&run_with_floor(cla, src.clone(), 1.0), &src);
+        assert!(
+            without > 0.05,
+            "fixture check: no halo to suppress ({without})"
+        );
+        assert!(
+            with < without * 0.6,
+            "the edge overshoot went {without} -> {with}, not suppressed"
+        );
+
+        // The other half: fine texture keeps at least 90% of the contrast Clarity gave it
+        // unsuppressed. Measured on the *added* contrast, which is the stricter reading of
+        // "retained within 10%" — the total span would pass with the suppressor set to
+        // swallow half of Clarity's contribution.
+        let fine = fine_only();
+        let base = fine_span(&fine);
+        let added_with = fine_span(&run(cla, fine.clone())) - base;
+        let added_without = fine_span(&run_with_floor(cla, fine.clone(), 1.0)) - base;
+        assert!(
+            added_without > 0.0,
+            "fixture check: Clarity added nothing to the sine"
+        );
+        assert!(
+            added_with > added_without * 0.9,
+            "fine texture kept only {added_with} of the {added_without} Clarity added"
+        );
+    }
+
+    #[test]
+    fn a_full_pass_through_floor_is_bit_identical_to_the_old_maths() {
+        // The plumbing check: at floor 1.0 the suppressor is exactly 1.0 and the stage must
+        // reproduce the pre-suppressor formula to the bit — computed here from the same
+        // primitives, in the same order, on a tinted image so the RGB gain path is covered.
+        let src = two_band();
+        let cla = LocalContrast {
+            texture: 0.0,
+            clarity: 60.0,
+        };
+        let out = run_with_floor(cla, src.clone(), 1.0);
+        let l: Vec<f32> = src
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| luma(p))
+            .collect();
+        let base = wide_blur(&l, S, S, CLARITY_SIGMA);
+        let k_c = cla.clarity / 100.0;
+        let mut moved = 0usize;
+        for (i, (o, px)) in out
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(src.data().as_chunks::<3>().0)
+            .enumerate()
+        {
+            let d = k_c * (l[i] - base[i]) * midtone_weight(l[i]);
+            let gain = (1.0 + d / l[i].max(LUMA_EPS)).clamp(0.0, GAIN_MAX);
+            for k in 0..3 {
+                assert_eq!(o[k], px[k] * gain, "sample {i} channel {k}");
+            }
+            if o[0] != px[0] {
+                moved += 1;
+            }
+        }
+        assert!(moved > 0, "nothing changed, so nothing was compared");
     }
 
     /// Mean absolute luma change over the interior, avoiding the border band where the
