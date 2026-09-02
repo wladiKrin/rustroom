@@ -166,6 +166,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     lens: s.lens.name.as_deref(),
                                     lens_profile_found: s.lens.shot.is_some(),
                                     wb_baseline: s.wb_baseline,
+                                    // ⚠ A shared borrow of a *different* field from the `&mut
+                                    // s.edits` beside it — disjoint fields, so this is legal
+                                    // where a closure capturing `s` twice would be `E0499`.
+                                    buffer: &s.buffer,
                                 },
                                 Some(&mut s.picking_wb),
                                 &mut ed,

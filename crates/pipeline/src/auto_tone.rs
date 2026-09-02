@@ -275,7 +275,9 @@ mod tests {
     /// luminances on both sides of every weight's knee and above 1.0, where the stage clamps.
     #[test]
     fn the_stage_is_monotone_in_whites_and_in_blacks() {
-        let lums = [0.0, 0.005, 0.02, 0.1, 0.3, 0.34, 0.5, 0.66, 0.7, 0.9, 1.0, 1.5, 3.0];
+        let lums = [
+            0.0, 0.005, 0.02, 0.1, 0.3, 0.34, 0.5, 0.66, 0.7, 0.9, 1.0, 1.5, 3.0,
+        ];
         for l in lums {
             let mut prev_w = f32::NEG_INFINITY;
             let mut prev_b = f32::NEG_INFINITY;
@@ -298,7 +300,7 @@ mod tests {
         let mut img = uniform(100, 100, 0.1);
         for y in 0..100 {
             for x in 0..100 {
-                if x < 20 || x >= 80 || y < 20 || y >= 80 {
+                if !(20..80).contains(&x) || !(20..80).contains(&y) {
                     img.set_pixel(x, y, [2.0, 2.0, 2.0]);
                 }
             }
@@ -332,10 +334,20 @@ mod tests {
         ];
         for (name, img) in cases {
             let got = analyse(&img, None);
-            assert!(got.exposure.is_finite(), "{name}: exposure {}", got.exposure);
+            assert!(
+                got.exposure.is_finite(),
+                "{name}: exposure {}",
+                got.exposure
+            );
             assert!(got.exposure.abs() <= EXPOSURE_LIMIT, "{name}: {got:?}");
-            assert!(got.whites.is_finite() && got.whites.abs() <= 100.0, "{name}: {got:?}");
-            assert!(got.blacks.is_finite() && got.blacks.abs() <= 100.0, "{name}: {got:?}");
+            assert!(
+                got.whites.is_finite() && got.whites.abs() <= 100.0,
+                "{name}: {got:?}"
+            );
+            assert!(
+                got.blacks.is_finite() && got.blacks.abs() <= 100.0,
+                "{name}: {got:?}"
+            );
         }
         assert_eq!(analyse(&uniform(10, 10, 0.0), None).exposure, 0.0);
         // ⚠ The discriminating half. Asserting only on `analyse`'s output cannot see the
@@ -359,7 +371,10 @@ mod tests {
             right: 0.5,
             bottom: 0.5,
         };
-        assert_eq!(analyse(&uniform(10, 10, 0.2), Some(none)), AutoTone::default());
+        assert_eq!(
+            analyse(&uniform(10, 10, 0.2), Some(none)),
+            AutoTone::default()
+        );
     }
 
     /// Spec test 6, both directions. ⚠ The spec's wording ("a frame 6 EV under lands at −2.5")
@@ -385,7 +400,11 @@ mod tests {
             hi: 0.5,
         });
         assert_eq!(got.exposure, 0.0);
-        assert_eq!(got.whites, 0.0, "no leverage must read as 0, got {}", got.whites);
+        assert_eq!(
+            got.whites, 0.0,
+            "no leverage must read as 0, got {}",
+            got.whites
+        );
         assert!(got.blacks.abs() < 99.0, "the blacks half is unaffected");
     }
 
@@ -398,8 +417,14 @@ mod tests {
             median: MEDIAN_TARGET,
             hi: 3.0,
         });
-        assert_eq!(got.blacks, -100.0, "0.05 cannot reach 0.01: crush as far as it goes");
-        assert_eq!(got.whites, -100.0, "3.0 cannot reach 0.98: pull down as far as it goes");
+        assert_eq!(
+            got.blacks, -100.0,
+            "0.05 cannot reach 0.01: crush as far as it goes"
+        );
+        assert_eq!(
+            got.whites, -100.0,
+            "3.0 cannot reach 0.98: pull down as far as it goes"
+        );
         let got = solve(Percentiles {
             lo: 0.001,
             median: MEDIAN_TARGET,
@@ -426,7 +451,10 @@ mod tests {
             median: m,
             hi: m * 2.1,
         });
-        assert_ne!(far.blacks, 0.0, "a tail a stop under the median is a black point");
+        assert_ne!(
+            far.blacks, 0.0,
+            "a tail a stop under the median is a black point"
+        );
         // hi = 0.336 has no whites leverage, so the guard's other half is seen through blacks
         // alone here and through the whites boundary below.
         let far_hi = solve(Percentiles {

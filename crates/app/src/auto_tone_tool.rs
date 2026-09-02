@@ -185,7 +185,10 @@ mod tests {
             (s.top - 0.75).abs() < 1e-6 && (s.bottom - 1.0).abs() < 1e-6,
             "a left-edge crop under Cw90 must be the buffer's bottom edge, got {s:?}"
         );
-        assert!((s.left - 0.0).abs() < 1e-6 && (s.right - 1.0).abs() < 1e-6, "{s:?}");
+        assert!(
+            (s.left - 0.0).abs() < 1e-6 && (s.right - 1.0).abs() < 1e-6,
+            "{s:?}"
+        );
     }
 
     #[test]
@@ -220,8 +223,14 @@ mod tests {
         );
         // ⚠ The fixture's own premise, asserted before anything rests on it: with no real tails
         // the two clip fields are 0 whatever `apply` does with them.
-        assert!(got.whites != 0.0, "fixture check: the whites solve must engage");
-        assert!(got.blacks != 0.0, "fixture check: the blacks solve must engage");
+        assert!(
+            got.whites != 0.0,
+            "fixture check: the whites solve must engage"
+        );
+        assert!(
+            got.blacks != 0.0,
+            "fixture check: the blacks solve must engage"
+        );
 
         assert_eq!(e.contrast, 40.0, "contrast must be left alone");
         assert_eq!(e.highlights, -30.0, "highlights must be left alone");

@@ -122,6 +122,13 @@ pub struct SourceInfo<'a> {
     pub lens_profile_found: bool,
     /// The illuminant the decode left the photo balanced to.
     pub wb_baseline: color::wb::Illuminant,
+    /// The decoded editing buffer, for Auto Tone's analysis.
+    ///
+    /// ⚠⚠ **The decode, never the rendered texture.** That texture already carries the current
+    /// exposure and tone, so analysing it would make the auto chase its own correction — press
+    /// Auto twice and it would keep moving. The white-balance eyedropper reads this same `Arc`
+    /// for the same reason, which is why `Session` keeps it at all.
+    pub buffer: &'a core_image::ImageBuf,
 }
 
 /// The white-balance controls: a temperature, a tint, and the named illuminants.
@@ -218,6 +225,68 @@ pub(crate) fn white_balance(
 const MIRED_MIN: f32 = 1.0e6 / 25000.0;
 const MIRED_MAX: f32 = 1.0e6 / 2000.0;
 
+/// The Tone section: Auto, the six tonal sliders, the Presence block and the curve.
+///
+/// ⚠ Its own function rather than a closure inside [`show`], which had reached 605 lines. The
+/// Auto button needs the buffer threaded to it, and threading a parameter through a closure that
+/// already captures half the panel is how that file grew in the first place.
+pub(crate) fn tone(
+    ui: &mut egui::Ui,
+    edits: &mut edit_model::Edits,
+    buffer: &core_image::ImageBuf,
+    ed: &mut Edited,
+) {
+    // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
+    // percentile sort of the buffer per frame is the `apply_view_demosaic` mistake in its most
+    // expensive costume yet.
+    //
+    // ⚠ Its own row rather than squeezed beside the Exposure slider: the panel is 240 pt and a
+    // slider there already spends all of it on the rail, its label and its value. Lightroom puts
+    // its Auto on its own row in the Tone panel for the same reason.
+    if ui
+        .button("Auto")
+        .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
+        .clicked()
+    {
+        rustroom_app::auto_tone_tool::apply(edits, buffer);
+        // ⚠ `mark_changed`, not a slider's `changed()`: a click is a complete act, so it is one
+        // history entry immediately rather than waiting for a `drag_stopped` that never comes.
+        // That is what makes Auto exactly one Ctrl+Z — the model the WB presets already follow.
+        ed.mark_changed();
+    }
+    ed.slider(ui, &mut edits.exposure, -5.0..=5.0, "Exposure");
+    ed.slider(ui, &mut edits.contrast, -100.0..=100.0, "Contrast");
+    ed.slider(ui, &mut edits.highlights, -100.0..=100.0, "Highlights");
+    ed.slider(ui, &mut edits.shadows, -100.0..=100.0, "Shadows");
+    ed.slider(ui, &mut edits.whites, -100.0..=100.0, "Whites");
+    ed.slider(ui, &mut edits.blacks, -100.0..=100.0, "Blacks");
+    // ⚠ A hairline, not a header. These are Lightroom's "Presence" block and they are
+    // local-contrast tools rather than tonal ones — but they belong to the `Tone` edit
+    // group, and a header here would put the panel and the Sync dialog out of step.
+    ui.separator();
+    ed.slider(
+        ui,
+        &mut edits.local_contrast.texture,
+        -100.0..=100.0,
+        "Texture",
+    )
+    .on_hover_text("Fine surface detail. Negative smooths texture while keeping edges sharp; positive crisps detail along edges too.");
+    ed.slider(
+        ui,
+        &mut edits.local_contrast.clarity,
+        -100.0..=100.0,
+        "Clarity",
+    );
+    ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze");
+    // ⚠ Last in the section, and a hairline rather than a header — `tone_curve` belongs to
+    // the `Tone` edit group, and a header here would put the panel and the Sync dialog out
+    // of step, which is the ambiguity this section structure exists to remove. It comes
+    // after the sliders because that is the order the decisions are made in: set the tone
+    // broadly, then refine its shape.
+    ui.separator();
+    tone_curve::show(ui, &mut edits.tone_curve, ed);
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
@@ -231,6 +300,7 @@ pub fn show(
         lens,
         lens_profile_found,
         wb_baseline: baseline,
+        buffer,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
     // that opens with 30 sliders showing is the problem this section structure removes.
@@ -239,37 +309,7 @@ pub fn show(
     });
 
     section(ui, SECTIONS[1], true, |ui| {
-        ed.slider(ui, &mut edits.exposure, -5.0..=5.0, "Exposure");
-        ed.slider(ui, &mut edits.contrast, -100.0..=100.0, "Contrast");
-        ed.slider(ui, &mut edits.highlights, -100.0..=100.0, "Highlights");
-        ed.slider(ui, &mut edits.shadows, -100.0..=100.0, "Shadows");
-        ed.slider(ui, &mut edits.whites, -100.0..=100.0, "Whites");
-        ed.slider(ui, &mut edits.blacks, -100.0..=100.0, "Blacks");
-        // ⚠ A hairline, not a header. These are Lightroom's "Presence" block and they are
-        // local-contrast tools rather than tonal ones — but they belong to the `Tone` edit
-        // group, and a header here would put the panel and the Sync dialog out of step.
-        ui.separator();
-        ed.slider(
-            ui,
-            &mut edits.local_contrast.texture,
-            -100.0..=100.0,
-            "Texture",
-        )
-        .on_hover_text("Fine surface detail. Negative smooths texture while keeping edges sharp; positive crisps detail along edges too.");
-        ed.slider(
-            ui,
-            &mut edits.local_contrast.clarity,
-            -100.0..=100.0,
-            "Clarity",
-        );
-        ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze");
-        // ⚠ Last in the section, and a hairline rather than a header — `tone_curve` belongs to
-        // the `Tone` edit group, and a header here would put the panel and the Sync dialog out
-        // of step, which is the ambiguity this section structure exists to remove. It comes
-        // after the sliders because that is the order the decisions are made in: set the tone
-        // broadly, then refine its shape.
-        ui.separator();
-        tone_curve::show(ui, &mut edits.tone_curve, ed);
+        tone(ui, edits, buffer, ed);
     });
 
     section(ui, SECTIONS[2], false, |ui| {
@@ -425,6 +465,80 @@ mod tests {
             );
         }
         assert_eq!(wb.kelvin, None, "the panel froze a temperature nobody set");
+    }
+
+    /// A buffer with real tails, so the solve engages every field it can.
+    fn tone_fixture() -> core_image::ImageBuf {
+        let (w, h) = (200usize, 100usize);
+        let n = w * h;
+        let mut data = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let v = 0.05 + 0.25 * (i as f32 / (n - 1) as f32);
+            data.extend_from_slice(&[v, v, v]);
+        }
+        let pin = n / 500;
+        for k in 0..pin {
+            let dark = (k * 997) % n;
+            let bright = (k * 991 + 13) % n;
+            for c in 0..3 {
+                data[dark * 3 + c] = 0.014;
+                data[bright * 3 + c] = 0.93;
+            }
+        }
+        core_image::ImageBuf::from_vec(w, h, data)
+    }
+
+    /// ⚠⚠ The load-bearing test of the button: it must write **all three** fields and mark the
+    /// edit **once**. An assertion on the exposure alone would pass against a button wired to a
+    /// third of the feature, which is exactly the shape M5.4a could ship broken in.
+    #[test]
+    fn the_auto_button_writes_all_three_and_marks_the_edit_once() {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        let mut ed = Edited::default();
+        crate::test_ui::click(&ctx, "Auto", |ui| {
+            ed = Edited::default();
+            tone(ui, &mut edits, &buf, &mut ed);
+        });
+        assert!(ed.changed, "the click must request a render");
+        assert!(ed.settled, "the click must push exactly one history entry");
+        assert_ne!(edits.exposure, 0.0, "Auto left the exposure alone");
+        assert_ne!(edits.whites, 0.0, "Auto left the whites alone");
+        assert_ne!(edits.blacks, 0.0, "Auto left the blacks alone");
+        // ⚠ And nothing beyond its three fields: Contrast, Highlights and Shadows are a taste
+        // nobody asked for, and a wildcard write would look identical in any screenshot.
+        assert_eq!(edits.contrast, 0.0);
+        assert_eq!(edits.highlights, 0.0);
+        assert_eq!(edits.shadows, 0.0);
+    }
+
+    /// ⚠ The discriminating other half: a button that fired every frame would pass the test
+    /// above and be a catastrophe — an analysis and a history entry per frame, at 60 Hz.
+    #[test]
+    fn merely_drawing_the_tone_section_changes_nothing() {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        for _ in 0..3 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::test_ui::screen()),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut ed = Edited::default();
+                    tone(ui, &mut edits, &buf, &mut ed);
+                    assert!(!ed.changed, "drawing the panel reported an edit");
+                    assert!(!ed.settled, "drawing the panel pushed a history entry");
+                },
+            );
+        }
+        assert_eq!(
+            edits,
+            edit_model::Edits::default(),
+            "drawing changed the edits"
+        );
     }
 
     #[test]
