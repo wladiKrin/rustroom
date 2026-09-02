@@ -16,7 +16,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -352,6 +352,23 @@ impl Catalog {
                  COMMIT;",
             )?;
         }
+        if from < 6 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1–5. Fifth time this rule meets a
+            // database holding real user data.
+            //
+            // ⚠ When this photo's `stem.xmp` sidecar was last **imported or written by
+            // Rustroom**, in unix seconds — not when the photo was edited. The whole conflict
+            // rule for XMP interchange is "a sidecar newer than this is a foreign edit and
+            // wins", so `0` (which every existing row acquires with no backfill) means "never
+            // seen", and any sidecar on disk therefore imports on the next folder open. That is
+            // the correct behaviour for a catalog that predates this column.
+            self.conn.execute_batch(
+                "BEGIN;
+                 ALTER TABLE photos ADD COLUMN xmp_mtime INTEGER NOT NULL DEFAULT 0;
+                 PRAGMA user_version = 6;
+                 COMMIT;",
+            )?;
+        }
         Ok(())
     }
 
@@ -558,6 +575,46 @@ impl Catalog {
             ))
         })?;
         Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// When each photo's XMP sidecar was last imported or written, for a whole folder.
+    ///
+    /// ⚠⚠ **Copy 0 only, and one query per folder.** XMP has no notion of a virtual copy, so
+    /// only the original's row carries the timestamp — and the grid rule applies here too: this
+    /// is called once per folder open, never once per photo.
+    ///
+    /// ⚠ Rows with `0` are returned like any other. `0` means "never seen", which is exactly
+    /// what the caller compares against, so filtering them out would hide the case that matters
+    /// most: a folder rated in Lightroom that Rustroom has never opened.
+    pub fn xmp_mtimes_in(&self, folder: &Path) -> Result<Vec<(PathBuf, i64)>, CatalogError> {
+        let key = folder.to_string_lossy().to_string();
+        let mut stmt = self.conn.prepare(
+            "SELECT p.file_name, p.xmp_mtime
+             FROM photos p JOIN folders f ON f.id = p.folder_id
+             WHERE f.path = ?1 AND p.copy = 0",
+        )?;
+        let rows = stmt.query_map([&key], |r| {
+            let name: String = r.get(0)?;
+            let secs: i64 = r.get(1)?;
+            Ok((PathBuf::from(&key).join(name), secs))
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Record that this photo's sidecar, as of `secs`, is one Rustroom has seen.
+    ///
+    /// ⚠ Copy 0, because that is the only row an XMP sidecar describes. ⚠ A photo the catalog
+    /// does not know is silently skipped — `set_marks`' rule, for its reason: the catalog is
+    /// never why an action fails.
+    pub fn set_xmp_mtime(&self, photo: &Path, secs: i64) -> Result<(), CatalogError> {
+        let Some(id) = self.photo_id(photo, 0)? else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "UPDATE photos SET xmp_mtime = ?2 WHERE id = ?1",
+            rusqlite::params![id, secs],
+        )?;
+        Ok(())
     }
 
     /// Every photo the catalog knows, from every folder ever opened.
@@ -1918,6 +1975,7 @@ mod tests {
                      DROP TABLE photo_capture;
                      DROP TABLE photo_keywords;
                      DROP TABLE keywords;
+                     ALTER TABLE photos DROP COLUMN xmp_mtime;
                      ALTER TABLE photos DROP COLUMN rating;
                      ALTER TABLE photos DROP COLUMN flag;
                      ALTER TABLE photos DROP COLUMN label;
@@ -2099,6 +2157,7 @@ mod tests {
                      DROP TABLE photo_capture;
                      DROP TABLE photo_keywords;
                      DROP TABLE keywords;
+                     ALTER TABLE photos DROP COLUMN xmp_mtime;
                      PRAGMA user_version = 2;",
                 )
                 .unwrap();
@@ -2115,6 +2174,90 @@ mod tests {
             "marks kept"
         );
         assert!(cat.keywords().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_version_five_catalog_upgrades_and_keeps_everything() {
+        // ⚠⚠ The fifth migration to meet real user data — folders, photos, collections, marks
+        // and keywords all present. Adding a column must touch nothing else.
+        let db = TempDb::new("v5v6");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+            let c = cat.create_collection("Portfolio").unwrap();
+            cat.add_to_collection(c, Path::new("/x/a.RAF"), 0).unwrap();
+            let k = cat.create_keyword("Paris", None).unwrap();
+            cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+            cat.set_marks(
+                Path::new("/x/a.RAF"),
+                0,
+                Marks {
+                    rating: 3,
+                    label: 2,
+                    ..Marks::default()
+                },
+            )
+            .unwrap();
+            cat.conn
+                .execute_batch(
+                    "ALTER TABLE photos DROP COLUMN xmp_mtime;
+                     PRAGMA user_version = 5;",
+                )
+                .unwrap();
+        }
+
+        let cat = Catalog::open(&db.0).expect("a v5 catalog must upgrade");
+
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(cat.photo_count().unwrap(), 1);
+        assert_eq!(cat.collections().unwrap()[0].count, 1, "collection kept");
+        assert_eq!(cat.keywords().unwrap()[0].count, 1, "keyword kept");
+        let m = cat.marks(Path::new("/x/a.RAF"), 0).unwrap();
+        assert_eq!((m.rating, m.label), (3, 2), "marks kept");
+        // ⚠ An upgraded row has never had its sidecar seen, which is what makes an existing
+        // folder rated in Lightroom import on the next open rather than being ignored forever.
+        assert_eq!(
+            cat.xmp_mtimes_in(Path::new("/x")).unwrap(),
+            vec![(PathBuf::from("/x/a.RAF"), 0)]
+        );
+    }
+
+    #[test]
+    fn an_xmp_mtime_round_trips_and_defaults_to_zero() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        assert_eq!(
+            cat.xmp_mtimes_in(Path::new("/x")).unwrap(),
+            vec![(PathBuf::from("/x/a.RAF"), 0)],
+            "a fresh row has never been seen"
+        );
+        cat.set_xmp_mtime(Path::new("/x/a.RAF"), 1_700_000_000)
+            .unwrap();
+        assert_eq!(
+            cat.xmp_mtimes_in(Path::new("/x")).unwrap(),
+            vec![(PathBuf::from("/x/a.RAF"), 1_700_000_000)]
+        );
+    }
+
+    #[test]
+    fn xmp_mtimes_come_back_for_copy_zero_only() {
+        // ⚠ XMP has no notion of a virtual copy, so only the original carries the timestamp.
+        // Without the `copy = 0` clause a three-copy photo would come back three times and the
+        // caller's map would be built from whichever row happened to be last.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+        cat.add_copy(Path::new("/x/a.RAF"), 1).unwrap();
+        cat.add_copy(Path::new("/x/a.RAF"), 2).unwrap();
+        cat.set_xmp_mtime(Path::new("/x/a.RAF"), 42).unwrap();
+
+        let rows = cat.xmp_mtimes_in(Path::new("/x")).unwrap();
+        assert_eq!(rows, vec![(PathBuf::from("/x/a.RAF"), 42)]);
+    }
+
+    #[test]
+    fn setting_the_xmp_mtime_of_an_unknown_photo_is_harmless() {
+        let cat = Catalog::open_in_memory().unwrap();
+        assert!(cat.set_xmp_mtime(Path::new("/nowhere/a.RAF"), 7).is_ok());
     }
 
     #[test]
