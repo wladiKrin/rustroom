@@ -64,7 +64,10 @@ impl GradeRange {
 /// ~190 pt strip is well past the point where the sampling shows.
 const STRIP_SAMPLES: usize = 256;
 /// Height of the range strip, in points.
-const STRIP_HEIGHT: f32 = 10.0;
+///
+/// ⚠ 15, not the 10 it shipped at: at 10 pt against a ~190 pt width the strip read as a stray
+/// rule rather than as a band you are meant to look at (user's call, 2026-09-02, after seeing it).
+const STRIP_HEIGHT: f32 = 15.0;
 
 /// Fixed tints for shadows / midtones / highlights, in that order.
 ///

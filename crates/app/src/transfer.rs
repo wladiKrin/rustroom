@@ -113,6 +113,10 @@ impl RustroomApp {
             let report = sync::apply(&targets, src, groups);
             touched += report.prior.len();
             failed = report.failed.len();
+            // ⚠ The targets' rows cache their sidecars — see `refresh_entry_edits`. Without
+            // this a synced photo's thumbnail keeps showing its pre-sync state.
+            let paths: Vec<PathBuf> = targets.iter().map(|t| t.path.clone()).collect();
+            self.refresh_entry_edits(&paths);
             if !report.prior.is_empty() {
                 parts.push(ActionKind::Sync(Box::new(SyncAction {
                     source: src.clone(),

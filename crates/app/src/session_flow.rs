@@ -132,14 +132,48 @@ impl RustroomApp {
             .map(|s| PhotoId::new(s.path.clone(), s.copy))
     }
 
-    pub(crate) fn persist_current_session(&self) {
-        if let Some(s) = &self.session {
-            // `persist`, not `save`: neutral edits *delete* the sidecar. Skipping the write
-            // would leave a stale one behind, so "Reset all" survived only until the next
-            // switch away and back.
-            // ⚠ `persist_copy`, not `persist`: two copies of one file share a sidecar, and
-            // whole-file writes would make the last-saved copy silently overwrite the other.
-            let _ = sidecar::persist_copy(&s.path, s.copy, &s.edits);
+    pub(crate) fn persist_current_session(&mut self) {
+        let Some(s) = &self.session else { return };
+        // `persist`, not `save`: neutral edits *delete* the sidecar. Skipping the write
+        // would leave a stale one behind, so "Reset all" survived only until the next
+        // switch away and back.
+        // ⚠ `persist_copy`, not `persist`: two copies of one file share a sidecar, and
+        // whole-file writes would make the last-saved copy silently overwrite the other.
+        let path = s.path.clone();
+        let _ = sidecar::persist_copy(&path, s.copy, &s.edits);
+        // ⚠⚠ **The row's cached edits must follow the sidecar, or the thumbnail goes stale the
+        // moment this photo stops being the open one.** `thumb_request` prefers the live session's
+        // edits *only while the photo is open*; every other row renders from `PhotoEntry::edits`,
+        // which `entries::build` read at folder-open time. Without this, resetting a crop updated
+        // the filmstrip immediately and then reverted to the old cropped thumbnail as soon as you
+        // arrowed away — reported 2026-09-02, and it held for every edit, not just geometry.
+        self.refresh_entry_edits(&[path]);
+    }
+
+    /// Re-read `paths`' sidecars into their rows' cached edits.
+    ///
+    /// ⚠⚠ **`PhotoEntry::edits` is a cache of the sidecar that nothing else invalidates.** It is
+    /// what an *unopened* photo's thumbnail renders through, so any write to a sidecar must be
+    /// followed by this or that photo's thumbnail shows a state that is no longer on disk — with
+    /// nothing on screen to say so. There are exactly three writers, and each has its own test:
+    /// [`Self::persist_current_session`] (the open photo, on a switch or on quit),
+    /// `apply_to_selection` (a paste or a sync), and the `Sync` arms of undo and redo.
+    ///
+    /// ⚠ Re-reads rather than taking the edits as an argument, deliberately: a sync merges only
+    /// the selected *groups* into each target's existing edits, so the result differs per photo
+    /// and only the file knows it. At 0.006 ms a sidecar, 200 targets cost ~1.2 ms.
+    ///
+    /// ⚠ **Not `rebuild_entries`**, which would also re-sort — and under the "last edited" order
+    /// that reorders the filmstrip under someone mid-edit, which `CLAUDE.md` records as worse
+    /// than a slightly stale order.
+    pub(crate) fn refresh_entry_edits(&mut self, paths: &[PathBuf]) {
+        let Some(lib) = self.library.as_mut() else {
+            return;
+        };
+        for e in lib.entries.iter_mut() {
+            if paths.contains(&e.id.path) {
+                e.edits = sidecar::load_copy(&e.id.path, e.id.copy).unwrap_or_default();
+            }
         }
     }
 
@@ -552,6 +586,97 @@ mod tests {
         assert_eq!(before.geometry.angle, 3.0, "the straighten must survive");
         assert_eq!(before.exposure, 0.0, "the adjustments must not");
         assert_eq!(before.vignette.amount, 0.0);
+    }
+
+    /// ⚠⚠ **The bug this reproduces: a thumbnail reverted the moment you navigated away.**
+    /// `thumb_request` prefers the live session's edits only while the photo is open; every other
+    /// row renders through `PhotoEntry::edits`, which `entries::build` read at folder-open time.
+    /// So editing a photo updated its filmstrip thumbnail immediately and then showed the *old*
+    /// state as soon as you arrowed to the next one — reported 2026-09-02 for a geometry reset,
+    /// and true of every edit.
+    ///
+    /// ⚠ Asserted through `thumb_request` rather than on the field, because the request's key is
+    /// what actually decides which thumbnail is shown: a test on `entries[i].edits` alone would
+    /// pass against a `thumb_request` that ignored it.
+    #[test]
+    fn an_edited_photo_keeps_its_new_thumbnail_after_you_navigate_away() {
+        let dir = test_app::TestDir::new("staleedits");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"not a real raw").unwrap();
+
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        let mut lib = test_app::library_of(1);
+        lib.entries[0].id = rustroom_app::photo_id::PhotoId::original(photo.clone());
+        lib.entries[0].edits = Edits::default();
+        app.library = Some(lib);
+
+        test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        if let Some(s) = &mut app.session {
+            s.path = photo.clone();
+            s.edits.exposure = 1.75;
+        }
+
+        // While the photo is open the live edits win, so the thumbnail is already right.
+        let live = app.live_edits();
+        let open_key = app
+            .library
+            .as_ref()
+            .unwrap()
+            .thumb_request(0, live.as_ref());
+        assert_eq!(
+            open_key.edits.exposure, 1.75,
+            "fixture check: live edits apply"
+        );
+
+        // Navigating away persists the session — and must carry the edits into the row.
+        app.persist_current_session();
+        app.session = None;
+
+        let away = app.library.as_ref().unwrap().thumb_request(0, None);
+        assert_eq!(
+            away.edits.exposure, 1.75,
+            "the thumbnail reverted to the pre-edit state after navigating away"
+        );
+    }
+
+    /// ⚠ And the other direction: a photo nobody edited must not pick up somebody else's edits.
+    /// An assertion that only checked "the edited row updated" would pass against a refresh that
+    /// wrote the same edits into every row.
+    #[test]
+    fn refreshing_one_row_leaves_the_others_alone() {
+        let dir = test_app::TestDir::new("staleothers");
+        let a = dir.0.join("a.RAF");
+        let b = dir.0.join("b.RAF");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+        sidecar::persist_copy(
+            &a,
+            0,
+            &Edits {
+                exposure: 2.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut app = test_app::for_test();
+        let mut lib = test_app::library_of(2);
+        lib.entries[0].id = rustroom_app::photo_id::PhotoId::original(a.clone());
+        lib.entries[1].id = rustroom_app::photo_id::PhotoId::original(b.clone());
+        app.library = Some(lib);
+
+        app.refresh_entry_edits(&[a.clone(), b.clone()]);
+
+        let lib = app.library.as_ref().unwrap();
+        assert_eq!(
+            lib.entries[0].edits.exposure, 2.0,
+            "a's sidecar was not read"
+        );
+        assert_eq!(
+            lib.entries[1].edits.exposure, 0.0,
+            "b has no sidecar and must stay neutral"
+        );
     }
 
     /// A `Decoded` with nothing behind it, so `finalize_session` can be driven directly.

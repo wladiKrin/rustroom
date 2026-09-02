@@ -107,6 +107,7 @@ impl RustroomApp {
                     format!("Reverted {}, {} failed", total - failed.len(), failed.len())
                 };
                 let affected: Vec<PathBuf> = action.prior.iter().map(|(p, _)| p.clone()).collect();
+                self.refresh_entry_edits(&affected);
                 self.reload_if_affected(&affected);
             }
         }
@@ -187,6 +188,7 @@ impl RustroomApp {
                 let report = sync::apply(&action.targets, &action.source, action.groups);
                 self.status = format!("Re-synced {} photos", report.prior.len());
                 let paths: Vec<PathBuf> = action.targets.iter().map(|t| t.path.clone()).collect();
+                self.refresh_entry_edits(&paths);
                 self.reload_if_affected(&paths);
             }
         }

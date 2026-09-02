@@ -17,12 +17,15 @@ use crate::{ExposureStage, PipelineStage, ToneRegionsStage};
 use core_image::ImageBuf;
 use edit_model::CropRect;
 
-/// Where the median lands, in linear light. A little under 18 % grey, because photographs'
-/// medians sit below mid-grey.
+/// Where the median lands, in linear light.
 ///
-/// ⚠ A **starting value**: the user tunes it from the probe's output (`auto_tone_probe`), and
-/// the spec says so. Do not treat it as measured.
-pub const MEDIAN_TARGET: f32 = 0.16;
+/// ⚠ **0.22, raised from the 0.16 this shipped at** — the results read as a bit too dark (user's
+/// call, 2026-09-02, after looking at three frames). Each doubling is one stop, so this is
+/// +0.46 EV across the board.
+///
+/// ⚠ Still a **tuned** value rather than a measured one: it is judged by looking at photographs,
+/// which is what `auto_tone_probe` exists to produce.
+pub const MEDIAN_TARGET: f32 = 0.22;
 /// Where the 99.9th percentile lands after the whites solve.
 pub const WHITE_TARGET: f32 = 0.98;
 /// Where the 0.1th percentile lands after the blacks solve.
@@ -391,18 +394,27 @@ mod tests {
     /// The no-leverage edge: whites has no effect below 2/3, so a white point that lands at
     /// 0.5 after exposure gets 0, not +100 — a slider at +100 that moves nothing is a lie.
     #[test]
-    fn a_percentile_the_slider_cannot_move_leaves_it_at_zero() {
-        // median 0.16 → exposure 0; hi = 0.5 is above 2·median, so the guard passes and only
-        // the leverage rule can produce the zero.
+    fn a_percentile_the_slider_can_now_move_is_solved_rather_than_zeroed() {
+        // ⚠⚠ **This test used to assert the opposite, and the branch it covered is now inert.**
+        // It was written when the Whites weight was `max(0, 3l − 2)` on *linear* luminance, which
+        // is exactly zero below linear 2/3 — so a highlight at 0.5 could not be moved at all and
+        // the solver's no-leverage rule returned 0. With the weight a cube of the *encoded*
+        // luminance the slider always has leverage, so that case no longer exists for any input
+        // a photograph can produce.
+        //
+        // ⚠ The guard itself is **kept as defence in depth and is recorded as unreachable**
+        // rather than deleted or covered by an invented fixture: `white_w` is zero only at `l = 0`,
+        // which the `hi > 2·median` guard already excludes. Inventing a test that appeared to
+        // cover it would be worse than saying so.
         let got = solve(Percentiles {
             lo: 0.012,
             median: MEDIAN_TARGET,
             hi: 0.5,
         });
         assert_eq!(got.exposure, 0.0);
-        assert_eq!(
-            got.whites, 0.0,
-            "no leverage must read as 0, got {}",
+        assert!(
+            got.whites.abs() > 1.0,
+            "a highlight at 0.5 must now be solvable, got {}",
             got.whites
         );
         assert!(got.blacks.abs() < 99.0, "the blacks half is unaffected");
@@ -415,7 +427,12 @@ mod tests {
         let got = solve(Percentiles {
             lo: 0.05,
             median: MEDIAN_TARGET,
-            hi: 3.0,
+            // ⚠ 10.0, not the 3.0 this test shipped with: the end pair got stronger when its
+            // weights moved to a cube on encoded luminance with its own `END_STRENGTH`, and
+            // 0.98 from 3.0 became *reachable* — which quietly turned this into a test of the
+            // solved path rather than of the boundary rule. A fixture the sliders genuinely
+            // cannot satisfy is what keeps it discriminating.
+            hi: 10.0,
         });
         assert_eq!(
             got.blacks, -100.0,
@@ -423,15 +440,21 @@ mod tests {
         );
         assert_eq!(
             got.whites, -100.0,
-            "3.0 cannot reach 0.98: pull down as far as it goes"
+            "10.0 cannot reach 0.98: pull down as far as it goes"
         );
         let got = solve(Percentiles {
             lo: 0.001,
             median: MEDIAN_TARGET,
-            hi: 0.7,
+            // ⚠ 0.5 for the same reason as the 10.0 above — the stronger end pair brought 0.98
+            // within reach from 0.7, so that fixture stopped testing the boundary. At 0.5 the
+            // most Whites can do is 0.64.
+            hi: 0.5,
         });
         assert_eq!(got.blacks, 100.0, "0.001 wants lifting as far as it goes");
-        assert_eq!(got.whites, 100.0, "0.7 wants lifting as far as it goes");
+        assert_eq!(
+            got.whites, 100.0,
+            "0.5 cannot reach 0.98: lift as far as it goes"
+        );
     }
 
     /// ⚠ The guard that spec test 1 forced: a tail one stop or less from the median is not a

@@ -36,8 +36,25 @@ pub(crate) const CLARITY_HALO_KNEE: f32 = 0.08;
 /// It sets what counts as an edge rather than as texture: a neighbourhood whose variance is
 /// far above this follows the guide (so the band is near zero there and the edge survives),
 /// and one far below becomes its local mean (so the band carries the texture and the slider
-/// removes it). Derived by sweep — see the module doc.
-pub(crate) const TEXTURE_GUIDED_EPS: f32 = 8e-4;
+/// removes it).
+///
+/// ⚠⚠ **2e-4, lowered from the 8e-4 this shipped at**: at −80 the edges were still visibly
+/// softening (user's call, 2026-09-02). Measured on the golden chart, edge contrast retained
+/// against texture removed at −80:
+///
+/// | eps | edge kept | texture removed |
+/// | --- | --- | --- |
+/// | 8e-4 | 94.9 % | 53 % |
+/// | 4e-4 | 97.3 % | 41 % |
+/// | **2e-4** | **98.6 %** | **29 %** |
+/// | 1e-4 | 99.3 % | 18 % |
+///
+/// ⚠ **The trade is inherent to a single-`eps` guided filter and cannot be tuned away**: the base
+/// preserves whatever has variance above `eps`, and fine texture has variance too — only about a
+/// decade below the edge's. So buying edge fidelity always costs removal power. 2e-4 is chosen
+/// because *edge preservation is this half of the slider's whole stated purpose*; if −80 now feels
+/// too gentle, −100 is the answer rather than a larger eps.
+pub(crate) const TEXTURE_GUIDED_EPS: f32 = 2e-4;
 
 /// Box radius of the guided base, in **rendered** pixels.
 ///
@@ -738,8 +755,14 @@ mod tests {
             src.clone(),
         );
         let (before, after) = (fine_span(&src), fine_span(&out));
+        // ⚠⚠ **0.55, and this threshold has now moved twice — each time because the model did,
+        // never to make a red test green.** It was 0.2 for a Gaussian base, 0.35 when the guided
+        // base landed (which necessarily keeps more of the fine band), and 0.55 now that
+        // `TEXTURE_GUIDED_EPS` dropped to 2e-4 to stop −80 softening edges. Measured here at
+        // ×0.514. ⚠ The trade is inherent and documented at that constant: buying edge fidelity
+        // costs removal power, because fine texture has variance too.
         assert!(
-            after < before * 0.35,
+            after < before * 0.55,
             "fine band went from {before} to {after}, not removed"
         );
     }
