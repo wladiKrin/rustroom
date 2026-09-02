@@ -1373,6 +1373,7 @@ fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
             ..pipeline::RenderSpec::default()
         },
         Some(lens_shot()),
+        None,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

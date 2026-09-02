@@ -223,6 +223,7 @@ fn render(
             baseline: decoded.metadata.as_shot.unwrap_or_default(),
         },
         lens,
+        None,
     );
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());

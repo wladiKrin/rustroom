@@ -695,6 +695,7 @@ fn render_cached(
         // Lens correction lives in the *prefix*, which this call discards — only the tail is
         // wanted here. `None` is therefore correct rather than provisional.
         None,
+        None,
     );
     (pack(tail.run(input), region, max_dim, display_space), ran)
 }

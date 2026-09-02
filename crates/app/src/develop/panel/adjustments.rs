@@ -701,7 +701,12 @@ mod tests {
         // ⚠ Retouch joins Geometry and Masks here: "Reset adjustments" must not wipe the
         // spots, for the reason it must not wipe a crop or a painted mask — they belong to a
         // tool the user cannot see from the Edit panel.
-        assert_eq!(untouched, vec!["Geometry", "Masks", "Retouch"]);
+        //
+        // ⚠⚠ And Rendering joins them for a *different* reason: it has no section at all. The
+        // reset derives its group set from `SECTIONS`, so a group with no matching section is
+        // never touched — which is precisely what stops this button flattening the photograph
+        // back to a colorimetric render. See `edit_model::RENDERING_GROUP`.
+        assert_eq!(untouched, vec!["Geometry", "Masks", "Retouch", "Rendering"]);
     }
 
     #[test]

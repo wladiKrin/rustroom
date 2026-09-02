@@ -406,6 +406,7 @@ pub fn build_pipeline_split_in_region(
         None,
         RenderSpec::default(),
         None,
+        None,
     )
 }
 
@@ -413,6 +414,15 @@ pub fn build_pipeline_split_in_region(
 ///
 /// ⚠ The extra parameter is additive with a delegating wrapper — the `Region` precedent, which
 /// gave that work zero call-site churn. The CLI, export and every golden go through the wrapper.
+/// Whether a profile's tone curve is the identity, and therefore no rendering at all.
+///
+/// ⚠ Checked because the X-T4's `ProfileToneCurve` is exactly `[[0,0],[1,1]]`. Applying it would
+/// leave the photograph colorimetric while the setting claimed to be rendering it — the feature
+/// silently doing nothing on real hardware.
+fn is_identity(points: &[[f32; 2]]) -> bool {
+    points.len() < 2 || points.iter().all(|p| (p[0] - p[1]).abs() < 1e-4)
+}
+
 pub fn build_pipeline_split_in_region_with_brush(
     edits: &Edits,
     scale: RenderScale,
@@ -420,6 +430,12 @@ pub fn build_pipeline_split_in_region_with_brush(
     brush: Option<&BrushCoverage>,
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
+    // The camera profile's tone curve, when it has one.
+    //
+    // ⚠ A parameter beside `lens` rather than a `RenderSpec` field: `RenderSpec` is `Copy` and a
+    // curve is not, which is exactly why `lens` sits outside it too. An eighth parameter would
+    // trip `too_many_arguments` and want a struct; seven does not.
+    profile_curve: Option<&[[f32; 2]]>,
 ) -> (Pipeline, Pipeline) {
     let RenderSpec {
         space,
@@ -532,6 +548,28 @@ pub fn build_pipeline_split_in_region_with_brush(
         tail.push(Box::new(SharpenStage::new(&edits.sharpening, scale)));
     }
 
+    // ⚠⚠ **Last before the output transform.** Every capture stage upstream keeps its
+    // scene-linear tuning — `local_contrast`'s `MID_GRAY`, `sharpening`'s `LUMA_EPS`,
+    // `dehaze`'s airlight percentile — and this is what bounds the data to [0, 1], which is the
+    // seam creative LUTs and `ProfileLookTable` were blocked on.
+    //
+    // ⚠ It sits *after* sharpening, and "sharpening is last so nothing stretches it" survives
+    // that: `OutputTransform` was always after sharpening too, and an sRGB encode is a ~1/2.2
+    // power — far more aggressive than any tone curve.
+    match edits.rendering {
+        edit_model::Rendering::None => {}
+        edit_model::Rendering::Camera => {
+            // ⚠⚠ An **identity** profile curve is ignored. The X-T4's `ProfileToneCurve` is
+            // literally [[0,0],[1,1]], so honouring it would produce no rendering at all —
+            // indistinguishable from `None`, and the setting would silently do nothing on the
+            // author's own camera.
+            let stage = match profile_curve.filter(|p| !is_identity(p)) {
+                Some(p) => DisplayRenderingStage::from_profile(p),
+                None => DisplayRenderingStage::built_in(),
+            };
+            tail.push(Box::new(stage));
+        }
+    }
     tail.push(Box::new(OutputTransform::new(space)));
 
     (Pipeline::new(prefix), Pipeline::new(tail))
@@ -585,7 +623,7 @@ pub fn build_pipeline_to(
 /// needs, since only it knows the file's white-balance baseline.
 pub fn build_pipeline_spec(edits: &Edits, scale: RenderScale, spec: RenderSpec) -> Pipeline {
     let (prefix, tail) =
-        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None);
+        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None, None);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)
@@ -644,6 +682,93 @@ pub fn max_tail_kernel_radius(scale: RenderScale) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⚠⚠ `Rendering::None` must insert **no stage at all**, not a curve that happens to be the
+    /// identity. Bit-exactness is the rule the entire golden harness rests on.
+    #[test]
+    fn the_default_rendering_inserts_no_stage() {
+        let names = build_pipeline(&Edits::default(), RenderScale::new(1.0)).stage_names();
+        assert!(
+            !names.contains(&"display_rendering"),
+            "a neutral photo got a rendering stage: {names:?}"
+        );
+    }
+
+    /// ⚠ And it lands immediately before the output transform — after every capture stage, so
+    /// their scene-linear tuning survives, and before the transform so the histogram (taken from
+    /// `pack`'s quantization of this output) describes the rendered image.
+    #[test]
+    fn the_rendering_runs_last_before_the_output_transform() {
+        let edits = Edits {
+            rendering: edit_model::Rendering::Camera,
+            ..Default::default()
+        };
+        let names = build_pipeline(&edits, RenderScale::new(1.0)).stage_names();
+        let r = names
+            .iter()
+            .position(|n| *n == "display_rendering")
+            .expect("no rendering stage");
+        let o = names
+            .iter()
+            .position(|n| *n == "output_transform")
+            .expect("no output transform");
+        assert_eq!(
+            o,
+            r + 1,
+            "something got between the rendering and the transform: {names:?}"
+        );
+    }
+
+    /// ⚠⚠ An identity profile curve is **ignored** — the X-T4's is exactly that, so honouring it
+    /// would leave the setting silently doing nothing on real hardware. Both directions, because
+    /// a test of one alone passes against a version that always uses the built-in.
+    #[test]
+    fn an_identity_profile_curve_is_ignored_and_a_real_one_is_not() {
+        assert!(
+            is_identity(&[[0.0, 0.0], [1.0, 1.0]]),
+            "the X-T4's curve reads as real"
+        );
+        assert!(is_identity(&[[0.5, 0.5]]), "a single point is not a curve");
+        assert!(!is_identity(&[[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]));
+    }
+
+    /// ⚠⚠ **And the pipeline actually consults it** — a test of `is_identity` alone went
+    /// **uncaught** when the `.filter()` was removed, because nothing observed which curve the
+    /// builder picked. Rendered output is the only thing that can see it.
+    #[test]
+    fn the_builder_falls_back_to_the_built_in_for_an_identity_curve() {
+        let edits = Edits {
+            rendering: edit_model::Rendering::Camera,
+            ..Default::default()
+        };
+        let render = |curve: Option<&[[f32; 2]]>| {
+            let (prefix, tail) = build_pipeline_split_in_region_with_brush(
+                &edits,
+                RenderScale::new(1.0),
+                None,
+                None,
+                RenderSpec::default(),
+                None,
+                curve,
+            );
+            let mut img = ImageBuf::new(1, 1);
+            img.set_pixel(0, 0, [0.05, 0.05, 0.05]);
+            tail.run(prefix.run(img)).pixel(0, 0)[0]
+        };
+
+        let identity: [[f32; 2]; 2] = [[0.0, 0.0], [1.0, 1.0]];
+        let real: [[f32; 3 - 1]; 3] = [[0.0, 0.0], [0.5, 0.9], [1.0, 1.0]];
+        let built_in = render(None);
+
+        assert!(
+            (render(Some(&identity)) - built_in).abs() < 1e-6,
+            "an identity profile curve was honoured instead of ignored"
+        );
+        assert!(
+            (render(Some(&real)) - built_in).abs() > 0.01,
+            "a real profile curve was ignored"
+        );
+    }
     use super::*;
     use core_image::ImageBuf;
     use edit_model::Edits;
