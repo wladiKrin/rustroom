@@ -129,7 +129,7 @@ project's recorded bugs were interactions between separately-correct changes.
 | **W0** ✅ | **Split `canvas.rs`** — done 2026-09-01 | **Split `main.rs`** — done 2026-09-01 | — | — |
 | **W1** ✅ | M5.1a tone curve + monotone spline | M6.1 seam + filename templating | M7.3a measured → **M7.3 shipped as a Settings choice** | M5.5a crop guides → now **View-wide** |
 | **W2** ✅ | M5.2 WB Kelvin ✅ | M6.1b/c/d ✅ | M7.1a luminance mask ✅ | M6.5a/b compare + survey ✅ |
-| **W3** | M5.3a spot headless *(owns `Edits` + stage order)* | M6.3 XMP *(owns schema **v6**)* | M5.4 auto tone | M7.6 tool gaps |
+| **W3** ✅ | M5.3a spot headless ✅ | M6.3a/b XMP ✅ | M5.4a auto tone ✅ *(targets await the user's eye)* | M7.6 ×3 ✅ |
 | **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
 
 **W2 is closed.** ⚠ M5.2's Task 3 needed one correction — it threaded the source's *camera
@@ -159,6 +159,30 @@ replacing it; C is **5.4a only** — exposure/whites/blacks from percentiles, a 
 on open, the user signs off the photographs; D takes the **three items that need no `Edits`
 change** and defers grading-in-masks and auto-mask to W4 and dehaze's achromatic guard to its own
 brainstorm.
+
+**W3 landed 2026-09-02: 1627 → 1723 tests, 51 → 53 goldens, merged D → A → C → B with one
+conflict.** ⚠⚠ **All four agents were killed mid-flight by a session rate limit and every one
+resumed with its context intact** — `SendMessage` to the agent id, not a fresh spawn. Nothing was
+lost; each had already committed its plan. **That is the recovery path for a rate-limited wave**,
+and it is far cheaper than re-dispatching.
+
+⚠ **The one conflict was the one predicted**: C extracted the Tone section body into `fn tone` while
+D added a hover string inside it. Resolved by hand in favour of C's extraction with D's string
+carried into the new function — a merge no agent could have done, which is why §6 says the merge is
+one person's job.
+
+⚠⚠ **Two ownership exceptions, both correct, both flagged by the agent rather than hidden:**
+**A edited `adjustments.rs`** (barred to it) because two test assertions enumerate the edit groups
+the panel does *not* show, and a ninth group is exactly what they exist to flag — `cargo test --all`
+cannot be green without it, so the instructions genuinely conflicted and it chose the gate.
+**D exposed `range_weights` as `ColorGradingStage::range_weights`** rather than the free function
+the spec named, because reaching the free function needs `pub mod stages` in `pipeline/src/lib.rs`
+— **A's file**. Verified: `mod stages` really is private. Both are the behaviour the dispatch brief
+asks for — report the conflict, do not silently pick.
+
+⚠ **B used `git merge-base main HEAD`, not `git diff main`, to check which goldens it had touched** —
+a plain diff shows D's re-authored PNGs and reads as a violation. §3 records this trap; B is the
+first track to hit it and get it right unprompted.
 
 **Why W0 existed.** `canvas.rs` was 1,890 lines and wanted by **six** milestones; `main.rs` was 4,375
 and touched by any new tool or modal. They were the two biggest serialisation points in the plan, and
