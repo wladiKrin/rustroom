@@ -487,17 +487,19 @@ mod tests {
     }
 
     #[test]
-    fn geometry_and_masks_are_the_two_groups_the_panel_does_not_show() {
+    fn geometry_masks_and_retouch_are_the_groups_the_panel_does_not_show() {
         // They are rail tools, not adjustment sections. Stated as a property over the full
-        // group list so that a *seventh* group added later cannot silently go missing from
-        // the panel with nothing failing.
+        // group list so that a group added later cannot silently go missing from the panel
+        // with nothing failing — which is exactly what it did when Retouch (spot removal)
+        // landed, and Retouch belongs here because its UI is a canvas tool (M5.3b), not a
+        // slider section.
         let shown: Vec<&str> = SECTIONS.iter().map(|s| s.name()).collect();
         let missing: Vec<&str> = edit_model::EDIT_GROUP_NAMES
             .iter()
             .copied()
             .filter(|n| !shown.contains(n))
             .collect();
-        assert_eq!(missing, vec!["Geometry", "Masks"]);
+        assert_eq!(missing, vec!["Geometry", "Masks", "Retouch"]);
     }
 
     /// Click the segment labelled `want` and report the channel afterwards.
@@ -572,7 +574,10 @@ mod tests {
             .filter(|i| !g.get(*i))
             .map(|i| names[i])
             .collect();
-        assert_eq!(untouched, vec!["Geometry", "Masks"]);
+        // ⚠ Retouch joins Geometry and Masks here: "Reset adjustments" must not wipe the
+        // spots, for the reason it must not wipe a crop or a painted mask — they belong to a
+        // tool the user cannot see from the Edit panel.
+        assert_eq!(untouched, vec!["Geometry", "Masks", "Retouch"]);
     }
 
     #[test]
