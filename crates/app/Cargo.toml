@@ -26,6 +26,7 @@ pipeline = { path = "../pipeline" }
 lens-profile = { path = "../lens-profile" }
 export = { path = "../export" }
 catalog = { path = "../catalog" }
+xmp = { path = "../xmp" }
 image-decode = { path = "../image-decode" }
 eframe = { workspace = true }
 egui = { workspace = true }
