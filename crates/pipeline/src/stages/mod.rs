@@ -12,6 +12,7 @@ pub mod output_transform;
 pub mod perspective;
 pub mod saturation;
 pub mod sharpening;
+pub mod spot_removal;
 pub mod tone_curve;
 pub mod tone_regions;
 pub mod vignette;

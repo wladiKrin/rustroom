@@ -43,6 +43,7 @@ pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransform;
 pub use stages::saturation::SaturationStage;
 pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
+pub use stages::spot_removal::SpotRemovalStage;
 pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
 pub use stages::vignette::VignetteStage;
