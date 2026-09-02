@@ -128,18 +128,13 @@ project's recorded bugs were interactions between separately-correct changes.
 | --- | --- | --- | --- | --- |
 | **W0** ✅ | **Split `canvas.rs`** — done 2026-09-01 | **Split `main.rs`** — done 2026-09-01 | — | — |
 | **W1** ✅ | M5.1a tone curve + monotone spline | M6.1 seam + filename templating | M7.3a measured → **M7.3 shipped as a Settings choice** | M5.5a crop guides → now **View-wide** |
-| **W2** ✅ | M5.2 WB Kelvin ✅ | M6.1b/c/d ✅ | M7.1a luminance mask ✅ | M6.5a/b compare + survey ✅ *(open feedback, see below)* |
+| **W2** ✅ | M5.2 WB Kelvin ✅ | M6.1b/c/d ✅ | M7.1a luminance mask ✅ | M6.5a/b compare + survey ✅ |
 | **W3** | M5.3a spot headless *(owns `Edits` + stage order)* | M6.3 XMP *(owns schema **v6**)* | M5.4 auto tone | M7.6 tool gaps |
 | **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
 
-**⚠ W2's remaining loose end.**
-- **A — M5.2 is done**, with one correction to the plan worth knowing: Task 3 threaded the source's
-  *camera matrix* into the pipeline, but the stage runs on linear ProPhoto, so `RenderSpec` carries
-  a baseline **illuminant** instead. See `CLAUDE.md`'s M5.2 section.
-- **D — M6.5a/b** merged and then drew real feedback that has *not* been acted on: the Compare
-  images are too small, Compare has no zoom or pan (wanted "same as in develop"), and Survey's
-  purpose is not landing. Only the tofu instruction glyphs were fixed. ⚠ Compare-at-1:1 needs real
-  decodes per candidate, so it is a slice rather than a tweak.
+**W2 is closed.** ⚠ M5.2's Task 3 needed one correction — it threaded the source's *camera
+matrix* into the pipeline, but the stage runs on linear ProPhoto, so `RenderSpec` carries a
+baseline **illuminant** instead. See `CLAUDE.md`'s M5.2 section.
 
 **Why W0 existed.** `canvas.rs` was 1,890 lines and wanted by **six** milestones; `main.rs` was 4,375
 and touched by any new tool or modal. They were the two biggest serialisation points in the plan, and
