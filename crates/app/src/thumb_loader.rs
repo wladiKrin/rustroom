@@ -87,7 +87,22 @@ fn load_thumbnail(req: &ThumbRequest, resampler: pipeline::Resampler) -> Option<
         // than paying it 830 times for a no-op.
         return Some(thumb);
     }
-    Some(render_edits(thumb, &req.edits, resampler))
+    Some(render_edits(thumb, &thumbnail_edits(&req.edits), resampler))
+}
+
+/// The edits a **thumbnail** renders through: the photo's, with the display rendering removed.
+///
+/// ⚠⚠ **A thumbnail is the camera's embedded JPEG, which has already been rendered.** Running our
+/// display rendering over it would render the photograph twice. Everything else is kept, because
+/// an edit-accurate thumbnail is the whole point of rendering one at all.
+///
+/// ⚠ This is also what *closes* the strip-versus-canvas gap rather than widening it: the strip
+/// keeps the camera's own rendering and the canvas gains ours, so the two converge.
+fn thumbnail_edits(edits: &Edits) -> Edits {
+    Edits {
+        rendering: edit_model::Rendering::None,
+        ..edits.clone()
+    }
 }
 
 /// Run the pipeline over an already-extracted thumbnail.
@@ -295,6 +310,27 @@ impl Drop for ThumbLoader {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⚠⚠ **A thumbnail is the camera's embedded JPEG, which is already rendered.** Running our
+    /// rendering over it would render twice — and it is also what closes the strip/canvas gap
+    /// rather than widening it: the strip keeps the camera's rendering and the canvas gains ours.
+    #[test]
+    fn a_thumbnail_is_never_rendered_twice() {
+        let edits = Edits {
+            rendering: edit_model::Rendering::Camera,
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let t = thumbnail_edits(&edits);
+        assert_eq!(
+            t.rendering,
+            edit_model::Rendering::None,
+            "the thumbnail path kept the rendering"
+        );
+        // ⚠ And it keeps everything else — a thumbnail that dropped the edits would stop being
+        // edit-accurate, which is the whole reason it renders at all.
+        assert_eq!(t.exposure, 0.5, "it dropped the other edits too");
+    }
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};

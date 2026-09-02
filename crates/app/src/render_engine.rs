@@ -137,6 +137,11 @@ impl RenderEngine {
         source_scale: f32,
         lens: Option<lens_profile::LensShot>,
         wb_baseline: color::wb::Illuminant,
+        // ⚠ Captured, not per request: neither can change without a re-decode. The profile is a
+        // `Settings` choice that rebuilds the decode worker, and whether a buffer is
+        // scene-referred is a property of the file.
+        profile_curve: Option<Vec<[f32; 2]>>,
+        scene_referred: bool,
         on_done: impl Fn() + Send + 'static,
     ) -> Self {
         let (req_tx, req_rx) = channel::<Request>();
@@ -156,13 +161,26 @@ impl RenderEngine {
                     }
                 }
                 // The stage count is for the tests and the bench; the worker only wants pixels.
+                // ⚠⚠ **A source that is already rendered never renders again.** A JPEG, a PNG
+                // or a TIFF has been through whatever produced it; applying ours on top would
+                // render the photograph twice. Stripped here rather than at every call site, so
+                // no caller can forget.
+                let edits = if scene_referred {
+                    req.edits
+                } else {
+                    edit_model::Edits {
+                        rendering: edit_model::Rendering::None,
+                        ..req.edits
+                    }
+                };
                 let (frame, _stages_run) = render_cached(
                     &buffer,
-                    &req.edits,
+                    &edits,
                     req.spec,
                     source_scale,
                     lens.clone(),
                     wb_baseline,
+                    profile_curve.as_deref(),
                     &mut cache,
                     &mut brush_cache,
                 );
@@ -573,6 +591,7 @@ fn render_cached(
     source_scale: f32,
     lens: Option<lens_profile::LensShot>,
     wb_baseline: color::wb::Illuminant,
+    profile_curve: Option<&[[f32; 2]]>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
 ) -> (RenderedFrame, usize) {
@@ -695,7 +714,10 @@ fn render_cached(
         // Lens correction lives in the *prefix*, which this call discards — only the tail is
         // wanted here. `None` is therefore correct rather than provisional.
         None,
-        None,
+        // ⚠ The display rendering, by contrast, lives in the **tail** — so this one must be
+        // carried, or every render would silently take the built-in curve while a profile with
+        // its own `ProfileToneCurve` sat unused.
+        profile_curve,
     );
     (pack(tail.run(input), region, max_dim, display_space), ran)
 }
@@ -782,6 +804,7 @@ mod tests {
                 color::wb::Illuminant::default(),
                 // ⚠ A fresh cache each time, or the second call would legitimately hit the
                 // first's checkpoint and the test would be asserting about caching instead.
+                None,
                 &mut PrefixCache::default(),
                 &mut BrushCache::default(),
             )
@@ -864,6 +887,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -876,6 +900,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -893,6 +918,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -910,6 +936,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -931,6 +958,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -951,6 +979,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -974,6 +1003,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut native,
             &mut bc,
         );
@@ -991,6 +1021,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut fit,
             &mut bc,
         );
@@ -1017,6 +1048,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -1032,6 +1064,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -1250,6 +1283,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1267,6 +1301,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1296,6 +1331,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1340,6 +1376,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         ); // "fit"
@@ -1350,6 +1387,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         ); // "native"
@@ -1383,6 +1421,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut cache,
             &mut bc,
         );
@@ -1410,6 +1449,7 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         );
@@ -1478,6 +1518,8 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
+            true,
             || {},
         );
         for (i, ed) in [&a, &a, &b, &c, &a, &d, &e, &a, &c].iter().enumerate() {
@@ -1525,7 +1567,15 @@ mod tests {
 
     #[test]
     fn produces_rgba_frame_of_expected_size() {
-        let engine = RenderEngine::new(tiny(), 1.0, None, color::wb::Illuminant::default(), || {});
+        let engine = RenderEngine::new(
+            tiny(),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            None,
+            true,
+            || {},
+        );
         engine.request(Edits::default(), FrameSpec::fit(4)); // downscale 8 -> 4
         let f = wait_for_frame(&engine);
         assert_eq!((f.width, f.height), (4, 4));
@@ -1537,7 +1587,15 @@ mod tests {
 
     #[test]
     fn exposure_brightens() {
-        let engine = RenderEngine::new(tiny(), 1.0, None, color::wb::Illuminant::default(), || {});
+        let engine = RenderEngine::new(
+            tiny(),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            None,
+            true,
+            || {},
+        );
         engine.request(
             Edits {
                 exposure: 2.0,
@@ -1775,6 +1833,8 @@ mod tests {
             1.0,
             None,
             color::wb::Illuminant::default(),
+            None,
+            true,
             || {},
         );
         assert_eq!(engine.requests_issued(), 0, "nothing asked for yet");

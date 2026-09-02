@@ -175,7 +175,15 @@ pub fn for_test() -> RustroomApp {
 /// a logic bug and is a fixture bug.
 pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: usize) {
     let buf = buffer(w, h);
-    let engine = RenderEngine::new(buf.clone(), 1.0, None, Default::default(), || {});
+    let engine = RenderEngine::new(
+        buf.clone(),
+        1.0,
+        None,
+        Default::default(),
+        None,
+        true,
+        || {},
+    );
     app.session = Some(Session {
         wb_baseline: color::wb::Illuminant::default(),
         buffer: buf,
@@ -292,5 +300,7 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
         source_scale: 1.0,
         lens: LensFacts::default(),
         wb_baseline: color::wb::Illuminant::default(),
+        profile_curve: None,
+        scene_referred: true,
     })
 }

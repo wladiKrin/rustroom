@@ -8,6 +8,18 @@ use crate::MAX_CONCURRENT_FULL_DECODES;
 use eframe::egui;
 use rustroom_app::decode_worker::{DecodeWorker, LensFacts, SourceFacts};
 
+/// The tone curve of the camera profile at `path`, when there is one.
+///
+/// ⚠ Parsed here rather than handed back by `raw_decode`, which loads the same file for its
+/// matrices and its HueSatMap. A second parse of a few-hundred-KB file once per decode is
+/// cheaper than widening that crate's return type, and it keeps the profile's *use* — the
+/// pipeline ignores an identity curve — out of the decoder entirely.
+fn profile_tone_curve(profile: &Option<std::path::PathBuf>) -> Option<Vec<[f32; 2]>> {
+    camera_profile::CameraProfile::from_file(profile.as_ref()?)
+        .ok()?
+        .tone_curve
+}
+
 /// Decode a file for editing (half-size for RAW; full decode for images) into a linear
 /// `ImageBuf`, a display label, and the buffer's size relative to a full-resolution
 /// decode. Dispatches by file kind.
@@ -23,6 +35,7 @@ pub(crate) fn decode_for_edit(
         let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
         let label = format!("{} {}", d.metadata.make, d.metadata.model);
         let lens = resolve_lens(&d.metadata);
+        let profile_curve = profile_tone_curve(&opts.camera_profile);
         Ok((
             d.image,
             SourceFacts {
@@ -33,6 +46,8 @@ pub(crate) fn decode_for_edit(
                 // sits for this photo. A file that records no usable multipliers falls back to
                 // D65, the same answer a JPEG gets — a right answer, not a degraded one.
                 wb_baseline: d.metadata.as_shot.unwrap_or_default(),
+                profile_curve,
+                scene_referred: true,
             },
         ))
     } else {
@@ -51,6 +66,12 @@ pub(crate) fn decode_for_edit(
                 lens: LensFacts::default(),
                 // A file the camera has already balanced: a neutral object in it reads as equal
                 // RGB, so its baseline *is* sRGB's white point.
+                //
+                // ⚠⚠ And `scene_referred` falls out of `Default` as **false**, which is
+                // load-bearing rather than incidental: a JPEG/PNG/TIFF has already been rendered
+                // by whatever produced it, so the display rendering must be skipped or the
+                // photograph is rendered twice. Stated here because a defaulted field carrying a
+                // decision is exactly the kind of thing a later reader "tidies up".
                 ..SourceFacts::default()
             },
         ))
@@ -120,6 +141,7 @@ pub(crate) fn decode_full_res(
     let d = raw_decode::decode_raw(path, &opts).map_err(|e| e.to_string())?;
     let label = format!("{} {}", d.metadata.make, d.metadata.model);
     let lens = resolve_lens(&d.metadata);
+    let profile_curve = profile_tone_curve(&opts.camera_profile);
     Ok((
         d.image,
         SourceFacts {
@@ -127,6 +149,8 @@ pub(crate) fn decode_full_res(
             source_scale: opts.source_scale(),
             lens,
             wb_baseline: d.metadata.as_shot.unwrap_or_default(),
+            profile_curve,
+            scene_referred: true,
         },
     ))
 }

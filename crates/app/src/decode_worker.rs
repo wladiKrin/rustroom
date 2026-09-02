@@ -41,6 +41,15 @@ pub struct Decoded {
     /// The illuminant the decode left the picture balanced to — the zero point of the Kelvin
     /// slider. D65 for anything that is not a RAW, which is what a camera JPEG genuinely is.
     pub wb_baseline: color::wb::Illuminant,
+    /// The camera profile's tone curve, when one was loaded and it has one.
+    pub profile_curve: Option<Vec<[f32; 2]>>,
+    /// Whether the buffer holds **scene-referred** light.
+    ///
+    /// ⚠⚠ False for JPEG/PNG/TIFF, which have *already* been rendered by whatever produced them.
+    /// The display rendering is skipped entirely when this is false — applying ours on top of a
+    /// camera's would render the photograph twice. The decoder is the only component that knows,
+    /// so the flag rides with the decode rather than being inferred from the extension later.
+    pub scene_referred: bool,
 }
 
 /// What a decode reports about a file beyond its pixels.
@@ -56,6 +65,10 @@ pub struct SourceFacts {
     pub source_scale: f32,
     pub lens: LensFacts,
     pub wb_baseline: color::wb::Illuminant,
+    /// The camera profile's tone curve, when one was loaded and it has one.
+    pub profile_curve: Option<Vec<[f32; 2]>>,
+    /// Whether the buffer holds **scene-referred** light — see [`Decoded::scene_referred`].
+    pub scene_referred: bool,
 }
 
 /// The outcome of one decode request.
@@ -188,6 +201,8 @@ impl DecodeWorker {
                     source_scale,
                     lens: facts.lens,
                     wb_baseline: facts.wb_baseline,
+                    profile_curve: facts.profile_curve,
+                    scene_referred: facts.scene_referred,
                 })
             });
             let _ = tx.send(DecodeResult {
