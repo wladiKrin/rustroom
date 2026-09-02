@@ -1,4 +1,6 @@
-use crate::spatial::{gaussian_blur, kernel_radius, wide_blur, wide_blur_reach};
+use crate::spatial::{
+    gaussian_blur, guided_filter, kernel_radius, wide_blur, wide_blur_radius, wide_blur_reach,
+};
 use crate::{PipelineStage, RenderScale};
 use core_image::ImageBuf;
 use edit_model::LocalContrast;
@@ -28,6 +30,30 @@ pub(crate) const CLARITY_HALO_FLOOR: f32 = 0.25;
 /// mean in the texture region. 0.08 sits between the two, so an edge is well above it and
 /// texture well below.
 pub(crate) const CLARITY_HALO_KNEE: f32 = 0.08;
+
+/// Regularisation of the guided base that **negative** Texture measures against.
+///
+/// It sets what counts as an edge rather than as texture: a neighbourhood whose variance is
+/// far above this follows the guide (so the band is near zero there and the edge survives),
+/// and one far below becomes its local mean (so the band carries the texture and the slider
+/// removes it). Derived by sweep — see the module doc.
+pub(crate) const TEXTURE_GUIDED_EPS: f32 = 8e-4;
+
+/// Box radius of the guided base, in **rendered** pixels.
+///
+/// The same sigma-to-radius rule [`wide_blur`] uses, so the guided neighbourhood matches the
+/// Gaussian the positive half measures against.
+///
+/// ⚠ **Clamped up to 1, where [`wide_blur_radius`] deliberately refuses to clamp.** The
+/// reasoning there is that a box radius of 1 is an effective sigma of 0.82, so clamping would
+/// render a small sigma far too wide. Here the radius is a *neighbourhood for statistics*, not
+/// a blur width — and at `r = 0` a guided filter has no neighbourhood at all: every window
+/// statistic collapses, the base becomes the input exactly, and negative Texture would be
+/// **silently inert** at fit resolution. A neighbourhood slightly wider than asked for is a
+/// lesser fault than a dead control. `negative_texture_is_never_inert_at_a_preview_scale`.
+pub(crate) fn texture_guided_radius(scale: RenderScale) -> usize {
+    wide_blur_radius(TEXTURE_SIGMA * scale.get()).max(1)
+}
 
 /// Near-black guard for the ratio. Load-bearing, exactly as in `stages/sharpening.rs`:
 /// without it a dark pixel beside a bright edge divides by ~0 and the gain explodes.
@@ -85,7 +111,11 @@ fn halo_suppression(d: f32, floor: f32) -> f32 {
 pub fn kernel_reach(params: &LocalContrast, scale: RenderScale) -> usize {
     let s = scale.get();
     let t = if params.texture != 0.0 {
-        kernel_radius(TEXTURE_SIGMA * s)
+        // Whichever base this setting will use — the sign is not consulted, because a reach
+        // that depended on it would change the region margin as the slider crossed zero.
+        // The guided base reaches `2r`: every window statistic is a box blur of radius `r`,
+        // and `mean_slope`/`mean_offset` blur those again.
+        kernel_radius(TEXTURE_SIGMA * s).max(2 * texture_guided_radius(scale))
     } else {
         0
     };
@@ -159,9 +189,30 @@ impl LocalContrastStage {
         // sliders additive rather than sequential.
         let mut delta = vec![0.0f32; n];
         if k_t != 0.0 {
-            // Small sigma: a direct Gaussian kernel, which is cheap here and is the only
-            // thing that can express a sub-pixel blur once RenderScale shrinks it.
-            let base = gaussian_blur(&l, w, h, TEXTURE_SIGMA * s);
+            // ⚠⚠ **The two halves of the slider measure against different bases, and that
+            // asymmetry is deliberate.** Positive Texture wants a Gaussian: a blurred base is
+            // what makes the band carry the edge too, so sharpening it crisps detail *along*
+            // an edge. Negative Texture wants the opposite — a Gaussian base makes the band
+            // carry the edge, so subtracting it smears the edge along with the texture, which
+            // is the complaint this fixes. A guided base keeps edges, so the band is near
+            // zero across one and the removal leaves it alone.
+            //
+            // The cost, stated because a user can see it: the slider behaves differently
+            // either side of zero. Its hover text says so.
+            let base = if k_t < 0.0 {
+                guided_filter(
+                    &l,
+                    &l,
+                    w,
+                    h,
+                    texture_guided_radius(self.scale),
+                    TEXTURE_GUIDED_EPS,
+                )
+            } else {
+                // Small sigma: a direct Gaussian kernel, which is cheap here and is the only
+                // thing that can express a sub-pixel blur once RenderScale shrinks it.
+                gaussian_blur(&l, w, h, TEXTURE_SIGMA * s)
+            };
             delta
                 .par_iter_mut()
                 .zip(&l)
@@ -329,6 +380,163 @@ mod tests {
             added_with > added_without * 0.9,
             "fine texture kept only {added_with} of the {added_without} Clarity added"
         );
+    }
+
+    /// Mean luma step across the edge: the first bright row minus the last dark row.
+    fn edge_step(img: &ImageBuf) -> f32 {
+        let mut sum = 0.0f32;
+        for x in 30..S - 30 {
+            sum += luma(&img.pixel(x, EDGE)) - luma(&img.pixel(x, EDGE - 1));
+        }
+        sum / (S - 60) as f32
+    }
+
+    /// The stage's own arithmetic against an arbitrary base plane — the reference the two
+    /// bases are compared through, so the only thing that differs between them is the base.
+    fn expected_from_base(src: &ImageBuf, base: &[f32], k: f32) -> ImageBuf {
+        let l: Vec<f32> = src
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| luma(p))
+            .collect();
+        let mut data = vec![0.0f32; src.data().len()];
+        for (i, (o, px)) in data
+            .as_chunks_mut::<3>()
+            .0
+            .iter_mut()
+            .zip(src.data().as_chunks::<3>().0)
+            .enumerate()
+        {
+            let d = k * (l[i] - base[i]);
+            let gain = (1.0 + d / l[i].max(LUMA_EPS)).clamp(0.0, GAIN_MAX);
+            for c in 0..3 {
+                o[c] = px[c] * gain;
+            }
+        }
+        ImageBuf::from_vec(src.width(), src.height(), data)
+    }
+
+    #[test]
+    fn negative_texture_keeps_a_hard_edge_where_a_gaussian_base_would_not() {
+        // ⚠ **Both halves are asserted.** "The edge survives" alone would pass against a
+        // version that simply did nothing, and it would pass on a fixture where the Gaussian
+        // also survives — so the Gaussian's own loss is measured here too, from the same
+        // primitives, and the test says outright that it must be the larger.
+        let src = hard_edge();
+        let k = -0.7;
+        let out = run(
+            LocalContrast {
+                texture: -70.0,
+                clarity: 0.0,
+            },
+            src.clone(),
+        );
+
+        let l: Vec<f32> = src
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| luma(p))
+            .collect();
+        let gauss = expected_from_base(&src, &gaussian_blur(&l, S, S, TEXTURE_SIGMA), k);
+
+        let before = edge_step(&src);
+        let kept = edge_step(&out) / before;
+        let gauss_kept = edge_step(&gauss) / before;
+        assert!(
+            gauss_kept < 0.8,
+            "fixture check: the Gaussian base kept {gauss_kept} of the edge, so this fixture \
+             cannot tell the two bases apart"
+        );
+        assert!(
+            kept > 0.95,
+            "the guided base kept only {kept} of the edge (Gaussian: {gauss_kept})"
+        );
+    }
+
+    #[test]
+    fn negative_texture_still_removes_the_fine_band() {
+        // The other half of the trade: keeping edges must not cost the tool its actual job.
+        let src = fine_only();
+        let out = run(
+            LocalContrast {
+                texture: -70.0,
+                clarity: 0.0,
+            },
+            src.clone(),
+        );
+        let ratio = fine_span(&out) / fine_span(&src);
+        assert!(ratio < 0.75, "the fine band only fell to {ratio}");
+    }
+
+    #[test]
+    fn positive_texture_is_bit_identical_to_the_gaussian_formula() {
+        // ⚠ The positive half must NOT become edge-aware: a Gaussian base is what makes
+        // positive Texture crisp *along* an edge. Bit-exact, so any leak of the guided base
+        // into this branch fails rather than merely shifting the numbers.
+        let src = two_band();
+        let k = 0.7;
+        let out = run(
+            LocalContrast {
+                texture: 70.0,
+                clarity: 0.0,
+            },
+            src.clone(),
+        );
+        let l: Vec<f32> = src
+            .data()
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| luma(p))
+            .collect();
+        let want = expected_from_base(&src, &gaussian_blur(&l, S, S, TEXTURE_SIGMA), k);
+        assert_eq!(out.data(), want.data());
+        assert_ne!(
+            out.data(),
+            src.data(),
+            "nothing changed, so nothing was compared"
+        );
+    }
+
+    #[test]
+    fn negative_texture_is_never_inert_at_a_preview_scale() {
+        // ⚠ The reason `texture_guided_radius` clamps up to 1 where `wide_blur_radius`
+        // deliberately does not: a guided filter at r = 0 has no neighbourhood at all, so it
+        // is *identically* the identity and the slider would silently do nothing at fit
+        // resolution. A blur that is slightly too wide is a lesser fault than a dead control.
+        let src = fine_only();
+        for s in [0.05f32, 0.1, 0.25, 0.5, 1.0] {
+            let params = LocalContrast {
+                texture: -100.0,
+                clarity: 0.0,
+            };
+            let out = LocalContrastStage::new(&params, RenderScale::new(s)).apply(src.clone());
+            assert_ne!(out, src, "negative texture is inert at render scale {s}");
+        }
+    }
+
+    #[test]
+    fn kernel_reach_covers_the_guided_base_at_every_scale() {
+        // The guided base reaches 2r — every window statistic is a box blur of radius r, and
+        // `mean_slope`/`mean_offset` blur those again. A reach that under-reports leaves a
+        // region render reading neighbours it does not have.
+        let tex = LocalContrast {
+            texture: -100.0,
+            clarity: 0.0,
+        };
+        for s in [0.05f32, 0.1, 0.25, 0.3, 0.44, 0.5, 0.75, 1.0] {
+            let scale = RenderScale::new(s);
+            let want = 2 * texture_guided_radius(scale);
+            assert!(
+                kernel_reach(&tex, scale) >= want,
+                "scale {s}: reach {} is under the guided base's {want}",
+                kernel_reach(&tex, scale)
+            );
+        }
     }
 
     #[test]
@@ -513,11 +721,14 @@ mod tests {
 
     #[test]
     fn texture_minus_100_removes_the_fine_band() {
-        // The endpoint claim: k = -1 subtracts the whole band, leaving the blurred base.
+        // The endpoint claim: k = -1 subtracts the whole band, leaving the base.
         //
-        // The residual is not slop — it is exactly what a sigma-2 Gaussian retains of a 6 px
-        // sine, about 11%. If this starts failing, check TEXTURE_SIGMA against the fixture's
-        // 6 px period before touching the tolerance.
+        // ⚠ The threshold was **0.2 while the base was a Gaussian**, which retains only ~11%
+        // of a 6 px sine. The negative half measures against a guided base now, whose whole
+        // purpose is to follow structure rather than blur it — so it keeps more of the sine
+        // and the residual is a measured 0.23 on this fixture. Re-authored, not loosened: the
+        // number moved because the model did. If this starts failing, check TEXTURE_SIGMA and
+        // TEXTURE_GUIDED_EPS against the fixture's 6 px period before touching the tolerance.
         let src = fine_only();
         let out = run(
             LocalContrast {
@@ -528,7 +739,7 @@ mod tests {
         );
         let (before, after) = (fine_span(&src), fine_span(&out));
         assert!(
-            after < before * 0.2,
+            after < before * 0.35,
             "fine band went from {before} to {after}, not removed"
         );
     }

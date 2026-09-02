@@ -254,7 +254,8 @@ pub fn show(
             &mut edits.local_contrast.texture,
             -100.0..=100.0,
             "Texture",
-        );
+        )
+        .on_hover_text("Fine surface detail. Negative smooths texture while keeping edges sharp; positive crisps detail along edges too.");
         ed.slider(
             ui,
             &mut edits.local_contrast.clarity,

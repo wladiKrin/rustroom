@@ -196,19 +196,27 @@ fn main() {
     };
     let step = edge_contrast(&src);
     let fine = fine_rms(&src, 100);
-    let g = gaussian_blur(&l, S, S, 2.0);
-    println!(
-        "gaussian sigma 2 base: band holds {:.1}% of the edge step, {:.1}% of the fine sine",
-        100.0 * edge_of(&g) / step,
-        100.0 * fine_of(&g) / fine
-    );
-    let r = wide_blur_radius(2.0);
-    for eps in [1e-4f32, 3e-4, 1e-3, 3e-3, 1e-2] {
-        let gf = guided_filter(&l, &l, S, S, r, eps);
+
+    // ⚠ The criterion, stated once: at k the output is `l - k·band`, so the edge **retained**
+    // is `1 - |k|·(band's share of the edge)` and the fine texture retained is the same with
+    // the sine's share. The spec asks for edge retention within 5% at -70, and the largest
+    // eps meeting it (the most texture-removing power) is the one to take.
+    let report = |name: &str, base: &[f32]| {
+        let (e, f) = (edge_of(base) / step, fine_of(base) / fine);
         println!(
-            "guided r={r} eps={eps:.0e} base: band holds {:.1}% of the edge step, {:.1}% of the fine sine",
-            100.0 * edge_of(&gf) / step,
-            100.0 * fine_of(&gf) / fine
+            "{name:<26} band holds {:>5.1}% edge, {:>5.1}% fine  ->  at -70 keeps {:>5.1}% of the edge, {:>5.1}% of the texture",
+            100.0 * e,
+            100.0 * f,
+            100.0 * (1.0 - 0.7 * e),
+            100.0 * (1.0 - 0.7 * f)
+        );
+    };
+    report("gaussian sigma 2:", &gaussian_blur(&l, S, S, 2.0));
+    let r = wide_blur_radius(2.0).max(1);
+    for eps in [3e-4f32, 5e-4, 6e-4, 7e-4, 8e-4, 9e-4, 1e-3, 3e-3] {
+        report(
+            &format!("guided r={r} eps={eps:.0e}:"),
+            &guided_filter(&l, &l, S, S, r, eps),
         );
     }
 }
