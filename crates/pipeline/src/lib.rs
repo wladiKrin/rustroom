@@ -745,6 +745,7 @@ mod tests {
                 feather: 30.0,
                 mode: edit_model::SpotMode::Heal,
             }],
+            rendering: edit_model::Rendering::Camera,
         }
     }
 

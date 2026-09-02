@@ -166,6 +166,7 @@ mod tests {
                 feather: 30.0,
                 mode: edit_model::SpotMode::Clone,
             }],
+            rendering: edit_model::Rendering::Camera,
         };
         assert_eq!(decode(&encode(&rich)), Some(rich));
     }

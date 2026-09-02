@@ -430,7 +430,25 @@ impl Dehaze {
 
 /// Group names in [`EditGroups`] field order — the one source of truth shared by the merge
 /// logic, the checkbox UI and the tests. Mirrors [`HSL_BAND_NAMES`].
-pub const EDIT_GROUP_NAMES: [&str; 9] = [
+/// How a scene-referred photograph is mapped onto a display.
+///
+/// ⚠⚠ **A rendering is not an adjustment.** Every slider in this pipeline moves a photograph that
+/// is already in a defined state; a rendering *establishes* that state — it turns scene-referred
+/// light into something a screen can show. That is why it curves each channel independently
+/// rather than preserving hue like every other tonal stage, and why "Reset adjustments" does not
+/// touch it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Rendering {
+    /// Colorimetric only — the primaries and the transfer curve, nothing else. What Rustroom did
+    /// before this existed, and what every golden and the CLI still get.
+    #[default]
+    None,
+    /// The camera's rendering: the profile's tone curve when it supplies a usable one, else the
+    /// built-in filmic curve.
+    Camera,
+}
+
+pub const EDIT_GROUP_NAMES: [&str; 10] = [
     "White Balance",
     "Tone",
     "Color",
@@ -440,6 +458,7 @@ pub const EDIT_GROUP_NAMES: [&str; 9] = [
     "Geometry",
     "Masks",
     "Retouch",
+    "Rendering",
 ];
 
 /// The `Geometry` group's index into [`EDIT_GROUP_NAMES`].
@@ -455,6 +474,14 @@ pub const MASKS_GROUP: usize = 7;
 /// The `Retouch` group's index into [`EDIT_GROUP_NAMES`] — spot removal. See
 /// [`GEOMETRY_GROUP`].
 pub const RETOUCH_GROUP: usize = 8;
+
+/// The `Rendering` group's index into [`EDIT_GROUP_NAMES`].
+///
+/// ⚠⚠ **There is deliberately no panel *section* named "Rendering".** "Reset adjustments" derives
+/// its group set from the panel's `SECTIONS`, so a group with no matching section is never reset —
+/// which is what stops that button flattening the photograph back to a colorimetric render. The
+/// control lives at the top of the Tone section instead.
+pub const RENDERING_GROUP: usize = 9;
 
 /// Which groups of settings a paste or a preset carries.
 ///
@@ -501,6 +528,12 @@ pub struct EditGroups {
     /// Syncing a burst with the box *ticked* is still the real use — the same sensor dust sits
     /// at the same coordinates on every frame, which pre-geometry anchoring is what makes right.
     pub retouch: bool,
+    /// The display rendering.
+    ///
+    /// ⚠ **On** by default, unlike `geometry`, `masks` and `retouch`: a rendering is a *look*,
+    /// so it should follow a paste, a preset and a sync, where those three are placements tied
+    /// to one photograph's content.
+    pub rendering: bool,
 }
 
 impl Default for EditGroups {
@@ -515,6 +548,7 @@ impl Default for EditGroups {
             geometry: false,
             masks: false,
             retouch: false,
+            rendering: true,
         }
     }
 }
@@ -530,6 +564,7 @@ impl EditGroups {
         geometry: true,
         masks: true,
         retouch: true,
+        rendering: true,
     };
 
     pub const NONE: Self = Self {
@@ -542,6 +577,7 @@ impl EditGroups {
         geometry: false,
         masks: false,
         retouch: false,
+        rendering: false,
     };
 
     /// Only group `i`, indexed as in [`EDIT_GROUP_NAMES`].
@@ -569,6 +605,7 @@ impl EditGroups {
             6 => self.geometry,
             7 => self.masks,
             8 => self.retouch,
+            9 => self.rendering,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -588,6 +625,7 @@ impl EditGroups {
             6 => &mut self.geometry,
             7 => &mut self.masks,
             8 => &mut self.retouch,
+            9 => &mut self.rendering,
             _ => panic!("edit group index {i} out of range"),
         }
     }
@@ -1185,6 +1223,14 @@ pub struct Edits {
     /// Local adjustments, each confined to a mask. Applied in order, after the global
     /// per-pixel adjustments and before the vignette.
     pub masks: Vec<MaskedAdjustment>,
+    /// How the scene is mapped onto a display. See [`Rendering`].
+    ///
+    /// ⚠ `None` by default, which is what keeps `Edits::default()` strictly neutral — and
+    /// therefore what keeps all 53 goldens and the CLI untouched. The GUI applies
+    /// `Settings::default_rendering` to a photo with no sidecar yet, the rule
+    /// `initial_lens_correction` already follows.
+    #[serde(default)]
+    pub rendering: Rendering,
     /// Spot removal patches, applied in order on the pre-geometry frame. Empty = no stage.
     pub spots: Vec<Spot>,
 }
@@ -1237,6 +1283,7 @@ impl Edits {
             geometry,
             masks,
             spots,
+            rendering,
         } = src;
 
         if groups.white_balance {
@@ -1281,6 +1328,9 @@ impl Edits {
         }
         if groups.retouch {
             self.spots = spots.clone();
+        }
+        if groups.rendering {
+            self.rendering = *rendering;
         }
     }
 }
@@ -1920,6 +1970,44 @@ mod tests {
         assert_eq!(e.geometry.crop, CropRect::default());
     }
 
+    /// ⚠⚠ `None` by default is what keeps `Edits::default()` strictly neutral, and therefore
+    /// what keeps all 53 goldens and the CLI untouched. A default of `Camera` would move every
+    /// one of them.
+    #[test]
+    fn the_default_rendering_is_colorimetric_only() {
+        assert_eq!(Edits::default().rendering, Rendering::None);
+    }
+
+    /// ⚠ Serde ignores what it does not know, so an existing sidecar reads as `None` — exactly
+    /// right, since that is what those photos were rendered with.
+    #[test]
+    fn a_sidecar_written_before_the_rendering_still_loads() {
+        let e: Edits = serde_json::from_str(r#"{"exposure":0.5}"#).expect("parses");
+        assert_eq!(e.rendering, Rendering::None);
+        assert_eq!(e.exposure, 0.5);
+    }
+
+    /// ⚠ Included in `EditGroups::default()` because a rendering is a *look* — it should follow
+    /// a paste, a preset and a sync, unlike Geometry, Masks and Retouch, which are placements.
+    #[test]
+    fn the_rendering_travels_on_its_own_group_and_by_default() {
+        assert!(EditGroups::default().get(RENDERING_GROUP));
+
+        let src = Edits {
+            rendering: Rendering::Camera,
+            exposure: 1.0,
+            ..Default::default()
+        };
+        let mut dst = Edits::default();
+        dst.merge_from(&src, EditGroups::only(RENDERING_GROUP));
+        assert_eq!(
+            dst.rendering,
+            Rendering::Camera,
+            "the rendering did not transfer"
+        );
+        assert_eq!(dst.exposure, 0.0, "its group carried something else too");
+    }
+
     /// An `Edits` with every field non-neutral, so a field that fails to transfer shows up.
     ///
     /// Deliberately does NOT use `..Default::default()`: adding a field to `Edits` should
@@ -2021,6 +2109,7 @@ mod tests {
                 feather: 30.0,
                 mode: SpotMode::Clone,
             }],
+            rendering: Rendering::Camera,
         }
     }
 

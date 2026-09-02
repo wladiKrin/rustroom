@@ -623,7 +623,7 @@ mod tests {
             .copied()
             .filter(|n| !shown.contains(n))
             .collect();
-        assert_eq!(missing, vec!["Geometry", "Masks", "Retouch"]);
+        assert_eq!(missing, vec!["Geometry", "Masks", "Retouch", "Rendering"]);
     }
 
     /// Click the segment labelled `want` and report the channel afterwards.
