@@ -78,6 +78,14 @@ pub(crate) fn image_area(rect: egui::Rect) -> egui::Rect {
 pub(crate) enum TileImage<'a> {
     /// A thumbnail, fitted and centred — magnified up to [`MAX_UPSCALE`] to fill the tile.
     Thumb(Option<&'a egui::TextureHandle>),
+    /// A thumbnail standing in for a render that has not landed yet, fitted with **no upscale
+    /// cap**.
+    ///
+    /// ⚠⚠ **It must occupy exactly the rect the render will**, or the photo visibly jumps in
+    /// size the moment the decode arrives — reported as looking unprofessional, and it does.
+    /// The 2× cap that is right for a Survey tile is wrong here for that reason alone: this is
+    /// not a picture in its own right, it is a placeholder for one.
+    Placeholder(&'a egui::TextureHandle),
     /// A rendered frame at an explicit scale and offset, clipped to the tile.
     ///
     /// ⚠ Clipped rather than fitted: at zoom the picture is *meant* to overflow, and that is what
@@ -122,6 +130,15 @@ pub(crate) fn tile(
         egui::Color32::from_gray(24),
     );
     match image {
+        TileImage::Placeholder(t) => {
+            let size = t.size_vec2();
+            if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
+                // No `MAX_UPSCALE`: see the variant.
+                let scale = (img.width() / size.x).min(img.height() / size.y);
+                egui::Image::new(t)
+                    .paint_at(ui, egui::Rect::from_center_size(img.center(), size * scale));
+            }
+        }
         TileImage::Thumb(Some(t)) => {
             // Fit, then centre. Magnified up to `MAX_UPSCALE` so a large tile is filled rather
             // than holding a small photo in a field of grey — see that constant for the trade.

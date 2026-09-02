@@ -260,6 +260,12 @@ struct RustroomApp {
     /// the alternative is an invalidation hook at every one of them, and the one that forgets
     /// shows the wrong photograph.
     compare_candidate: Option<PhotoId>,
+    /// Which of Compare's two panes carries the border, and therefore what its keys act on.
+    ///
+    /// ⚠ 0 is the reference, 1 the candidate. A plain index rather than a `PhotoId`, because it
+    /// is a fact about the *layout* — which side you are looking at — and must survive the
+    /// candidate changing under the arrow keys.
+    compare_focus: usize,
     /// Compare's two panes, and the zoom and pan they share.
     ///
     /// ⚠ Lives on the app rather than inside the view so it survives a frame — a pane owns a
@@ -506,6 +512,7 @@ impl RustroomApp {
             view: AppView::default(),
             library_mode: LibraryMode::default(),
             compare_candidate: None,
+            compare_focus: 1,
             compare_view: Default::default(),
             last_view: AppView::default(),
             library: None,

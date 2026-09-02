@@ -32,13 +32,18 @@ const CULLING_KEYS: [(char, egui::Key); 13] = [
 
 /// The culling action this frame's keys ask for, if any.
 ///
-/// ⚠ **No modifier**, deliberately: ⌘X is cut and ⌘A is select-all. A culling key is bare or
-/// it is not a culling key.
+/// ⚠⚠ **No command, control or alt — but Shift is allowed, and that was a real bug.** ⌘X is cut
+/// and ⌘A is select-all, so those must not cull. Shift is different: `Shift+X` is how anyone
+/// types the capital `X` the on-screen hints show, and blocking every modifier meant the key the
+/// hint named did nothing. Reported from Survey, where the hint reads "X rejects".
+///
+/// ⚠ The physical key is the same either way — `Key::X` is `Key::X` — so allowing Shift changes
+/// no other binding.
 ///
 /// ⚠ The caller must still gate on `memory().focused()` — this reads raw key state and knows
 /// nothing about the search field or the rename field a digit might be typed into.
 pub(crate) fn culling_key(i: &egui::InputState) -> Option<rustroom_app::marks::MarkAction> {
-    if i.modifiers.any() {
+    if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
         return None;
     }
     CULLING_KEYS
@@ -178,6 +183,54 @@ impl RustroomApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn keys(modifiers: egui::Modifiers) -> Option<rustroom_app::marks::MarkAction> {
+        let ctx = egui::Context::default();
+        let mut got = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::X,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                modifiers,
+                ..Default::default()
+            },
+            |ui| {
+                got = ui.input(culling_key);
+            },
+        );
+        got
+    }
+
+    /// ⚠⚠ **Shift must not block a culling key, and nothing covered this until a sabotage
+    /// restoring `modifiers.any()` went uncaught.** `Shift+X` is how anyone types the capital `X`
+    /// the on-screen hints show, so blocking every modifier meant the key the hint named did
+    /// nothing at all — reported from Survey, where the hint reads "X rejects".
+    #[test]
+    fn shift_does_not_block_a_culling_key() {
+        let want = Some(rustroom_app::marks::MarkAction::Flag(
+            catalog::db::Flag::Reject,
+        ));
+        assert_eq!(keys(egui::Modifiers::NONE), want, "bare x did not cull");
+        assert_eq!(keys(egui::Modifiers::SHIFT), want, "Shift+X did not cull");
+    }
+
+    /// ⚠ And the modifiers that genuinely mean something else still do: ⌘X is cut, ⌘A is
+    /// select-all. A culling key is bare-or-shifted, or it is not a culling key.
+    #[test]
+    fn the_editing_modifiers_still_block_a_culling_key() {
+        for m in [
+            egui::Modifiers::COMMAND,
+            egui::Modifiers::CTRL,
+            egui::Modifiers::ALT,
+        ] {
+            assert_eq!(keys(m), None, "{m:?} was treated as a culling key");
+        }
+    }
 
     /// ⚠⚠ **Two guides per family are required, and the sabotage step is what forced this test.**
     /// A single line has no vanishing point at all, so one guide must leave the edits alone rather

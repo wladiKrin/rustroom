@@ -29,6 +29,9 @@ pub(crate) struct Pane {
     /// What the last request asked for, so an unchanged view issues none.
     requested: Option<(usize, u64)>,
     edits: edit_model::Edits,
+    /// This pane's own magnification. 1.0 is fit.
+    pub zoom: f32,
+    pub pan: egui::Vec2,
 }
 
 impl Pane {
@@ -54,6 +57,42 @@ impl Pane {
             shown: None,
             requested: None,
             edits,
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+        }
+    }
+
+    /// Fold this frame's navigation into the pane's own view.
+    ///
+    /// ⚠ Zoom before pan: the anchor correction depends on the *new* zoom, and the other order
+    /// anchors against a stale factor — the order the Develop canvas records.
+    ///
+    /// ⚠ At fit there is nothing hidden to reveal, so a stray pan must not push the photo off
+    /// into the grey with nothing to bring it back. The canvas records the same rule.
+    pub fn navigate(
+        &mut self,
+        img: egui::Rect,
+        zoom_factor: f32,
+        pointer: Option<egui::Pos2>,
+        pan: egui::Vec2,
+    ) {
+        if zoom_factor != 1.0 {
+            let next = view_region::zoom_step(self.zoom, zoom_factor);
+            if let Some(p) = pointer {
+                let c = img.center();
+                self.pan += view_region::zoom_anchor_shift(
+                    (p.x - c.x, p.y - c.y),
+                    (self.pan.x, self.pan.y),
+                    self.zoom,
+                    next,
+                )
+                .into();
+            }
+            self.zoom = next;
+        }
+        self.pan += pan;
+        if self.zoom <= 1.0 {
+            self.pan = egui::Vec2::ZERO;
         }
     }
 
@@ -150,14 +189,15 @@ impl Pane {
 
 /// Compare's two panes and the view they share.
 ///
-/// ⚠⚠ **One zoom and one pan for both, and that is the feature rather than an economy.** The
-/// question Compare answers is "which of these two is sharper *here*", so the two panes must show
-/// the same part of the frame at the same magnification. Independent views would let you compare
-/// an eye against an ear and believe the answer.
+/// ⚠⚠ **Each pane zooms and pans on its own** (user's call, 2026-09-02). Shipping this shared was
+/// a defensible reading — "which is sharper *here*" wants the same part of both frames — but the
+/// two photographs are not registered to each other: they were shot seconds apart, handheld, and
+/// the subject moved. A shared view then puts the eye you are inspecting in one pane and an ear
+/// in the other, and the sharing actively gets in the way of the alignment it was meant to
+/// guarantee. Independent views let you put the same *feature* in both, which is what actually
+/// answers the question.
 #[derive(Default)]
 pub(crate) struct CompareView {
-    pub zoom: f32,
-    pub pan: egui::Vec2,
     panes: Vec<Pane>,
     /// The one decode in flight, so a miss does not re-request every frame.
     pending: Option<std::path::PathBuf>,
@@ -169,17 +209,6 @@ impl CompareView {
     pub fn clear(&mut self) {
         self.panes.clear();
         self.pending = None;
-        self.zoom = 1.0;
-        self.pan = egui::Vec2::ZERO;
-    }
-
-    /// Zoom is 1.0 at fit; a `Default` of 0.0 would draw nothing.
-    pub fn zoom(&self) -> f32 {
-        if self.zoom <= 0.0 {
-            1.0
-        } else {
-            self.zoom
-        }
     }
 
     pub fn pane_mut(&mut self, id: &PhotoId) -> Option<&mut Pane> {
@@ -326,16 +355,66 @@ mod tests {
         assert!(view.pane_mut(&id("b")).is_some());
     }
 
-    /// ⚠ `Default` gives zoom 0.0, which would draw the photo at nothing. The guard is the only
-    /// thing between a derived `Default` and a blank pane on entering Compare.
+    /// ⚠⚠ **Each pane's view is its own** (user's call). Zooming one must leave the other alone:
+    /// the two frames are not registered to each other — shot seconds apart, handheld, subject
+    /// moving — so a shared view puts the eye you are inspecting in one pane and an ear in the
+    /// other. Independent views let you put the same *feature* in both.
     #[test]
-    fn the_default_zoom_is_fit_rather_than_nothing() {
-        assert_eq!(CompareView::default().zoom(), 1.0);
-        let v = CompareView {
-            zoom: 2.5,
-            ..Default::default()
-        };
-        assert_eq!(v.zoom(), 2.5);
+    fn zooming_one_pane_leaves_the_other_alone() {
+        let ctx = crate::test_ui::ctx();
+        let mut view = CompareView::default();
+        let mut cache = BufferCache::new(3);
+        let mut w = worker();
+        for n in ["a", "b"] {
+            cache.insert(id(n).path.clone(), crate::test_app::fake_decode());
+        }
+        view.sync(&want(&[id("a"), id("b")]), &mut cache, &mut w, &ctx);
+        let img = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        view.pane_mut(&id("a"))
+            .expect("pane a")
+            .navigate(img, 2.0, None, egui::Vec2::ZERO);
+        assert!(
+            view.pane_mut(&id("a")).unwrap().zoom > 1.0,
+            "pane a did not zoom"
+        );
+        assert_eq!(
+            view.pane_mut(&id("b")).unwrap().zoom,
+            1.0,
+            "zooming one pane moved the other"
+        );
+    }
+
+    /// ⚠ A pane starts at fit, not at zero — a derived `Default` on the field would draw nothing.
+    #[test]
+    fn a_new_pane_starts_at_fit() {
+        let ctx = crate::test_ui::ctx();
+        let mut view = CompareView::default();
+        let mut cache = BufferCache::new(3);
+        let mut w = worker();
+        cache.insert(id("a").path.clone(), crate::test_app::fake_decode());
+        view.sync(&want(&[id("a")]), &mut cache, &mut w, &ctx);
+        let pane = view.pane_mut(&id("a")).expect("pane");
+        assert_eq!(pane.zoom, 1.0);
+        assert_eq!(pane.pan, egui::Vec2::ZERO);
+    }
+
+    /// ⚠ At fit there is nothing hidden to reveal, so a stray pan must not push the photo off
+    /// into the grey with nothing to bring it back — the rule the Develop canvas already follows.
+    #[test]
+    fn panning_at_fit_does_nothing() {
+        let ctx = crate::test_ui::ctx();
+        let mut view = CompareView::default();
+        let mut cache = BufferCache::new(3);
+        let mut w = worker();
+        cache.insert(id("a").path.clone(), crate::test_app::fake_decode());
+        view.sync(&want(&[id("a")]), &mut cache, &mut w, &ctx);
+        let img = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        let pane = view.pane_mut(&id("a")).expect("pane");
+        pane.navigate(img, 1.0, None, egui::vec2(50.0, 50.0));
+        assert_eq!(pane.pan, egui::Vec2::ZERO);
+        pane.navigate(img, 3.0, None, egui::Vec2::ZERO);
+        pane.navigate(img, 1.0, None, egui::vec2(50.0, 50.0));
+        assert_ne!(pane.pan, egui::Vec2::ZERO, "zoomed in, panning must work");
     }
 
     /// ⚠ Clearing drops the panes, which is what frees ~78 MB and a worker thread each.
@@ -347,11 +426,7 @@ mod tests {
         let mut w = worker();
         cache.insert(id("a").path.clone(), crate::test_app::fake_decode());
         view.sync(&want(&[id("a")]), &mut cache, &mut w, &ctx);
-        view.zoom = 3.0;
-        view.pan = egui::vec2(10.0, 10.0);
         view.clear();
         assert!(view.pane_mut(&id("a")).is_none());
-        assert_eq!(view.zoom(), 1.0);
-        assert_eq!(view.pan, egui::Vec2::ZERO);
     }
 }

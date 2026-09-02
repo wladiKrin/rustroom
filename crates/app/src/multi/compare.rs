@@ -4,10 +4,13 @@
 //! candidate is the one being judged against it, moved with the arrow keys and promoted to
 //! reference with Enter when it wins.
 //!
-//! ⚠⚠ **The culling keys act on the candidate, never on both.** That is the whole shape of the
-//! view: the reference is settled and the candidate is the question. A key that rated both
-//! would answer nothing, and a key that rated the reference would undo a decision you had
-//! already made.
+//! ⚠⚠ **The culling keys act on ONE pane — whichever carries the border.** A key that rated both
+//! would answer nothing at all. The border starts on the candidate, because that is the pane the
+//! arrows move and the question you arrived to ask; Enter or a click moves it to the other.
+//!
+//! ⚠ Enter used to *promote* the candidate to reference, which swapped the two panes. It was
+//! taken out (user's call, 2026-09-02): a view whose whole job is holding two frames still while
+//! you look between them must not rearrange itself under you.
 //!
 //! ⚠ Which photos the candidate moves through is [`rustroom_app::compare_pair::pool`]'s one
 //! decision, and it is confined there.
@@ -20,7 +23,6 @@ use rustroom_app::compare_pair;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
-use rustroom_app::view_region;
 
 /// What one frame of Compare decided, applied after the closure that borrows `app.library`.
 ///
@@ -34,8 +36,8 @@ struct Outcome {
     mark: Option<(PhotoId, rustroom_app::marks::MarkAction)>,
     /// Remember this candidate. `Some(None)` clears it; `None` leaves it alone.
     candidate: Option<Option<PhotoId>>,
-    /// Make this row the reference, keeping the selection it belongs to.
-    promote: Option<usize>,
+    /// Move the blue border to this pane.
+    focus: Option<usize>,
     /// Leave for the grid.
     to_grid: bool,
 }
@@ -48,8 +50,9 @@ struct Outcome {
 /// arrows. A literal inside a `RichText::new(..)` call cannot be probed by a test.
 ///
 /// ⚠ `<-` and `->` as ASCII, not `←`/`→`: neither arrow is in any bundled font.
-const INSTRUCTION: &str = "<- -> change the candidate · Enter promotes it · digits, P, X and U \
-                           rate it · scroll pans, pinch or ctrl+scroll zooms both panes together";
+const INSTRUCTION: &str = "<- -> change the candidate · Enter or a click moves the border · \
+                           digits, P, X and U rate the bordered photo · scroll pans and pinch \
+                           zooms, each pane on its own";
 
 impl RustroomApp {
     /// Drop Compare's panes whenever Compare is not the view on screen.
@@ -65,23 +68,6 @@ impl RustroomApp {
             self.compare_view.clear();
         }
     }
-}
-
-/// The centre of whichever pane a point falls in — or nearest, if it is in the gap.
-///
-/// ⚠ The zoom anchor has to be measured against the pane the pointer is in, not against the
-/// stage: the two panes are drawn about their own centres, so anchoring both to the stage's
-/// centre would slide the picture out from under the cursor in whichever pane you were using.
-fn nearest_centre(stage: egui::Rect, tiles: &[tile_layout::Tile], p: egui::Pos2) -> egui::Pos2 {
-    tiles
-        .iter()
-        .map(|t| multi::image_area(multi::tile_rect(stage, *t)).center())
-        .min_by(|a, b| {
-            (a.distance(p))
-                .partial_cmp(&b.distance(p))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .unwrap_or_else(|| stage.center())
 }
 
 /// ⚠⚠ **The pair is derived ONCE, here, and both the panes and the drawing use it.** Resolving
@@ -165,6 +151,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let view = &mut app.compare_view;
     let library = &mut app.library;
     let pan_binding = app.settings.pan_drag;
+    let compare_focus = app.compare_focus;
 
     egui::CentralPanel::default().show(ui, |ui| {
         let Some(lib) = library else {
@@ -192,6 +179,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // `pool` is still needed live, because the arrow keys step through it.
         let selected: Vec<usize> = lib.selection.iter().collect();
         let pool = compare_pair::pool(&lib.visible, &selected);
+        // Which pane the border is on, and therefore what the culling keys act on.
+        let focus = compare_focus.min(1);
 
         // ── Keyboard ─────────────────────────────────────────────────────────────────────
         //
@@ -210,17 +199,27 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     }
                 }
             }
+            // ⚠⚠ **Enter moves the border, it does not move the photographs** (user's call,
+            // 2026-09-02). It used to promote the candidate to reference, which swapped the two
+            // panes — and a view whose whole job is holding two frames still while you look
+            // between them must not rearrange itself under you. Now it toggles which pane the
+            // culling keys act on, which is what the border was already saying.
             if i.key_pressed(egui::Key::Enter) {
-                out.promote = candidate;
+                out.focus = Some(1 - focus);
             }
             // ⚠ Escape leaves for the grid, the same exit `G` gives. Without it the one key
             // everybody reaches for to back out of a mode would do nothing here.
             if i.key_pressed(egui::Key::Escape) {
                 out.to_grid = true;
             }
-            // ⚠ The candidate alone — see the module doc.
-            if let (Some(a), Some(c)) = (crate::interaction::culling_key(i), candidate) {
-                if let Some(e) = lib.entries.get(c) {
+            // ⚠ The **focused** pane alone, which is what the border marks — see the module doc.
+            let target = if focus == 0 {
+                Some(reference)
+            } else {
+                candidate
+            };
+            if let (Some(a), Some(t)) = (crate::interaction::culling_key(i), target) {
+                if let Some(e) = lib.entries.get(t) {
                     out.mark = Some((e.id.clone(), a));
                 }
             }
@@ -254,8 +253,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // ⚠ The same inputs the Develop canvas takes, through the same `pan_delta` — scroll or a
         // two-finger swipe pans, pinch or ctrl+scroll zooms, and the configured drag button pans.
         // Duplicating that idiom per view is how the two would drift apart.
-        let zoom = view.zoom();
-        let pan = view.pan;
         let (scroll, space_down, zoom_factor, pointer) = ui.input(|i| {
             (
                 i.smooth_scroll_delta,
@@ -264,8 +261,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 i.pointer.hover_pos(),
             )
         });
-        let mut pan_accum = egui::Vec2::ZERO;
-        let mut hovered = false;
 
         let mut window: Vec<ThumbRequest> = Vec::new();
         for (slot, (row, label)) in [(reference, "Reference"), (cand, "Candidate")]
@@ -291,17 +286,37 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // what makes zooming worth anything — but showing grey while a ~1 s decode runs
             // would make arriving in Compare feel broken.
             let img_area = multi::image_area(rect);
+            // ⚠⚠ **Navigation is folded in BEFORE the render is asked for**, so a zoom gesture
+            // and the rung it needs land in the same frame. Applied afterwards, every zoom would
+            // render one frame stale — visible as the picture sharpening a beat late.
+            //
+            // ⚠ The pointer gates it: `hovered` is not usable here because the tile's response
+            // does not exist yet, and `contains` is the same question asked of the rect that
+            // will be drawn. It is what keeps a scroll over one pane out of the other.
+            let over = pointer.is_some_and(|p| rect.contains(p));
             let pane_img = view.pane_mut(&lib.entries[row].id).map(|pane| {
-                pane.update(img_area, zoom, display_space, ui.ctx());
-                (pane.texture().cloned(), pane.draw_scale(img_area, zoom))
+                if over {
+                    pane.navigate(img_area, zoom_factor, pointer, scroll);
+                }
+                pane.update(img_area, pane.zoom, display_space, ui.ctx());
+                (
+                    pane.texture().cloned(),
+                    pane.draw_scale(img_area, pane.zoom),
+                    pane.pan,
+                )
             });
             let image = match &pane_img {
-                Some((Some(t), scale)) => multi::TileImage::Pane {
+                Some((Some(t), scale, offset)) => multi::TileImage::Pane {
                     tex: t,
                     scale: *scale,
-                    offset: pan,
+                    offset: *offset,
                 },
-                _ => multi::TileImage::Thumb(tex),
+                // ⚠ `Placeholder`, not `Thumb`: it must occupy exactly the rect the render will,
+                // or the photo jumps in size the moment the decode lands.
+                _ => match tex {
+                    Some(t) => multi::TileImage::Placeholder(t),
+                    None => multi::TileImage::Thumb(None),
+                },
             };
             let resp = multi::tile(
                 ui,
@@ -310,55 +325,35 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 image,
                 &caption,
                 marks,
-                // The candidate carries the focus ring, because it is what the keys act on.
-                slot == 1,
+                // The focused pane carries the ring, because it is what the keys act on.
+                slot == focus,
             );
             // ⚠⚠ **One gesture, both panes.** The navigation is read from whichever pane the
             // pointer is over and applied to the shared zoom and pan, so the two always show the
             // same part of the frame — see `CompareView`.
-            pan_accum += pan_delta(&resp, scroll, space_down, pan_binding, typing);
-            if resp.hovered() {
-                hovered = true;
+            // ⚠ The drag half of the navigation, which needs the tile's response and so can
+            // only be folded in after it. The scroll and zoom halves are handled above, before
+            // the render request — see there for why.
+            //
+            // ⚠ `egui::Vec2::ZERO` for the scroll: it was already applied above, and passing it
+            // again would pan at twice the rate.
+            let drag = pan_delta(&resp, egui::Vec2::ZERO, space_down, pan_binding, typing);
+            if drag != egui::Vec2::ZERO {
+                if let Some(pane) = view.pane_mut(&lib.entries[row].id) {
+                    pane.navigate(img_area, 1.0, None, drag);
+                }
             }
             if resp.double_clicked() {
                 out.open = Some(row);
-            } else if resp.clicked() && slot == 1 {
-                // ⚠ Clicking the candidate promotes it — the same act as Enter, reached with
-                // the mouse. Clicking the *reference* deliberately does nothing: it is already
-                // the reference, and inventing a second meaning for that click is how one
-                // gesture comes to do two things.
-                out.promote = Some(row);
+            } else if resp.clicked() {
+                // ⚠ Clicking a pane focuses it — the same act as Enter, reached with the mouse,
+                // and it now means the same thing on either side. It used to promote, so a click
+                // on the left pane had to be a no-op to avoid inventing a second meaning; with
+                // Enter reduced to a focus toggle that asymmetry is gone.
+                out.focus = Some(slot);
             }
             window.push(req);
         }
-        // ⚠⚠ **Applied once, after both tiles, to the shared view.** Zoom is folded in before
-        // pan because the anchor correction depends on the new zoom — the order the Develop
-        // canvas records, and the other way round anchors against a stale factor.
-        if zoom_factor != 1.0 && hovered {
-            let next = view_region::zoom_step(zoom, zoom_factor);
-            // Zoom about the cursor, not the tile's centre: whatever the pointer is over holds
-            // still, which is what makes comparing a detail at high zoom possible at all.
-            if let Some(p) = pointer {
-                // The anchor is measured against the pane the pointer is in, which is the tile
-                // whose centre is nearest it — the panes are side by side, so this is exact.
-                let centre = nearest_centre(stage, &tiles, p);
-                view.pan += view_region::zoom_anchor_shift(
-                    (p.x - centre.x, p.y - centre.y),
-                    (view.pan.x, view.pan.y),
-                    zoom,
-                    next,
-                )
-                .into();
-            }
-            view.zoom = next;
-        }
-        view.pan += pan_accum;
-        // ⚠ At fit there is nothing hidden to reveal, so a stray pan must not push the photo off
-        // into the grey with nothing to bring it back. The canvas records the same rule.
-        if view.zoom() <= 1.0 {
-            view.pan = egui::Vec2::ZERO;
-        }
-
         // ⚠ Prefetch the candidates either side, so stepping is instant rather than showing a
         // grey pane for a moment. Four requests in all — nothing against the byte budget.
         for forward in [true, false] {
@@ -377,8 +372,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some((id, action)) = out.mark {
         app.apply_mark_to(&[id], action);
     }
-    if let Some(row) = out.promote {
-        promote(app, row);
+    if let Some(slot) = out.focus {
+        app.compare_focus = slot.min(1);
     }
     if out.to_grid {
         app.library_mode = LibraryMode::Grid;
@@ -388,31 +383,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some(row) = out.open {
         app.open_entry(ctx, row);
     }
-}
-
-/// Make `row` the reference, and hand the old reference back as the candidate.
-///
-/// ⚠⚠ **`focus` when the row is already selected, `click` only when it is not** — and the
-/// difference is what keeps the pool stable. `click` replaces the whole selection, so promoting
-/// inside a two-photo comparison would collapse the selection to one and silently widen the
-/// pool from "these two" to "the whole folder". `Selection::focus` moves the active photo
-/// without touching the set, which is exactly a swap.
-fn promote(app: &mut RustroomApp, row: usize) {
-    let Some(lib) = app.library.as_mut() else {
-        return;
-    };
-    let old = lib
-        .selection
-        .active()
-        .and_then(|i| lib.entries.get(i))
-        .map(|e| e.id.clone());
-    if !lib.selection.focus(row) {
-        lib.selection.click(row);
-    }
-    // ⚠ The old reference becomes the candidate, so Enter is a *swap* rather than a one-way
-    // step — press it twice and you are back where you started, which is what makes it safe to
-    // try.
-    app.compare_candidate = old;
 }
 
 #[cfg(test)]
@@ -588,36 +558,83 @@ mod tests {
     }
 
     #[test]
-    fn enter_swaps_the_two_photos() {
-        // ⚠ A *swap*, not a one-way step: press Enter twice and you are back where you started,
-        // which is what makes it safe to try. A promote that dropped the old reference would
-        // pass an "the active photo changed" assertion and lose the frame you were keeping.
+    fn enter_moves_the_border_and_leaves_the_photos_where_they_are() {
+        // ⚠⚠ **This test used to assert the opposite**, and the rewrite is deliberate: Enter
+        // promoted the candidate to reference, which swapped the two panes. It was taken out
+        // (user's call, 2026-09-02) because a view whose whole job is holding two frames still
+        // while you look between them must not rearrange itself under you.
+        //
+        // ⚠ Both halves matter. That the border moved is the feature; that the photographs did
+        // *not* is the bug that was being fixed, and an assertion on the border alone would pass
+        // against the old swapping behaviour too.
         let ctx = crate::test_ui::ctx();
         let mut app = app_with(6);
         app.library.as_mut().unwrap().selection.click(2);
-        let before = app.library.as_ref().unwrap().entries[2].id.clone();
+        let before_active = app.library.as_ref().unwrap().selection.active();
+        let before_candidate = app.compare_candidate.clone();
+        let before_focus = app.compare_focus;
 
         frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
 
+        assert_ne!(app.compare_focus, before_focus, "the border did not move");
         let lib = app.library.as_ref().unwrap();
         assert_eq!(
             lib.selection.active(),
-            Some(3),
-            "the candidate was not promoted"
+            before_active,
+            "Enter moved the photographs"
         );
         assert_eq!(
-            app.compare_candidate.as_ref(),
-            Some(&before),
-            "the old reference was not handed back as the candidate"
+            app.compare_candidate, before_candidate,
+            "Enter changed the candidate"
+        );
+    }
+
+    /// ⚠ And it is a *toggle*: press it twice and you are back where you started, which is what
+    /// makes it safe to try.
+    #[test]
+    fn enter_toggles_rather_than_stepping_one_way() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(6);
+        app.library.as_mut().unwrap().selection.click(2);
+        let start = app.compare_focus;
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+        frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+        assert_eq!(app.compare_focus, start);
+    }
+
+    /// ⚠⚠ The culling keys follow the border, which is the whole reason the border exists. With
+    /// it on the reference, a rating must land on the reference — an assertion that only checked
+    /// "something was rated" would pass whichever pane it hit.
+    #[test]
+    fn the_culling_keys_act_on_the_bordered_pane() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(6);
+        app.library.as_mut().unwrap().selection.click(2);
+        // ⚠ Without this `set_marks` is a no-op on an uncatalogued photo and the test fails
+        // against correct code — see `catalog_library`.
+        crate::test_app::catalog_library(&mut app);
+        app.compare_focus = 0;
+        frame(&mut app, &ctx, vec![key(egui::Key::Num3)]);
+        let lib = app.library.as_ref().unwrap();
+        assert_eq!(
+            lib.marks.get(&lib.entries[2].id).map(|m| m.rating),
+            Some(3),
+            "the bordered pane was not the one rated"
+        );
+        assert_eq!(
+            lib.marks.get(&lib.entries[3].id).map(|m| m.rating),
+            None,
+            "the unbordered pane was rated too"
         );
     }
 
     #[test]
-    fn promoting_inside_a_two_photo_selection_keeps_both_selected() {
-        // ⚠⚠ The reason `promote` calls `focus` rather than `click`. `click` replaces the whole
-        // selection, so a swap would collapse "compare exactly these two" to one photo and
-        // silently widen the pool to the entire folder — a change with nothing on screen to
-        // announce it.
+    fn moving_the_border_inside_a_two_photo_selection_keeps_both_selected() {
+        // ⚠⚠ **This used to test `promote`'s use of `focus` over `click`** — `click` replaces the
+        // whole selection, so a swap would collapse "compare exactly these two" to one photo and
+        // silently widen the pool to the entire folder. Enter no longer touches the selection at
+        // all, so the property is now trivially safe; the test is kept because the property is
+        // what matters, not the mechanism that used to threaten it.
         let ctx = crate::test_ui::ctx();
         let mut app = app_with(6);
         app.library
@@ -629,8 +646,8 @@ mod tests {
         frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
 
         let lib = app.library.as_ref().unwrap();
-        assert_eq!(lib.selection.len(), 2, "the swap collapsed the selection");
-        assert_eq!(lib.selection.active(), Some(4));
+        assert_eq!(lib.selection.len(), 2, "the selection collapsed");
+        assert_eq!(lib.selection.active(), Some(1), "the reference moved");
     }
 
     #[test]

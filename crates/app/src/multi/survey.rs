@@ -7,8 +7,11 @@
 //! choosing between; and `×` on a tile removes it from the selection, which is how a survey is
 //! narrowed down to the keeper.
 //!
-//! ⚠ Capped at [`tile_layout::MAX_TILES`], which is a memory bound before it is a legibility
-//! one — see that constant.
+//! ⚠⚠ **A scrolling, virtualised grid, and it did not start that way.** It used to fill one
+//! screenful, capped at 24 tiles, and say "showing 24 of 39" — which named the problem and gave
+//! no way out: the remaining photographs were simply unreachable. Virtualised, the cap is gone
+//! *and* the memory bound it existed for is stronger, because `retain_window` now pins only what
+//! is actually on screen. The Library grid solved the identical problem the identical way.
 
 use crate::multi;
 use crate::{LibraryMode, RustroomApp};
@@ -42,7 +45,6 @@ fn surveyed(visible: &[usize], selection: &Selection) -> Vec<usize> {
         .iter()
         .copied()
         .filter(|&i| selection.contains(i))
-        .take(tile_layout::MAX_TILES)
         .collect()
 }
 
@@ -51,6 +53,21 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let live = app.live_edits();
     let mut out = Outcome::default();
 
+    // ⚠⚠ **Pinch, or ctrl/cmd+scroll, resizes the tiles — the same gesture the Library grid
+    // takes**, because a survey of three photos on a large monitor should be able to fill it.
+    // `zoom_delta` folds trackpad pinch and ctrl+scroll into one **multiplicative factor that is
+    // 1.0 when idle**, which is what leaves plain scrolling free to scroll.
+    let zoom = ui.ctx().input(|i| i.zoom_delta());
+    if zoom != 1.0 {
+        app.settings.survey_cell = app.settings.zoomed_survey_cell(zoom);
+        app.cell_zoom_pending = true;
+    } else if app.cell_zoom_pending {
+        // ⚠ Saved when the gesture *settles*, not per frame — a pinch runs at 60 Hz.
+        app.cell_zoom_pending = false;
+        app.save_settings();
+    }
+    let cell = app.settings.clamped_survey_cell();
+
     egui::CentralPanel::default().show(ui, |ui| {
         let Some(lib) = &mut app.library else {
             ui.centered_and_justified(|ui| {
@@ -58,8 +75,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             });
             return;
         };
-        let rows = surveyed(&lib.visible, &lib.selection);
-        if rows.is_empty() {
+        let rows_list = surveyed(&lib.visible, &lib.selection);
+        if rows_list.is_empty() {
             ui.centered_and_justified(|ui| {
                 crate::theme::empty_state(
                     ui,
@@ -68,7 +85,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             });
             return;
         }
-        let total = lib.selection.len();
 
         // ── Keyboard ─────────────────────────────────────────────────────────────────────
         //
@@ -76,20 +92,34 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // screen here too.
         let focused = lib.selection.active();
         let typing = ui.ctx().memory(|m| m.focused().is_some());
+
+        // ── Layout ───────────────────────────────────────────────────────────────────────
+        let spacing = ui.spacing().item_spacing.x;
+        let cols = grid_columns(ui.available_width(), cell, spacing);
+        // ⚠ Aspect-shaped, not square: a survey is looked at rather than scanned, and a square
+        // cell gives a 3:2 photograph two grey bars for nothing. The Library grid is square
+        // because it is scanned.
+        let tile_h = cell / tile_layout::NOMINAL_ASPECT + multi::CAPTION_H;
+
         ui.input(|i| {
             if typing {
                 return;
             }
-            // ⚠ Arrows move through the *survey*, not through the folder: this view shows a
-            // handful of photos and stepping off the end into ones nobody selected would be a
-            // different view. Clamped rather than wrapping, matching the grid's arrows.
-            let at = focused.and_then(|f| rows.iter().position(|&r| r == f));
-            for (key, delta) in [(egui::Key::ArrowRight, 1i64), (egui::Key::ArrowLeft, -1)] {
+            // ⚠⚠ **Up and down move by a whole row, left and right by one.** With the survey a
+            // scrolling grid rather than a single screenful, stepping only left-to-right makes a
+            // long selection unreachable by keyboard — you would hold `→` through forty photos.
+            let at = focused.and_then(|f| rows_list.iter().position(|&r| r == f));
+            for (key, delta) in [
+                (egui::Key::ArrowRight, 1i64),
+                (egui::Key::ArrowLeft, -1),
+                (egui::Key::ArrowDown, cols as i64),
+                (egui::Key::ArrowUp, -(cols as i64)),
+            ] {
                 if i.key_pressed(key) {
                     let next = at.map_or(0, |p| {
-                        (p as i64 + delta).clamp(0, rows.len() as i64 - 1) as usize
+                        (p as i64 + delta).clamp(0, rows_list.len() as i64 - 1) as usize
                     });
-                    out.focus = Some(rows[next]);
+                    out.focus = Some(rows_list[next]);
                 }
             }
             if i.key_pressed(egui::Key::Enter) {
@@ -103,12 +133,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if let Some(e) = lib.entries.get(f) {
                     out.mark = Some((e.id.clone(), a));
                 }
-                // ⚠⚠ **Rejecting takes the photo off the wall, and that is what Survey is for.**
-                // Without it the view is a smaller Library grid — reported as "I don't get the
-                // point of survey". Culling is a subtractive act: the wall shrinks as you
-                // reject, and what is left when you stop is the keeper. Nothing is deleted; the
-                // photo is still in the folder, still rejected, and `X` again in the grid
-                // un-rejects it.
+            }
+            // ⚠⚠ **Rejecting takes the photo off the wall, and that is what Survey is for.**
+            // Without it the view is a smaller Library grid. Culling is a subtractive act: the
+            // wall shrinks as you reject, and what is left when you stop is the keeper. Nothing
+            // is deleted; the photo is still in the folder, still rejected, and `X` again in the
+            // grid un-rejects it.
+            if let (Some(a), Some(f)) = (crate::interaction::culling_key(i), focused) {
                 if a == rustroom_app::marks::MarkAction::Flag(catalog::db::Flag::Reject) {
                     out.drop = Some(f);
                 }
@@ -116,85 +147,83 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         });
 
         // ── Draw ─────────────────────────────────────────────────────────────────────────
-        let hint = if total > rows.len() {
-            // ⚠ Said out loud rather than silently truncated. A survey that showed 24 of 57
-            // without saying so reads as photos having gone missing.
-            format!(
-                "Showing {} of {total} selected · click a photo to focus it · X rejects and \
-                 takes it off the wall · × removes it without rejecting",
-                rows.len()
+        ui.label(
+            egui::RichText::new(
+                "Arrows move · digits rate · P picks · X rejects and takes it off the wall · \
+                 Enter opens · pinch or ctrl+scroll resizes",
             )
-        } else {
-            "Click a photo to focus it · digits rate · P picks · X rejects and takes it off \
-             the wall · × removes it without rejecting · Enter opens it"
-                .to_string()
-        };
-        ui.label(egui::RichText::new(hint).small().weak());
+            .small()
+            .weak(),
+        );
 
-        let stage = multi::stage(ui);
-        let tiles = tile_layout::survey(rows.len(), stage.width(), stage.height(), 10.0);
+        let grid_rows = rows_list.len().div_ceil(cols);
         let mut window: Vec<ThumbRequest> = Vec::new();
-        for (slot, &row) in rows.iter().enumerate() {
-            let Some(t) = tiles.get(slot) else { continue };
-            let rect = multi::tile_rect(stage, *t);
-            let req = lib.thumb_request(row, live.as_ref());
-            let tex = lib
-                .cache
-                .get(&req.key())
-                // ⚠ This photo's previous render rather than grey while a re-render lands.
-                .or_else(|| lib.cache.get_stale(&lib.entries[row].id));
-            let marks = lib
-                .marks
-                .get(&lib.entries[row].id)
-                .copied()
-                .unwrap_or_default();
-            let resp = multi::photo_tile(
-                ui,
-                rect,
-                ui.id().with(("survey", slot)),
-                tex,
-                &lib.entries[row].caption(),
-                marks,
-                focused == Some(row),
-            );
-            if resp.double_clicked() {
-                out.open = Some(row);
-            } else if resp.clicked() {
-                out.focus = Some(row);
-            }
-
-            // ⚠⚠ The remove button is registered **after** the tile, so it wins the hit test:
-            // egui breaks a tie by registration order — "in case of a tie, take the last one =
-            // the one on top" — and registered first the tile would swallow every click meant
-            // for it. The mirror of the Library grid's drag background, which is registered
-            // *before* its cells for the same reason.
-            let close = egui::Rect::from_min_size(
-                egui::pos2(rect.max.x - 22.0, rect.min.y + 4.0),
-                egui::vec2(18.0, 18.0),
-            );
-            if rect.contains_rect(close) {
-                let cr = ui.interact(
-                    close,
-                    ui.id().with(("survey_close", slot)),
-                    egui::Sense::click(),
-                );
-                if cr.hovered() || focused == Some(row) {
-                    ui.painter().text(
-                        close.center(),
-                        egui::Align2::CENTER_CENTER,
-                        // ⚠ `×`, the glyph the reject badge already uses — probed and known to
-                        // render. `✕` and `✗` are in no bundled font.
-                        "×",
-                        egui::FontId::proportional(15.0),
-                        egui::Color32::from_rgb(230, 110, 110),
-                    );
+        // ⚠⚠ **A scrolling, virtualised grid rather than one screenful.** It used to cap at
+        // `MAX_TILES` and say "showing 24 of 39" — which named the problem without offering a
+        // way out, and the remaining photos were simply unreachable. Virtualised, the cap is
+        // gone *and* the memory bound it existed for is stronger: `retain_window` now pins only
+        // what is actually on screen, exactly as the Library grid does.
+        egui::ScrollArea::vertical()
+            // ⚠ Pins the scrollbar to the panel edge rather than letting it track the widest
+            // row — the fix the Library grid needed for the same reason.
+            .auto_shrink([false, false])
+            .show_rows(ui, tile_h, grid_rows, |ui, row_range| {
+                for grid_row in row_range {
+                    ui.horizontal(|ui| {
+                        let first = grid_row * cols;
+                        let last = (first + cols).min(rows_list.len());
+                        for &row in &rows_list[first..last] {
+                            let (_, rect) = ui.allocate_space(egui::vec2(cell, tile_h));
+                            let req = lib.thumb_request(row, live.as_ref());
+                            let tex = lib
+                                .cache
+                                .get(&req.key())
+                                // ⚠ This photo's previous render rather than grey while a
+                                // re-render lands.
+                                .or_else(|| lib.cache.get_stale(&lib.entries[row].id));
+                            let marks = lib
+                                .marks
+                                .get(&lib.entries[row].id)
+                                .copied()
+                                .unwrap_or_default();
+                            // ⚠⚠ A stable id per photo, not egui's auto-id counter: under
+                            // `show_rows` that counter shifts with the scroll position, which
+                            // silently detaches every widget's state from its photo. The
+                            // Library grid records the same trap.
+                            let base = ui.id().with(&lib.entries[row].id);
+                            let resp = multi::photo_tile(
+                                ui,
+                                rect,
+                                base.with("tile"),
+                                tex,
+                                &lib.entries[row].caption(),
+                                marks,
+                                focused == Some(row),
+                            );
+                            if resp.double_clicked() {
+                                out.open = Some(row);
+                            } else if resp.clicked() {
+                                out.focus = Some(row);
+                            }
+                            match tile_buttons(ui, rect, base, focused == Some(row)) {
+                                Some(TileAction::Pick) => {
+                                    if let Some(e) = lib.entries.get(row) {
+                                        out.mark = Some((
+                                            e.id.clone(),
+                                            rustroom_app::marks::MarkAction::Flag(
+                                                catalog::db::Flag::Pick,
+                                            ),
+                                        ));
+                                    }
+                                }
+                                Some(TileAction::Remove) => out.drop = Some(row),
+                                None => {}
+                            }
+                            window.push(req);
+                        }
+                    });
                 }
-                if cr.clicked() {
-                    out.drop = Some(row);
-                }
-            }
-            window.push(req);
-        }
+            });
         // ⚠⚠ Everything drawn, or `retain_window` leaves these photos unpinned and evictable
         // while they are the only thing on screen.
         lib.sync_thumb_window(&window);
@@ -223,6 +252,89 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some(row) = out.open {
         app.open_entry(ctx, row);
     }
+}
+
+/// What a tile's own buttons asked for.
+enum TileAction {
+    /// Flag it a pick — the keeper this survey is narrowing towards.
+    Pick,
+    /// Take it off the wall without judging it.
+    Remove,
+}
+
+/// The two buttons in a tile's top-right corner.
+///
+/// ⚠⚠ **Registered AFTER the tile, so they win the hit test**: egui breaks a tie by registration
+/// order — "in case of a tie, take the last one = the one on top" — and registered first the tile
+/// would swallow every click meant for them.
+///
+/// ⚠ Shown on hover or on the focused tile, not always: two glyphs on every tile of a
+/// forty-photo wall is more chrome than photograph.
+///
+/// ⚠ The glyphs are `⚑` and `×`, the two the mark badges already use — probed and known to
+/// render. `✓`, `✔`, `✕` and `✗` are in **no** bundled font.
+fn tile_buttons(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    base: egui::Id,
+    focused: bool,
+) -> Option<TileAction> {
+    const SIZE: f32 = 20.0;
+    let mut out = None;
+    for (i, (glyph, action, colour, hint)) in [
+        (
+            "⚑",
+            TileAction::Pick,
+            egui::Color32::from_rgb(120, 200, 130),
+            "Pick — flag it as a keeper",
+        ),
+        (
+            "×",
+            TileAction::Remove,
+            egui::Color32::from_rgb(230, 110, 110),
+            "Take it off the wall without rejecting it",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - SIZE * (2.0 - i as f32) - 4.0, rect.min.y + 4.0),
+            egui::vec2(SIZE, SIZE),
+        );
+        if !rect.contains_rect(at) {
+            continue;
+        }
+        let r = ui
+            .interact(at, base.with(("tilebtn", i)), egui::Sense::click())
+            .on_hover_text(hint);
+        if r.hovered() || focused {
+            ui.painter().text(
+                at.center(),
+                egui::Align2::CENTER_CENTER,
+                glyph,
+                egui::FontId::proportional(15.0),
+                colour,
+            );
+        }
+        if r.clicked() {
+            out = Some(action);
+        }
+    }
+    out
+}
+
+/// How many tiles fit across `avail`, counting the gaps between them.
+///
+/// ⚠ `n` cells need `n*cell + (n-1)*spacing`, not `n*cell`. The Library grid shipped without the
+/// gap term and overflowed on wide windows, where the gap total grows with the column count while
+/// the leftover width stays uniform — which is why it showed on a large monitor and not a small
+/// one.
+fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
+    if !avail.is_finite() || avail <= 0.0 || cell <= 0.0 {
+        return 1;
+    }
+    (((avail + spacing) / (cell + spacing)).floor() as usize).max(1)
 }
 
 /// Take one photo out of the survey.
@@ -361,22 +473,123 @@ mod tests {
         assert_eq!(asked, vec![2, 5, 9, 30]);
     }
 
+    /// ⚠⚠ **Up and down move by a whole row.** With the survey a scrolling grid rather than one
+    /// screenful, left-to-right alone makes a long selection unreachable by keyboard — you would
+    /// hold `→` through forty photographs.
     #[test]
-    fn a_huge_selection_is_capped_rather_than_pinning_the_whole_cache() {
-        // ⚠⚠ Not a legibility nicety: `retain_window` pins everything in the window and never
-        // evicts it, so an uncapped survey over hundreds of photos would pin far past the
-        // 512 MB budget with nothing sheddable. A cap that only limited the *drawing* would
-        // pass a "how many tiles?" assertion and still blow the cache.
+    fn up_and_down_move_by_a_row() {
+        let ctx = crate::test_ui::ctx();
+        let sel: Vec<usize> = (0..12).collect();
+        let mut app = app_with(40, &sel);
+        // ⚠ The harness screen is 400x300 and the default tile is 320 wide, which gives **one**
+        // column — where a row and a step are the same thing and this test could not see the
+        // difference it names. The smallest tile fits two.
+        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.0;
+        frame(&mut app, &ctx, Vec::new());
+        app.library.as_mut().unwrap().selection.focus(0);
+
+        frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown)]);
+        let after_down = app.library.as_ref().unwrap().selection.active().unwrap();
+        assert!(
+            after_down > 1,
+            "down moved by one photo ({after_down}) rather than by a row"
+        );
+
+        frame(&mut app, &ctx, vec![key(egui::Key::ArrowUp)]);
+        assert_eq!(
+            app.library.as_ref().unwrap().selection.active(),
+            Some(0),
+            "up did not undo down"
+        );
+    }
+
+    /// ⚠ Clamped, not wrapping — the rule the arrows already followed left-to-right. Wrapping
+    /// from the last row to the first is disorienting in a grid you are scrolling.
+    #[test]
+    fn the_arrows_clamp_at_the_ends() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(40, &[2, 5, 9]);
+        app.settings.survey_cell = rustroom_app::settings::SURVEY_CELL_RANGE.0;
+        frame(&mut app, &ctx, Vec::new());
+        app.library.as_mut().unwrap().selection.focus(2);
+        frame(&mut app, &ctx, vec![key(egui::Key::ArrowUp)]);
+        assert_eq!(app.library.as_ref().unwrap().selection.active(), Some(2));
+        app.library.as_mut().unwrap().selection.focus(9);
+        frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown)]);
+        assert_eq!(app.library.as_ref().unwrap().selection.active(), Some(9));
+    }
+
+    /// ⚠ Pinch resizes the tiles and **persists**, so a survey opened again is the size you left
+    /// it. `zoom_delta` is a factor that is 1.0 when idle, not a delta — treating it as a delta
+    /// collapses the size to nothing on every idle frame, which this project has paid for once
+    /// already in the canvas navigation work.
+    #[test]
+    fn pinching_resizes_the_tiles() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(20, &[1, 4]);
+        let before = app.settings.survey_cell;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::test_ui::screen()),
+                events: vec![egui::Event::Zoom(1.5)],
+                ..Default::default()
+            },
+            |ui| {
+                let c = ui.ctx().clone();
+                show(&mut app, ui, &c);
+            },
+        );
+        assert!(
+            app.settings.survey_cell > before,
+            "a pinch left the tile size at {before}"
+        );
+    }
+
+    /// ⚠ And an idle frame must not move it: the guard against reading `zoom_delta` as a delta.
+    #[test]
+    fn an_idle_frame_leaves_the_tile_size_alone() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(20, &[1, 4]);
+        let before = app.settings.survey_cell;
+        for _ in 0..3 {
+            frame(&mut app, &ctx, Vec::new());
+        }
+        assert_eq!(app.settings.survey_cell, before);
+    }
+
+    #[test]
+    fn a_huge_selection_asks_only_for_what_is_on_screen() {
+        // ⚠⚠ **This test used to assert the opposite** — that a huge selection was *capped* at
+        // 24 tiles — and the cap was the bug: "showing 24 of 39" named the problem and offered no
+        // way to reach the rest. Virtualising is the stronger answer to the memory bound the cap
+        // existed for: `retain_window` pins everything in the window and never evicts it, so what
+        // matters is that the window stays bounded by the viewport, not by a constant.
+        //
+        // ⚠ The assertion is on the **want-list**, not on the tile count: a view that drew fewer
+        // tiles while still asking for all 300 would pass a "how many tiles?" check and blow the
+        // cache anyway.
         let ctx = crate::test_ui::ctx();
         let all: Vec<usize> = (0..300).collect();
         let mut app = app_with(300, &all);
 
         frame(&mut app, &ctx, Vec::new());
 
-        assert_eq!(
-            app.library.as_ref().unwrap().last_want.len(),
-            tile_layout::MAX_TILES
+        let asked = app.library.as_ref().unwrap().last_want.len();
+        assert!(asked > 0, "the survey asked for nothing at all");
+        assert!(
+            asked < 300,
+            "the survey asked for the whole selection ({asked}) rather than a screenful"
         );
+    }
+
+    /// ⚠ And the other half: every photo in the selection is *reachable*, which is what the cap
+    /// took away. `surveyed` is what the grid is laid out from, so an unreachable photo is one
+    /// missing here.
+    #[test]
+    fn every_selected_photo_is_in_the_survey() {
+        let mut app = app_with(300, &(0..300).collect::<Vec<_>>());
+        let lib = app.library.as_mut().unwrap();
+        assert_eq!(surveyed(&lib.visible, &lib.selection).len(), 300);
     }
 
     #[test]

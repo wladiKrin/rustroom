@@ -219,6 +219,11 @@ pub struct Settings {
     /// ⚠ Still clamped by [`Settings::clamped_cell`] rather than trusted: this is read from a
     /// file a user can edit, and a zero cell divides by zero when the column count is worked out.
     pub library_cell: u32,
+    /// Survey's tile size in points.
+    ///
+    /// ⚠ Clamped by [`Settings::clamped_survey_cell`] rather than trusted — the file is
+    /// hand-editable, `library_cell`'s rule.
+    pub survey_cell: u32,
     /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
     /// state does not survive a restart here — see [`PanelSections`].
     pub panel_sections: PanelSections,
@@ -283,6 +288,15 @@ pub struct Settings {
 pub const DEFAULT_CELL: u32 = 168;
 /// The smallest and largest cell the buttons will reach.
 pub const CELL_RANGE: (u32, u32) = (108, 320);
+
+/// Survey's tile range, in points. ⚠ Wider at the top than the grid's: a survey of three photos
+/// on a large monitor should be able to fill it, which is the whole complaint that put a size
+/// control here.
+pub const SURVEY_CELL_RANGE: (u32, u32) = (140, 900);
+
+/// Survey's default tile size. Larger than [`DEFAULT_CELL`] because a survey holds a handful of
+/// photographs where the grid holds hundreds.
+pub const DEFAULT_SURVEY_CELL: u32 = 320;
 /// How much one press of the grid-size buttons moves the cell.
 pub const CELL_STEP: u32 = 28;
 
@@ -305,6 +319,35 @@ impl Settings {
     /// The grid cell size in points, guaranteed usable.
     pub fn clamped_cell(&self) -> f32 {
         self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
+    }
+
+    /// Survey's tile size in points, guaranteed usable.
+    ///
+    /// ⚠ Its **own** value rather than the grid's, because the two are used for opposite things:
+    /// the grid is for finding a photo among hundreds and wants small cells, a survey is for
+    /// looking at a handful and wants large ones. Sharing the number would make sizing one
+    /// resize the other.
+    pub fn clamped_survey_cell(&self) -> f32 {
+        self.survey_cell
+            .clamp(SURVEY_CELL_RANGE.0, SURVEY_CELL_RANGE.1) as f32
+    }
+
+    /// The survey tile size a pinch of `factor` would give. [`Self::zoomed_cell`]'s rule, over
+    /// the survey's own wider range.
+    pub fn zoomed_survey_cell(&self, factor: f32) -> u32 {
+        let now = self.clamped_survey_cell() as u32;
+        if !factor.is_finite() || factor <= 0.0 {
+            return now;
+        }
+        let mut next = (now as f32 * factor).round() as u32;
+        if next == now {
+            match factor.partial_cmp(&1.0) {
+                Some(std::cmp::Ordering::Greater) => next = now.saturating_add(1),
+                Some(std::cmp::Ordering::Less) => next = now.saturating_sub(1),
+                _ => {}
+            }
+        }
+        next.clamp(SURVEY_CELL_RANGE.0, SURVEY_CELL_RANGE.1)
     }
 
     /// The panel's section order, guaranteed to contain every section exactly once.
@@ -428,6 +471,7 @@ impl Default for Settings {
             auto_lens_correction: true,
             library_sort: catalog::SortOrder::default(),
             library_cell: DEFAULT_CELL,
+            survey_cell: DEFAULT_SURVEY_CELL,
             panel_sections: PanelSections::default(),
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),
@@ -855,6 +899,7 @@ mod tests {
             // like it round-tripped.
             library_sort: catalog::SortOrder::ModifiedDesc,
             library_cell: DEFAULT_CELL + CELL_STEP,
+            survey_cell: DEFAULT_SURVEY_CELL,
             // Likewise non-default, and inside `STRIP_HEIGHT_RANGE` so `clamped_strip_height`
             // cannot mask a field that failed to round-trip.
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT + 20,
