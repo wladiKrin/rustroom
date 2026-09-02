@@ -356,8 +356,21 @@ pub fn show(
         }
         ui.separator();
         let g = &mut edits.color_grading;
+        // ⚠⚠ **Blending and Balance are shared by all four wheels, and that is correct rather
+        // than an oversight** — they are properties of the *range decomposition*, not of any one
+        // wheel: Blending sets how far the shadow, midtone and highlight weights overlap and
+        // Balance slides all three centres together. Lightroom places them the same way, below
+        // the wheels rather than inside one.
+        //
+        // ⚠ Separated and captioned because without it they sit flush against Hue/Saturation/
+        // Luminance, which *are* per-wheel, and nothing on screen says which is which.
+        ui.separator();
         ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
         ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
+        crate::theme::hint(
+            ui,
+            "Shared: these set where the three ranges meet. Global is a flat tint and is unaffected.",
+        );
     });
 
     section(ui, SECTIONS[3], false, |ui| {

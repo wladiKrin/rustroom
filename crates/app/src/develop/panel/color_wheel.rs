@@ -175,22 +175,47 @@ fn offset(deg: f32, r: f32, radius: f32) -> egui::Vec2 {
 /// ⚠ Takes the whole `ColorGrading` rather than one wheel, because the strip is drawn from
 /// `blending`/`balance` — which belong to the grade, not to any one range. The strip is drawn
 /// here rather than beside the call so it cannot be forgotten by a second caller.
+/// Draw the range strip and the wheel for `range`, returning the **wheel's** rect.
+///
+/// ⚠ The rect is returned so tests can *measure* where the wheel landed rather than re-deriving
+/// it from the strip's height and the layout's spacing. A test that recomputes the layout drifts
+/// the moment the layout changes — which is exactly what happened when the wheel was centred, and
+/// is the lesson `canvas_centre` already records for the develop canvas. Production ignores it.
 pub fn show(
     ui: &mut egui::Ui,
     grade: &mut ColorGrading,
     range: GradeRange,
     diameter: f32,
     ed: &mut Edited,
-) {
+) -> egui::Rect {
     // Read before the wheel is borrowed mutably out of the same struct.
     let (blending, balance) = (grade.blending, grade.balance);
+    // ⚠ Captured before the strip is drawn: inside the `horizontal` below `available_width` is
+    // whatever is left of the row, not the panel's width, and the wheel would centre against the
+    // wrong thing.
+    let full = ui.available_width();
     range_strip(ui, blending, balance);
     let wheel = range.wheel_mut(grade);
 
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(diameter, diameter),
-        egui::Sense::click_and_drag(),
-    );
+    // ⚠⚠ **Centred against the strip.** `allocate_exact_size` in a vertical layout starts at the
+    // left edge, so the wheel sat left of a strip that spans the full panel width and the two read
+    // as unrelated controls rather than as one instrument (user's call, 2026-09-02).
+    //
+    // ⚠ The pad is allocated inside a `horizontal` rather than by widening the wheel's own rect,
+    // so the click target stays tight to the wheel — a full-width response would drag the handle
+    // from anywhere on the row.
+    let pad = ((full - diameter) * 0.5).max(0.0);
+    let (rect, resp) = {
+        let mut allocated = None;
+        ui.horizontal(|ui| {
+            ui.add_space(pad);
+            allocated = Some(ui.allocate_exact_size(
+                egui::vec2(diameter, diameter),
+                egui::Sense::click_and_drag(),
+            ));
+        });
+        allocated.expect("the horizontal closure always runs")
+    };
     let centre = rect.center();
     let radius = diameter * 0.5;
 
@@ -240,6 +265,7 @@ pub fn show(
     }
     ed.settled |= resp.drag_stopped_by(egui::PointerButton::Primary)
         || resp.clicked_by(egui::PointerButton::Primary);
+    rect
 }
 
 #[cfg(test)]
@@ -282,16 +308,53 @@ mod tests {
                 _ => {}
             }
             let _ = ctx.run_ui(input, |ui| {
-                let before = ui.cursor().min;
-                let gap = ui.spacing().item_spacing.y;
-                show(ui, &mut grade, GradeRange::Shadows, D, &mut ed);
-                // ⚠ The strip is allocated before the wheel, so the wheel's centre is a
-                // strip's height and one gap further down. The existing drag tests are the
-                // check on this arithmetic: get it wrong and every drag misses the wheel.
-                centre = before + egui::vec2(D * 0.5, STRIP_HEIGHT + gap + D * 0.5);
+                // ⚠⚠ **Measured, never re-derived.** This used to compute the centre from the
+                // strip's height, the layout's spacing and a left-aligned wheel — and silently
+                // missed the wheel entirely the moment it was centred against the strip. The rect
+                // `show` reports is the one thing that cannot drift from where the wheel is.
+                centre = show(ui, &mut grade, GradeRange::Shadows, D, &mut ed).center();
             });
         }
         grade.shadows
+    }
+
+    /// ⚠⚠ **The wheel is centred against the strip.** `allocate_exact_size` in a vertical layout
+    /// starts at the left edge, so the wheel sat left of a full-width strip and the two read as
+    /// unrelated controls rather than as one instrument.
+    ///
+    /// ⚠ Asserted against the **strip's** centre rather than a constant: the strip spans
+    /// `available_width`, which depends on the panel's margins, so a hardcoded x would be a
+    /// second derivation of the layout — the thing that made the drag tests miss the wheel.
+    #[test]
+    fn the_wheel_is_centred_under_the_strip() {
+        let ctx = egui::Context::default();
+        let mut grade = ColorGrading::default();
+        let mut ed = Edited::default();
+        let mut wheel = egui::Rect::NOTHING;
+        let mut strip_centre_x = 0.0;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                strip_centre_x = ui.cursor().min.x + ui.available_width() * 0.5;
+                wheel = show(ui, &mut grade, GradeRange::Shadows, 120.0, &mut ed);
+            },
+        );
+        assert!(
+            (wheel.center().x - strip_centre_x).abs() < 1.0,
+            "the wheel centres at {} but the strip at {strip_centre_x}",
+            wheel.center().x
+        );
+        // ⚠ And it is genuinely narrower than the strip, or "centred" would be vacuous.
+        assert!(
+            wheel.width() < 400.0 * 0.9,
+            "fixture check: the wheel is inset"
+        );
     }
 
     #[test]
@@ -411,7 +474,9 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ui| show(ui, &mut grade, GradeRange::Shadows, 200.0, &mut ed),
+            |ui| {
+                show(ui, &mut grade, GradeRange::Shadows, 200.0, &mut ed);
+            },
         );
         out.textures_delta.set.iter().find_map(|(_, delta)| {
             let egui::ImageData::Color(img) = &delta.image;
