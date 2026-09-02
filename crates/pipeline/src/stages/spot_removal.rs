@@ -112,8 +112,20 @@ fn apply_spot(image: &mut ImageBuf, spot: &Spot) {
     // anisotropic space. A radius against width compared against height would make every patch
     // an ellipse — `BrushStroke::radius`'s rule.
     let r = spot.radius * w.max(h) as f32;
-    // `!(r > 0.0)` rather than `r <= 0.0` so a NaN radius is skipped too.
-    if !(r > 0.0) {
+    // ⚠ `is_finite` first, so a NaN **or** infinite radius is skipped rather than sizing a
+    // bounding box from it. Written this way and not as `!(r > 0.0)` — which says the same thing
+    // — because clippy rejects a negated comparison on a partially ordered type, and it is right
+    // that the NaN case should be visible rather than implied.
+    //
+    // ⚠⚠ **This guard is defence in depth, and deleting it entirely leaves every test green** —
+    // established by sabotage, and recorded rather than papered over. Three independent
+    // mechanisms downstream already produce "a degenerate radius changes nothing": `coverage`
+    // returns 0.0 for `r <= 0.0` so the blend is skipped; every comparison against a NaN `r` is
+    // false, so no pixel joins the disc or the ring; and a negative `r` inverts the bounding box,
+    // which `x0 > x1` rejects. `a_zero_radius_spot_changes_nothing` therefore names a real and
+    // guaranteed property that it cannot attribute to *this* line. It stays because relying on
+    // three coincidences is not a thing to build on — the `min_filter` clause's precedent.
+    if !r.is_finite() || r <= 0.0 {
         return;
     }
     let dx = (sx - cx).round() as i64;
