@@ -205,6 +205,17 @@ pub struct Settings {
     /// ⚠ Consequence, accepted and documented rather than discovered: the GUI and the CLI then
     /// disagree on a fresh photo — the CLI renders neutral, the GUI renders corrected.
     pub auto_lens_correction: bool,
+    /// What a freshly-opened photo's display rendering starts as.
+    ///
+    /// ⚠ A **preference**, not an op-list default — `auto_lens_correction`'s rule, for
+    /// `auto_lens_correction`'s reason. `Edits::default()` stays strictly neutral, so the CLI,
+    /// the goldens and every existing sidecar are untouched, and only a *fresh* photo opens
+    /// rendered. Defaulting `Edits` instead would move every golden at once and destroy the
+    /// harness's ability to say that this stage changed nothing else.
+    ///
+    /// ⚠ Consequence, stated rather than discovered: the GUI and the CLI disagree on a fresh
+    /// photo — exactly as they already do about lens correction.
+    pub default_rendering: edit_model::Rendering,
     /// How the Library and the filmstrip order a folder.
     ///
     /// ⚠ Applied to the **scan**, not to `entries`, which is what keeps a file's copies adjacent
@@ -489,6 +500,7 @@ impl Default for Settings {
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
             auto_lens_correction: true,
+            default_rendering: edit_model::Rendering::Camera,
             library_sort: catalog::SortOrder::default(),
             library_cell: DEFAULT_CELL,
             survey_cell: DEFAULT_SURVEY_CELL,
@@ -580,6 +592,20 @@ impl Settings {
             }
         } else {
             edit_model::LensCorrection::default()
+        }
+    }
+
+    /// What a newly-opened photo's display rendering should start as.
+    ///
+    /// ⚠ Only a photo with **no sidecar**. One already edited keeps exactly what it had, so
+    /// nothing in the catalog silently re-renders when this setting changes — the rule
+    /// [`Self::initial_lens_correction`] already follows, and the reason both live here rather
+    /// than in `Edits`.
+    pub fn initial_rendering(&self, has_sidecar: bool) -> edit_model::Rendering {
+        if has_sidecar {
+            edit_model::Rendering::None
+        } else {
+            self.default_rendering
         }
     }
 
@@ -952,6 +978,8 @@ mod tests {
             },
             // Likewise non-default: the preference defaults to *on*, so persisting `false` is
             // what proves it round-trips rather than being re-defaulted.
+            // Not the default, so the round trip actually carries it.
+            default_rendering: edit_model::Rendering::None,
             auto_lens_correction: false,
             // Non-default so a field re-defaulted on load cannot pass.
             composition_guide: crate::composition_guides::CompositionGuide::Thirds,
@@ -1309,6 +1337,57 @@ mod tests {
         assert!(
             s.auto_lens_correction,
             "the new field must default to on, not to false"
+        );
+    }
+
+    /// ⚠⚠ **The default is `Camera`, and the value is what is asserted rather than the
+    /// mechanism.** A rendering off by default would leave every RAW opening flat — the complaint
+    /// this milestone exists to answer — and nothing else in the suite can see that, because
+    /// `Edits::default()` is deliberately still `None` and every golden depends on it.
+    #[test]
+    fn a_fresh_photo_opens_rendered_and_an_edited_one_is_left_alone() {
+        let s = Settings::default();
+        assert_eq!(
+            s.default_rendering,
+            edit_model::Rendering::Camera,
+            "a fresh RAW must not open colorimetric-only"
+        );
+        assert_eq!(
+            s.initial_rendering(false),
+            edit_model::Rendering::Camera,
+            "fresh photo"
+        );
+        // ⚠ A photo with a sidecar keeps what it had — which for every sidecar written before
+        // today is `None`, so nothing in the catalog re-renders itself overnight.
+        assert_eq!(
+            s.initial_rendering(true),
+            edit_model::Rendering::None,
+            "a photo with a sidecar must be left alone"
+        );
+    }
+
+    /// ⚠ Turning the preference off must reach a fresh photo too, or the setting is inert.
+    #[test]
+    fn the_preference_off_opens_a_fresh_photo_colorimetric() {
+        let off = Settings {
+            default_rendering: edit_model::Rendering::None,
+            ..Settings::default()
+        };
+        assert_eq!(off.initial_rendering(false), edit_model::Rendering::None);
+    }
+
+    /// ⚠ `SettingsStore::load` is infallible, so one unparseable field silently reverts *every*
+    /// setting. The container-level `#[serde(default)]` is what stops an older file doing that.
+    #[test]
+    fn a_settings_file_from_before_default_rendering_still_loads() {
+        let f = TempFile::new("pre_rendering");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let s = SettingsStore::new(f.0.clone()).load();
+        assert!(!s.confirm_preset_delete, "the stored field was lost");
+        assert_eq!(
+            s.default_rendering,
+            edit_model::Rendering::Camera,
+            "the new field must come from Default, not from the enum's own default"
         );
     }
 

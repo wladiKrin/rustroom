@@ -243,6 +243,29 @@ pub(crate) fn tone(
     // ⚠ Its own row rather than squeezed beside the Exposure slider: the panel is 240 pt and a
     // slider there already spends all of it on the rail, its label and its value. Lightroom puts
     // its Auto on its own row in the Tone panel for the same reason.
+    // ⚠⚠ **A rendering is not an adjustment, and it sits above the sliders to say so.** Every
+    // control below moves a photograph already in a defined state; this one *establishes* that
+    // state, turning scene-referred light into something a screen can show. It is also the first
+    // thing anyone reaches for when a RAW opens looking flat, which is the other reason it is
+    // first.
+    let mut rendered = edits.rendering == edit_model::Rendering::Camera;
+    if ui
+        .checkbox(&mut rendered, "Camera rendering")
+        .on_hover_text(
+            "Maps the scene's light onto the display the way the camera would. \
+             Off is colorimetric only, which looks flat and is what the CLI renders.",
+        )
+        .changed()
+    {
+        edits.rendering = if rendered {
+            edit_model::Rendering::Camera
+        } else {
+            edit_model::Rendering::None
+        };
+        // ⚠ `mark_changed`, not a slider's `changed()`: a click is a complete act, so it is one
+        // history entry immediately rather than waiting for a `drag_stopped` that never comes.
+        ed.mark_changed();
+    }
     if ui
         .button("Auto")
         .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
@@ -521,6 +544,38 @@ mod tests {
         assert_eq!(edits.contrast, 0.0);
         assert_eq!(edits.highlights, 0.0);
         assert_eq!(edits.shadows, 0.0);
+    }
+
+    /// ⚠⚠ **Both directions, because a checkbox stuck on would pass a one-way test.** The
+    /// control writes an enum from a `bool`, so the mapping is the thing that can be wrong, and
+    /// only clicking it twice can see it.
+    #[test]
+    fn the_rendering_checkbox_switches_both_ways_and_marks_the_edit() {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits::default();
+        let mut ed = Edited::default();
+
+        crate::test_ui::click(&ctx, "Camera rendering", |ui| {
+            ed = Edited::default();
+            tone(ui, &mut edits, &buf, &mut ed);
+        });
+        assert_eq!(
+            edits.rendering,
+            edit_model::Rendering::Camera,
+            "ticking it did not turn the rendering on"
+        );
+        assert!(ed.changed && ed.settled, "one click, one history entry");
+
+        crate::test_ui::click(&ctx, "Camera rendering", |ui| {
+            ed = Edited::default();
+            tone(ui, &mut edits, &buf, &mut ed);
+        });
+        assert_eq!(
+            edits.rendering,
+            edit_model::Rendering::None,
+            "unticking it did not turn the rendering off"
+        );
     }
 
     /// ⚠ The discriminating other half: a button that fired every frame would pass the test

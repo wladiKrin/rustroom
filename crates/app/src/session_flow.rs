@@ -281,6 +281,7 @@ impl RustroomApp {
         let stored = sidecar::load_copy(&path, id.copy);
         let mut edits = stored.clone().unwrap_or_default();
         edits.lens_correction = self.settings.initial_lens_correction(stored.is_some());
+        edits.rendering = self.settings.initial_rendering(stored.is_some());
         let edits = edits;
         let history = match self.histories.take_matching(&id, &edits) {
             Some(h) => h,
