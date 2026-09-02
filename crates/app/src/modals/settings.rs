@@ -9,6 +9,7 @@ use rustroom_app::settings::{Accent, PanDrag, ThemeChoice};
 /// The Settings window: preferences that survive a restart.
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut confirm = app.settings.confirm_preset_delete;
+    let mut write_xmp = app.settings.write_xmp;
     let mut tier = app.settings.view_demosaic;
     let mut resampler = app.settings.resampler;
     let mut theme_choice = app.settings.theme;
@@ -27,6 +28,18 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         theme::DialogSize::Standard,
         |ui| {
             ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+            ui.separator();
+
+            ui.checkbox(&mut write_xmp, "Write XMP sidecars beside RAW files");
+            theme::hint(
+                ui,
+                "Ratings, colour labels and keywords are written to a stem.xmp file next to \
+             each RAW, which is what Lightroom and exiftool read. An existing sidecar is \
+             merged into, never replaced, so develop settings written by another application \
+             survive. Turning this off does not stop Rustroom reading sidecars somebody else \
+             changed, and turning it back on updates each photo at its next rating or keyword \
+             change rather than all at once.",
+            );
             ui.separator();
 
             // ⚠ One grid so the two controls line up. The Display row below sits in a runtime
@@ -176,6 +189,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
 
     if confirm != app.settings.confirm_preset_delete {
         app.settings.confirm_preset_delete = confirm;
+        app.save_settings();
+    }
+    // ⚠ Change-guarded like its neighbours: this body runs every frame the dialog is open, and
+    // an unguarded write would rewrite the settings file sixty times a second.
+    if write_xmp != app.settings.write_xmp {
+        app.settings.write_xmp = write_xmp;
         app.save_settings();
     }
     // ⚠ The inequality is what stops the worker being rebuilt and a decode fired on

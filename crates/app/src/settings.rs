@@ -282,6 +282,26 @@ pub struct Settings {
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
     /// missing field already falls back to this struct's `Default`.
     pub composition_guide: crate::composition_guides::CompositionGuide,
+    /// Write a `stem.xmp` sidecar beside every RAW when its rating, colour label or keywords
+    /// change, so Lightroom and exiftool can read them.
+    ///
+    /// ⚠ Defaults to **true**: the whole point of the milestone is that a week of keywording
+    /// does not stay locked inside a SQLite catalog no other application can read, and a
+    /// default of `false` would make that opt-in for people who never find the setting.
+    ///
+    /// ⚠⚠ Writing **merges** into any existing sidecar rather than replacing it — see
+    /// `xmp::write`. That is what makes it safe to leave on over a folder somebody has edited
+    /// in Lightroom.
+    ///
+    /// ⚠ Turning it off does not stop *reading*: a foreign sidecar still imports on folder
+    /// open. Turning it back on does not backfill either — the next mark change on each photo
+    /// does.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field falls back to this struct's `Default` — which is `true`. A field-level one
+    /// would use `bool`'s own default of `false` instead, silently disabling the feature for
+    /// every existing user. The same trap `snapshot_strip_height` documents.
+    pub write_xmp: bool,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -477,6 +497,7 @@ impl Default for Settings {
             dialog_sizes: std::collections::BTreeMap::new(),
             panel_order: PanelSection::ALL.to_vec(),
             composition_guide: crate::composition_guides::CompositionGuide::Off,
+            write_xmp: true,
         }
     }
 }
@@ -822,6 +843,22 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_file_from_before_write_xmp_still_loads_and_it_defaults_to_on() {
+        // ⚠ The forgiving-load property again, and here the *value* is what discriminates:
+        // `bool`'s own default is `false`, so a field-level `#[serde(default)]` would silently
+        // turn XMP writing off for every existing user while still parsing cleanly.
+        let f = TempFile::new("write_xmp_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert!(
+            loaded.write_xmp,
+            "XMP writing must default to on for a settings file that predates it"
+        );
+        assert!(Settings::default().write_xmp);
+    }
+
+    #[test]
     fn the_export_delete_confirmation_defaults_to_on() {
         assert!(Settings::default().confirm_export_preset_delete);
     }
@@ -918,6 +955,9 @@ mod tests {
             auto_lens_correction: false,
             // Non-default so a field re-defaulted on load cannot pass.
             composition_guide: crate::composition_guides::CompositionGuide::Thirds,
+            // Likewise non-default: it defaults to *on*, so persisting `false` is what proves
+            // it round-trips rather than being re-defaulted.
+            write_xmp: false,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
