@@ -21,6 +21,7 @@ impl BrushCoverage {
         self.maps.get(i).and_then(|m| m.clone())
     }
 }
+pub mod auto_tone;
 pub mod perspective;
 /// ⚠ Its own module rather than a section of [`spatial`]: that one holds *separable blur*
 /// primitives (box, Gaussian, guided) and is already 889 lines. A resampling kernel reads at a
