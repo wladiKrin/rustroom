@@ -3,7 +3,6 @@
 use crate::interaction::apply_click;
 use crate::{name_edit, thumb, RustroomApp};
 use eframe::egui;
-use rustroom_app::format_filter;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::thumb_loader::ThumbRequest;
 use std::path::PathBuf;
@@ -304,6 +303,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // photo and open it. This is the same gate the filmstrip's arrow navigation already uses,
         // and it was simply missing here.
         let typing = ui.ctx().memory(|m| m.focused().is_some());
+        // ⚠ Hoisted above the keyboard block because a vertical arrow steps by a *row*, and a row
+        // is `cols` wide. It was computed further down, next to the layout that also needs it —
+        // one value, read twice, rather than two derivations that could disagree about the shape
+        // of the grid the arrows are moving through.
+        let cols = grid_columns(ui.available_width(), cell, ui.spacing().item_spacing.x);
+        let mut centre_on: Option<usize> = None;
         ui.input(|i| {
             if typing {
                 return;
@@ -311,14 +316,23 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // Steps through the *visible* list, so arrows skip a hidden format rather
             // than landing on gaps.
             let cur = lib.selection.active().unwrap_or(0);
-            if i.key_pressed(egui::Key::ArrowRight) {
-                if let Some(n) = format_filter::step(&lib.visible, cur, true) {
-                    lib.selection.click(n);
-                }
-            }
-            if i.key_pressed(egui::Key::ArrowLeft) {
-                if let Some(n) = format_filter::step(&lib.visible, cur, false) {
-                    lib.selection.click(n);
+            // ⚠⚠ **Up and down move by a whole row**, which the grid did not do at all: it
+            // stepped left-to-right only, so reaching a photo four rows down meant holding `→`
+            // through everything between. `grid_nav::step_by` is the same function Survey uses —
+            // a grid *is* its visible list read in rows, and `cols` is the only difference.
+            for (key, delta) in [
+                (egui::Key::ArrowRight, 1i64),
+                (egui::Key::ArrowLeft, -1),
+                (egui::Key::ArrowDown, cols as i64),
+                (egui::Key::ArrowUp, -(cols as i64)),
+            ] {
+                if i.key_pressed(key) {
+                    if let Some(n) = rustroom_app::grid_nav::step_by(&lib.visible, cur, delta) {
+                        lib.selection.click(n);
+                        // ⚠ Only on the frame a key moved it: forcing the offset every frame
+                        // would fight the wheel, dragging you back the moment you scrolled away.
+                        centre_on = lib.visible.binary_search(&n).ok();
+                    }
                 }
             }
             if i.key_pressed(egui::Key::Enter) {
@@ -347,7 +361,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // covers this number for that reason.
         const MARGIN_ROWS: usize = 2;
 
-        let cols = grid_columns(ui.available_width(), cell, ui.spacing().item_spacing.x);
         // Cloned so the loop body can mutate `lib.selection`. A few hundred `usize`
         // per frame is nothing against the thumbnails being drawn.
         let visible = lib.visible.clone();
@@ -379,13 +392,26 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         // cannot both happen from one gesture.
         bg_clicked = bg.clicked();
 
-        // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell.
-        let drawn = egui::ScrollArea::vertical()
+        // ⚠ `show_rows` adds `item_spacing.y` itself, so the height passed is the bare cell —
+        // and the *pitch* the centring works in is therefore the cell plus that gap.
+        let pitch = cell + ui.spacing().item_spacing.y;
+        let viewport_h = ui.available_height();
+        let mut area = egui::ScrollArea::vertical()
             // ⚠ The scrollbar belongs at the window's right edge, not hugging the rightmost
             // thumbnail. With `auto_shrink` egui puts the leftover width *outside* the scroll
             // area, so the bar tracked the grid and moved whenever the column count or cell size
             // changed. `false` puts that space inside instead, pinning the bar.
-            .auto_shrink([false, false])
+            .auto_shrink([false, false]);
+        // ⚠⚠ **Arithmetic, not `scroll_to_me`.** egui computes a `scroll_to_me` target offset
+        // **once** and never recomputes it, which is the drift bug the filmstrip already paid
+        // for: the centred photo slid away as thumbnails ahead of it loaded and reflowed the
+        // content. A grid of fixed-height rows can be placed exactly instead.
+        if let Some(pos) = centre_on {
+            area = area.vertical_scroll_offset(rustroom_app::grid_nav::centre_offset(
+                pos, cols, pitch, viewport_h, rows,
+            ));
+        }
+        let drawn = area
             .show_rows(ui, cell, rows, |ui, row_range| {
                 for row in row_range.clone() {
                     ui.horizontal(|ui| {
@@ -677,6 +703,22 @@ fn grid_columns(avail: f32, cell: f32, spacing: f32) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⚠⚠ **The grid stepped left-to-right only**, so reaching a photo four rows down meant
+    /// holding `→` through everything between. Vertical arrows move by a row, which is a step of
+    /// `cols` through the *visible* list — the same rule Survey follows, through the same
+    /// function.
+    #[test]
+    fn a_vertical_arrow_moves_by_a_row_not_by_one() {
+        // Four columns over a dense list: down from 0 lands on 4, not on 1.
+        let visible: Vec<usize> = (0..20).collect();
+        assert_eq!(
+            rustroom_app::grid_nav::step_by(&visible, 0, 4),
+            Some(4),
+            "down moved by one photo rather than by a row"
+        );
+        assert_eq!(rustroom_app::grid_nav::step_by(&visible, 9, -4), Some(5));
+    }
     use super::*;
 
     #[test]

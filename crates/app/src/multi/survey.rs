@@ -30,6 +30,8 @@ struct Outcome {
     focus: Option<usize>,
     /// Drop this row from the survey.
     drop: Option<usize>,
+    /// Scroll so this *position in the survey* sits in the middle of the view.
+    centre_on: Option<usize>,
     to_grid: bool,
 }
 
@@ -120,6 +122,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         (p as i64 + delta).clamp(0, rows_list.len() as i64 - 1) as usize
                     });
                     out.focus = Some(rows_list[next]);
+                    // ⚠⚠ **Scroll only on the frame a key moved the selection.** Setting the
+                    // offset every frame would fight the wheel: you would scroll away and be
+                    // dragged straight back.
+                    out.centre_on = Some(next);
                 }
             }
             if i.key_pressed(egui::Key::Enter) {
@@ -158,72 +164,82 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         let grid_rows = rows_list.len().div_ceil(cols);
         let mut window: Vec<ThumbRequest> = Vec::new();
+        // ⚠ `show_rows` adds `item_spacing.y` between rows itself, so the pitch is the tile plus
+        // that gap — using the bare tile height drifts further from the truth with every row and
+        // centres the wrong photo near the bottom of a long grid.
+        let pitch = tile_h + ui.spacing().item_spacing.y;
+        let viewport_h = ui.available_height();
         // ⚠⚠ **A scrolling, virtualised grid rather than one screenful.** It used to cap at
         // `MAX_TILES` and say "showing 24 of 39" — which named the problem without offering a
         // way out, and the remaining photos were simply unreachable. Virtualised, the cap is
         // gone *and* the memory bound it existed for is stronger: `retain_window` now pins only
         // what is actually on screen, exactly as the Library grid does.
-        egui::ScrollArea::vertical()
+        let mut area = egui::ScrollArea::vertical()
             // ⚠ Pins the scrollbar to the panel edge rather than letting it track the widest
             // row — the fix the Library grid needed for the same reason.
-            .auto_shrink([false, false])
-            .show_rows(ui, tile_h, grid_rows, |ui, row_range| {
-                for grid_row in row_range {
-                    ui.horizontal(|ui| {
-                        let first = grid_row * cols;
-                        let last = (first + cols).min(rows_list.len());
-                        for &row in &rows_list[first..last] {
-                            let (_, rect) = ui.allocate_space(egui::vec2(cell, tile_h));
-                            let req = lib.thumb_request(row, live.as_ref());
-                            let tex = lib
-                                .cache
-                                .get(&req.key())
-                                // ⚠ This photo's previous render rather than grey while a
-                                // re-render lands.
-                                .or_else(|| lib.cache.get_stale(&lib.entries[row].id));
-                            let marks = lib
-                                .marks
-                                .get(&lib.entries[row].id)
-                                .copied()
-                                .unwrap_or_default();
-                            // ⚠⚠ A stable id per photo, not egui's auto-id counter: under
-                            // `show_rows` that counter shifts with the scroll position, which
-                            // silently detaches every widget's state from its photo. The
-                            // Library grid records the same trap.
-                            let base = ui.id().with(&lib.entries[row].id);
-                            let resp = multi::photo_tile(
-                                ui,
-                                rect,
-                                base.with("tile"),
-                                tex,
-                                &lib.entries[row].caption(),
-                                marks,
-                                focused == Some(row),
-                            );
-                            if resp.double_clicked() {
-                                out.open = Some(row);
-                            } else if resp.clicked() {
-                                out.focus = Some(row);
-                            }
-                            match tile_buttons(ui, rect, base, focused == Some(row)) {
-                                Some(TileAction::Pick) => {
-                                    if let Some(e) = lib.entries.get(row) {
-                                        out.mark = Some((
-                                            e.id.clone(),
-                                            rustroom_app::marks::MarkAction::Flag(
-                                                catalog::db::Flag::Pick,
-                                            ),
-                                        ));
-                                    }
-                                }
-                                Some(TileAction::Remove) => out.drop = Some(row),
-                                None => {}
-                            }
-                            window.push(req);
+            .auto_shrink([false, false]);
+        if let Some(pos) = out.centre_on {
+            area = area.vertical_scroll_offset(rustroom_app::grid_nav::centre_offset(
+                pos, cols, pitch, viewport_h, grid_rows,
+            ));
+        }
+        area.show_rows(ui, tile_h, grid_rows, |ui, row_range| {
+            for grid_row in row_range {
+                ui.horizontal(|ui| {
+                    let first = grid_row * cols;
+                    let last = (first + cols).min(rows_list.len());
+                    for &row in &rows_list[first..last] {
+                        let (_, rect) = ui.allocate_space(egui::vec2(cell, tile_h));
+                        let req = lib.thumb_request(row, live.as_ref());
+                        let tex = lib
+                            .cache
+                            .get(&req.key())
+                            // ⚠ This photo's previous render rather than grey while a
+                            // re-render lands.
+                            .or_else(|| lib.cache.get_stale(&lib.entries[row].id));
+                        let marks = lib
+                            .marks
+                            .get(&lib.entries[row].id)
+                            .copied()
+                            .unwrap_or_default();
+                        // ⚠⚠ A stable id per photo, not egui's auto-id counter: under
+                        // `show_rows` that counter shifts with the scroll position, which
+                        // silently detaches every widget's state from its photo. The
+                        // Library grid records the same trap.
+                        let base = ui.id().with(&lib.entries[row].id);
+                        let resp = multi::photo_tile(
+                            ui,
+                            rect,
+                            base.with("tile"),
+                            tex,
+                            &lib.entries[row].caption(),
+                            marks,
+                            focused == Some(row),
+                        );
+                        if resp.double_clicked() {
+                            out.open = Some(row);
+                        } else if resp.clicked() {
+                            out.focus = Some(row);
                         }
-                    });
-                }
-            });
+                        match tile_buttons(ui, rect, base, focused == Some(row)) {
+                            Some(TileAction::Pick) => {
+                                if let Some(e) = lib.entries.get(row) {
+                                    out.mark = Some((
+                                        e.id.clone(),
+                                        rustroom_app::marks::MarkAction::Flag(
+                                            catalog::db::Flag::Pick,
+                                        ),
+                                    ));
+                                }
+                            }
+                            Some(TileAction::Remove) => out.drop = Some(row),
+                            None => {}
+                        }
+                        window.push(req);
+                    }
+                });
+            }
+        });
         // ⚠⚠ Everything drawn, or `retain_window` leaves these photos unpinned and evictable
         // while they are the only thing on screen.
         lib.sync_thumb_window(&window);
