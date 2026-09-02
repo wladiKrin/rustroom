@@ -35,6 +35,26 @@ pub enum XmpError {
     Unclosed,
     #[error("not an XMP document: it has no rdf:Description to write into")]
     NoDescription,
+    /// ⚠ Unreachable in practice, and a variant rather than an `expect`: the merge slices the
+    /// source at event boundaries, which are always character boundaries in a UTF-8 document.
+    /// A panic in a file-reading path is never acceptable, so the impossible case is an error.
+    #[error("internal: an event span did not land on a character boundary")]
+    Internal,
+}
+
+/// Produce the text to write beside a photo.
+///
+/// ⚠⚠ **With `existing`, this MERGES — it never replaces.** A folder edited in Lightroom already
+/// has `stem.xmp` files carrying that person's entire develop history (`crs:*`), and writing a
+/// fresh packet over one would destroy it silently, with nothing to notice until they reopened the
+/// folder in Lightroom. So the document is streamed through, the four owned fields are dropped
+/// wherever they appear — attribute or element — ours are injected into the first
+/// `rdf:Description`, and **everything else is copied byte for byte**.
+///
+/// ⚠ A fresh packet is the same code path applied to a built-in skeleton, so there is exactly one
+/// injection implementation rather than two that can disagree.
+pub fn write(sidecar: &Sidecar, existing: Option<&str>) -> Result<String, XmpError> {
+    merge(existing.unwrap_or(SKELETON), sidecar)
 }
 
 use quick_xml::events::{BytesStart, Event};
@@ -223,6 +243,295 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
         return Err(XmpError::Unclosed);
     }
     out.keywords = if hier.is_empty() { flat } else { hier };
+    Ok(out)
+}
+
+/// The document a fresh sidecar is merged into.
+///
+/// ⚠ Deliberately an *empty* `rdf:Description`: writing a fresh packet then exercises the same
+/// re-opening path a real empty description takes, so that branch is covered by every write
+/// rather than by one test.
+const SKELETON: &str = concat!(
+    "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n",
+    "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Rustroom\">\n",
+    " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n",
+    "  <rdf:Description rdf:about=\"\"/>\n",
+    " </rdf:RDF>\n",
+    "</x:xmpmeta>\n",
+    "<?xpacket end=\"w\"?>\n",
+);
+
+/// The byte range of every attribute in a raw start tag, with its key, the range **including the
+/// whitespace before it**.
+///
+/// ⚠⚠ Written here rather than taken from `quick-xml`, which does not expose attribute offsets —
+/// and offsets are the whole point: removing an attribute by its span leaves every other byte of
+/// the tag, its line breaks and its indentation exactly as the other application wrote them.
+/// Rebuilding the tag from parsed attributes would reflow a Lightroom sidecar's `crs:` block onto
+/// one line, which is a diff nobody wants to see against their own file.
+///
+/// ⚠ Stops at the first thing it does not understand, so a tag it cannot parse is simply left
+/// whole. The conservative direction: the worst case is an owned field left in place, never a
+/// destroyed one.
+fn attribute_spans(raw: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let b = raw.as_bytes();
+    let mut i = 0;
+    if b.first() == Some(&b'<') {
+        i += 1;
+    }
+    while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'>' && b[i] != b'/' {
+        i += 1;
+    }
+    let mut out = Vec::new();
+    loop {
+        let ws = i;
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || b[i] == b'>' || b[i] == b'/' {
+            break;
+        }
+        let key_start = i;
+        while i < b.len() && b[i] != b'=' && !b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let key_end = i;
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || b[i] != b'=' {
+            break;
+        }
+        i += 1;
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || (b[i] != b'"' && b[i] != b'\'') {
+            break;
+        }
+        let quote = b[i];
+        i += 1;
+        while i < b.len() && b[i] != quote {
+            i += 1;
+        }
+        if i >= b.len() {
+            break;
+        }
+        i += 1;
+        match raw.get(key_start..key_end) {
+            Some(key) => out.push((ws..i, key)),
+            None => break,
+        }
+    }
+    out
+}
+
+/// `raw` — the start tag as written — with every owned attribute's span removed.
+///
+/// ⚠ Returns the raw text unchanged when nothing is owned, so a foreign `rdf:Description` (the
+/// one inside a `crs:Look`, for instance) comes out byte for byte.
+fn strip_owned_attributes(
+    reader: &NsReader<&[u8]>,
+    e: &BytesStart<'_>,
+    raw: &str,
+) -> Result<String, XmpError> {
+    // ⚠ Iterated for its errors alone: a malformed attribute must surface as an `Err` rather
+    // than being quietly stepped over by the scanner below.
+    for a in e.attributes() {
+        a?;
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut at = 0;
+    for (span, key) in attribute_spans(raw) {
+        let (ns, local) = reader
+            .resolver()
+            .resolve_attribute(quick_xml::name::QName(key.as_bytes()));
+        if owned(&ns, local.as_ref()).is_some() {
+            out.push_str(raw.get(at..span.start).ok_or(XmpError::Internal)?);
+            at = span.end;
+        }
+    }
+    out.push_str(raw.get(at..).ok_or(XmpError::Internal)?);
+    Ok(out)
+}
+
+fn esc(s: &str) -> String {
+    quick_xml::escape::escape(s).into_owned()
+}
+
+/// A `dc:Bag` of `items` under `tag`, with `tag`'s namespace declared inline.
+///
+/// ⚠ Every injected element carries its own `xmlns:` declaration, so nothing here has to know
+/// which prefixes the host document happens to bind — a re-declaration to the same URI is legal
+/// and a document binding a prefix differently is shadowed only inside our own element.
+fn bag(tag: &str, ns: &str, items: &[String]) -> String {
+    let mut s = format!(
+        "   <{tag} xmlns:{prefix}=\"{ns}\">\n    <rdf:Bag xmlns:rdf=\"{NS_RDF_STR}\">\n",
+        prefix = tag.split(':').next().unwrap_or(tag)
+    );
+    for it in items {
+        s.push_str(&format!("     <rdf:li>{}</rdf:li>\n", esc(it)));
+    }
+    s.push_str(&format!("    </rdf:Bag>\n   </{tag}>\n"));
+    s
+}
+
+const NS_RDF_STR: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// The children injected into the first `rdf:Description`.
+///
+/// ⚠ Simple properties go in as **elements**, not attributes, which is what lets each one declare
+/// its own namespace. Both forms are legal XMP and Lightroom, exiftool and this crate's own
+/// reader all accept either.
+///
+/// ⚠ Keywords are written in **both** forms, Lightroom's own habit: the hierarchy in
+/// `lr:hierarchicalSubject`, and each path's **leaf** in the flat `dc:subject` bag, which is all
+/// an application that reads only the flat form can use.
+fn injection(s: &Sidecar) -> String {
+    let mut out = String::from("\n");
+    if let Some(r) = s.rating {
+        out.push_str(&format!(
+            "   <xmp:Rating xmlns:xmp=\"{}\">{r}</xmp:Rating>\n",
+            std::str::from_utf8(NS_XMP).unwrap_or_default()
+        ));
+    }
+    if let Some(l) = &s.label {
+        out.push_str(&format!(
+            "   <xmp:Label xmlns:xmp=\"{}\">{}</xmp:Label>\n",
+            std::str::from_utf8(NS_XMP).unwrap_or_default(),
+            esc(l)
+        ));
+    }
+    if !s.keywords.is_empty() {
+        let mut flat: Vec<String> = Vec::new();
+        for p in &s.keywords {
+            if let Some(leaf) = p.last() {
+                if !flat.contains(leaf) {
+                    flat.push(leaf.clone());
+                }
+            }
+        }
+        let paths: Vec<String> = s.keywords.iter().map(|p| p.join("|")).collect();
+        out.push_str(&bag(
+            "dc:subject",
+            std::str::from_utf8(NS_DC).unwrap_or_default(),
+            &flat,
+        ));
+        out.push_str(&bag(
+            "lr:hierarchicalSubject",
+            std::str::from_utf8(NS_LR).unwrap_or_default(),
+            &paths,
+        ));
+    }
+    out.push_str("  ");
+    out
+}
+
+/// Drop the trailing spaces and tabs a removed element left behind on its line.
+fn trim_line_padding(out: &mut String) {
+    while out.ends_with(' ') || out.ends_with('\t') {
+        out.pop();
+    }
+}
+
+fn merge(text: &str, s: &Sidecar) -> Result<String, XmpError> {
+    let mut reader = NsReader::from_str(text);
+    let mut out = String::with_capacity(text.len() + 256);
+    // Everything before this byte has been emitted, or deliberately dropped.
+    let mut pos = 0usize;
+    let mut injected = false;
+    let mut depth = 0usize;
+    loop {
+        let start = pos;
+        let (ns, ev) = reader.read_resolved_event()?;
+        // ⚠⚠ Classified **before anything else touches the reader**. `read_resolved_event`
+        // hands back a `ResolveResult` that is a reborrow of `&mut self`, so while it is alive
+        // the reader cannot even be read from — not `buffer_position`, not `resolver`. Reducing
+        // it to a `Copy` value first is what makes the rest of the loop possible at all.
+        let kind = match &ev {
+            Event::Start(e) | Event::Empty(e) => classify(&ns, e),
+            _ => Kind::Other,
+        };
+        drop(ns);
+        pos = reader.buffer_position() as usize;
+        let raw = text.get(start..pos).ok_or(XmpError::Internal)?;
+        match ev {
+            Event::Start(e) => {
+                match kind {
+                    Kind::Owned(_) => {
+                        // ⚠ The whole subtree goes, not just the open tag: `dc:subject` holds a
+                        // bag, and leaving its children behind would produce a stray `rdf:Bag`.
+                        let end_name = e.to_end().into_owned();
+                        reader.read_to_end(end_name.name())?;
+                        pos = reader.buffer_position() as usize;
+                        trim_line_padding(&mut out);
+                    }
+                    Kind::Description => {
+                        let rewritten = strip_owned_attributes(&reader, &e, raw)?;
+                        depth += 1;
+                        out.push_str(&rewritten);
+                        if !injected {
+                            out.push_str(&injection(s));
+                            injected = true;
+                        }
+                    }
+                    _ => {
+                        depth += 1;
+                        out.push_str(raw);
+                    }
+                }
+            }
+            Event::Empty(e) => {
+                match kind {
+                    Kind::Owned(_) => {
+                        trim_line_padding(&mut out);
+                    }
+                    Kind::Description => {
+                        let rewritten = strip_owned_attributes(&reader, &e, raw)?;
+                        if injected {
+                            out.push_str(&rewritten);
+                        } else {
+                            // ⚠ `<rdf:Description …/>` has to be **opened** to hold children.
+                            // The name is taken from the tag as written, so a document using a
+                            // different prefix for the rdf namespace still closes correctly.
+                            let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                            let head = rewritten
+                                .trim_end()
+                                .strip_suffix('>')
+                                .map(str::trim_end)
+                                .and_then(|t| t.strip_suffix('/'))
+                                .ok_or(XmpError::Internal)?
+                                .to_string();
+                            out.push_str(head.trim_end());
+                            out.push('>');
+                            out.push_str(&injection(s));
+                            out.push_str(&format!("</{name}>"));
+                            injected = true;
+                        }
+                    }
+                    _ => {
+                        out.push_str(raw);
+                    }
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                out.push_str(raw);
+            }
+            Event::Eof => break,
+            _ => {
+                out.push_str(raw);
+            }
+        }
+    }
+    if depth != 0 {
+        return Err(XmpError::Unclosed);
+    }
+    if !injected {
+        // ⚠ Refused rather than replaced with a fresh packet. Overwriting a document we did not
+        // recognise is exactly the destruction the merge exists to prevent.
+        return Err(XmpError::NoDescription);
+    }
     Ok(out)
 }
 
@@ -421,5 +730,172 @@ mod tests {
             vec![vec!["Rock & Roll".to_string(), "Bühne <2>".to_string()]]
         );
         assert_eq!(s.label.as_deref(), Some("R&D"));
+    }
+
+    // ─── writing: a fresh packet ──────────────────────────────────────────────────────────
+
+    fn sample() -> Sidecar {
+        Sidecar {
+            rating: Some(2),
+            label: Some("Blue".into()),
+            keywords: vec![
+                vec!["Europe".into(), "France".into(), "Paris".into()],
+                vec!["Cat".into()],
+            ],
+        }
+    }
+
+    #[test]
+    fn a_fresh_packet_reads_back_as_written() {
+        let s = sample();
+        let text = write(&s, None).unwrap();
+        assert_eq!(read(&text).unwrap(), s);
+    }
+
+    #[test]
+    fn a_fresh_packet_writes_both_keyword_forms() {
+        // ⚠ Both, because an application reading only the flat `dc:subject` bag must still see
+        // the keywords — and one reading the hierarchy must get the tree rather than three roots.
+        let text = write(&sample(), None).unwrap();
+        assert!(text.contains("<dc:subject"), "no flat bag:\n{text}");
+        assert!(
+            text.contains("<lr:hierarchicalSubject"),
+            "no hierarchy:\n{text}"
+        );
+        assert!(
+            text.contains("<rdf:li>Europe|France|Paris</rdf:li>"),
+            "the path was not joined:\n{text}"
+        );
+        // The flat bag carries the **leaf**, which is what a flat reader can act on.
+        assert!(text.contains("<rdf:li>Paris</rdf:li>"), "no leaf:\n{text}");
+        assert!(
+            !text.contains("<rdf:li>Europe</rdf:li>"),
+            "an interior level leaked into the flat bag:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_unset_field_is_absent_from_a_fresh_packet() {
+        let text = write(&Sidecar::default(), None).unwrap();
+        assert!(!text.contains("Rating"), "{text}");
+        assert!(!text.contains("Label"), "{text}");
+        assert!(!text.contains("subject"), "{text}");
+        // And it is still a document this crate can read back.
+        assert_eq!(read(&text).unwrap(), Sidecar::default());
+    }
+
+    #[test]
+    fn a_keyword_with_markup_characters_is_escaped() {
+        // ⚠ The failure this prevents is not cosmetic: an unescaped `&` makes the whole sidecar
+        // unparseable, by us and by Lightroom.
+        let s = Sidecar {
+            rating: None,
+            label: Some("R&D".into()),
+            keywords: vec![vec!["Rock & Roll".into(), "<2>".into()]],
+        };
+        let text = write(&s, None).unwrap();
+        assert!(text.contains("Rock &amp; Roll"), "{text}");
+        assert_eq!(read(&text).unwrap(), s, "it did not survive the round trip");
+    }
+
+    // ─── writing: the merge ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn merging_keeps_every_foreign_byte_and_changes_only_the_rating() {
+        // ⚠⚠ **The load-bearing test of the whole feature.** A folder edited in Lightroom already
+        // has sidecars carrying that person's entire develop history; writing a fresh packet over
+        // one destroys it silently, and nothing notices until they reopen the folder in Lightroom.
+        let out = write(&sample(), Some(LIGHTROOM)).unwrap();
+
+        let before: Vec<&str> = LIGHTROOM.lines().filter(|l| l.contains("crs:")).collect();
+        let after: Vec<&str> = out.lines().filter(|l| l.contains("crs:")).collect();
+        assert!(before.len() > 5, "the fixture lost its develop settings");
+        assert_eq!(before, after, "a crs: line changed\n--- after ---\n{out}");
+
+        let back = read(&out).unwrap();
+        assert_eq!(back, sample(), "our own fields did not survive");
+    }
+
+    #[test]
+    fn merging_replaces_owned_child_elements_in_place() {
+        // The fixture already carries a rating attribute and both keyword bags. They must be
+        // *replaced*, not joined by a second copy — two ratings in one description is a document
+        // whose meaning depends on which one a reader happens to take.
+        let out = write(&sample(), Some(LIGHTROOM)).unwrap();
+        assert_eq!(out.matches("<dc:subject").count(), 1, "{out}");
+        // ⚠ Matched on the tag's *start*, not on `hierarchicalSubject>`: the injected open tag
+        // carries an inline `xmlns:lr=…` and therefore does not end in the bare name. A first
+        // draft of this assertion demanded two and was simply wrong about correct code.
+        assert_eq!(out.matches("<lr:hierarchicalSubject").count(), 1, "{out}");
+        assert_eq!(out.matches("</lr:hierarchicalSubject>").count(), 1, "{out}");
+        assert_eq!(out.matches("<xmp:Rating").count(), 1, "{out}");
+        assert_eq!(
+            out.matches("xmp:Rating=").count(),
+            0,
+            "the old attribute form survived:\n{out}"
+        );
+        assert_eq!(out.matches("xmp:Label=").count(), 0, "{out}");
+        assert_eq!(read(&out).unwrap(), sample());
+    }
+
+    #[test]
+    fn merging_into_an_empty_description_tag_opens_it() {
+        let text = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" tiff:Make="FUJIFILM" xmlns:tiff="http://ns.adobe.com/tiff/1.0/"/>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let out = write(&sample(), Some(text)).unwrap();
+        assert!(
+            out.contains("tiff:Make=\"FUJIFILM\""),
+            "a foreign attribute was lost:\n{out}"
+        );
+        assert!(
+            out.contains("</rdf:Description>"),
+            "the tag was not opened:\n{out}"
+        );
+        assert_eq!(read(&out).unwrap(), sample());
+    }
+
+    #[test]
+    fn a_nested_foreign_description_is_left_alone() {
+        // ⚠ `crs:Look` contains an `rdf:Description` of its own. Injecting into every description
+        // rather than the first would put our rating inside somebody's look preset.
+        let out = write(&sample(), Some(LIGHTROOM)).unwrap();
+        assert_eq!(out.matches("<xmp:Rating").count(), 1, "{out}");
+        assert!(out.contains("crs:Name=\"Adobe Color\""), "{out}");
+    }
+
+    #[test]
+    fn a_document_with_no_description_is_refused() {
+        // ⚠ Refused, never replaced: overwriting a file we did not recognise is precisely the
+        // destruction the merge exists to prevent.
+        let text = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><foo/></x:xmpmeta>";
+        assert!(matches!(
+            write(&sample(), Some(text)),
+            Err(XmpError::NoDescription)
+        ));
+    }
+
+    // ─── malformed input ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn malformed_xml_is_an_error_not_a_panic() {
+        // The file is hand-editable and written by other applications; a panic here would take
+        // the whole folder open down with it.
+        assert!(read("<a><b></a>").is_err());
+        assert!(write(&sample(), Some("<a><b></a>")).is_err());
+    }
+
+    #[test]
+    fn an_unclosed_document_is_an_error() {
+        // ⚠ A truncated file — half-written by an interrupted export, say — ends cleanly at EOF
+        // with elements still open. Without the depth check it reads as an empty sidecar, and a
+        // merge into it would silently drop everything after the truncation.
+        assert!(matches!(read("<a><b></b>"), Err(XmpError::Unclosed)));
+        assert!(matches!(
+            write(&sample(), Some("<a><b></b>")),
+            Err(XmpError::Unclosed)
+        ));
     }
 }
