@@ -113,12 +113,19 @@ pub fn percentiles(img: &ImageBuf, crop: Option<CropRect>) -> Option<Percentiles
 
 /// The values that put `p`'s median, white point and black point on their targets.
 ///
+/// ⚠⚠ **`median_target` is a parameter because the display rendering also places the level.**
+/// The rendering lifts the scene by a baseline exposure before its curve, so a solve that still
+/// aimed the *scene* median at [`MEDIAN_TARGET`] would stack the two and open every photograph
+/// about a stop too bright — measured at −1.00 EV against the camera's own JPEG. The caller
+/// divides the target by the rendering's gain, which is what makes the two compose instead of
+/// fighting. See [`median_target_for`].
+///
 /// Exposure first, from the median; then whites and blacks each by bisection against the real
 /// stage with the other at zero (their interaction is small — the two weights never overlap —
 /// and accepted). ⚠ Guarded so a black frame gives exposure 0, never `inf`.
-pub fn solve(p: Percentiles) -> AutoTone {
+pub fn solve(p: Percentiles, median_target: f32) -> AutoTone {
     let exposure = if p.median > 0.0 && p.median.is_finite() {
-        (MEDIAN_TARGET / p.median)
+        (median_target / p.median)
             .log2()
             .clamp(-EXPOSURE_LIMIT, EXPOSURE_LIMIT)
     } else {
@@ -142,8 +149,35 @@ pub fn solve(p: Percentiles) -> AutoTone {
 }
 
 /// [`percentiles`] then [`solve`]; an empty region gives the neutral answer.
-pub fn analyse(img: &ImageBuf, crop: Option<CropRect>) -> AutoTone {
-    percentiles(img, crop).map(solve).unwrap_or_default()
+pub fn analyse(img: &ImageBuf, crop: Option<CropRect>, median_target: f32) -> AutoTone {
+    percentiles(img, crop)
+        .map(|p| solve(p, median_target))
+        .unwrap_or_default()
+}
+
+/// The median target to solve against, given the rendering that will follow.
+///
+/// ⚠ One function so the two callers — the panel's Auto button and its readout — cannot disagree
+/// about where the level is being aimed. With no rendering it is [`MEDIAN_TARGET`] unchanged, so
+/// the CLI and every existing test are untouched.
+pub fn median_target_for(rendering: edit_model::Rendering, baseline_ev: Option<f32>) -> f32 {
+    match rendering {
+        edit_model::Rendering::None => MEDIAN_TARGET,
+        // ⚠ Divided, not subtracted: the rendering multiplies the scene by `2^ev` *before* its
+        // curve, so aiming the scene median at `target / gain` is what lands the **rendered**
+        // median where `MEDIAN_TARGET` used to put it. The curve is near-identity around grey,
+        // which is what makes that exact rather than approximate.
+        edit_model::Rendering::Camera => {
+            let gain = baseline_ev
+                .unwrap_or(crate::stages::display_rendering::BASELINE_EV)
+                .exp2();
+            if gain.is_finite() && gain > 0.0 {
+                MEDIAN_TARGET / gain
+            } else {
+                MEDIAN_TARGET
+            }
+        }
+    }
 }
 
 /// The luminance a pixel of luminance `l` has after exposure and the tone-regions stage.
@@ -207,7 +241,7 @@ mod tests {
     #[test]
     fn a_uniform_grey_sets_exposure_from_the_median_and_clips_nothing() {
         for g in [0.05f32, 0.16, 0.4] {
-            let got = analyse(&uniform(40, 30, g), None);
+            let got = analyse(&uniform(40, 30, g), None, MEDIAN_TARGET);
             let want = (MEDIAN_TARGET / g).log2();
             assert!(
                 (got.exposure - want).abs() < 1e-5,
@@ -249,7 +283,7 @@ mod tests {
         }
         let img = ImageBuf::from_vec(w, h, data);
         let before = lum_percentiles(&img);
-        let got = analyse(&img, None);
+        let got = analyse(&img, None, MEDIAN_TARGET);
 
         let out = ExposureStage::new(got.exposure).apply(img);
         let out = ToneRegionsStage::new(0.0, 0.0, got.whites, got.blacks).apply(out);
@@ -336,7 +370,7 @@ mod tests {
             ("all nan", uniform(4, 4, f32::NAN)),
         ];
         for (name, img) in cases {
-            let got = analyse(&img, None);
+            let got = analyse(&img, None, MEDIAN_TARGET);
             assert!(
                 got.exposure.is_finite(),
                 "{name}: exposure {}",
@@ -352,7 +386,10 @@ mod tests {
                 "{name}: {got:?}"
             );
         }
-        assert_eq!(analyse(&uniform(10, 10, 0.0), None).exposure, 0.0);
+        assert_eq!(
+            analyse(&uniform(10, 10, 0.0), None, MEDIAN_TARGET).exposure,
+            0.0
+        );
         // ⚠ The discriminating half. Asserting only on `analyse`'s output cannot see the
         // `is_finite` guard: a NaN percentile merely fails the tail-separation check and yields
         // the same 0 the correct code does. The percentiles themselves must be finite, and a
@@ -375,9 +412,50 @@ mod tests {
             bottom: 0.5,
         };
         assert_eq!(
-            analyse(&uniform(10, 10, 0.2), Some(none)),
+            analyse(&uniform(10, 10, 0.2), Some(none), MEDIAN_TARGET),
             AutoTone::default()
         );
+    }
+
+    /// ⚠⚠ **Auto Tone and the display rendering both place the level, and this is the only test
+    /// that can see them stack.** With the rendering on, the scene is lifted by a baseline
+    /// exposure *before* the curve, so a solve still aiming the scene median at
+    /// [`MEDIAN_TARGET`] opens every photograph about a stop too bright — measured at −1.00 EV
+    /// against the camera's own JPEG before this was threaded through. Dividing the target by
+    /// the gain is what makes the two compose.
+    #[test]
+    fn the_median_target_is_divided_by_the_renderings_gain() {
+        use edit_model::Rendering;
+        // No rendering: unchanged, so the CLI and every existing test are untouched.
+        assert_eq!(median_target_for(Rendering::None, None), MEDIAN_TARGET);
+        assert_eq!(median_target_for(Rendering::None, Some(2.0)), MEDIAN_TARGET);
+
+        // ⚠ Divided, not multiplied: a solve that *raised* the target would open a photograph
+        // two stops bright rather than one, and "it changed" alone cannot tell the two apart.
+        let one_stop = median_target_for(Rendering::Camera, Some(1.0));
+        assert!(
+            (one_stop - MEDIAN_TARGET / 2.0).abs() < 1e-6,
+            "a +1 EV baseline did not halve the target: {one_stop}"
+        );
+
+        // ⚠ And an absent baseline falls back to the renderer's own constant, so a profile that
+        // declares none still composes rather than stacking.
+        let fallback = median_target_for(Rendering::Camera, None);
+        assert!(
+            fallback < MEDIAN_TARGET,
+            "an absent baseline left the target unchanged: {fallback}"
+        );
+    }
+
+    /// ⚠ A degenerate baseline must not make the target zero or infinite — the solve would then
+    /// return the exposure clamp on every photograph.
+    #[test]
+    fn a_degenerate_baseline_leaves_the_target_usable() {
+        use edit_model::Rendering;
+        for bad in [f32::NAN, f32::INFINITY, -f32::INFINITY, 1e30] {
+            let t = median_target_for(Rendering::Camera, Some(bad));
+            assert!(t.is_finite() && t > 0.0, "{bad} gave {t}");
+        }
     }
 
     /// Spec test 6, both directions. ⚠ The spec's wording ("a frame 6 EV under lands at −2.5")
@@ -385,9 +463,9 @@ mod tests {
     /// are asserted so the clamp cannot be one-sided.
     #[test]
     fn exposure_clamps_at_two_and_a_half_stops() {
-        let under = analyse(&uniform(20, 20, MEDIAN_TARGET / 64.0), None);
+        let under = analyse(&uniform(20, 20, MEDIAN_TARGET / 64.0), None, MEDIAN_TARGET);
         assert_eq!(under.exposure, EXPOSURE_LIMIT);
-        let over = analyse(&uniform(20, 20, MEDIAN_TARGET * 64.0), None);
+        let over = analyse(&uniform(20, 20, MEDIAN_TARGET * 64.0), None, MEDIAN_TARGET);
         assert_eq!(over.exposure, -EXPOSURE_LIMIT);
     }
 
@@ -406,11 +484,14 @@ mod tests {
         // rather than deleted or covered by an invented fixture: `white_w` is zero only at `l = 0`,
         // which the `hi > 2·median` guard already excludes. Inventing a test that appeared to
         // cover it would be worse than saying so.
-        let got = solve(Percentiles {
-            lo: 0.012,
-            median: MEDIAN_TARGET,
-            hi: 0.5,
-        });
+        let got = solve(
+            Percentiles {
+                lo: 0.012,
+                median: MEDIAN_TARGET,
+                hi: 0.5,
+            },
+            MEDIAN_TARGET,
+        );
         assert_eq!(got.exposure, 0.0);
         assert!(
             got.whites.abs() > 1.0,
@@ -424,16 +505,19 @@ mod tests {
     /// target as the slider goes, not 0 and not something in between.
     #[test]
     fn the_solve_reaches_the_boundary_when_the_target_is_out_of_range() {
-        let got = solve(Percentiles {
-            lo: 0.05,
-            median: MEDIAN_TARGET,
-            // ⚠ 10.0, not the 3.0 this test shipped with: the end pair got stronger when its
-            // weights moved to a cube on encoded luminance with its own `END_STRENGTH`, and
-            // 0.98 from 3.0 became *reachable* — which quietly turned this into a test of the
-            // solved path rather than of the boundary rule. A fixture the sliders genuinely
-            // cannot satisfy is what keeps it discriminating.
-            hi: 10.0,
-        });
+        let got = solve(
+            Percentiles {
+                lo: 0.05,
+                median: MEDIAN_TARGET,
+                // ⚠ 10.0, not the 3.0 this test shipped with: the end pair got stronger when its
+                // weights moved to a cube on encoded luminance with its own `END_STRENGTH`, and
+                // 0.98 from 3.0 became *reachable* — which quietly turned this into a test of the
+                // solved path rather than of the boundary rule. A fixture the sliders genuinely
+                // cannot satisfy is what keeps it discriminating.
+                hi: 10.0,
+            },
+            MEDIAN_TARGET,
+        );
         assert_eq!(
             got.blacks, -100.0,
             "0.05 cannot reach 0.01: crush as far as it goes"
@@ -442,14 +526,17 @@ mod tests {
             got.whites, -100.0,
             "10.0 cannot reach 0.98: pull down as far as it goes"
         );
-        let got = solve(Percentiles {
-            lo: 0.001,
-            median: MEDIAN_TARGET,
-            // ⚠ 0.5 for the same reason as the 10.0 above — the stronger end pair brought 0.98
-            // within reach from 0.7, so that fixture stopped testing the boundary. At 0.5 the
-            // most Whites can do is 0.64.
-            hi: 0.5,
-        });
+        let got = solve(
+            Percentiles {
+                lo: 0.001,
+                median: MEDIAN_TARGET,
+                // ⚠ 0.5 for the same reason as the 10.0 above — the stronger end pair brought 0.98
+                // within reach from 0.7, so that fixture stopped testing the boundary. At 0.5 the
+                // most Whites can do is 0.64.
+                hi: 0.5,
+            },
+            MEDIAN_TARGET,
+        );
         assert_eq!(got.blacks, 100.0, "0.001 wants lifting as far as it goes");
         assert_eq!(
             got.whites, 100.0,
@@ -463,28 +550,37 @@ mod tests {
     #[test]
     fn a_tail_not_distinct_from_the_body_is_not_clipped() {
         let m = MEDIAN_TARGET;
-        let near = solve(Percentiles {
-            lo: m / 1.9,
-            median: m,
-            hi: m * 1.9,
-        });
+        let near = solve(
+            Percentiles {
+                lo: m / 1.9,
+                median: m,
+                hi: m * 1.9,
+            },
+            MEDIAN_TARGET,
+        );
         assert_eq!((near.whites, near.blacks), (0.0, 0.0));
-        let far = solve(Percentiles {
-            lo: m / 2.1,
-            median: m,
-            hi: m * 2.1,
-        });
+        let far = solve(
+            Percentiles {
+                lo: m / 2.1,
+                median: m,
+                hi: m * 2.1,
+            },
+            MEDIAN_TARGET,
+        );
         assert_ne!(
             far.blacks, 0.0,
             "a tail a stop under the median is a black point"
         );
         // hi = 0.336 has no whites leverage, so the guard's other half is seen through blacks
         // alone here and through the whites boundary below.
-        let far_hi = solve(Percentiles {
-            lo: m / 2.1,
-            median: m,
-            hi: 0.8,
-        });
+        let far_hi = solve(
+            Percentiles {
+                lo: m / 2.1,
+                median: m,
+                hi: 0.8,
+            },
+            MEDIAN_TARGET,
+        );
         assert_ne!(far_hi.whites, 0.0, "a tail above the body is a white point");
     }
 

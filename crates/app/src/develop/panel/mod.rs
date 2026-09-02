@@ -166,6 +166,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     lens: s.lens.name.as_deref(),
                                     lens_profile_found: s.lens.shot.is_some(),
                                     wb_baseline: s.wb_baseline,
+                                    baseline_ev: s.baseline_ev,
                                     // ⚠ A shared borrow of a *different* field from the `&mut
                                     // s.edits` beside it — disjoint fields, so this is legal
                                     // where a closure capturing `s` twice would be `E0499`.
@@ -396,6 +397,36 @@ mod tests {
         e.discrete();
         assert!(e.changed, "a discrete act must request a render");
         assert!(e.settled, "a discrete act must push one history entry");
+    }
+
+    /// ⚠⚠ **The session's baseline must reach `SourceInfo`, and only a whole-panel draw can see
+    /// it.** The correction lives in `pipeline`, the forwarding in `adjustments::tone` — both
+    /// tested — and a `baseline_ev: None` here would still leave the fix present and
+    /// **unreachable from the running app**, with every other test green. Found by sabotage,
+    /// which is the only reason this test exists.
+    #[test]
+    fn the_sessions_baseline_reaches_the_auto_solve() {
+        let ctx = crate::test_ui::ctx();
+        let mut exposures = Vec::new();
+        for baseline in [None, Some(2.0)] {
+            let mut app = crate::test_app::for_test();
+            crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+            {
+                let s = app.session.as_mut().expect("session");
+                s.baseline_ev = baseline;
+                // ⚠ The correction applies only under the camera rendering; with `None` the two
+                // do not stack, the target is unchanged, and this test could see nothing.
+                s.edits.rendering = edit_model::Rendering::Camera;
+            }
+            crate::test_ui::click(&ctx, "Auto", |ui| {
+                show(&mut app, ui);
+            });
+            exposures.push(app.session.as_ref().unwrap().edits.exposure);
+        }
+        assert!(
+            (exposures[0] - exposures[1]).abs() > 0.1,
+            "the session's baseline never reached the solve: {exposures:?}"
+        );
     }
 
     #[test]

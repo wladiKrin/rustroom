@@ -186,6 +186,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
     );
     app.session = Some(Session {
         wb_baseline: color::wb::Illuminant::default(),
+        baseline_ev: None,
         buffer: buf,
         picking_wb: false,
         path: std::path::PathBuf::from("/test/a.RAF"),

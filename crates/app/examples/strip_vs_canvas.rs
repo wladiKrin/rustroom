@@ -68,7 +68,8 @@ fn main() {
             rendering: edit_model::Rendering::Camera,
             ..Default::default()
         };
-        rustroom_app::auto_tone_tool::apply(&mut auto, &small);
+        // ⚠ The same baseline the app would pass, so the probe measures what the app does.
+        rustroom_app::auto_tone_tool::apply(&mut auto, &small, None);
         let cam_auto = render(&small, &auto);
 
         let ev = |x: f32| (a / x).log2();

@@ -357,6 +357,7 @@ impl RustroomApp {
             make_model: decoded.label.clone(),
             lens: decoded.lens.clone(),
             wb_baseline: decoded.wb_baseline,
+            baseline_ev: decoded.profile.baseline_ev,
             buffer: decoded.buffer.clone(),
             picking_wb: false,
             zoom: 1.0,

@@ -31,7 +31,11 @@ fn main() {
     let buf = decoded.image;
 
     let neutral = edit_model::Edits::default();
-    let (p, auto) = rustroom_app::auto_tone_tool::analyse(&buf, &neutral.geometry);
+    let (p, auto) = rustroom_app::auto_tone_tool::analyse(
+        &buf,
+        &neutral.geometry,
+        pipeline::auto_tone::MEDIAN_TARGET,
+    );
 
     println!("{stem}  {}x{}", buf.width(), buf.height());
     match p {
@@ -55,7 +59,7 @@ fn main() {
     }
 
     let mut edited = edit_model::Edits::default();
-    rustroom_app::auto_tone_tool::apply(&mut edited, &buf);
+    rustroom_app::auto_tone_tool::apply(&mut edited, &buf, None);
 
     if let Some(dir) = out_dir {
         std::fs::create_dir_all(&dir).expect("out dir");

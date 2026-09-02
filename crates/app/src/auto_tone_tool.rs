@@ -54,11 +54,19 @@ pub fn source_crop(crop: CropRect, o: Orientation) -> CropRect {
 /// Returns the percentiles as well so the probe can print what the decision was made from —
 /// the numbers are the evidence the user signs off on, and recomputing them anywhere else
 /// would be a second implementation that could disagree.
-pub fn analyse(buffer: &ImageBuf, geometry: &Geometry) -> (Option<Percentiles>, AutoTone) {
+pub fn analyse(
+    buffer: &ImageBuf,
+    geometry: &Geometry,
+    median_target: f32,
+) -> (Option<Percentiles>, AutoTone) {
     let small = buffer.downscale_to(ANALYSIS_DIM);
     let crop = source_crop(geometry.crop, geometry.orientation);
     let p = auto_tone::percentiles(&small, Some(crop));
-    (p, p.map(auto_tone::solve).unwrap_or_default())
+    (
+        p,
+        p.map(|p| auto_tone::solve(p, median_target))
+            .unwrap_or_default(),
+    )
 }
 
 /// Set Exposure, Whites and Blacks from the photograph's own histogram.
@@ -66,8 +74,14 @@ pub fn analyse(buffer: &ImageBuf, geometry: &Geometry) -> (Option<Percentiles>, 
 /// ⚠ **Three fields, and no others.** Contrast, highlights and shadows are a taste the user did
 /// not ask for; three values that mean "put the black point, the white point and the middle
 /// where they belong" are explainable and undoable in one Ctrl+Z.
-pub fn apply(edits: &mut Edits, buffer: &ImageBuf) -> AutoTone {
-    let (_, a) = analyse(buffer, &edits.geometry);
+/// ⚠⚠ **`baseline_ev` is taken because the display rendering also places the level.** With the
+/// rendering on, the scene is lifted by a baseline exposure before its curve, so a solve still
+/// aiming the *scene* median at `MEDIAN_TARGET` would stack the two and open every photograph
+/// about a stop too bright — measured at −1.00 EV against the camera's own JPEG before this was
+/// threaded through. `median_target_for` is the one place that decision lives.
+pub fn apply(edits: &mut Edits, buffer: &ImageBuf, baseline_ev: Option<f32>) -> AutoTone {
+    let target = auto_tone::median_target_for(edits.rendering, baseline_ev);
+    let (_, a) = analyse(buffer, &edits.geometry, target);
     edits.exposure = a.exposure;
     edits.whites = a.whites;
     edits.blacks = a.blacks;
@@ -208,7 +222,7 @@ mod tests {
         e.geometry.angle = 3.0;
         e.tone_curve.points = vec![[0.0, 0.0], [0.4, 0.6], [1.0, 1.0]];
 
-        let got = apply(&mut e, &graded(500, 200));
+        let got = apply(&mut e, &graded(500, 200), None);
         assert_eq!(e.exposure, got.exposure);
         assert_eq!(e.whites, got.whites);
         assert_eq!(e.blacks, got.blacks);
@@ -267,7 +281,7 @@ mod tests {
             right: 0.25,
             bottom: 1.0,
         };
-        let dark = apply(&mut e, &buf);
+        let dark = apply(&mut e, &buf, None);
 
         let mut whole = Edits {
             geometry: Geometry {
@@ -276,7 +290,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let all = apply(&mut whole, &buf);
+        let all = apply(&mut whole, &buf, None);
         assert!(
             dark.exposure > all.exposure + 1.0,
             "the crop must select the dark quarter: cropped {dark:?} vs whole {all:?}"
@@ -294,15 +308,18 @@ mod tests {
         let big = grey(ANALYSIS_DIM * 3, ANALYSIS_DIM * 2, 0.08);
         let small = grey(64, 42, 0.08);
         let g = Geometry::default();
-        let (_, a) = analyse(&big, &g);
-        let (_, b) = analyse(&small, &g);
+        let (_, a) = analyse(&big, &g, auto_tone::MEDIAN_TARGET);
+        let (_, b) = analyse(&small, &g, auto_tone::MEDIAN_TARGET);
         assert!((a.exposure - b.exposure).abs() < 1e-5, "{a:?} vs {b:?}");
     }
 
     #[test]
     fn an_empty_buffer_is_the_neutral_answer() {
         let mut e = Edits::default();
-        assert_eq!(apply(&mut e, &ImageBuf::new(0, 0)), AutoTone::default());
+        assert_eq!(
+            apply(&mut e, &ImageBuf::new(0, 0), None),
+            AutoTone::default()
+        );
         assert_eq!(e.exposure, 0.0);
     }
 }

@@ -122,6 +122,12 @@ pub struct SourceInfo<'a> {
     pub lens_profile_found: bool,
     /// The illuminant the decode left the photo balanced to.
     pub wb_baseline: color::wb::Illuminant,
+    /// The camera profile's `BaselineExposure` in stops, when it declares one.
+    ///
+    /// ⚠ Auto Tone needs it: with the display rendering on, the scene is lifted by this before
+    /// the curve, so a solve aiming the *scene* median at `MEDIAN_TARGET` would stack the two
+    /// and open every photograph about a stop too bright.
+    pub baseline_ev: Option<f32>,
     /// The decoded editing buffer, for Auto Tone's analysis.
     ///
     /// ⚠⚠ **The decode, never the rendered texture.** That texture already carries the current
@@ -234,6 +240,7 @@ pub(crate) fn tone(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
     buffer: &core_image::ImageBuf,
+    baseline_ev: Option<f32>,
     ed: &mut Edited,
 ) {
     // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
@@ -271,7 +278,7 @@ pub(crate) fn tone(
         .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
         .clicked()
     {
-        rustroom_app::auto_tone_tool::apply(edits, buffer);
+        rustroom_app::auto_tone_tool::apply(edits, buffer, baseline_ev);
         // ⚠ `mark_changed`, not a slider's `changed()`: a click is a complete act, so it is one
         // history entry immediately rather than waiting for a `drag_stopped` that never comes.
         // That is what makes Auto exactly one Ctrl+Z — the model the WB presets already follow.
@@ -323,6 +330,7 @@ pub fn show(
         lens,
         lens_profile_found,
         wb_baseline: baseline,
+        baseline_ev,
         buffer,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
@@ -332,7 +340,7 @@ pub fn show(
     });
 
     section(ui, SECTIONS[1], true, |ui| {
-        tone(ui, edits, buffer, ed);
+        tone(ui, edits, buffer, baseline_ev, ed);
     });
 
     section(ui, SECTIONS[2], false, |ui| {
@@ -532,7 +540,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Auto", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, &mut ed);
+            tone(ui, &mut edits, &buf, None, &mut ed);
         });
         assert!(ed.changed, "the click must request a render");
         assert!(ed.settled, "the click must push exactly one history entry");
@@ -558,7 +566,7 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, &mut ed);
+            tone(ui, &mut edits, &buf, None, &mut ed);
         });
         assert_eq!(
             edits.rendering,
@@ -569,12 +577,45 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, &mut ed);
+            tone(ui, &mut edits, &buf, None, &mut ed);
         });
         assert_eq!(
             edits.rendering,
             edit_model::Rendering::None,
             "unticking it did not turn the rendering off"
+        );
+    }
+
+    /// ⚠⚠ **The panel must forward the session's baseline into the solve, and nothing else can
+    /// see it drop.** Auto Tone and the display rendering both place the level: with the
+    /// rendering on, the scene is lifted by a baseline exposure before the curve, so a solve
+    /// still aiming the scene median at `MEDIAN_TARGET` opens every photograph about a stop too
+    /// bright. The correction lives in `pipeline` and is tested there — but passing `None` here
+    /// would leave it present and **unreachable from the UI**, which is exactly what a sabotage
+    /// found.
+    #[test]
+    fn the_auto_button_carries_the_baseline_into_the_solve() {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut exposures = Vec::new();
+        for baseline in [None, Some(2.0)] {
+            let mut edits = edit_model::Edits {
+                // ⚠ The correction applies only under the camera rendering; with `None` the two
+                // do not stack and the target is unchanged, so this test could not see anything.
+                rendering: edit_model::Rendering::Camera,
+                ..Default::default()
+            };
+            let mut ed = Edited::default();
+            crate::test_ui::click(&ctx, "Auto", |ui| {
+                ed = Edited::default();
+                tone(ui, &mut edits, &buf, baseline, &mut ed);
+            });
+            assert!(ed.changed, "the click did not take");
+            exposures.push(edits.exposure);
+        }
+        assert!(
+            (exposures[0] - exposures[1]).abs() > 0.1,
+            "the baseline never reached the solve: {exposures:?}"
         );
     }
 
@@ -593,7 +634,7 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    tone(ui, &mut edits, &buf, &mut ed);
+                    tone(ui, &mut edits, &buf, None, &mut ed);
                     assert!(!ed.changed, "drawing the panel reported an edit");
                     assert!(!ed.settled, "drawing the panel pushed a history entry");
                 },

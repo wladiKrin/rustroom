@@ -644,6 +644,13 @@ pub struct Session {
     /// export, since a Kelvin in the sidecar means nothing without the baseline it was set
     /// against.
     wb_baseline: color::wb::Illuminant,
+    /// The camera profile's `BaselineExposure` in stops, when it declares one.
+    ///
+    /// ⚠ Kept beside `wb_baseline` and for its reason: a fact about the file that cannot change
+    /// within one session. The **panel** needs it, not only the renderer — Auto Tone has to aim
+    /// the scene median at a target divided by the rendering's gain, or the two both place the
+    /// level and stack.
+    baseline_ev: Option<f32>,
     zoom: f32,
     /// The scale that fits `fit_image_size` into the canvas, as of the last frame.
     ///
