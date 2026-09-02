@@ -83,7 +83,7 @@ own writes update `xmp_mtime` so they never re-import.
   measured there at 4.6 ms for 830 files. Do it on the open path, not in the metadata scanner: a
   4 KB file is not a 29 MB RAW.
 - Keywords: walk the path, creating each missing level under its parent (`keywords()` +
-  `add_keyword`), then `assign_keyword` the leaf. ⚠ Unique names are per `(parent, name)`, which
+  `create_keyword(name, parent)`), then `assign_keyword` the leaf. ⚠ Unique names are per `(parent, name)`, which
   is what makes `Paris` under `France` and under `Texas` two keywords.
 
 ---

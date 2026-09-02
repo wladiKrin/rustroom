@@ -52,8 +52,8 @@ full pass-through — the sanity check that the plumbing did not change the math
 band is `luma − gaussian₂(luma)` and a Gaussian blurs edges too.
 
 **The fix:** for `k_t < 0` **only**, compute the fine band against a **guided-filter base** —
-`spatial::guided_filter(luma, luma, r, eps)`, the edge-preserving smoother noise reduction already
-uses — instead of the Gaussian. The base then keeps edges, so `d_t` is near zero across an edge and
+`spatial::guided_filter(&luma, &luma, w, h, r, eps)`, the edge-preserving smoother noise
+reduction already uses — instead of the Gaussian. The base then keeps edges, so `d_t` is near zero across an edge and
 the negative half removes texture without smearing it. The **positive half is unchanged**: a
 Gaussian base is what makes positive texture crisp *along* edges, and it must stay.
 
