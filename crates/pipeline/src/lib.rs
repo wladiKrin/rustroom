@@ -35,6 +35,7 @@ pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::ContrastStage;
 pub use stages::dehaze::DehazeStage;
+pub use stages::display_rendering::DisplayRenderingStage;
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
