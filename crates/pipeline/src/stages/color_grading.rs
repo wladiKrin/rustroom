@@ -76,6 +76,17 @@ pub struct ColorGradingStage {
 }
 
 impl ColorGradingStage {
+    /// The shadow / midtone / highlight weights at lightness `l`.
+    ///
+    /// ⚠⚠ **Exposed so the panel's range strip cannot re-derive them.** A strip that computed
+    /// its own Gaussians would come to *lie* about where the ranges are — which is the exact
+    /// failure the strip exists to prevent, since its whole job is showing what Blending and
+    /// Balance did. Reached through the stage rather than through the free function because
+    /// `pipeline`'s `stages` module is private and `ColorGradingStage` is already re-exported.
+    pub fn range_weights(l: f32, blending: f32, balance: f32) -> [f32; 3] {
+        range_weights(l, blending, balance)
+    }
+
     pub fn new(g: &ColorGrading) -> Self {
         let wheels = [
             wheel_offset(&g.shadows),
@@ -270,6 +281,41 @@ mod tests {
                 assert!(
                     (got[k] - want[k]).abs() < 1e-3,
                     "l={l} component {k}: table {got:?} vs direct {want:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_exposed_weights_are_the_ones_the_stage_actually_grades_with() {
+        // ⚠ Derived from the stage's *rendered* behaviour, not compared against the free
+        // function it delegates to — that comparison would be true by construction and blind
+        // to the exposed copy being reimplemented. With only the shadow wheel tinted,
+        // `grade_at(l)` is exactly `w[0] * wheel_offset(shadows)`, so the weight can be
+        // recovered by division and checked against what the panel is handed.
+        let shadows = GradeWheel {
+            hue: 0.0,
+            saturation: 80.0,
+            luminance: 0.0,
+        };
+        for &(blending, balance) in &[(0.0, 0.0), (50.0, 0.0), (50.0, 60.0), (100.0, -40.0)] {
+            let g = ColorGrading {
+                shadows,
+                blending,
+                balance,
+                ..ColorGrading::default()
+            };
+            let stage = ColorGradingStage::new(&g);
+            let unit = wheel_offset(&shadows)[0];
+            assert!(unit.abs() > 1e-3, "fixture check: the shadow tint is inert");
+            for i in 0..=20 {
+                let l = i as f32 / 20.0;
+                let from_render = stage.grade_at(l)[0] / unit;
+                let exposed = ColorGradingStage::range_weights(l, blending, balance)[0];
+                assert!(
+                    (from_render - exposed).abs() < 2e-3,
+                    "l={l} blending={blending} balance={balance}: the stage grades with \
+                     {from_render} but hands the panel {exposed}"
                 );
             }
         }

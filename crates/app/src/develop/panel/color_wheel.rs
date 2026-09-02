@@ -60,6 +60,94 @@ impl GradeRange {
     }
 }
 
+/// Lightness samples across the range strip. The weight curves are smooth, so 256 across a
+/// ~190 pt strip is well past the point where the sampling shows.
+const STRIP_SAMPLES: usize = 256;
+/// Height of the range strip, in points.
+const STRIP_HEIGHT: f32 = 10.0;
+
+/// Fixed tints for shadows / midtones / highlights, in that order.
+///
+/// ⚠ **Not the wheels' current hues, and not the theme accent.** The strip shows *where the
+/// ranges are*; painting it with the grade would conflate the two questions it exists to keep
+/// apart — and the accent is user-switchable, including a `Neutral` setting whose whole point
+/// is to have no colour. Low chroma so the strip reads as a legend rather than as a picture,
+/// and deliberately off the skin-tone/temperature axis for the reason `theme`'s accent list
+/// excludes amber.
+const RANGE_TINTS: [egui::Color32; 3] = [
+    egui::Color32::from_rgb(0x46, 0x5c, 0x7a),
+    egui::Color32::from_rgb(0x6e, 0x6e, 0x6e),
+    egui::Color32::from_rgb(0x78, 0x62, 0x80),
+];
+
+/// The strip's colour at lightness `l`: the three tints mixed by the stage's own weights.
+///
+/// ⚠⚠ **The weights come from `ColorGradingStage::range_weights`, never from a copy.** They
+/// sum to exactly 1, so this is a convex mix and the result stays inside the three tints —
+/// which is what makes an overlap read as a blend rather than as a fourth colour.
+fn strip_color(l: f32, blending: f32, balance: f32) -> egui::Color32 {
+    let w = pipeline::ColorGradingStage::range_weights(l, blending, balance);
+    let mix = |c: fn(&egui::Color32) -> u8| {
+        (0..3)
+            .map(|k| w[k] * c(&RANGE_TINTS[k]) as f32)
+            .sum::<f32>()
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    egui::Color32::from_rgb(mix(|c| c.r()), mix(|c| c.g()), mix(|c| c.b()))
+}
+
+/// The strip's pixels, left (black) to right (white).
+fn strip_image(blending: f32, balance: f32) -> egui::ColorImage {
+    let pixels: Vec<egui::Color32> = (0..STRIP_SAMPLES)
+        .map(|i| strip_color(i as f32 / (STRIP_SAMPLES - 1) as f32, blending, balance))
+        .collect();
+    egui::ColorImage {
+        size: [STRIP_SAMPLES, 1],
+        pixels,
+        source_size: egui::vec2(STRIP_SAMPLES as f32, 1.0),
+    }
+}
+
+/// A strip showing where the three tonal ranges sit and how far they overlap — the feedback
+/// Blending and Balance had none of, so both were judged only by their effect on the photo.
+///
+/// ⚠ One textured quad, never a mesh: the brush tint's lesson, where a per-sample mesh across
+/// a soft gradient built a 711 MB vertex buffer. 256 samples stretched by the GPU costs the
+/// same at any width.
+pub fn range_strip(ui: &mut egui::Ui, blending: f32, balance: f32) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), STRIP_HEIGHT),
+        egui::Sense::hover(),
+    );
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    // Re-uploaded only when a slider actually moved — the panel body runs sixty times a
+    // second, and the values are the whole of what the image depends on.
+    let key = egui::Id::new("grade_range_strip");
+    let stamp = (blending.to_bits(), balance.to_bits());
+    let cached: Option<((u32, u32), egui::TextureHandle)> = ui.data(|d| d.get_temp(key));
+    let tex = match cached {
+        Some((s, tex)) if s == stamp => tex,
+        _ => {
+            let tex = ui.ctx().load_texture(
+                "grade_range_strip",
+                strip_image(blending, balance),
+                egui::TextureOptions::LINEAR,
+            );
+            ui.data_mut(|d| d.insert_temp(key, (stamp, tex.clone())));
+            tex
+        }
+    };
+    ui.painter().image(
+        tex.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+}
+
 /// An sRGB colour for the rim at hue `deg`.
 fn rim_color(deg: f32) -> egui::Color32 {
     let h = deg.to_radians();
@@ -78,8 +166,24 @@ fn offset(deg: f32, r: f32, radius: f32) -> egui::Vec2 {
     egui::vec2(r * radius * h.cos(), -r * radius * h.sin())
 }
 
-/// The wheel. Dragging sets hue from the angle and saturation from the radius.
-pub fn show(ui: &mut egui::Ui, wheel: &mut GradeWheel, diameter: f32, ed: &mut Edited) {
+/// The range strip, then the selected range's wheel. Dragging the wheel sets hue from the
+/// angle and saturation from the radius.
+///
+/// ⚠ Takes the whole `ColorGrading` rather than one wheel, because the strip is drawn from
+/// `blending`/`balance` — which belong to the grade, not to any one range. The strip is drawn
+/// here rather than beside the call so it cannot be forgotten by a second caller.
+pub fn show(
+    ui: &mut egui::Ui,
+    grade: &mut ColorGrading,
+    range: GradeRange,
+    diameter: f32,
+    ed: &mut Edited,
+) {
+    // Read before the wheel is borrowed mutably out of the same struct.
+    let (blending, balance) = (grade.blending, grade.balance);
+    range_strip(ui, blending, balance);
+    let wheel = range.wheel_mut(grade);
+
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(diameter, diameter),
         egui::Sense::click_and_drag(),
@@ -147,7 +251,7 @@ mod tests {
     /// `a_left_drag_does_not_pan` inert once already.
     fn drag_to(offset_from_centre: egui::Vec2, button: egui::PointerButton) -> GradeWheel {
         let ctx = egui::Context::default();
-        let mut wheel = GradeWheel::default();
+        let mut grade = ColorGrading::default();
         let mut ed = Edited::default();
         let mut centre = egui::Pos2::ZERO;
         const D: f32 = 200.0;
@@ -176,11 +280,15 @@ mod tests {
             }
             let _ = ctx.run_ui(input, |ui| {
                 let before = ui.cursor().min;
-                show(ui, &mut wheel, D, &mut ed);
-                centre = before + egui::vec2(D * 0.5, D * 0.5);
+                let gap = ui.spacing().item_spacing.y;
+                show(ui, &mut grade, GradeRange::Shadows, D, &mut ed);
+                // ⚠ The strip is allocated before the wheel, so the wheel's centre is a
+                // strip's height and one gap further down. The existing drag tests are the
+                // check on this arithmetic: get it wrong and every drag misses the wheel.
+                centre = before + egui::vec2(D * 0.5, STRIP_HEIGHT + gap + D * 0.5);
             });
         }
-        wheel
+        grade.shadows
     }
 
     #[test]
@@ -277,6 +385,137 @@ mod tests {
                 "dragged to {d:?} but the handle paints at {back:?}"
             );
         }
+    }
+
+    /// Draw one frame into `ctx` and return the strip's pixels **if it was uploaded** — so a
+    /// caller can tell "re-uploaded with new pixels" from "served from the cache".
+    fn strip_upload(
+        ctx: &egui::Context,
+        blending: f32,
+        balance: f32,
+    ) -> Option<Vec<egui::Color32>> {
+        let mut grade = ColorGrading {
+            blending,
+            balance,
+            ..ColorGrading::default()
+        };
+        let mut ed = Edited::default();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| show(ui, &mut grade, GradeRange::Shadows, 200.0, &mut ed),
+        );
+        out.textures_delta.set.iter().find_map(|(_, delta)| {
+            let egui::ImageData::Color(img) = &delta.image;
+            (img.size == [STRIP_SAMPLES, 1]).then(|| img.pixels.clone())
+        })
+    }
+
+    /// The strip's pixels as actually uploaded, read back out of the frame's texture delta —
+    /// so the assertion is about what was drawn, not about what `strip_image` returns.
+    fn drawn_strip(blending: f32, balance: f32) -> Vec<egui::Color32> {
+        // A fresh context per call: the strip caches its texture on the values, so a shared
+        // context would serve the first call's pixels to the second and the comparison would
+        // be vacuous.
+        strip_upload(&egui::Context::default(), blending, balance)
+            .expect("the range strip was never uploaded")
+    }
+
+    #[test]
+    fn the_strip_is_re_uploaded_when_a_value_changes_and_cached_when_it_does_not() {
+        // ⚠⚠ **Every other test here uses a fresh context, so none of them can see the cache
+        // key at all** — stubbing it to a constant left them all green. That is a real bug,
+        // not a harmless one: the strip would freeze at whatever Blending it was first drawn
+        // with, and nothing on screen would say so. This is the only test that holds ONE
+        // context across two frames, which is the only way the key is reachable.
+        let ctx = egui::Context::default();
+        let first = strip_upload(&ctx, 0.0, 0.0).expect("the strip was never uploaded");
+
+        // Same values: served from the cache, so nothing is uploaded. Without this half a key
+        // that never matched would pass the other half while re-uploading every frame.
+        assert!(
+            strip_upload(&ctx, 0.0, 0.0).is_none(),
+            "the strip re-uploaded although nothing changed"
+        );
+
+        let moved = strip_upload(&ctx, 100.0, 0.0)
+            .expect("the strip was not re-uploaded after Blending changed");
+        assert_ne!(first, moved, "the re-upload carried the old pixels");
+
+        let moved_again = strip_upload(&ctx, 100.0, 60.0)
+            .expect("the strip was not re-uploaded after Balance changed");
+        assert_ne!(moved, moved_again, "the re-upload carried the old pixels");
+    }
+
+    #[test]
+    fn the_strip_is_painted_with_the_stages_own_range_weights() {
+        // ⚠⚠ The guard the whole feature rests on. A strip that re-derived the Gaussians —
+        // or hardcoded them — would come to disagree with the grade it claims to describe,
+        // which is the failure it exists to prevent. Compared against `range_weights` mixed
+        // independently here, at settings where the three weights are all distinct.
+        for &(blending, balance) in &[(0.0f32, 0.0f32), (50.0, 0.0), (50.0, 70.0), (100.0, -50.0)] {
+            let drawn = drawn_strip(blending, balance);
+            assert_eq!(drawn.len(), STRIP_SAMPLES);
+            for (i, got) in drawn.iter().enumerate() {
+                let l = i as f32 / (STRIP_SAMPLES - 1) as f32;
+                let w = pipeline::ColorGradingStage::range_weights(l, blending, balance);
+                let want = |c: fn(&egui::Color32) -> u8| {
+                    (0..3)
+                        .map(|k| w[k] * c(&RANGE_TINTS[k]) as f32)
+                        .sum::<f32>()
+                        .round() as u8
+                };
+                assert_eq!(
+                    (got.r(), got.g(), got.b()),
+                    (want(|c| c.r()), want(|c| c.g()), want(|c| c.b())),
+                    "sample {i} (l={l}) at blending={blending} balance={balance}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn at_blending_zero_the_ends_of_the_strip_are_the_pure_range_tints() {
+        // The readable consequence of a near-hard selection: black is all shadows, white all
+        // highlights, mid-grey all midtones. If this fails the strip is drawn over the wrong
+        // lightness axis, or the tints are in the wrong order.
+        let drawn = drawn_strip(0.0, 0.0);
+        assert_eq!(
+            drawn[0], RANGE_TINTS[0],
+            "the black end is not the shadow tint"
+        );
+        assert_eq!(
+            drawn[STRIP_SAMPLES - 1],
+            RANGE_TINTS[2],
+            "the white end is not the highlight tint"
+        );
+        assert_eq!(
+            drawn[STRIP_SAMPLES / 2],
+            RANGE_TINTS[1],
+            "the middle is not the midtone tint"
+        );
+    }
+
+    #[test]
+    fn the_strip_changes_when_blending_or_balance_moves() {
+        // Without this the strip could be a fixed picture and every other assertion here
+        // would still hold — it is the only test that says the controls reach it.
+        let base = drawn_strip(50.0, 0.0);
+        assert_ne!(
+            base,
+            drawn_strip(100.0, 0.0),
+            "Blending did not move the strip"
+        );
+        assert_ne!(
+            base,
+            drawn_strip(50.0, 80.0),
+            "Balance did not move the strip"
+        );
     }
 
     #[test]

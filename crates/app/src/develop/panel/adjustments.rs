@@ -308,8 +308,8 @@ pub fn show(
         {
             // Scoped so the borrow of `color_grading` ends before Blending and Balance,
             // which need the struct itself.
+            color_wheel::show(ui, &mut edits.color_grading, *grade_range, diameter, ed);
             let w = grade_range.wheel_mut(&mut edits.color_grading);
-            color_wheel::show(ui, w, diameter, ed);
             ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
             ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Saturation");
             ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
