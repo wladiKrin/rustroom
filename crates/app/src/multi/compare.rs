@@ -12,6 +12,7 @@
 //! ⚠ Which photos the candidate moves through is [`rustroom_app::compare_pair::pool`]'s one
 //! decision, and it is confined there.
 
+use crate::develop::canvas::navigation::pan_delta;
 use crate::multi;
 use crate::{LibraryMode, RustroomApp};
 use eframe::egui;
@@ -19,6 +20,7 @@ use rustroom_app::compare_pair;
 use rustroom_app::photo_id::PhotoId;
 use rustroom_app::thumb_loader::ThumbRequest;
 use rustroom_app::tile_layout;
+use rustroom_app::view_region;
 
 /// What one frame of Compare decided, applied after the closure that borrows `app.library`.
 ///
@@ -46,8 +48,101 @@ struct Outcome {
 /// arrows. A literal inside a `RichText::new(..)` call cannot be probed by a test.
 ///
 /// ⚠ `<-` and `->` as ASCII, not `←`/`→`: neither arrow is in any bundled font.
-const INSTRUCTION: &str =
-    "<- -> change the candidate · Enter promotes it · digits, P, X and U rate it";
+const INSTRUCTION: &str = "<- -> change the candidate · Enter promotes it · digits, P, X and U \
+                           rate it · scroll pans, pinch or ctrl+scroll zooms both panes together";
+
+impl RustroomApp {
+    /// Drop Compare's panes whenever Compare is not the view on screen.
+    ///
+    /// ⚠⚠ **Each pane holds a ~78 MB decode and a render worker**, so keeping them for a view
+    /// nobody is looking at would leave ~350 MB and two threads behind after a single visit.
+    ///
+    /// ⚠ One edge check, not a release at each exit: `to_grid`, Escape, `G`, the segmented
+    /// switch and `open_entry` all leave Compare, and one of the five would be forgotten. The
+    /// per-view status line is cleared the same way and for the same reason.
+    pub(crate) fn release_compare_panes(&mut self) {
+        if self.library_mode != LibraryMode::Compare || self.view != crate::AppView::Library {
+            self.compare_view.clear();
+        }
+    }
+}
+
+/// The centre of whichever pane a point falls in — or nearest, if it is in the gap.
+///
+/// ⚠ The zoom anchor has to be measured against the pane the pointer is in, not against the
+/// stage: the two panes are drawn about their own centres, so anchoring both to the stage's
+/// centre would slide the picture out from under the cursor in whichever pane you were using.
+fn nearest_centre(stage: egui::Rect, tiles: &[tile_layout::Tile], p: egui::Pos2) -> egui::Pos2 {
+    tiles
+        .iter()
+        .map(|t| multi::image_area(multi::tile_rect(stage, *t)).center())
+        .min_by(|a, b| {
+            (a.distance(p))
+                .partial_cmp(&b.distance(p))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or_else(|| stage.center())
+}
+
+/// ⚠⚠ **The pair is derived ONCE, here, and both the panes and the drawing use it.** Resolving
+/// it a second time inside the draw closure would be two computations of one fact — and while
+/// they read the same `lib` in the same frame and so agree today, that is exactly the shape this
+/// project has been bitten by three times (`render_max_dim`, `fit_image_size`, the crop feedback
+/// loop). Deriving it once makes the disagreement unrepresentable rather than merely unlikely.
+struct Plan {
+    reference: usize,
+    candidate: Option<usize>,
+    /// The photos to build panes for, with the edits to render each through.
+    want: Vec<(PhotoId, edit_model::Edits)>,
+}
+
+/// The two photos Compare is about to show, with the edits to render them through.
+///
+/// ⚠ Resolved from `app` read-only and *before* the panel is drawn, because building a pane needs
+/// the decode cache and the worker while the draw closure holds `app.library`.
+///
+/// ⚠ The **open** photo's edits come from the live session rather than from the row: the sidecar
+/// is stale exactly while you are editing, which is `edit-accurate thumbnails`' rule and matters
+/// here for the same reason — you arrive in Compare straight from Develop.
+fn plan(app: &RustroomApp, stored: &Option<PhotoId>) -> Option<Plan> {
+    let lib = app.library.as_ref()?;
+    // ⚠ Falls back to the first visible row rather than refusing to draw. Arriving in Compare
+    // with nothing selected is ordinary — pressing `C` is how you get here — and an empty state
+    // you can only leave by going back to the grid is worse than a sensible starting pair.
+    let reference = lib
+        .selection
+        .active()
+        .or_else(|| lib.visible.first().copied())?;
+    let selected: Vec<usize> = lib.selection.iter().collect();
+    let pool = compare_pair::pool(&lib.visible, &selected);
+    // ⚠ Resolved from the stored **id**, so a candidate whose row moved under a sort, was
+    // filtered away, or has just been promoted falls back rather than showing the wrong
+    // photograph. See `RustroomApp::compare_candidate`.
+    let stored_row = stored
+        .as_ref()
+        .and_then(|id| lib.entries.iter().position(|e| &e.id == id));
+    let candidate = compare_pair::candidate(&pool, reference, stored_row);
+    let live = app.live_edits();
+    let want = [Some(reference), candidate]
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let e = lib.entries.get(row)?;
+            // ⚠ The **open** photo renders through its live edits, not the row's: the sidecar is
+            // stale exactly while you are editing, and you arrive here straight from Develop.
+            let edits = match &live {
+                Some((p, c, ed)) if *p == e.id.path && *c == e.id.copy => ed.clone(),
+                _ => e.edits.clone(),
+            };
+            Some((e.id.clone(), edits))
+        })
+        .collect();
+    Some(Plan {
+        reference,
+        candidate,
+        want,
+    })
+}
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Hoisted before any `&mut app.*`: `live_edits` takes `&self`, so it borrows the whole of
@@ -57,8 +152,22 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let stored = app.compare_candidate.clone();
     let mut out = Outcome::default();
 
+    // ⚠⚠ **The panes are settled BEFORE the panel is drawn**, because building one needs the
+    // decode cache and the decode worker while the draw closure is holding `app.library`.
+    let plan = plan(app, &stored);
+    let display_space = app.settings.effective_display_space(app.os_manages_colour);
+    if let Some(p) = &plan {
+        app.compare_view
+            .sync(&p.want, &mut app.cache, &mut app.decoder, ctx);
+    }
+    // Two disjoint `&mut` fields, which is legal where a closure capturing `app` twice is E0499 —
+    // the shape `masks::BrushTool` already uses.
+    let view = &mut app.compare_view;
+    let library = &mut app.library;
+    let pan_binding = app.settings.pan_drag;
+
     egui::CentralPanel::default().show(ui, |ui| {
-        let Some(lib) = &mut app.library else {
+        let Some(lib) = library else {
             ui.centered_and_justified(|ui| {
                 crate::theme::empty_state(ui, "Open a folder to compare photos.");
             });
@@ -71,26 +180,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             return;
         }
 
-        let selected: Vec<usize> = lib.selection.iter().collect();
-        // ⚠ Falls back to the first visible row rather than refusing to draw. Arriving in
-        // Compare with nothing selected is ordinary — pressing `C` is how you get here — and an
-        // empty state you can only leave by going back to the grid is worse than a sensible
-        // starting pair.
-        let Some(reference) = lib
-            .selection
-            .active()
-            .or_else(|| lib.visible.first().copied())
+        // ⚠ The pair `plan` already resolved, never a second derivation of it — see `Plan`.
+        let Some(Plan {
+            reference,
+            candidate,
+            ..
+        }) = plan
         else {
             return;
         };
+        // `pool` is still needed live, because the arrow keys step through it.
+        let selected: Vec<usize> = lib.selection.iter().collect();
         let pool = compare_pair::pool(&lib.visible, &selected);
-        // ⚠ Resolved from the stored **id** every frame, so a candidate whose row moved under a
-        // sort, was filtered away, or has just been promoted falls back rather than showing the
-        // wrong photograph. See `RustroomApp::compare_candidate`.
-        let stored_row = stored
-            .as_ref()
-            .and_then(|id| lib.entries.iter().position(|e| &e.id == id));
-        let candidate = compare_pair::candidate(&pool, reference, stored_row);
 
         // ── Keyboard ─────────────────────────────────────────────────────────────────────
         //
@@ -148,6 +249,24 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             return;
         };
 
+        // ── Navigation ───────────────────────────────────────────────────────────────────
+        //
+        // ⚠ The same inputs the Develop canvas takes, through the same `pan_delta` — scroll or a
+        // two-finger swipe pans, pinch or ctrl+scroll zooms, and the configured drag button pans.
+        // Duplicating that idiom per view is how the two would drift apart.
+        let zoom = view.zoom();
+        let pan = view.pan;
+        let (scroll, space_down, zoom_factor, pointer) = ui.input(|i| {
+            (
+                i.smooth_scroll_delta,
+                i.key_down(egui::Key::Space),
+                i.zoom_delta(),
+                i.pointer.hover_pos(),
+            )
+        });
+        let mut pan_accum = egui::Vec2::ZERO;
+        let mut hovered = false;
+
         let mut window: Vec<ThumbRequest> = Vec::new();
         for (slot, (row, label)) in [(reference, "Reference"), (cand, "Candidate")]
             .into_iter()
@@ -167,16 +286,40 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 .get(&lib.entries[row].id)
                 .copied()
                 .unwrap_or_default();
-            let resp = multi::photo_tile(
+            // ⚠⚠ **The real render when there is one, the thumbnail only until it lands.** A
+            // 512 px thumbnail cannot answer the question this view exists for, so the pane is
+            // what makes zooming worth anything — but showing grey while a ~1 s decode runs
+            // would make arriving in Compare feel broken.
+            let img_area = multi::image_area(rect);
+            let pane_img = view.pane_mut(&lib.entries[row].id).map(|pane| {
+                pane.update(img_area, zoom, display_space, ui.ctx());
+                (pane.texture().cloned(), pane.draw_scale(img_area, zoom))
+            });
+            let image = match &pane_img {
+                Some((Some(t), scale)) => multi::TileImage::Pane {
+                    tex: t,
+                    scale: *scale,
+                    offset: pan,
+                },
+                _ => multi::TileImage::Thumb(tex),
+            };
+            let resp = multi::tile(
                 ui,
                 rect,
                 ui.id().with(("compare", slot)),
-                tex,
+                image,
                 &caption,
                 marks,
                 // The candidate carries the focus ring, because it is what the keys act on.
                 slot == 1,
             );
+            // ⚠⚠ **One gesture, both panes.** The navigation is read from whichever pane the
+            // pointer is over and applied to the shared zoom and pan, so the two always show the
+            // same part of the frame — see `CompareView`.
+            pan_accum += pan_delta(&resp, scroll, space_down, pan_binding, typing);
+            if resp.hovered() {
+                hovered = true;
+            }
             if resp.double_clicked() {
                 out.open = Some(row);
             } else if resp.clicked() && slot == 1 {
@@ -188,6 +331,34 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
             window.push(req);
         }
+        // ⚠⚠ **Applied once, after both tiles, to the shared view.** Zoom is folded in before
+        // pan because the anchor correction depends on the new zoom — the order the Develop
+        // canvas records, and the other way round anchors against a stale factor.
+        if zoom_factor != 1.0 && hovered {
+            let next = view_region::zoom_step(zoom, zoom_factor);
+            // Zoom about the cursor, not the tile's centre: whatever the pointer is over holds
+            // still, which is what makes comparing a detail at high zoom possible at all.
+            if let Some(p) = pointer {
+                // The anchor is measured against the pane the pointer is in, which is the tile
+                // whose centre is nearest it — the panes are side by side, so this is exact.
+                let centre = nearest_centre(stage, &tiles, p);
+                view.pan += view_region::zoom_anchor_shift(
+                    (p.x - centre.x, p.y - centre.y),
+                    (view.pan.x, view.pan.y),
+                    zoom,
+                    next,
+                )
+                .into();
+            }
+            view.zoom = next;
+        }
+        view.pan += pan_accum;
+        // ⚠ At fit there is nothing hidden to reveal, so a stray pan must not push the photo off
+        // into the grey with nothing to bring it back. The canvas records the same rule.
+        if view.zoom() <= 1.0 {
+            view.pan = egui::Vec2::ZERO;
+        }
+
         // ⚠ Prefetch the candidates either side, so stepping is instant rather than showing a
         // grey pane for a moment. Four requests in all — nothing against the byte budget.
         for forward in [true, false] {
@@ -270,6 +441,90 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    /// ⚠⚠ **The wiring test for the whole feature.** `plan` is what turns the two rows
+    /// on screen into two real decodes; get it wrong and Compare silently keeps showing 512 px
+    /// thumbnails, which looks exactly like it working until you zoom.
+    #[test]
+    fn the_two_shown_photos_are_the_two_panes_asked_for() {
+        let mut app = app_with(6);
+        {
+            let lib = app.library.as_mut().unwrap();
+            lib.selection.select_indices(&[1, 4]);
+            lib.selection.focus(1);
+        }
+        let want = plan(&app, &None).expect("a plan").want;
+        let lib = app.library.as_ref().unwrap();
+        let rows: Vec<usize> = want
+            .iter()
+            .filter_map(|(id, _)| lib.entries.iter().position(|e| e.id == *id))
+            .collect();
+        assert_eq!(
+            rows.len(),
+            2,
+            "Compare wants exactly two panes, got {rows:?}"
+        );
+        assert_eq!(rows[0], 1, "the first pane is the reference");
+        assert_ne!(rows[1], rows[0], "the candidate is not the reference");
+    }
+
+    /// ⚠ The **open** photo renders through its live edits, not the row's. The sidecar is stale
+    /// exactly while you are editing, and you arrive in Compare straight from Develop — the rule
+    /// edit-accurate thumbnails already follow, and it matters more here because these are the
+    /// full-size renders you are judging.
+    #[test]
+    fn the_open_photos_pane_uses_its_live_edits() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(4);
+        crate::test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        let open_id = {
+            let s = app.session.as_mut().unwrap();
+            s.edits.exposure = 1.75;
+            rustroom_app::photo_id::PhotoId::new(s.path.clone(), s.copy)
+        };
+        {
+            let lib = app.library.as_mut().unwrap();
+            lib.entries[0].id = open_id.clone();
+            lib.entries[0].edits = edit_model::Edits::default();
+            lib.selection.select_indices(&[0, 1]);
+            lib.selection.focus(0);
+        }
+        let want = plan(&app, &None).expect("a plan").want;
+        let live = want
+            .iter()
+            .find(|(id, _)| *id == open_id)
+            .expect("the open photo is a pane");
+        assert_eq!(
+            live.1.exposure, 1.75,
+            "the pane took the stale sidecar edits rather than the live ones"
+        );
+    }
+
+    /// ⚠⚠ Leaving Compare must drop the panes: each holds a ~78 MB decode and a render worker,
+    /// and nothing else in the app would notice them being kept.
+    #[test]
+    fn leaving_compare_drops_its_panes() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(4);
+        {
+            let lib = app.library.as_mut().unwrap();
+            lib.selection.select_indices(&[0, 1]);
+        }
+        let id = app.library.as_ref().unwrap().entries[0].id.clone();
+        app.cache
+            .insert(id.path.clone(), crate::test_app::fake_decode());
+        frame(&mut app, &ctx, Vec::new());
+        assert!(
+            app.compare_view.pane_mut(&id).is_some(),
+            "no pane was built from the cached buffer"
+        );
+        app.library_mode = LibraryMode::Grid;
+        app.release_compare_panes();
+        assert!(
+            app.compare_view.pane_mut(&id).is_none(),
+            "the panes survived leaving Compare"
+        );
     }
 
     fn app_with(n: usize) -> RustroomApp {

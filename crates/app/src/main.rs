@@ -260,6 +260,12 @@ struct RustroomApp {
     /// the alternative is an invalidation hook at every one of them, and the one that forgets
     /// shows the wrong photograph.
     compare_candidate: Option<PhotoId>,
+    /// Compare's two panes, and the zoom and pan they share.
+    ///
+    /// ⚠ Lives on the app rather than inside the view so it survives a frame — a pane owns a
+    /// decoded buffer and a render worker, and rebuilding those per frame would decode the
+    /// photograph sixty times a second.
+    compare_view: multi::pane::CompareView,
     /// The view as of the previous frame, so a switch can be noticed.
     ///
     /// ⚠ An edge detector, not a second source of truth: it is only ever compared against
@@ -500,6 +506,7 @@ impl RustroomApp {
             view: AppView::default(),
             library_mode: LibraryMode::default(),
             compare_candidate: None,
+            compare_view: Default::default(),
             last_view: AppView::default(),
             library: None,
             session: None,

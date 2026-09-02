@@ -269,6 +269,7 @@ impl eframe::App for RustroomApp {
                 // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
                 // a mode that silently shows the grid — the rule `commands::execute`'s match
                 // already follows.
+                self.release_compare_panes();
                 match self.library_mode {
                     LibraryMode::Grid => library::show(self, ui, &ctx),
                     LibraryMode::Compare => multi::compare::show(self, ui, &ctx),

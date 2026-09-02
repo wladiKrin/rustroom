@@ -128,6 +128,16 @@ impl DecodeWorker {
         self.next_seq
     }
 
+    /// How many decodes have been asked for, ever.
+    ///
+    /// ⚠ Not `#[cfg(test)]`, for the reason `RenderEngine::requests_issued` records: this is the
+    /// only quantity that says "a decode was *requested*" synchronously. `in_flight` is not a
+    /// substitute — a decode that has already finished, or failed, is no longer in flight, so a
+    /// test asserting on it would pass whether or not the request was ever made.
+    pub fn requests_issued(&self) -> u64 {
+        self.next_seq
+    }
+
     /// Collect finished results and start the queued request if a slot freed up.
     /// Call once per frame.
     pub fn poll(&mut self) -> Vec<DecodeResult> {

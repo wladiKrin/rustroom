@@ -42,7 +42,7 @@ pub(super) fn tool_drag_started(resp: &egui::Response) -> bool {
 /// plain flag, so the `&&` short-circuits and never locks *unless something is being dragged*.
 /// Caught by `the_configured_drag_button_pans`; it would otherwise have panicked in production
 /// on the first middle-drag.
-pub(super) fn pan_delta(
+pub(crate) fn pan_delta(
     resp: &egui::Response,
     scroll: egui::Vec2,
     space_down: bool,

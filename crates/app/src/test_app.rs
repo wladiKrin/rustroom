@@ -104,6 +104,7 @@ pub fn for_test() -> RustroomApp {
         filter: Default::default(),
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         camera_profiles_cache: Vec::new(),
+        compare_view: Default::default(),
         os_manages_colour: false,
         view: AppView::Develop,
         // ⚠ The grid, not `Default::default()` spelled out — a test that has not said otherwise

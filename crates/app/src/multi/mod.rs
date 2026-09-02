@@ -24,6 +24,7 @@
 //! without a window; only the drawing and the egui wiring are here.
 
 pub mod compare;
+pub(crate) mod pane;
 pub mod survey;
 
 use crate::thumb;
@@ -54,7 +55,38 @@ pub(crate) fn photo_tile(
     marks: catalog::db::Marks,
     focused: bool,
 ) -> egui::Response {
-    photo_tile_scaled(ui, rect, id, tex, caption, marks, focused, MAX_UPSCALE)
+    tile(ui, rect, id, TileImage::Thumb(tex), caption, marks, focused)
+}
+
+/// The part of a tile the photo occupies: everything above the caption strip.
+///
+/// ⚠ Public because Compare needs it *before* drawing — a pane picks its render rung from the
+/// area it will be drawn into, and re-deriving that from the tile rect in two places is how the
+/// two would come to disagree about where the picture goes.
+pub(crate) fn image_area(rect: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.max.x, (rect.max.y - CAPTION_H).max(rect.min.y)),
+    )
+}
+
+/// What goes in a tile's image area.
+///
+/// ⚠⚠ **One chrome, two pictures.** A Survey tile shows a thumbnail fitted to it; a Compare pane
+/// shows a real render at whatever zoom and pan the two panes share. The caption, the marks and
+/// the focus ring are identical, and duplicating them per view is how the two would drift.
+pub(crate) enum TileImage<'a> {
+    /// A thumbnail, fitted and centred — magnified up to [`MAX_UPSCALE`] to fill the tile.
+    Thumb(Option<&'a egui::TextureHandle>),
+    /// A rendered frame at an explicit scale and offset, clipped to the tile.
+    ///
+    /// ⚠ Clipped rather than fitted: at zoom the picture is *meant* to overflow, and that is what
+    /// panning moves around inside.
+    Pane {
+        tex: &'a egui::TextureHandle,
+        scale: f32,
+        offset: egui::Vec2,
+    },
 }
 
 /// How far a thumbnail may be magnified to fill its tile.
@@ -70,44 +102,54 @@ pub(crate) fn photo_tile(
 /// because past it a 512 px thumbnail is more artifact than photograph.
 const MAX_UPSCALE: f32 = 2.0;
 
-#[allow(clippy::too_many_arguments)]
-fn photo_tile_scaled(
+pub(crate) fn tile(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     id: egui::Id,
-    tex: Option<&egui::TextureHandle>,
+    image: TileImage<'_>,
     caption: &str,
     marks: catalog::db::Marks,
     focused: bool,
-    max_upscale: f32,
 ) -> egui::Response {
     let resp = ui.interact(rect, id, egui::Sense::click());
     let p = ui.painter_at(rect);
 
     // The photo gets everything above the caption strip.
-    let img = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(rect.max.x, (rect.max.y - CAPTION_H).max(rect.min.y)),
-    );
+    let img = image_area(rect);
     p.rect_filled(
         rect,
         egui::CornerRadius::same(3),
         egui::Color32::from_gray(24),
     );
-    match tex {
-        Some(t) => {
-            // Fit, then centre. Magnified up to `max_upscale` so a large tile is filled rather
+    match image {
+        TileImage::Thumb(Some(t)) => {
+            // Fit, then centre. Magnified up to `MAX_UPSCALE` so a large tile is filled rather
             // than holding a small photo in a field of grey — see that constant for the trade.
             let size = t.size_vec2();
             if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
                 let scale = (img.width() / size.x)
                     .min(img.height() / size.y)
-                    .min(max_upscale);
+                    .min(MAX_UPSCALE);
                 egui::Image::new(t)
                     .paint_at(ui, egui::Rect::from_center_size(img.center(), size * scale));
             }
         }
-        None => {
+        TileImage::Pane { tex, scale, offset } => {
+            let size = tex.size_vec2();
+            if size.x > 0.0 && size.y > 0.0 && img.width() > 0.0 && img.height() > 0.0 {
+                // ⚠⚠ **Clipped explicitly.** At zoom the picture is larger than the pane, and
+                // `paint_at` honours the `Ui`'s clip rect rather than its layout rect — so
+                // without `set_clip_rect` the zoomed photo spills across the divider and over
+                // its neighbour, which is the one thing a comparison view must never do.
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(img));
+                child.set_clip_rect(img);
+                egui::Image::new(tex).paint_at(
+                    &child,
+                    egui::Rect::from_center_size(img.center() + offset, size * scale),
+                );
+            }
+        }
+        TileImage::Thumb(None) => {
             // ⚠ A placeholder, not nothing: a tile that vanished while its thumbnail loaded
             // would make the whole layout look broken rather than merely unfinished.
             p.rect_filled(

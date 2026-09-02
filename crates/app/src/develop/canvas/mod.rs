@@ -10,7 +10,7 @@ mod crop_overlay;
 mod guide_overlay;
 mod mask_overlay;
 mod mask_tint;
-mod navigation;
+pub(crate) mod navigation;
 #[cfg(test)]
 mod test_support;
 
