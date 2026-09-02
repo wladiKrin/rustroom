@@ -1472,3 +1472,165 @@ fn golden_perspective_aspect() {
         grid_chart(),
     );
 }
+
+/// A smooth vertical gradient with a dark 6 px "dust spot" — the one chart on which a clone and
+/// a heal are legible and *distinguishable*.
+///
+/// ⚠ The source sits **diagonally** from the destination, not to the side, so clone lands a
+/// visibly lighter disc where heal lands one that continues the gradient.
+///
+/// ⚠⚠ **AND THE GRADIENT ITSELF IS DIAGONAL, WHICH THE SABOTAGE STEP IS WHAT ESTABLISHED.** A
+/// purely vertical ramp makes a *horizontal* offset error completely invisible: forcing `dx = 0`
+/// left both references byte-identical and the guard green, because two points on the same row
+/// have the same brightness. The spec predicted exactly this ("a clone test on a uniform source
+/// cannot see a wrong offset") and a one-axis gradient is uniform along the other axis. With both
+/// axes contributing, every component of the offset moves pixels.
+///
+/// ⚠ The ramp stops short of both ends (0.15..0.75) for `grade_ramp_chart`'s reason: a clipped
+/// golden cannot tell one effect from a stronger one. `the_spot_goldens_do_not_clip_and_differ`
+/// is the guard.
+const SPOT_W: usize = 64;
+const SPOT_H: usize = 48;
+
+/// The retouch radius in pixels, shared by the cases and the guard so the two cannot disagree
+/// about where the patch is. Comfortably larger than the 6 px dust spot — see `spot_cases`.
+const SPOT_R: f32 = 9.0;
+
+/// Where the dust spot and the retouch are centred.
+const SPOT_C: (f32, f32) = (24.0, 20.0);
+
+fn spot_chart() -> ImageBuf {
+    let (sw, sh) = (SPOT_W, SPOT_H);
+    let mut img = ImageBuf::new(sw, sh);
+    for y in 0..sh {
+        for x in 0..sw {
+            let u = x as f32 / (sw - 1) as f32;
+            let w = y as f32 / (sh - 1) as f32;
+            let v = 0.15 + 0.60 * (0.5 * u + 0.5 * w);
+            // A warm tint, so a per-channel heal shift is visible rather than only a grey level.
+            let px = [v, v * 0.88, v * 0.74];
+            set_srgb(&mut img, x, y, px);
+        }
+    }
+    // The dust spot: a dark disc the retouch is there to remove.
+    let (cx, cy) = SPOT_C;
+    for y in 0..sh {
+        for x in 0..sw {
+            let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+            if d <= 6.0 {
+                set_srgb(&mut img, x, y, [0.05, 0.05, 0.05]);
+            }
+        }
+    }
+    img
+}
+
+/// The two spot cases, looked up from one table so the goldens and their guard cannot describe
+/// different renders — `grading_cases`' rule.
+fn spot_cases() -> Vec<(&'static str, Edits)> {
+    let mk = |mode| Edits {
+        spots: vec![edit_model::Spot {
+            centre: [24.0 / 63.0, 20.0 / 47.0],
+            // Down and to the right: far enough that the gradient has visibly moved.
+            source: [44.0 / 63.0, 34.0 / 47.0],
+            // ⚠⚠ **9 px against the dust spot's 6, and the margin is load-bearing.** Heal matches
+            // the annulus `r < d ≤ 1.5r`, so a spot no larger than the blemish measures a ring
+            // that still lies *on* the blemish and dutifully matches the thing being removed —
+            // which is exactly what the first version of this case did (patch 146 against a
+            // surround of 171). A real retouch covers the blemish with room to spare, and that
+            // is not merely tidiness: it is what makes the ring describe the surroundings.
+            radius: SPOT_R / 64.0,
+            feather: 40.0,
+            mode,
+        }],
+        ..Edits::default()
+    };
+    vec![
+        ("spot_clone", mk(edit_model::SpotMode::Clone)),
+        ("spot_heal", mk(edit_model::SpotMode::Heal)),
+    ]
+}
+
+fn spot_case(name: &str) -> Edits {
+    spot_cases()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, e)| e)
+        .unwrap()
+}
+
+#[test]
+fn golden_spot_clone() {
+    check_golden_with("spot_clone", &spot_case("spot_clone"), spot_chart());
+}
+
+#[test]
+fn golden_spot_heal() {
+    check_golden_with("spot_heal", &spot_case("spot_heal"), spot_chart());
+}
+
+/// ⚠ Two valid-looking PNGs prove nothing on their own. This asserts three things a picture
+/// cannot: neither clips (so each can still witness a change), the two genuinely differ, and
+/// **heal matches the surrounding gradient where clone does not** — which is the whole
+/// difference between the modes, measured rather than eyeballed.
+#[test]
+fn the_spot_goldens_do_not_clip_and_differ() {
+    let mut rendered: Vec<(&str, Vec<u8>)> = Vec::new();
+    for (name, edits) in spot_cases() {
+        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(spot_chart()));
+        let hi = bytes.iter().filter(|&&c| c == 255).count();
+        let lo = bytes.iter().filter(|&&c| c == 0).count();
+        assert!(
+            hi == 0 && lo == 0,
+            "{name}: {hi} samples clipped high, {lo} low — the golden cannot discriminate \
+             where it is pinned"
+        );
+        rendered.push((name, bytes));
+    }
+    let differing = rendered[0]
+        .1
+        .iter()
+        .zip(&rendered[1].1)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing >= 20,
+        "clone and heal differ in only {differing} samples — the pair has no discriminating power"
+    );
+
+    // The measured half: the mean over the patch against the mean of the ring around it.
+    // Heal exists to make those agree; clone brings the source's own brightness with it.
+    //
+    // ⚠ The ring is measured **on the neutral render, in place**, rather than sampled from some
+    // fixed row or column. The gradient runs diagonally, so any fixed sample describes a
+    // different brightness from the patch's own neighbourhood and the comparison would be
+    // between two unrelated numbers.
+    let (cx, cy) = SPOT_C;
+    let region_mean = |bytes: &[u8], lo: f32, hi: f32| -> f32 {
+        let (mut sum, mut n) = (0.0f32, 0usize);
+        for y in 0..SPOT_H {
+            for x in 0..SPOT_W {
+                let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                if d > lo && d <= hi {
+                    sum += bytes[(y * SPOT_W + x) * 3] as f32;
+                    n += 1;
+                }
+            }
+        }
+        sum / n as f32
+    };
+    // Well inside the patch, so the feathered rim cannot dilute the reading.
+    let patch_mean = |bytes: &[u8]| region_mean(bytes, -1.0, SPOT_R * 0.6);
+    let neutral = to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(spot_chart()));
+    let surround = region_mean(&neutral, SPOT_R, SPOT_R * 1.5);
+    let heal = patch_mean(&rendered[1].1);
+    let clone = patch_mean(&rendered[0].1);
+    assert!(
+        (heal - surround).abs() < 6.0,
+        "heal should continue the gradient: patch {heal:.1} vs surround {surround:.1}"
+    );
+    assert!(
+        (clone - surround).abs() > 12.0,
+        "clone should carry the source's brightness: patch {clone:.1} vs surround {surround:.1}"
+    );
+}
