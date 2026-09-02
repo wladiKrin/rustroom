@@ -173,6 +173,9 @@ impl RustroomApp {
                 }
             }
         }
+        // ⚠ Keywords are per **file**, so `files` is already the right list — deduplicated
+        // above, and every copy of a photo shares the one sidecar.
+        self.write_xmp_for(&files);
         self.status = format!("Tagged {n} photos");
     }
 
@@ -199,6 +202,9 @@ impl RustroomApp {
                 }
             }
         }
+        // ⚠ Removing a keyword must reach the sidecar too, or Lightroom keeps showing one that
+        // is no longer in the catalog — a stale sidecar is worse than none.
+        self.write_xmp_for(&files);
         self.status = format!("Removed the keyword from {n} photos");
     }
 
@@ -249,6 +255,9 @@ impl RustroomApp {
                 }
             }
         }
+        // ⚠ The context menu's tri-state toggle reaches the sidecar exactly as the panel's
+        // `+`/`−` do — two routes to one change must not disagree about whether it is written.
+        self.write_xmp_for(&files);
         self.status = if on {
             format!("Tagged {n} photos")
         } else {
@@ -360,6 +369,43 @@ impl RustroomApp {
         }
     }
 
+    /// Import any XMP sidecar that has changed since Rustroom last saw it.
+    ///
+    /// ⚠⚠ **Called from `open_scan`, before `reload_marks`** — a rating that arrived from
+    /// Lightroom must be in the catalog before the marks map is built, or it would not appear
+    /// until something unrelated rebuilt the Library.
+    ///
+    /// ⚠ Deliberately **not** gated on `Settings::write_xmp`: that setting is about *writing*.
+    /// Somebody who has turned writing off still wants to see what another application did,
+    /// and reading can destroy nothing.
+    ///
+    /// ⚠ Copy 0 only — the rows an XMP sidecar describes.
+    pub(crate) fn import_xmp(&self) {
+        let Some(cat) = &self.catalog else { return };
+        let Some(lib) = self.library.as_ref() else {
+            return;
+        };
+        let paths: Vec<PathBuf> = lib
+            .entries
+            .iter()
+            .filter(|e| e.id.is_original())
+            .map(|e| e.id.path.clone())
+            .collect();
+        rustroom_app::xmp_sync::import_newer(cat, &paths);
+    }
+
+    /// Write these photos' XMP sidecars, if the setting allows it.
+    ///
+    /// ⚠ One funnel for every mark and keyword change, so a new call site cannot forget the
+    /// setting check or the RAW-only rule — both live in `xmp_sync`.
+    pub(crate) fn write_xmp_for(&self, files: &[PathBuf]) {
+        if !self.settings.write_xmp {
+            return;
+        }
+        let Some(cat) = &self.catalog else { return };
+        rustroom_app::xmp_sync::write_for_all(cat, files);
+    }
+
     /// Apply a culling action to every selected photo.
     ///
     /// ⚠ The **selection**, not the active photo — the rule a paste, a preset and a sync already
@@ -404,6 +450,16 @@ impl RustroomApp {
                 let _ = cat.set_marks(&id.path, id.copy, next);
             }
         }
+        // ⚠ **Copy 0 only, and that is not merely a filter.** An XMP sidecar carries the
+        // original's marks, so rating a copy changes nothing a sidecar can express — writing
+        // one anyway would rewrite the same bytes and move its modification time, which is the
+        // one value the whole conflict rule turns on.
+        let files: Vec<PathBuf> = chosen
+            .iter()
+            .filter(|id| id.is_original())
+            .map(|id| id.path.clone())
+            .collect();
+        self.write_xmp_for(&files);
         self.reload_marks();
     }
 }

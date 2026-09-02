@@ -217,6 +217,11 @@ impl RustroomApp {
         if let Some(lib) = self.library.as_mut() {
             lib.refilter(&filter);
         }
+        // ⚠⚠ **Before `reload_marks`.** A rating or keyword somebody set in Lightroom has to be
+        // in the catalog before the marks map is read, or it would not show until something
+        // unrelated rebuilt the Library. One `stat` per RAW, the cost the "last edited" sort
+        // already pays for the JSON sidecar.
+        self.import_xmp();
         self.reload_marks();
         self.reload_captures();
         self.queue_metadata();
@@ -376,6 +381,153 @@ mod tests {
             app.library.as_ref().unwrap().visible.len(),
             1,
             "the filter was not applied to the new source"
+        );
+    }
+
+    /// Write `stem.xmp` beside `photo`, carrying `rating`.
+    fn put_xmp(photo: &std::path::Path, rating: u8) {
+        let text = xmp::write(
+            &xmp::Sidecar {
+                rating: Some(rating),
+                ..xmp::Sidecar::default()
+            },
+            None,
+        )
+        .unwrap();
+        std::fs::write(rustroom_app::xmp_sync::sidecar_path(photo), text).unwrap();
+    }
+
+    #[test]
+    fn a_raw_rated_elsewhere_imports_when_the_folder_opens() {
+        // ⚠⚠ The milestone's own "done when": a folder rated in Lightroom opens here with its
+        // stars. End to end through the real `open_scan`, with files on disk.
+        let dir = test_app::TestDir::new("xmpopen");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"x").unwrap();
+        put_xmp(&photo, 4);
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+
+        app.open_catalog_folder(&ctx, &dir.0);
+
+        let id = rustroom_app::photo_id::PhotoId::original(photo);
+        assert_eq!(
+            app.library
+                .as_ref()
+                .unwrap()
+                .marks
+                .get(&id)
+                .map(|m| m.rating),
+            Some(4),
+            "the sidecar's rating did not reach the Library"
+        );
+    }
+
+    #[test]
+    fn rating_a_raw_writes_its_sidecar_and_does_not_re_import_on_the_next_open() {
+        // ⚠ Both halves in one test on purpose: a write that did not record its own mtime would
+        // still produce a file, so "a sidecar appeared" alone cannot see the bug.
+        let dir = test_app::TestDir::new("xmpwrite");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"x").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.open_catalog_folder(&ctx, &dir.0);
+
+        let id = rustroom_app::photo_id::PhotoId::original(photo.clone());
+        app.apply_mark_to(&[id.clone()], rustroom_app::marks::MarkAction::Rating(3));
+
+        let side = rustroom_app::xmp_sync::sidecar_path(&photo);
+        let text = std::fs::read_to_string(&side).expect("no sidecar was written");
+        assert_eq!(xmp::read(&text).unwrap().rating, Some(3));
+
+        // Re-opening must not treat our own write as a foreign edit.
+        app.open_catalog_folder(&ctx, &dir.0);
+        assert_eq!(
+            app.library
+                .as_ref()
+                .unwrap()
+                .marks
+                .get(&id)
+                .map(|m| m.rating),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn a_jpeg_gets_no_sidecar_when_rated() {
+        let dir = test_app::TestDir::new("xmpjpeg");
+        let photo = dir.0.join("a.jpg");
+        std::fs::write(&photo, b"x").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.open_catalog_folder(&ctx, &dir.0);
+
+        app.apply_mark_to(
+            &[rustroom_app::photo_id::PhotoId::original(photo.clone())],
+            rustroom_app::marks::MarkAction::Rating(5),
+        );
+        assert!(
+            !rustroom_app::xmp_sync::sidecar_path(&photo).exists(),
+            "a JPEG got a sidecar Lightroom would never look for"
+        );
+    }
+
+    #[test]
+    fn the_write_setting_is_honoured() {
+        let dir = test_app::TestDir::new("xmpoff");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"x").unwrap();
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.settings.write_xmp = false;
+        app.open_catalog_folder(&ctx, &dir.0);
+
+        app.apply_mark_to(
+            &[rustroom_app::photo_id::PhotoId::original(photo.clone())],
+            rustroom_app::marks::MarkAction::Rating(5),
+        );
+        assert!(
+            !rustroom_app::xmp_sync::sidecar_path(&photo).exists(),
+            "a sidecar was written with the setting off"
+        );
+        // ⚠ And the mark still reached the catalog: the setting governs the sidecar, never the
+        // rating itself.
+        let id = rustroom_app::photo_id::PhotoId::original(photo);
+        assert_eq!(
+            app.library
+                .as_ref()
+                .unwrap()
+                .marks
+                .get(&id)
+                .map(|m| m.rating),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn reading_still_happens_with_writing_turned_off() {
+        // ⚠ The asymmetry, stated as a test: turning writing off must not blind Rustroom to
+        // what another application did — reading can destroy nothing.
+        let dir = test_app::TestDir::new("xmpreadonly");
+        let photo = dir.0.join("a.RAF");
+        std::fs::write(&photo, b"x").unwrap();
+        put_xmp(&photo, 2);
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.settings.write_xmp = false;
+
+        app.open_catalog_folder(&ctx, &dir.0);
+
+        let id = rustroom_app::photo_id::PhotoId::original(photo);
+        assert_eq!(
+            app.library
+                .as_ref()
+                .unwrap()
+                .marks
+                .get(&id)
+                .map(|m| m.rating),
+            Some(2)
         );
     }
 
