@@ -95,6 +95,105 @@ pub(super) fn crop_screen_rect(s: &Session, frame_rect: egui::Rect) -> egui::Rec
     egui::Rect::from_min_max(to_screen(g.left, g.top), to_screen(g.right, g.bottom))
 }
 
+/// How prominently the crop marks are drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Marks {
+    /// The Crop tool itself: full strength, with the surround dimmed.
+    Active,
+    /// Context under another gesture — currently the straighten line. Thinner and dimmer, and
+    /// **no dimming of the surround**.
+    ///
+    /// ⚠ The surround is deliberately left undimmed rather than merely lightened: a straighten
+    /// line is very often traced along a horizon that runs *outside* the crop, and darkening
+    /// exactly that region fights the gesture the marks are there to support. The composition
+    /// guides make the same call under Guide Mode, for the same kind of reason.
+    Muted,
+}
+
+/// Draw the crop rectangle: the dimmed surround, the border and the corner brackets.
+///
+/// ⚠ Split out so the straighten overlay can show the framing without inheriting the crop tool's
+/// *interaction* — one drawing rule with two callers, rather than a second copy that would drift
+/// in colour and weight. `test_support.rs` states the general form of that rule.
+pub(super) fn draw_crop_marks(
+    ui: &egui::Ui,
+    crop_rect: egui::Rect,
+    img_rect: egui::Rect,
+    how: Marks,
+) {
+    if how == Marks::Active {
+        let painter = ui.painter_at(img_rect);
+        let dim = egui::Color32::from_black_alpha(140);
+        for outside in rects_around(img_rect, crop_rect) {
+            painter.rect_filled(outside, egui::CornerRadius::ZERO, dim);
+        }
+    }
+    // ⚠⚠ A **wider** clip for the marks. `line_segment` centres its stroke on the path, so at a
+    // full-frame crop — where the boundary *is* the image edge — clipping to the image cuts the
+    // outer half off every mark. See `canvas_geom::overlay_clip`. The dimming above keeps the
+    // tight clip: there is no photograph outside the image to darken.
+    let marks = ui.painter_at(canvas_geom::overlay_clip(img_rect));
+    // ⚠⚠ **Every mark is drawn twice — a dark stroke first, the light one over it.** A plain
+    // white line is invisible against a bright photograph, and the crop border is *hardest* to
+    // see in the case that matters most: at a full-frame crop it lies exactly on the image
+    // boundary, so there is nothing to distinguish the control from the edge of the picture.
+    // Reported in use as the border and the corner dots being easy to miss entirely.
+    // ⚠ Muted is thinner *and* dimmer, the treatment the composition guides already use when
+    // they are context rather than the tool in hand (0.8 over a 2.0 halo, 190 at alpha 150).
+    let muted = how == Marks::Muted;
+    let halo = egui::Color32::from_black_alpha(if muted { 110 } else { 180 });
+    // ⚠ Red, not white and not the theme accent. White vanishes against a bright photograph, and
+    // the accent is user-switchable — including a `Neutral` setting whose whole point is to have
+    // no colour, which would defeat this. A fixed red is legible on essentially all photographic
+    // content and reads unmistakably as a control rather than part of the picture.
+    //
+    // ⚠ The crop overlay was already painted by hand with fixed colours and deliberately does not
+    // follow the accent; this keeps that, rather than introducing a second rule.
+    let mark = if muted {
+        egui::Color32::from_rgba_unmultiplied(255, 60, 60, 150)
+    } else {
+        egui::Color32::from_rgb(255, 60, 60)
+    };
+    let (halo_w, mark_w) = if muted { (2.0, 0.8) } else { (4.0, 1.5) };
+    // ⚠⚠ The guides are **no longer drawn here.** They moved to `canvas::show` so every tool
+    // gets them, not only Crop — the View menu entry and the `O` key did nothing in the other
+    // three. Crop still passes the **crop rect**, because the preview strips the crop and that
+    // rect is the photograph-to-be.
+    marks.rect_stroke(
+        crop_rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(halo_w, halo),
+        egui::StrokeKind::Middle,
+    );
+    marks.rect_stroke(
+        crop_rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(mark_w, mark),
+        egui::StrokeKind::Middle,
+    );
+
+    // ⚠ Corner **brackets**, not dots. They are the conventional crop affordance, they read as
+    // "grab me" where a dot reads as decoration, and they are far larger targets — the hit test
+    // below uses a 0.03 tolerance, which a 4 px dot badly under-advertised.
+    for (a, b) in canvas_geom::corner_brackets(crop_rect, CROP_BRACKET_ARM) {
+        marks.line_segment(
+            [a, b],
+            egui::Stroke::new(
+                if muted {
+                    3.0
+                } else {
+                    canvas_geom::CROP_HALO_WIDTH
+                },
+                halo,
+            ),
+        );
+        marks.line_segment(
+            [a, b],
+            egui::Stroke::new(if muted { 1.6 } else { 3.5 }, mark),
+        );
+    }
+}
+
 pub(super) fn draw_crop_overlay(
     ui: &egui::Ui,
     s: &mut Session,
@@ -112,57 +211,7 @@ pub(super) fn draw_crop_overlay(
     // they cannot drift apart by a pixel.
     let crop_rect = crop_screen_rect(s, frame_rect);
 
-    let painter = ui.painter_at(img_rect);
-    let dim = egui::Color32::from_black_alpha(140);
-    for outside in rects_around(img_rect, crop_rect) {
-        painter.rect_filled(outside, egui::CornerRadius::ZERO, dim);
-    }
-    // ⚠⚠ A **wider** clip for the marks. `line_segment` centres its stroke on the path, so at a
-    // full-frame crop — where the boundary *is* the image edge — clipping to the image cuts the
-    // outer half off every mark. See `canvas_geom::overlay_clip`. The dimming above keeps the
-    // tight clip: there is no photograph outside the image to darken.
-    let marks = ui.painter_at(canvas_geom::overlay_clip(img_rect));
-    // ⚠⚠ **Every mark is drawn twice — a dark stroke first, the light one over it.** A plain
-    // white line is invisible against a bright photograph, and the crop border is *hardest* to
-    // see in the case that matters most: at a full-frame crop it lies exactly on the image
-    // boundary, so there is nothing to distinguish the control from the edge of the picture.
-    // Reported in use as the border and the corner dots being easy to miss entirely.
-    let halo = egui::Color32::from_black_alpha(180);
-    // ⚠ Red, not white and not the theme accent. White vanishes against a bright photograph, and
-    // the accent is user-switchable — including a `Neutral` setting whose whole point is to have
-    // no colour, which would defeat this. A fixed red is legible on essentially all photographic
-    // content and reads unmistakably as a control rather than part of the picture.
-    //
-    // ⚠ The crop overlay was already painted by hand with fixed colours and deliberately does not
-    // follow the accent; this keeps that, rather than introducing a second rule.
-    let mark = egui::Color32::from_rgb(255, 60, 60);
-    // ⚠⚠ The guides are **no longer drawn here.** They moved to `canvas::show` so every tool
-    // gets them, not only Crop — the View menu entry and the `O` key did nothing in the other
-    // three. Crop still passes the **crop rect**, because the preview strips the crop and that
-    // rect is the photograph-to-be.
-    marks.rect_stroke(
-        crop_rect,
-        egui::CornerRadius::ZERO,
-        egui::Stroke::new(4.0, halo),
-        egui::StrokeKind::Middle,
-    );
-    marks.rect_stroke(
-        crop_rect,
-        egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.5, mark),
-        egui::StrokeKind::Middle,
-    );
-
-    // ⚠ Corner **brackets**, not dots. They are the conventional crop affordance, they read as
-    // "grab me" where a dot reads as decoration, and they are far larger targets — the hit test
-    // below uses a 0.03 tolerance, which a 4 px dot badly under-advertised.
-    for (a, b) in canvas_geom::corner_brackets(crop_rect, CROP_BRACKET_ARM) {
-        marks.line_segment(
-            [a, b],
-            egui::Stroke::new(canvas_geom::CROP_HALO_WIDTH, halo),
-        );
-        marks.line_segment([a, b], egui::Stroke::new(3.5, mark));
-    }
+    draw_crop_marks(ui, crop_rect, img_rect, Marks::Active);
 
     if let Some(p) = resp.interact_pointer_pos() {
         // ⚠⚠ **The frame, not the painted slice — head 2 of M3.1a's bug.** The crop is stored in

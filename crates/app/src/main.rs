@@ -831,12 +831,16 @@ pub struct Session {
     ///
     /// ⚠ An `Arc`, so retaining it costs nothing beyond the memory the frame already held.
     readout_bytes: Option<(std::sync::Arc<Vec<u8>>, usize, usize)>,
-    /// What the status cluster shows for the pixel under the cursor, or empty.
+    /// The sampled value under the cursor, or `None`.
+    ///
+    /// ⚠ The **value**, not a formatted string: the swatch and the numbers are two renderings of
+    /// one fact, and storing the string would leave the swatch deriving a colour from text. One
+    /// fact, formatted at the edge that draws it.
     ///
     /// ⚠ Cleared by `canvas::show` on every frame and set again only by an actual hover over the
     /// image. A stale number left on screen after the pointer leaves is worse than none, because
     /// it gets trusted.
-    readout: String,
+    readout: Option<[u8; 3]>,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so

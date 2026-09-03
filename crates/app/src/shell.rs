@@ -277,8 +277,34 @@ impl eframe::App for RustroomApp {
                     // through other paths and have no rendered frame to read.
                     if self.view == AppView::Develop {
                         if let Some(s) = &self.session {
-                            if !s.readout.is_empty() {
-                                ui.label(&s.readout);
+                            if let Some(rgb) = s.readout {
+                                // ⚠⚠ **The swatch is what replaces the `R`/`G`/`B` letters.** It
+                                // answers "which colour" instantly, which no labelling does, and
+                                // it costs less width than three prefixes in the one row this
+                                // project has already had to fix for running out of space.
+                                //
+                                // ⚠ Laid out **rightmost first** like everything in this cluster,
+                                // so the numbers are added before the swatch that precedes them.
+                                ui.label(rustroom_app::color_readout::label(rgb));
+                                let (patch, painter) = ui.allocate_painter(
+                                    egui::vec2(READOUT_SWATCH, READOUT_SWATCH),
+                                    egui::Sense::hover(),
+                                );
+                                let r = patch.rect;
+                                painter.rect_filled(
+                                    r,
+                                    egui::CornerRadius::ZERO,
+                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                                );
+                                // ⚠ A hairline border, or a near-black or near-white sample is
+                                // indistinguishable from the panel behind it and the swatch reads
+                                // as missing rather than as dark.
+                                painter.rect_stroke(
+                                    r,
+                                    egui::CornerRadius::ZERO,
+                                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(120)),
+                                    egui::StrokeKind::Inside,
+                                );
                             }
                         }
                     }
@@ -323,6 +349,9 @@ impl eframe::App for RustroomApp {
 /// `Event::Copy` / `Event::Paste` *instead of* a `Key` event, so `key_pressed(Key::C)` can
 /// never fire — a trap this codebase has already paid for once. Those stay in
 /// `handle_clipboard_keys`, which reads the semantic events.
+/// The colour swatch beside the numeric readout, in points.
+const READOUT_SWATCH: f32 = 11.0;
+
 fn pressed_command(ctx: &egui::Context) -> Option<Command> {
     if ctx.memory(|m| m.focused()).is_some() {
         return None;

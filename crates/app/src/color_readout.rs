@@ -53,13 +53,18 @@ pub fn mean_at(rgba: &[u8], w: usize, h: usize, x: usize, y: usize) -> Option<[u
     Some([(acc[0] / n) as u8, (acc[1] / n) as u8, (acc[2] / n) as u8])
 }
 
-/// What the status cluster shows for a sampled value.
+/// What the status cluster shows for a sampled value, beside its colour swatch.
+///
+/// ⚠ **Unlabelled, and the swatch is what replaces the letters.** `R`/`G`/`B` prefixes cost three
+/// tokens of width in the one row this project has already had to fix for running out of space,
+/// and they tell you nothing the conventional channel order does not — where the swatch tells you
+/// *which colour* at a glance, which no amount of labelling does.
 ///
 /// ⚠ sRGB 0–255, which is exactly what the bytes already are — zero conversion, nothing to get
 /// subtly wrong. It also answers the clipping question precisely: 255 means blown and 254 does
 /// not, a distinction Lightroom's 0–100 % cannot make.
 pub fn label(rgb: [u8; 3]) -> String {
-    format!("R {}  G {}  B {}", rgb[0], rgb[1], rgb[2])
+    format!("{} {} {}", rgb[0], rgb[1], rgb[2])
 }
 
 #[cfg(test)]
@@ -136,6 +141,12 @@ mod tests {
         assert!(s.contains("255"), "{s}");
         assert!(s.contains("128"), "{s}");
         assert!(!s.contains('%'), "the label rescaled to a percentage: {s}");
+        // ⚠ No channel letters: the swatch beside it carries that job. Asserted so the letters
+        // cannot creep back in and silently widen the status cluster.
+        assert!(
+            !s.contains('R'),
+            "the label grew channel letters again: {s}"
+        );
     }
 
     /// ⚠ The channels stay in R G B order and are distinguishable in the string, or the readout

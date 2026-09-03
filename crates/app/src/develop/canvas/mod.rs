@@ -64,7 +64,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // session) leaves it blank. A stale number left on screen after the pointer leaves is worse
     // than none, because it gets trusted.
     if let Some(s) = app.session.as_mut() {
-        s.readout.clear();
+        s.readout = None;
     }
     egui::CentralPanel::default().show(ui, |ui| {
         if let Some(p) = &app.pending {
@@ -234,6 +234,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     guide_drag = d;
                                 }
                             } else if s.straighten_armed {
+                                // ⚠ The crop rectangle stays on screen while the straighten mode
+                                // is armed, muted and non-interactive. It used to vanish — the
+                                // dispatch replaced `draw_crop_overlay` entirely, as Guide Mode
+                                // does — which left the composition guides dividing a rectangle
+                                // nobody could see. Lightroom keeps it visible too.
+                                crop_overlay::draw_crop_marks(
+                                    ui,
+                                    crop_overlay::crop_screen_rect(s, frame_rect),
+                                    img_rect,
+                                    crop_overlay::Marks::Muted,
+                                );
                                 photo_edited |= draw_straighten_overlay(
                                     ui, s, &resp, frame_rect, img_rect, tool,
                                 );
@@ -410,14 +421,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             let v = (p.y - img_rect.top()) / img_rect.height();
                             let x = ((u * *bw as f32) as usize).min(bw.saturating_sub(1));
                             let y = ((v * *bh as f32) as usize).min(bh.saturating_sub(1));
-                            let text = rustroom_app::color_readout::mean_at(bytes, *bw, *bh, x, y)
-                                .map(rustroom_app::color_readout::label);
                             // ⚠ Computed into a local first: `bytes` is a shared borrow of `s`
                             // and writing `s.readout` needs a mutable one. Never a clone of the
                             // bytes.
-                            if let Some(text) = text {
-                                s.readout = text;
-                            }
+                            let sampled =
+                                rustroom_app::color_readout::mean_at(bytes, *bw, *bh, x, y);
+                            s.readout = sampled;
                         }
                     }
                 } else {
@@ -618,6 +627,83 @@ mod tests {
         assert!(s.history.can_undo(), "the release pushed no history entry");
         // ⚠ And it disarms, or every later drag would rotate the photo instead of moving the crop.
         assert!(!s.straighten_armed, "the mode stayed armed after one line");
+    }
+
+    /// How many line segments a frame paints.
+    fn segments(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::LineSegment { .. } => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(super::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// ⚠⚠ **The crop rectangle stays on screen while the straighten mode is armed.** It used to
+    /// vanish outright — the dispatch replaced `draw_crop_overlay` entirely, as Guide Mode does —
+    /// which left the composition guides dividing a rectangle nobody could see. Reported in use;
+    /// Lightroom keeps it visible too.
+    ///
+    /// ⚠ Counts the **corner brackets**, which only the crop marks paint: eight segments, and
+    /// nothing else in the straighten overlay draws in eights. Asserting merely "more than zero"
+    /// would pass against the straighten line's own two segments.
+    #[test]
+    fn the_crop_rectangle_stays_visible_while_straighten_is_armed() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let unarmed = segments(&mut app, &ctx);
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        let armed = segments(&mut app, &ctx);
+        assert_eq!(
+            armed, unarmed,
+            "arming the straighten mode changed how much of the crop rectangle is drawn: \
+             {unarmed} unarmed, {armed} armed"
+        );
+        assert!(
+            armed >= 8,
+            "the corner brackets are not being drawn: {armed}"
+        );
+    }
+
+    /// ⚠ Visible is not interactive. The muted rectangle is context; a drag while armed belongs to
+    /// the straighten line, and the crop must not move with it. Without this, "the crop is drawn"
+    /// could be satisfied by re-enabling the whole crop overlay.
+    #[test]
+    fn the_visible_crop_rectangle_is_not_draggable_while_armed() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_armed = true;
+            s.edits.geometry.crop = edit_model::CropRect {
+                left: 0.2,
+                top: 0.2,
+                right: 0.8,
+                bottom: 0.8,
+            };
+        }
+        let before = app.session.as_ref().expect("a session").edits.geometry.crop;
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(40.0, 10.0),
+            centre + egui::vec2(40.0, 10.0),
+        );
+        let after = app.session.as_ref().expect("a session").edits.geometry.crop;
+        assert_eq!(before, after, "the crop moved during a straighten drag");
     }
 
     /// ⚠⚠ **A straighten line clears the perspective guides, and leaves the sliders alone.** It
@@ -1397,8 +1483,22 @@ mod tests {
         (DARK, LIGHT)
     }
 
+    /// The readout as the status cluster renders it, or empty when there is none.
+    ///
+    /// ⚠ Goes through `color_readout::label`, the same function `shell.rs` calls, so a change to
+    /// the wording cannot pass here and fail on screen.
     fn readout(app: &crate::RustroomApp) -> String {
-        app.session.as_ref().expect("a session").readout.clone()
+        app.session
+            .as_ref()
+            .expect("a session")
+            .readout
+            .map(rustroom_app::color_readout::label)
+            .unwrap_or_default()
+    }
+
+    /// The sampled value itself.
+    fn readout_value(app: &crate::RustroomApp) -> Option<[u8; 3]> {
+        app.session.as_ref().expect("a session").readout
     }
 
     /// ⚠⚠ The wiring test. `color_readout` has its own unit tests, but nothing else can see that
@@ -1417,9 +1517,15 @@ mod tests {
         // was read and that it is the label's shape — the two probes below carry the position.
         let got = readout(&app);
         assert!(!got.is_empty(), "the hover produced no readout");
-        assert!(
-            got.starts_with("R ") && got.contains("G ") && got.contains("B "),
-            "the hover produced something that is not the readout label: {got:?}"
+        // ⚠ Asserted through the stored **value** rather than by matching the label's wording:
+        // the wording is `color_readout`'s to decide (it lost its `R`/`G`/`B` prefixes when the
+        // swatch arrived), and a wiring test that pins the wording breaks on every cosmetic
+        // change while saying nothing about the wiring.
+        let v = readout_value(&app).expect("a sampled value");
+        assert_eq!(
+            got,
+            rustroom_app::color_readout::label(v),
+            "the string the cluster shows is not this value's label"
         );
         assert_ne!(
             got,
@@ -1497,7 +1603,7 @@ mod tests {
         };
         super::test_support::hover_through(&mut app, &ctx, centre);
         let s = app.session.as_ref().expect("a session");
-        assert!(!s.readout.is_empty(), "fixture check: nothing was read");
+        assert!(s.readout.is_some(), "fixture check: nothing was read");
         assert_eq!(
             s.engine.requests_issued(),
             before.0,

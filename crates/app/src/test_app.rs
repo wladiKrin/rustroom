@@ -236,7 +236,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         straighten_drag: None,
         straighten_line: None,
         readout_bytes: None,
-        readout: String::new(),
+        readout: None,
     });
 }
 
