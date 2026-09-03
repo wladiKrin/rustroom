@@ -7,7 +7,7 @@
 //! `img_rect` survives only as the clip, widened by `overlay_clip` because `line_segment` centres
 //! its stroke on the path and a tight clip shaves the outer half of a halo at the frame edge.
 
-use super::loupe::draw_loupe;
+use super::loupe::{self, draw_loupe};
 use super::navigation::{tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
@@ -137,15 +137,22 @@ pub(super) fn draw_straighten_overlay(
             p.circle_filled(q, 5.0, egui::Color32::from_black_alpha(180));
             p.circle_filled(q, 3.0, egui::Color32::from_rgb(255, 80, 80));
         }
+    }
 
-        // ⚠ The loupe, at the **live end** of the line and only while a drag is in progress — the
-        // point being placed. The guide overlay shows it for the endpoint being dragged and for
-        // the same reason: magnification where you are aiming, and nothing covering the
-        // photograph once you have let go. A loupe left up permanently is chrome.
-        //
-        // ⚠ Drawn last, over everything, and into the same widened clip as the marks.
-        if let (Some((_, live)), Some(tex)) = (s.straighten_drag, s.texture.as_ref()) {
-            draw_loupe(&p, tex, to_screen(live), img_rect, frame_rect);
+    // ⚠⚠ **Drawn whenever the mode is armed, not only during a drag** — outside the block above,
+    // which runs only once a line exists. The point you most need to place precisely is the
+    // **first** one, and while a drag is in progress there is by definition already a line.
+    // Reported in use.
+    //
+    // ⚠ At the live end while dragging, else wherever the pointer is; `loupe_at` owns that rule so
+    // this overlay and the guide overlay cannot drift on it.
+    //
+    // ⚠ Drawn last, over everything, into the same widened clip as the marks.
+    if let Some(tex) = s.texture.as_ref() {
+        let live = s.straighten_drag.map(|(_, to)| to_screen(to));
+        if let Some(at) = loupe::loupe_at(ui, img_rect, live) {
+            let p = ui.painter_at(canvas_geom::overlay_clip(img_rect));
+            draw_loupe(&p, tex, at, img_rect, frame_rect);
         }
     }
     edited

@@ -1,7 +1,7 @@
 //! The perspective-guide overlay: tracing lines onto the photograph, and the loupe that makes
 //! placing an endpoint precise.
 
-use super::loupe::draw_loupe;
+use super::loupe::{self, draw_loupe};
 use super::navigation::{tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
@@ -116,9 +116,17 @@ pub(super) fn draw_guide_overlay(
 
     // ⚠ The loupe: a magnified crop around the endpoint being placed, so an edge can be traced
     // precisely without the whole canvas being at 1:1. Drawn last, over everything.
-    if let (Some((i, e)), Some(tex)) = (s.active_guide, s.texture.as_ref()) {
-        if let Some(seg) = shown.get(i) {
-            let at = to_screen(if e == 0 { seg.0 } else { seg.1 });
+    //
+    // ⚠⚠ **Shown whenever Guide Mode is on, not only while an endpoint is being dragged.** It used
+    // to require `active_guide`, which meant the one point you could not place precisely was the
+    // **first** one of each guide — you pressed blind and nudged afterwards. Reported in use.
+    // `loupe::loupe_at` owns that rule, so this overlay and the straighten overlay cannot drift.
+    if let Some(tex) = s.texture.as_ref() {
+        let active = s
+            .active_guide
+            .and_then(|(i, e)| shown.get(i).map(|seg| if e == 0 { seg.0 } else { seg.1 }))
+            .map(to_screen);
+        if let Some(at) = loupe::loupe_at(ui, img_rect, active) {
             draw_loupe(&marks, tex, at, img_rect, frame_rect);
         }
     }

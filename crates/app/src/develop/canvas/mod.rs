@@ -671,7 +671,12 @@ mod tests {
 
     /// How many mesh shapes a frame paints. `painter.image` — which is all the loupe is — emits a
     /// `Shape::Mesh`, and nothing else in this canvas does.
-    fn meshes(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+    /// With the pointer moved to `at` first, or with no pointer at all when `at` is `None`.
+    fn meshes_hovering(
+        app: &mut crate::RustroomApp,
+        ctx: &egui::Context,
+        at: Option<egui::Pos2>,
+    ) -> usize {
         fn count(s: &egui::Shape) -> usize {
             match s {
                 egui::Shape::Mesh(_) => 1,
@@ -680,48 +685,75 @@ mod tests {
             }
         }
         let c = ctx.clone();
-        let out = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(super::test_support::screen()),
-                ..Default::default()
-            },
-            |ui| {
-                super::show(app, ui, &c);
-            },
-        );
-        out.shapes.iter().map(|s| count(&s.shape)).sum()
+        // ⚠ Two passes: egui's pointer state is per-frame, so a hover is only *there* on the frame
+        // after the move event. Reading on the same pass sees no pointer — the harness fault the
+        // headless-canvas work records three separate times.
+        let mut total = 0;
+        for _ in 0..2 {
+            let events = at.map(egui::Event::PointerMoved).into_iter().collect();
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(super::test_support::screen()),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::show(app, ui, &c);
+                },
+            );
+            total = out.shapes.iter().map(|s| count(&s.shape)).sum();
+        }
+        total
     }
 
-    /// ⚠ The loupe appears at the live end of a straighten drag and **not** after release — the
-    /// guide overlay's rule, for its reason: magnification where you are aiming, and nothing
-    /// covering the photograph once you have let go.
-    ///
-    /// ⚠ Driven from the *state* rather than through a gesture, deliberately: this is a drawing
-    /// rule, a function of whether a drag is live, and the gesture→state wiring is already covered
-    /// by `an_armed_straighten_drag_sets_the_angle_and_one_history_entry`. Counting meshes on a
-    /// mid-drag frame through the five-pass harness would test the harness as much as the rule.
+    /// ⚠⚠ **The loupe is up whenever the mode is armed, not only while dragging.** Reported in
+    /// use: gated on a live drag, the one point you could not place precisely was the **first**
+    /// one — you pressed blind and corrected afterwards.
     #[test]
-    fn the_straighten_loupe_shows_while_dragging_and_not_after() {
+    fn the_straighten_loupe_is_up_while_armed_before_any_drag() {
         let ctx = egui::Context::default();
         let mut app = crop_app(&ctx);
-        let line = ([0.3f32, 0.4], [0.7f32, 0.6]);
-        {
-            let s = app.session.as_mut().expect("a session");
-            s.straighten_armed = true;
-            s.straighten_drag = Some(line);
-        }
-        let dragging = meshes(&mut app, &ctx);
-        {
-            let s = app.session.as_mut().expect("a session");
-            s.straighten_drag = None;
-            s.straighten_line = Some(line);
-        }
-        let settled = meshes(&mut app, &ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        let idle = meshes_hovering(&mut app, &ctx, Some(centre));
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        let armed = meshes_hovering(&mut app, &ctx, Some(centre));
         assert_eq!(
-            dragging,
-            settled + 1,
-            "expected exactly one extra mesh — the loupe — while dragging; \
-             got {dragging} dragging and {settled} settled"
+            armed,
+            idle + 1,
+            "expected one extra mesh — the loupe — once armed; got {armed} armed, {idle} idle"
+        );
+    }
+
+    /// ⚠ It follows the pointer only while the pointer is **over the photograph**. A loupe pinned
+    /// in the corner magnifying nothing is chrome, and it goes stale rather than empty.
+    #[test]
+    fn the_straighten_loupe_is_absent_when_the_pointer_is_off_the_image() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        let on = meshes_hovering(&mut app, &ctx, Some(centre));
+        let off = meshes_hovering(&mut app, &ctx, Some(egui::pos2(-50.0, -50.0)));
+        assert_eq!(
+            on,
+            off + 1,
+            "the loupe survived the pointer leaving the image: {on} on, {off} off"
+        );
+    }
+
+    /// ⚠ Guide Mode gets the same rule from the same helper, so the two cannot drift.
+    #[test]
+    fn the_guide_loupe_is_up_before_any_endpoint_is_grabbed() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        let idle = meshes_hovering(&mut app, &ctx, Some(centre));
+        app.session.as_mut().expect("a session").show_guides = true;
+        let guiding = meshes_hovering(&mut app, &ctx, Some(centre));
+        assert_eq!(
+            guiding,
+            idle + 1,
+            "expected one extra mesh — the loupe — in Guide Mode; got {guiding}, idle {idle}"
         );
     }
 

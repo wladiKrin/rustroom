@@ -85,3 +85,30 @@ pub(super) fn draw_loupe(
         egui::StrokeKind::Outside,
     );
 }
+
+/// Where the loupe should look: the point a live gesture is placing, else the pointer itself
+/// while it is over the photograph.
+///
+/// ⚠⚠ **The `else` half is the whole reason this exists.** Both overlays originally showed the
+/// loupe only while an endpoint was being *dragged*, which meant the one point you could not place
+/// precisely was the **first** one — you pressed blind and corrected afterwards. Reported in use.
+///
+/// ⚠ `None` when the pointer is off the photograph: a loupe pinned in the corner magnifying
+/// nothing is chrome, and worse, it goes stale rather than empty.
+///
+/// ⚠ `img_rect`, not `frame_rect`, for the reason [`draw_loupe`] itself records — it samples the
+/// texture, and `img_rect` is where the texture is actually painted.
+pub(super) fn loupe_at(
+    ui: &egui::Ui,
+    img_rect: egui::Rect,
+    active: Option<egui::Pos2>,
+) -> Option<egui::Pos2> {
+    if active.is_some() {
+        return active;
+    }
+    // ⚠ Read and release the input lock before anything else touches it. `Response::dragged_by`
+    // takes the same lock internally, and a nested borrow panics in epaint's mutex the moment a
+    // drag is live — the trap `pan_delta` already records.
+    let p = ui.input(|i| i.pointer.hover_pos())?;
+    img_rect.contains(p).then_some(p)
+}
