@@ -578,12 +578,35 @@ pub enum ConfirmOutcome {
 }
 
 impl Settings {
-    /// What a newly-opened photo's lens corrections should start as.
+    /// The edits a newly-opened photo starts with.
     ///
-    /// Extracted as a pure function so the rule is testable without a window — the decision is
-    /// the part worth testing, and the egui glue is not.
-    pub fn initial_lens_correction(&self, has_sidecar: bool) -> edit_model::LensCorrection {
-        if self.auto_lens_correction && !has_sidecar {
+    /// ⚠⚠ **A photo with a sidecar keeps EXACTLY what it stored; the preferences seed a photo
+    /// that has never been edited and nothing else.** Assigning them unconditionally is the bug
+    /// this replaced — it overwrote the stored value on every open, so the Camera-rendering
+    /// toggle reset to off on any photo that had ever been edited, and a stored lens correction
+    /// silently reverted to all-off the same way. The old code's own comment claimed this
+    /// behaviour while the line beneath it did the opposite.
+    ///
+    /// ⚠ Extracted as a pure function so the rule is testable without a window — the decision is
+    /// the part worth testing, and the session glue is not.
+    pub fn initial_edits(&self, stored: Option<edit_model::Edits>) -> edit_model::Edits {
+        match stored {
+            Some(e) => e,
+            None => edit_model::Edits {
+                lens_correction: self.initial_lens_correction(),
+                rendering: self.default_rendering,
+                ..edit_model::Edits::default()
+            },
+        }
+    }
+
+    /// What a **fresh** photo's lens corrections start as.
+    ///
+    /// ⚠ No `has_sidecar` parameter any more: the "only when there is no sidecar" half of the
+    /// rule lives in [`Self::initial_edits`], where it applies to every preference at once
+    /// rather than being repeated per field and got wrong for the second one.
+    pub fn initial_lens_correction(&self) -> edit_model::LensCorrection {
+        if self.auto_lens_correction {
             edit_model::LensCorrection {
                 distortion: true,
                 tca: true,
@@ -592,20 +615,6 @@ impl Settings {
             }
         } else {
             edit_model::LensCorrection::default()
-        }
-    }
-
-    /// What a newly-opened photo's display rendering should start as.
-    ///
-    /// ⚠ Only a photo with **no sidecar**. One already edited keeps exactly what it had, so
-    /// nothing in the catalog silently re-renders when this setting changes — the rule
-    /// [`Self::initial_lens_correction`] already follows, and the reason both live here rather
-    /// than in `Edits`.
-    pub fn initial_rendering(&self, has_sidecar: bool) -> edit_model::Rendering {
-        if has_sidecar {
-            edit_model::Rendering::None
-        } else {
-            self.default_rendering
         }
     }
 
@@ -1345,35 +1354,65 @@ mod tests {
     /// this milestone exists to answer — and nothing else in the suite can see that, because
     /// `Edits::default()` is deliberately still `None` and every golden depends on it.
     #[test]
-    fn a_fresh_photo_opens_rendered_and_an_edited_one_is_left_alone() {
+    fn a_fresh_photo_opens_rendered_and_corrected() {
         let s = Settings::default();
         assert_eq!(
             s.default_rendering,
             edit_model::Rendering::Camera,
             "a fresh RAW must not open colorimetric-only"
         );
-        assert_eq!(
-            s.initial_rendering(false),
-            edit_model::Rendering::Camera,
-            "fresh photo"
-        );
-        // ⚠ A photo with a sidecar keeps what it had — which for every sidecar written before
-        // today is `None`, so nothing in the catalog re-renders itself overnight.
-        assert_eq!(
-            s.initial_rendering(true),
-            edit_model::Rendering::None,
-            "a photo with a sidecar must be left alone"
-        );
+        let fresh = s.initial_edits(None);
+        assert_eq!(fresh.rendering, edit_model::Rendering::Camera);
+        assert!(fresh.lens_correction.is_active(), "and corrected");
     }
 
-    /// ⚠ Turning the preference off must reach a fresh photo too, or the setting is inert.
+    /// ⚠⚠ **THE BUG THIS FUNCTION EXISTS FOR, and it was reported from using the app: the
+    /// Camera-rendering toggle "always reset to off" after switching photos.** The old seam
+    /// assigned both preferences *unconditionally*, so every photo that had ever been edited had
+    /// its stored rendering overwritten with `None` and its stored lens corrections with
+    /// all-off — on every single open.
+    ///
+    /// ⚠ Both fields are asserted, because a fix that restored only the one that was reported
+    /// would leave the other silently broken, and the two are set by the same line.
     #[test]
-    fn the_preference_off_opens_a_fresh_photo_colorimetric() {
+    fn a_photo_with_a_sidecar_keeps_exactly_what_it_stored() {
+        let s = Settings::default();
+        let stored = edit_model::Edits {
+            // The opposite of what each preference would impose, so neither can pass by accident.
+            rendering: edit_model::Rendering::None,
+            lens_correction: edit_model::LensCorrection::default(),
+            exposure: 0.75,
+            ..edit_model::Edits::default()
+        };
+        let got = s.initial_edits(Some(stored.clone()));
+        assert_eq!(
+            got.rendering,
+            edit_model::Rendering::None,
+            "the stored rendering was overwritten by the preference"
+        );
+        assert!(
+            !got.lens_correction.is_active(),
+            "the stored lens correction was overwritten by the preference"
+        );
+        assert_eq!(got, stored, "a stored photo must come back untouched");
+    }
+
+    /// ⚠ Turning a preference off must reach a fresh photo too, or the setting is inert.
+    #[test]
+    fn the_preferences_off_open_a_fresh_photo_neutral() {
         let off = Settings {
             default_rendering: edit_model::Rendering::None,
+            auto_lens_correction: false,
             ..Settings::default()
         };
-        assert_eq!(off.initial_rendering(false), edit_model::Rendering::None);
+        let fresh = off.initial_edits(None);
+        assert_eq!(fresh.rendering, edit_model::Rendering::None);
+        assert!(!fresh.lens_correction.is_active());
+        assert_eq!(
+            fresh,
+            edit_model::Edits::default(),
+            "and nothing else moved"
+        );
     }
 
     /// ⚠ `SettingsStore::load` is infallible, so one unparseable field silently reverts *every*
@@ -1399,9 +1438,14 @@ mod tests {
             auto_lens_correction: true,
             ..Settings::default()
         };
-        assert!(on.initial_lens_correction(false).is_active(), "fresh photo");
         assert!(
-            !on.initial_lens_correction(true).is_active(),
+            on.initial_edits(None).lens_correction.is_active(),
+            "fresh photo"
+        );
+        assert!(
+            !on.initial_edits(Some(edit_model::Edits::default()))
+                .lens_correction
+                .is_active(),
             "a photo with a sidecar must be left alone"
         );
     }
@@ -1412,7 +1456,7 @@ mod tests {
             auto_lens_correction: false,
             ..Settings::default()
         };
-        assert!(!off.initial_lens_correction(false).is_active());
+        assert!(!off.initial_lens_correction().is_active());
     }
 
     #[test]
@@ -1421,7 +1465,7 @@ mod tests {
             auto_lens_correction: true,
             ..Settings::default()
         };
-        let l = s.initial_lens_correction(false);
+        let l = s.initial_lens_correction();
         assert!(l.distortion && l.tca && l.vignetting, "{l:?}");
         assert_eq!(l.scale, 100.0, "and autoscale by default");
     }

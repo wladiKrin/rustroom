@@ -275,14 +275,11 @@ impl RustroomApp {
         )
         .list_for(&decoded.label);
 
-        // ⚠ The preference applies only to a photo with **no sidecar**. A photo already edited
-        // keeps exactly what it had, which is what lets `Edits::default()` stay strictly neutral
-        // while fresh photos still open corrected — see `Settings::initial_lens_correction`.
+        // ⚠ The preferences apply only to a photo with **no sidecar**. One already edited keeps
+        // exactly what it had, which is what lets `Edits::default()` stay strictly neutral while
+        // fresh photos still open corrected and rendered — see `Settings::initial_edits`.
         let stored = sidecar::load_copy(&path, id.copy);
-        let mut edits = stored.clone().unwrap_or_default();
-        edits.lens_correction = self.settings.initial_lens_correction(stored.is_some());
-        edits.rendering = self.settings.initial_rendering(stored.is_some());
-        let edits = edits;
+        let edits = self.settings.initial_edits(stored);
         let history = match self.histories.take_matching(&id, &edits) {
             Some(h) => h,
             None => {

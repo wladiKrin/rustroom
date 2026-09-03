@@ -22,17 +22,43 @@ fn mean_luma(rgb: &[f32]) -> f32 {
         / n as f32
 }
 
-fn render(buf: &core_image::ImageBuf, edits: &edit_model::Edits) -> f32 {
+/// Mean saturation, `(max-min)/max`, over the non-black pixels.
+///
+/// ⚠ Skipping near-black is what makes this comparable between two renders of different
+/// brightness: a pixel at 0.001 has a meaningless ratio, and one render having more of them
+/// would move the mean without anything being less colourful.
+fn mean_sat(rgb: &[f32]) -> f32 {
+    let (mut sum, mut n) = (0.0f32, 0usize);
+    for p in rgb.as_chunks::<3>().0 {
+        let mx = p[0].max(p[1]).max(p[2]);
+        if mx < 0.02 {
+            continue;
+        }
+        sum += (mx - p[0].min(p[1]).min(p[2])) / mx;
+        n += 1;
+    }
+    if n == 0 {
+        0.0
+    } else {
+        sum / n as f32
+    }
+}
+
+fn render(buf: &core_image::ImageBuf, edits: &edit_model::Edits) -> (f32, f32) {
     let out = pipeline::build_pipeline(edits, pipeline::RenderScale::new(1.0)).run(buf.clone());
-    mean_luma(out.data())
+    (mean_luma(out.data()), mean_sat(out.data()))
 }
 
 fn main() {
     let files: Vec<String> = std::env::args().skip(1).collect();
     assert!(!files.is_empty(), "usage: strip_vs_canvas <raw>...");
     println!(
-        "{:<16} {:>8} {:>10} {:>10} {:>10}",
-        "file", "strip", "none", "camera", "camera+auto"
+        "{:<16} {:>18} {:>18} {:>18}",
+        "file", "strip", "none", "camera"
+    );
+    println!(
+        "{:<16} {:>8} {:>9} {:>8} {:>9} {:>8} {:>9}",
+        "", "luma", "sat", "dEV", "sat", "dEV", "sat"
     );
     let mut sums = [0f32; 3];
     let mut n = 0f32;
@@ -53,7 +79,7 @@ fn main() {
         };
         let small = d.image.downscale_to(thumb.width.max(thumb.height));
 
-        let a = mean_luma(&strip);
+        let (a, a_sat) = (mean_luma(&strip), mean_sat(&strip));
         let none = render(&small, &edit_model::Edits::default());
         let cam = render(
             &small,
@@ -62,33 +88,26 @@ fn main() {
                 ..Default::default()
             },
         );
-        // ⚠ Auto Tone measures the *scene*, so it runs on the buffer, not on a render — the same
-        // way the panel's button does.
-        let mut auto = edit_model::Edits {
-            rendering: edit_model::Rendering::Camera,
-            ..Default::default()
-        };
-        // ⚠ The same baseline the app would pass, so the probe measures what the app does.
-        rustroom_app::auto_tone_tool::apply(&mut auto, &small, None);
-        let cam_auto = render(&small, &auto);
 
         let ev = |x: f32| (a / x).log2();
         println!(
-            "{:<16} {a:8.4} {:+9.2}E {:+9.2}E {:+9.2}E",
+            "{:<16} {a:8.4} {a_sat:9.4} {:+8.2} {:9.4} {:+8.2} {:9.4}",
             path.file_name().unwrap().to_string_lossy(),
-            ev(none),
-            ev(cam),
-            ev(cam_auto)
+            ev(none.0),
+            none.1,
+            ev(cam.0),
+            cam.1
         );
-        sums[0] += ev(none).abs();
-        sums[1] += ev(cam).abs();
-        sums[2] += ev(cam_auto).abs();
+        sums[0] += ev(none.0).abs();
+        sums[1] += ev(cam.0).abs();
+        // ⚠ Saturation as a *ratio* to the camera's, so the sign is readable: below 1 is duller.
+        sums[2] += cam.1 / a_sat;
         n += 1.0;
     }
     println!(
-        "\nmean |gap| from the camera:  none {:+.2} EV   camera {:+.2} EV   camera+auto {:+.2} EV",
+        "\nmean |gap| from the camera:  none {:+.2} EV   camera {:+.2} EV",
         sums[0] / n,
-        sums[1] / n,
-        sums[2] / n
+        sums[1] / n
     );
+    println!("mean saturation, rendered / camera: {:.3}x", sums[2] / n);
 }
