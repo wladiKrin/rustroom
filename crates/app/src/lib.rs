@@ -40,6 +40,7 @@ pub mod settings;
 pub mod sidecar;
 pub mod spot_source;
 pub mod spot_tool;
+pub mod straighten_line;
 pub mod sync;
 pub mod thumb_cache;
 pub mod thumb_key;
