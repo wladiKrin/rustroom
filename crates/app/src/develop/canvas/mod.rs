@@ -109,11 +109,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // you are aiming at a blur. It can afford to: the guide overlay is anchored
                     // to `frame_rect`, so it survives a region render, which is precisely what
                     // the crop overlay cannot do.
-                    let rung = if tool.is_geometry() && !s.show_guides {
-                        fit_cap
-                    } else {
-                        view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom)
-                    };
+                    // ⚠⚠ **The fit rung is no longer pinned in Geometry mode.** It was, because
+                    // "the crop overlay is drawn against the whole image and placed by the
+                    // fit-mode maths", so a region render would misplace it. The crop overlay is
+                    // anchored to `frame_rect` now, like the guide and mask overlays, so it
+                    // survives a region render and the pin is unnecessary — which is what lets
+                    // the crop tool zoom and pan. Guide Mode was already the exception for
+                    // exactly this reason; there is no longer an exception to make.
+                    let rung = view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom);
                     let max_dim = rung;
                     let native = view_region::is_native(max_dim, fit_cap);
 
@@ -235,8 +238,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     ui, s, &resp, frame_rect, img_rect, tool,
                                 );
                             } else {
-                                photo_edited |=
-                                    draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
+                                photo_edited |= draw_crop_overlay(
+                                    ui,
+                                    s,
+                                    &resp,
+                                    frame_rect,
+                                    img_rect,
+                                    app.crop_aspect,
+                                );
                             }
                         }
                         Tool::Masks => {
@@ -316,7 +325,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // the corners and a tight clip would shave half the stroke off there.
                     let guide_rect = match tool {
                         Tool::Crop if s.show_guides => None,
-                        Tool::Crop => Some(crop_overlay::crop_screen_rect(s, img_rect)),
+                        Tool::Crop => Some(crop_overlay::crop_screen_rect(s, frame_rect)),
                         _ => Some(frame_rect),
                     };
                     if let Some(r) = guide_rect {
@@ -330,7 +339,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // change to a per-tool match.
                     // ⚠ Guide Mode zooms and pans like the ordinary tools; only the crop
                     // rectangle needs the view held still.
-                    if !tool.is_geometry() || s.show_guides {
+                    // ⚠ Every tool zooms and pans now. This was gated off for Geometry because
+                    // the crop overlay was placed by fit-mode maths; see the rung above.
+                    {
                         // Zoom first, then pan: the anchor correction below depends on the
                         // new zoom, and the other order would anchor against a stale factor.
                         //
