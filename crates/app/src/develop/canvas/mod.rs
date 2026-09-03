@@ -229,6 +229,18 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             // disables the toggle while guides are in force — which keeps that
                             // track out of `Session.guides` entirely.
                             if s.show_guides {
+                                // ⚠ Guide Mode shows the muted crop rectangle for the same reason
+                                // the straighten mode does: the preview strips the crop, so
+                                // without it there is nothing on screen saying what will actually
+                                // be kept. ⚠ This is **not** the composition-guide rule below,
+                                // which stays — those divide the photograph-to-be, and under
+                                // Guide Mode there is no crop rect *they* may divide.
+                                crop_overlay::draw_crop_marks(
+                                    ui,
+                                    crop_overlay::crop_screen_rect(s, frame_rect),
+                                    img_rect,
+                                    crop_overlay::Marks::Muted,
+                                );
                                 let d = draw_guide_overlay(ui, s, &resp, frame_rect, img_rect);
                                 if d != GuideDrag::None {
                                     guide_drag = d;
@@ -674,6 +686,30 @@ mod tests {
         assert!(
             armed >= 8,
             "the corner brackets are not being drawn: {armed}"
+        );
+    }
+
+    /// ⚠ Guide Mode shows it too, for the same reason: the preview strips the crop, so without the
+    /// rectangle there is nothing on screen saying what will be kept.
+    ///
+    /// ⚠ This is **not** the composition-guide rule, which stays as it was — under Guide Mode no
+    /// crop rect is passed to `draw_guides`, because a guide dividing a rectangle nobody keeps is
+    /// worse than none. Drawing the crop *rectangle* is a different thing from dividing it.
+    #[test]
+    fn the_crop_rectangle_stays_visible_in_guide_mode() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let plain = segments(&mut app, &ctx);
+        app.session.as_mut().expect("a session").show_guides = true;
+        let guiding = segments(&mut app, &ctx);
+        assert_eq!(
+            guiding, plain,
+            "turning on Guide Mode changed how much of the crop rectangle is drawn: \
+             {plain} plain, {guiding} in Guide Mode"
+        );
+        assert!(
+            guiding >= 8,
+            "the corner brackets are not being drawn: {guiding}"
         );
     }
 

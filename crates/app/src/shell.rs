@@ -285,7 +285,16 @@ impl eframe::App for RustroomApp {
                                 //
                                 // ⚠ Laid out **rightmost first** like everything in this cluster,
                                 // so the numbers are added before the swatch that precedes them.
-                                ui.label(rustroom_app::color_readout::label(rgb));
+                                // ⚠⚠ **Monospaced, and that is half of the anti-wobble fix.**
+                                // `color_readout::label` pads each channel to three characters,
+                                // which only fixes the width if the digits and the padding are
+                                // the same width — in a proportional font a space is narrower
+                                // than a digit, so the numbers still shift and drag the swatch
+                                // with them. Reported in use as the readout seeming wobbly.
+                                ui.label(
+                                    egui::RichText::new(rustroom_app::color_readout::label(rgb))
+                                        .monospace(),
+                                );
                                 let (patch, painter) = ui.allocate_painter(
                                     egui::vec2(READOUT_SWATCH, READOUT_SWATCH),
                                     egui::Sense::hover(),
@@ -350,7 +359,9 @@ impl eframe::App for RustroomApp {
 /// never fire — a trap this codebase has already paid for once. Those stay in
 /// `handle_clipboard_keys`, which reads the semantic events.
 /// The colour swatch beside the numeric readout, in points.
-const READOUT_SWATCH: f32 = 11.0;
+///
+/// ⚠ Large enough to judge a colour against rather than merely notice — 11 pt read as a bullet.
+const READOUT_SWATCH: f32 = 14.0;
 
 fn pressed_command(ctx: &egui::Context) -> Option<Command> {
     if ctx.memory(|m| m.focused()).is_some() {

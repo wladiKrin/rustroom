@@ -60,11 +60,19 @@ pub fn mean_at(rgba: &[u8], w: usize, h: usize, x: usize, y: usize) -> Option<[u
 /// and they tell you nothing the conventional channel order does not — where the swatch tells you
 /// *which colour* at a glance, which no amount of labelling does.
 ///
+/// ⚠⚠ **Every channel is padded to three characters, and the caller MUST draw it monospaced.**
+/// Reported in use as the readout "jumping around and seeming wobbly": the cluster is laid out
+/// right-to-left, so anything left of the numbers — the swatch — moves whenever their width does,
+/// and 8 → 128 → 255 changes that width twice as the pointer crosses a gradient. ⚠ Padding alone
+/// is **not** enough in a proportional font, where a space is narrower than a digit; the two
+/// halves of the fix are here and at the call site, which is why this says so rather than leaving
+/// it to be rediscovered.
+///
 /// ⚠ sRGB 0–255, which is exactly what the bytes already are — zero conversion, nothing to get
 /// subtly wrong. It also answers the clipping question precisely: 255 means blown and 254 does
 /// not, a distinction Lightroom's 0–100 % cannot make.
 pub fn label(rgb: [u8; 3]) -> String {
-    format!("{} {} {}", rgb[0], rgb[1], rgb[2])
+    format!("{:>3} {:>3} {:>3}", rgb[0], rgb[1], rgb[2])
 }
 
 #[cfg(test)]
@@ -151,6 +159,33 @@ mod tests {
 
     /// ⚠ The channels stay in R G B order and are distinguishable in the string, or the readout
     /// cannot answer "which channel is blown".
+    /// ⚠⚠ **Every value renders to the same length**, or the swatch to its left shifts as the
+    /// pointer moves and the whole readout reads as wobbly — reported in use. The cluster is laid
+    /// out right-to-left, so anything left of the numbers moves whenever their width does, and
+    /// 8 → 128 → 255 changes that width twice as the pointer crosses a gradient.
+    ///
+    /// ⚠ This is only **half** the fix. Padding alone does nothing in a proportional font, where
+    /// a space is narrower than a digit; `shell.rs` must draw the label **monospaced**, and no
+    /// test here can see whether it does.
+    #[test]
+    fn every_value_renders_to_the_same_width() {
+        let widths: std::collections::BTreeSet<usize> = [
+            [0, 0, 0],
+            [9, 9, 9],
+            [10, 99, 100],
+            [255, 255, 255],
+            [1, 128, 40],
+        ]
+        .into_iter()
+        .map(|c| label(c).chars().count())
+        .collect();
+        assert_eq!(
+            widths.len(),
+            1,
+            "labels render to differing lengths, so the readout will jump: {widths:?}"
+        );
+    }
+
     #[test]
     fn the_label_keeps_the_channels_in_order() {
         let s = label([11, 22, 33]);
