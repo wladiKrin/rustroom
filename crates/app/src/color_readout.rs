@@ -75,6 +75,12 @@ pub fn label(rgb: [u8; 3]) -> String {
     format!("{:>3} {:>3} {:>3}", rgb[0], rgb[1], rgb[2])
 }
 
+/// The widest label [`label`] can ever produce.
+///
+/// ⚠ Exists so the caller can reserve a fixed width for the readout **measured from real text**,
+/// rather than trusting that padded spaces and digits come out the same width. See `shell.rs`.
+pub const WIDEST_LABEL: &str = "255 255 255";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +173,18 @@ mod tests {
     /// ⚠ This is only **half** the fix. Padding alone does nothing in a proportional font, where
     /// a space is narrower than a digit; `shell.rs` must draw the label **monospaced**, and no
     /// test here can see whether it does.
+    /// ⚠ `WIDEST_LABEL` must actually be a label, and the widest one — the caller reserves space
+    /// from it, so if it were shorter than a real value the numbers would be clipped.
+    #[test]
+    fn the_widest_label_is_a_real_label_of_the_full_width() {
+        assert_eq!(
+            WIDEST_LABEL.chars().count(),
+            label([0, 0, 0]).chars().count(),
+            "WIDEST_LABEL is not the same width as a real label"
+        );
+        assert_eq!(WIDEST_LABEL, label([255, 255, 255]));
+    }
+
     #[test]
     fn every_value_renders_to_the_same_width() {
         let widths: std::collections::BTreeSet<usize> = [

@@ -285,15 +285,42 @@ impl eframe::App for RustroomApp {
                                 //
                                 // ⚠ Laid out **rightmost first** like everything in this cluster,
                                 // so the numbers are added before the swatch that precedes them.
-                                // ⚠⚠ **Monospaced, and that is half of the anti-wobble fix.**
-                                // `color_readout::label` pads each channel to three characters,
-                                // which only fixes the width if the digits and the padding are
-                                // the same width — in a proportional font a space is narrower
-                                // than a digit, so the numbers still shift and drag the swatch
-                                // with them. Reported in use as the readout seeming wobbly.
-                                ui.label(
-                                    egui::RichText::new(rustroom_app::color_readout::label(rgb))
+                                // ⚠⚠ **The label occupies a FIXED width, measured from the widest
+                                // label that can occur.** Padding each channel to three characters
+                                // and drawing it monospaced was the first attempt and was not
+                                // enough — reported in use as the swatch still moving when the
+                                // *red* channel changed digit count, which is where a width error
+                                // surfaces: this cluster is laid out right-to-left, so the label's
+                                // right edge is pinned and any discrepancy accumulates leftward,
+                                // into the swatch.
+                                //
+                                // ⚠ Reserving the width **removes the dependency on font metrics
+                                // altogether** rather than assuming padded spaces and digits
+                                // measure alike. The padding and the monospace both stay, because
+                                // together they keep the digits themselves from shifting *inside*
+                                // the reserved box.
+                                let font = egui::TextStyle::Monospace.resolve(ui.style());
+                                // ⚠ Measured through `Painter`, not `Ui::fonts`: the latter hands
+                                // out a shared `&Fonts` while laying text out needs a mutable one
+                                // to populate the glyph atlas. `Painter::layout_no_wrap` takes
+                                // `&self` and does that internally.
+                                let w = ui
+                                    .painter()
+                                    .layout_no_wrap(
+                                        rustroom_app::color_readout::WIDEST_LABEL.to_owned(),
+                                        font,
+                                        egui::Color32::PLACEHOLDER,
+                                    )
+                                    .rect
+                                    .width();
+                                ui.add_sized(
+                                    egui::vec2(w, ui.spacing().interact_size.y),
+                                    egui::Label::new(
+                                        egui::RichText::new(rustroom_app::color_readout::label(
+                                            rgb,
+                                        ))
                                         .monospace(),
+                                    ),
                                 );
                                 let (patch, painter) = ui.allocate_painter(
                                     egui::vec2(READOUT_SWATCH, READOUT_SWATCH),
