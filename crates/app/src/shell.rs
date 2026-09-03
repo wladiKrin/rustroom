@@ -349,6 +349,7 @@ fn egui_key(c: char) -> Option<egui::Key> {
         '2' => egui::Key::Num2,
         '3' => egui::Key::Num3,
         '4' => egui::Key::Num4,
+        '5' => egui::Key::Num5,
         ',' => egui::Key::Comma,
         '[' => egui::Key::OpenBracket,
         ']' => egui::Key::CloseBracket,

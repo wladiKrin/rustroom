@@ -15,13 +15,20 @@ pub enum Tool {
     Edit,
     Crop,
     Masks,
+    Retouch,
     Presets,
 }
 
 impl Tool {
     /// Every tool, in rail order. The rail iterates this, so a variant missing from it is
     /// unreachable in the UI while compiling perfectly.
-    pub const ALL: [Tool; 4] = [Self::Edit, Self::Crop, Self::Masks, Self::Presets];
+    pub const ALL: [Tool; 5] = [
+        Self::Edit,
+        Self::Crop,
+        Self::Masks,
+        Self::Retouch,
+        Self::Presets,
+    ];
 
     /// The rail's text label.
     pub fn label(self) -> &'static str {
@@ -29,6 +36,7 @@ impl Tool {
             Self::Edit => "Edit",
             Self::Crop => "Geometry",
             Self::Masks => "Masks",
+            Self::Retouch => "Retouch",
             Self::Presets => "Presets",
         }
     }
@@ -45,6 +53,7 @@ impl Tool {
             Self::Edit => crate::icons::EDIT,
             Self::Crop => crate::icons::CROP,
             Self::Masks => crate::icons::MASKS,
+            Self::Retouch => crate::icons::RETOUCH,
             Self::Presets => crate::icons::PRESETS,
         }
     }
@@ -64,6 +73,7 @@ impl Tool {
             Self::Edit => None,
             Self::Crop => Some("Crop & Geometry"),
             Self::Masks => Some("Masks"),
+            Self::Retouch => Some("Retouch"),
             Self::Presets => Some("Presets"),
         }
     }
@@ -109,17 +119,26 @@ mod tests {
         assert_eq!(geo, vec![Tool::Crop]);
     }
 
+    /// ⚠ Retouch must NOT be a geometry tool: `is_geometry` pins the canvas to the fit rung and
+    /// makes `preview_edits` strip the crop, so a spot placed there would be positioned against a
+    /// frame the user never sees applied.
+    #[test]
+    fn retouch_is_not_a_geometry_tool_and_has_its_own_heading() {
+        assert!(!Tool::Retouch.is_geometry());
+        assert_eq!(Tool::Retouch.panel_heading(), Some("Retouch"));
+    }
+
     #[test]
     fn labels_and_glyphs_are_all_distinct() {
         // Two tools sharing either would give the rail two identical-looking entries.
         let mut labels: Vec<&str> = Tool::ALL.iter().map(|t| t.label()).collect();
         labels.sort_unstable();
         labels.dedup();
-        assert_eq!(labels.len(), 4, "two tools share a label");
+        assert_eq!(labels.len(), 5, "two tools share a label");
         let mut glyphs: Vec<char> = Tool::ALL.iter().map(|t| t.glyph()).collect();
         glyphs.sort_unstable();
         glyphs.dedup();
-        assert_eq!(glyphs.len(), 4, "two tools share a glyph");
+        assert_eq!(glyphs.len(), 5, "two tools share a glyph");
     }
 
     #[test]
@@ -129,8 +148,9 @@ mod tests {
         assert_eq!(Tool::from_digit(1), Some(Tool::Edit));
         assert_eq!(Tool::from_digit(2), Some(Tool::Crop));
         assert_eq!(Tool::from_digit(3), Some(Tool::Masks));
-        assert_eq!(Tool::from_digit(4), Some(Tool::Presets));
+        assert_eq!(Tool::from_digit(4), Some(Tool::Retouch));
+        assert_eq!(Tool::from_digit(5), Some(Tool::Presets));
         assert_eq!(Tool::from_digit(0), None, "there is no tool 0");
-        assert_eq!(Tool::from_digit(5), None);
+        assert_eq!(Tool::from_digit(6), None);
     }
 }

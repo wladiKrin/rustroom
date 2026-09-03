@@ -230,7 +230,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             &mut ed,
                         ),
                         // Drawn above, outside the session borrow — see the comment there.
-                        Tool::Presets => {}
+                        Tool::Presets | Tool::Retouch => {}
                     }
 
                     if ed.changed {

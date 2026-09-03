@@ -249,7 +249,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 .on_hover_cursor(egui::CursorIcon::Crosshair);
                             photo_edited |= pick_white_balance(s, &pick, frame_rect, tool);
                         }
-                        Tool::Edit | Tool::Presets => {}
+                        Tool::Edit | Tool::Presets | Tool::Retouch => {}
                     }
 
                     // ⚠⚠ **One rule: the guides divide what will be the final photograph.** Under

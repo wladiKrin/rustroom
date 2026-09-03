@@ -244,9 +244,14 @@ pub fn model() -> Vec<Section> {
                     Some(Shortcut::bare('3')),
                 ),
                 action(
+                    "Retouch",
+                    Command::SelectTool(Tool::Retouch),
+                    Some(Shortcut::bare('4')),
+                ),
+                action(
                     "Presets",
                     Command::SelectTool(Tool::Presets),
-                    Some(Shortcut::bare('4')),
+                    Some(Shortcut::bare('5')),
                 ),
                 Item::Separator,
                 // ⚠ ⌘' **is** safe as a native accelerator, and it is worth knowing why: the
