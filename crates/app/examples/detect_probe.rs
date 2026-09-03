@@ -55,8 +55,9 @@ fn describe(label: &str, gs: &[Guide], aspect: f32) {
             roll.to_degrees()
         );
         // The sliders the app would actually write, so the probe and the GUI can be compared.
-        let to_slider =
-            |rad: f32| (rad.to_degrees() / pipeline::perspective::MAX_ANGLE_DEG * 100.0).clamp(-100.0, 100.0);
+        let to_slider = |rad: f32| {
+            (rad.to_degrees() / pipeline::perspective::MAX_ANGLE_DEG * 100.0).clamp(-100.0, 100.0)
+        };
         println!(
             "    sliders: Vertical {:+.1}, Horizontal {:+.1}, Straighten {:+.2}°",
             to_slider(pitch),
@@ -153,8 +154,12 @@ fn main() {
         on.lens_correction.distortion = true;
         on.lens_correction.tca = true;
         on.lens_correction.vignetting = true;
-        let with =
-            perspective_detect::detect_verticals(&buf, &on, Some(lens.clone()), Resampler::default());
+        let with = perspective_detect::detect_verticals(
+            &buf,
+            &on,
+            Some(lens.clone()),
+            Resampler::default(),
+        );
 
         // Lens correction OFF — the raw buffer, i.e. the bug this guards against.
         let off = Edits::default();
