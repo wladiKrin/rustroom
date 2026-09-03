@@ -138,9 +138,74 @@ reported by the user between commits — a shape a parallel worktree cannot serv
 rendering) also landed inline on 2026-09-03, outside any wave, because it was blocking three other
 milestones. ⚠ The remaining three W4 tracks are still parallelisable on the original partition —
 M5.5b and M7.4 both touch `crop_overlay.rs`/`guides` and would need the surface split before
-dispatch; M6.5d is Library-side and touches nothing of theirs. ⚠ `mask_overlay.rs` is now 455 lines
+dispatch; M6.5d is a **canvas hover** (not Library-side, as an earlier draft of this line said) and
+touches `canvas/mod.rs`, which B's dispatch line also does. ⚠ `mask_overlay.rs` is now 455 lines
 and `spot_overlay.rs` 462 — the "next file to watch" note below held, since M5.3b got its own
-module rather than growing `mask_overlay.rs`; `canvas/mod.rs` is 992 including its tests.
+module rather than growing `mask_overlay.rs`; `canvas/mod.rs` is 992 including its tests (474 of
+production code).
+
+### W4 — to be run by a DIFFERENT agent (user's call, 2026-09-03)
+
+**Read this whole file first, then §5, then `CLAUDE.md`'s M5.3b, guided-perspective and M5.2
+sections.** Three tracks, none yet specced. ⚠⚠ **W4-0 comes first and is the orchestrator's job,
+inline, with the user:** brainstorm → spec for each track, settling the decisions listed under it.
+§6 is unambiguous — an agent given an open design choice picks one silently and the choice ships.
+Then verify `.claude/settings.json` still has `"baseRef": "head"`, dispatch all three with the §3
+prompt contents, and merge **D → B → C**.
+
+| Track | Owns | Must not touch |
+| --- | --- | --- |
+| **B** M5.5b straighten line | new lib `app/src/straighten_line.rs` (pure: two frame points + aspect → angle), new bin `develop/canvas/straighten_overlay.rs`, **one dispatch line** in `canvas/mod.rs`'s `Tool::Crop` arm, `crop_overlay.rs` only if the gesture must be arbitrated there | `guide_overlay.rs`, `panel/geometry.rs`, `Session.guides`/`show_guides`, `Edits`, `pipeline`, goldens, D's hover code |
+| **C** M7.4 Hough verticals | new `pipeline/src/perspective/detect.rs` (the analysis — `auto_tone.rs` is the precedent for an analysis pass living in `pipeline`), an `Auto` button in `panel/geometry.rs` under Guide Mode, one app method writing `Session.guides` (in `interaction.rs` beside `select_tool`, or a new lib glue module) | `canvas/**` entirely — the inferred guides go into `Session.guides` and the existing overlay draws and edits them for free — `Edits`, `crop_tool.rs`, goldens, `visualize.rs` (read it, do not change it) |
+| **D** M6.5d colour readout | new lib `app/src/color_readout.rs` (pure: `[f32;3]` → the strings shown), the **hover read at the end of `canvas/mod.rs::show`**, the status cluster in `shell.rs`, and **extracting `spot_overlay::sampler_for`** into a shared bin helper both it and the retouch tool call | `crop_overlay.rs`, `guide_overlay.rs`, `panel/**`, `Session` fields other than what the hover needs, `Edits`, `pipeline` |
+
+**Merge order D → B → C**: `canvas/mod.rs` is the contended surface (D's hover block, B's one
+dispatch line), so D lands first and B rebases one line; C touches nothing the others do.
+
+**Decisions to settle in W4-0, per track** — none of these may be left to the agent:
+
+- **B.** (1) The gesture: Lightroom's is ⌘-drag inside the crop tool; here the crop rect already
+  owns every drag in `Tool::Crop`, so it is a modifier-drag (the retouch tool's ⌥-drag precedent)
+  or a small armed mode — pick one. (2) Whether the crop auto-shrinks to exclude the black corners
+  after the angle lands (Lightroom's "constrain to image"), or is left to the user. (3) Whether the
+  drawn line is shown mapped through the resulting angle after release (it lands level by
+  construction, which is the only feedback that says the gesture worked). ⚠ Facts the agent needs:
+  the angle is `atan2` of the line **in screen space, aspect-corrected** — normalised space is
+  anisotropic, the trap `LinearGradient::coverage`, `mask_tool::hit_test` and the guide overlay each
+  had to handle; the canvas `resp` is `Sense::drag()` and never reports `clicked()`; crop mode
+  **pins the fit rung**, so the overlay is placed by fit-mode maths; `guides::solve` returns roll as
+  its third value but a single line needs no solver — the roadmap's "nearly free" note refers to
+  the *write path* into Straighten, which guided perspective already exercises.
+- **C.** (1) What the detector runs on: the fit-rung **rendered frame** (frame-normalised, which is
+  what `Guide` stores) versus the pre-geometry decode buffer — and if the frame, whether with the
+  current perspective stripped, since lines already corrected have no vanishing point to find.
+  (2) Verticals only (the roadmap's wording) or both families. (3) Whether the button *proposes*
+  guides for the user to accept, or solves immediately with the guides left visible and editable —
+  the roadmap's "Done when" says one button corrects **and** the inferred guides are visible and
+  editable, which is the second. (4) The Hough window: near-vertical only (±20°) keeps it cheap and
+  specific; a full 180° Hough finds every horizon and edge of a table. ⚠ Reuse, not rebuild:
+  `app::visualize::edge_view` is already a luminance edge map (⚠ in the **app lib**, so `pipeline`
+  cannot call it — either move it down to `pipeline::spatial` first, in C's own first commit, or
+  recompute `|luma − gaussian_blur|` there; do not copy it); `pipeline::perspective::guides::solve`
+  is the pure solver and needs exactly two guides per family; `Guide { from, to }` in frame units.
+  ⚠ This is the one track whose "Done when" is a judgement about a photograph — the agent produces
+  the before/after on a real off-axis building, **the user signs it off** (§6).
+- **D.** (1) What is read: the **rendered** value (what you see, every edit applied — Lightroom's
+  choice) versus the decode buffer (the eyedropper's choice, because it must not chase its own
+  correction — a readout has no such loop). (2) Which numbers: sRGB 0–255, Lightroom's 0–100 %, Lab
+  or Oklab — and whether it is one pixel or a 5×5 mean under the cursor. (3) Where it shows: the
+  right-aligned status cluster `shell.rs` owns is the obvious home; the Develop toolbar must not
+  grow a second right-aligned region (the recorded two-regions-in-one-row bug). ⚠ Reuse:
+  `spot_overlay::sampler_for` composes `Homography::source_of` → `Corrector::source` → buffer read
+  and is the sampler for the *buffer* choice; for the *rendered* choice the texture's RGBA is on
+  hand in `canvas/mod.rs` and needs no inverse mapping at all. The eyedropper's `inverse_point` call
+  at `canvas/mod.rs:441` is the screen→frame mapping either way.
+
+**Standing for all three:** the §3 prompt contents; unique `/tmp/<x>-<track>.log` names; the
+sabotage rule with `ran = passed + failed ≥ 1`; **53 goldens byte-identical** — no track here has
+any business moving one; ⚠ **every one of these lands in canvas or panel code, which this project's
+record says is where every defect is found by use and none by a test** — so each track's report
+must say what was *run in the GUI*, not only what passed.
 
 **W2 is closed.** ⚠ M5.2's Task 3 needed one correction — it threaded the source's *camera
 matrix* into the pipeline, but the stage runs on linear ProPhoto, so `RenderSpec` carries a
