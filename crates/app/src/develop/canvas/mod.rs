@@ -8,6 +8,7 @@
 
 mod crop_overlay;
 mod guide_overlay;
+mod loupe;
 mod mask_overlay;
 mod mask_tint;
 pub(crate) mod navigation;
