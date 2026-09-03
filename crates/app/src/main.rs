@@ -809,6 +809,13 @@ pub struct Session {
     /// release saw no gesture", and "one `eprintln` found it after the lifecycle had read
     /// perfectly three times." It is `Session.spot_drag` now, and this follows it.
     straighten_drag: Option<([f32; 2], [f32; 2])>,
+    /// The last straighten line, on the **raw** frame, drawn mapped through the correction so it
+    /// reads level — the feedback that says the gesture worked.
+    ///
+    /// ⚠ View state, never `Edits`, for `straighten_armed`'s reason. Cleared when the mode is
+    /// re-armed, the tool changes, or the photo changes (the last is free — `Session` is
+    /// per-photo).
+    straighten_line: Option<([f32; 2], [f32; 2])>,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so

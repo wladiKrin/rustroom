@@ -11,6 +11,7 @@ use super::navigation::{tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
 use eframe::egui;
+use pipeline::perspective::guides;
 use rustroom_app::tool::Tool;
 
 /// Draw the straighten line and apply the angle it asks for on release.
@@ -36,13 +37,28 @@ pub(super) fn draw_straighten_overlay(
     // guide overlay records the identical trap.
     let aspect = frame_rect.width() / frame_rect.height().max(1.0);
 
-    let norm = |p: egui::Pos2| {
-        [
+    // ⚠⚠ **`shown_geo`, not `s.edits`** — the transform the *visible* texture was rendered with.
+    // Perspective and geometry are prefix stages, so changing them drops the prefix cache: at
+    // native zoom the re-render costs hundreds of milliseconds, and mapping through the
+    // *requested* edits put the guides at their new positions over the previous image. Reported
+    // there as the line jumping on release when fully zoomed in.
+    let (shown_persp, shown_angle) = s.shown_geo;
+    let hom = pipeline::perspective::Homography::from_edits(&shown_persp, aspect);
+    let angle_rad = shown_angle.to_radians();
+
+    // ⚠⚠ **The cursor is on the *corrected* frame; the line is stored on the raw one.** That is
+    // `guide_overlay.rs`'s exact pattern, and it is what makes the line read **level** after
+    // release: the raw endpoints survive the rotation that is about to be applied, and drawing
+    // them forward through the new angle puts them back on the feature they were traced onto.
+    let raw_at = |p: egui::Pos2| {
+        let screen = [
             ((p.x - frame_rect.left()) / frame_rect.width()).clamp(0.0, 1.0),
             ((p.y - frame_rect.top()) / frame_rect.height()).clamp(0.0, 1.0),
-        ]
+        ];
+        guides::from_frame(screen, &hom, angle_rad, aspect)
     };
-    let to_screen = |n: [f32; 2]| {
+    let to_screen = |raw: [f32; 2]| {
+        let n = guides::to_frame(raw, &hom, angle_rad, aspect);
         egui::pos2(
             frame_rect.left() + n[0] * frame_rect.width(),
             frame_rect.top() + n[1] * frame_rect.height(),
@@ -50,7 +66,7 @@ pub(super) fn draw_straighten_overlay(
     };
 
     if let Some(p) = resp.interact_pointer_pos() {
-        let at = norm(p);
+        let at = raw_at(p);
         if tool_drag_started(resp) {
             s.straighten_drag = Some((at, at));
         }
@@ -72,9 +88,24 @@ pub(super) fn draw_straighten_overlay(
     // there "silently skipped both the render and the history push."
     if resp.drag_stopped() {
         if let Some((from, to)) = s.straighten_drag.take() {
-            if let Some(a) = rustroom_app::straighten_line::angle_for_line(from, to, aspect) {
-                if s.edits.geometry.angle != a {
-                    s.edits.geometry.angle = a;
+            // ⚠ Measured on the **corrected** frame — that is the line the user drew. The stored
+            // endpoints stay raw so they survive the rotation that is about to be applied.
+            let sf = guides::to_frame(from, &hom, angle_rad, aspect);
+            let st = guides::to_frame(to, &hom, angle_rad, aspect);
+            if let Some(a) = rustroom_app::straighten_line::angle_for_line(sf, st, aspect) {
+                // ⚠⚠ The new angle is **relative** to the one already applied: the line was drawn
+                // on a frame that already carries `shown_angle`, so levelling it means rotating by
+                // that much *more*. Without the addition, straightening a second time would undo
+                // the first correction rather than refine it.
+                //
+                // ⚠ Clamped to the Straighten slider's own range, which `angle_for_line` alone
+                // cannot do: it bounds the *relative* angle, and a sum of two in-range values is
+                // not in range. A value outside ±45 would be one the slider could neither show nor
+                // return to. (Not settled by the plan — reported.)
+                let want = (shown_angle + a).clamp(-45.0, 45.0);
+                s.straighten_line = Some((from, to));
+                if s.edits.geometry.angle != want {
+                    s.edits.geometry.angle = want;
                     s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
                     s.history.push(s.edits.clone());
                     edited = true;
@@ -88,10 +119,15 @@ pub(super) fn draw_straighten_overlay(
         }
     }
 
-    // Draw the band in progress. ⚠ `img_rect` is still the right *clip*: there is no photograph
-    // outside it to annotate, and `overlay_clip` widens it because `line_segment` centres its
-    // stroke on the path — a tight clip shaves the outer half of a halo at the frame edge.
-    if let Some((from, to)) = s.straighten_drag {
+    // Draw the band in progress, else the settled line mapped through the correction — which is
+    // what makes it read **level** after release, the only feedback that says a subtle 0.4°
+    // correction worked at all.
+    //
+    // ⚠ `img_rect` is still the right *clip*: there is no photograph outside it to annotate, and
+    // `overlay_clip` widens it because `line_segment` centres its stroke on the path — a tight
+    // clip shaves the outer half of a halo at the frame edge.
+    let shown = s.straighten_drag.or(s.straighten_line);
+    if let Some((from, to)) = shown {
         let p = ui.painter_at(canvas_geom::overlay_clip(img_rect));
         let (a, b) = (to_screen(from), to_screen(to));
         // ⚠ Halo then mark, the crop overlay's convention: "a white line is invisible against a
@@ -104,6 +140,10 @@ pub(super) fn draw_straighten_overlay(
             [a, b],
             egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 80, 80)),
         );
+        for q in [a, b] {
+            p.circle_filled(q, 5.0, egui::Color32::from_black_alpha(180));
+            p.circle_filled(q, 3.0, egui::Color32::from_rgb(255, 80, 80));
+        }
     }
     edited
 }

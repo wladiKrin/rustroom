@@ -98,6 +98,16 @@ impl RustroomApp {
             // `t != Tool::Retouch` guard was tried and its sabotage went uncaught — an
             // unreachable guard is an untested one.
             s.visualize = None;
+            // ⚠ The straighten line goes too. It is drawn only under `Tool::Crop`, so leaving it
+            // would simply reappear on the way back — but a tool change can also interrupt the
+            // drag itself, and neither the canvas nor the panel gets its release frame in that
+            // case, so a half-drawn rubber band would survive with nothing to finish it.
+            //
+            // ⚠ Unconditional, not gated on the new tool: `visualize` above records that a
+            // `t != Tool::Retouch` guard's sabotage went **uncaught** because the guard was
+            // unreachable — an unreachable guard is an untested one.
+            s.straighten_line = None;
+            s.straighten_drag = None;
             s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         }
     }

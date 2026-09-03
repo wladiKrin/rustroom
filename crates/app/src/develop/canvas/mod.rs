@@ -608,6 +608,71 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ The point of keeping the line: after release it must read **level on screen**, which is
+    /// the only feedback that says a subtle correction worked. Asserted through the same forward
+    /// map the overlay draws with, so a line stored in the wrong space cannot pass.
+    ///
+    /// ⚠⚠ **Mapped through `s.edits`, NOT through `s.shown_geo` — and the plan predicted this
+    /// exact substitution.** `shown_geo` is advanced at the frame-landing site in `shell.rs`,
+    /// which this harness does not run, so it never moves on its own here.
+    /// `s.edits.geometry.angle` is the angle the release just wrote and the one the next frame
+    /// will render with, so this is the property the user actually sees — a frame later.
+    ///
+    /// ⚠⚠ **The fixture carries a 5° correction ALREADY APPLIED, and that is what gives the test
+    /// leverage.** With `shown_geo` at its default the raw frame and the corrected frame coincide,
+    /// so `from_frame`/`to_frame` are the identity and `shown_angle + a == a` — under which
+    /// **two sabotages this test names went uncaught**: storing the *screen* endpoints instead of
+    /// the raw ones, and dropping the `shown_angle +` that makes the new angle relative. Both are
+    /// invisible at zero. Seeding a photo that has already been straightened once is the case
+    /// where they differ, and it is also the real workflow: straighten, look again, straighten
+    /// better.
+    #[test]
+    fn the_settled_straighten_line_reads_level_afterwards() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_armed = true;
+            // A frame that has already landed carrying 5° — `edits` and `shown_geo` agree, as
+            // they do in the app once the render catches up.
+            s.edits.geometry.angle = 5.0;
+            s.shown_geo = (s.edits.perspective, 5.0);
+        }
+        super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        let (from, to) = s.straighten_line.expect("the line was not kept");
+        let aspect = s.fit_image_size.x / s.fit_image_size.y.max(1.0);
+        let hom = pipeline::perspective::Homography::from_edits(&s.edits.perspective, aspect);
+        let angle = s.edits.geometry.angle.to_radians();
+        let a = pipeline::perspective::guides::to_frame(from, &hom, angle, aspect);
+        let b = pipeline::perspective::guides::to_frame(to, &hom, angle, aspect);
+        // ⚠ The guard on the guard: a stored line that was never rotated would also have a small
+        // rise if the drag itself had been level, so assert the drag really was tilted.
+        assert!(
+            (to[1] - from[1]).abs() > 0.05,
+            "fixture check: the drawn line was not tilted ({from:?} to {to:?})"
+        );
+        // ⚠ And the angle really did move off the 5° the fixture started at, or the "level" check
+        // below would be measuring a photo nothing happened to.
+        assert!(
+            (s.edits.geometry.angle - 5.0).abs() > 1.0,
+            "fixture check: the release did not change the angle: {}",
+            s.edits.geometry.angle
+        );
+        // Levelled: the mapped line's screen-space rise is ~0.
+        let rise = (b[1] - a[1]).abs();
+        assert!(
+            rise < 0.02,
+            "the line did not come out level: rise {rise} (from {a:?} to {b:?})"
+        );
+    }
+
     /// ⚠ A non-primary drag must leave it alone. egui reports `dragged()` for every button, so a
     /// bare `dragged()` would let the middle-drag pan binding rotate the photo as it passed over
     /// the canvas — and no test using Primary alone can see that.

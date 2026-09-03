@@ -361,6 +361,7 @@ impl RustroomApp {
             visualize: None,
             straighten_armed: false,
             straighten_drag: None,
+            straighten_line: None,
             path,
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session

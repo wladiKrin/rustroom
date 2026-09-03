@@ -196,6 +196,9 @@ pub fn show(
         .clicked()
     {
         s.straighten_armed = !s.straighten_armed;
+        // Re-arming discards the previous line: it described a correction that is no longer the
+        // one being drawn.
+        s.straighten_line = None;
     }
 
     ui.separator();
@@ -780,6 +783,40 @@ mod tests {
         assert!(!s.straighten_armed, "fixture check: it starts unarmed");
         let _ = click_in_panel("Straighten by drawing a line", &mut s, false);
         assert!(s.straighten_armed, "the toggle did not arm");
+    }
+
+    /// ⚠ Re-arming discards the previous line, which described a correction that is no longer the
+    /// one being drawn. Without this the old line hangs on screen through the next gesture.
+    #[test]
+    fn re_arming_the_toggle_discards_the_previous_line() {
+        let mut s = session();
+        s.straighten_line = Some(([0.2, 0.4], [0.8, 0.6]));
+        let _ = click_in_panel("Straighten by drawing a line", &mut s, false);
+        assert_eq!(s.straighten_line, None, "the old line survived a re-arm");
+    }
+
+    /// ⚠⚠ It must not survive leaving the tool. `visualize_turns_itself_off_when_the_tool_changes`
+    /// is the precedent, and its note applies here too: there is deliberately **no** "staying in
+    /// Crop keeps it" half, because `select_tool` returns early when the tool is unchanged, so the
+    /// line under test would never be reached and the assertion would pass against anything.
+    #[test]
+    fn the_straighten_line_does_not_survive_a_tool_change() {
+        let ctx = test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        app.select_tool(rustroom_app::tool::Tool::Crop);
+        {
+            let s = app.session.as_mut().unwrap();
+            s.straighten_line = Some(([0.2, 0.4], [0.8, 0.6]));
+            s.straighten_drag = Some(([0.2, 0.4], [0.8, 0.6]));
+        }
+        app.select_tool(rustroom_app::tool::Tool::Edit);
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.straighten_line, None, "the line outlived its tool");
+        assert_eq!(
+            s.straighten_drag, None,
+            "an interrupted drag outlived its tool"
+        );
     }
 
     /// ⚠ The other half: Aspect and Scale are **not** written by a solve, so adjusting them is
