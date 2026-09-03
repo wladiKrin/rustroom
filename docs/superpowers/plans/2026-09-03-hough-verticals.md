@@ -79,6 +79,33 @@ touch is contended.
 
 ---
 
+## ⚠⚠ CORRECTIONS — three things in THIS plan were wrong, found by executing it (2026-09-03)
+
+Recorded so the plan is not misleading to a later reader. The track C agent caught all three.
+
+1. **The plan's Hough code used gradient direction to PICK the angle bin; the spec says direction is
+   a *gate*.** A per-pixel gradient direction is a noisy local estimate, so one line's pixels scatter
+   across a dozen 1° bins and no peak forms. Measured: the plan's version recovered a lean of **0°**
+   for a line drawn at 7.1°. The correct shape is the classic Hough — gate on direction, then **sweep
+   the angle window** — which is what shipped.
+2. **`OFFSET_BINS` spanned the half-diagonal, which is too small.** A 30°-leaning line through a
+   corner needs 202 px where the half-diagonal is 181, so the steepest lines' votes were silently
+   dropped — the failure mode being a detector that quietly ignores exactly the frames the ±30°
+   window was widened for.
+3. **The plan's test fixtures were hard-painted staircases.** A slope-0.125 line steps 1 px every 8
+   rows, so it *is* a vertical run; and a 50° line's risers are genuine short verticals, which is why
+   the out-of-window fixture "detected" one. Fixtures need Gaussian cross-sections, and the
+   out-of-window endpoints must lie inside the frame — the originals clamped and painted a 43 px
+   vertical up the right edge.
+
+⚠ **A sixth constant was also required and the plan did not anticipate it.** Every threshold here is
+relative to the frame's own strongest gradient, and **a relative threshold structurally cannot say
+"there is no vertical in this photograph"** — so a landscape always returned two lines.
+`MIN_LENGTH_FRACTION` counts *voting pixels* rather than summed magnitude, because thresholding
+magnitude conflates length with contrast.
+
+---
+
 ## ⚠⚠ Two things the roadmap and the brief get wrong
 
 **1. `visualize::edge_view` is NOT a usable edge map for a Hough pass**, and the vault roadmap's M7.4
