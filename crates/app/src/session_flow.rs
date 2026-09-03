@@ -364,6 +364,7 @@ impl RustroomApp {
             show_before: false,
             active_handle: None,
             selected_mask: None,
+            selected_spot: None,
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,

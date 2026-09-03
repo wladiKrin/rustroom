@@ -320,6 +320,12 @@ struct RustroomApp {
     brush_erase: bool,
     /// Whether to tint the selected brush mask's coverage on the canvas.
     show_mask_tint: bool,
+    /// The Retouch tool's live settings.
+    ///
+    /// ⚠ On `RustroomApp` rather than `Session` and **not persisted** — the brush's rule. The
+    /// canvas size-drag writes `radius` back here, which is what makes the panel's Size slider
+    /// follow the gesture.
+    spot_tool: rustroom_app::spot_tool::SpotTool,
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
@@ -542,6 +548,7 @@ impl RustroomApp {
             histories: HistoryStash::default(),
             status: String::new(),
             show_filmstrip: true,
+            spot_tool: Default::default(),
             brush_size: 40.0,
             brush_hardness: 50.0,
             brush_flow: 100.0,
@@ -668,6 +675,12 @@ pub struct Session {
     /// appear in a preset — `Edits` is the file format, and a selection is not part of the
     /// photograph's description. `Session` is per-photo, so this resets on a switch for free.
     selected_mask: Option<usize>,
+    /// Which retouch spot is selected, if any.
+    ///
+    /// ⚠ **View state, never `Edits`** — `selected_mask`'s rule, for its reason: a selection is
+    /// not part of the photograph's description, so it must not reach the sidecar or travel with
+    /// a paste. `Session` is per-photo, so this resets on a switch for free.
+    selected_spot: Option<usize>,
     /// The mask handle this drag is moving, if the drag started on one.
     ///
     /// ⚠ Load-bearing for panning: a drag that did *not* start on a handle must still pan the

@@ -5,6 +5,7 @@ pub mod color_wheel;
 pub mod geometry;
 pub mod masks;
 pub mod presets;
+pub mod retouch;
 pub mod snapshots;
 pub mod tone_curve;
 
@@ -229,8 +230,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             },
                             &mut ed,
                         ),
+                        Tool::Retouch => retouch::show(ui, s, &mut app.spot_tool, &mut ed),
                         // Drawn above, outside the session borrow — see the comment there.
-                        Tool::Presets | Tool::Retouch => {}
+                        Tool::Presets => {}
                     }
 
                     if ed.changed {

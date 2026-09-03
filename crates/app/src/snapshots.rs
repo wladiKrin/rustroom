@@ -65,6 +65,9 @@ impl RustroomApp {
         // one is harmless today — but a mask added later would land at that index and appear
         // selected without anyone having selected it. A photo switch clears it for this reason.
         s.selected_mask = None;
+        // ⚠ Same reason as `selected_mask`: a restored state has a different spot list, so a
+        // stale index would leave a spot selected that nobody selected.
+        s.selected_spot = None;
         s.active_mask_handle = None;
         let pushed = s.history.push(s.edits.clone());
         s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
