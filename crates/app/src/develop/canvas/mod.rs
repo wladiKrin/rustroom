@@ -696,12 +696,112 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **Moving a spot must render on the drag frame itself**, because there the pixels change
-    /// continuously and the render *is* the feedback. Sampled on that frame, not after the
-    /// gesture: in the real app no later frame comes, because egui idles once the drag ends —
-    /// which is exactly how the M3.1a mask bug hid.
+    /// ⚠⚠ **The patch must leave the VIEW while it is being moved**, so the blemish underneath is
+    /// visible and the new position can be lined up against it. Reported as "it shows the previous
+    /// retouching there, I think it should just disappear, so I can once again better align the
+    /// positions".
+    ///
+    /// ⚠ Both halves are asserted. That it disappears is half the property; that it comes back on
+    /// release is the other, and without that a moved patch would stay invisible for good — the
+    /// worse bug of the two.
     #[test]
-    fn dragging_a_placed_spot_renders_on_the_drag_frame() {
+    fn a_moving_patch_leaves_the_view_and_returns_on_release() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "setup: nothing was placed");
+
+        // ⚠ Sampled *during* the drag rather than after it: the suppression exists only for the
+        // gesture's duration, so a check afterwards could only ever see it cleared.
+        let mut during = None;
+        for pass in 0..4 {
+            let pos = if pass <= 1 {
+                centre
+            } else {
+                centre + egui::vec2(30.0, 0.0)
+            };
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if pass == 1 {
+                events.push(egui::Event::PointerButton {
+                    pos: centre,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+            }
+            if pass == 3 {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                });
+            }
+            let c = ctx.clone();
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(super::test_support::screen()),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::show(&mut app, ui, &c);
+                },
+            );
+            if pass == super::test_support::DRAG_PASS {
+                during = app.session.as_ref().unwrap().suppressed_spot;
+            }
+        }
+        assert_eq!(
+            during,
+            Some(0),
+            "the patch stayed in the view while it was being moved"
+        );
+        assert_eq!(
+            app.session.as_ref().unwrap().suppressed_spot,
+            None,
+            "the patch never came back after the move"
+        );
+    }
+
+    /// ⚠ The suppression is *view* state: it must never reach the stored edits, or a moved patch
+    /// would be deleted rather than hidden.
+    #[test]
+    fn suppressing_a_patch_leaves_the_stored_edits_alone() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let stored = spots(&app);
+        app.session.as_mut().unwrap().suppressed_spot = Some(0);
+        let _ = painted(&mut app, &ctx);
+        assert_eq!(spots(&app), stored, "suppression edited the stored spots");
+        // ⚠ And the *view* really does leave it out, or the mechanism is inert.
+        let s = app.session.as_ref().unwrap();
+        assert!(
+            s.view_edits(rustroom_app::tool::Tool::Retouch)
+                .spots
+                .is_empty(),
+            "the suppressed patch is still in the rendered edits"
+        );
+    }
+
+    /// ⚠⚠ **Moving a spot must NOT render while the drag runs — the moving circle is the
+    /// feedback.** This reverses an earlier version of this very test, and the reversal was forced
+    /// by using the tool: "moving around the retouch patch is very laggy, as it adapts the
+    /// retouching on the go".
+    ///
+    /// The reason is structural rather than a matter of taste. `SpotRemovalStage` lives in the
+    /// **prefix**, so moving a spot drops the prefix cache and re-runs noise reduction and dehaze
+    /// over the whole buffer — ~117 ms each at native resolution, every frame of the drag. A mask
+    /// handle can render live because `MaskStage` is in the cheap tail; the M3.1a rule was right
+    /// for masks and wrong here.
+    ///
+    /// ⚠ Both halves are asserted. "No render during the drag" alone would pass against a version
+    /// that never rendered at all and left the patch permanently stale.
+    #[test]
+    fn dragging_a_placed_spot_renders_only_on_release() {
         let ctx = egui::Context::default();
         let mut app = retouch_app(&ctx);
         let centre = super::test_support::canvas_centre(&mut app, &ctx);

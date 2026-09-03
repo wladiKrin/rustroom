@@ -86,6 +86,10 @@ pub(crate) fn show(
     // below, not by review.
     let mut touched = r.changed();
     let mut settled = r.drag_stopped();
+    // ⚠ `dragged()` rather than `changed()`: a slider reports no change on a frame the pointer
+    // held still, and treating that as "the drag ended" would flicker the patch back into view
+    // mid-gesture.
+    let mut dragging = r.dragged();
 
     let feather = live
         .as_mut()
@@ -95,6 +99,7 @@ pub(crate) fn show(
         .on_hover_text("0 is a hard edge; 100 ramps from the centre to the rim.");
     touched |= r.changed();
     settled |= r.drag_stopped();
+    dragging |= r.dragged();
 
     let mode = live.as_mut().map_or(&mut tool.mode, |sp| &mut sp.mode);
     ui.horizontal(|ui| {
@@ -139,7 +144,27 @@ pub(crate) fn show(
             tool.feather = sp.feather;
             tool.mode = sp.mode;
         }
-        ed.changed |= touched;
+        // ⚠⚠ **The pixels are NOT re-rendered while a slider is being dragged — the outline is
+        // the feedback, exactly as it is while moving a patch.** Reported as "changing the size or
+        // feathering does the live update as before with moving it; it should follow the same
+        // guidelines", and the reason is the same: `SpotRemovalStage` is in the prefix, so every
+        // frame would re-run noise reduction and dehaze over the whole buffer.
+        //
+        // ⚠ The stored spot *is* updated every frame, which is what makes the circle follow the
+        // slider — the canvas redraws from `Edits` on its own, with no render request needed.
+        //
+        // ⚠ And the patch leaves the view for the duration, so the blemish being sized against is
+        // visible. `suppressed_spot` doubles as the edge detector: it is `None` on the first
+        // dragging frame, which is the one render that hides the patch.
+        if dragging {
+            if s.suppressed_spot != Some(i) {
+                s.suppressed_spot = Some(i);
+                ed.changed = true;
+            }
+        } else if settled || s.suppressed_spot == Some(i) {
+            s.suppressed_spot = None;
+            ed.changed = true;
+        }
         ed.settled |= settled;
     }
 
@@ -361,6 +386,100 @@ mod tests {
         assert!(
             !ed.settled,
             "changing a default pushed a history entry for a photo that did not change"
+        );
+    }
+
+    /// ⚠⚠ **A slider drag must not re-render the pixels, and must hide the patch while it runs —
+    /// the same rule moving one follows.** Reported as "changing the size or feathering does the
+    /// live update as before with moving it; it should follow the same guidelines". The reason is
+    /// the same too: `SpotRemovalStage` is in the prefix, so every frame would re-run noise
+    /// reduction and dehaze over the whole buffer.
+    ///
+    /// ⚠ Three properties, and each is a separate way to get this wrong: the stored spot follows
+    /// the slider (so the outline moves), the patch leaves the view while dragging, and it comes
+    /// back with exactly one settled edit on release.
+    #[test]
+    fn a_slider_drag_hides_the_patch_and_renders_only_on_release() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        {
+            let s = app.session.as_mut().expect("session");
+            s.edits.spots = vec![a_spot()];
+            s.selected_spot = Some(0);
+        }
+        let before = app.session.as_ref().unwrap().edits.spots[0].radius;
+
+        let at = crate::test_ui::find(&ctx, "Size", |ui| {
+            let mut ed = Edited::default();
+            let mut tool = app.spot_tool;
+            let mut on = true;
+            let s = app.session.as_mut().expect("session");
+            show(ui, s, &mut tool, &mut on, &mut ed);
+        })
+        .expect("no Size slider was drawn");
+
+        let mut mid = None;
+        let mut released = Edited::default();
+        for pass in 0..4 {
+            let pos = if pass <= 1 {
+                at
+            } else {
+                egui::pos2(at.x + 200.0, at.y)
+            };
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if pass == 1 || pass == 3 {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: pass == 1,
+                    modifiers: Default::default(),
+                });
+            }
+            let mut tool = app.spot_tool;
+            let mut ed = Edited::default();
+            {
+                let s = app.session.as_mut().expect("session");
+                let mut on = true;
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(crate::test_ui::screen()),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| show(ui, s, &mut tool, &mut on, &mut ed),
+                );
+            }
+            app.spot_tool = tool;
+            if pass == 2 {
+                mid = Some((
+                    app.session.as_ref().unwrap().suppressed_spot,
+                    app.session.as_ref().unwrap().edits.spots[0].radius,
+                ));
+            }
+            if ed.settled {
+                released = ed;
+            }
+        }
+
+        let (suppressed, radius_mid) = mid.expect("the drag never reached its middle");
+        assert_ne!(
+            radius_mid, before,
+            "the stored spot did not follow the slider, so the outline would not move"
+        );
+        assert_eq!(
+            suppressed,
+            Some(0),
+            "the patch stayed in the view while the slider was dragged"
+        );
+        assert_eq!(
+            app.session.as_ref().unwrap().suppressed_spot,
+            None,
+            "the patch never came back after the drag"
+        );
+        assert!(
+            released.settled,
+            "the drag pushed no history entry on release"
         );
     }
 

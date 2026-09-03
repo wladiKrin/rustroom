@@ -147,6 +147,19 @@ pub(super) fn draw_spot_overlay(
             s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
                 Some((i, h)) => {
                     s.selected_spot = Some(i);
+                    // ⚠⚠ **The patch leaves the view for the duration of the drag**, so the
+                    // blemish underneath is visible and can be lined up against. Without this its
+                    // old effect stays on screen and hides the very thing being aimed at.
+                    //
+                    // ⚠ One render here and one on release — not one per frame, which is what was
+                    // reported as laggy. `SpotRemovalStage` is in the prefix, so each costs a
+                    // whole-buffer noise-reduction and dehaze pass.
+                    s.suppressed_spot = Some(i);
+                    s.request(
+                        s.view_edits(Tool::Retouch),
+                        s.render_max_dim(),
+                        s.requested_region,
+                    );
                     SpotDrag::Moving(i, h)
                 }
                 None if ui.input(|i| i.modifiers.alt) => SpotDrag::Sourcing { at: p, to: p },
@@ -240,6 +253,9 @@ pub(super) fn draw_spot_overlay(
             changed = true;
         }
         if s.spot_drag != SpotDrag::None {
+            // ⚠ Cleared before the request, or the render that is meant to bring the patch back
+            // would be built from the suppressed view and leave it invisible.
+            s.suppressed_spot = None;
             // ⚠⚠ A drag MUST request a render. `draw_crop_overlay` deliberately does not, because
             // `preview_edits` strips the crop in geometry mode so the overlay *is* the feedback —
             // copying that here is the exact false analogy that shipped the M3.1a mask bug, where

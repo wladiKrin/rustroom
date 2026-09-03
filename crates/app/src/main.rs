@@ -693,6 +693,21 @@ pub struct Session {
     /// ⚠ Load-bearing for panning: a drag that did *not* start on a handle must still pan the
     /// image, so this records whether the mask claimed the gesture.
     active_mask_handle: Option<mask_tool::Handle>,
+    /// A spot the *view* leaves out while it is being adjusted.
+    ///
+    /// ⚠⚠ **Why: while you drag a patch, its old effect is still on screen, hiding the very
+    /// blemish you are trying to line up with.** Reported as "it shows the previous retouching
+    /// there, I think it should just disappear, so I can once again better align the positions".
+    /// Suppressing it reveals the untouched pixels underneath for the duration of the gesture.
+    ///
+    /// ⚠ **View state, never `Edits`** — the same standing as `selected_spot`, and applied in
+    /// `view_edits`, which is where `preview_edits` already strips the crop in geometry mode. The
+    /// sidecar, an export and the CLI never see it.
+    ///
+    /// ⚠ Two renders per gesture, not one per frame: one when the suppression begins and one when
+    /// it ends. `SpotRemovalStage` is in the prefix, so each costs a whole-buffer noise-reduction
+    /// and dehaze pass — which is exactly why the per-frame version was reported as laggy.
+    suppressed_spot: Option<usize>,
     /// What the retouch gesture is doing, across frames.
     ///
     /// ⚠⚠ **On the session, not a local in `canvas::show`** — `active_mask_handle`'s home, for a

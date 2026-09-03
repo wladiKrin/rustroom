@@ -83,6 +83,11 @@ impl RustroomApp {
         self.tool = t;
         let tool = self.tool;
         if let Some(s) = &mut self.session {
+            // ⚠ A tool change can interrupt a retouch drag, and neither the canvas nor the panel
+            // gets its release frame in that case — so a suppressed spot would stay invisible with
+            // nothing on screen to explain it. Cleared here, where every route into a tool change
+            // already converges.
+            s.suppressed_spot = None;
             s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         }
     }

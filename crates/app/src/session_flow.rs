@@ -109,7 +109,16 @@ impl Session {
         } else {
             self.edits.clone()
         };
-        preview_edits(&edits, tool)
+        let mut e = preview_edits(&edits, tool);
+        // ⚠ Removed rather than zeroed: a spot with a zero radius still runs the stage, and
+        // `SpotRemovalStage`'s own guard treats a non-positive radius as covering nothing — so
+        // dropping it is both cheaper and unambiguous.
+        if let Some(i) = self.suppressed_spot {
+            if i < e.spots.len() {
+                e.spots.remove(i);
+            }
+        }
+        e
     }
 }
 
@@ -372,6 +381,7 @@ impl RustroomApp {
             active_handle: None,
             selected_mask: None,
             selected_spot: None,
+            suppressed_spot: None,
             spot_drag: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
