@@ -139,7 +139,14 @@ rendering) also landed inline on 2026-09-03, outside any wave, because it was bl
 milestones. ⚠ The remaining three W4 tracks are still parallelisable on the original partition —
 M5.5b and M7.4 both touch `crop_overlay.rs`/`guides` and would need the surface split before
 dispatch; M6.5d is a **canvas hover** (not Library-side, as an earlier draft of this line said) and
-touches `canvas/mod.rs`, which B's dispatch line also does. ⚠ `mask_overlay.rs` is now 455 lines
+touches `canvas/mod.rs`, which B's dispatch line also does.
+
+⚠⚠ **W4-0 SUPERSEDED THAT SURFACE ANALYSIS (2026-09-03), and in both directions.** The predicted
+B↔C collision **does not exist**: C is barred from `canvas/**` entirely and writes into
+`Session.guides` instead, so no `crop_overlay.rs`/`guides` split was needed. Two collisions the line
+did *not* predict took its place — **B↔C in `panel/geometry.rs`** (B's toggle, C's Auto button) and
+**B↔D in `Session`** — because B's gesture came out as an armed toggle. See the revised table and the
+merge-order note below. ⚠ `mask_overlay.rs` is now 455 lines
 and `spot_overlay.rs` 462 — the "next file to watch" note below held, since M5.3b got its own
 module rather than growing `mask_overlay.rs`; `canvas/mod.rs` is 992 including its tests (474 of
 production code).
@@ -147,11 +154,13 @@ production code).
 ### W4 — to be run by a DIFFERENT agent (user's call, 2026-09-03)
 
 **Read this whole file first, then §5, then `CLAUDE.md`'s M5.3b, guided-perspective and M5.2
-sections.** Three tracks, none yet specced. ⚠⚠ **W4-0 comes first and is the orchestrator's job,
-inline, with the user:** brainstorm → spec for each track, settling the decisions listed under it.
-§6 is unambiguous — an agent given an open design choice picks one silently and the choice ships.
-Then verify `.claude/settings.json` still has `"baseRef": "head"`, dispatch all three with the §3
-prompt contents, and merge **D → B → C**.
+sections.** ⚠⚠ **W4-0 IS DONE (2026-09-03): all three tracks are specced and every decision below is
+settled with the user.** Specs: `2026-09-03-straighten-line-design.md` (B),
+`2026-09-03-hough-verticals-design.md` (C), `2026-09-03-colour-readout-design.md` (D). §6 is
+unambiguous — an agent given an open design choice picks one silently and the choice ships — so
+**each agent gets its own spec and re-opens nothing in it.** `.claude/settings.json` was verified to
+still hold `"baseRef": "head"`. Dispatch all three with the §3 prompt contents and merge
+**B → D → C** (revised — see the merge-order note below).
 
 | Track | Owns | Must not touch |
 | --- | --- | --- |
@@ -159,10 +168,67 @@ prompt contents, and merge **D → B → C**.
 | **C** M7.4 Hough verticals | new `pipeline/src/perspective/detect.rs` (the analysis — `auto_tone.rs` is the precedent for an analysis pass living in `pipeline`), an `Auto` button in `panel/geometry.rs` under Guide Mode, one app method writing `Session.guides` (in `interaction.rs` beside `select_tool`, or a new lib glue module) | `canvas/**` entirely — the inferred guides go into `Session.guides` and the existing overlay draws and edits them for free — `Edits`, `crop_tool.rs`, goldens, `visualize.rs` (read it, do not change it) |
 | **D** M6.5d colour readout | new lib `app/src/color_readout.rs` (pure: `[f32;3]` → the strings shown), the **hover read at the end of `canvas/mod.rs::show`**, the status cluster in `shell.rs`, and **extracting `spot_overlay::sampler_for`** into a shared bin helper both it and the retouch tool call | `crop_overlay.rs`, `guide_overlay.rs`, `panel/**`, `Session` fields other than what the hover needs, `Edits`, `pipeline` |
 
-**Merge order D → B → C**: `canvas/mod.rs` is the contended surface (D's hover block, B's one
-dispatch line), so D lands first and B rebases one line; C touches nothing the others do.
+**⚠⚠ Merge order is B → D → C, REVISED from D → B → C by W4-0's own decisions (2026-09-03), and the
+ownership table above needs two amendments with it.** B's gesture came out as an **armed toggle in
+the Geometry panel** rather than the modifier-drag the table assumed, which moved B into
+`panel/geometry.rs` — C's file for its Auto button — and into `Session` in `main.rs`, D's file for
+the retained bytes. **B is now the only track touching all three contended surfaces**, so §3's rule
+(*the owner of the most contended surface merges first*) puts it first.
 
-**Decisions to settle in W4-0, per track** — none of these may be left to the agent:
+| Surface | B | C | D |
+| --- | --- | --- | --- |
+| `canvas/mod.rs` (992) | one dispatch branch in the `Tool::Crop` arm | — | hover read at the end of `show` |
+| `panel/geometry.rs` (742) | toggle on the **Straighten slider's row**, ~line 155 | **Auto** button in the **Guides** block, ~line 222 | — |
+| `main.rs` (`Session`) | 2 view-state fields | — | 1 field group for the retained bytes |
+| `shell.rs` (930) | — | — | retain the sRGB bytes + the readout label |
+
+⚠ The ~70 lines between B's and C's edits in `panel/geometry.rs` is **deliberate placement**, not
+luck — it is what makes C's rebase clean. ⚠ B and D both append a field to `Session`: expect one
+trivial conflict in `main.rs` and keep both additions.
+
+**Two amendments to the ownership table, both to go in the dispatch prompts so no agent decides them
+silently:**
+
+1. **B may write `s.edits.geometry.angle`.** The table bars B from "`Edits`", which read literally
+   makes the feature impossible. It means *add no `Edits` field, do not touch the `edit-model`
+   crate*. B writes one existing field and adds none.
+2. **B reads `show_guides` and `guides` and writes neither.** Mutual exclusion is by **gating**, not
+   cross-writes: the toggle is `add_enabled(!s.show_guides && s.guides.is_empty(), ..)` and the
+   `Tool::Crop` dispatch tests `show_guides` first. ⚠ That gating also removes a wart for free — a
+   straighten line writes one of the three values a guide solve owns, and `panel/geometry.rs:203`
+   structurally **cannot** catch it, because it captures `solved_before` within the frame and an
+   angle written by the canvas on the *previous* frame is already in `s.edits`.
+3. **D's `sampler_for` extraction is DROPPED.** It only served the decode-buffer choice, and D reads
+   the rendered frame. Doing it anyway would touch the retouch tool for a helper with no caller.
+
+**⚠⚠ THE TEN DECISIONS, ALL SETTLED (user's call, 2026-09-03), so no agent re-opens one.** Each
+track's spec carries the reasoning; this is the record.
+
+- **B.** (1) An **armed toggle on the Straighten slider's row**, mutually exclusive with Guide Mode
+  and auto-disarming after one line — *not* a modifier-drag, because `shell.rs`'s own comment says a
+  feature reachable only by an unmentioned key is a feature nobody finds, and this is Lightroom's
+  primary affordance too. (2) **No auto-shrink** — the black wedges stay the user's to crop,
+  consistent with what the slider has always done. (3) **The line is kept and drawn mapped through
+  the resulting angle**, via `guides::from_frame`/`to_frame` against `shown_geo`, so it reads level
+  after release.
+- **C.** (1) The **decode buffer, sampled through `lens_profile::Corrector` and `Orientation`** at a
+  fixed `ANALYSIS_DIM` — which lands exactly in Guide space, so no inverse mapping exists in the
+  track. ⚠ The lens step is the part an agent would skip: on the raw buffer, distortion curves every
+  building edge and the vanishing point comes out plausible-but-wrong. (2) **Verticals only.**
+  (3) **Solves immediately**, guides left visible and editable — and the button must also set
+  `show_guides = true`, or the overlay draws nothing and the Done-when is not met. (4) **±30° of
+  vertical**, chosen from the failure asymmetry: a missed line reads as a broken button, a false
+  positive is a visible editable guide. ⚠ **Do NOT reuse `visualize::edge_view`** — it is a
+  dust-tuned high-pass with no gradient direction, and it is in the app lib; compute a **Sobel** in
+  `pipeline::spatial`. This contradicts the roadmap's own note.
+- **D.** (1) The **rendered frame** — and specifically `pack`'s `srgb8`, the same bytes the histogram
+  is bucketed from, **not** `frame.rgba`, which is in the *display's* primaries. ⚠ Two corrections to
+  the table below: `Session` holds only a `TextureHandle`, which cannot be sampled, and those bytes
+  are not sRGB. (2) **sRGB 0–255**, **5×5 mean**. (3) Its **own label immediately left of the
+  status/progress label** in `shell.rs`'s right-aligned cluster, blank when the pointer is off the
+  canvas.
+
+**The original decision list, kept for the ⚠ facts each agent still needs:**
 
 - **B.** (1) The gesture: Lightroom's is ⌘-drag inside the crop tool; here the crop rect already
   owns every drag in `Tool::Crop`, so it is a modifier-drag (the retouch tool's ⌥-drag precedent)
