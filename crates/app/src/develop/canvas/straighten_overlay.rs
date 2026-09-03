@@ -88,6 +88,9 @@ pub(super) fn draw_straighten_overlay(
     // there "silently skipped both the render and the history push."
     if resp.drag_stopped() {
         if let Some((from, to)) = s.straighten_drag.take() {
+            // The measurement stays here — it needs the drawn endpoints and the live transform.
+            // Everything that follows from the *answer* lives in `settle`, so the panel's tests
+            // can reach it without a canvas.
             // ⚠ Measured on the **corrected** frame — that is the line the user drew. The stored
             // endpoints stay raw so they survive the rotation that is about to be applied.
             let sf = guides::to_frame(from, &hom, angle_rad, aspect);
@@ -97,19 +100,8 @@ pub(super) fn draw_straighten_overlay(
                 // on a frame that already carries `shown_angle`, so levelling it means rotating by
                 // that much *more*. Without the addition, straightening a second time would undo
                 // the first correction rather than refine it.
-                //
-                // ⚠ Clamped to the Straighten slider's own range, which `angle_for_line` alone
-                // cannot do: it bounds the *relative* angle, and a sum of two in-range values is
-                // not in range. A value outside ±45 would be one the slider could neither show nor
-                // return to. (Not settled by the plan — reported.)
-                let want = (shown_angle + a).clamp(-45.0, 45.0);
                 s.straighten_line = Some((from, to));
-                if s.edits.geometry.angle != want {
-                    s.edits.geometry.angle = want;
-                    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
-                    s.history.push(s.edits.clone());
-                    edited = true;
-                }
+                edited = settle(s, shown_angle + a, tool);
             }
             // ⚠ Disarmed after one line, the eyedropper's recorded rule: a mode that stayed armed
             // would turn every later drag on the canvas — including one meant to move the crop —
@@ -146,4 +138,43 @@ pub(super) fn draw_straighten_overlay(
         }
     }
     edited
+}
+
+/// Apply a straighten angle the way a released line does: clamp it, request, push one history
+/// entry, and clear the guides.
+///
+/// Returns whether a photo edit settled into a new history entry.
+///
+/// ⚠ Split out of the release path so the *rule* has one home and the panel's tests can reach it
+/// without driving a canvas — the `apply_cell_action` / `name_edit` pattern, where two routes into
+/// one act must not be able to drift.
+pub(super) fn settle(s: &mut Session, angle: f32, tool: Tool) -> bool {
+    // ⚠ Clamped to the Straighten slider's own range, which `angle_for_line` alone cannot do: it
+    // bounds the *relative* angle, and a sum of two in-range values is not in range. A value
+    // outside ±45 is one the slider could neither show nor return to.
+    let want = angle.clamp(-45.0, 45.0);
+
+    // ⚠⚠ **A straighten line is a hand edit through another affordance, so it clears the guides.**
+    // `panel/geometry.rs` states the rule for the slider: "editing by hand throws the guides away,
+    // because the solve no longer describes what you see." Straighten is one of the three values a
+    // solve writes, so a line leaves any drawn guides describing a correction that no longer holds
+    // — and a stale overlay is worse than none, because it gets trusted.
+    //
+    // ⚠ The panel's own hand-edit check structurally **cannot** do this for us: it captures
+    // `solved_before` earlier in the same frame, so an angle written by the canvas on the
+    // *previous* frame is already in `s.edits` and never reads as an edit.
+    //
+    // ⚠ The **sliders are deliberately left alone**, which is `Clear`'s own contract — "Remove all
+    // guides. The sliders they produced are left alone." Clearing them here would throw away a
+    // perspective correction the user never asked to undo.
+    s.guides.clear();
+    s.active_guide = None;
+
+    if s.edits.geometry.angle == want {
+        return false;
+    }
+    s.edits.geometry.angle = want;
+    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+    s.history.push(s.edits.clone());
+    true
 }

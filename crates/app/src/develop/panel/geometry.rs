@@ -169,11 +169,8 @@ pub fn show(
     // drawn guides would be left describing a solve that no longer holds — and the hand-edit
     // check ~50 lines below structurally **cannot** catch it, because it captures `solved_before`
     // within this frame and an angle written by the canvas on the *previous* frame is already in
-    // `s.edits`. Gating makes that state unreachable instead of guarding against it. "Clear"
-    // leaves the solved sliders alone, so the workflow is: Clear, then draw.
-    //
-    // ⚠ This reads `show_guides` and `guides` and writes neither — the ownership amendment
-    // agreed in W4-0.
+    // `s.edits`. ⚠ That is still true, and it is why `settle` clears the guides itself rather than
+    // relying on this file to notice.
     //
     // ⚠⚠ **It deliberately does NOT touch `ed`.** Arming changes no `Edits` *and* changes nothing
     // about the render, so `ed.discrete()` here would issue a redundant whole-frame request every
@@ -182,17 +179,19 @@ pub fn show(
     // `adjustments.rs` follows it. **Guide Mode below is the exception rather than the model:**
     // it re-renders because `show_guides` unpins the fit rung in `canvas::show`, which this does
     // not.
-    let can_straighten = !s.show_guides && s.guides.is_empty();
+    // ⚠⚠ **Always enabled.** This was gated on `!s.show_guides && s.guides.is_empty()` when it
+    // shipped, which was reported in use as the button being mysteriously greyed out after any
+    // guide work. The gate existed because a straighten line writes `geometry.angle` and would
+    // leave drawn guides describing a solve that no longer holds — a real problem with the wrong
+    // fix. `straighten_overlay::settle` **clears the guides** instead, which is the rule this file
+    // already applies to the Straighten slider ~30 lines below. One rule, two affordances.
     if ui
-        .add_enabled(
-            can_straighten,
-            egui::Button::new("Straighten by drawing a line").selected(s.straighten_armed),
-        )
+        .add(egui::Button::new("Straighten by drawing a line").selected(s.straighten_armed))
         .on_hover_text(
             "Drag along something that should be level — a horizon, a roofline. The photo \
-             rotates when you let go.",
+             rotates when you let go. Any perspective guides are cleared, as editing Straighten \
+             by hand does.",
         )
-        .on_disabled_hover_text("Clear the perspective guides first.")
         .clicked()
     {
         s.straighten_armed = !s.straighten_armed;
@@ -758,20 +757,24 @@ mod tests {
         assert!(s.guides.is_empty(), "a hand edit must clear them");
     }
 
-    /// ⚠ The toggle must be unreachable while a guide solve is in force — the gate that makes
-    /// this track's non-interference with `Session.guides` structural rather than remembered.
+    /// ⚠⚠ **This test used to assert the opposite**, and the inversion is the point. The toggle was
+    /// gated on `!s.show_guides && s.guides.is_empty()`, which was reported in use as the button
+    /// being mysteriously greyed out after any guide work. Guides are no longer a reason to refuse
+    /// the gesture: `straighten_overlay::settle` clears them, the way a hand edit to Straighten
+    /// already does. Kept rather than deleted so the removal is visible to the next reader.
     #[test]
-    fn the_straighten_line_toggle_is_disabled_while_guides_are_in_force() {
+    fn the_straighten_line_toggle_arms_even_with_guides_in_force() {
         let mut s = session();
+        s.show_guides = true;
         s.guides.push(pipeline::perspective::guides::Guide {
             from: [0.2, 0.2],
             to: [0.2, 0.8],
         });
-        let before = s.straighten_armed;
+        assert!(!s.straighten_armed, "fixture check: it starts unarmed");
         let _ = click_in_panel("Straighten by drawing a line", &mut s, false);
-        assert_eq!(
-            s.straighten_armed, before,
-            "the toggle armed itself while guides existed"
+        assert!(
+            s.straighten_armed,
+            "the toggle refused to arm while guides existed"
         );
     }
 

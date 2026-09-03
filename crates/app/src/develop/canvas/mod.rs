@@ -608,6 +608,55 @@ mod tests {
         assert!(!s.straighten_armed, "the mode stayed armed after one line");
     }
 
+    /// ⚠⚠ **A straighten line clears the perspective guides, and leaves the sliders alone.** It
+    /// writes `geometry.angle`, one of the three values a guide solve owns, so guides left on
+    /// screen would describe a solve that no longer holds — and this project's records call a
+    /// stale-but-plausible overlay worse than none, because it gets trusted. The rule is the one
+    /// `panel/geometry.rs` already applies to the Straighten slider.
+    ///
+    /// ⚠ Asserts **both halves**. A version that cleared the whole solve — guides *and* the
+    /// perspective sliders — would pass a guides-only assertion, and `Clear`'s own contract is
+    /// "the sliders they produced are left alone."
+    ///
+    /// ⚠ Driven through the real drag rather than by calling `settle` directly: the wiring half is
+    /// what this project has repeatedly shipped broken.
+    #[test]
+    fn a_straighten_line_clears_the_guides_and_leaves_the_perspective_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_armed = true;
+            s.edits.perspective.vertical = 30.0;
+            for x in [0.2f32, 0.8] {
+                s.guides.push(pipeline::perspective::guides::Guide {
+                    from: [x, 0.2],
+                    to: [x, 0.8],
+                });
+            }
+            // ⚠ Set deliberately: with `active_guide` left `None` the clearing of it is a no-op
+            // on this fixture, so the assertion below could not see it being dropped — found by
+            // the sabotage, which went uncaught until this line existed. A stale index into a
+            // list that has just been emptied is exactly what `restore_snapshot` clears
+            // `selected_mask` for.
+            s.active_guide = Some((1, 1));
+        }
+        super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert!(s.guides.is_empty(), "the guides survived a straighten line");
+        assert_eq!(s.active_guide, None, "a stale active guide survived");
+        assert_eq!(
+            s.edits.perspective.vertical, 30.0,
+            "the straighten line cleared the perspective solve too"
+        );
+    }
+
     /// The guard on the guard: with the mode unarmed the drag belongs to the crop rectangle, so
     /// "the angle moved after a drag" means nothing without this.
     #[test]
