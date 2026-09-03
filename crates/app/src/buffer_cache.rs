@@ -92,7 +92,8 @@ mod tests {
             baseline: RenderedFrame {
                 width: 1,
                 height: 1,
-                rgba: vec![0, 0, 0, 255],
+                rgba: Arc::new(vec![0, 0, 0, 255]),
+                srgb: Arc::new(vec![0, 0, 0, 255]),
                 hist: [[0; 256]; 3],
                 region: None,
                 max_dim: 1,

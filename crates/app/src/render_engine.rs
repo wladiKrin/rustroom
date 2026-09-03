@@ -12,7 +12,24 @@ use std::thread::{self, JoinHandle};
 pub struct RenderedFrame {
     pub width: usize,
     pub height: usize,
-    pub rgba: Vec<u8>,
+    /// The frame in the **display's** primaries — what this monitor must be driven with.
+    ///
+    /// ⚠ An `Arc` so the sRGB case costs nothing: when the display space *is* sRGB, `rgba` and
+    /// `srgb` are two handles on one allocation. `ColorImage::from_rgba_unmultiplied` takes a
+    /// slice, so the texture path never needs ownership.
+    pub rgba: Arc<Vec<u8>>,
+    /// The same frame quantized to **sRGB**, before the display transform and before the
+    /// Visualize Spots view mode.
+    ///
+    /// ⚠⚠ **This is the instrument channel, and `rgba` is not.** `hist` is already bucketed from
+    /// these bytes for the reason `pack` records: "the histogram describes the image; the texture
+    /// describes what this monitor must be driven with. Deriving one from the other is the bug
+    /// this ordering exists to prevent." The colour readout is a second instrument of exactly
+    /// that kind — reading `rgba` would give numbers that change when you change monitors.
+    ///
+    /// ⚠ Taken **before** Visualize Spots replaces the image, so the readout reports the
+    /// photograph rather than the grey edge view.
+    pub srgb: Arc<Vec<u8>>,
     /// Where this frame sits in the post-geometry image; `None` = the whole image. The canvas
     /// needs it to place the texture.
     pub region: Option<Region>,
@@ -286,19 +303,30 @@ fn pack(
     // the other is the bug this ordering exists to prevent.
     let srgb8 = out.to_rgba8();
     let hist = crate::histogram::histogram_rgba(&srgb8);
+    // ⚠⚠ Wrapped **here**, above the Visualize Spots block, so `srgb` carries the photograph's
+    // bytes rather than the edge view's — the same ordering `hist` on the line above depends on,
+    // and what makes the colour readout report the photograph under any view mode.
+    //
+    // ⚠ Moved into the `Arc` rather than cloned, so the ordinary path copies nothing and the
+    // sRGB branch at the bottom shares this one allocation with `rgba` instead of duplicating
+    // ~7 MB (the fit rung) or ~27 MB (a native one) on every rendered frame.
+    let srgb = Arc::new(srgb8);
 
     // ⚠⚠ Visualize Spots goes here: AFTER the histogram, BEFORE the display transform. The
     // histogram must describe the photograph and not the view mode — the rule `display_space`
     // established above — and the display transform must still run, or the grey view would be
     // driven into the wrong primaries like any other pixels. Sabotage-verified by moving the
     // histogram below this block.
-    let (out, srgb8) = match visualize {
+    //
+    // ⚠ `shown` is what the *texture* shows; `srgb` above stays the photograph. In the ordinary
+    // case they are one allocation.
+    let (out, shown) = match visualize {
         Some(threshold) => {
             let out = edge_image(&out, threshold);
-            let srgb8 = out.to_rgba8();
-            (out, srgb8)
+            let shown = Arc::new(out.to_rgba8());
+            (out, shown)
         }
-        None => (out, srgb8),
+        None => (out, Arc::clone(&srgb)),
     };
 
     // Env-gated, like `RUSTROOM_DEBUG_BRUSH`: instrumentation beat reasoning twice on the brush
@@ -315,27 +343,30 @@ fn pack(
     }
 
     let rgba = if display_space == color::OutputSpace::Srgb {
-        srgb8
+        shown
     } else {
-        // ⚠ Converted from the **float** image, not from `srgb8`. An 8-bit → 8-bit conversion
+        // ⚠ Converted from the **float** image, not from `shown`. An 8-bit → 8-bit conversion
         // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
         // sky. The extra quantization pass is paid only when a display space is actually set.
-        out.map_pixels(move |c| {
-            let lin = c.map(color::srgb_to_linear);
-            let conv = display_space.from_srgb(lin);
-            [
-                display_space.encode(conv[0]),
-                display_space.encode(conv[1]),
-                display_space.encode(conv[2]),
-            ]
-        })
-        .to_rgba8()
+        Arc::new(
+            out.map_pixels(move |c| {
+                let lin = c.map(color::srgb_to_linear);
+                let conv = display_space.from_srgb(lin);
+                [
+                    display_space.encode(conv[0]),
+                    display_space.encode(conv[1]),
+                    display_space.encode(conv[2]),
+                ]
+            })
+            .to_rgba8(),
+        )
     };
 
     RenderedFrame {
         width,
         height,
         rgba,
+        srgb,
         hist,
         region,
         max_dim,
@@ -1872,6 +1903,81 @@ mod tests {
         assert_eq!(
             srgb.hist, p3.hist,
             "the histogram must describe the image, not the monitor"
+        );
+    }
+
+    /// The fixture `the_histogram_is_unaffected_by_the_display_space` uses, reused rather than
+    /// re-invented: a two-pixel buffer with a saturated red and a mid green, which is what makes
+    /// the display transform actually move something.
+    fn render_for_test(space: color::OutputSpace) -> RenderedFrame {
+        let mut buf = ImageBuf::new(2, 1);
+        buf.set_pixel(0, 0, color::srgb_to_prophoto([0.95, 0.15, 0.1]));
+        buf.set_pixel(1, 0, color::srgb_to_prophoto([0.2, 0.6, 0.3]));
+        render_once(
+            &buf,
+            &Edits::default(),
+            2,
+            1.0,
+            space,
+            pipeline::Resampler::default(),
+        )
+    }
+
+    /// ⚠⚠ **`srgb` must be sRGB whatever the display space, and `rgba` must not.** Nothing else
+    /// can see this: a colour readout built on `rgba` looks entirely plausible and is simply
+    /// wrong on a wide-gamut monitor. This is the sibling of
+    /// `the_histogram_is_unaffected_by_the_display_space`, one layer over — and the histogram is
+    /// asserted here too, so the two instrument channels cannot drift apart.
+    #[test]
+    fn the_srgb_channel_is_unaffected_by_the_display_space() {
+        let a = render_for_test(color::OutputSpace::Srgb);
+        let b = render_for_test(color::OutputSpace::DisplayP3);
+        assert_eq!(
+            *a.srgb, *b.srgb,
+            "the sRGB channel moved with the display space"
+        );
+        assert_ne!(
+            *a.rgba, *b.rgba,
+            "fixture check: the display transform did nothing, so this test proves nothing"
+        );
+        assert_eq!(a.hist, b.hist);
+    }
+
+    /// ⚠ In the sRGB case the two must be **one** allocation, or every rendered frame pays a
+    /// multi-megabyte clone — ~7 MB at the fit rung, ~27 MB at a native one. Asserted
+    /// structurally rather than by measuring.
+    #[test]
+    fn the_srgb_case_shares_one_allocation() {
+        let f = render_for_test(color::OutputSpace::Srgb);
+        assert!(
+            Arc::ptr_eq(&f.rgba, &f.srgb),
+            "sRGB rendered two buffers where one would do"
+        );
+    }
+
+    /// ⚠⚠ `srgb` is taken **before** Visualize Spots replaces the image, so the readout reports
+    /// the photograph and not the grey edge view — the ordering `hist` already depends on, and
+    /// the reason `pack` wraps the `Arc` above that block rather than below it. Nothing in the
+    /// canvas can see this: an edge-view readout is a plausible-looking number.
+    #[test]
+    fn the_srgb_channel_is_unaffected_by_visualize_spots() {
+        // A hard edge, so the edge view is far from the photograph and the textures must differ.
+        let mut buf = ImageBuf::new(16, 4);
+        for y in 0..4 {
+            for x in 0..16 {
+                let v = if x < 8 { 0.1 } else { 0.8 };
+                buf.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let plain = pack(buf.clone(), None, 16, color::OutputSpace::Srgb, None);
+        let vis = pack(buf, None, 16, color::OutputSpace::Srgb, Some(12.0));
+        assert_ne!(
+            *plain.rgba, *vis.rgba,
+            "fixture check: the view mode did not reach the pixels"
+        );
+        assert_eq!(
+            *plain.srgb, *vis.srgb,
+            "the view mode reached the readout's bytes"
         );
     }
 

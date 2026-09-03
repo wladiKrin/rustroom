@@ -303,7 +303,8 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
         baseline: rustroom_app::render_engine::RenderedFrame {
             width: 8,
             height: 4,
-            rgba: vec![0; 8 * 4 * 4],
+            rgba: std::sync::Arc::new(vec![0; 8 * 4 * 4]),
+            srgb: std::sync::Arc::new(vec![0; 8 * 4 * 4]),
             region: None,
             hist: [[0; 256]; 3],
             max_dim: 8,
