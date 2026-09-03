@@ -11,6 +11,7 @@ mod guide_overlay;
 mod mask_overlay;
 mod mask_tint;
 pub(crate) mod navigation;
+pub(crate) mod spot_overlay;
 #[cfg(test)]
 mod test_support;
 
@@ -23,6 +24,7 @@ use mask_overlay::{draw_mask_overlay, BrushTool};
 use navigation::pan_delta;
 use rustroom_app::tool::Tool;
 use rustroom_app::view_region;
+use spot_overlay::{draw_spot_overlay, sampler_for};
 
 /// Draw the image canvas.
 ///
@@ -37,6 +39,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // ⚠ The solve needs `&mut RustroomApp`, which the session borrow below rules out — so the
     // overlay only reports that a drag settled and `show` runs the solve afterwards.
     let mut guide_drag = GuideDrag::None;
+    // ⚠⚠ **A COPY of the tool, written back after the session borrow ends.** The size-drag has to
+    // update `app.spot_tool.radius` so the panel's Size slider follows the gesture, but
+    // `&mut app.spot_tool` cannot be taken while `match &mut app.session` holds its borrow — the
+    // canvas takes `&mut app` whole, unlike the panel, which borrows disjoint fields.
+    let mut app_spot_tool = app.spot_tool;
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
@@ -249,7 +256,21 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 .on_hover_cursor(egui::CursorIcon::Crosshair);
                             photo_edited |= pick_white_balance(s, &pick, frame_rect, tool);
                         }
-                        Tool::Edit | Tool::Presets | Tool::Retouch => {}
+                        Tool::Retouch => {
+                            // ⚠ Built here rather than inside the overlay so the shared borrow of
+                            // `s` it holds ends before the overlay takes `&mut s`.
+                            let sample = sampler_for(s);
+                            photo_edited |= draw_spot_overlay(
+                                ui,
+                                s,
+                                &resp,
+                                img_rect,
+                                frame_rect,
+                                &mut app_spot_tool,
+                                &sample,
+                            );
+                        }
+                        Tool::Edit | Tool::Presets => {}
                     }
 
                     // ⚠⚠ **One rule: the guides divide what will be the final photograph.** Under
@@ -346,6 +367,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
         }
         photo_edited = true;
     }
+    // ⚠ Written back after the session borrow ends: the size-drag sets the radius, and the panel's
+    // Size slider reads this same field next frame. One value, two affordances.
+    app.spot_tool = app_spot_tool;
     photo_edited
 }
 
@@ -473,6 +497,186 @@ mod tests {
         // ⚠ And it disarms, or every later click — one meant to select a mask, or to dismiss
         // something — would silently re-set the white balance.
         assert!(!s.picking_wb, "the eyedropper stayed armed after a pick");
+    }
+
+    fn retouch_app(ctx: &egui::Context) -> crate::RustroomApp {
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, ctx, 80, 60);
+        app.tool = rustroom_app::tool::Tool::Retouch;
+        app
+    }
+
+    fn spots(app: &crate::RustroomApp) -> Vec<edit_model::Spot> {
+        app.session.as_ref().expect("a session").edits.spots.clone()
+    }
+
+    /// ⚠ A click places exactly one spot, and the auto-source must put the source somewhere else:
+    /// a source equal to the destination copies the blemish onto itself.
+    #[test]
+    fn a_retouch_click_places_one_spot_with_a_source_elsewhere() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the click did not place exactly one spot");
+        assert_ne!(
+            placed[0].source, placed[0].centre,
+            "the source sits on the destination"
+        );
+    }
+
+    /// ⚠⚠ The guard on the guard. Without it, "a spot appeared after a click" means nothing — it
+    /// would pass against a version that placed spots under every tool.
+    #[test]
+    fn a_click_under_another_tool_places_no_spot() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        app.tool = rustroom_app::tool::Tool::Edit;
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert!(spots(&app).is_empty(), "Edit placed a retouch spot");
+    }
+
+    /// ⚠ A second click on a placed spot **selects** it rather than stacking another on top —
+    /// the hit-test-before-placement rule, and what makes a crowded frame editable.
+    #[test]
+    fn clicking_a_placed_spot_selects_it_rather_than_stacking() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "the second click stacked a spot");
+        assert_eq!(
+            app.session.as_ref().unwrap().selected_spot,
+            Some(0),
+            "the second click did not select the spot it landed on"
+        );
+    }
+
+    /// ⚠⚠ The render is sampled **on the drag frame itself** (`DRAG_PASS`), not after the
+    /// gesture. A later frame issues one anyway, and in the real app that frame never comes
+    /// because egui idles after a drag — which is exactly how the M3.1a mask bug hid.
+    #[test]
+    fn a_retouch_drag_sizes_the_spot_and_asks_for_a_render() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        let before = app.spot_tool.radius;
+        let counts = super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(60.0, 0.0),
+        );
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the drag did not place exactly one spot");
+        assert!(
+            placed[0].radius > before,
+            "the drag did not size the spot: {} vs {before}",
+            placed[0].radius
+        );
+        // ⚠ And the tool keeps it, so the panel's Size slider follows the gesture.
+        assert!(
+            (app.spot_tool.radius - placed[0].radius).abs() < 1e-6,
+            "the drag did not write the radius back into the tool"
+        );
+        // ⚠ A *placement* happens on release, so its render belongs on the release frame — not
+        // the drag frame, which is where a **move** must request (see the test below). Asserting
+        // "somewhere in the gesture" would be the weak form this project warns about, so the
+        // frame is named: nothing before it, a request on it.
+        assert_eq!(
+            counts[super::test_support::DRAG_PASS],
+            counts[0],
+            "a placement rendered before the gesture finished: {counts:?}"
+        );
+        assert!(
+            *counts.last().unwrap() > counts[super::test_support::DRAG_PASS],
+            "the placement never asked for a render: {counts:?}"
+        );
+    }
+
+    /// ⚠⚠ **A spot must land where you clicked on a CROPPED photo**, which is what
+    /// `FrameMap::inverse_point` buys and what nothing else here can see. Spots are stored in
+    /// pre-geometry source coordinates while the canvas shows the cropped frame, so treating a
+    /// canvas position as if it were already a source position is invisible on an uncropped photo
+    /// and wrong on every cropped one.
+    ///
+    /// With the right half of the frame cropped, the centre of what is shown is source x = 0.75.
+    /// Skipping the map would store 0.5.
+    #[test]
+    fn a_click_on_a_cropped_photo_lands_where_it_was_clicked() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.edits.geometry.crop = edit_model::CropRect {
+                left: 0.5,
+                top: 0.0,
+                right: 1.0,
+                bottom: 1.0,
+            };
+        }
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        let placed = spots(&app);
+        assert_eq!(placed.len(), 1, "the click placed nothing");
+        assert!(
+            (placed[0].centre[0] - 0.75).abs() < 0.02,
+            "the crop was not undone: stored x = {} (0.5 means the map was skipped)",
+            placed[0].centre[0]
+        );
+    }
+
+    /// ⚠⚠ **A non-primary drag must place nothing.** egui reports `dragged()` for *every* button,
+    /// so a tool reading a bare `dragged()` would place a spot as the middle-drag pan gesture
+    /// passed over the canvas. `tool_drag` is the guard, and no test using Primary alone can see
+    /// it removed — this one was added because that sabotage went uncaught.
+    #[test]
+    fn a_middle_drag_places_no_spot_and_pans_instead() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::drag_through_with(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(60.0, 0.0),
+            egui::PointerButton::Middle,
+        );
+        assert!(
+            spots(&app).is_empty(),
+            "the pan gesture placed a retouch spot"
+        );
+    }
+
+    /// ⚠⚠ **Moving a spot must render on the drag frame itself**, because there the pixels change
+    /// continuously and the render *is* the feedback. Sampled on that frame, not after the
+    /// gesture: in the real app no later frame comes, because egui idles once the drag ends —
+    /// which is exactly how the M3.1a mask bug hid.
+    #[test]
+    fn dragging_a_placed_spot_renders_on_the_drag_frame() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "setup: the click placed nothing");
+        let before = spots(&app)[0].centre;
+
+        let counts = super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(25.0, 15.0),
+        );
+        let after = spots(&app);
+        assert_eq!(after.len(), 1, "the drag stacked a second spot");
+        assert_ne!(after[0].centre, before, "the drag did not move the spot");
+        assert!(
+            counts[super::test_support::DRAG_PASS] > counts[super::test_support::DRAG_PASS - 1],
+            "no render was requested on the drag frame: {counts:?}"
+        );
     }
 
     /// ⚠ The guard on the guard: "a click changed the edits" means nothing unless a click with

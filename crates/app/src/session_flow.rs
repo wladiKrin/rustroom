@@ -365,6 +365,7 @@ impl RustroomApp {
             active_handle: None,
             selected_mask: None,
             selected_spot: None,
+            spot_drag: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
             active_guide: None,

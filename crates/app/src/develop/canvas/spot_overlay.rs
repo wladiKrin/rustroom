@@ -1,0 +1,380 @@
+//! The retouch overlay: every spot's destination and source, and the gestures that place, move
+//! and size them.
+//!
+//! ⚠⚠ **Every coordinate goes against `frame_rect`, never `img_rect`.** That is the M3.1a drift
+//! bug: once a region render is on, `img_rect` covers only the rendered *slice*, so an overlay
+//! placed against it follows the view while panning and takes the region's aspect rather than the
+//! frame's. `img_rect` survives as the **clip** and nothing else.
+//!
+//! ⚠ **Recorded honestly: no test can see that distinction.** The two rects differ only under a
+//! *region* render, which happens at high zoom, and the headless harness always renders the whole
+//! image — so `img_rect == frame_rect` there and substituting one for the other changes nothing.
+//! The sabotage was run and is inert. Inventing a test that appeared to cover it would be worse
+//! than saying so.
+//!
+//! ⚠⚠ **Spots are stored pre-geometry and this draws on the post-geometry frame**, so each one
+//! maps forward through [`FrameMap::point`]. Unlike the analytic masks, whose coordinates are
+//! already frame-relative, that mapping is not optional: without it a cropped or straightened
+//! photo draws every spot in the wrong place.
+
+use super::navigation::{tool_drag, tool_drag_started};
+use crate::develop::canvas_geom;
+use crate::Session;
+use eframe::egui;
+use pipeline::brush::FrameMap;
+use rustroom_app::spot_tool::{self, Handle, SpotTool};
+use rustroom_app::tool::Tool;
+
+/// Segments in a drawn circle. egui has no ellipse primitive; the radial mask uses the same count.
+const CIRCLE_SEGMENTS: usize = 48;
+
+/// A drag shorter than this, in screen points, is a click that wandered.
+///
+/// ⚠ Without it a click with a shaky hand would size a spot to ~0, which covers nothing and can
+/// never be grabbed again.
+const CLICK_SLOP: f32 = 3.0;
+
+/// What the pointer is currently doing.
+///
+/// ⚠⚠ **The two placing variants carry SCREEN positions, updated on every drag frame, because
+/// egui frequently reports no `interact_pointer_pos` on the release frame.** Reading the pointer
+/// only at `drag_stopped` therefore places nothing at all — which is precisely the trap
+/// `draw_mask_overlay` already records for its own release handling, met here from the other
+/// side. Tracking the latest position as the drag runs makes the release frame need no pointer.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub(crate) enum SpotDrag {
+    #[default]
+    None,
+    /// Sizing a new spot: where the press landed, and where the pointer has reached.
+    Sizing { at: egui::Pos2, to: egui::Pos2 },
+    /// Choosing a source for a new spot (⌥-drag): same two points.
+    Sourcing { at: egui::Pos2, to: egui::Pos2 },
+    /// Moving one end of an existing spot.
+    Moving(usize, Handle),
+}
+
+impl SpotDrag {
+    /// Record the pointer's latest position, whichever placing gesture is running.
+    fn advance(&mut self, p: egui::Pos2) {
+        match self {
+            Self::Sizing { to, .. } | Self::Sourcing { to, .. } => *to = p,
+            _ => {}
+        }
+    }
+}
+
+/// Draw the overlay and run the gestures. `true` when the edits changed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_spot_overlay(
+    ui: &egui::Ui,
+    s: &mut Session,
+    resp: &egui::Response,
+    img_rect: egui::Rect,
+    frame_rect: egui::Rect,
+    tool: &mut SpotTool,
+    sample: &dyn Fn([f32; 2]) -> [f32; 3],
+) -> bool {
+    if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
+        return false;
+    }
+    let aspect = canvas_geom::frame_aspect(frame_rect);
+    let map = FrameMap::new(
+        &s.edits.geometry,
+        frame_rect.width() as usize,
+        frame_rect.height() as usize,
+    );
+    let mut changed = false;
+
+    // A canvas point → the stage's input space, which is where a spot lives.
+    let to_source = |p: egui::Pos2| -> [f32; 2] {
+        let (nx, ny) = canvas_geom::normalized_point(p, frame_rect);
+        map.inverse_point(nx * frame_rect.width(), ny * frame_rect.height())
+    };
+
+    // ---- the click gesture ------------------------------------------------------------------
+    // ⚠⚠ **A second, click-sensing interaction — the canvas's own `resp` is `Sense::drag()` and
+    // never reports `clicked()`.** Making `resp` `click_and_drag` instead also changes when egui
+    // promotes a press to a drag, which broke both mask-drag tests outright when the white-balance
+    // eyedropper tried exactly that. egui's hit test resolves click- and drag-sensing widgets
+    // **separately**, so a click-only widget on top and the drag-sensing canvas beneath each get
+    // their own events.
+    //
+    // ⚠ Registered *after* `resp`, which is what makes it win the click: egui breaks a hit-test
+    // tie by registration order, taking the last as the one on top.
+    let click = ui
+        .interact(
+            img_rect,
+            ui.id().with("retouch_click"),
+            egui::Sense::click(),
+        )
+        .on_hover_cursor(egui::CursorIcon::Crosshair);
+    if click.clicked() {
+        if let Some(p) = click.interact_pointer_pos() {
+            let at = to_source(p);
+            // ⚠ Hit-test BEFORE placement: a click on an existing handle selects it rather than
+            // stacking a new spot on top of it.
+            match spot_tool::hit_test(&s.edits.spots, at, aspect) {
+                Some((i, _)) => s.selected_spot = Some(i),
+                None => {
+                    let sp = place_with_source(at, *tool, &s.edits.spots, aspect, sample);
+                    s.edits.spots.push(sp);
+                    s.selected_spot = Some(s.edits.spots.len() - 1);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // ---- the drag gestures ------------------------------------------------------------------
+    if tool_drag_started(resp) {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let at = to_source(p);
+            s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect) {
+                Some((i, h)) => {
+                    s.selected_spot = Some(i);
+                    SpotDrag::Moving(i, h)
+                }
+                None if ui.input(|i| i.modifiers.alt) => SpotDrag::Sourcing { at: p, to: p },
+                None => SpotDrag::Sizing { at: p, to: p },
+            };
+        }
+    }
+
+    if tool_drag(resp) {
+        if let Some(p) = resp.interact_pointer_pos() {
+            s.spot_drag.advance(p);
+        }
+        if let SpotDrag::Moving(i, h) = s.spot_drag {
+            // ⚠ `drag_delta` is in **screen** points while a spot lives in source-normalised
+            // units, so the delta is converted by mapping both ends of it through the same inverse
+            // the press used. Scaling by `frame_rect` alone would be wrong on a cropped or
+            // straightened photo, where the map is not a plain scale.
+            if let Some(p) = resp.interact_pointer_pos() {
+                let now = to_source(p);
+                let was = to_source(p - resp.drag_delta());
+                let moved = s.edits.spots.get_mut(i).is_some_and(|sp| {
+                    spot_tool::apply_drag(sp, h, now[0] - was[0], now[1] - was[1]);
+                    true
+                });
+                if moved {
+                    changed = true;
+                    // ⚠⚠ **Requested on the drag frame itself, unlike a placement.** Moving a spot
+                    // changes the pixels continuously, so the render is the feedback; without this
+                    // the patch would visibly lag behind its own circle until some unrelated edit
+                    // forced a frame — the M3.1a mask bug exactly. A *placement* differs: it only
+                    // happens on release, so its render belongs there.
+                    s.request(
+                        s.view_edits(Tool::Retouch),
+                        s.render_max_dim(),
+                        s.requested_region,
+                    );
+                }
+            }
+        }
+    }
+
+    if resp.drag_stopped() {
+        // ⚠ The pointer may not be reported on this frame, so the gesture's own record is used
+        // and a live position only refines it.
+        let live = resp.interact_pointer_pos();
+        let placed = match s.spot_drag {
+            // ⚠⚠ **A gesture that never moved is left to the click path, and this is what keeps
+            // the two disjoint.** egui runs the whole drag lifecycle for a plain click on a
+            // `Sense::drag()` widget — `drag_started` and `drag_stopped` both fire with a zero
+            // delta — so without this guard a single click placed **two** spots: one from the
+            // click interaction and one from here.
+            SpotDrag::Sizing { at, to } if (live.unwrap_or(to) - at).length() > CLICK_SLOP => {
+                let to = live.unwrap_or(to);
+                let centre = to_source(at);
+                // ⚠⚠ **The gesture writes back into the tool**, which is what makes the panel's
+                // Size slider follow the drag. One value, two affordances. Storing the radius only
+                // on the spot would leave the slider showing a number that no longer describes
+                // what the next click will place.
+                //
+                // ⚠ The slop is measured in **screen** points between the press and the
+                // release, not from `drag_delta()`: that is a per-frame value and is usually zero
+                // on the release frame, so a real drag would be mistaken for a click. The arm's
+                // guard above already established that this gesture moved.
+                tool.radius = spot_tool::drag_radius(centre, to_source(to), aspect);
+                Some(place_with_source(
+                    centre,
+                    *tool,
+                    &s.edits.spots,
+                    aspect,
+                    sample,
+                ))
+            }
+            // ⚠ Same rule: an ⌥-click that never moved has chosen no source, so it falls to
+            // the click path and gets an auto-picked one.
+            SpotDrag::Sourcing { at, to } if (live.unwrap_or(to) - at).length() > CLICK_SLOP => {
+                let to = live.unwrap_or(to);
+                Some(spot_tool::place(to_source(at), to_source(to), *tool))
+            }
+            _ => None,
+        };
+        if let Some(sp) = placed {
+            s.edits.spots.push(sp);
+            s.selected_spot = Some(s.edits.spots.len() - 1);
+            changed = true;
+        }
+        if s.spot_drag != SpotDrag::None {
+            // ⚠⚠ A drag MUST request a render. `draw_crop_overlay` deliberately does not, because
+            // `preview_edits` strips the crop in geometry mode so the overlay *is* the feedback —
+            // copying that here is the exact false analogy that shipped the M3.1a mask bug, where
+            // the image did not update until an unrelated slider was touched.
+            s.request(
+                s.view_edits(Tool::Retouch),
+                s.render_max_dim(),
+                s.requested_region,
+            );
+            s.spot_drag = SpotDrag::None;
+        }
+    }
+
+    // ---- the overlay ------------------------------------------------------------------------
+    // ⚠ Widened by `overlay_clip`: `line_segment` centres its stroke on the path, so a halo drawn
+    // on a spot at the very edge of the frame would have its outer half shaved off.
+    let painter = ui.painter_at(canvas_geom::overlay_clip(img_rect));
+    for (i, sp) in s.edits.spots.iter().enumerate() {
+        let selected = s.selected_spot == Some(i);
+        let c = to_screen(&map, sp.centre, frame_rect);
+        let src = to_screen(&map, sp.source, frame_rect);
+        // ⚠ `radius_scale` is the source long edge measured in frame pixels — the *same* quantity
+        // the rasterizer multiplies by, so the drawn circle matches the rendered patch by
+        // construction rather than by a second derivation that could drift.
+        let r = sp.radius * map.radius_scale;
+        // ⚠ Doubled: a dark halo under a light mark. A thin white circle is invisible against a
+        // bright sky — the fix the crop overlay needed after being reported.
+        for (w, col) in [
+            (3.0, egui::Color32::from_black_alpha(140)),
+            (
+                1.0,
+                if selected {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::from_white_alpha(190)
+                },
+            ),
+        ] {
+            let stroke = egui::Stroke::new(w, col);
+            painter.line_segment([c, src], stroke);
+            circle(&painter, c, r, stroke);
+            circle(&painter, src, r, stroke);
+        }
+    }
+
+    changed
+}
+
+fn to_screen(map: &FrameMap, p: [f32; 2], frame: egui::Rect) -> egui::Pos2 {
+    let (x, y) = map.point(p);
+    frame.min + egui::vec2(x, y)
+}
+
+fn circle(painter: &egui::Painter, c: egui::Pos2, r: f32, stroke: egui::Stroke) {
+    let pts: Vec<egui::Pos2> = (0..CIRCLE_SEGMENTS)
+        .map(|k| {
+            let t = k as f32 / CIRCLE_SEGMENTS as f32 * std::f32::consts::TAU;
+            c + egui::vec2(r * t.cos(), r * t.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::closed_line(pts, stroke));
+}
+
+/// Place a spot, auto-picking the source and falling back to a fixed offset.
+///
+/// ⚠ The fallback is **3r straight up** (or down, when up would leave the frame), clamped: a spot
+/// the user can drag beats a click that silently did nothing.
+fn place_with_source(
+    centre: [f32; 2],
+    tool: SpotTool,
+    existing: &[edit_model::Spot],
+    aspect: f32,
+    sample: &dyn Fn([f32; 2]) -> [f32; 3],
+) -> edit_model::Spot {
+    let source = rustroom_app::spot_source::pick(sample, centre, tool.radius, aspect, existing)
+        .unwrap_or_else(|| {
+            let up = centre[1] - 3.0 * tool.radius;
+            let y = if up >= 0.0 {
+                up
+            } else {
+                (centre[1] + 3.0 * tool.radius).min(1.0)
+            };
+            [centre[0], y]
+        });
+    spot_tool::place(centre, source, tool)
+}
+
+/// A sampler over the spot-removal stage's input space, built from the session.
+///
+/// ⚠⚠ **`FrameMap::inverse_point` returns post-lens, post-perspective coordinates while
+/// `s.buffer` is the raw decode.** Indexing one with the other is wrong by the distortion — ~3.5%
+/// at the corners, which on a 6246 px frame is ~220 px and therefore larger than a spot radius.
+/// The search would sample a different piece of the picture and return a confidently wrong source,
+/// silently. Both stages expose the inverse, which is exactly the direction needed.
+///
+/// ⚠ Missing corrections are the identity, not an error: a JPEG has no lens profile and a neutral
+/// perspective is the identity homography, so this degrades to a plain buffer read.
+/// ⚠ Returns an **owned** closure: everything it needs is cloned or `Copy`, so it does not borrow
+/// the session and can therefore be built before `draw_spot_overlay` takes `&mut Session`. The
+/// buffer is behind an `Arc`, so "cloning" it copies a pointer.
+pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
+    let buf = s.buffer.clone();
+    let (w, h) = (buf.width(), buf.height());
+    // ⚠⚠ **`Homography` works in coordinates centred on the frame with half-height = 1**, not in
+    // `[0, 1]`. The exact convention is `PerspectiveStage`'s, copied rather than re-derived: a
+    // pixel becomes `((x − cx) / cy, (y − cy) / cy)`, and the mapped point comes back through
+    // `cx + s.0 * cy`. Feeding it `[0, 1]` values would be silently wrong — a plausible-looking
+    // offset rather than an error.
+    let cx = (w as f32 - 1.0) / 2.0;
+    let cy = (h as f32 - 1.0) / 2.0;
+    let hom = (cy > 0.0)
+        .then(|| pipeline::perspective::Homography::from_edits(&s.edits.perspective, cx / cy));
+    let corr = s.lens.shot.as_ref().and_then(|shot| {
+        lens_profile::Corrector::new(
+            &shot.profile,
+            &shot.shot,
+            w,
+            h,
+            lens_profile::Corrections {
+                distortion: s.edits.lens_correction.distortion,
+                tca: s.edits.lens_correction.tca,
+                vignetting: s.edits.lens_correction.vignetting,
+                scale: s.edits.lens_correction.scale,
+            },
+        )
+    });
+    move |p: [f32; 2]| {
+        // stage input, `[0, 1]` normalised → pixels
+        let (mut x, mut y) = (p[0] * w as f32, p[1] * h as f32);
+        // → perspective input
+        if let Some(hom) = &hom {
+            let n = hom.source_of(((x - cx) / cy, (y - cy) / cy));
+            x = cx + n.0 * cy;
+            y = cy + n.1 * cy;
+        }
+        match &corr {
+            // → lens-correction input, in pixels, **per channel** because TCA displaces them
+            // differently. Reading each channel at its own coordinate costs nothing and is more
+            // faithful than picking green for all three.
+            Some(c) => {
+                let per = c.source(x, y);
+                let mut out = [0.0f32; 3];
+                for (ch, o) in out.iter_mut().enumerate() {
+                    *o = read(&buf, per[ch][0], per[ch][1])[ch];
+                }
+                out
+            }
+            None => read(&buf, x, y),
+        }
+    }
+}
+
+fn read(buf: &core_image::ImageBuf, x: f32, y: f32) -> [f32; 3] {
+    if buf.width() == 0 || buf.height() == 0 {
+        return [0.0; 3];
+    }
+    let xi = (x.round() as i64).clamp(0, buf.width() as i64 - 1) as usize;
+    let yi = (y.round() as i64).clamp(0, buf.height() as i64 - 1) as usize;
+    buf.pixel(xi, yi)
+}

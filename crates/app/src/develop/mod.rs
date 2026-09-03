@@ -29,6 +29,39 @@ use rustroom_app::menu::Command;
 /// panel takes what is left, so rail (right, outermost) → adjustments (right) → filmstrip
 /// (bottom) → canvas (central) must be preserved exactly. The rail coming *first* is what puts
 /// it against the window edge rather than between the panel and the image.
+/// Delete or Backspace removes the selected retouch spot. `true` when one was removed.
+///
+/// ⚠ **Gated on nothing having keyboard focus**, the rule every bare key in this app follows:
+/// without it, Backspace in the Save-preset name field would delete a spot instead of a
+/// character.
+///
+/// ⚠ And on the Retouch tool being active, so the key means nothing anywhere else — a Delete that
+/// silently removed a patch while the user was moving a slider would be unattributable.
+fn delete_selected_spot(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
+    if app.tool != rustroom_app::tool::Tool::Retouch || ctx.memory(|m| m.focused()).is_some() {
+        return false;
+    }
+    let pressed =
+        ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+    if !pressed {
+        return false;
+    }
+    let Some(s) = app.session.as_mut() else {
+        return false;
+    };
+    if rustroom_app::spot_tool::delete_selected(&mut s.edits.spots, &mut s.selected_spot) {
+        s.request(
+            s.view_edits(rustroom_app::tool::Tool::Retouch),
+            s.render_max_dim(),
+            s.requested_region,
+        );
+        s.history.push(s.edits.clone());
+        true
+    } else {
+        false
+    }
+}
+
 pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     app.handle_develop_arrows(ctx);
     let mut photo_edited = false;
@@ -45,6 +78,7 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         filmstrip::show(app, ui, ctx);
     }
     photo_edited |= canvas::show(app, ui, ctx);
+    photo_edited |= delete_selected_spot(app, ctx);
 
     // Recorded in the same order as everything else, so "delete a preset, move a slider,
     // Ctrl+Z twice" undoes the slider and then restores the preset.

@@ -209,6 +209,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         active_handle: None,
         selected_mask: None,
         selected_spot: None,
+        spot_drag: Default::default(),
         guides: Vec::new(),
         active_guide: None,
         shown_geo: (edit_model::Perspective::default(), 0.0),

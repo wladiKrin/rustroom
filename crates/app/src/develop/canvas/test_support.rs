@@ -51,6 +51,22 @@ pub(super) fn drag_through(
     from: egui::Pos2,
     to: egui::Pos2,
 ) -> Vec<usize> {
+    drag_through_with(app, ctx, from, to, egui::PointerButton::Primary)
+}
+
+/// As [`drag_through`], with the mouse button named.
+///
+/// ⚠ Exists so a test can drag with a **non-primary** button. egui reports `dragged()` for every
+/// button, so a tool reading a bare `dragged()` would act on the middle-drag pan gesture as it
+/// passed over the canvas — and no test using Primary alone can see that. `tool_drag` is the
+/// guard; this is what proves it is doing something.
+pub(super) fn drag_through_with(
+    app: &mut RustroomApp,
+    ctx: &egui::Context,
+    from: egui::Pos2,
+    to: egui::Pos2,
+    button: egui::PointerButton,
+) -> Vec<usize> {
     let mut counts = Vec::new();
     for pass in 0..5 {
         // ⚠⚠ The pointer must still be at `from` on the pass that presses. An earlier
@@ -62,7 +78,7 @@ pub(super) fn drag_through(
         if pass == 1 {
             events.push(egui::Event::PointerButton {
                 pos: from,
-                button: egui::PointerButton::Primary,
+                button,
                 pressed: true,
                 modifiers: Default::default(),
             });
@@ -70,7 +86,7 @@ pub(super) fn drag_through(
         if pass == 3 {
             events.push(egui::Event::PointerButton {
                 pos,
-                button: egui::PointerButton::Primary,
+                button,
                 pressed: false,
                 modifiers: Default::default(),
             });

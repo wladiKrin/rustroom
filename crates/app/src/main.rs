@@ -686,6 +686,13 @@ pub struct Session {
     /// ⚠ Load-bearing for panning: a drag that did *not* start on a handle must still pan the
     /// image, so this records whether the mask claimed the gesture.
     active_mask_handle: Option<mask_tool::Handle>,
+    /// What the retouch gesture is doing, across frames.
+    ///
+    /// ⚠⚠ **On the session, not a local in `canvas::show`** — `active_mask_handle`'s home, for a
+    /// reason found the hard way: `show` runs fresh every frame, so a local resets between the
+    /// press and the release and the release then sees no gesture at all. The drag placed nothing
+    /// and the lifecycle looked perfect from every angle until it was instrumented.
+    spot_drag: crate::develop::canvas::spot_overlay::SpotDrag,
     /// Drawn perspective guides.
     ///
     /// ⚠⚠ **View state, never `Edits`.** A guide is scaffolding for arriving at a slider value,
