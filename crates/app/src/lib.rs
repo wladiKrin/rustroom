@@ -49,5 +49,6 @@ pub mod tile_layout;
 pub mod tone_curve_tool;
 pub mod tool;
 pub mod view_region;
+pub mod visualize;
 pub mod wb_tool;
 pub mod xmp_sync;
