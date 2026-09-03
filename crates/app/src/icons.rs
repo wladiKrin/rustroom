@@ -19,6 +19,13 @@ pub const CROP: char = '\u{e1d4}';
 pub const MASKS: char = '\u{e18c}';
 /// `star` — the Presets tool.
 pub const PRESETS: char = '\u{e46a}';
+/// `bandaids` — the Retouch tool.
+///
+/// ⚠ The plaster, which is Photoshop's healing-brush symbol and reads as "spot removal" at a
+/// glance. Verified present in the bundled 2.1.2 TTF by parsing its cmap, not assumed: four
+/// separate features in this project have picked a glyph that turned out to be absent from the
+/// bundled fonts and would have shipped a tofu box.
+pub const RETOUCH: char = '\u{e0b2}';
 
 /// `arrow-u-up-left` — undo.
 ///
@@ -47,11 +54,12 @@ pub const BEFORE_AFTER: char = '\u{e870}';
 /// Every icon the app draws.
 ///
 /// ⚠ The coverage tests sweep this, so an icon missing from it is one nothing checks.
-pub const ALL: [char; 11] = [
+pub const ALL: [char; 12] = [
     EDIT,
     CROP,
     MASKS,
     PRESETS,
+    RETOUCH,
     UNDO,
     REDO,
     ZOOM_OUT,
