@@ -6,6 +6,7 @@ pub mod batch_export;
 pub mod brush_tool;
 pub mod buffer_cache;
 pub mod collections;
+pub mod color_readout;
 pub mod compare_pair;
 pub mod composition_guides;
 pub mod crop_tool;
