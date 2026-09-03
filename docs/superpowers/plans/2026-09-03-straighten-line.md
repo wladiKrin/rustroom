@@ -779,7 +779,7 @@ Sabotages, each reverted after:
 
 | # | Sabotage | Must fail |
 | --- | --- | --- |
-| 1 | Delete the `StraightenDrag::Settled` block in `show` | `an_armed_straighten_drag_sets_the_angle_and_one_history_entry` |
+| 1 | Delete the `drag_stopped` apply block in the overlay | `an_armed_straighten_drag_sets_the_angle_and_one_history_entry` |
 | 2 | Remove the `s.history.push` line | the same test, on `can_undo` |
 | 3 | Remove `s.straighten_armed = false;` | the same test, on the disarm |
 | 4 | Change the dispatch to `else if true` | `an_unarmed_drag_leaves_the_straighten_angle_alone` |
@@ -891,22 +891,30 @@ block, map both ends forward before measuring:
 
 ```rust
     if resp.drag_stopped() {
-        if let Some((from, to)) = drag.take() {
+        if let Some((from, to)) = s.straighten_drag.take() {
             // ⚠ Measured on the **corrected** frame — that is the line the user drew. The stored
             // endpoints are raw so they survive the rotation that is about to be applied.
             let sf = guides::to_frame(from, &hom, angle_rad, aspect);
             let st = guides::to_frame(to, &hom, angle_rad, aspect);
-            match rustroom_app::straighten_line::angle_for_line(sf, st, aspect) {
+            if let Some(a) = rustroom_app::straighten_line::angle_for_line(sf, st, aspect) {
                 // ⚠ The new angle is **relative** to the one already applied: the line was drawn
                 // on a frame that already carries `shown_angle`, so levelling it means rotating
                 // by that much *more*. Without the addition, straightening twice would undo the
                 // first correction rather than refine it.
-                Some(a) => {
-                    s.straighten_line = Some((from, to));
-                    out = StraightenDrag::Settled((((shown_angle + a) * 1000.0).round()) as i32);
+                //
+                // ⚠ Clamped again: `angle_for_line` bounds the *relative* angle, and a sum of two
+                // in-range values is not in range. An out-of-range value is one the Straighten
+                // slider could neither show nor return to.
+                let next = (shown_angle + a).clamp(-45.0, 45.0);
+                if s.edits.geometry.angle != next {
+                    s.edits.geometry.angle = next;
+                    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+                    s.history.push(s.edits.clone());
+                    edited = true;
                 }
-                None => out = StraightenDrag::Settled((shown_angle * 1000.0).round() as i32),
+                s.straighten_line = Some((from, to));
             }
+            s.straighten_armed = false;
         }
     }
 ```
