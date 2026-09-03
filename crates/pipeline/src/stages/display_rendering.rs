@@ -63,6 +63,43 @@ pub const BASELINE_EV: f32 = 1.13;
 /// `the_table_agrees_with_direct_evaluation_below_half_an_eight_bit_level` is the guard.
 const LUT_SIZE: usize = 4096;
 
+/// How much chroma the camera's rendering carries beyond what a per-channel tone curve produces.
+///
+/// ⚠⚠ **Measured, and it is a real second component rather than a curve error.** With the curve
+/// fitted, the *luminance* already matches the camera to 0.10 EV — and the saturation does not:
+/// pooled over 8 X-T4 frames our render is **0.945×** the camera's, and **0.855–0.931×** through
+/// the four best-sampled midtone buckets (200k+ samples each). That residual is the film
+/// simulation the camera applies on top of its transfer, which no tone curve can produce.
+/// `sat_probe` is the measurement.
+///
+/// ⚠ **A constant with a highlight taper is as much structure as the data supports.** The
+/// per-bucket ratios in the well-sampled range are 1.074 / 1.153 / 1.120 / 1.170 — scatter around
+/// ~1.12 — while the two brightest buckets disagree with each other (1.244 and 0.928) on 29k and
+/// 16k samples. Fitting that scatter would be fitting noise.
+///
+/// ⚠ The taper is not cosmetic: near white the measurement says we are **already 1.077× too
+/// saturated**, because our shoulder is gentler than the camera's, and boosting there would turn
+/// a documented caveat into neon clipping.
+///
+/// ⚠⚠ **A chroma scale of 1.18 delivers a saturation gain of only ~1.12, and that is arithmetic
+/// rather than a mis-fit.** Holding the luminance fixed means scaling about `y`, so
+/// `(max−min)/max` comes out multiplied by `s·max / (y + (max−y)·s)` — strictly less than `s`
+/// whenever `y < max`, which is every non-neutral pixel. The constant is therefore defined by
+/// what it *achieves*: swept over 1.16 / 1.18 / 1.20, it lands the pooled ratio at 0.996 / **1.001**
+/// / 1.007.
+///
+/// ⚠ X-T4-derived, like [`BUILT_IN`] and [`BASELINE_EV`], and for the same reason: it is what a
+/// profile's `ProfileLookTable` would otherwise supply, and most community profiles omit one.
+const CHROMA_BOOST: f32 = 1.18;
+
+/// The rendered luminance below which the chroma boost ramps away to nothing.
+///
+/// ⚠ Justified by noise rather than by the fit: below this, what the measurement calls
+/// "saturation" is the `(max−min)/max` of near-black sensor noise — both our render and the
+/// camera read ~0.83 there, which no real content produces. Boosting it amplifies chroma
+/// speckle. The measurement agrees: the deepest bucket needed no boost at 1.006×.
+const SHADOW_KNEE: f32 = 0.08;
+
 /// The largest scene value the LUT resolves *before* the baseline gain; above it the curve is
 /// flat at 1 anyway.
 ///
@@ -174,6 +211,31 @@ impl DisplayRenderingStage {
         let frac = pos - i as f32;
         self.lut[i] + frac * (self.lut[i + 1] - self.lut[i])
     }
+
+    /// How far to scale a pixel's chroma about its own luminance, given that luminance.
+    ///
+    /// ⚠ Taken on the **rendered** luminance, which is what the measurement bucketed by, and
+    /// which is also the only thing that makes the highlight taper mean what it says.
+    fn chroma_scale(y: f32) -> f32 {
+        // ⚠ Total, like [`Self::map`]. Unreachable in production — `map` is total and clamped, so
+        // the luminance of its output always is too — but a scale that could come back `NaN`
+        // would turn one bad pixel into a black hole rather than an odd colour, and `clamp`
+        // propagates `NaN` rather than repairing it.
+        if !y.is_finite() {
+            return 1.0;
+        }
+        let y = y.clamp(0.0, 1.0);
+        // ⚠ `1 - y⁴` is flat through the midtones and falls away only as white approaches, which
+        // is the shape the measurement asks for with the least structure imposed on it.
+        //
+        // ⚠⚠ **And it falls away toward black too, for two independent reasons.** The measurement
+        // says the deepest bucket already matches the camera at 1.006× — so a boost there is
+        // unwarranted — and what reads as "saturation" that near black is chroma *noise*, which a
+        // 12% boost would make 12% worse on any high-ISO file. Noise reduction runs upstream and
+        // defaults to off, so nothing else would catch it.
+        let shadow = (y / SHADOW_KNEE).min(1.0);
+        1.0 + (CHROMA_BOOST - 1.0) * shadow * (1.0 - y * y * y * y)
+    }
 }
 
 /// Scene value to normalised log-exposure, clamped into the spline's domain.
@@ -196,7 +258,18 @@ impl PipelineStage for DisplayRenderingStage {
         // where a camera rendering's shadow saturation and its roll toward white come from, and
         // it is what the DNG spec does with `ProfileToneCurve`. A neutral grey still stays
         // exactly neutral, because all three channels take the same curve.
-        image.map_pixels(|[r, g, b]| [self.map(r), self.map(g), self.map(b)])
+        image.map_pixels(|[r, g, b]| {
+            let p = [self.map(r), self.map(g), self.map(b)];
+            // ⚠ The curve alone lands 0.945× the camera's saturation; [`CHROMA_BOOST`] is the
+            // measured remainder. Scaled about the pixel's own luminance, so the *tone* the curve
+            // just decided is left exactly alone and only the colour opens up.
+            let y = color::luminance(p);
+            let s = Self::chroma_scale(y);
+            // ⚠ Clamped: a bright saturated pixel scaled up can leave [0, 1], and letting one
+            // channel clip while its neighbours do not would shift the hue — the one thing this
+            // stage's per-channel curve is careful to do only where the *curve* says so.
+            p.map(|c| (y + (c - y) * s).clamp(0.0, 1.0))
+        })
     }
 }
 
@@ -376,6 +449,90 @@ mod tests {
                 "at {ev} EV the table drifts {:.2} of an 8-bit level from the curve",
                 worst * 255.0
             );
+        }
+    }
+
+    /// ⚠⚠ **The chroma boost opens the colour without moving the tone, and both halves matter.**
+    /// It was added because the curve alone lands 0.945× the camera's saturation — measured, not
+    /// guessed — and a boost that also lifted the luminance would be a brightness change wearing
+    /// a saturation label, which nothing else here could tell apart.
+    #[test]
+    fn the_chroma_boost_saturates_a_midtone_and_leaves_its_luminance_alone() {
+        let s = DisplayRenderingStage::new(None, Some(0.0));
+        let mut img = ImageBuf::new(1, 1);
+        img.set_pixel(0, 0, [0.20, 0.10, 0.05]);
+        let out = s.apply(img).pixel(0, 0);
+
+        // What the curve alone would have produced.
+        let bare = [s.map(0.20), s.map(0.10), s.map(0.05)];
+        assert!(
+            sat(out) > sat(bare) * 1.05,
+            "the boost did not reach the pixel: {:.4} vs {:.4}",
+            sat(out),
+            sat(bare)
+        );
+        assert!(
+            (color::luminance(out) - color::luminance(bare)).abs() < 1e-5,
+            "the boost moved the luminance: {} vs {}",
+            color::luminance(out),
+            color::luminance(bare)
+        );
+    }
+
+    /// ⚠⚠ **The taper, and it is not cosmetic.** Near white the measurement says we are *already*
+    /// 1.077× the camera's saturation, because our shoulder is gentler — so boosting there would
+    /// turn a documented caveat into neon clipping. A test that only probed a midtone would pass
+    /// against a flat boost.
+    #[test]
+    fn the_boost_tapers_away_toward_white() {
+        let full = CHROMA_BOOST - 1.0;
+        let mid = DisplayRenderingStage::chroma_scale(0.4) - 1.0;
+        let hi = DisplayRenderingStage::chroma_scale(0.95) - 1.0;
+        // ⚠ Expressed as a *fraction of the boost* rather than as absolute numbers, so tuning the
+        // constant cannot silently invalidate the property the test is about.
+        assert!(mid > 0.9 * full, "the midtones are not boosted: {mid}");
+        assert!(hi < 0.25 * full, "the boost did not taper near white: {hi}");
+        assert!(
+            DisplayRenderingStage::chroma_scale(1.0) < 1.001,
+            "white itself is still boosted"
+        );
+        // ⚠ And away toward black, where "saturation" is chroma noise — the deepest measured
+        // bucket already matched the camera without any boost.
+        let dark = DisplayRenderingStage::chroma_scale(0.01) - 1.0;
+        assert!(
+            dark < 0.25 * full,
+            "the boost did not taper near black: {dark}"
+        );
+        // ⚠ Total, so a value outside [0, 1] — which a clipped highlight can be — cannot produce
+        // a nonsensical scale.
+        for y in [-1.0, 2.0, f32::NAN] {
+            let s = DisplayRenderingStage::chroma_scale(y);
+            assert!((0.9..=CHROMA_BOOST).contains(&s), "{y} gave {s}");
+        }
+    }
+
+    /// ⚠ A neutral must stay bit-exactly neutral: the boost scales chroma about the pixel's own
+    /// luminance, and a grey has none, so this is a property of the arithmetic rather than a
+    /// tolerance.
+    #[test]
+    fn the_boost_cannot_tint_a_grey() {
+        let s = DisplayRenderingStage::new(None, Some(0.0));
+        let mut img = ImageBuf::new(1, 1);
+        img.set_pixel(0, 0, [0.35, 0.35, 0.35]);
+        let p = img.pixel(0, 0);
+        let out = s.apply(img).pixel(0, 0);
+        assert_eq!(out[0], out[1]);
+        assert_eq!(out[1], out[2]);
+        assert_eq!(out[0], s.map(p[0]), "and it moved the tone");
+    }
+
+    fn sat(p: [f32; 3]) -> f32 {
+        let mx = p[0].max(p[1]).max(p[2]);
+        let mn = p[0].min(p[1]).min(p[2]);
+        if mx <= 1e-6 {
+            0.0
+        } else {
+            (mx - mn) / mx
         }
     }
 
