@@ -130,7 +130,7 @@ project's recorded bugs were interactions between separately-correct changes.
 | **W1** ✅ | M5.1a tone curve + monotone spline | M6.1 seam + filename templating | M7.3a measured → **M7.3 shipped as a Settings choice** | M5.5a crop guides → now **View-wide** |
 | **W2** ✅ | M5.2 WB Kelvin ✅ | M6.1b/c/d ✅ | M7.1a luminance mask ✅ | M6.5a/b compare + survey ✅ |
 | **W3** ✅ | M5.3a spot headless ✅ | M6.3a/b XMP ✅ | M5.4a auto tone ✅ *(targets await the user's eye)* | M7.6 ×3 ✅ |
-| **W4** 🟡 | M5.3b spot canvas ✅ *(inline, 2026-09-03)* | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
+| **W4** 🟡 | M5.3b spot canvas ✅ *(inline, 2026-09-03)* | M5.5b straighten line ✅ | M7.4 Hough verticals ⛔ **held** | M6.5d colour readout ✅ |
 
 **W4 status (2026-09-03): A is done, B/C/D are not started, and the wave was never dispatched as a
 wave.** M5.3b ran **inline** because it went through five rounds of use-and-fix on the canvas, each
@@ -150,6 +150,28 @@ merge-order note below. ⚠ `mask_overlay.rs` is now 455 lines
 and `spot_overlay.rs` 462 — the "next file to watch" note below held, since M5.3b got its own
 module rather than growing `mask_overlay.rs`; `canvas/mod.rs` is 992 including its tests (474 of
 production code).
+
+**⚠⚠ W4 OUTCOME (2026-09-03): B and D merged fast-forward, C HELD OUT.** 1815 → **1845 tests**; 53
+goldens byte-identical and confirmed to have **run**; all three gates green **on the merged result**.
+⚠ The three predicted `Session`-append conflicts were the only ones, and **`canvas/mod.rs` auto-merged
+cleanly** — B's dispatch branch and D's hover read sit ~170 lines apart, which is the deliberate
+placement paying off. **The merge order B → D → C was right.**
+
+⚠⚠ **C is not merged: on a real off-axis building it detects two near-parallel lines in the sky and
+writes Vertical −42.5.** They cleared `MIN_SEPARATION` 0.15 at **0.17**, so the separation rule §4
+introduced let through exactly the ill-conditioned pair `guides.rs` warns about. Across 70 RAWs it
+fires on 54%, asking |Vertical| ≥ 50 on 47% of those. Root cause: **every threshold is relative to
+the frame's own strongest gradient**, which cannot express "there is no vertical here". It needs an
+**absolute contrast floor** — a design question, so §6 applies and it does not parallelise. Full
+detail is in `CLAUDE.md`'s W4 block; the branch and its `detect_probe` are kept.
+
+⚠ **A finding for the next wave, and it is a real limit on this model: an agent cannot verify a GUI
+feature here.** `AXIsProcessTrusted()` is false, so every synthetic mouse event is silently dropped
+(track B built a CGEvent driver in Swift and confirmed the cursor did not move), and `screencapture`
+returns `could not create image from display`. Granting either permission is a system-settings change
+an agent must not make. **So for canvas work, scope an agent to build and test it and plan on the
+user running the checklist** — the same shape §6 already recommends for a judgement about a
+photograph. All twenty of B's and D's checklist items are outstanding.
 
 ### W4 — to be run by a DIFFERENT agent (user's call, 2026-09-03)
 
