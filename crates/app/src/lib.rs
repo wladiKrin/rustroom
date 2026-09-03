@@ -38,6 +38,7 @@ pub mod safe_name;
 pub mod selection;
 pub mod settings;
 pub mod sidecar;
+pub mod spot_source;
 pub mod spot_tool;
 pub mod sync;
 pub mod thumb_cache;
