@@ -130,7 +130,17 @@ project's recorded bugs were interactions between separately-correct changes.
 | **W1** ✅ | M5.1a tone curve + monotone spline | M6.1 seam + filename templating | M7.3a measured → **M7.3 shipped as a Settings choice** | M5.5a crop guides → now **View-wide** |
 | **W2** ✅ | M5.2 WB Kelvin ✅ | M6.1b/c/d ✅ | M7.1a luminance mask ✅ | M6.5a/b compare + survey ✅ |
 | **W3** ✅ | M5.3a spot headless ✅ | M6.3a/b XMP ✅ | M5.4a auto tone ✅ *(targets await the user's eye)* | M7.6 ×3 ✅ |
-| **W4** | M5.3b spot canvas | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
+| **W4** 🟡 | M5.3b spot canvas ✅ *(inline, 2026-09-03)* | M5.5b straighten line | M7.4 Hough verticals | M6.5d colour readout |
+
+**W4 status (2026-09-03): A is done, B/C/D are not started, and the wave was never dispatched as a
+wave.** M5.3b ran **inline** because it went through five rounds of use-and-fix on the canvas, each
+reported by the user between commits — a shape a parallel worktree cannot serve. **M5.4b** (display
+rendering) also landed inline on 2026-09-03, outside any wave, because it was blocking three other
+milestones. ⚠ The remaining three W4 tracks are still parallelisable on the original partition —
+M5.5b and M7.4 both touch `crop_overlay.rs`/`guides` and would need the surface split before
+dispatch; M6.5d is Library-side and touches nothing of theirs. ⚠ `mask_overlay.rs` is now 455 lines
+and `spot_overlay.rs` 462 — the "next file to watch" note below held, since M5.3b got its own
+module rather than growing `mask_overlay.rs`; `canvas/mod.rs` is 992 including its tests.
 
 **W2 is closed.** ⚠ M5.2's Task 3 needed one correction — it threaded the source's *camera
 matrix* into the pipeline, but the stage runs on linear ProPhoto, so `RenderSpec` carries a
