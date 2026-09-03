@@ -161,7 +161,14 @@ pub(crate) fn show(
                 s.suppressed_spot = Some(i);
                 ed.changed = true;
             }
-        } else if settled || s.suppressed_spot == Some(i) {
+        } else if settled {
+            // ⚠⚠ Released on `settled` ONLY — never on "the selected spot is suppressed". Two
+            // owners share `suppressed_spot`: this panel while a slider is dragged, and the canvas
+            // while a patch is moved. Moving a patch *selects* it, so a clear keyed on the
+            // selection fired here on every frame of a canvas move, one frame after the canvas
+            // hid the patch — reported as "the unretouched image only flickers once, with the
+            // retouched one appearing again while moving". The panel may only release what it
+            // suppressed, and its own release is the slider's `drag_stopped`.
             s.suppressed_spot = None;
             ed.changed = true;
         }
@@ -580,6 +587,51 @@ mod tests {
         );
         assert!(!ed.settled, "a view toggle pushed a history entry");
         assert_eq!(s.edits, before, "a view toggle edited the photograph");
+    }
+
+    /// ⚠⚠ A suppression the CANVAS owns must survive the panel being drawn. Moving a patch selects
+    /// it, and a clear keyed on "the selected spot is suppressed" fired here on every frame of a
+    /// canvas move — the heal flickered away for one frame and came straight back. Reported as
+    /// such, after the previous round had fixed exactly this for the sliders.
+    ///
+    /// ⚠ Both halves: the suppression stays, AND no render is requested — a request alone would
+    /// re-render the (still suppressed) view for nothing on every frame of the move.
+    #[test]
+    fn the_panel_leaves_a_suppression_it_did_not_start_alone() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        {
+            let s = app.session.as_mut().unwrap();
+            s.edits.spots = vec![a_spot()];
+            // What the canvas does on the first frame of a move.
+            s.selected_spot = Some(0);
+            s.suppressed_spot = Some(0);
+        }
+        for _ in 0..3 {
+            let mut tool = app.spot_tool;
+            let s = app.session.as_mut().expect("session");
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::test_ui::screen()),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut ed = Edited::default();
+                    let mut on = true;
+                    show(ui, s, &mut tool, &mut on, &mut ed);
+                    assert!(
+                        !ed.changed,
+                        "the panel requested a render during a canvas move"
+                    );
+                },
+            );
+        }
+        assert_eq!(
+            app.session.as_ref().unwrap().suppressed_spot,
+            Some(0),
+            "the panel released a suppression the canvas owns"
+        );
     }
 
     /// ⚠ The threshold is drawn only while the view is on: its absence is the off state.
