@@ -88,6 +88,16 @@ impl RustroomApp {
             // nothing on screen to explain it. Cleared here, where every route into a tool change
             // already converges.
             s.suppressed_spot = None;
+            // ⚠ Visualize Spots turns itself off here too. A canvas stuck in a high-contrast grey
+            // view after switching to Edit reads as a broken render, and it is the single most
+            // likely thing in the Retouch tool to be reported as a bug. The request below is
+            // what brings the photograph back.
+            //
+            // ⚠ Unconditional, deliberately: the view can only be switched on from the Retouch
+            // panel, so every tool change that reaches this line is a change *away* from it. A
+            // `t != Tool::Retouch` guard was tried and its sabotage went uncaught — an
+            // unreachable guard is an untested one.
+            s.visualize = None;
             s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
         }
     }

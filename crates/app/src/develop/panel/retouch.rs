@@ -181,6 +181,44 @@ pub(crate) fn show(
         "Hides the outlines so you can see the photograph. Placing and editing still work.",
     );
 
+    // ⚠⚠ Visualize Spots is a VIEW MODE, not an edit: it writes `Session.visualize`, which only
+    // `FrameSpec` reads, so it never reaches `Edits`, the sidecar, an export or the histogram.
+    // Hence `ed.changed` (re-render) and never `ed.settled` (no history entry) — the same split
+    // "Show patches" makes one line above, for the same reason.
+    //
+    // ⚠ It turns itself off in `select_tool`: a canvas stuck in the grey edge view after
+    // switching to Edit reads as a broken render.
+    let mut visualize_on = s.visualize.is_some();
+    if ui
+        .checkbox(&mut visualize_on, "Visualize spots")
+        .on_hover_text(
+            "A high-contrast view that makes sensor dust visible. Affects only what you see — \
+             never the render, the export or the histogram.",
+        )
+        .changed()
+    {
+        s.visualize = visualize_on.then_some(rustroom_app::visualize::DEFAULT_THRESHOLD);
+        ed.changed = true;
+    }
+    if let Some(t) = s.visualize.as_mut() {
+        // ⚠ Drawn only while the view is on — a threshold for a view you are not looking at is
+        // a control that does nothing, and the absence *is* the off state.
+        let r = ui
+            .add(
+                egui::Slider::new(
+                    t,
+                    rustroom_app::visualize::MIN_THRESHOLD..=rustroom_app::visualize::MAX_THRESHOLD,
+                )
+                .text("Threshold"),
+            )
+            .on_hover_text(
+                "Higher shows more. It is a gain, not a cutoff, so it always shows something.",
+            );
+        // ⚠ Live, unlike Size and Feather: this is a post-step in `pack`, so a re-render costs
+        // only the cached-prefix tail and the prefix cache is untouched.
+        ed.changed |= r.changed();
+    }
+
     // ⚠ A count, not a list. Forty dust spots make a useless list, and Lightroom has none either.
     ui.horizontal(|ui| {
         let n = s.edits.spots.len();
@@ -509,6 +547,81 @@ mod tests {
         assert!(
             !ed.settled,
             "a view toggle pushed a history entry for a photo that did not change"
+        );
+    }
+
+    /// ⚠⚠ Visualize is a view mode: ticking it must ask for a render (or the canvas would not
+    /// change) and must push **no** history entry and touch **no** patch (or a view toggle would
+    /// be an undo step). All three are asserted, because each is a separate way to get it wrong.
+    #[test]
+    fn ticking_visualize_re_renders_without_editing_anything() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        app.session.as_mut().unwrap().edits.spots = vec![a_spot()];
+        let before = app.session.as_ref().unwrap().edits.clone();
+        let mut on = true;
+        let mut ed = Edited::default();
+        crate::test_ui::click(&ctx, "Visualize spots", |ui| {
+            ed = Edited::default();
+            let mut tool = app.spot_tool;
+            let s = app.session.as_mut().expect("session");
+            show(ui, s, &mut tool, &mut on, &mut ed);
+        });
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(
+            s.visualize,
+            Some(rustroom_app::visualize::DEFAULT_THRESHOLD),
+            "the checkbox did not turn the view on"
+        );
+        assert!(
+            ed.changed,
+            "the view mode asked for no render, so the canvas would not change"
+        );
+        assert!(!ed.settled, "a view toggle pushed a history entry");
+        assert_eq!(s.edits, before, "a view toggle edited the photograph");
+    }
+
+    /// ⚠ The threshold is drawn only while the view is on: its absence is the off state.
+    #[test]
+    fn the_threshold_appears_only_while_visualize_is_on() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        for (visualize, expect) in [(None, false), (Some(12.0), true)] {
+            app.session.as_mut().unwrap().visualize = visualize;
+            let found = crate::test_ui::find(&ctx, "Threshold", |ui| {
+                let mut tool = app.spot_tool;
+                let mut on = true;
+                let mut ed = Edited::default();
+                let s = app.session.as_mut().expect("session");
+                show(ui, s, &mut tool, &mut on, &mut ed);
+            })
+            .is_some();
+            assert_eq!(found, expect, "visualize={visualize:?}");
+        }
+    }
+
+    /// ⚠⚠ It must not survive leaving the tool: a canvas stuck in the grey edge view after
+    /// switching to Edit reads as a broken render, and it is the single most likely thing here to
+    /// be reported as a bug.
+    ///
+    /// ⚠ There is deliberately no "staying in Retouch keeps it" half. A first version had one and
+    /// it was vacuous: `select_tool` returns early when the tool is unchanged, so the line under
+    /// test is never reached and the assertion passes against anything. The view can only be
+    /// switched on from this panel, so every real tool change is a change away from Retouch.
+    #[test]
+    fn visualize_turns_itself_off_when_the_tool_changes() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        app.select_tool(rustroom_app::tool::Tool::Retouch);
+        app.session.as_mut().unwrap().visualize = Some(12.0);
+        app.select_tool(rustroom_app::tool::Tool::Edit);
+        assert_eq!(
+            app.session.as_ref().unwrap().visualize,
+            None,
+            "the view mode outlived its tool"
         );
     }
 
