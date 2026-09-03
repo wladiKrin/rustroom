@@ -34,6 +34,13 @@ const CIRCLE_SEGMENTS: usize = 48;
 /// never be grabbed again.
 const CLICK_SLOP: f32 = 3.0;
 
+/// The smallest a handle may be to grab, in **screen points**.
+///
+/// ⚠ [`spot_tool::MIN_RADIUS`] allows a spot about 2 pt across at fit zoom. Without a floor here
+/// such a spot could be placed and then never selected, moved or deleted again — which is why
+/// lowering that floor and adding this had to happen together.
+const GRAB_POINTS: f32 = 7.0;
+
 /// What the pointer is currently doing.
 ///
 /// ⚠⚠ **The two placing variants carry SCREEN positions, updated on every drag frame, because
@@ -83,6 +90,13 @@ pub(super) fn draw_spot_overlay(
         frame_rect.width() as usize,
         frame_rect.height() as usize,
     );
+    // ⚠ `radius_scale` is the source long edge in frame pixels, so dividing by it converts a
+    // screen distance into the long-edge units a spot's radius is measured in.
+    let min_grab = if map.radius_scale > 0.0 {
+        GRAB_POINTS / map.radius_scale
+    } else {
+        0.0
+    };
     let mut changed = false;
 
     // A canvas point → the stage's input space, which is where a spot lives.
@@ -113,7 +127,7 @@ pub(super) fn draw_spot_overlay(
             let at = to_source(p);
             // ⚠ Hit-test BEFORE placement: a click on an existing handle selects it rather than
             // stacking a new spot on top of it.
-            match spot_tool::hit_test(&s.edits.spots, at, aspect) {
+            match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
                 Some((i, _)) => s.selected_spot = Some(i),
                 None => {
                     let sp = place_with_source(at, *tool, &s.edits.spots, aspect, sample);
@@ -129,7 +143,7 @@ pub(super) fn draw_spot_overlay(
     if tool_drag_started(resp) {
         if let Some(p) = resp.interact_pointer_pos() {
             let at = to_source(p);
-            s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect) {
+            s.spot_drag = match spot_tool::hit_test(&s.edits.spots, at, aspect, min_grab) {
                 Some((i, h)) => {
                     s.selected_spot = Some(i);
                     SpotDrag::Moving(i, h)
@@ -143,6 +157,15 @@ pub(super) fn draw_spot_overlay(
     if tool_drag(resp) {
         if let Some(p) = resp.interact_pointer_pos() {
             s.spot_drag.advance(p);
+        }
+        // ⚠⚠ **Sized on every drag frame, not only on release** — reported as "no way to gauge
+        // the size" and "the slider should adapt already while dragging". The tool is what the
+        // panel's Size slider reads, so writing it here is what makes the slider track the
+        // gesture; the preview circle below reads the same value, so the two cannot disagree.
+        if let SpotDrag::Sizing { at, to } = s.spot_drag {
+            if (to - at).length() > CLICK_SLOP {
+                tool.radius = spot_tool::drag_radius(to_source(at), to_source(to), aspect);
+            }
         }
         if let SpotDrag::Moving(i, h) = s.spot_drag {
             // ⚠ `drag_delta` is in **screen** points while a spot lives in source-normalised
@@ -191,10 +214,9 @@ pub(super) fn draw_spot_overlay(
                 // on the spot would leave the slider showing a number that no longer describes
                 // what the next click will place.
                 //
-                // ⚠ The slop is measured in **screen** points between the press and the
-                // release, not from `drag_delta()`: that is a per-frame value and is usually zero
-                // on the release frame, so a real drag would be mistaken for a click. The arm's
-                // guard above already established that this gesture moved.
+                // ⚠ The radius was already written on every drag frame, so the slider could
+                // follow it; this only settles the last position, which the release frame may
+                // report more precisely than the previous drag frame did.
                 tool.radius = spot_tool::drag_radius(centre, to_source(to), aspect);
                 Some(place_with_source(
                     centre,
@@ -263,7 +285,47 @@ pub(super) fn draw_spot_overlay(
         }
     }
 
+    // ⚠⚠ **The gesture in progress is drawn too, and without it the drag is blind** — reported as
+    // "no preview of what's happening, no way to gauge the size". Nothing is committed until the
+    // release, so until this existed a size-drag showed the photograph and nothing else.
+    //
+    // ⚠ It reads `tool.radius`, the *same* value the drag just wrote and the panel's Size slider
+    // shows, so the circle, the slider and the spot that lands cannot disagree.
+    match s.spot_drag {
+        SpotDrag::Sizing { at, to } if (to - at).length() > CLICK_SLOP => {
+            preview(&painter, at, None, tool.radius * map.radius_scale);
+        }
+        // ⚠ An ⌥-drag keeps the stored radius and is choosing a *source*, so both discs are drawn
+        // with a line between them: the gesture's whole content is the pairing.
+        SpotDrag::Sourcing { at, to } if (to - at).length() > CLICK_SLOP => {
+            preview(&painter, at, Some(to), tool.radius * map.radius_scale);
+        }
+        _ => {}
+    }
+
     changed
+}
+
+/// The gesture in progress: a destination circle, optionally a source circle and the line to it.
+///
+/// ⚠ Dashed-thin rather than solid, so a preview never reads as a placed patch. Same doubled
+/// stroke as the committed spots, for the same reason: a light mark alone vanishes on a bright sky.
+fn preview(painter: &egui::Painter, at: egui::Pos2, source: Option<egui::Pos2>, r: f32) {
+    for (w, col) in [
+        (3.0, egui::Color32::from_black_alpha(140)),
+        (1.5, egui::Color32::from_white_alpha(230)),
+    ] {
+        let stroke = egui::Stroke::new(w, col);
+        circle(painter, at, r, stroke);
+        if let Some(src) = source {
+            circle(painter, src, r, stroke);
+            painter.line_segment([at, src], stroke);
+        } else {
+            // ⚠ A radial tick from the centre out to the rim: it is what makes the *size* legible
+            // while dragging, since a circle alone gives the eye nothing to measure against.
+            painter.line_segment([at, at + egui::vec2(r, 0.0)], stroke);
+        }
+    }
 }
 
 fn to_screen(map: &FrameMap, p: [f32; 2], frame: egui::Rect) -> egui::Pos2 {

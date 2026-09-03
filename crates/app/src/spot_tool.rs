@@ -7,9 +7,24 @@ use edit_model::{Spot, SpotMode};
 
 /// The smallest radius a gesture may produce, as a fraction of the long edge.
 ///
-/// ⚠ A spot below this covers no pixels, draws as a dot, and cannot be grabbed again — so a click
-/// with a shaky hand would leave litter the user can neither see nor remove.
-pub const MIN_RADIUS: f32 = 0.004;
+/// ⚠ **0.001, lowered from 0.004 after use** — reported as "the minimal size still seems too
+/// large". On a 6246 px frame this is a 6 px radius, which is the size sensor dust actually is;
+/// 0.004 was 25 px, comfortably bigger than most specks.
+///
+/// ⚠ A spot this small is only ~2 px across on screen at fit zoom, so [`hit_test`] takes a
+/// **minimum grab radius** in addition to it. Without that, lowering this floor would make tiny
+/// spots impossible to select again — trading one complaint for a worse one.
+pub const MIN_RADIUS: f32 = 0.001;
+
+/// ⚠⚠ **The floor's VALUE is guarded at COMPILE time, not by a test.** Reported from use: at
+/// 0.004 the smallest patch was still too large for sensor dust. Every other assertion about the
+/// floor is *relative* to it, so raising it back would leave them all green while reintroducing
+/// the complaint. On a 6246 px frame 0.0015 is a 9 px radius; 0.004 was 25 px.
+///
+/// ⚠ A `const _` rather than a `#[test]`: clippy rightly rejects a runtime `assert!` on a
+/// constant, and this is the stronger guard anyway — raising the floor becomes a build error
+/// rather than a red test. The form `MID_BUDGET_BYTES` already uses.
+const _: () = assert!(MIN_RADIUS > 0.0 && MIN_RADIUS <= 0.0015);
 /// The largest. Beyond this a "spot" is a region, and that is the wrong tool.
 pub const MAX_RADIUS: f32 = 0.25;
 
@@ -50,12 +65,22 @@ fn long_edge_distance(a: [f32; 2], b: [f32; 2], aspect: f32) -> f32 {
 /// ⚠ The destination is tested before the source within one spot: where the two discs overlap the
 /// destination is what the user means, and preferring the source would make a spot whose source
 /// sits on its own destination impossible to move.
-pub fn hit_test(spots: &[Spot], p: [f32; 2], aspect: f32) -> Option<(usize, Handle)> {
+pub fn hit_test(
+    spots: &[Spot],
+    p: [f32; 2],
+    aspect: f32,
+    min_grab: f32,
+) -> Option<(usize, Handle)> {
     for (i, s) in spots.iter().enumerate().rev() {
-        if long_edge_distance(s.centre, p, aspect) <= s.radius {
+        // ⚠⚠ **The grab radius is at least `min_grab`, which is the disc's radius only when that
+        // is comfortably clickable.** [`MIN_RADIUS`] allows a spot ~2 px across on screen at fit
+        // zoom; without a floor here it could be placed and then never selected again. The caller
+        // supplies the floor because only it knows the screen scale.
+        let grab = s.radius.max(min_grab);
+        if long_edge_distance(s.centre, p, aspect) <= grab {
             return Some((i, Handle::Centre));
         }
-        if long_edge_distance(s.source, p, aspect) <= s.radius {
+        if long_edge_distance(s.source, p, aspect) <= grab {
             return Some((i, Handle::Source));
         }
     }
@@ -157,18 +182,60 @@ mod tests {
     #[test]
     fn the_destination_wins_when_both_discs_contain_the_point() {
         let s = [spot(0.5, 0.5, 0.52, 0.5, 0.05)];
-        assert_eq!(hit_test(&s, [0.51, 0.5], 1.0), Some((0, Handle::Centre)));
+        assert_eq!(
+            hit_test(&s, [0.51, 0.5], 1.0, 0.0),
+            Some((0, Handle::Centre))
+        );
     }
 
     #[test]
     fn the_source_is_grabbable_where_the_destination_is_not() {
         let s = [spot(0.2, 0.5, 0.8, 0.5, 0.05)];
-        assert_eq!(hit_test(&s, [0.8, 0.5], 1.0), Some((0, Handle::Source)));
-        assert_eq!(hit_test(&s, [0.2, 0.5], 1.0), Some((0, Handle::Centre)));
         assert_eq!(
-            hit_test(&s, [0.5, 0.5], 1.0),
+            hit_test(&s, [0.8, 0.5], 1.0, 0.0),
+            Some((0, Handle::Source))
+        );
+        assert_eq!(
+            hit_test(&s, [0.2, 0.5], 1.0, 0.0),
+            Some((0, Handle::Centre))
+        );
+        assert_eq!(
+            hit_test(&s, [0.5, 0.5], 1.0, 0.0),
             None,
             "empty space grabs nothing"
+        );
+    }
+
+    /// ⚠⚠ **A spot far smaller than a click can land on must still be grabbable.**
+    /// [`MIN_RADIUS`] allows ~2 px on screen at fit zoom, so without the floor a dust patch could
+    /// be placed and then never selected, moved or deleted again. Reported as "the minimal size
+    /// still seems too large"; lowering the floor without this would have traded one complaint
+    /// for a worse one.
+    #[test]
+    fn a_tiny_spot_is_still_grabbable_through_the_minimum() {
+        let s = [spot(0.5, 0.5, 0.2, 0.2, MIN_RADIUS)];
+        let near = [0.5 + MIN_RADIUS * 4.0, 0.5];
+        assert_eq!(
+            hit_test(&s, near, 1.0, 0.0),
+            None,
+            "fixture check: without a floor this point misses"
+        );
+        assert_eq!(
+            hit_test(&s, near, 1.0, MIN_RADIUS * 8.0),
+            Some((0, Handle::Centre)),
+            "the minimum grab radius was not applied"
+        );
+    }
+
+    /// ⚠ The floor only ever *widens* the grab: a spot larger than it keeps its own radius, or a
+    /// big patch would become impossible to click past.
+    #[test]
+    fn the_minimum_never_shrinks_a_large_spots_grab() {
+        let s = [spot(0.5, 0.5, 0.2, 0.2, 0.10)];
+        assert_eq!(
+            hit_test(&s, [0.59, 0.5], 1.0, 0.001),
+            Some((0, Handle::Centre)),
+            "a large spot lost its own reach to the floor"
         );
     }
 
@@ -179,7 +246,10 @@ mod tests {
             spot(0.5, 0.5, 0.2, 0.2, 0.05),
             spot(0.5, 0.5, 0.8, 0.8, 0.05),
         ];
-        assert_eq!(hit_test(&s, [0.5, 0.5], 1.0), Some((1, Handle::Centre)));
+        assert_eq!(
+            hit_test(&s, [0.5, 0.5], 1.0, 0.0),
+            Some((1, Handle::Centre))
+        );
     }
 
     /// ⚠⚠ The radius is a fraction of the **long edge**, so on a frame twice as wide as it is
@@ -191,21 +261,21 @@ mod tests {
         let s = [spot(0.5, 0.5, 0.9, 0.9, 0.10)];
         // aspect 2.0 → the width is the long edge, so 0.09 of the width is 0.09 long-edge units.
         assert!(
-            hit_test(&s, [0.59, 0.5], 2.0).is_some(),
+            hit_test(&s, [0.59, 0.5], 2.0, 0.0).is_some(),
             "inside on the long axis"
         );
         assert!(
-            hit_test(&s, [0.62, 0.5], 2.0).is_none(),
+            hit_test(&s, [0.62, 0.5], 2.0, 0.0).is_none(),
             "outside on the long axis"
         );
         // ⚠ The discriminating probe: 0.15 of the *height* is only 0.075 long-edge units, so it
         // is INSIDE — while a naive comparison against 0.10 would call it outside.
         assert!(
-            hit_test(&s, [0.5, 0.65], 2.0).is_some(),
+            hit_test(&s, [0.5, 0.65], 2.0, 0.0).is_some(),
             "the vertical extent was measured in the wrong unit"
         );
         assert!(
-            hit_test(&s, [0.5, 0.75], 2.0).is_none(),
+            hit_test(&s, [0.5, 0.75], 2.0, 0.0).is_none(),
             "outside vertically"
         );
     }
