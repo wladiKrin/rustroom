@@ -145,3 +145,35 @@ pub(super) fn click_through(app: &mut RustroomApp, ctx: &egui::Context, at: egui
         );
     }
 }
+
+/// Drive `show` with the pointer moved to `at` and no button pressed — an ordinary hover.
+///
+/// ⚠⚠ **The pointer must be at `at` on the pass that is read.** Pointer state is per-frame, and
+/// the headless-canvas work records three separate harness faults of this family — one of which
+/// made the regression guard for a whole change pass vacuously, because "`drag_delta()` is
+/// per-frame and the harness moved the pointer on an earlier pass than the one it read." Two
+/// passes: move, then read on the next one with the pointer still there.
+pub(super) fn hover_through(app: &mut RustroomApp, ctx: &egui::Context, at: egui::Pos2) {
+    for _ in 0..2 {
+        let c = ctx.clone();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen()),
+                events: vec![egui::Event::PointerMoved(at)],
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+    }
+}
+
+/// Drive `show` with the pointer moved off the image entirely.
+///
+/// ⚠ Off the *screen rect*, not merely off the photo: at fit the image is centred with grey
+/// around it, so a position inside the canvas but outside `img_rect` would also do — this is
+/// the unambiguous version.
+pub(super) fn hover_away(app: &mut RustroomApp, ctx: &egui::Context) {
+    hover_through(app, ctx, egui::pos2(-100.0, -100.0));
+}

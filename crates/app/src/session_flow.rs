@@ -362,6 +362,8 @@ impl RustroomApp {
             straighten_armed: false,
             straighten_drag: None,
             straighten_line: None,
+            readout_bytes: None,
+            readout: String::new(),
             path,
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session

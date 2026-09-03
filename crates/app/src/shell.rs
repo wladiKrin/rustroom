@@ -70,6 +70,18 @@ impl eframe::App for RustroomApp {
                 // ⚠ Taken from the frame, never recomputed from `frame.rgba` — those bytes are in
                 // the display's primaries. See `RenderedFrame::hist`.
                 s.hist = frame.hist;
+                // ⚠⚠ Kept rather than dropped, and it is the **sRGB** channel, not `rgba`. See
+                // `RenderedFrame::srgb`: `rgba` is in the display's primaries, so a readout built
+                // on it would report different numbers on a different monitor — the same bug the
+                // histogram's ordering already exists to prevent. The dimensions travel with the
+                // bytes so nothing has to re-derive them.
+                //
+                // ⚠ An `Arc::clone`, so this retains no memory the frame did not already hold.
+                s.readout_bytes = Some((
+                    std::sync::Arc::clone(&frame.srgb),
+                    frame.width,
+                    frame.height,
+                ));
                 let img = egui::ColorImage::from_rgba_unmultiplied(
                     [frame.width, frame.height],
                     &frame.rgba,
@@ -250,6 +262,25 @@ impl eframe::App for RustroomApp {
                         ui.label(&self.export_progress);
                     } else if !self.status.is_empty() {
                         ui.label(&self.status);
+                    }
+                    // ⚠ Its own label, immediately left of the status/progress label, so neither
+                    // is ever hidden. ⚠⚠ It must NOT become a second right-aligned region: this
+                    // cluster's own comment above records that "the develop toolbar right-aligned
+                    // the filename itself and then the status label was added after it — which
+                    // meant the status was pushed into a row that had no space left." One
+                    // cluster, laid out rightmost first.
+                    //
+                    // ⚠ Blank when the pointer is off the image, which `canvas::show` clears
+                    // every frame — a stale number gets trusted.
+                    //
+                    // ⚠ Develop only. The Library grid and the Compare/Survey views render
+                    // through other paths and have no rendered frame to read.
+                    if self.view == AppView::Develop {
+                        if let Some(s) = &self.session {
+                            if !s.readout.is_empty() {
+                                ui.label(&s.readout);
+                            }
+                        }
                     }
                 });
             });

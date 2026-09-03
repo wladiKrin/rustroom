@@ -816,6 +816,27 @@ pub struct Session {
     /// re-armed, the tool changes, or the photo changes (the last is free — `Session` is
     /// per-photo).
     straighten_line: Option<([f32; 2], [f32; 2])>,
+    /// The rendered frame's sRGB bytes, kept for the colour readout, with the dimensions they
+    /// describe.
+    ///
+    /// ⚠⚠ **Not the texture.** `texture` is an `egui::TextureHandle`, i.e. GPU-side, and cannot
+    /// be sampled CPU-side — which is exactly why `guide_overlay::draw_loupe` magnifies it by
+    /// *drawing* it with UVs. These bytes are `pack`'s `srgb8`, the same ones `hist` is bucketed
+    /// from, and deliberately **not** `RenderedFrame.rgba`, which is in the display's primaries
+    /// and would give a readout that changes with the monitor.
+    ///
+    /// ⚠ The dimensions travel **with** the bytes rather than being re-derived from
+    /// `rendered_region` or the texture. Two facts that can disagree is the shape
+    /// `render_max_dim`, `fit_image_size` and `geometry_mode` were each fixed for.
+    ///
+    /// ⚠ An `Arc`, so retaining it costs nothing beyond the memory the frame already held.
+    readout_bytes: Option<(std::sync::Arc<Vec<u8>>, usize, usize)>,
+    /// What the status cluster shows for the pixel under the cursor, or empty.
+    ///
+    /// ⚠ Cleared by `canvas::show` on every frame and set again only by an actual hover over the
+    /// image. A stale number left on screen after the pointer leaves is worse than none, because
+    /// it gets trusted.
+    readout: String,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so
