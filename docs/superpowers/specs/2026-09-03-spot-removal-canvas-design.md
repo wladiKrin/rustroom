@@ -108,8 +108,9 @@ Sample the **ring around the destination** as the target signature, then score c
 angles × 5 distances (2r…6r). Score is the colour distance from that ring **plus** the variance
 inside the candidate disc — a flat patch copies more cleanly than an edge. Reject any candidate
 that leaves the frame, overlaps the destination disc, or lands on an existing spot's destination.
-`None` when nothing qualifies, in which case the caller falls back to a fixed offset rather than
-refusing to place the spot.
+`None` when nothing qualifies, in which case the caller places the source **3r straight up**,
+clamped to keep the disc inside the frame — a spot the user can drag beats a click that silently
+did nothing.
 
 ⚠⚠ **The ring is sampled at 1.2r–1.6r, outset from the rim rather than flush with it, and this is
 A's Wave 3 finding arriving one layer up.** That finding — *the retouch radius must exceed the
@@ -153,7 +154,9 @@ perspective is the identity homography, so the sampler degrades to a plain buffe
 ## 5. The overlay
 
 Every spot while Retouch is active: a destination circle, a source circle, a line between them, the
-selected one brighter. Drawn under `Tool::Retouch` only — the canvas already matches on the tool
+selected one brighter. A spot whose destination or source falls outside the current crop is
+drawn and simply clipped by `img_rect` — it still exists and still affects the render, so hiding it
+would make a spot the user cannot find but can see the effect of. Drawn under `Tool::Retouch` only — the canvas already matches on the tool
 exhaustively, so a fifth variant forces the decision rather than defaulting.
 
 ⚠⚠ **Every coordinate goes against `frame_rect`, never `img_rect`.** That is the M3.1a drift bug —
@@ -202,8 +205,14 @@ and toggling it re-renders without touching the prefix cache — `FrameSpec` is 
 stuck in a high-contrast grey view after switching to Edit reads as a broken render, and it is the
 single most likely thing here to be reported as a bug.
 
-⚠ σ is in **rendered** pixels, so the view looks the same at fit and at 1:1. Unlike the spots
-themselves, which are normalised, this is a screen-space effect and takes the render scale.
+⚠ σ is **6 rendered pixels**, not scene pixels, so the view looks the same at fit and at 1:1.
+Unlike the spots themselves, which are normalised, this is a screen-space effect and deliberately
+does *not* take the render scale: the point is to make dust visible on screen, and dust is a few
+pixels across wherever you are looking from.
+
+⚠ The threshold slider is a **gain**, 1×–50×, defaulting to 12×. A slider that mapped to a hard
+cutoff would show nothing at all over most of its travel; a gain always shows *something*, which is
+what lets it be judged by eye.
 
 ---
 
