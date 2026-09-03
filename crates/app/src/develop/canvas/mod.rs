@@ -44,6 +44,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // `&mut app.spot_tool` cannot be taken while `match &mut app.session` holds its borrow — the
     // canvas takes `&mut app` whole, unlike the panel, which borrows disjoint fields.
     let mut app_spot_tool = app.spot_tool;
+    let app_show_spots = app.show_spots;
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
@@ -267,6 +268,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 img_rect,
                                 frame_rect,
                                 &mut app_spot_tool,
+                                app_show_spots,
                                 &sample,
                             );
                         }
@@ -629,6 +631,49 @@ mod tests {
         );
     }
 
+    /// How many shapes one frame of the canvas paints.
+    ///
+    /// ⚠ The overlay is *appearance*, which this harness cannot assert on directly — but egui's
+    /// `FullOutput` carries the shapes it painted, and a count is enough to see that a whole
+    /// group of outlines stopped being drawn.
+    fn painted(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(super::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+        out.shapes.len()
+    }
+
+    /// ⚠⚠ **Turning the outlines off must actually stop drawing them.** Reported as wanting a way
+    /// to "remove the skeletons... such that one can better see the picture": with thirty patches
+    /// the circles become the picture. A test on the flag alone would pass against a canvas that
+    /// ignored it entirely, which is exactly what a sabotage found.
+    #[test]
+    fn hiding_the_patches_paints_fewer_shapes() {
+        let ctx = egui::Context::default();
+        let mut app = retouch_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::click_through(&mut app, &ctx, centre);
+        assert_eq!(spots(&app).len(), 1, "setup: nothing was placed");
+
+        app.show_spots = true;
+        let shown = painted(&mut app, &ctx);
+        app.show_spots = false;
+        let hidden = painted(&mut app, &ctx);
+        assert!(
+            hidden < shown,
+            "hiding the patches painted just as much: {hidden} vs {shown}"
+        );
+        // ⚠ And the patch itself survives — this is a *view* toggle, not a delete.
+        assert_eq!(spots(&app).len(), 1, "hiding the outlines removed a patch");
+    }
+
     /// ⚠⚠ **A non-primary drag must place nothing.** egui reports `dragged()` for *every* button,
     /// so a tool reading a bare `dragged()` would place a spot as the middle-drag pan gesture
     /// passed over the canvas. `tool_drag` is the guard, and no test using Primary alone can see
@@ -673,9 +718,14 @@ mod tests {
         let after = spots(&app);
         assert_eq!(after.len(), 1, "the drag stacked a second spot");
         assert_ne!(after[0].centre, before, "the drag did not move the spot");
+        assert_eq!(
+            counts[super::test_support::DRAG_PASS],
+            counts[super::test_support::DRAG_PASS - 1],
+            "the move re-rendered mid-drag, which is what made it laggy: {counts:?}"
+        );
         assert!(
-            counts[super::test_support::DRAG_PASS] > counts[super::test_support::DRAG_PASS - 1],
-            "no render was requested on the drag frame: {counts:?}"
+            *counts.last().unwrap() > counts[super::test_support::DRAG_PASS],
+            "the move never rendered at all, so the patch is left stale: {counts:?}"
         );
     }
 

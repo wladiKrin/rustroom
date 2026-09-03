@@ -26,7 +26,12 @@ pub const MIN_RADIUS: f32 = 0.001;
 /// rather than a red test. The form `MID_BUDGET_BYTES` already uses.
 const _: () = assert!(MIN_RADIUS > 0.0 && MIN_RADIUS <= 0.0015);
 /// The largest. Beyond this a "spot" is a region, and that is the wrong tool.
-pub const MAX_RADIUS: f32 = 0.25;
+///
+/// ⚠ **0.05, lowered from 0.25 after use.** The working range for dust and blemishes is about
+/// 0.1–0.5% of the long edge, so a ceiling at 25% spent 98% of the slider's travel on sizes
+/// nobody uses and left the useful zone unusably cramped. 5% of a 6246 px frame is still a 312 px
+/// radius — a very large patch.
+pub const MAX_RADIUS: f32 = 0.05;
 
 /// Which end of a spot a gesture has hold of.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -147,6 +152,22 @@ impl Default for SpotTool {
             mode: SpotMode::Heal,
         }
     }
+}
+
+/// A radius as pixels of a full-resolution image whose long edge is `full_long`.
+///
+/// ⚠ A radius is *stored* as a fraction of the long edge, because that is what makes it survive a
+/// resize — but nobody thinks about dust in fractions of a frame, so the UI reads in pixels.
+pub fn radius_px(radius: f32, full_long: usize) -> f32 {
+    radius * full_long.max(1) as f32
+}
+
+/// The inverse of [`radius_px`], clamped into the representable range.
+///
+/// ⚠ Clamped here rather than at the call site, so a typed-in pixel figure cannot produce a spot
+/// outside the range a gesture can — two routes to one value must land in the same place.
+pub fn radius_from_px(px: f32, full_long: usize) -> f32 {
+    (px / full_long.max(1) as f32).clamp(MIN_RADIUS, MAX_RADIUS)
 }
 
 /// A new spot at `centre` sourcing from `source`, taking the tool's current settings.
@@ -312,13 +333,34 @@ mod tests {
     /// on a portrait frame than on a landscape one.
     #[test]
     fn drag_radius_is_the_distance_in_long_edge_units() {
+        // ⚠ The probes sit inside `[MIN_RADIUS, MAX_RADIUS]`. They used to be 0.12, which was
+        // fine at the old 0.25 ceiling and hits the clamp at the new 0.05 one — a fixture that
+        // silently stopped testing the property it names. The property is unchanged.
+        //
         // aspect 2.0 → the long edge is the width, so dx is already in long-edge units.
-        let r = drag_radius([0.5, 0.5], [0.62, 0.5], 2.0);
-        assert!((r - 0.12).abs() < 1e-6, "got {r}");
+        let r = drag_radius([0.5, 0.5], [0.53, 0.5], 2.0);
+        assert!((r - 0.03).abs() < 1e-6, "got {r}");
         // The same *visual* distance vertically is half as many long-edge units, so the drag has
         // to be twice as long in normalised y to produce the same radius.
-        let r = drag_radius([0.5, 0.5], [0.5, 0.74], 2.0);
-        assert!((r - 0.12).abs() < 1e-6, "got {r}");
+        let r = drag_radius([0.5, 0.5], [0.5, 0.56], 2.0);
+        assert!((r - 0.03).abs() < 1e-6, "got {r}");
+    }
+
+    /// ⚠ The pixel conversion round-trips, and its inverse clamps: a figure outside the
+    /// representable range must land where a gesture would, not somewhere only typing can reach.
+    #[test]
+    fn the_pixel_conversion_round_trips_and_clamps() {
+        let long = 6246;
+        for r in [MIN_RADIUS, 0.002, 0.01, MAX_RADIUS] {
+            let back = radius_from_px(radius_px(r, long), long);
+            assert!((back - r).abs() < 1e-6, "{r} came back as {back}");
+        }
+        assert_eq!(radius_from_px(0.0, long), MIN_RADIUS);
+        assert_eq!(radius_from_px(1e9, long), MAX_RADIUS);
+        // ⚠ A degenerate long edge must not divide by zero — the panel can be drawn before a
+        // photo is open.
+        assert!(radius_from_px(10.0, 0).is_finite());
+        assert!(radius_px(0.01, 0).is_finite());
     }
 
     /// ⚠ A radius below the floor is a spot that covers nothing and cannot be seen or grabbed —

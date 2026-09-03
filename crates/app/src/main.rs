@@ -320,6 +320,12 @@ struct RustroomApp {
     brush_erase: bool,
     /// Whether to tint the selected brush mask's coverage on the canvas.
     show_mask_tint: bool,
+    /// Whether the Retouch tool draws its patch outlines.
+    ///
+    /// ⚠ A *view* toggle on the app, `show_mask_tint`'s home: turning the outlines off is how you
+    /// see the photograph itself and judge what still needs retouching, which is impossible with
+    /// forty circles over it.
+    show_spots: bool,
     /// The Retouch tool's live settings.
     ///
     /// ⚠ On `RustroomApp` rather than `Session` and **not persisted** — the brush's rule. The
@@ -556,6 +562,7 @@ impl RustroomApp {
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
             show_mask_tint: true,
+            show_spots: true,
             hsl_channel: Default::default(),
             grade_range: Default::default(),
             new_collection: String::new(),
@@ -734,6 +741,13 @@ pub struct Session {
     rendered_long: f32,
     /// The editing buffer's long edge — the top rung of the render ladder.
     buffer_long: usize,
+    /// The long edge of a **full-resolution** decode of this file, in pixels.
+    ///
+    /// ⚠⚠ Derived from the buffer and its `source_scale` **once**, so it is the same number
+    /// before and after the full-resolution handover. `buffer_long` is not usable for this: a RAW
+    /// opens at half size, so a size shown in pixels against it would silently double a few
+    /// seconds after the photo appeared.
+    full_long: usize,
     /// Whether `engine`'s buffer is the full-resolution decode.
     ///
     /// True from the start for JPEG/PNG/TIFF, which are decoded at full size already.

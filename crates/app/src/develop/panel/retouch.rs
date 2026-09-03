@@ -5,14 +5,20 @@ use super::Edited;
 use crate::Session;
 use edit_model::SpotMode;
 use eframe::egui;
-use rustroom_app::spot_tool::{SpotTool, MAX_RADIUS, MIN_RADIUS};
+use rustroom_app::spot_tool::{self, SpotTool, MAX_RADIUS, MIN_RADIUS};
 
 /// Draw the Retouch controls.
 ///
 /// ⚠ `tool` is `&mut` to a field of `RustroomApp` while `s` borrows another — **disjoint** fields,
 /// which is what makes both legal where a closure capturing the app twice would be `E0499`. The
 /// `masks::BrushTool` precedent, which takes five of them.
-pub(crate) fn show(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: &mut Edited) {
+pub(crate) fn show(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    tool: &mut SpotTool,
+    show_outlines: &mut bool,
+    ed: &mut Edited,
+) {
     // ⚠⚠ **When a patch is selected the controls edit THAT patch; otherwise they set what the
     // next one will be.** Reported from use: "when clicking on a patch, it should be possible to
     // adapt the size and feather, right now it's doing nothing" — because the sliders only ever
@@ -37,16 +43,43 @@ pub(crate) fn show(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: 
     // ⚠⚠ **Not a second mechanism.** This slider shows and sets the *same* value the canvas
     // size-drag sets — one value, two affordances, the eyedropper-and-Kelvin idiom M5.2 shipped.
     // The drag writes `tool.radius` on every frame, so the slider tracks the gesture live.
+    //
+    // ⚠⚠ **Shown in PIXELS of the full-resolution image, not as a percentage** — reported as
+    // "I don't like the % numbering, can we just do pixels". A radius is *stored* as a fraction of
+    // the long edge, because that is what makes it survive a resize; nobody thinks about dust in
+    // fractions of a frame.
+    //
+    // ⚠ Against `full_long`, never the buffer's long edge: a RAW opens at half size, so a pixel
+    // count taken from the buffer would silently double a few seconds later when the
+    // full-resolution decode landed.
+    //
+    // ⚠⚠ **Recorded honestly: no test can see which of the two is used.** The slider's range and
+    // its write-back divide by the *same* figure, so a wrong `long` is self-consistent and yields
+    // an identical radius — it changes only the digits on screen, and egui does not publish a
+    // slider's formatted value to the accessibility tree. The arithmetic itself is covered by
+    // `spot_tool::the_pixel_conversion_round_trips_and_clamps`; this one line is not.
+    let long = s.full_long;
+    let mut px = spot_tool::radius_px(*radius, long);
     let r = ui
         .add(
-            egui::Slider::new(radius, MIN_RADIUS..=MAX_RADIUS)
-                .text("Size")
-                .custom_formatter(|v, _| format!("{:.2}%", v * 100.0)),
+            // ⚠⚠ **Logarithmic**, because the range spans 50x and the useful zone sits at the
+            // bottom of it. On a linear slider 0.1–0.5% — where this tool is actually used —
+            // occupied the first 8% of the travel, which is the "cramped" half of the same report.
+            egui::Slider::new(
+                &mut px,
+                spot_tool::radius_px(MIN_RADIUS, long)..=spot_tool::radius_px(MAX_RADIUS, long),
+            )
+            .logarithmic(true)
+            .text("Size")
+            .custom_formatter(|v, _| format!("{v:.0} px")),
         )
         .on_hover_text(
-            "The patch's radius, as a percentage of the long edge. Dragging out on the canvas \
-             sets this too.",
+            "The patch's radius in pixels of the full-resolution image. Dragging out on the \
+             canvas sets this too.",
         );
+    if r.changed() {
+        *radius = spot_tool::radius_from_px(px, long);
+    }
     // ⚠⚠ **Accounted locally, and folded into `ed` only if a patch is selected.** Calling
     // `absorb` here unconditionally re-rendered the photo and pushed a history entry every time
     // the *defaults* were adjusted — an undo step for a change no pixel saw. Caught by the test
@@ -112,6 +145,17 @@ pub(crate) fn show(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: 
 
     ui.separator();
 
+    // ⚠⚠ **Turning the outlines off is how you see the photograph.** With thirty patches placed
+    // the circles become the picture, and judging what still needs retouching is impossible.
+    // Reported alongside wanting the unselected ones dimmer — the two answer one problem at
+    // different strengths.
+    //
+    // ⚠ It suppresses only the drawing of *committed* patches: every gesture still works, and a
+    // gesture in progress is still previewed. A toggle that disabled the tool would be a mode.
+    ui.checkbox(show_outlines, "Show patches").on_hover_text(
+        "Hides the outlines so you can see the photograph. Placing and editing still work.",
+    );
+
     // ⚠ A count, not a list. Forty dust spots make a useless list, and Lightroom has none either.
     ui.horizontal(|ui| {
         let n = s.edits.spots.len();
@@ -176,7 +220,7 @@ mod tests {
             let mut ed = Edited::default();
             let mut tool = app.spot_tool;
             let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut ed);
+            show(ui, s, &mut tool, &mut true, &mut ed);
             if ed.changed {
                 seen = ed;
             }
@@ -208,7 +252,7 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    show(ui, s, &mut tool, &mut ed);
+                    show(ui, s, &mut tool, &mut true, &mut ed);
                     assert!(!ed.changed, "drawing the panel reported an edit");
                 },
             );
@@ -228,7 +272,7 @@ mod tests {
             let mut ed = Edited::default();
             let mut tool = app.spot_tool;
             let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut ed);
+            show(ui, s, &mut tool, &mut true, &mut ed);
         })
         .expect("no Size slider was drawn");
         let target = egui::pos2(at.x + to, at.y);
@@ -253,7 +297,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| show(ui, s, &mut tool, &mut ed),
+                    |ui| show(ui, s, &mut tool, &mut true, &mut ed),
                 );
             }
             app.spot_tool = tool;
@@ -317,6 +361,35 @@ mod tests {
         assert!(
             !ed.settled,
             "changing a default pushed a history entry for a photo that did not change"
+        );
+    }
+
+    /// ⚠ The toggle is a plain view flag, and turning it off must not touch a single patch —
+    /// hiding the outlines is for *looking*, not for editing.
+    #[test]
+    fn hiding_the_outlines_changes_no_patch() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        app.session.as_mut().unwrap().edits.spots = vec![a_spot()];
+        let before = app.session.as_ref().unwrap().edits.spots.clone();
+        let mut on = true;
+        let mut ed = Edited::default();
+        crate::test_ui::click(&ctx, "Show patches", |ui| {
+            ed = Edited::default();
+            let mut tool = app.spot_tool;
+            let s = app.session.as_mut().expect("session");
+            show(ui, s, &mut tool, &mut on, &mut ed);
+        });
+        assert!(!on, "the checkbox did not toggle");
+        assert_eq!(
+            app.session.as_ref().unwrap().edits.spots,
+            before,
+            "hiding the outlines edited a patch"
+        );
+        assert!(
+            !ed.settled,
+            "a view toggle pushed a history entry for a photo that did not change"
         );
     }
 

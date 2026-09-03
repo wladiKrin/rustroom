@@ -313,6 +313,13 @@ impl RustroomApp {
             move || ctx2.request_repaint(),
         );
         let buffer_long = decoded.buffer.width().max(decoded.buffer.height());
+        // ⚠ Derived once from the buffer and its scale, so it is the same number before and after
+        // the full-resolution handover — see `Session::full_long`.
+        let full_long = if decoded.source_scale > 0.0 {
+            (buffer_long as f32 / decoded.source_scale).round() as usize
+        } else {
+            buffer_long
+        };
         // `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the cap, and
         // the canvas only accepts a frame as the fit size when its `max_dim` matches.
         let fit_cap = view_region::fit_cap(buffer_long, PREVIEW_MAX_DIM);
@@ -379,6 +386,7 @@ impl RustroomApp {
             fit_image_size: egui::vec2(1.0, 1.0),
             rendered_long: 1.0,
             buffer_long,
+            full_long,
             buffer_is_full_res,
             opened_at: Instant::now(),
             // ⚠ `fit_cap`, not `PREVIEW_MAX_DIM`: they differ for an image smaller than the

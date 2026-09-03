@@ -79,6 +79,7 @@ pub(super) fn draw_spot_overlay(
     img_rect: egui::Rect,
     frame_rect: egui::Rect,
     tool: &mut SpotTool,
+    show_outlines: bool,
     sample: &dyn Fn([f32; 2]) -> [f32; 3],
 ) -> bool {
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
@@ -179,19 +180,18 @@ pub(super) fn draw_spot_overlay(
                     spot_tool::apply_drag(sp, h, now[0] - was[0], now[1] - was[1]);
                     true
                 });
-                if moved {
-                    changed = true;
-                    // ⚠⚠ **Requested on the drag frame itself, unlike a placement.** Moving a spot
-                    // changes the pixels continuously, so the render is the feedback; without this
-                    // the patch would visibly lag behind its own circle until some unrelated edit
-                    // forced a frame — the M3.1a mask bug exactly. A *placement* differs: it only
-                    // happens on release, so its render belongs there.
-                    s.request(
-                        s.view_edits(Tool::Retouch),
-                        s.render_max_dim(),
-                        s.requested_region,
-                    );
-                }
+                // ⚠⚠ **Deliberately NO render while the drag runs — the moving circle IS the
+                // feedback**, which is `draw_crop_overlay`'s model rather than the mask overlay's.
+                // Reported as "very laggy, as it adapts the retouching on the go", and the reason
+                // is structural: `SpotRemovalStage` is in the **prefix**, so moving a spot drops
+                // the prefix cache and re-runs noise reduction and dehaze on the whole buffer —
+                // ~117 ms each at native resolution. A mask handle can render live because
+                // `MaskStage` is in the cheap tail.
+                //
+                // ⚠ An earlier version did request here, citing the M3.1a bug. That reasoning was
+                // right for masks and wrong here, and only using it showed which. The release path
+                // below still requests, so the pixels are never left stale.
+                changed |= moved;
             }
         }
     }
@@ -257,7 +257,12 @@ pub(super) fn draw_spot_overlay(
     // ⚠ Widened by `overlay_clip`: `line_segment` centres its stroke on the path, so a halo drawn
     // on a spot at the very edge of the frame would have its outer half shaved off.
     let painter = ui.painter_at(canvas_geom::overlay_clip(img_rect));
-    for (i, sp) in s.edits.spots.iter().enumerate() {
+    // ⚠⚠ **Only the COMMITTED outlines are suppressed; every gesture still works and the
+    // in-progress preview is still drawn.** Hiding them is for judging what still needs
+    // retouching, so placing a patch while they are hidden must behave normally — and a gesture
+    // with no preview would be blind again, which is the complaint this same round fixed. A
+    // toggle that disabled the tool would be a mode, which is not what was asked for.
+    for (i, sp) in s.edits.spots.iter().enumerate().filter(|_| show_outlines) {
         let selected = s.selected_spot == Some(i);
         let c = to_screen(&map, sp.centre, frame_rect);
         let src = to_screen(&map, sp.source, frame_rect);
@@ -267,16 +272,15 @@ pub(super) fn draw_spot_overlay(
         let r = sp.radius * map.radius_scale;
         // ⚠ Doubled: a dark halo under a light mark. A thin white circle is invisible against a
         // bright sky — the fix the crop overlay needed after being reported.
+        //
+        // ⚠⚠ **An unselected patch is drawn much fainter than a selected one**, and the gap is
+        // deliberately large: on a frame with thirty patches the outlines otherwise become the
+        // picture. Reported as wanting them dimmer, alongside the toggle that removes them
+        // entirely.
+        let (halo, mark) = if selected { (140, 255) } else { (70, 90) };
         for (w, col) in [
-            (3.0, egui::Color32::from_black_alpha(140)),
-            (
-                1.0,
-                if selected {
-                    egui::Color32::WHITE
-                } else {
-                    egui::Color32::from_white_alpha(190)
-                },
-            ),
+            (3.0, egui::Color32::from_black_alpha(halo)),
+            (1.0, egui::Color32::from_white_alpha(mark)),
         ] {
             let stroke = egui::Stroke::new(w, col);
             painter.line_segment([c, src], stroke);

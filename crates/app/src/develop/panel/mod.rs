@@ -230,7 +230,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             },
                             &mut ed,
                         ),
-                        Tool::Retouch => retouch::show(ui, s, &mut app.spot_tool, &mut ed),
+                        Tool::Retouch => {
+                            retouch::show(ui, s, &mut app.spot_tool, &mut app.show_spots, &mut ed)
+                        }
                         // Drawn above, outside the session borrow — see the comment there.
                         Tool::Presets => {}
                     }

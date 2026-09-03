@@ -131,6 +131,7 @@ pub fn for_test() -> RustroomApp {
         brush_flow: 100.0,
         brush_erase: false,
         show_mask_tint: true,
+        show_spots: true,
         hsl_channel: Default::default(),
         grade_range: Default::default(),
         new_collection: String::new(),
@@ -221,6 +222,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         fit_image_size: egui::vec2(w as f32, h as f32),
         rendered_long: w.max(h) as f32,
         buffer_long: w.max(h),
+        full_long: w.max(h),
         buffer_is_full_res: true,
         opened_at: std::time::Instant::now(),
         // ⚠ The fit cap, as a real session starts. `render_max_dim` returns this now, so a
