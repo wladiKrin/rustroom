@@ -7,6 +7,7 @@
 //! `img_rect` survives only as the clip, widened by `overlay_clip` because `line_segment` centres
 //! its stroke on the path and a tight clip shaves the outer half of a halo at the frame edge.
 
+use super::loupe::draw_loupe;
 use super::navigation::{tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
@@ -135,6 +136,16 @@ pub(super) fn draw_straighten_overlay(
         for q in [a, b] {
             p.circle_filled(q, 5.0, egui::Color32::from_black_alpha(180));
             p.circle_filled(q, 3.0, egui::Color32::from_rgb(255, 80, 80));
+        }
+
+        // ⚠ The loupe, at the **live end** of the line and only while a drag is in progress — the
+        // point being placed. The guide overlay shows it for the endpoint being dragged and for
+        // the same reason: magnification where you are aiming, and nothing covering the
+        // photograph once you have let go. A loupe left up permanently is chrome.
+        //
+        // ⚠ Drawn last, over everything, and into the same widened clip as the marks.
+        if let (Some((_, live)), Some(tex)) = (s.straighten_drag, s.texture.as_ref()) {
+            draw_loupe(&p, tex, to_screen(live), img_rect, frame_rect);
         }
     }
     edited

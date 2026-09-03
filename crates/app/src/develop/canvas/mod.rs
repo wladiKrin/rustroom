@@ -658,6 +658,62 @@ mod tests {
         );
     }
 
+    /// How many mesh shapes a frame paints. `painter.image` — which is all the loupe is — emits a
+    /// `Shape::Mesh`, and nothing else in this canvas does.
+    fn meshes(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Mesh(_) => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(super::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// ⚠ The loupe appears at the live end of a straighten drag and **not** after release — the
+    /// guide overlay's rule, for its reason: magnification where you are aiming, and nothing
+    /// covering the photograph once you have let go.
+    ///
+    /// ⚠ Driven from the *state* rather than through a gesture, deliberately: this is a drawing
+    /// rule, a function of whether a drag is live, and the gesture→state wiring is already covered
+    /// by `an_armed_straighten_drag_sets_the_angle_and_one_history_entry`. Counting meshes on a
+    /// mid-drag frame through the five-pass harness would test the harness as much as the rule.
+    #[test]
+    fn the_straighten_loupe_shows_while_dragging_and_not_after() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let line = ([0.3f32, 0.4], [0.7f32, 0.6]);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_armed = true;
+            s.straighten_drag = Some(line);
+        }
+        let dragging = meshes(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.straighten_drag = None;
+            s.straighten_line = Some(line);
+        }
+        let settled = meshes(&mut app, &ctx);
+        assert_eq!(
+            dragging,
+            settled + 1,
+            "expected exactly one extra mesh — the loupe — while dragging; \
+             got {dragging} dragging and {settled} settled"
+        );
+    }
+
     /// The guard on the guard: with the mode unarmed the drag belongs to the crop rectangle, so
     /// "the angle moved after a drag" means nothing without this.
     #[test]
