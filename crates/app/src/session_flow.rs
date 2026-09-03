@@ -359,6 +359,8 @@ impl RustroomApp {
                 .effective_display_space(self.os_manages_colour),
             resampler: self.settings.resampler,
             visualize: None,
+            straighten_armed: false,
+            straighten_drag: None,
             path,
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session

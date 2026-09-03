@@ -12,6 +12,7 @@ mod mask_overlay;
 mod mask_tint;
 pub(crate) mod navigation;
 pub(crate) mod spot_overlay;
+mod straighten_overlay;
 #[cfg(test)]
 mod test_support;
 
@@ -25,6 +26,7 @@ use navigation::pan_delta;
 use rustroom_app::tool::Tool;
 use rustroom_app::view_region;
 use spot_overlay::{draw_spot_overlay, sampler_for};
+use straighten_overlay::draw_straighten_overlay;
 
 /// Draw the image canvas.
 ///
@@ -205,11 +207,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                             // crop rectangle, so without this the two would fight over one
                             // gesture — and the crop rectangle is invisible here anyway, since
                             // the preview resets the crop.
+                            //
+                            // ⚠⚠ **Precedence, and it is a three-way decision now.** Guide Mode
+                            // stays first and stays exclusive; the straighten line is next; the
+                            // crop rectangle is the default. Without an order the three would
+                            // fight over one gesture.
+                            //
+                            // ⚠ `show_guides` is **read** here and never written by the
+                            // straighten gesture. Mutual exclusion is by gating — the panel
+                            // disables the toggle while guides are in force — which keeps that
+                            // track out of `Session.guides` entirely.
                             if s.show_guides {
                                 let d = draw_guide_overlay(ui, s, &resp, frame_rect, img_rect);
                                 if d != GuideDrag::None {
                                     guide_drag = d;
                                 }
+                            } else if s.straighten_armed {
+                                photo_edited |= draw_straighten_overlay(
+                                    ui, s, &resp, frame_rect, img_rect, tool,
+                                );
                             } else {
                                 photo_edited |=
                                     draw_crop_overlay(ui, s, &resp, img_rect, app.crop_aspect);
@@ -499,6 +515,117 @@ mod tests {
         // ⚠ And it disarms, or every later click — one meant to select a mask, or to dismiss
         // something — would silently re-set the white balance.
         assert!(!s.picking_wb, "the eyedropper stayed armed after a pick");
+    }
+
+    fn crop_app(ctx: &egui::Context) -> crate::RustroomApp {
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, ctx, 80, 60);
+        app.tool = rustroom_app::tool::Tool::Crop;
+        app
+    }
+
+    /// ⚠⚠ The wiring test: an armed drag must reach `angle_for_line` and land in `Edits`. The
+    /// angle has its own unit tests, and nothing else can see that a drag on the canvas ever
+    /// reaches it — `an_armed_eyedropper_sets_the_white_balance_from_a_click` exists for exactly
+    /// this reason.
+    #[test]
+    fn an_armed_straighten_drag_sets_the_angle_and_one_history_entry() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        let before = app
+            .session
+            .as_ref()
+            .expect("a session")
+            .edits
+            .geometry
+            .angle;
+        assert_eq!(before, 0.0, "fixture check: the angle starts neutral");
+        // A clearly tilted, clearly diagonal drag.
+        super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert!(
+            s.edits.geometry.angle.abs() > 1.0,
+            "the drag did not reach the angle: {}",
+            s.edits.geometry.angle
+        );
+        // ⚠ `can_undo`, not only `Edits`. The headless-canvas work records that "the edits change
+        // during the drag… only the undo push happens on release", so an `Edits` assertion alone
+        // cannot see a missing release commit.
+        assert!(s.history.can_undo(), "the release pushed no history entry");
+        // ⚠ And it disarms, or every later drag would rotate the photo instead of moving the crop.
+        assert!(!s.straighten_armed, "the mode stayed armed after one line");
+    }
+
+    /// The guard on the guard: with the mode unarmed the drag belongs to the crop rectangle, so
+    /// "the angle moved after a drag" means nothing without this.
+    #[test]
+    fn an_unarmed_drag_leaves_the_straighten_angle_alone() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(
+            s.edits.geometry.angle, 0.0,
+            "an unarmed drag rotated the photo"
+        );
+    }
+
+    /// ⚠ Guide Mode keeps precedence. Armed *and* in Guide Mode, the drag must reach the guides.
+    #[test]
+    fn guide_mode_still_wins_over_an_armed_straighten_line() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("a session");
+            s.show_guides = true;
+            s.straighten_armed = true;
+        }
+        super::test_support::drag_through(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(20.0, 60.0),
+            centre + egui::vec2(20.0, 60.0),
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(
+            s.guides.len(),
+            1,
+            "the drag did not reach the guide overlay"
+        );
+    }
+
+    /// ⚠ A non-primary drag must leave it alone. egui reports `dragged()` for every button, so a
+    /// bare `dragged()` would let the middle-drag pan binding rotate the photo as it passed over
+    /// the canvas — and no test using Primary alone can see that.
+    #[test]
+    fn a_non_primary_drag_does_not_straighten() {
+        let ctx = egui::Context::default();
+        let mut app = crop_app(&ctx);
+        let centre = super::test_support::canvas_centre(&mut app, &ctx);
+        app.session.as_mut().expect("a session").straighten_armed = true;
+        super::test_support::drag_through_with(
+            &mut app,
+            &ctx,
+            centre - egui::vec2(60.0, 20.0),
+            centre + egui::vec2(60.0, 20.0),
+            egui::PointerButton::Middle,
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(s.edits.geometry.angle, 0.0, "a middle-drag straightened");
     }
 
     fn retouch_app(ctx: &egui::Context) -> crate::RustroomApp {

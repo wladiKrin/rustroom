@@ -794,6 +794,21 @@ pub struct Session {
     /// on a photo switch, like `selected_spot`; `select_tool` also clears it, since a canvas
     /// stuck in the grey edge view after switching to Edit reads as a broken render.
     visualize: Option<f32>,
+    /// The straighten-line gesture is armed: the next drag under `Tool::Crop` draws a line
+    /// instead of moving the crop rectangle.
+    ///
+    /// ⚠ View state on the session, never in `Edits` — the rule `picking_wb` states: "arming a
+    /// tool is not part of the photograph's description, so it must not reach the sidecar or
+    /// travel with a paste." `show_guides` and `selected_mask` follow it too. `Session` is
+    /// per-photo, so this resets on a switch for free.
+    straighten_armed: bool,
+    /// The line being drawn, in **raw**-frame normalised coordinates, while the drag is live.
+    ///
+    /// ⚠⚠ **On `Session`, never a local in `canvas::show`.** M5.3b records the exact failure: the
+    /// spot drag state "was a **local** in `canvas::show` at first — reset every frame, so the
+    /// release saw no gesture", and "one `eprintln` found it after the lifecycle had read
+    /// perfectly three times." It is `Session.spot_drag` now, and this follows it.
+    straighten_drag: Option<([f32; 2], [f32; 2])>,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so

@@ -232,6 +232,8 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         display_space: color::OutputSpace::Srgb,
         resampler: pipeline::Resampler::default(),
         visualize: None,
+        straighten_armed: false,
+        straighten_drag: None,
     });
 }
 

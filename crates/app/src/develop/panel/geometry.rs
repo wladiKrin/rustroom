@@ -153,6 +153,50 @@ pub fn show(
     .response
     .on_hover_text("Drawn inside the crop rectangle. Press O to cycle.");
     ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Straighten");
+    // ⚠⚠ **An armed toggle, not a modifier-drag.** `shell.rs`'s `mode_switch` records the rule:
+    // "a feature reachable only by a key nothing on screen mentions is a feature nobody finds."
+    // The ⌥-drag in `spot_overlay.rs` is the counter-precedent and is a *refinement* of a gesture
+    // that already works unmodified; a straighten line has no unmodified form to refine. It is
+    // also Lightroom's own primary affordance — the ruler button inside the crop panel.
+    //
+    // ⚠ Text, not a glyph. The Guide Mode toggle below is text, and four separate features in
+    // this project have picked a glyph that turned out to be absent from the bundled fonts and
+    // would have shipped a tofu box. A probe is available if an icon is ever wanted; it is not
+    // wanted for a control that sits beside a text-labelled sibling.
+    //
+    // ⚠⚠ **Gated on Guide Mode being off AND no guides existing, and both halves matter.** A
+    // straighten line writes `geometry.angle`, one of the three values a guide solve owns, so
+    // drawn guides would be left describing a solve that no longer holds — and the hand-edit
+    // check ~50 lines below structurally **cannot** catch it, because it captures `solved_before`
+    // within this frame and an angle written by the canvas on the *previous* frame is already in
+    // `s.edits`. Gating makes that state unreachable instead of guarding against it. "Clear"
+    // leaves the solved sliders alone, so the workflow is: Clear, then draw.
+    //
+    // ⚠ This reads `show_guides` and `guides` and writes neither — the ownership amendment
+    // agreed in W4-0.
+    //
+    // ⚠⚠ **It deliberately does NOT touch `ed`.** Arming changes no `Edits` *and* changes nothing
+    // about the render, so `ed.discrete()` here would issue a redundant whole-frame request every
+    // time the mode is armed or disarmed. The Composition chips above carry the rule outright —
+    // "it changes no `Edits`, so it must not touch `ed`" — and `picking_wb`'s own toggle in
+    // `adjustments.rs` follows it. **Guide Mode below is the exception rather than the model:**
+    // it re-renders because `show_guides` unpins the fit rung in `canvas::show`, which this does
+    // not.
+    let can_straighten = !s.show_guides && s.guides.is_empty();
+    if ui
+        .add_enabled(
+            can_straighten,
+            egui::Button::new("Straighten by drawing a line").selected(s.straighten_armed),
+        )
+        .on_hover_text(
+            "Drag along something that should be level — a horizon, a roofline. The photo \
+             rotates when you let go.",
+        )
+        .on_disabled_hover_text("Clear the perspective guides first.")
+        .clicked()
+    {
+        s.straighten_armed = !s.straighten_armed;
+    }
 
     ui.separator();
     // ⚠ Here rather than in the Edit panel because this is the only view that can judge it: crop
@@ -709,6 +753,33 @@ mod tests {
         click_in_panel("Vertical", &mut s, false);
         assert_ne!(s.edits.perspective.vertical, 60.0, "the click must move it");
         assert!(s.guides.is_empty(), "a hand edit must clear them");
+    }
+
+    /// ⚠ The toggle must be unreachable while a guide solve is in force — the gate that makes
+    /// this track's non-interference with `Session.guides` structural rather than remembered.
+    #[test]
+    fn the_straighten_line_toggle_is_disabled_while_guides_are_in_force() {
+        let mut s = session();
+        s.guides.push(pipeline::perspective::guides::Guide {
+            from: [0.2, 0.2],
+            to: [0.2, 0.8],
+        });
+        let before = s.straighten_armed;
+        let _ = click_in_panel("Straighten by drawing a line", &mut s, false);
+        assert_eq!(
+            s.straighten_armed, before,
+            "the toggle armed itself while guides existed"
+        );
+    }
+
+    /// And it is reachable with no guides, or the test above would pass against a toggle that is
+    /// disabled always — including one that is missing entirely.
+    #[test]
+    fn the_straighten_line_toggle_arms_with_no_guides() {
+        let mut s = session();
+        assert!(!s.straighten_armed, "fixture check: it starts unarmed");
+        let _ = click_in_panel("Straighten by drawing a line", &mut s, false);
+        assert!(s.straighten_armed, "the toggle did not arm");
     }
 
     /// ⚠ The other half: Aspect and Scale are **not** written by a solve, so adjusting them is
