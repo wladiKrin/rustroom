@@ -167,6 +167,32 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 
 ## Editing tools
 
+### ⚠⚠ Anchor strokes and spots in sensor space (recorded 2026-09-03 — blocked on a MISSING MAP)
+
+**Not "extend `FrameMap`", and the name matters.** `FrameMap` is not wrong: it models
+orientation → straighten → crop faithfully, which is its entire domain. The bug is that the space
+it maps *into* is the wrong anchor.
+
+Brush strokes and retouch spots are anchored in **`GeometryStage`'s input**, which sits
+*downstream* of lens correction and perspective. So the stored coordinate stays put while the
+content under it moves: toggling either correction after painting or after placing a spot shifts
+the mark — measured at up to **~3.5% at the corners**, ~0 at the centre, which on a 6246 px frame
+is ~220 px and therefore **larger than a typical spot radius**.
+
+The principled fix is to anchor in true **sensor** space and map *forward* through the distortion
+when rasterizing. ⚠ **That is what blocks it: lensfun exposes only the inverse** (`Corrector::source`,
+corrected → raw), because that is the direction resampling needs. A forward map has to be built by
+inverting it numerically, per lens and per focal length.
+
+⚠ It affects the brush and spot removal identically and predates both M5.3a and M5.3b, so it is its
+own change rather than either milestone's.
+
+⚠ **What is *not* blocked, and was fixed in M5.3b:** *sampling* the correct pixels. The inverse map
+is exactly what a search needs — given a point in stage-input space, `perspective::source_of` then
+`Corrector::source` reach the raw decode. M5.3b's auto-source composes those rather than indexing
+the raw buffer with post-lens coordinates, which would have been wrong by the whole displacement
+above. Only *anchoring* wants the forward map.
+
 - **Mask intersection and subtraction between masks.** `erase` works only *within* one brush; a
   radial cannot be cut out of a linear.
 - **Auto-mask / edge detection** for the brush.
