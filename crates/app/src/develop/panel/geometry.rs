@@ -18,6 +18,9 @@ pub fn show(
     composition_guide: &mut CompositionGuide,
     lens_profile_found: bool,
     ed: &mut Edited,
+    // Set when the Auto button was clicked. ⚠ Reported outward rather than handled here — see
+    // the button itself for why.
+    auto: &mut bool,
 ) {
     // ⚠ The lens **Scale** appears here as well as in the Lens section, and this is the one place
     // it can actually be judged: crop mode previews the *uncropped* frame, which is where the
@@ -286,6 +289,23 @@ pub fn show(
             s.guides.clear();
             s.active_guide = None;
         }
+        // ⚠ In the Guides block beside Clear, because what it produces *is* guides — the same
+        // objects the overlay draws and the same ones Clear removes. Not beside the perspective
+        // sliders, which are the solve's output rather than its input.
+        //
+        // ⚠ The click is reported outward rather than acted on here: `show` takes `&mut Session`
+        // and `auto_guides` needs `&mut RustroomApp`, which are not disjoint. `panel/mod.rs`
+        // already applies `rename` after the panel closes for exactly that reason.
+        if ui
+            .button("Auto")
+            .on_hover_text(
+                "Find two vertical edges in the photograph and solve the tilt from them. The \
+                 guides it infers are left on screen so you can nudge or delete them.",
+            )
+            .clicked()
+        {
+            *auto = true;
+        }
     });
     crate::theme::hint(
         ui,
@@ -357,11 +377,21 @@ mod tests {
     }
 
     fn click_in_panel(label: &str, s: &mut Session, lens: bool) -> Edited {
+        click_in_panel_reporting(label, s, lens).0
+    }
+
+    /// The one harness, with the Auto click it reports outward.
+    ///
+    /// ⚠ `click_in_panel` is a thin wrapper over this rather than a second copy: a helper
+    /// duplicated per test is how two harnesses come to disagree about what a click is.
+    fn click_in_panel_reporting(label: &str, s: &mut Session, lens: bool) -> (Edited, bool) {
         let ctx = test_ui::ctx();
         let mut ed = Edited::default();
         let mut aspect = None;
+        let mut auto = false;
         test_ui::click(&ctx, label, |ui| {
             ed = Edited::default();
+            auto = false;
             show(
                 ui,
                 s,
@@ -369,9 +399,29 @@ mod tests {
                 &mut CompositionGuide::Off,
                 lens,
                 &mut ed,
+                &mut auto,
             );
         });
-        ed
+        (ed, auto)
+    }
+
+    /// ⚠⚠ **The button exists and is reachable.** A test on `auto_guides` alone cannot see that
+    /// nothing calls it — the defect shape this project's records name most often, and the half
+    /// it has repeatedly shipped broken.
+    #[test]
+    fn the_auto_button_is_drawn_in_the_guides_block() {
+        let mut s = session();
+        let (_, auto) = click_in_panel_reporting("Auto", &mut s, false);
+        assert!(auto, "clicking Auto reported nothing to the caller");
+    }
+
+    /// ⚠ The discriminating other half: a panel that reported `true` unconditionally would pass
+    /// the test above. Clicking a *different* control must leave it alone.
+    #[test]
+    fn clicking_something_else_does_not_report_an_auto() {
+        let mut s = session();
+        let (_, auto) = click_in_panel_reporting("Clear", &mut s, false);
+        assert!(!auto, "clicking Clear reported an Auto");
     }
 
     #[test]
@@ -389,7 +439,15 @@ mod tests {
         let mut guide = CompositionGuide::Off;
         let labels: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let mut ed = Edited::default();
-            show(ui, &mut s, &mut aspect, &mut guide, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut guide,
+                false,
+                &mut ed,
+                &mut false,
+            );
         })
         .into_iter()
         .map(|(l, _)| l)
@@ -414,7 +472,15 @@ mod tests {
         let mut guide = CompositionGuide::Off;
         test_ui::click(&ctx, CompositionGuide::Diagonals.label(), |ui| {
             let mut ed = Edited::default();
-            show(ui, &mut s, &mut aspect, &mut guide, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut guide,
+                false,
+                &mut ed,
+                &mut false,
+            );
         });
         assert_eq!(guide, CompositionGuide::Diagonals);
     }
@@ -431,7 +497,15 @@ mod tests {
         let mut ed = Edited::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             ed = Edited::default();
-            show(ui, &mut s, &mut aspect, &mut guide, false, &mut ed);
+            show(
+                ui,
+                &mut s,
+                &mut aspect,
+                &mut guide,
+                false,
+                &mut ed,
+                &mut false,
+            );
         });
         assert!(!ed.changed && !ed.settled, "the guide is not an edit");
     }
@@ -512,6 +586,7 @@ mod tests {
                     &mut CompositionGuide::Off,
                     lens,
                     &mut ed,
+                    &mut false,
                 );
             })
             .is_some()
@@ -542,6 +617,7 @@ mod tests {
                 &mut CompositionGuide::Off,
                 true,
                 &mut ed,
+                &mut false,
             );
         });
         let scales: Vec<&String> = found
@@ -569,6 +645,7 @@ mod tests {
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
+                &mut false,
             );
         });
         for want in ["Vertical", "Horizontal", "Aspect", "Scale"] {
@@ -641,6 +718,7 @@ mod tests {
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
+                &mut false,
             );
         });
         let label = found
@@ -669,6 +747,7 @@ mod tests {
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
+                &mut false,
             );
         });
         for want in ["Guide Mode", "Clear"] {
@@ -743,6 +822,7 @@ mod tests {
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
+                &mut false,
             );
         });
         assert_eq!(s.guides.len(), 1, "an untouched frame must not clear them");
@@ -845,6 +925,7 @@ mod tests {
                     &mut CompositionGuide::Off,
                     false,
                     &mut ed,
+                    &mut false,
                 );
             });
         }

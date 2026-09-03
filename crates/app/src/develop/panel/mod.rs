@@ -93,6 +93,10 @@ impl Edited {
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
     let mut rename: Option<name_edit::Rename> = None;
+    // ⚠ The Geometry panel's Auto button, applied after the panel closes: `auto_guides` needs
+    // `&mut RustroomApp` while the closure below still holds `&mut app.session`, which is the
+    // same reason `rename` is applied out here rather than at its call site.
+    let mut auto = false;
     // ⚠ Captured so the settings file is written **once, on an actual change**, after the panel
     // closes. The Crop tool's dropdown edits `app.settings.composition_guide` in place — a
     // disjoint field, so the borrow is legal — but `save_settings` takes `&mut app` whole, and
@@ -216,6 +220,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 &mut app.settings.composition_guide,
                                 found,
                                 &mut ed,
+                                &mut auto,
                             )
                         }
                         Tool::Masks => masks::show(
@@ -279,6 +284,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // ⚠ Guarded on an actual change, and outside the closure — see `guide_before`.
     if app.settings.composition_guide != guide_before {
         app.save_settings();
+    }
+
+    // ⚠ Run OUTSIDE the session borrow: `auto_guides` needs `&mut RustroomApp`, which
+    // `&mut app.session` rules out — the same reason `presets::show` is drawn outside it.
+    if auto {
+        photo_edited |= app.auto_guides();
     }
 
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
