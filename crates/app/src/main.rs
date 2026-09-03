@@ -785,6 +785,15 @@ pub struct Session {
     /// every render goes through and it cannot reach `RustroomApp`. `apply_resampler` writes it
     /// on the open session so a change takes effect without reopening the photo.
     resampler: pipeline::Resampler,
+    /// The Visualize Spots threshold, or `None` when the view is off.
+    ///
+    /// ⚠ On `Session`, not `RustroomApp`, for the reason `display_space` gives: `Session::request`
+    /// is the one funnel every render goes through and has no access to the app, so the render
+    /// reads it from here. A second copy on the app would be two facts that can disagree — the
+    /// shape `render_max_dim` and `geometry_mode` were each fixed for. The cost is that it resets
+    /// on a photo switch, like `selected_spot`; `select_tool` also clears it, since a canvas
+    /// stuck in the grey edge view after switching to Edit reads as a broken render.
+    visualize: Option<f32>,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so

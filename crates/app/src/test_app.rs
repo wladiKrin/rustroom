@@ -231,6 +231,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         render_rung: w.max(h).min(crate::PREVIEW_MAX_DIM),
         display_space: color::OutputSpace::Srgb,
         resampler: pipeline::Resampler::default(),
+        visualize: None,
     });
 }
 

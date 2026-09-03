@@ -140,6 +140,7 @@ impl Pane {
                     region: None,
                     display_space: space,
                     resampler: pipeline::Resampler::default(),
+                    visualize: None,
                 },
             );
         }

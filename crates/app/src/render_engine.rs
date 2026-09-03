@@ -76,6 +76,18 @@ pub struct FrameSpec {
     /// the next render with no engine rebuild — and because the three resampling
     /// `PrefixStepKey`s carry it, a stale checkpoint is an ordinary cache miss.
     pub resampler: pipeline::Resampler,
+    /// The Visualize Spots threshold, or `None` when the view is off.
+    ///
+    /// ⚠⚠ Applied in `pack`, *after* the pipeline — **never as a pipeline stage**, and the reason
+    /// is recorded rather than reasoned: the display transform went into `pack` because a stage
+    /// would make the **histogram** display-referred, and `pack` already takes the histogram from
+    /// its sRGB output *before* the post-step. This is the same shape and inherits that ordering.
+    /// As a stage it would also want a place in the cache key for something that is not an edit.
+    ///
+    /// ⚠ A view-only property of the *request*, like `display_space` — it never reaches `Edits`,
+    /// the sidecar, an export or the CLI, and toggling it invalidates no checkpoint, because
+    /// `CacheKey` is `(PrefixKey, max_dim)`.
+    pub visualize: Option<f32>,
 }
 
 impl FrameSpec {
@@ -93,6 +105,7 @@ impl FrameSpec {
             region: None,
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
+            visualize: None,
         }
     }
 }
@@ -265,6 +278,7 @@ fn pack(
     region: Option<Region>,
     max_dim: usize,
     display_space: color::OutputSpace,
+    visualize: Option<f32>,
 ) -> RenderedFrame {
     let (width, height) = (out.width(), out.height());
     // ⚠ Quantized to sRGB *first*, and the histogram taken from that. The histogram describes
@@ -272,6 +286,20 @@ fn pack(
     // the other is the bug this ordering exists to prevent.
     let srgb8 = out.to_rgba8();
     let hist = crate::histogram::histogram_rgba(&srgb8);
+
+    // ⚠⚠ Visualize Spots goes here: AFTER the histogram, BEFORE the display transform. The
+    // histogram must describe the photograph and not the view mode — the rule `display_space`
+    // established above — and the display transform must still run, or the grey view would be
+    // driven into the wrong primaries like any other pixels. Sabotage-verified by moving the
+    // histogram below this block.
+    let (out, srgb8) = match visualize {
+        Some(threshold) => {
+            let out = edge_image(&out, threshold);
+            let srgb8 = out.to_rgba8();
+            (out, srgb8)
+        }
+        None => (out, srgb8),
+    };
 
     // Env-gated, like `RUSTROOM_DEBUG_BRUSH`: instrumentation beat reasoning twice on the brush
     // canvas, and it did again here — the setting reaching `pack` is not something the code
@@ -604,6 +632,7 @@ fn render_cached(
         region,
         display_space,
         resampler,
+        visualize,
     } = spec;
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
@@ -722,7 +751,10 @@ fn render_cached(
         // baseline while a profile that declares its own sat unused.
         profile,
     );
-    (pack(tail.run(input), region, max_dim, display_space), ran)
+    (
+        pack(tail.run(input), region, max_dim, display_space, visualize),
+        ran,
+    )
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -751,7 +783,31 @@ pub fn render_once(
         None,
         max_dim,
         display_space,
+        None,
     )
+}
+
+/// The Visualize Spots view of a rendered frame: the edge view of its luminance, written back as
+/// grey.
+///
+/// ⚠ Taken on the **encoded** output, not linear light. This is a view aid, not a measurement,
+/// and an edge in encoded values is closer to what the eye reads as an edge — which is what
+/// makes dust findable. `color::luminance` is only a weighted sum here.
+fn edge_image(out: &ImageBuf, threshold: f32) -> ImageBuf {
+    let (w, h) = (out.width(), out.height());
+    let luma: Vec<f32> = out
+        .data()
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| color::luminance(*p))
+        .collect();
+    let edges = crate::visualize::edge_view(&luma, w, h, threshold);
+    let mut data = Vec::with_capacity(edges.len() * 3);
+    for e in edges {
+        data.extend_from_slice(&[e, e, e]);
+    }
+    ImageBuf::from_vec(w, h, data)
 }
 
 #[cfg(test)]
@@ -801,6 +857,7 @@ mod tests {
                     region: None,
                     display_space: color::OutputSpace::Srgb,
                     resampler: k,
+                    visualize: None,
                 },
                 1.0,
                 None,
@@ -1330,6 +1387,7 @@ mod tests {
                 region: Some(RegionRect { x, y, w, h }),
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
+                visualize: None,
             },
             1.0,
             None,
@@ -1448,6 +1506,7 @@ mod tests {
                 }),
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
+                visualize: None,
             },
             1.0,
             None,
@@ -1816,6 +1875,29 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ The histogram must be **unaffected** by Visualize Spots, for the reason the display
+    /// transform records: `pack` takes the histogram from its sRGB output *before* the post-step,
+    /// and a view mode that poisoned it would make the histogram lie about the photograph. This
+    /// is the test that the ordering was inherited rather than reinvented.
+    #[test]
+    fn the_histogram_is_unaffected_by_visualize_spots() {
+        // A hard edge, so the edge view is far from black and the two textures must differ.
+        let mut buf = ImageBuf::new(16, 4);
+        for y in 0..4 {
+            for x in 0..16 {
+                let v = if x < 8 { 0.1 } else { 0.8 };
+                buf.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let plain = pack(buf.clone(), None, 16, color::OutputSpace::Srgb, None);
+        let vis = pack(buf, None, 16, color::OutputSpace::Srgb, Some(12.0));
+        assert_ne!(
+            plain.rgba, vis.rgba,
+            "the view mode did not reach the pixels"
+        );
+        assert_eq!(plain.hist, vis.hist, "the view mode reached the histogram");
+    }
+
     #[test]
     fn requests_are_counted() {
         // ⚠⚠ This counter exists because "a drag mutated `Edits` but never asked for a render"
@@ -1830,6 +1912,7 @@ mod tests {
             region: None,
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
+            visualize: None,
         };
         let engine = RenderEngine::new(
             Arc::new(ImageBuf::new(4, 2)),
