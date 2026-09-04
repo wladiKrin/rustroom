@@ -264,6 +264,7 @@ mod tests {
                 edit_model::Mask::Radial(_) => "Radial",
                 edit_model::Mask::Brush(_) => "Brush",
                 edit_model::Mask::Luminance(_) => "Luminance",
+                edit_model::Mask::Colour(_) => "Colour",
             };
             assert_eq!(got, want, "{label} added the wrong kind");
         }

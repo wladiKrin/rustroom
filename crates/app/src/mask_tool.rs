@@ -71,6 +71,9 @@ pub fn hit_test(m: &Mask, p: [f32; 2], aspect: f32, tol: f32) -> Option<Handle> 
         // *position* whatsoever. It selects tones, so nothing about it can be anywhere on the
         // canvas, and its two sliders are the whole of its interaction.
         Mask::Luminance(_) => None,
+        // ⚠ A colour range has no position either, for the identical reason — it selects hues.
+        // Its sliders are the whole of its interaction, exactly as the luminance range's are.
+        Mask::Colour(_) => None,
     }
 }
 

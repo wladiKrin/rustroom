@@ -44,8 +44,15 @@ enum CoverageSource {
     /// the adjusted one would make the mask chase its own effect: lifting the shadows moves them
     /// out of the band that selected them, so the correction would fade as it applied.
     ///
-    /// ⚠ A colour range (M7.1b) is the same *kind* and would join here as a sibling variant.
+    /// ⚠ A colour range is the same *kind* and joins below as a sibling variant.
     Range(edit_model::LuminanceRange),
+    /// A colour range — a pure function of the **pixel's hue**, gated on its chroma.
+    ///
+    /// ⚠ The sibling [`CoverageSource::Range`] anticipated, and it inherits every one of that
+    /// variant's notes: it is keyed on the `base` pixel, never the adjusted one, or the mask
+    /// chases its own effect — a saturation lift moves a colour out of the band that selected it,
+    /// so the correction would fade as it applied.
+    Colour(edit_model::ColourRange),
 }
 
 /// Display-referred lightness of a working-space pixel, in 0..=100.
@@ -59,6 +66,24 @@ enum CoverageSource {
 /// the scale while keeping every bit of its headroom for the adjustment that follows.
 fn lightness(rgb: [f32; 3]) -> f32 {
     color::linear_to_srgb(color::luminance(rgb)) * 100.0
+}
+
+/// Oklab hue in degrees and Oklab chroma of a working-space pixel.
+///
+/// ⚠ **The same measurement `HslStage` makes, from the same function** — `prophoto_to_oklab`,
+/// `b.atan2(a)`, `a.hypot(b)` — so "red" means the same angle to a colour range mask as it does to
+/// the Red band of HSL. A second hue convention here would be invisible per stage and disagree
+/// everywhere; `BAND_HUES` is the table both are measured against.
+///
+/// ⚠ `atan2` returns `-180..=180`. Nothing normalises it here on purpose:
+/// `ColourRange::coverage_at` takes both its span and its offset with `rem_euclid(360)`, so a
+/// negative angle is already handled by the one wrap rule rather than by a second one.
+///
+/// ⚠ Chroma is **not** clamped and must not be: it is the gate's own input, and a wide-gamut
+/// colour legitimately reads above anything sRGB can express.
+fn hue_chroma(rgb: [f32; 3]) -> (f32, f32) {
+    let [_, a, b] = color::oklab::prophoto_to_oklab(rgb);
+    (b.atan2(a).to_degrees(), a.hypot(b))
 }
 
 pub struct MaskStage {
@@ -116,6 +141,7 @@ impl MaskStage {
                 prebuilt,
             },
             edit_model::Mask::Luminance(r) => CoverageSource::Range(*r),
+            edit_model::Mask::Colour(r) => CoverageSource::Colour(*r),
             m @ (edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_)) => {
                 CoverageSource::Analytic(m.clone())
             }
@@ -155,7 +181,9 @@ impl PipelineStage for MaskStage {
         let coverage = match &self.source {
             // ⚠ Neither of these rasterizes anything: one answers from the position, the other
             // from the pixel, both inside the loop below.
-            CoverageSource::Analytic(_) | CoverageSource::Range(_) => None,
+            CoverageSource::Analytic(_) | CoverageSource::Range(_) | CoverageSource::Colour(_) => {
+                None
+            }
             CoverageSource::Painted {
                 prebuilt: Some(c), ..
             } => Some(std::sync::Arc::clone(c)),
@@ -207,6 +235,14 @@ impl PipelineStage for MaskStage {
                 // ⚠ `base`, never `adjusted`. A mask keyed on its own output chases its effect:
                 // lifting the shadows moves them out of the band that selected them.
                 (CoverageSource::Range(r), _) => r.coverage(lightness(base)),
+                // ⚠ `base` here too, and the failure it avoids is the sharper of the two: a
+                // saturation or white-balance move inside the mask shifts the pixel's own hue, so
+                // a colour range keyed on its own output would slide the selection out from under
+                // the correction as it applied.
+                (CoverageSource::Colour(r), _) => {
+                    let (hue, chroma) = hue_chroma(base);
+                    r.coverage_at(hue, chroma)
+                }
                 // ⚠ Indexed by FRAME pixel, not by the region-relative `(x, y)`.
                 (CoverageSource::Painted { .. }, Some(cov)) => {
                     cov.at(x0 + x, y0 + y) as f32 / 255.0
@@ -625,6 +661,135 @@ mod tests {
         assert!(
             out.pixel(0, light)[1] / src.pixel(0, light)[1] > 1.9,
             "and everything outside it is lifted"
+        );
+    }
+
+    /// Three vertical patches, authored in **linear sRGB** and decoded into the working space —
+    /// the rule `luminance_chart` follows, and for its reason: a literal read as ProPhoto is a far
+    /// more saturated colour than any camera produces.
+    fn patches(cols: [[f32; 3]; 3]) -> ImageBuf {
+        let mut img = ImageBuf::new(30, 4);
+        for y in 0..4 {
+            for x in 0..30 {
+                img.set_pixel(x, y, color::srgb_to_prophoto(cols[x / 10]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn a_colour_range_mask_really_reaches_the_pixels() {
+        // ⚠⚠ **The wiring test.** `ColourRange` has its own unit tests in `edit-model`, but
+        // nothing else can see that a colour mask reaches `MaskStage` and moves pixels — the half
+        // this project has repeatedly shipped broken. It is also the only thing that can see the
+        // catch-all trap: routing `Mask::Colour` into `CoverageSource::Analytic` compiles, runs,
+        // and produces a mask covering **nothing**.
+        let red = [0.5, 0.05, 0.05];
+        let green = [0.05, 0.5, 0.05];
+        // ⚠ A NOISY near-neutral, not a perfect grey. A perfect grey has an undefined hue and
+        // would be rejected by a broken gate too, which is the fixture fault the spec names.
+        let grey = [0.30, 0.297, 0.303];
+        let src = patches([red, green, grey]);
+
+        // ⚠ The fixture asserts its own premise before testing anything. Without this the test
+        // could pass on patches that never sat where it believes they sit — and the hue angles
+        // are not guessable by eye, they are a property of Oklab.
+        let (hr, cr) = hue_chroma(src.pixel(5, 0));
+        let (hg, cg) = hue_chroma(src.pixel(15, 0));
+        let (_, cn) = hue_chroma(src.pixel(25, 0));
+        assert!(
+            (0.0..=60.0).contains(&hr),
+            "fixture check: the red patch must sit inside a 0..60 band, got {hr}"
+        );
+        assert!(
+            !(0.0..=60.0).contains(&hg),
+            "fixture check: the green patch must sit outside it, got {hg}"
+        );
+        assert!(
+            cr > 0.05 && cg > 0.05,
+            "fixture check: both must be real colours, got {cr} and {cg}"
+        );
+        assert!(
+            cn < 0.02,
+            "fixture check: the near-neutral must be under the gate, got {cn}"
+        );
+
+        let m = MaskedAdjustment {
+            mask: Mask::Colour(edit_model::ColourRange {
+                low: 0.0,
+                high: 60.0,
+                feather: 0.0,
+                min_chroma: 0.02,
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+        };
+        let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
+
+        // +1 EV doubles a linear sample.
+        let ratio = |x: usize| out.pixel(x, 0)[1] / src.pixel(x, 0)[1];
+        assert!(
+            (ratio(5) - 2.0).abs() < 1e-3,
+            "the red patch must get the full lift, got {}",
+            ratio(5)
+        );
+        // ⚠ All three asserted. A stage that lifted everything and one that lifted nothing are
+        // equally wrong, and the near-neutral is what proves the chroma gate is wired rather than
+        // merely present in `edit-model`.
+        assert_eq!(
+            out.pixel(15, 0),
+            src.pixel(15, 0),
+            "green is outside the band and must be untouched"
+        );
+        assert_eq!(
+            out.pixel(25, 0),
+            src.pixel(25, 0),
+            "and a near-neutral is under the chroma gate however well its hue matches"
+        );
+    }
+
+    #[test]
+    fn the_hue_band_is_selected_on_the_pixel_before_the_adjustment() {
+        // ⚠⚠ **Added because the sabotage step showed the wiring test could not see this.** Keying
+        // the band on `adjusted` instead of `base` left `a_colour_range_mask_really_reaches_the_
+        // pixels` green, because its payload is an **exposure lift** — a scalar gain, which
+        // preserves `r:g:b` and therefore preserves hue exactly. The rule is invisible to any
+        // adjustment that does not move the pixel out of its own selection.
+        //
+        // A saturation collapse does. Keyed on `base` the patch is selected and goes grey; keyed
+        // on `adjusted` the stage measures a pixel it has just made neutral, the chroma gate
+        // rejects it, coverage falls to zero and **the mask undoes itself** — the "mask chasing
+        // its own effect" failure, in its sharpest form.
+        let red = [0.5, 0.05, 0.05];
+        let src = patches([red, red, red]);
+        let m = MaskedAdjustment {
+            mask: Mask::Colour(edit_model::ColourRange {
+                low: 0.0,
+                high: 60.0,
+                feather: 0.0,
+                min_chroma: 0.02,
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                saturation: -100.0,
+                ..Default::default()
+            },
+        };
+        let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
+
+        let spread = |p: [f32; 3]| p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2]);
+        let before = spread(src.pixel(5, 0));
+        let after = spread(out.pixel(5, 0));
+        assert!(
+            before > 0.05,
+            "fixture check: the patch must start with real chroma, got {before}"
+        );
+        assert!(
+            after < before * 0.05,
+            "the selected colour must go fully grey, not fade back to itself: {before} -> {after}"
         );
     }
 

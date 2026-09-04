@@ -1166,6 +1166,13 @@ pub enum Mask {
     /// ⚠ A function of the pixel's **lightness**, not of its position — see [`LuminanceRange`].
     /// Named for the quantity it selects on, leaving room for a colour range beside it.
     Luminance(LuminanceRange),
+    /// ⚠ A function of the pixel's **hue**, not of its position — see [`ColourRange`]. The
+    /// companion `Luminance` anticipated: "leaving room for a colour range beside it".
+    ///
+    /// ⚠ **Appended**, per `docs/PARALLEL-WORK.md` rule 3: `Mask` is externally tagged, so a new
+    /// variant is backward compatible with every sidecar on disk, and appending is what git merges
+    /// cleanly.
+    Colour(ColourRange),
 }
 
 impl Default for Mask {
@@ -1194,6 +1201,14 @@ impl Mask {
             // A function of the pixel, not of `(u, v)` — `LuminanceRange::coverage` answers for
             // this one, from inside `MaskStage`'s pixel loop where the sample is in hand.
             Mask::Luminance(_) => None,
+            // ⚠⚠ `None` for the same reason, and it is worth stating plainly because the obvious
+            // reading of "a new variant must return `Some(..)`" is unimplementable here: a colour
+            // range selects on the pixel's **hue and chroma**, and this function is handed a
+            // position and an aspect. `Some(_)` would have to invent a number, which is the
+            // silent-mask failure the `Option` exists to prevent, one level worse than the `0.0`
+            // fallback it replaced. `ColourRange::coverage_at` answers, from `MaskStage`'s pixel
+            // loop, exactly as the luminance range's does.
+            Mask::Colour(_) => None,
         }
     }
 
@@ -1204,6 +1219,7 @@ impl Mask {
             Mask::Radial(_) => "Radial",
             Mask::Brush(_) => "Brush",
             Mask::Luminance(_) => "Luminance",
+            Mask::Colour(_) => "Colour",
         }
     }
 
@@ -1218,6 +1234,7 @@ impl Mask {
             Mask::Radial(r) => &mut r.invert,
             Mask::Brush(b) => &mut b.invert,
             Mask::Luminance(r) => &mut r.invert,
+            Mask::Colour(r) => &mut r.invert,
         }
     }
 }
@@ -3165,6 +3182,46 @@ mod tests {
     }
 
     #[test]
+    fn a_colour_range_has_no_analytic_coverage() {
+        // ⚠⚠ The same reason a brush and a luminance range have none, and the one the plan's
+        // "return `Some(..)`" line cannot mean: this function is handed a position and an aspect,
+        // and a colour range selects on the pixel's hue and chroma. `Some(_)` here would be a
+        // number invented from coordinates — a mask that quietly selects by position while
+        // claiming to select by colour.
+        let m = Mask::Colour(ColourRange::default());
+        assert_eq!(m.analytic_coverage(0.5, 0.5, 1.0), None);
+    }
+
+    #[test]
+    fn a_colour_mask_round_trips_through_json() {
+        // ⚠ `Mask` is externally tagged, so this is `{"Colour": {...}}` and every sidecar written
+        // before today still loads. Asserts the PAYLOAD, not merely the variant — the lesson
+        // `an_existing_sidecar_without_a_brush_still_loads` records.
+        let m = Mask::Colour(ColourRange {
+            low: 340.0,
+            high: 20.0,
+            feather: 12.0,
+            min_chroma: 0.05,
+            invert: true,
+        });
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(s.contains("Colour"), "externally tagged: {s}");
+        let back: Mask = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, m);
+    }
+
+    #[test]
+    fn a_partial_colour_range_json_gets_the_struct_default() {
+        // ⚠ The container-level `#[serde(default)]` fills from `Default`, so a sidecar naming only
+        // `low` must still get a usable band — the trap a derived `Default` would spring.
+        let r: ColourRange = serde_json::from_str(r#"{"low":200.0}"#).unwrap();
+        assert_eq!(r.low, 200.0);
+        assert_eq!(r.high, 120.0);
+        assert_eq!(r.feather, 50.0);
+        assert_eq!(r.min_chroma, 0.02);
+    }
+
+    #[test]
     fn every_mask_variant_has_a_label_and_an_invert() {
         // A table over every variant, so a fourth cannot ship with an empty list row or an
         // `invert` the panel's checkbox cannot reach.
@@ -3173,6 +3230,7 @@ mod tests {
             Mask::Radial(RadialGradient::default()),
             Mask::Brush(Brush::default()),
             Mask::Luminance(LuminanceRange::default()),
+            Mask::Colour(ColourRange::default()),
         ] {
             assert!(!m.label().is_empty());
             *m.invert_mut() = true;

@@ -305,7 +305,13 @@ fn paint_mask(
         //
         // Doing it honestly needs coverage computed against the *pre-mask* buffer, which lives on
         // the render worker — a real feature, and a different one.
-        edit_model::Mask::Luminance(_) => {}
+        // ⚠⚠ **A selected colour range draws nothing either, and the reasoning above transfers
+        // unchanged.** It has no position, so there is nothing to annotate; and a coverage tint
+        // would be misleading for exactly the same reason, one step worse — the rendered texture
+        // already carries this mask's adjustment, and a mask that carries a saturation or
+        // white-balance move has changed the very hues its tint would be measured from. Doing it
+        // honestly needs coverage against the pre-mask buffer, which lives on the render worker.
+        edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => {}
     }
 }
 
