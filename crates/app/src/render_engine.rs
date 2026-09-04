@@ -213,6 +213,7 @@ impl RenderEngine {
                     pipeline::ProfileRendering {
                         curve: profile.curve.as_deref(),
                         baseline_ev: profile.baseline_ev,
+                        ..Default::default()
                     },
                     &mut cache,
                     &mut brush_cache,

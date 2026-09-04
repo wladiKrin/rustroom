@@ -1,5 +1,6 @@
 pub mod color_grading;
 pub mod contrast;
+pub mod creative_look;
 pub mod dehaze;
 pub mod display_rendering;
 pub mod exposure;

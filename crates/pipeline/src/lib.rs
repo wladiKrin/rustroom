@@ -39,6 +39,7 @@ mod stages;
 pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::ContrastStage;
+pub use stages::creative_look::CreativeLookStage;
 pub use stages::dehaze::DehazeStage;
 pub use stages::display_rendering::DisplayRenderingStage;
 pub use stages::exposure::ExposureStage;
@@ -415,20 +416,20 @@ pub fn build_pipeline_split_in_region(
     )
 }
 
-/// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
+/// What the **tail's rendering** needs that [`Edits`] cannot carry.
 ///
-/// ⚠ The extra parameter is additive with a delegating wrapper — the `Region` precedent, which
-/// gave that work zero call-site churn. The CLI, export and every golden go through the wrapper.
-/// Whether a profile's tone curve is the identity, and therefore no rendering at all.
+/// ⚠ A struct rather than more parameters: the builder already sits at seven, and an eighth trips
+/// `too_many_arguments` — the same answer `FrameSpec`, `NameField`, `SourceInfo`, `SourceFacts`
+/// and `RenderSpec` each gave. `Copy` despite holding references, because a shared reference is
+/// `Copy`, which is what lets it sit beside `RenderSpec` rather than inside it.
 ///
-/// ⚠ Checked because the X-T4's `ProfileToneCurve` is exactly `[[0,0],[1,1]]`. Applying it would
-/// leave the photograph colorimetric while the setting claimed to be rendering it — the feature
-/// What a camera profile contributes to the display rendering.
+/// ⚠ **The name is now narrower than the contents**, and that is a deliberate wave-scoping
+/// choice rather than a judgement: `look` is not a camera-profile field, but renaming the type
+/// would churn ~25 `ProfileRendering::default()` call sites in `render_engine.rs`, which another
+/// track is editing concurrently. Worth renaming to `TailRendering` once the wave merges.
 ///
-/// ⚠ A struct rather than two more parameters: the builder already sits at seven, and an eighth
-/// trips `too_many_arguments` — the same answer `FrameSpec`, `NameField`, `SourceInfo`,
-/// `SourceFacts` and `RenderSpec` each gave. `Copy` despite holding a slice, because a shared
-/// reference is `Copy`, which is what lets it sit beside `RenderSpec` rather than inside it.
+/// ⚠⚠ **Everything here is loaded by the CALLER**, because `pipeline` does no I/O. A caller that
+/// supplies nothing gets a render without it — which is exactly what a missing `.cube` must do.
 #[derive(Clone, Copy, Default)]
 pub struct ProfileRendering<'a> {
     /// The profile's `ProfileToneCurve`, when it has a usable one; else the built-in curve.
@@ -439,13 +440,31 @@ pub struct ProfileRendering<'a> {
     /// ⚠ `None` is not `Some(0.0)`: a profile that declares no shift has made a statement, and
     /// one that says nothing has not.
     pub baseline_ev: Option<f32>,
+    /// The creative look's parsed table, when the app has resolved `edits.look.file` to a file
+    /// and read it.
+    ///
+    /// ⚠ `&Arc` rather than `Arc`, so this struct stays `Copy` and the builder clones a refcount
+    /// rather than up to 786 KB of table on every render.
+    ///
+    /// ⚠⚠ **`None` means the look does not run AND does not suppress the camera rendering.** A
+    /// preset naming a `.cube` that is not on this machine must render *without the look*, not
+    /// without a rendering — see `a_look_with_no_table_leaves_the_camera_rendering_alone`.
+    pub look: Option<&'a std::sync::Arc<lut::Cube>>,
 }
 
+/// Whether a profile's tone curve is the identity, and therefore no rendering at all.
+///
+/// ⚠ Checked because the X-T4's `ProfileToneCurve` is exactly `[[0,0],[1,1]]`. Applying it would
+/// leave the photograph colorimetric while the setting claimed to be rendering it — the feature
 /// silently doing nothing on real hardware.
 fn is_identity(points: &[[f32; 2]]) -> bool {
     points.len() < 2 || points.iter().all(|p| (p[0] - p[1]).abs() < 1e-4)
 }
 
+/// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
+///
+/// ⚠ The extra parameter is additive with a delegating wrapper — the `Region` precedent, which
+/// gave that work zero call-site churn. The CLI, export and every golden go through the wrapper.
 pub fn build_pipeline_split_in_region_with_brush(
     edits: &Edits,
     scale: RenderScale,
@@ -453,12 +472,13 @@ pub fn build_pipeline_split_in_region_with_brush(
     brush: Option<&BrushCoverage>,
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
-    // What the camera profile contributes to the *tail*.
+    // What the *tail's* rendering needs that `Edits` cannot carry.
     profile: ProfileRendering<'_>,
 ) -> (Pipeline, Pipeline) {
     let ProfileRendering {
         curve: profile_curve,
         baseline_ev,
+        look: look_table,
     } = profile;
     let RenderSpec {
         space,
@@ -579,8 +599,29 @@ pub fn build_pipeline_split_in_region_with_brush(
     // ⚠ It sits *after* sharpening, and "sharpening is last so nothing stretches it" survives
     // that: `OutputTransform` was always after sharpening too, and an sRGB encode is a ~1/2.2
     // power — far more aggressive than any tone curve.
+    // ⚠⚠ **The look's table, and it gates everything below.** `edits.look` says what the user
+    // asked for; `look_table` says whether the `.cube` is actually here. A preset naming a file
+    // this machine does not have must render *without the look* — never silently as an error, and
+    // never as a photo that lost its rendering too.
+    let look = look_table.filter(|_| edits.look.is_active());
+
+    // ⚠⚠ **A LINEAR LUT REPLACES THE CAMERA RENDERING; A DISPLAY-REFERRED ONE FOLLOWS IT.** This
+    // is the core of the design (spec §2), and it is a placement decision rather than a shaping
+    // one. A film emulation expects log-or-linear input and produces the final look — stacked on
+    // top of `DisplayRenderingStage` it double-renders, our S-curve then the LUT's, giving
+    // crushed shadows and a clipped roll-off. That is the single most common way LUT support is
+    // reported as "looks wrong". A grade, by contrast, expects an already-rendered image.
+    //
+    // ⚠ Conditioned on `look.is_some()`, not on the declared space alone: see above.
+    let look_is_the_rendering = look.is_some() && edits.look.space.is_the_rendering();
+
     match edits.rendering {
         edit_model::Rendering::None => {}
+        _ if look_is_the_rendering => {
+            // The linear LUT *is* the rendering. Suppressed deliberately — the Rendering panel
+            // section must say so, because two renderings apparently both switched on with one
+            // silently ignored is the invisible-state failure this project keeps recording.
+        }
         edit_model::Rendering::Camera => {
             // ⚠⚠ An **identity** profile curve is ignored. The X-T4's `ProfileToneCurve` is
             // literally [[0,0],[1,1]], so honouring it would produce no rendering at all —
@@ -590,6 +631,19 @@ pub fn build_pipeline_split_in_region_with_brush(
             tail.push(Box::new(DisplayRenderingStage::new(curve, baseline_ev)));
         }
     }
+
+    // ⚠ Either way, **before** the output transform: a look is a display-referred decision on
+    // working-space data, not something applied to encoded output.
+    if let Some(cube) = look {
+        tail.push(Box::new(CreativeLookStage::new(
+            // ⚠ Cloning the `Arc`, not the table — a refcount rather than up to 786 KB, on every
+            // rebuild of the pipeline.
+            std::sync::Arc::clone(cube),
+            edits.look.space,
+            edits.look.strength,
+        )));
+    }
+
     tail.push(Box::new(OutputTransform::new(space)));
 
     (Pipeline::new(prefix), Pipeline::new(tail))
@@ -746,6 +800,145 @@ mod tests {
         );
     }
 
+    /// The tail's stage names for `edits`, with `cube` supplied as the look's table.
+    ///
+    /// ⚠ The **only** order helper these look tests use. Six tests already name stage order and a
+    /// second helper is how two come to disagree, so this one delegates to the same builder every
+    /// other order assertion goes through rather than reconstructing the list.
+    #[cfg(test)]
+    fn look_stage_names(
+        edits: &Edits,
+        cube: Option<&std::sync::Arc<lut::Cube>>,
+    ) -> Vec<&'static str> {
+        let (_, tail) = build_pipeline_split_in_region_with_brush(
+            edits,
+            RenderScale::FULL,
+            None,
+            None,
+            RenderSpec::default(),
+            None,
+            ProfileRendering {
+                look: cube,
+                ..ProfileRendering::default()
+            },
+        );
+        tail.stage_names()
+    }
+
+    fn a_cube() -> std::sync::Arc<lut::Cube> {
+        std::sync::Arc::new(
+            lut::Cube::parse(
+                "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
+            )
+            .expect("parses"),
+        )
+    }
+
+    /// ⚠⚠ **Assert on the STAGE LIST, not on pixels.** The two placements are indistinguishable
+    /// from output whenever a LUT happens to be gentle, so a pixel test would pass against the
+    /// wrong one — and double-rendering a film emulation (our S-curve, then the LUT's, giving
+    /// crushed shadows and a clipped roll-off) is precisely the bug this prevents.
+    #[test]
+    fn a_linear_lut_replaces_the_camera_rendering_and_a_display_lut_follows_it() {
+        let cube = a_cube();
+        let with = |space| {
+            let edits = Edits {
+                rendering: edit_model::Rendering::Camera,
+                look: edit_model::Look {
+                    file: Some("x.cube".into()),
+                    space,
+                    strength: 100.0,
+                },
+                ..Default::default()
+            };
+            look_stage_names(&edits, Some(&cube))
+        };
+
+        let display = with(edit_model::LutSpace::SrgbDisplay);
+        assert!(
+            display
+                .windows(2)
+                .any(|w| w[0] == "display_rendering" && w[1] == "creative_look"),
+            "a display-referred look must FOLLOW the rendering: {display:?}"
+        );
+        // Rec.709 is display-referred too, and must place identically.
+        assert_eq!(with(edit_model::LutSpace::Rec709), display);
+
+        let linear = with(edit_model::LutSpace::Linear);
+        assert!(
+            !linear.contains(&"display_rendering"),
+            "a linear look IS the rendering and must replace it: {linear:?}"
+        );
+        assert!(linear.contains(&"creative_look"), "{linear:?}");
+    }
+
+    /// ⚠ Either way the look runs **before** the output transform: it is a display-referred
+    /// decision on working-space data, not something applied to encoded output.
+    #[test]
+    fn a_look_runs_before_the_output_transform() {
+        let cube = a_cube();
+        for space in edit_model::LutSpace::ALL {
+            let edits = Edits {
+                rendering: edit_model::Rendering::Camera,
+                look: edit_model::Look {
+                    file: Some("x.cube".into()),
+                    space,
+                    strength: 100.0,
+                },
+                ..Default::default()
+            };
+            let names = look_stage_names(&edits, Some(&cube));
+            let l = names.iter().position(|n| *n == "creative_look").unwrap();
+            let o = names.iter().position(|n| *n == "output_transform").unwrap();
+            assert_eq!(o, l + 1, "{space:?}: {names:?}");
+        }
+    }
+
+    /// ⚠⚠ **A look whose file is missing renders WITHOUT the look — and the camera rendering
+    /// stays.** Suppressing the rendering on the strength of a `Linear` declaration alone would
+    /// leave a photo with a missing `.cube` rendering colorimetrically flat, which is worse than
+    /// the missing look. The suppression is therefore conditioned on the table actually being
+    /// there, not on what `Edits` claims.
+    #[test]
+    fn a_look_with_no_table_leaves_the_camera_rendering_alone() {
+        for space in edit_model::LutSpace::ALL {
+            let edits = Edits {
+                rendering: edit_model::Rendering::Camera,
+                look: edit_model::Look {
+                    file: Some("gone.cube".into()),
+                    space,
+                    strength: 100.0,
+                },
+                ..Default::default()
+            };
+            let names = look_stage_names(&edits, None);
+            assert!(!names.contains(&"creative_look"), "{space:?}: {names:?}");
+            assert!(
+                names.contains(&"display_rendering"),
+                "{space:?} lost the camera rendering to a look that is not there: {names:?}"
+            );
+        }
+    }
+
+    /// ⚠ An inactive look inserts no stage even when a table is supplied — a whole-image pass
+    /// that does nothing is not free.
+    #[test]
+    fn an_inactive_look_inserts_no_stage() {
+        let cube = a_cube();
+        let no_file = Edits::default();
+        assert!(!look_stage_names(&no_file, Some(&cube)).contains(&"creative_look"));
+
+        let zero_strength = Edits {
+            look: edit_model::Look {
+                file: Some("x.cube".into()),
+                strength: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!look_stage_names(&zero_strength, Some(&cube)).contains(&"creative_look"));
+    }
+
     /// ⚠⚠ An identity profile curve is **ignored** — the X-T4's is exactly that, so honouring it
     /// would leave the setting silently doing nothing on real hardware. Both directions, because
     /// a test of one alone passes against a version that always uses the built-in.
@@ -781,6 +974,7 @@ mod tests {
                     // The transfer is what this test is about; a baseline shift would move the
                     // probe along it and blur what the assertion is comparing.
                     baseline_ev: Some(0.0),
+                    ..ProfileRendering::default()
                 },
             );
             let mut img = ImageBuf::new(1, 1);
@@ -1003,6 +1197,16 @@ mod tests {
                 sharpening: edit_model::Sharpening {
                     amount: 80.0,
                     ..Default::default()
+                },
+                ..base.clone()
+            },
+            // ⚠ A look is tail-only, so it must NOT disturb the prefix key — otherwise every
+            // strength drag would throw away the cached prefix and re-run demosaic and geometry.
+            Edits {
+                look: edit_model::Look {
+                    file: Some("x.cube".into()),
+                    space: edit_model::LutSpace::Linear,
+                    strength: 40.0,
                 },
                 ..base.clone()
             },
