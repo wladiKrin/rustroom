@@ -173,6 +173,47 @@ an agent must not make. **So for canvas work, scope an agent to build and test i
 user running the checklist** — the same shape §6 already recommends for a judgement about a
 photograph. All twenty of B's and D's checklist items are outstanding.
 
+### W5 — READY TO DISPATCH (specced 2026-09-04; W5-0 is done)
+
+**Read this whole file first, then §5, then `CLAUDE.md`'s M7.4 section.** ⚠⚠ **W5-0 IS DONE: all
+three tracks are specced and every decision is settled with the user.** Specs
+`2026-09-04-creative-luts-design.md` (A), `2026-09-04-soft-proofing-design.md` (B),
+`2026-09-04-colour-range-mask-design.md` (C); plans of the same names in `plans/`. §6 is unambiguous
+— an agent given an open design choice picks one silently and the choice ships — so **each agent
+gets its own spec and plan and re-opens nothing in either.**
+
+**Merge order A → C → B**, per §3's rule: the owner of the most contended surface goes first.
+
+| Track | Owns | Must not touch |
+| --- | --- | --- |
+| **A** M7.5 creative LUTs | the **`Edits` field list + its 5 exhaustive sites**, pipeline stage order, `PrefixStepKey`, `DisplayRenderingStage`'s placement; new `pipeline/src/lut.rs` and `stages/creative_look.rs`; a looks directory + the Rendering panel section | `Mask`, `MaskStage`, `panel/masks.rs` (C); `render_engine::pack`, `Session` view state, `commands.rs`, `menu.rs` (B) |
+| **B** M6.4 soft proofing | `render_engine::pack`, `Session` view state, `commands.rs`, `menu.rs`, the `DialogSize` array, `Settings`, `color::is_out_of_gamut` | **`Edits` entirely** and all five exhaustive sites (A); `pipeline/src/lib.rs` and every stage (A); `Mask`, `MaskStage` (C). ⚠ **Adds no golden.** |
+| **C** M7.1b colour range masks | `Mask` variants, `MaskStage`'s analytic half, `panel/masks.rs`, one arm in `mask_overlay.rs` | the **`Edits` field list and its 5 sites** (A); stage order, `PrefixStepKey` (A); `pack`, `commands.rs`, `menu.rs` (B) |
+
+**⚠⚠ The distinction that keeps A and C apart, stated because it is easy to get wrong: a `Mask`
+variant is NOT an `Edits` field.** C appends a variant to an enum; it needs none of `merge_from`'s
+destructure, `EditGroups`, `pipeline::all_edits`, `edit_model::all_nonneutral` or
+`edit_clipboard`'s payload. **If C finds itself editing one of those, it must stop and report** —
+that is A's surface for this wave.
+
+⚠ **A and C both APPEND goldens** (rule 3). B adds none, which is one of the reasons it is in this
+wave: it is the only track writing no `Edits` and no stage.
+
+**⚠⚠ A carries a PLANNED CHECKPOINT and must stop at it.** Nobody in this project has yet put a real
+`.cube` through this pipeline, so A's Task 6 runs real LUTs through every candidate colour space,
+**reports, and stops** — it does not tune a transfer constant or decide a conversion "looks right".
+That is the §6 remedy the user chose in W5-0: *where a decision genuinely needs evidence, scope that
+agent to measure and report rather than to build, which turns an accidental stall into a planned
+checkpoint.* W1's M7.3a is the precedent.
+
+⚠ **A correction W5-0 made to the record:** `CLAUDE.md` said M7.5 was "unblocked, since M5.4b
+answered the design question". That overstated it — M5.4b answered *where a display rendering lives*,
+supplying the seam, while the blocker `BACKLOG.md` records (**a `.cube` does not declare its input
+colour space**) was still open. W5-0 settled it: the declared space decides **placement**, and only
+spaces that can be verified here ship.
+
+---
+
 ### W4 — to be run by a DIFFERENT agent (user's call, 2026-09-03)
 
 **Read this whole file first, then §5, then `CLAUDE.md`'s M5.3b, guided-perspective and M5.2

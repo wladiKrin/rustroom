@@ -23,9 +23,9 @@ still carries the reasoning that matters — read the entry, then build it under
 
 | Backlog entry | Now |
 | --- | --- |
-| Creative 3-D LUTs | **M7.5** — ⚠ unblocked by **M5.4b**, not before |
+| Creative 3-D LUTs | **M7.5** — ⚠⚠ **SPECCED AND SCHEDULED as W5 track A (2026-09-04).** M5.4b supplied the *seam*, not the answer: the blocker below — a `.cube` does not declare its input space — was still open, and W5-0 settled it. See `specs/2026-09-04-creative-luts-design.md`. |
 | `ProfileToneCurve` / `ProfileLookTable` | **answered by M5.4b** — the same display-rendering question |
-| Soft-proofing · gamut mapping / rendering intents | **M6.4** |
+| Soft-proofing · gamut mapping / rendering intents | **M6.4** — ⚠ **soft proofing is SPECCED as W5 track B (2026-09-04)**; gamut mapping and rendering intents are *not* in it and stay deferred. `specs/2026-09-04-soft-proofing-design.md`. |
 | EXIF/IPTC metadata editing | **M6.2** — ⚠ its blocker dissolves at export scope; see below |
 | Export filename templating · output/print sharpening | **M6.1a** / **M6.1d** |
 | Mask intersection and subtraction | **M7.1c** |
@@ -113,6 +113,14 @@ Three concrete consequences:
 **Recommended shape:** the second, staged — the enum from the start, populated initially with only
 the spaces that can actually be verified (sRGB display, Rec.709, linear passthrough), with log
 encodings added when there is something to validate them against.
+
+✅ **RESOLVED IN W5-0 (2026-09-04): the recommended shape was taken, and it turned out to answer the
+placement question too.** The declared input space decides **where the LUT runs** — display-referred
+LUTs modify the camera rendering, a linear one runs *in place of* it because it **is** the rendering.
+That dissolves consequence 3 above: a film emulation stacked on our S-curve would double-render,
+which is the commonest way this feature ships broken, and one declaration prevents it. Consequence 2
+is settled by clipping into the cube, which is defensible **only** because a creative look is itself
+a display-referred decision — this is the point in the chain where headroom is legitimately spent.
 
 ⚠ **Start the brainstorm with the space question, not with a parser.** The parser is the easy half.
 
