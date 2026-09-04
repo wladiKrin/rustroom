@@ -159,6 +159,9 @@ fn main() {
         ));
     }
 
+    // The identity round-trip diagnostic's own input, independent of whatever `--cube` supplied.
+    let identity = Arc::new(Cube::parse(&write_cube(33, |p| p)).unwrap());
+
     println!("== stage lists (rendering = Camera) ==");
     for space in LutSpace::ALL {
         let e = Edits {
@@ -233,7 +236,13 @@ fn main() {
                 },
                 ..Default::default()
             };
-            let out = render(small.clone(), &e, Some(&cubes[0].1));
+            // ⚠⚠ A **genuine** identity, never `cubes[0]`. With `--cube` supplied that was
+            // whichever file was named first, so this line reported a real look's effect under an
+            // "identity round trip" label — handed a film emulation it printed `worst 55.972 of an
+            // 8-bit level, 100.000% of pixels`, which reads as a catastrophic shaper bug and is
+            // nothing of the kind. The diagnostic is about the shaper, so it must supply its own
+            // input.
+            let out = render(small.clone(), &e, Some(&identity));
             let (mut worst, mut over) = (0f32, 0usize);
             let mut n = 0usize;
             for y in 0..out.height() {
@@ -268,7 +277,15 @@ fn main() {
                 };
                 let out = render(small.clone(), &e, Some(cube));
                 let (m, lo, hi, s) = stats(&out);
-                let short: String = name.chars().take(30).collect();
+                // ⚠ The BASENAME, not the first 30 characters of the path: four files in one
+                // directory truncated to four identical labels, so every row read the same and
+                // the table could not be attributed to its LUT at all. A synthetic label has no
+                // separator, so `file_name` returns it whole and those rows are unaffected.
+                let base = std::path::Path::new(name)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| name.clone());
+                let short: String = base.chars().take(30).collect();
                 println!(
                     "{:<46} {:>8.4} {:>8.2}% {:>8.2}% {:>8.4}",
                     format!("{short} @ {}", space.label()),
