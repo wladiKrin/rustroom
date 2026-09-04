@@ -52,13 +52,18 @@ pub struct Decoded {
     pub scene_referred: bool,
 }
 
-/// What a camera profile contributes to the display rendering, owned so the render worker can
-/// capture it.
+/// What the **tail's rendering** needs, owned so the render worker can capture it.
 ///
-/// ⚠ One struct rather than two fields, because the two must always travel together: a curve
+/// ⚠ One struct rather than separate fields, because they must always travel together: a curve
 /// that arrived without its baseline would render under this renderer's own measured constant
 /// instead of the profile's, which is a wrong picture rather than an error. Grouping them also
 /// keeps `RenderEngine::new` inside clippy's argument limit.
+///
+/// ⚠ **The name is now narrower than the contents** — `looks_dir` is not a camera-profile field.
+/// A deliberate wave-scoping choice rather than a judgement: `ProfileParts` and
+/// `pipeline::ProfileRendering` are the owned and borrowed halves of one seam and want the same
+/// rename to `TailRendering`, and renaming both would churn call sites in files another track is
+/// editing concurrently. Worth doing once the wave merges.
 #[derive(Debug, Clone, Default)]
 pub struct ProfileParts {
     /// The profile's `ProfileToneCurve`, when it has one.
@@ -66,6 +71,15 @@ pub struct ProfileParts {
     /// The profile's `BaselineExposure` in stops. `None` falls back to the renderer's own
     /// measured constant; `Some(0.0)` is a profile declaring no shift, which is different.
     pub baseline_ev: Option<f32>,
+    /// Where creative looks are read from, so the render worker can resolve `Edits.look.file`.
+    ///
+    /// ⚠ The **directory**, not the loaded table: the look is chosen by `Edits`, which arrives
+    /// per request, while everything else here is fixed for the photo. Passing a table would
+    /// mean rebuilding the engine on every look change.
+    ///
+    /// ⚠ `None` means no looks are available — every render then behaves as though the `.cube`
+    /// were missing, which is the documented fallback rather than a failure.
+    pub looks_dir: Option<std::path::PathBuf>,
 }
 
 /// What a decode reports about a file beyond its pixels.

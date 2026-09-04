@@ -135,6 +135,11 @@ pub struct SourceInfo<'a> {
     /// Auto twice and it would keep moving. The white-balance eyedropper reads this same `Arc`
     /// for the same reason, which is why `Session` keeps it at all.
     pub buffer: &'a core_image::ImageBuf,
+    /// The looks installed on this machine, and whether this photo's named one loaded.
+    ///
+    /// ⚠ Read-only here: discovery happens once per photo in `session_flow`, never in this body,
+    /// which runs sixty times a second.
+    pub looks: &'a rustroom_app::looks::LooksState,
 }
 
 /// The white-balance controls: a temperature, a tint, and the named illuminants.
@@ -241,6 +246,7 @@ pub(crate) fn tone(
     edits: &mut edit_model::Edits,
     buffer: &core_image::ImageBuf,
     baseline_ev: Option<f32>,
+    looks: &rustroom_app::looks::LooksState,
     ed: &mut Edited,
 ) {
     // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
@@ -273,6 +279,9 @@ pub(crate) fn tone(
         // history entry immediately rather than waiting for a `drag_stopped` that never comes.
         ed.mark_changed();
     }
+    // ⚠ Directly under the camera-rendering checkbox, because a `Linear` look *replaces* it:
+    // the two controls decide one thing between them and must be read together.
+    crate::develop::panel::look::section(ui, edits, looks, ed);
     if ui
         .button("Auto")
         .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
@@ -332,6 +341,7 @@ pub fn show(
         wb_baseline: baseline,
         baseline_ev,
         buffer,
+        looks,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
     // that opens with 30 sliders showing is the problem this section structure removes.
@@ -340,7 +350,7 @@ pub fn show(
     });
 
     section(ui, SECTIONS[1], true, |ui| {
-        tone(ui, edits, buffer, baseline_ev, ed);
+        tone(ui, edits, buffer, baseline_ev, looks, ed);
     });
 
     section(ui, SECTIONS[2], false, |ui| {
@@ -540,7 +550,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Auto", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &mut ed);
+            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
         });
         assert!(ed.changed, "the click must request a render");
         assert!(ed.settled, "the click must push exactly one history entry");
@@ -566,7 +576,7 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &mut ed);
+            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
         });
         assert_eq!(
             edits.rendering,
@@ -577,7 +587,7 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &mut ed);
+            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
         });
         assert_eq!(
             edits.rendering,
@@ -608,7 +618,7 @@ mod tests {
             let mut ed = Edited::default();
             crate::test_ui::click(&ctx, "Auto", |ui| {
                 ed = Edited::default();
-                tone(ui, &mut edits, &buf, baseline, &mut ed);
+                tone(ui, &mut edits, &buf, baseline, &Default::default(), &mut ed);
             });
             assert!(ed.changed, "the click did not take");
             exposures.push(edits.exposure);
@@ -634,7 +644,7 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    tone(ui, &mut edits, &buf, None, &mut ed);
+                    tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
                     assert!(!ed.changed, "drawing the panel reported an edit");
                     assert!(!ed.settled, "drawing the panel pushed a history entry");
                 },
@@ -832,5 +842,76 @@ mod tests {
             "No profile for XF8mmF3.5 R WR"
         );
         assert_eq!(lens_status(Some("XF23mmF2 R WR"), true), "XF23mmF2 R WR");
+    }
+
+    /// A `LooksState` with two installed looks, built without touching disk.
+    fn two_looks() -> rustroom_app::looks::LooksState {
+        rustroom_app::looks::LooksState::from_entries(vec![
+            rustroom_app::looks::LookEntry {
+                file: "portra.cube".into(),
+                name: "portra".into(),
+            },
+            rustroom_app::looks::LookEntry {
+                file: "teal.cube".into(),
+                name: "teal".into(),
+            },
+        ])
+    }
+
+    fn look_labels(
+        edits: &mut edit_model::Edits,
+        looks: &rustroom_app::looks::LooksState,
+    ) -> Vec<String> {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut ed = Edited::default();
+        crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            ed = Edited::default();
+            tone(ui, edits, &buf, None, looks, &mut ed);
+        })
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect()
+    }
+
+    /// ⚠ The controls appear only once there is something to choose, and the Strength slider
+    /// only once a look is chosen — a dropdown whose sole entry is "None" can only disappoint.
+    ///
+    /// ⚠⚠ **Asserted on Strength, not on the dropdown or the warnings.** The harness reads the
+    /// accessibility tree, which carries interactive widgets and not plain labels or combo box
+    /// headings — so what the panel *says* is guarded in `looks::notes`, where it is a pure
+    /// function, and only what the panel *offers* is guarded here.
+    #[test]
+    fn the_strength_slider_appears_only_when_a_look_is_chosen() {
+        let looks = two_looks();
+        let mut none = edit_model::Edits::default();
+        assert!(
+            !look_labels(&mut none, &looks)
+                .iter()
+                .any(|l| l == "Strength"),
+            "Strength was offered with no look chosen"
+        );
+
+        let mut chosen = edit_model::Edits {
+            look: edit_model::Look {
+                file: Some("portra.cube".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            look_labels(&mut chosen, &looks)
+                .iter()
+                .any(|l| l == "Strength"),
+            "a chosen look offered no Strength"
+        );
+
+        // ⚠ And nothing at all when none are installed and none is named.
+        let empty = rustroom_app::looks::LooksState::default();
+        let mut e = edit_model::Edits::default();
+        assert!(
+            !look_labels(&mut e, &empty).iter().any(|l| l == "Strength"),
+            "the look controls appeared with no looks installed"
+        );
     }
 }

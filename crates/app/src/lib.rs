@@ -25,6 +25,7 @@ pub mod histogram;
 pub mod history;
 pub mod icons;
 pub mod library_filter;
+pub mod looks;
 pub mod marks;
 pub mod mask_tool;
 pub mod menu;

@@ -174,10 +174,16 @@ impl RenderEngine {
         scene_referred: bool,
         on_done: impl Fn() + Send + 'static,
     ) -> Self {
+        let looks_dir = profile.looks_dir.clone();
         let (req_tx, req_rx) = channel::<Request>();
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let handle = thread::spawn(move || {
             let mut cache = PrefixCache::default();
+            // ⚠⚠ **Resolved HERE rather than on the UI thread**, and cached by name: a 64³ cube
+            // is 786 KB and this loop runs on every slider frame. One slot is enough — a photo
+            // has one look, and switching looks is a deliberate act, not a drag.
+            let look_store = looks_dir.map(crate::looks::LookStore::new);
+            let mut look_cache: Option<(String, Arc<pipeline::lut::Cube>)> = None;
             // Lives beside the prefix cache and for the same reason: this thread is the sole
             // renderer, so neither needs locking.
             let mut brush_cache = BrushCache::default();
@@ -203,6 +209,26 @@ impl RenderEngine {
                         ..req.edits
                     }
                 };
+                // ⚠ A look that will not load leaves `look` as `None`, which renders the photo
+                // *without the look* and keeps the camera rendering — never an error that stops
+                // the photo opening. The panel is where the user is told; see `LooksState`.
+                if let (Some(store), Some(file)) = (look_store.as_ref(), edits.look.file.as_deref())
+                {
+                    if edits.look.is_active() && look_cache.as_ref().is_none_or(|(n, _)| n != file)
+                    {
+                        look_cache = store
+                            .load(file)
+                            .ok()
+                            .map(|c| (file.to_owned(), Arc::new(c)));
+                    }
+                }
+                let look = look_cache
+                    .as_ref()
+                    .filter(|(n, _)| {
+                        edits.look.is_active() && edits.look.file.as_deref() == Some(n.as_str())
+                    })
+                    .map(|(_, c)| c);
+
                 let (frame, _stages_run) = render_cached(
                     &buffer,
                     &edits,
@@ -213,7 +239,7 @@ impl RenderEngine {
                     pipeline::ProfileRendering {
                         curve: profile.curve.as_deref(),
                         baseline_ev: profile.baseline_ev,
-                        ..Default::default()
+                        look,
                     },
                     &mut cache,
                     &mut brush_cache,

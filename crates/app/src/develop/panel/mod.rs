@@ -3,6 +3,7 @@
 pub mod adjustments;
 pub mod color_wheel;
 pub mod geometry;
+pub mod look;
 pub mod masks;
 pub mod presets;
 pub mod retouch;
@@ -176,6 +177,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     // s.edits` beside it — disjoint fields, so this is legal
                                     // where a closure capturing `s` twice would be `E0499`.
                                     buffer: &s.buffer,
+                                    looks: &app.looks,
                                 },
                                 Some(&mut s.picking_wb),
                                 &mut ed,

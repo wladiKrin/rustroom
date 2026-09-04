@@ -57,6 +57,10 @@ pub(crate) fn decode_for_edit(
                 profile: ProfileParts {
                     curve: profile_curve,
                     baseline_ev,
+                    // ⚠ Filled in at `RenderEngine::new`, not here: the decode has no business
+                    // knowing where looks live, and the directory is a session fact rather than
+                    // a fact about this file.
+                    looks_dir: None,
                 },
                 scene_referred: true,
             },
@@ -163,6 +167,7 @@ pub(crate) fn decode_full_res(
             profile: ProfileParts {
                 curve: profile_curve,
                 baseline_ev,
+                looks_dir: None,
             },
             scene_referred: true,
         },

@@ -312,13 +312,25 @@ impl RustroomApp {
             egui::TextureOptions::LINEAR,
         );
 
+        // ⚠ Scanned once per photo, beside the camera profiles and for the same reason: the
+        // panel body runs sixty times a second and must not read a directory.
+        let look_store = rustroom_app::looks::LookStore::user_default(
+            &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+        );
+        self.looks.refresh(&look_store);
+        // ⚠ Resolved once, here: this is where a sidecar or a preset can have brought a look
+        // that is not on this machine, which is the case the spec's §9.2 requires be *said*.
+        self.looks.sync(edits.look.file.as_deref(), &look_store);
+        let mut profile = decoded.profile.clone();
+        profile.looks_dir = Some(look_store.dir().to_path_buf());
+
         let ctx2 = ctx.clone();
         let engine = RenderEngine::new(
             decoded.buffer.clone(),
             decoded.source_scale,
             decoded.lens.shot.clone(),
             decoded.wb_baseline,
-            decoded.profile.clone(),
+            profile,
             decoded.scene_referred,
             move || ctx2.request_repaint(),
         );

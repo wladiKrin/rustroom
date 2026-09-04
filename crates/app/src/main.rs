@@ -473,6 +473,11 @@ struct RustroomApp {
     /// `Session::history`, deleted presets in the trash — and this only records which of
     /// the two the next undo should pop.
     actions: ActionLog,
+    /// The creative looks found on disk, and whether the one this photo names actually loaded.
+    ///
+    /// ⚠ Cached rather than rescanned per frame, exactly like `camera_profiles_cache` and for the
+    /// same reason. Refreshed when a photo opens.
+    looks: rustroom_app::looks::LooksState,
 }
 
 impl RustroomApp {
@@ -596,6 +601,9 @@ impl RustroomApp {
             catalog,
             modal: Modal::None,
             actions: ActionLog::default(),
+            // ⚠ Empty until a photo opens: the looks directory is scanned once per photo in
+            // `session_flow`, never at startup and never per frame.
+            looks: Default::default(),
         }
     }
 }

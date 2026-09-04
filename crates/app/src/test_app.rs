@@ -166,6 +166,10 @@ pub fn for_test() -> RustroomApp {
         catalog: catalog::db::Catalog::open_in_memory().ok(),
         modal: Modal::None,
         actions: ActionLog::default(),
+        // ⚠ Empty, and deliberately not pointed at the real looks directory: a test that found
+        // the developer's own `.cube` files would pass or fail depending on whose machine it ran
+        // on. Panel tests that need a look install one into their own temp directory.
+        looks: Default::default(),
     }
 }
 
