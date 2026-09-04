@@ -873,6 +873,69 @@ fn golden_mask_radial_inverted_saturation() {
     );
 }
 
+/// A masked Clarity over the RIGHT half of the local-contrast chart.
+///
+/// ⚠ One helper for the golden and the confinement test below, so the two cannot describe
+/// different edits while claiming to be about the same thing.
+///
+/// ⚠ The gradient runs 0.6 -> 0.9, so everything left of x = 0.6 is at coverage **exactly zero** —
+/// which is what makes an assertion about pixel (1, 1) meaningful rather than approximate.
+fn masked_clarity_edits() -> Edits {
+    Edits {
+        masks: vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                from: [0.6, 0.5],
+                to: [0.9, 0.5],
+                invert: false,
+            }),
+            adjustments: edit_model::LocalAdjustments {
+                local_contrast: LocalContrast {
+                    texture: 0.0,
+                    clarity: 80.0,
+                },
+                ..Default::default()
+            },
+        }],
+        ..Edits::default()
+    }
+}
+
+/// A masked Clarity leaves every uncovered pixel **bit-identical**.
+///
+/// ⚠⚠ "A masked clarity changes the pixels" passes with the mask ignored entirely — a global
+/// clarity would satisfy it. **This is the discriminating half**: outside the mask the result must
+/// be identical, not close. Blending at coverage 0 is bit-exactly the identity, so there is no
+/// tolerance to argue about.
+///
+/// ⚠ The second assertion is the fixture check. Without it the test passes just as well against a
+/// mask that changes nothing anywhere, which proves nothing at all.
+#[test]
+fn a_masked_clarity_leaves_uncovered_pixels_bit_identical() {
+    let chart = local_contrast_chart();
+    let plain = build_pipeline(&Edits::default(), RenderScale::FULL).run(chart.clone());
+    let masked = build_pipeline(&masked_clarity_edits(), RenderScale::FULL).run(chart);
+
+    assert_eq!(
+        plain.pixel(1, 1),
+        masked.pixel(1, 1),
+        "the masked clarity leaked outside its mask"
+    );
+    assert_ne!(
+        plain.data(),
+        masked.data(),
+        "fixture check: the mask changed nothing at all, so this test proves nothing"
+    );
+}
+
+/// The masked-Clarity reference.
+///
+/// ⚠ On `local_contrast_chart` rather than the main chart: the main one is primaries and grey,
+/// where a local-contrast band has almost nothing to act on.
+#[test]
+fn golden_mask_clarity() {
+    check_golden_with("mask_clarity", &masked_clarity_edits(), local_contrast_chart());
+}
+
 #[test]
 fn golden_mask_brush_exposure() {
     // A soft horizontal stroke over the LEFT half of the 64x16 chart.
