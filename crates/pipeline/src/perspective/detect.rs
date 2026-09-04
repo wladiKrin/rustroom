@@ -35,10 +35,29 @@ pub const MAX_LEAN_DEG: f32 = 30.0;
 /// ⚠ Only meaningful because [`verticals`] display-encodes first: in linear light the same number
 /// is a strong edge in shadow and an invisible one near white.
 ///
-/// ⚠⚠ **Chosen from the sweep, not asserted.** `detect_probe --sweep` reports precision and recall
-/// against a hand-labelled corpus; record the numbers here when it sets this value, or nobody can
-/// revisit the choice — the rule `MEDIAN_TARGET` and `TEXTURE_GUIDED_EPS` both follow.
-pub const MIN_EDGE_LEVELS: f32 = 8.0;
+/// ⚠⚠ **Read off `detect_probe --sweep`, and the evidence is recorded here so the choice can be
+/// revisited — the rule `MEDIAN_TARGET` and `TEXTURE_GUIDED_EPS` both follow.**
+///
+/// Across 70 of the author's RAWs, the fraction firing (two lines found) against the floor:
+///
+/// | levels | 2 | 4 | 6 | 8 | 12 | 16 | **24** | 32 | 48 | 64 | 96 |
+/// |---|---|---|---|---|---|---|---|---|---|---|---|
+/// | fires | 97% | 96% | 93% | 84% | 53% | 34% | **29%** | 27% | 20% | 13% | 7% |
+///
+/// ⚠⚠ **24 is an upper bound, not a preference: Weltenburg Abbey — the frame this feature exists
+/// for — is still detected at 24 and is LOST at 32.** So the constant cannot go higher without
+/// breaking the case that motivated the milestone, and the fire rate at 24 is 29% against the
+/// 54% the relative threshold produced.
+///
+/// ⚠ **A starting value of 8 was measured and rejected**: it fires on 84% of frames, *worse* than
+/// the relative threshold it replaces, because display-encoding expands exactly the soft shadow
+/// gradients that were previously too weak to vote. The spec's "starting band of 6–10" was a
+/// guess and the measurement overturned it.
+///
+/// ⚠ **Still outstanding: this is a fire *rate*, not precision and recall.** A rate cannot
+/// distinguish "fires less" from "fires better", and the labelled corpus that would is the user's
+/// to write. 24 is the best-justified value available, not a signed-off one.
+pub const MIN_EDGE_LEVELS: f32 = 24.0;
 
 /// Sobel's response to a unit step: the kernel sums to 4 on the leading side.
 ///
@@ -458,13 +477,18 @@ mod tests {
     /// A photograph of a wall must produce nothing, not two lines through noise.
     /// Two vertical edges of the **same linear contrast**, one in deep shadow and one near white.
     ///
-    /// The shadow pair steps 0.02 → 0.06 linear, the highlight pair 0.90 → 0.94: both a linear
-    /// delta of exactly 0.04.
+    /// The shadow pair steps 0.02 → 0.10 linear, the highlight pair 0.86 → 0.94: both a linear
+    /// delta of exactly 0.08.
+    ///
+    /// ⚠ The delta is 0.08 rather than a smaller one so that **neither half sits near
+    /// [`MIN_EDGE_LEVELS`]**: at 0.04 the shadow edge measured 30.6 levels, which silently made
+    /// this test an upper bound on the constant — raising the floor past 30 would have failed it
+    /// for a reason having nothing to do with the encode it exists to check.
     fn same_linear_delta(w: usize, h: usize, low: f32) -> Vec<f32> {
         let mut p = vec![low; w * h];
         for y in 0..h {
             for x in w / 2..w {
-                p[y * w + x] = low + 0.04;
+                p[y * w + x] = low + 0.08;
             }
         }
         p
@@ -473,8 +497,8 @@ mod tests {
     /// ⚠⚠ **The encode is what makes an absolute floor mean anything, and this is the only test
     /// that can see it deleted.** Under a *linear* Sobel these two frames are identical — the same
     /// 0.04 delta — so any threshold treats them alike. Display-encoded, the sRGB curve expands the
-    /// shadows: **0.02 → 0.06 spans 30.6 8-bit levels while 0.90 → 0.94 spans 4.7** — a factor of
-    /// six and a half. The shadow edge is strongly visible and the highlight edge is nearly
+    /// shadows: **0.02 → 0.10 spans 50.4 8-bit levels while 0.86 → 0.94 spans 9.5** — a factor of
+    /// five and a third. The shadow edge is strongly visible and the highlight edge is nearly
     /// invisible, which is exactly the judgement the detector must make and cannot make on linear
     /// values.
     ///
@@ -488,14 +512,14 @@ mod tests {
     fn a_shadow_edge_and_a_highlight_edge_of_equal_linear_contrast_are_not_equal() {
         let (w, h) = (128, 128);
         let shadow = verticals(&same_linear_delta(w, h, 0.02), w, h);
-        let highlight = verticals(&same_linear_delta(w, h, 0.90), w, h);
+        let highlight = verticals(&same_linear_delta(w, h, 0.86), w, h);
         assert!(
             !shadow.is_empty(),
-            "the shadow edge — about 31 levels of contrast — was not detected"
+            "the shadow edge — about 50 levels of contrast — was not detected"
         );
         assert!(
             highlight.is_empty(),
-            "the highlight edge — under 5 levels — was detected: {highlight:?}, so the plane is \
+            "the highlight edge — under 10 levels — was detected: {highlight:?}, so the plane is \
              being measured linearly and the floor means nothing"
         );
     }

@@ -246,7 +246,7 @@ fn score(results: &[(bool, bool)]) -> (f32, f32, usize, usize) {
 }
 
 /// The candidate floors the sweep reports, in 8-bit levels.
-const SWEEP: &[f32] = &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0];
+const SWEEP: &[f32] = &[2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0, 96.0];
 
 fn sweep(labels_path: &std::path::Path) {
     let labels = match read_labels(labels_path) {
