@@ -70,6 +70,14 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
                 edit_model::LuminanceRange::default(),
             ));
         }
+        // ⚠ Appended, per PARALLEL-WORK.md rule 3 — the mask-kind row gains one entry at the end
+        // rather than being reordered around it.
+        if ui.button("Add colour range").clicked() {
+            // ⚠ The hand-written `Default`: the warm half of the wheel with a soft shoulder and
+            // the chroma gate already at HSL's measured value, so the mask is doing something
+            // recognisable before any slider is touched.
+            added = Some(edit_model::Mask::Colour(edit_model::ColourRange::default()));
+        }
     });
     if let Some(mask) = added {
         s.edits.masks.push(edit_model::MaskedAdjustment {
@@ -138,6 +146,37 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
                     "Selects tones by brightness — 0 is black, 100 is white, the \
                      same scale as the histogram. Feather widens the range with a \
                      soft shoulder either side.",
+                );
+            }
+            if let edit_model::Mask::Colour(r) = &mut m.mask {
+                // ⚠⚠ **These sliders are the whole of this mask's interaction — there is nothing
+                // on the canvas**, for the luminance range's reason and one more: a colour range
+                // has no position at all, so no handle and no boundary can be drawn for it.
+                //
+                // ⚠ Named "Hue low"/"Hue high" rather than the luminance range's "Range
+                // low"/"Range high" deliberately. They are never on screen together, so this is
+                // not the two-sliders-called-Scale ambiguity the perspective work fixed — it is
+                // that the label should say *what* is being ranged, and a test asserting the
+                // colour block appears could not otherwise tell it from the luminance one being
+                // drawn for every mask.
+                ed.slider(ui, &mut r.low, 0.0..=360.0, "Hue low");
+                ed.slider(ui, &mut r.high, 0.0..=360.0, "Hue high");
+                // ⚠ Named "Feather" like the luminance range's, the radial's and the vignette's,
+                // and a smoothstep like all three, so the app keeps one idiom for "soften this
+                // edge" rather than four.
+                ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
+                // ⚠ The top of the range is 0.15, not 1.0. Oklab chroma is not a percentage:
+                // sensor noise measures ~0.003, an ordinary real colour ~0.06, and a fully
+                // saturated sRGB primary reaches ~0.26 — so a gate above 0.15 excludes nearly
+                // every colour in a photograph and the rest of the slider's travel would do
+                // nothing but turn the mask off.
+                ed.slider(ui, &mut r.min_chroma, 0.0..=0.15, "Min chroma");
+                theme::hint(
+                    ui,
+                    "Selects colours by hue, in degrees around the wheel — and the band \
+                     wraps, so 340 to 20 selects the reds either side of zero. Min chroma \
+                     is what stops a near-neutral sky being selected: below it a pixel has \
+                     no reliable hue, only sensor noise.",
                 );
             }
             if matches!(m.mask, edit_model::Mask::Brush(_)) {
@@ -255,6 +294,7 @@ mod tests {
             ("Add brush", "Brush"),
             ("Add radial filter", "Radial"),
             ("Add luminance range", "Luminance"),
+            ("Add colour range", "Colour"),
         ] {
             let mut s = session();
             click_in_panel(label, &mut s);
@@ -462,6 +502,65 @@ mod tests {
         );
         assert_eq!(after.low, before.low, "and only the one it names");
         assert!(ed.changed, "and it must re-request the preview");
+    }
+
+    #[test]
+    fn a_selected_colour_mask_shows_its_hue_band_and_a_luminance_one_does_not() {
+        // ⚠⚠ **Both halves, the pair `a_selected_luminance_mask_shows_its_range_and_a_radial_
+        // does_not` established.** Controls that never appear and controls that appear for every
+        // mask are equally wrong, and only the pair distinguishes them — "Min chroma" beside a
+        // luminance range's tone band would control nothing at all.
+        //
+        // ⚠ These four sliders are the *whole* interaction for this mask: there is nothing on the
+        // canvas to drag, so a panel that failed to draw them would leave it unusable rather than
+        // merely inconvenient.
+        let mut s = session();
+        click_in_panel("Add colour range", &mut s);
+        let shown = labels_in_panel(&mut s);
+        for want in ["Hue low", "Hue high", "Feather", "Min chroma"] {
+            assert!(
+                shown.iter().any(|l| l == want),
+                "a selected colour mask must offer {want}; got {shown:?}"
+            );
+        }
+        assert!(
+            !shown.iter().any(|l| l == "Range low"),
+            "and not the luminance range's tone band; got {shown:?}"
+        );
+
+        let mut s = session();
+        click_in_panel("Add luminance range", &mut s);
+        let shown = labels_in_panel(&mut s);
+        assert!(
+            !shown.iter().any(|l| l == "Hue low" || l == "Min chroma"),
+            "a luminance mask must not offer a hue band; got {shown:?}"
+        );
+    }
+
+    #[test]
+    fn the_hue_sliders_are_wired_to_the_mask_and_settle_into_one_edit() {
+        // ⚠⚠ **Presence is not wiring, and the sabotage step proved that on the luminance range's
+        // own sliders.** Pointing these at a clone leaves every label drawn and every assertion
+        // about presence green while the panel edits a temporary and the mask never moves — four
+        // controls that visibly do nothing.
+        let mut s = session();
+        click_in_panel("Add colour range", &mut s);
+        let before = match s.edits.masks[0].mask {
+            edit_model::Mask::Colour(r) => r,
+            ref other => panic!("expected a colour mask, got {other:?}"),
+        };
+        let ed = drag_in_panel("Hue high", &mut s);
+        let after = match s.edits.masks[0].mask {
+            edit_model::Mask::Colour(r) => r,
+            ref other => panic!("expected a colour mask, got {other:?}"),
+        };
+        assert_ne!(
+            after.high, before.high,
+            "the slider must edit the mask itself, not a copy of it"
+        );
+        assert_eq!(after.low, before.low, "and only the one it names");
+        assert!(ed.changed, "and it must re-request the preview");
+        assert!(ed.settled, "one drag is one undo step");
     }
 
     #[test]
