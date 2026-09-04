@@ -89,9 +89,20 @@ between a pastel skin tone and a saturated sign, which is precisely the judgemen
 | the panel controls | `develop/panel/masks.rs` |
 
 ⚠⚠ **`Mask::coverage` became `analytic_coverage(..) -> Option<f32>` for exactly this reason** — a
-`Mask::Brush => 0.0` arm would compile, run, and silently produce a mask covering nothing. The new
-variant returns `Some(..)`; `CoverageSource`'s match is **exhaustive on purpose** and a catch-all
-there was a live trap the range-mask work already removed once.
+`Mask::Brush => 0.0` arm would compile, run, and silently produce a mask covering nothing.
+`CoverageSource`'s match is **exhaustive on purpose** and a catch-all there was a live trap the
+range-mask work already removed once.
+
+⚠⚠ **CORRECTED 2026-09-04: this section said "the new variant returns `Some(..)`", and that is
+wrong.** `Mask::Colour(_)` returns **`None`**, exactly as `Mask::Luminance(_)` already does one line
+above it, whose own comment states the reason: *"A function of the pixel, not of `(u, v)`."*
+`analytic_coverage` is handed a **position**; a colour range selects on the pixel's hue and chroma,
+which are not in scope there, so `Some(_)` could only be a number invented from coordinates — a mask
+silently selecting by position while claiming to select by colour, which is a worse version of the
+`=> 0.0` fallback the `Option` exists to prevent. Coverage is answered from inside `MaskStage`'s
+pixel loop, where the sample is in hand, as `CoverageSource::Range`'s own comment anticipated.
+⚠ The implementer flagged this rather than stalling the branch, and was right on both counts; the
+sentence was a generic gloss that contradicted the sibling variant this one is modelled on.
 
 ⚠ The variant is **appended** to the `Mask` enum — `PARALLEL-WORK.md` rule 3.
 
