@@ -597,4 +597,5 @@ mod tests {
     }
 }
 
+pub mod detect;
 pub mod guides;

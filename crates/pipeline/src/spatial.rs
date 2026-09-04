@@ -392,6 +392,59 @@ pub fn min_filter(plane: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     out
 }
 
+/// A Sobel gradient field: the per-pixel derivative in x and y, and its magnitude.
+///
+/// ⚠⚠ **The direction is the point, not a bonus.** `crates/app/src/visualize.rs`'s `edge_view` is
+/// already a high-pass over luminance and cannot be used for line detection, because
+/// `|luma − blur|` says *how much* an edge there is and nothing about which way it runs — so a
+/// near-vertical filter built on it would have to accumulate every edge in the frame and throw
+/// most of them away. It is also in the app lib, where `pipeline` cannot reach it. This is a
+/// different operator, not a duplicate.
+///
+/// ⚠ Edges **replicate**, the convention [`box_blur`] and [`gaussian_blur`] already follow here,
+/// so a constant plane comes back with exactly zero gradient rather than a frame-wide border
+/// artifact.
+#[derive(Debug, Clone, Default)]
+pub struct Gradient {
+    pub gx: Vec<f32>,
+    pub gy: Vec<f32>,
+    pub mag: Vec<f32>,
+}
+
+/// The Sobel gradient of a single-channel plane.
+///
+/// ⚠ A size mismatch returns an empty field rather than panicking, unlike the blurs above: the
+/// only caller is a detector whose honest answer for an unusable plane is "no lines found".
+pub fn sobel(plane: &[f32], w: usize, h: usize) -> Gradient {
+    if w == 0 || h == 0 || plane.len() != w * h {
+        return Gradient::default();
+    }
+    let at = |x: i64, y: i64| -> f32 {
+        let xi = x.clamp(0, w as i64 - 1) as usize;
+        let yi = y.clamp(0, h as i64 - 1) as usize;
+        plane[yi * w + xi]
+    };
+    let mut g = Gradient {
+        gx: vec![0.0; w * h],
+        gy: vec![0.0; w * h],
+        mag: vec![0.0; w * h],
+    };
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let (tl, tc, tr) = (at(x - 1, y - 1), at(x, y - 1), at(x + 1, y - 1));
+            let (ml, mr) = (at(x - 1, y), at(x + 1, y));
+            let (bl, bc, br) = (at(x - 1, y + 1), at(x, y + 1), at(x + 1, y + 1));
+            let gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+            let gy = (bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr);
+            let i = y as usize * w + x as usize;
+            g.gx[i] = gx;
+            g.gy[i] = gy;
+            g.mag[i] = (gx * gx + gy * gy).sqrt();
+        }
+    }
+    g
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,5 +938,65 @@ mod tests {
                 out[w - 1 - i]
             );
         }
+    }
+
+    /// A vertical edge: the gradient points across it, so `gx` is large and `gy` is ~0.
+    #[test]
+    fn a_vertical_edge_gives_a_horizontal_gradient() {
+        let (w, h) = (16, 16);
+        let mut p = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 8..w {
+                p[y * w + x] = 1.0;
+            }
+        }
+        let g = sobel(&p, w, h);
+        let i = 8 * w + 8;
+        assert!(g.mag[i] > 0.5, "no magnitude on the edge: {}", g.mag[i]);
+        assert!(
+            g.gx[i].abs() > 4.0 * g.gy[i].abs().max(1e-6),
+            "gx {} should dominate gy {}",
+            g.gx[i],
+            g.gy[i]
+        );
+    }
+
+    /// ⚠ The mirror case, and it is what makes the test above mean something: a test that only
+    /// checked a vertical edge would pass against an implementation that reported a horizontal
+    /// gradient for everything.
+    #[test]
+    fn a_horizontal_edge_gives_a_vertical_gradient() {
+        let (w, h) = (16, 16);
+        let mut p = vec![0.0f32; w * h];
+        for y in 8..h {
+            for x in 0..w {
+                p[y * w + x] = 1.0;
+            }
+        }
+        let g = sobel(&p, w, h);
+        let i = 8 * w + 8;
+        assert!(g.mag[i] > 0.5, "no magnitude on the edge: {}", g.mag[i]);
+        assert!(
+            g.gy[i].abs() > 4.0 * g.gx[i].abs().max(1e-6),
+            "gy {} should dominate gx {}",
+            g.gy[i],
+            g.gx[i]
+        );
+    }
+
+    /// A flat field has no edges anywhere, or every photograph would be full of them.
+    #[test]
+    fn a_flat_field_has_no_gradient() {
+        let g = sobel(&vec![0.42; 32 * 32], 32, 32);
+        let max = g.mag.iter().copied().fold(0.0f32, f32::max);
+        assert!(max < 1e-5, "a flat field had a gradient: {max}");
+    }
+
+    /// Degenerate sizes must return empty rather than panic — the guard `downscale_to` and
+    /// `map_pixels_xy` each needed.
+    #[test]
+    fn sobel_handles_the_degenerate_sizes() {
+        assert!(sobel(&[], 0, 0).mag.is_empty());
+        assert!(sobel(&[1.0], 1, 1).mag.len() == 1);
     }
 }

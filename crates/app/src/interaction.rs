@@ -203,6 +203,55 @@ impl RustroomApp {
         s.edits.geometry.angle = roll.to_degrees().clamp(-45.0, 45.0);
         (s.edits.perspective, s.edits.geometry.angle) != before
     }
+
+    /// Detect the verticals, write them as guides, and solve — the Auto button.
+    ///
+    /// Returns whether anything changed.
+    ///
+    /// ⚠ Beside [`Self::solve_guides`] because it is the same operation with the guides supplied
+    /// by a detector rather than by a drag, and it reuses that solver rather than repeating it.
+    pub(crate) fn auto_guides(&mut self) -> bool {
+        // ⚠ Hoisted before the session is borrowed mutably: `self.tool` is an immutable borrow of
+        // `self`, which is the `E0502` this codebase records at thirteen sites. `Tool` is `Copy`.
+        let tool = self.tool;
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
+        let found = rustroom_app::perspective_detect::detect_verticals(
+            &s.buffer,
+            &s.edits,
+            s.lens.shot.clone(),
+            s.resampler,
+        );
+        // ⚠⚠ **Two are required, and fewer must SAY SO rather than doing nothing.**
+        // `guides::solve` needs exactly two per family — "one line has no vanishing point at all"
+        // — and a button that silently does nothing is the worst outcome this feature can have.
+        // The status cluster is where this app already reports what it just did.
+        if found.len() < 2 {
+            self.status = format!(
+                "Found {} vertical{} — need two. Draw them by hand in Guide Mode.",
+                found.len(),
+                if found.len() == 1 { "" } else { "s" }
+            );
+            return false;
+        }
+        s.guides = found;
+        s.active_guide = None;
+        // ⚠⚠ **Guide Mode must go on, and this is not a convenience.** `canvas/mod.rs` draws the
+        // guide overlay only under `Tool::Crop && s.show_guides`, so without this the inferred
+        // guides are invisible and the milestone's "Done when" — "the guides it inferred are
+        // visible and editable" — is not met.
+        s.show_guides = true;
+        let solved = self.solve_guides();
+        if let Some(s) = self.session.as_mut() {
+            s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+            // ⚠ One push, so one Auto click is one Ctrl+Z — the rule the guide drag's own caller
+            // in `canvas/mod.rs::show` already follows.
+            s.history.push(s.edits.clone());
+        }
+        self.status = "Perspective solved from two detected verticals.".to_string();
+        solved
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +340,126 @@ mod tests {
             0.0,
             "the vertical slider should have moved"
         );
+    }
+
+    /// A buffer with two converging near-vertical edges, smooth-edged so the detector measures a
+    /// photographic edge rather than a staircase — `detect.rs`'s `line` helper records why.
+    ///
+    /// ⚠ Built here rather than in `test_app`, whose `buffer` is a flat 0.5 and is shared by
+    /// every other test in the crate. Replacing the session's buffer is what lets the **success**
+    /// path be covered by the suite rather than only by a run of the GUI.
+    fn building_buffer(w: usize, h: usize) -> std::sync::Arc<core_image::ImageBuf> {
+        edges_buffer(w, h, &[(0.25, 0.35), (0.75, 0.65)])
+    }
+
+    /// The same frame with a single edge — a photograph the detector can find *one* vertical in.
+    fn one_edge_buffer(w: usize, h: usize) -> std::sync::Arc<core_image::ImageBuf> {
+        edges_buffer(w, h, &[(0.5, 0.58)])
+    }
+
+    /// Bright near-vertical edges running from `a` at the bottom to `b` at the top, in fractions
+    /// of the width.
+    fn edges_buffer(
+        w: usize,
+        h: usize,
+        edges: &[(f32, f32)],
+    ) -> std::sync::Arc<core_image::ImageBuf> {
+        let mut v = vec![0.05f32; w * h * 3];
+        for y in 0..h {
+            let t = y as f32 / (h - 1) as f32;
+            for &(a, b) in edges {
+                let xc = (a + (b - a) * (1.0 - t)) * w as f32;
+                for dx in -4i64..=4 {
+                    let xi = match xc.round() as i64 + dx {
+                        x if (0..w as i64).contains(&x) => x as usize,
+                        _ => continue,
+                    };
+                    let d = xi as f32 - xc;
+                    let val = 0.05 + 0.95 * (-(d * d) / (1.2 * 1.2)).exp();
+                    let i = (y * w + xi) * 3;
+                    for c in 0..3 {
+                        v[i + c] = v[i + c].max(val);
+                    }
+                }
+            }
+        }
+        std::sync::Arc::new(core_image::ImageBuf::from_vec(w, h, v))
+    }
+
+    /// ⚠⚠ **Auto must write guides AND switch Guide Mode on.** A test asserting only the guides
+    /// passes against a version whose output is invisible on the canvas — which is the whole
+    /// "Done when": *the guides it inferred are visible and editable*. `canvas/mod.rs` draws the
+    /// overlay only under `Tool::Crop && s.show_guides`.
+    #[test]
+    fn auto_writes_guides_and_shows_them() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 256, 256);
+        app.session.as_mut().unwrap().buffer = building_buffer(256, 256);
+
+        assert!(app.auto_guides(), "two detected verticals must solve");
+        let s = app.session.as_ref().expect("a session");
+        assert_eq!(s.guides.len(), 2, "Auto should have written two guides");
+        assert!(
+            s.show_guides,
+            "Guide Mode must be on or the guides are invisible"
+        );
+        assert_ne!(
+            s.edits.perspective.vertical, 0.0,
+            "the vertical slider should have moved"
+        );
+        assert!(s.history.can_undo(), "one Auto click must be one Ctrl+Z");
+        assert!(
+            !app.status.is_empty(),
+            "Auto said nothing about what it did"
+        );
+    }
+
+    /// ⚠ Fewer than two detected must set the status rather than doing nothing silently — the
+    /// worst outcome this feature can have. `test_app`'s buffer is a flat 0.5, so this is the
+    /// path a photograph with no verticals in it takes.
+    #[test]
+    fn finding_fewer_than_two_verticals_reports_it() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+
+        assert!(!app.auto_guides(), "a flat photo solved something");
+        assert!(app.status.contains("need two"), "status: {}", app.status);
+        let s = app.session.as_ref().expect("a session");
+        assert!(
+            s.guides.is_empty(),
+            "guides were written despite no detection"
+        );
+        assert!(!s.show_guides, "Guide Mode came on with nothing to show");
+    }
+
+    /// ⚠⚠ **One vertical is not two, and this is the only test that can see the guides being
+    /// written before the length check.** On a *flat* photo the detector returns an empty list,
+    /// so writing it early leaves `guides` empty either way and the sabotage is inert — found by
+    /// running it. A photograph with exactly one detectable edge is what discriminates: the
+    /// guide must **not** be kept, because a single line has no vanishing point and half a solve
+    /// left on screen is worse than none.
+    #[test]
+    fn finding_exactly_one_vertical_keeps_none_of_it() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 256, 256);
+        app.session.as_mut().unwrap().buffer = one_edge_buffer(256, 256);
+
+        assert!(!app.auto_guides(), "one guide must not solve");
+        assert!(
+            app.status.contains("Found 1 vertical —"),
+            "the singular case should read naturally: {}",
+            app.status
+        );
+        let s = app.session.as_ref().expect("a session");
+        assert!(
+            s.guides.is_empty(),
+            "a lone detected vertical was written as a guide: {:?}",
+            s.guides
+        );
+        assert!(!s.show_guides, "Guide Mode came on for one guide");
     }
 
     /// ⚠⚠ **Guides survive a trip to another tool and back.** They live on `Session`, which is
