@@ -179,6 +179,15 @@ pub struct RenderEngine {
     /// has shipped — the mask overlay kept showing its previous position until some unrelated
     /// edit happened to request a frame.
     requests: Arc<std::sync::atomic::AtomicUsize>,
+    /// Where this engine's worker looks for `.cube` files, kept so the **full-resolution
+    /// handover** can carry it onto the replacement engine.
+    ///
+    /// ⚠⚠ The decode cannot supply it — `decode.rs` sets `looks_dir: None` on purpose — so the
+    /// handover rebuilding from `decoded.profile` silently dropped it, and every creative look
+    /// stopped loading ~4 s after a RAW opened. Retained here rather than re-derived at the
+    /// handover, because "where looks live" existing in two places is how the two come to
+    /// disagree.
+    looks_dir: Option<std::path::PathBuf>,
 }
 
 impl RenderEngine {
@@ -205,6 +214,7 @@ impl RenderEngine {
         on_done: impl Fn() + Send + 'static,
     ) -> Self {
         let looks_dir = profile.looks_dir.clone();
+        let kept_looks_dir = looks_dir.clone();
         let (req_tx, req_rx) = channel::<Request>();
         let (res_tx, res_rx) = channel::<RenderedFrame>();
         let handle = thread::spawn(move || {
@@ -285,6 +295,7 @@ impl RenderEngine {
             res_rx,
             _handle: handle,
             requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            looks_dir: kept_looks_dir,
         }
     }
 
@@ -300,6 +311,15 @@ impl RenderEngine {
 
     /// How many renders have been asked for. See the field's doc comment for why this is not
     /// `#[cfg(test)]`.
+    /// Where this engine loads `.cube` files from, so the full-resolution handover can carry it.
+    ///
+    /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason: `session_flow`
+    /// is in the **bin** and this is the **lib**, which the bin's test target compiles without
+    /// `cfg(test)`, so a gated accessor would not exist where it is needed.
+    pub fn looks_dir(&self) -> Option<&std::path::Path> {
+        self.looks_dir.as_deref()
+    }
+
     pub fn requests_issued(&self) -> usize {
         self.requests.load(std::sync::atomic::Ordering::Relaxed)
     }

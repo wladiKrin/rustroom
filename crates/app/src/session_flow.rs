@@ -10,7 +10,7 @@ use crate::{
 use edit_model::EditGroups;
 use edit_model::Edits;
 use eframe::egui;
-use rustroom_app::decode_worker::Decoded;
+use rustroom_app::decode_worker::{Decoded, ProfileParts};
 use rustroom_app::full_res;
 use rustroom_app::history::History;
 use rustroom_app::photo_id::PhotoId;
@@ -504,7 +504,11 @@ impl RustroomApp {
                         // baseline that reverted to D65 here would shift the white balance of
                         // every RAW the moment the full-resolution decode landed.
                         s.wb_baseline,
-                        decoded.profile.clone(),
+                        // ⚠⚠ **Not `decoded.profile` — see `handover_profile`.** The decode
+                        // sets `looks_dir: None` by design, so rebuilding straight from it
+                        // dropped the looks directory and every creative look stopped loading
+                        // ~4 s after the photo opened.
+                        handover_profile(&decoded.profile, s.engine.looks_dir()),
                         decoded.scene_referred,
                         move || ctx2.request_repaint(),
                     );
@@ -620,10 +624,127 @@ impl RustroomApp {
     }
 }
 
+/// The profile the render engine gets at the **full-resolution handover**.
+///
+/// ⚠⚠ **NOT `decoded.profile` — that is where the look silently died.** `decode.rs` sets
+/// `looks_dir: None` deliberately ("the decode has no business knowing where looks live"), and
+/// `finalize_session` fills it in afterwards. The handover rebuilt the engine straight from the
+/// decode, so ~4 s after every RAW opened — `full_res::SETTLE` plus the decode — the engine lost
+/// the directory and **every creative look stopped loading**, with no error and no visible cause.
+/// Reported as selecting a look and moving Strength 0→100 changing nothing.
+///
+/// ⚠ The comment at that call site already warned that the profile must survive the handover; it
+/// was written for the curve and the baseline, and the field added later was not covered by it.
+/// This function exists so the rule is one expression a test can reach.
+fn handover_profile(
+    decoded: &ProfileParts,
+    current_looks_dir: Option<&std::path::Path>,
+) -> ProfileParts {
+    let mut profile = decoded.clone();
+    profile.looks_dir = current_looks_dir.map(|p| p.to_path_buf());
+    profile
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{test_app, test_ui};
+
+    /// ⚠⚠ **The call-site half, and it is the half that matters.** The sibling test pins
+    /// `handover_profile`'s rule; sabotaging the **call site** back to `decoded.profile.clone()`
+    /// leaves that test green, which is exactly how this bug shipped. This one drives the real
+    /// `pump_full_res` against an injected decode whose profile carries no looks directory —
+    /// the real decode's behaviour — and asserts the engine still has one afterwards.
+    #[test]
+    fn the_handover_call_site_carries_the_looks_directory_onto_the_new_engine() {
+        let dir = crate::test_app::TestDir::new("handoverlooks");
+        let ctx = crate::test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 8, 4);
+
+        // An engine that knows where looks live, as `finalize_session` builds one.
+        let photo = dir.0.join("a.RAF");
+        let looks = dir.0.join("looks");
+        {
+            let s = app.session.as_mut().expect("session");
+            s.path = photo.clone();
+            s.buffer_is_full_res = false;
+            s.engine = RenderEngine::new(
+                s.buffer.clone(),
+                1.0,
+                None,
+                color::wb::Illuminant::default(),
+                ProfileParts {
+                    looks_dir: Some(looks.clone()),
+                    ..Default::default()
+                },
+                true,
+                || {},
+            );
+            assert_eq!(
+                s.engine.looks_dir(),
+                Some(looks.as_path()),
+                "fixture check: the engine must start with a looks directory"
+            );
+        }
+
+        // Drive a real full-resolution decode through the injected stub, whose profile carries
+        // `looks_dir: None` exactly as the real decode does.
+        let seq = app.full_decoder.request(photo.clone(), 16);
+        app.full_pending = Some((photo.clone(), seq));
+
+        // ⚠ Deadline rather than an unbounded wait: a regression must fail, never hang CI.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            app.pump_full_res(&ctx);
+            if app.session.as_ref().is_some_and(|s| s.buffer_is_full_res) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let s = app.session.as_ref().expect("session");
+        assert!(
+            s.buffer_is_full_res,
+            "fixture check: the handover never ran, so this test proves nothing"
+        );
+        assert_eq!(
+            s.engine.looks_dir(),
+            Some(looks.as_path()),
+            "the handover dropped the looks directory — every creative look stops loading"
+        );
+    }
+
+    /// ⚠⚠ **The bug this reproduces: every creative look stopped working ~4 s after a RAW
+    /// opened.** `full_res::SETTLE` is 800 ms and the full decode ~3 s, so the handover always
+    /// landed before anyone could pick a look — which made it read as looks never working at all
+    /// rather than as something that expired.
+    ///
+    /// ⚠ The decode cannot know where looks live and sets `looks_dir: None` by design, so a
+    /// handover that takes the decode's profile verbatim is *guaranteed* to drop it. The session's
+    /// engine already holds the resolved directory; carrying it is the whole fix.
+    #[test]
+    fn the_full_resolution_handover_keeps_the_looks_directory() {
+        let dir = std::path::PathBuf::from("/looks");
+        // What the decode always hands over: no directory, because it cannot know one.
+        let decoded = ProfileParts {
+            looks_dir: None,
+            ..Default::default()
+        };
+        let carried = super::handover_profile(&decoded, Some(dir.as_path()));
+        assert_eq!(
+            carried.looks_dir.as_deref(),
+            Some(dir.as_path()),
+            "the handover dropped the looks directory, so every look stops loading"
+        );
+        // ⚠ And it must not invent one when the session had none, or a photo opened before any
+        // look existed would start claiming a directory the session never resolved.
+        let none = super::handover_profile(&decoded, None);
+        assert_eq!(
+            none.looks_dir, None,
+            "the handover invented a looks directory"
+        );
+    }
 
     #[test]
     fn the_before_view_keeps_the_geometry_and_drops_the_adjustments() {
