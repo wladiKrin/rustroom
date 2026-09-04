@@ -133,6 +133,45 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
                 groups: EditGroups::default(),
             }
         }
+        // ⚠ Guarded on an actual change, then re-rendered. A menu body runs every frame it is
+        // open, so an unguarded request is the `apply_view_demosaic` mistake — and *not*
+        // re-rendering at all is the `draw_mask_overlay` one, where the setting appears to do
+        // nothing until some unrelated edit happens to ask for a frame.
+        Command::SoftProof(space) => {
+            let tool = app.tool;
+            if let Some(s) = &mut app.session {
+                if s.soft_proof != space {
+                    s.soft_proof = space;
+                    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+                }
+            }
+            // ⚠ Said out loud, because a proof can be genuinely subtle — and on this Mac the OS
+            // colour-manages the window, so the *absolute* colour of the canvas is not a reliable
+            // signal that anything happened. The status line is.
+            app.status = match space {
+                Some(sp) => format!("Soft proof: {}", sp.label()),
+                None => "Soft proof off".to_string(),
+            };
+        }
+        Command::GamutWarning => {
+            let tool = app.tool;
+            let mut on = false;
+            if let Some(s) = &mut app.session {
+                s.gamut_warning = !s.gamut_warning;
+                on = s.gamut_warning;
+                // ⚠ Only when a proof is on. With no proof the flag changes no pixel, so a
+                // request here would spend a render — and, while proofing, a whole extra tail
+                // run — to produce the identical frame.
+                if s.soft_proof.is_some() {
+                    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+                }
+            }
+            app.status = if on {
+                "Gamut warning on".to_string()
+            } else {
+                "Gamut warning off".to_string()
+            };
+        }
         Command::KeyboardShortcuts => app.modal = Modal::KeyboardShortcuts,
         Command::About => app.modal = Modal::About,
     }

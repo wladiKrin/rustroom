@@ -141,6 +141,10 @@ impl Pane {
                     display_space: space,
                     resampler: pipeline::Resampler::default(),
                     visualize: None,
+                    // ⚠ Compare and Survey are for choosing between frames, not for judging
+                    // output colour. A proof is a Develop view mode and lives on `Session`,
+                    // which a `Pane` deliberately is not.
+                    soft_proof: None,
                 },
             );
         }

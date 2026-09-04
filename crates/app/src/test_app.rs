@@ -241,6 +241,8 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         straighten_line: None,
         readout_bytes: None,
         readout: None,
+        soft_proof: None,
+        gamut_warning: false,
     });
 }
 

@@ -73,6 +73,24 @@ impl RegionRect {
     }
 }
 
+/// A soft proof: the output space the canvas is being shown through, and whether the pixels that
+/// space cannot hold are marked.
+///
+/// ⚠ The two travel together because the warning is meaningless without a space to be out of.
+/// Carrying `gamut_warning` as a bare `bool` beside an `Option<OutputSpace>` would make
+/// "warn, against nothing" representable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Proof {
+    /// The space being proofed into. Never `ProPhoto`: the menu is built from
+    /// [`color::OutputSpace::DISPLAYS`], and proofing into the working space would show nothing.
+    pub space: color::OutputSpace,
+    /// Whether out-of-gamut pixels are marked.
+    ///
+    /// ⚠ A separate toggle from the proof itself. Proofing *without* the warning is the common
+    /// case — you want to see the picture — and a warning you cannot switch off is chrome.
+    pub warn: bool,
+}
+
 /// What frame to produce: the working resolution, the visible sub-rect, the display's
 /// primaries, and the resampling kernel.
 ///
@@ -105,6 +123,17 @@ pub struct FrameSpec {
     /// the sidecar, an export or the CLI, and toggling it invalidates no checkpoint, because
     /// `CacheKey` is `(PrefixKey, max_dim)`.
     pub visualize: Option<f32>,
+    /// The soft proof, or `None` when the canvas shows the ordinary render.
+    ///
+    /// ⚠⚠ **While this is `Some` the tail runs TWICE**, and that is the design rather than an
+    /// accident of implementation — see `render_cached`. `None` runs it exactly once, on the path
+    /// that existed before this field, so the ordinary render is bit-exactly unchanged.
+    ///
+    /// ⚠ A view-only property of the *request*, like `display_space` and `visualize`: it never
+    /// reaches `Edits`, the sidecar, an export or the CLI, and toggling it invalidates no
+    /// checkpoint, because `CacheKey` is `(PrefixKey, max_dim)` and the whole proof lives in the
+    /// tail.
+    pub soft_proof: Option<Proof>,
 }
 
 impl FrameSpec {
@@ -123,6 +152,7 @@ impl FrameSpec {
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
             visualize: None,
+            soft_proof: None,
         }
     }
 }
@@ -317,8 +347,13 @@ fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> 
 /// 8-bit → 8-bit conversion compresses the range and costs roughly 0.8 bits, which shows as
 /// banding on a smooth sky. It also happens *after* the pipeline rather than inside it, so the
 /// histogram stays image-referred; see the spec for why that is the whole design.
+///
+/// ⚠ `proofed` is the **second** tail run — the same frame rendered into ProPhoto — paired with the
+/// proof it was rendered for. It is `None` on the ordinary path, which is then bit-exactly what it
+/// was before soft proofing existed.
 fn pack(
     out: ImageBuf,
+    proofed: Option<(ImageBuf, Proof)>,
     region: Option<Region>,
     max_dim: usize,
     display_space: color::OutputSpace,
@@ -361,32 +396,42 @@ fn pack(
     // reads wrong, it is something a call site can quietly bypass.
     if std::env::var_os("RUSTROOM_DEBUG_DISPLAY").is_some() {
         eprintln!(
-            "pack: {}x{} space={:?} region={}",
+            "pack: {}x{} space={:?} region={} proof={:?}",
             width,
             height,
             display_space,
-            region.is_some()
+            region.is_some(),
+            proofed.as_ref().map(|(_, p)| p),
         );
     }
 
-    let rgba = if display_space == color::OutputSpace::Srgb {
-        shown
-    } else {
-        // ⚠ Converted from the **float** image, not from `shown`. An 8-bit → 8-bit conversion
-        // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
-        // sky. The extra quantization pass is paid only when a display space is actually set.
-        Arc::new(
-            out.map_pixels(move |c| {
-                let lin = c.map(color::srgb_to_linear);
-                let conv = display_space.from_srgb(lin);
-                [
-                    display_space.encode(conv[0]),
-                    display_space.encode(conv[1]),
-                    display_space.encode(conv[2]),
-                ]
-            })
-            .to_rgba8(),
-        )
+    let rgba = match proofed {
+        // ⚠⚠ The proof **replaces** the display transform for the texture rather than composing
+        // with it. That is the original architecture of this feature, kept through the amendment
+        // that changed where the data comes from: soft proofing points the space `pack` converts
+        // into at the export target instead of at the monitor. The consequence, recorded in the
+        // spec rather than discovered later: while proofing, the display-profile setting has no
+        // effect — which is also why the spec says the thing to look at is the *difference*
+        // between proof and no proof, not the absolute colour.
+        Some((proof_out, proof)) => Arc::new(proof_texture(&proof_out, proof)),
+        None if display_space == color::OutputSpace::Srgb => shown,
+        None => {
+            // ⚠ Converted from the **float** image, not from `shown`. An 8-bit → 8-bit conversion
+            // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
+            // sky. The extra quantization pass is paid only when a display space is actually set.
+            Arc::new(
+                out.map_pixels(move |c| {
+                    let lin = c.map(color::srgb_to_linear);
+                    let conv = display_space.from_srgb(lin);
+                    [
+                        display_space.encode(conv[0]),
+                        display_space.encode(conv[1]),
+                        display_space.encode(conv[2]),
+                    ]
+                })
+                .to_rgba8(),
+            )
+        }
     };
 
     RenderedFrame {
@@ -398,6 +443,45 @@ fn pack(
         region,
         max_dim,
     }
+}
+
+/// The colour an out-of-gamut pixel is marked with, as **encoded output values** so it lands in
+/// the texture exactly as written rather than being converted into the proof space on the way.
+///
+/// ⚠⚠ **Fixed, never the theme accent.** The accent is user-switchable and includes a `Neutral`
+/// setting whose whole point is to have no colour — which would defeat the warning precisely when
+/// somebody had chosen it. The crop overlay records the same reasoning for the same red
+/// `(255, 60, 60)`, and reusing it keeps one rule rather than adding a second.
+const GAMUT_WARNING: [f32; 3] = [1.0, 60.0 / 255.0, 60.0 / 255.0];
+
+/// The texture for a soft proof: the ProPhoto-run frame taken back to the working space, marked
+/// where the proof space cannot hold it, and encoded into that space.
+///
+/// ⚠⚠ **The decode is what makes the warning able to fire at all.** `OutputSpace::encode` clamps
+/// to `[0, 1]` in every space, so the ordinary sRGB tail hands `pack` data that is already gamut
+/// clipped — against which an exact out-of-gamut test is identically false for every target,
+/// because sRGB fits inside all of them. The tail is run into ProPhoto — the documented bit-exact
+/// identity, which converts nothing — precisely so this round trip recovers the working-space
+/// colour instead.
+///
+/// ⚠ "Exact" therefore means exact *within ProPhoto*: a colour outside it was clipped by that
+/// encode and cannot be recovered here. ProPhoto holds essentially every real colour and the
+/// display rendering bounds the data before it, so the residue is negligible — stated so it is not
+/// later found as a bug.
+fn proof_texture(out: &ImageBuf, proof: Proof) -> Vec<u8> {
+    out.map_pixels(move |c| {
+        let working = c.map(|v| color::OutputSpace::ProPhoto.decode(v));
+        if proof.warn && color::is_out_of_gamut(working, proof.space) {
+            return GAMUT_WARNING;
+        }
+        let conv = proof.space.from_working(working);
+        [
+            proof.space.encode(conv[0]),
+            proof.space.encode(conv[1]),
+            proof.space.encode(conv[2]),
+        ]
+    })
+    .to_rgba8()
 }
 
 /// A cached checkpoint is valid for one cumulative set of prefix parameters at one working
@@ -691,6 +775,7 @@ fn render_cached(
         display_space,
         resampler,
         visualize,
+        soft_proof,
     } = spec;
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
@@ -787,30 +872,67 @@ fn render_cached(
     // slow.
     let clip = rect.map(|r| (r.x, r.y, r.w, r.h));
     let coverage = brush_cache.get_or_build(edits, pw, ph, clip);
-    let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
-        edits,
-        scale,
-        region,
-        Some(&coverage),
-        pipeline::RenderSpec {
-            // ⚠ The **pipeline** is always sRGB. The display transform is a post-step in `pack`,
-            // deliberately outside the pipeline so the histogram stays image-referred.
-            space: color::OutputSpace::Srgb,
-            // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this is
-            // carried for consistency rather than because it changes a pixel here.
-            resampler,
-            baseline: wb_baseline,
-        },
-        // Lens correction lives in the *prefix*, which this call discards — only the tail is
-        // wanted here. `None` is therefore correct rather than provisional.
-        None,
-        // ⚠ The display rendering, by contrast, lives in the **tail** — so this must be
-        // carried, or every render would silently take the built-in curve and the built-in
-        // baseline while a profile that declares its own sat unused.
-        profile,
-    );
+    let build_tail = |space| {
+        let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+            edits,
+            scale,
+            region,
+            Some(&coverage),
+            pipeline::RenderSpec {
+                space,
+                // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
+                // is carried for consistency rather than because it changes a pixel here.
+                resampler,
+                baseline: wb_baseline,
+            },
+            // Lens correction lives in the *prefix*, which this call discards — only the tail is
+            // wanted here. `None` is therefore correct rather than provisional.
+            None,
+            // ⚠ The display rendering, by contrast, lives in the **tail** — so this must be
+            // carried, or every render would silently take the built-in curve and the built-in
+            // baseline while a profile that declares its own sat unused.
+            profile,
+        );
+        tail
+    };
+
+    // ⚠⚠ **While proofing the tail runs TWICE, and that was MEASURED into existence rather than
+    // argued.** A single ProPhoto run was the first design; run over 12 real X-T4 frames, 12 of 12
+    // histograms moved — worst **five 8-bit levels** with the camera rendering off, because
+    // ProPhoto's `encode` ceilings genuine scene headroom at 1.0 *before* the sRGB matrix mixes the
+    // channels, where the direct path clamps only afterwards. So the histogram comes from an
+    // unmodified sRGB run and is bit-identical **by construction**, not by luck, and the texture
+    // and the warning come from a ProPhoto run that reaches `pack` near-unclipped.
+    //
+    // ⚠ Cost: one extra tail run per proofed frame — ~7 ms at fit, ~13 ms at a native rung —
+    // paid only while the proof is switched on. That is accepted; it is not something to optimise
+    // away by collapsing the two runs back into one.
+    //
+    // ⚠ Suppressed while Visualize Spots is on. That view replaces the photograph with an
+    // achromatic edge view, so proofing it would mark nothing and show nothing; suppressing it
+    // here also means the extra run is never paid for a frame that could not use it. The two are
+    // both view modes applied at this point and the diagnostic one wins.
+    let proof = soft_proof.filter(|_| visualize.is_none());
+    // ⚠ `input` is cloned **only** when proofing. With the proof off there is one tail, one run,
+    // and no clone — bit-exactly the path that existed before this feature.
+    let proofed = proof.map(|p| {
+        (
+            build_tail(color::OutputSpace::ProPhoto).run(input.clone()),
+            p,
+        )
+    });
+    // ⚠ The **pipeline** is always sRGB here, whatever the proof does. The display transform is a
+    // post-step in `pack`, deliberately outside the pipeline so the histogram stays image-referred.
+    let tail = build_tail(color::OutputSpace::Srgb);
     (
-        pack(tail.run(input), region, max_dim, display_space, visualize),
+        pack(
+            tail.run(input),
+            proofed,
+            region,
+            max_dim,
+            display_space,
+            visualize,
+        ),
         ran,
     )
 }
@@ -838,6 +960,10 @@ pub fn render_once(
     );
     pack(
         pipeline::build_pipeline_with(edits, scale, resampler).run(preview),
+        // ⚠ Never proofed. This is the before/after baseline and the reference the cached path is
+        // tested against; a proof is a property of the *view* and would make the reference move
+        // with a menu setting.
+        None,
         None,
         max_dim,
         display_space,
@@ -916,6 +1042,7 @@ mod tests {
                     display_space: color::OutputSpace::Srgb,
                     resampler: k,
                     visualize: None,
+                    soft_proof: None,
                 },
                 1.0,
                 None,
@@ -1446,6 +1573,7 @@ mod tests {
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
                 visualize: None,
+                soft_proof: None,
             },
             1.0,
             None,
@@ -1565,6 +1693,7 @@ mod tests {
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
                 visualize: None,
+                soft_proof: None,
             },
             1.0,
             None,
@@ -1996,8 +2125,8 @@ mod tests {
                 buf.set_pixel(x, y, [v, v, v]);
             }
         }
-        let plain = pack(buf.clone(), None, 16, color::OutputSpace::Srgb, None);
-        let vis = pack(buf, None, 16, color::OutputSpace::Srgb, Some(12.0));
+        let plain = pack(buf.clone(), None, None, 16, color::OutputSpace::Srgb, None);
+        let vis = pack(buf, None, None, 16, color::OutputSpace::Srgb, Some(12.0));
         assert_ne!(
             *plain.rgba, *vis.rgba,
             "fixture check: the view mode did not reach the pixels"
@@ -2022,13 +2151,286 @@ mod tests {
                 buf.set_pixel(x, y, [v, v, v]);
             }
         }
-        let plain = pack(buf.clone(), None, 16, color::OutputSpace::Srgb, None);
-        let vis = pack(buf, None, 16, color::OutputSpace::Srgb, Some(12.0));
+        let plain = pack(buf.clone(), None, None, 16, color::OutputSpace::Srgb, None);
+        let vis = pack(buf, None, None, 16, color::OutputSpace::Srgb, Some(12.0));
         assert_ne!(
             plain.rgba, vis.rgba,
             "the view mode did not reach the pixels"
         );
         assert_eq!(plain.hist, vis.hist, "the view mode reached the histogram");
+    }
+
+    // ---- soft proofing -------------------------------------------------------------------
+
+    /// A neutral grey: in gamut in every space, so it must never be marked.
+    const IN_GAMUT: [f32; 3] = [0.5, 0.5, 0.5];
+
+    /// Display P3's green primary, pulled a tenth of the way toward mid grey **in P3
+    /// coordinates**, expressed in the working space.
+    ///
+    /// ⚠⚠ **This is the discriminating fixture, and it is off the boundary on purpose.** P3's
+    /// primary itself lands at a P3 coordinate of exactly 1.0, where a rounding change either way
+    /// decides whether it is "out of gamut" — a fixture that flips with the last f32 bit proves
+    /// nothing. Blended, it sits at P3 ≈ (0.05, 0.95, 0.05): comfortably inside P3, and still far
+    /// outside sRGB, where its red component is around −0.4. `the_fixture_is_in_one_gamut_and_out
+    /// _of_another` asserts that premise rather than trusting this comment.
+    const P3_GREEN: [f32; 3] = [0.242_51, 0.847_31, 0.095_72];
+
+    /// ProPhoto's own green: outside sRGB *and* outside P3.
+    const WIDE_GREEN: [f32; 3] = [0.0, 1.0, 0.0];
+
+    /// Three working-space colours the proof must actually move, one pixel each.
+    fn gamut_fixture() -> Arc<ImageBuf> {
+        let mut buf = ImageBuf::new(3, 1);
+        buf.set_pixel(0, 0, IN_GAMUT);
+        buf.set_pixel(1, 0, P3_GREEN);
+        buf.set_pixel(2, 0, WIDE_GREEN);
+        Arc::new(buf)
+    }
+
+    /// Render `buf` through the cached path at its own resolution, with the given proof.
+    fn proofed(buf: &Arc<ImageBuf>, soft_proof: Option<Proof>) -> RenderedFrame {
+        proofed_with(buf, soft_proof, None)
+    }
+
+    fn proofed_with(
+        buf: &Arc<ImageBuf>,
+        soft_proof: Option<Proof>,
+        visualize: Option<f32>,
+    ) -> RenderedFrame {
+        render_cached(
+            buf,
+            &Edits::default(),
+            FrameSpec {
+                // The fixture's own long edge, so nothing is downscaled and each pixel stays one
+                // pixel — the texture is read back by index below.
+                max_dim: 3,
+                region: None,
+                display_space: color::OutputSpace::Srgb,
+                resampler: pipeline::Resampler::default(),
+                visualize,
+                soft_proof,
+            },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            &mut PrefixCache::default(),
+            &mut BrushCache::default(),
+        )
+        .0
+    }
+
+    /// The RGBA of pixel `i` of a 3×1 frame.
+    fn px(f: &RenderedFrame, i: usize) -> [u8; 4] {
+        [
+            f.rgba[i * 4],
+            f.rgba[i * 4 + 1],
+            f.rgba[i * 4 + 2],
+            f.rgba[i * 4 + 3],
+        ]
+    }
+
+    fn proof(space: color::OutputSpace, warn: bool) -> Option<Proof> {
+        Some(Proof { space, warn })
+    }
+
+    #[test]
+    fn the_fixture_is_in_one_gamut_and_out_of_another() {
+        // ⚠⚠ The fixture's own premise, asserted before anything is built on it. A colour flagged
+        // in *every* space cannot tell a working proof from one that ignores the space argument
+        // entirely — which is the shape of bug the whole feature is exposed to. If this fails, the
+        // tests below are measuring something other than what they name.
+        assert!(
+            color::is_out_of_gamut(P3_GREEN, color::OutputSpace::Srgb),
+            "fixture check: the green must be outside sRGB"
+        );
+        assert!(
+            !color::is_out_of_gamut(P3_GREEN, color::OutputSpace::DisplayP3),
+            "fixture check: the green must be inside Display P3"
+        );
+        assert!(!color::is_out_of_gamut(IN_GAMUT, color::OutputSpace::Srgb));
+        assert!(color::is_out_of_gamut(WIDE_GREEN, color::OutputSpace::Srgb));
+    }
+
+    /// ⚠⚠ **The histogram describes the PHOTOGRAPH, never the view mode.** It is derived from
+    /// `pack`'s sRGB quantisation, so a proof applied before that point silently makes it
+    /// display-referred — the bug the display-profile work shipped and caught by re-reading what
+    /// consumes the bytes.
+    ///
+    /// ⚠⚠ It holds **byte for byte and by construction**, not by luck: while proofing the tail
+    /// runs twice, and the histogram comes from an unmodified sRGB run. A single ProPhoto run was
+    /// tried first and measured to move 12 of 12 real frames' histograms, worst five levels.
+    #[test]
+    fn the_histogram_is_unaffected_by_the_soft_proof() {
+        let buf = gamut_fixture();
+        let plain = proofed(&buf, None);
+        let mut moved = false;
+        for space in color::OutputSpace::DISPLAYS {
+            for warn in [false, true] {
+                let p = proofed(&buf, proof(space, warn));
+                assert_eq!(
+                    plain.hist,
+                    p.hist,
+                    "the proof reached the histogram ({space:?}, warn={warn})"
+                );
+                // ⚠ The sRGB instrument channel too. A colour readout built on the *texture*
+                // would report the proof's numbers, which look entirely plausible and are wrong.
+                assert_eq!(
+                    *plain.srgb, *p.srgb,
+                    "the proof reached the readout's bytes ({space:?}, warn={warn})"
+                );
+                moved |= *plain.rgba != *p.rgba;
+            }
+        }
+        assert!(
+            moved,
+            "fixture check: no proof changed the texture, so this test proves nothing"
+        );
+    }
+
+    /// ⚠ With the proof off, `pack` is bit-exactly what it was — so nothing about the ordinary
+    /// path moved. `render_once` is the reference precisely because it has no proof concept at
+    /// all: it always passes `None`, so it cannot drift with this feature.
+    #[test]
+    fn the_proof_off_path_is_unchanged() {
+        let buf = gamut_fixture();
+        let cold = render_once(
+            &buf,
+            &Edits::default(),
+            3,
+            1.0,
+            color::OutputSpace::Srgb,
+            pipeline::Resampler::default(),
+        );
+        let off = proofed(&buf, None);
+        assert_eq!(*cold.rgba, *off.rgba, "the texture moved with the proof off");
+        assert_eq!(*cold.srgb, *off.srgb, "the sRGB channel moved");
+        assert_eq!(cold.hist, off.hist, "the histogram moved");
+        // ⚠ And the fixture is one a proof genuinely changes, or "unchanged" would be trivially
+        // true of an image nothing could move.
+        let on = proofed(&buf, proof(color::OutputSpace::Srgb, true));
+        assert_ne!(
+            *cold.rgba, *on.rgba,
+            "fixture check: the proof changed nothing, so this test proves nothing"
+        );
+    }
+
+    /// ⚠⚠ **Both halves, and the second is the one that matters.** A warning that flags every
+    /// pixel and one that flags none each pass a one-sided assertion.
+    #[test]
+    fn a_colour_the_proof_space_cannot_hold_is_marked_and_one_it_can_is_not() {
+        let buf = gamut_fixture();
+        let f = proofed(&buf, proof(color::OutputSpace::Srgb, true));
+        assert_ne!(
+            px(&f, 0),
+            marked(),
+            "a neutral grey is in gamut everywhere and must not be marked"
+        );
+        assert_eq!(px(&f, 1), marked(), "sRGB cannot hold this green");
+        assert_eq!(px(&f, 2), marked(), "sRGB cannot hold ProPhoto green");
+    }
+
+    /// The warning as it must appear in the texture.
+    fn marked() -> [u8; 4] {
+        [255, 60, 60, 255]
+    }
+
+    /// ⚠ The colour is **fixed**, asserted, so it cannot drift onto the theme accent — which is
+    /// user-switchable and includes a `Neutral` setting whose whole point is to have no colour,
+    /// defeating the warning exactly when someone had chosen it.
+    #[test]
+    fn the_warning_colour_is_fixed() {
+        let buf = gamut_fixture();
+        let f = proofed(&buf, proof(color::OutputSpace::Srgb, true));
+        assert_eq!(
+            px(&f, 2),
+            marked(),
+            "the warning must be the crop overlay's fixed red (255, 60, 60)"
+        );
+    }
+
+    /// ⚠ The warning is a **separate toggle** from the proof: proofing without it is the common
+    /// case. Without this, a version that marked unconditionally would pass every other test here.
+    #[test]
+    fn the_warning_only_fires_when_it_is_switched_on() {
+        let buf = gamut_fixture();
+        let quiet = proofed(&buf, proof(color::OutputSpace::Srgb, false));
+        let loud = proofed(&buf, proof(color::OutputSpace::Srgb, true));
+        assert_ne!(
+            px(&quiet, 2),
+            marked(),
+            "the warning fired with the flag off"
+        );
+        assert_eq!(px(&loud, 2), marked(), "fixture check: nothing was marked");
+        // The proof itself still applies with the warning off — only the marking is suppressed.
+        //
+        // ⚠⚠ Measured against **Display P3**, not sRGB, and the reason is a finding rather than a
+        // convenience: an sRGB proof with the warning off came back *bit-identical* to no proof on
+        // this fixture, which is correct. The ordinary render already clips into sRGB, so proofing
+        // into sRGB re-does what the pipeline just did. **An sRGB proof is only informative with
+        // the warning on** — the marking is the whole of what it adds — and a test asserting
+        // otherwise would have been asserting something false about correct code.
+        let plain = proofed(&buf, None);
+        let p3 = proofed(&buf, proof(color::OutputSpace::DisplayP3, false));
+        assert_ne!(
+            *plain.rgba, *p3.rgba,
+            "the proof did nothing with the warning off"
+        );
+    }
+
+    /// ⚠⚠ **The test that catches a warning ignoring its space argument.** The green is inside
+    /// Display P3 and outside sRGB, so proofing the same frame into the two spaces must mark it in
+    /// one and not the other. A fixture flagged everywhere cannot see this, and neither can a test
+    /// that only ever proofs into one space.
+    #[test]
+    fn the_proof_space_decides_what_is_marked() {
+        let buf = gamut_fixture();
+        let srgb = proofed(&buf, proof(color::OutputSpace::Srgb, true));
+        let p3 = proofed(&buf, proof(color::OutputSpace::DisplayP3, true));
+        assert_eq!(px(&srgb, 1), marked(), "sRGB cannot hold this green");
+        assert_ne!(px(&p3, 1), marked(), "Display P3 can hold this green");
+        // ⚠ And a colour outside *both* is marked either way, so "P3 marks nothing" is excluded.
+        assert_eq!(px(&p3, 2), marked(), "P3 cannot hold ProPhoto green");
+    }
+
+    /// ⚠ The proof reaches the texture at all, and reaches it *differently* per space — the
+    /// failure this whole task risks is a menu that changes a field nothing reads.
+    #[test]
+    fn the_proof_reaches_the_texture() {
+        let buf = gamut_fixture();
+        let plain = proofed(&buf, None);
+        let srgb = proofed(&buf, proof(color::OutputSpace::Srgb, false));
+        let p3 = proofed(&buf, proof(color::OutputSpace::DisplayP3, false));
+        assert_ne!(*plain.rgba, *p3.rgba, "the proof never reached `pack`");
+        assert_ne!(
+            *srgb.rgba, *p3.rgba,
+            "the two proof spaces produced the same texture"
+        );
+        // ⚠ The direction, not merely a difference: P3's primaries are wider, so an in-gamut
+        // colour needs a *smaller* green coordinate there than in sRGB. An inverted conversion
+        // would also differ and would be wrong in exactly the way this feature exists to avoid.
+        assert!(
+            px(&p3, 1)[1] < px(&srgb, 1)[1],
+            "P3 green {:?} should sit below sRGB green {:?}",
+            px(&p3, 1),
+            px(&srgb, 1)
+        );
+    }
+
+    /// ⚠ Visualize Spots and the proof are both view modes applied at the same point in `pack`,
+    /// and the diagnostic one wins: its edge view is achromatic, so proofing it would mark nothing
+    /// and show nothing while still paying for a second tail run. Asserted so the suppression is a
+    /// decision rather than something a later reader removes as redundant.
+    #[test]
+    fn visualize_spots_suppresses_the_proof() {
+        let buf = gamut_fixture();
+        let vis = proofed_with(&buf, None, Some(12.0));
+        let both = proofed_with(&buf, proof(color::OutputSpace::Srgb, true), Some(12.0));
+        assert_eq!(
+            *vis.rgba, *both.rgba,
+            "the proof reached the edge view's texture"
+        );
     }
 
     #[test]
@@ -2046,6 +2448,7 @@ mod tests {
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
             visualize: None,
+            soft_proof: None,
         };
         let engine = RenderEngine::new(
             Arc::new(ImageBuf::new(4, 2)),

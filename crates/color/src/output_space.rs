@@ -20,7 +20,12 @@ const ADOBE_RGB_GAMMA: f32 = 563.0 / 256.0;
 const PROPHOTO_TOE_END: f32 = 0.001_953_125;
 
 /// A space an export can be written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+///
+/// ⚠ `Hash` is carried for `menu::Command`, which derives it so the native macOS menu can key its
+/// item-id map — the same reason `Tool` carries it. It is not used for colour.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum OutputSpace {
     /// The safe default: every browser, every screen, every recipient.
     #[default]
@@ -123,6 +128,35 @@ impl OutputSpace {
                     v * 16.0
                 } else {
                     v.powf(1.0 / 1.8)
+                }
+            }
+        }
+    }
+
+    /// The inverse of [`Self::encode`]: an encoded value back to linear.
+    ///
+    /// ⚠⚠ **This recovers `[0, 1]` and nothing outside it, because `encode` clamps.** A sample the
+    /// encode ceilinged at 1.0 or floored at 0.0 is gone, and no inverse can bring it back. That
+    /// is what bounds the soft proof to "exact *within* the space it round-tripped through",
+    /// stated here rather than left to be found later as a bug.
+    ///
+    /// ⚠ It lives beside `encode` so the two cannot drift. A transfer curve inverted in a second
+    /// file is how a round trip comes to be off by a gamma nobody notices until a shadow looks
+    /// wrong — the same reasoning that keeps the primaries and the curve on one type.
+    #[inline]
+    pub fn decode(self, v: f32) -> f32 {
+        let v = v.clamp(0.0, 1.0);
+        match self {
+            OutputSpace::Srgb | OutputSpace::DisplayP3 => crate::srgb_to_linear(v),
+            OutputSpace::AdobeRgb => v.powf(ADOBE_RGB_GAMMA),
+            // ⚠ The threshold is the toe's **encoded** end, `PROPHOTO_TOE_END * 16.0`, not
+            // `PROPHOTO_TOE_END` itself. Using the linear value here would put the join at
+            // 1/512 on a curve whose join is at 1/32, silently bending everything between.
+            OutputSpace::ProPhoto => {
+                if v < PROPHOTO_TOE_END * 16.0 {
+                    v / 16.0
+                } else {
+                    v.powf(1.8)
                 }
             }
         }
@@ -364,6 +398,62 @@ mod tests {
         for s in OutputSpace::ALL {
             assert_eq!(s.encode(-0.5), 0.0, "{} let a negative through", s.label());
             let top = s.encode(2.0);
+            assert!(
+                top <= 1.0 && (top - 1.0).abs() < 1e-6,
+                "{} let a value above 1 through: {top}",
+                s.label()
+            );
+        }
+    }
+
+    #[test]
+    fn every_curve_round_trips_through_its_inverse() {
+        // ⚠⚠ The property the soft proof rests on: the tail is rendered into ProPhoto and `pack`
+        // decodes it back to the working space before testing the gamut. If `decode` is not the
+        // inverse of `encode`, every proofed pixel is measured against a colour that is not the
+        // one that was rendered — and the result still *looks* like a photograph, which is why
+        // this is asserted rather than assumed.
+        for s in OutputSpace::ALL {
+            let mut v = 0.0f32;
+            while v <= 1.0 {
+                let back = s.decode(s.encode(v));
+                assert!(
+                    (back - v).abs() < 1e-5,
+                    "{}: {v} encoded and decoded back to {back}",
+                    s.label()
+                );
+                v += 1e-3;
+            }
+        }
+    }
+
+    #[test]
+    fn the_prophoto_inverse_takes_the_toe_at_its_encoded_join() {
+        // ⚠ The discriminating case, and the one a round trip over a coarse sweep can miss: the
+        // join sits at linear 1/512, i.e. **encoded 1/32**. An inverse that branched on the linear
+        // threshold instead would use the power segment right down to 1/512 encoded, bending
+        // everything in between while still round-tripping at both ends of the range.
+        let join_encoded = 1.0f32 / 32.0;
+        assert!(
+            (OutputSpace::ProPhoto.decode(join_encoded) - 1.0 / 512.0).abs() < 1e-7,
+            "the join decoded to {}",
+            OutputSpace::ProPhoto.decode(join_encoded)
+        );
+        // Just inside the toe, where the two branches disagree by a wide margin.
+        let inside = join_encoded / 2.0;
+        assert!(
+            (OutputSpace::ProPhoto.decode(inside) - inside / 16.0).abs() < 1e-9,
+            "the toe is linear with slope 1/16"
+        );
+    }
+
+    #[test]
+    fn the_inverse_clamps_like_the_curve_it_inverts() {
+        // ⚠ `encode` clamps, so `decode` must too, or a texture byte read back as 1.2 would make
+        // a pixel look out of gamut that the render had already brought into it.
+        for s in OutputSpace::ALL {
+            assert_eq!(s.decode(-0.5), 0.0, "{} let a negative through", s.label());
+            let top = s.decode(2.0);
             assert!(
                 top <= 1.0 && (top - 1.0).abs() < 1e-6,
                 "{} let a value above 1 through: {top}",

@@ -14,7 +14,7 @@ use rustroom_app::decode_worker::Decoded;
 use rustroom_app::full_res;
 use rustroom_app::history::History;
 use rustroom_app::photo_id::PhotoId;
-use rustroom_app::render_engine::{FrameSpec, RegionRect, RenderEngine};
+use rustroom_app::render_engine::{FrameSpec, Proof, RegionRect, RenderEngine};
 use rustroom_app::sidecar;
 use rustroom_app::tool::Tool;
 use rustroom_app::view_region;
@@ -86,6 +86,13 @@ impl Session {
                 display_space: self.display_space,
                 resampler: self.resampler,
                 visualize: self.visualize,
+                // ⚠ Built here rather than stored assembled, so "warn against nothing" is not
+                // representable: the flag only reaches the render when a space is being proofed
+                // into. Two independent toggles on the session, one value on the wire.
+                soft_proof: self.soft_proof.map(|space| Proof {
+                    space,
+                    warn: self.gamut_warning,
+                }),
             },
         );
     }
@@ -360,6 +367,10 @@ impl RustroomApp {
                     .effective_display_space(self.os_manages_colour),
                 resampler: self.settings.resampler,
                 visualize: None,
+                // ⚠ The proof is per session and a session is per photo, so a photo always opens
+                // unproofed — matching the field's initialiser below rather than reaching for a
+                // state that does not exist yet.
+                soft_proof: None,
             },
         );
         // Non-RAW formats are decoded at full size, so their buffer is already the real thing.
@@ -376,6 +387,11 @@ impl RustroomApp {
             straighten_line: None,
             readout_bytes: None,
             readout: None,
+            // ⚠ Off on every photo, like `visualize` and for the same reason: the state lives on
+            // the session, which is rebuilt per photo. Recorded as an accepted caveat rather than
+            // an oversight.
+            soft_proof: None,
+            gamut_warning: false,
             path,
             copy: id.copy,
             // ⚠ Read from the sidecar rather than carried from the Library entry, so a session

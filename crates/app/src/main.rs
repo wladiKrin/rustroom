@@ -849,6 +849,23 @@ pub struct Session {
     /// image. A stale number left on screen after the pointer leaves is worse than none, because
     /// it gets trusted.
     readout: Option<[u8; 3]>,
+    /// The output space the canvas is being proofed into, or `None`.
+    ///
+    /// ⚠ On `Session`, not `RustroomApp`: `Session::request` is the one funnel every render goes
+    /// through and it has no app access. That is why `display_space` and `visualize` live here —
+    /// and, as there, the cost is that it resets on a photo switch.
+    ///
+    /// ⚠⚠ **View state, never `Edits`.** A proof is a property of the *view*, exactly like
+    /// `display_space`: it must not reach the sidecar, must not travel with a paste, a preset or
+    /// a sync, and must not appear in any golden.
+    soft_proof: Option<color::OutputSpace>,
+    /// Whether out-of-gamut pixels are marked while proofing.
+    ///
+    /// ⚠ A separate toggle from the proof itself: proofing without the warning is the common case
+    /// — you want to see the picture — and a warning you cannot switch off is chrome. It has no
+    /// effect at all while `soft_proof` is `None`, which is why `Session::request` folds the two
+    /// into one `Proof` rather than sending them separately.
+    gamut_warning: bool,
 }
 
 /// Edits to render for the preview. In Geometry mode the crop is reset to the full frame so

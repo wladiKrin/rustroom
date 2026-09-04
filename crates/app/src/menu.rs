@@ -44,6 +44,14 @@ pub enum Command {
     SavePreset,
     KeyboardShortcuts,
     About,
+    /// Show the canvas through an output space, or `None` to stop proofing.
+    ///
+    /// ⚠ A **view** mode, which is why it lives here beside Before/After rather than in the export
+    /// dialog — proofing what you are about to write is the obvious instinct, and it would make a
+    /// canvas view mode reachable only from a modal that covers the canvas.
+    SoftProof(Option<color::OutputSpace>),
+    /// Toggle the marking of pixels the proof space cannot hold.
+    GamutWarning,
 }
 
 /// A keyboard chord, in the model's own terms so neither renderer's types leak in here.
@@ -123,7 +131,11 @@ impl Shortcut {
 #[derive(Clone, Debug)]
 pub enum Item {
     Action {
-        label: &'static str,
+        /// ⚠ A `String` rather than `&'static str` because the soft-proof entries are built from
+        /// [`color::OutputSpace::DISPLAYS`] and name themselves through `OutputSpace::label`. A
+        /// second static table of space names beside that one is exactly how the menu and the
+        /// export dropdown would come to call the same space different things.
+        label: String,
         command: Command,
         shortcut: Option<Shortcut>,
     },
@@ -137,9 +149,9 @@ pub struct Section {
     pub items: Vec<Item>,
 }
 
-fn action(label: &'static str, command: Command, shortcut: Option<Shortcut>) -> Item {
+fn action(label: impl Into<String>, command: Command, shortcut: Option<Shortcut>) -> Item {
     Item::Action {
-        label,
+        label: label.into(),
         command,
         shortcut,
     }
@@ -191,39 +203,7 @@ pub fn model() -> Vec<Section> {
         },
         Section {
             title: "View",
-            items: vec![
-                action("Library", Command::ShowLibrary, Some(Shortcut::bare('G'))),
-                action("Develop", Command::ShowDevelop, Some(Shortcut::bare('D'))),
-                // ⚠⚠ Bare `C` is safe, and that was **verified in egui-winit's source** rather
-                // than assumed. `is_copy_command` is `modifiers.command && key == C`, so only
-                // the ⌘C chord is swallowed into `Event::Copy`; a bare `C` emits an ordinary
-                // `Event::Key`. Being bare, neither ever becomes a native accelerator — see
-                // `safe_as_native_accelerator` — so neither can steal a character typed into
-                // the search field or the new-collection field.
-                action("Compare", Command::ShowCompare, Some(Shortcut::bare('C'))),
-                action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
-                Item::Separator,
-                action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
-                action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),
-                action("Zoom to fit", Command::FitView, Some(Shortcut::cmd('0'))),
-                action("Zoom to 1:1", Command::ZoomActual, Some(Shortcut::cmd('1'))),
-                action(
-                    "Before / After",
-                    Command::ToggleBeforeAfter,
-                    Some(Shortcut::bare('\\')),
-                ),
-                Item::Separator,
-                action("Filmstrip", Command::ToggleFilmstrip, None),
-                action("Show mask overlay", Command::ToggleMaskOverlay, None),
-                // ⚠ A **bare** key, so it never becomes a native accelerator — see
-                // `safe_as_native_accelerator`. `O` is Lightroom's, which is the whole argument
-                // for it; ⌘O is Open file and the two chords are distinct.
-                action(
-                    "Composition guide",
-                    Command::CycleCompositionGuide,
-                    Some(Shortcut::bare('O')),
-                ),
-            ],
+            items: view_items(),
         },
         Section {
             title: "Photo",
@@ -287,6 +267,71 @@ pub fn model() -> Vec<Section> {
             ],
         },
     ]
+}
+
+/// The View menu's items.
+///
+/// ⚠ Its own function because the soft-proof entries are **built from a list** rather than typed
+/// out, which a `vec![]` literal cannot express — and because appending to a menu that is already
+/// the longest one reads better as a sequence of pushes than as a wall of literals.
+fn view_items() -> Vec<Item> {
+    let mut items = vec![
+                action("Library", Command::ShowLibrary, Some(Shortcut::bare('G'))),
+                action("Develop", Command::ShowDevelop, Some(Shortcut::bare('D'))),
+                // ⚠⚠ Bare `C` is safe, and that was **verified in egui-winit's source** rather
+                // than assumed. `is_copy_command` is `modifiers.command && key == C`, so only
+                // the ⌘C chord is swallowed into `Event::Copy`; a bare `C` emits an ordinary
+                // `Event::Key`. Being bare, neither ever becomes a native accelerator — see
+                // `safe_as_native_accelerator` — so neither can steal a character typed into
+                // the search field or the new-collection field.
+                action("Compare", Command::ShowCompare, Some(Shortcut::bare('C'))),
+                action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
+                Item::Separator,
+                action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
+                action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),
+                action("Zoom to fit", Command::FitView, Some(Shortcut::cmd('0'))),
+                action("Zoom to 1:1", Command::ZoomActual, Some(Shortcut::cmd('1'))),
+                action(
+                    "Before / After",
+                    Command::ToggleBeforeAfter,
+                    Some(Shortcut::bare('\\')),
+                ),
+                Item::Separator,
+                action("Filmstrip", Command::ToggleFilmstrip, None),
+                action("Show mask overlay", Command::ToggleMaskOverlay, None),
+                // ⚠ A **bare** key, so it never becomes a native accelerator — see
+                // `safe_as_native_accelerator`. `O` is Lightroom's, which is the whole argument
+                // for it; ⌘O is Open file and the two chords are distinct.
+                action(
+                    "Composition guide",
+                    Command::CycleCompositionGuide,
+                    Some(Shortcut::bare('O')),
+                ),
+    ];
+
+    // ⚠⚠ **Appended, never inserted.** `PARALLEL-WORK.md` lists this menu among the surfaces any
+    // new dialog or shortcut contends for; appending is what keeps two tracks' additions from
+    // colliding in the middle of a list.
+    //
+    // ⚠ Built from `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, and proofing into the
+    // working space is the identity, so the entry would be a control that does nothing.
+    items.push(Item::Separator);
+    items.push(action("Soft proof: off", Command::SoftProof(None), None));
+    for space in color::OutputSpace::DISPLAYS {
+        items.push(action(
+            format!("Soft proof: {}", space.label()),
+            Command::SoftProof(Some(space)),
+            None,
+        ));
+    }
+    // ⚠ A separate entry from the proof itself, deliberately: proofing without the warning is the
+    // common case, and a warning you cannot switch off is chrome.
+    items.push(action("Gamut warning", Command::GamutWarning, None));
+
+    // ⚠ **No shortcuts on any of these.** A bare key is stolen from every text field and a
+    // text-editing chord breaks editing inside one — `Shortcut::safe_as_native_accelerator`
+    // records the rule — and there is no obvious unclaimed ⌘ chord for a five-entry family.
+    items
 }
 
 /// Every command the model contains, in menu order.
@@ -377,6 +422,54 @@ mod tests {
             assert!(
                 s.safe_as_native_accelerator(),
                 "{s:?} is safe and should be native"
+            );
+        }
+    }
+
+    #[test]
+    fn every_display_space_is_reachable_as_a_proof() {
+        // ⚠ Stated over `DISPLAYS`, so a space added there cannot ship with no way to proof into
+        // it — which would compile and look fine.
+        let cmds = commands();
+        for s in color::OutputSpace::DISPLAYS {
+            assert!(
+                cmds.contains(&Command::SoftProof(Some(s))),
+                "{} has no proof entry",
+                s.label()
+            );
+        }
+        // ⚠ Both the way in and the way out. A proof that cannot be switched off is a mode the
+        // user is stuck in until they change photo.
+        assert!(cmds.contains(&Command::SoftProof(None)), "no way to stop");
+        assert!(cmds.contains(&Command::GamutWarning));
+    }
+
+    #[test]
+    fn the_working_space_is_not_offered_as_a_proof() {
+        // ⚠ Proofing into ProPhoto is the identity — `from_working` returns its argument — so the
+        // entry would be a control that provably does nothing. Building the list from
+        // `OutputSpace::ALL` is exactly how it would creep back in.
+        assert!(!commands().contains(&Command::SoftProof(Some(color::OutputSpace::ProPhoto))));
+    }
+
+    #[test]
+    fn the_proof_entries_name_their_spaces_the_way_the_rest_of_the_app_does() {
+        // ⚠ The labels come from `OutputSpace::label`, not from a second table typed out here.
+        // Two tables is how the View menu and the export dropdown come to call one space by two
+        // names — and the menu's would be the one nobody notices is wrong.
+        let labels: Vec<String> = model()
+            .into_iter()
+            .flat_map(|s| s.items)
+            .filter_map(|i| match i {
+                Item::Action { label, .. } => Some(label),
+                Item::Separator => None,
+            })
+            .collect();
+        for s in color::OutputSpace::DISPLAYS {
+            assert!(
+                labels.iter().any(|l| l.contains(s.label())),
+                "no menu entry names {}",
+                s.label()
             );
         }
     }
