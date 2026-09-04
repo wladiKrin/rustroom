@@ -172,24 +172,6 @@ mod tests {
     use super::*;
     use pipeline::RenderScale;
 
-    #[test]
-    fn the_region_margin_exceeds_every_tail_kernel_radius() {
-        // ⚠ The invariant that keeps 1:1 panning seam-free.
-        //
-        // Noise reduction cannot produce a seam because it lives in the *prefix*, which
-        // always runs whole-buffer. Sharpening and local contrast live in the **tail**,
-        // which runs on the cropped region — so at the region's edge they read neighbours
-        // that do not exist, producing a band of wrong output. `with_margin` renders that
-        // much extra on every side, so the band is never displayed.
-        //
-        // Widening a slider range, or adding another spatial stage to the tail, must fail
-        // here rather than produce seams that only show up while panning at 1:1.
-        let worst = pipeline::max_tail_kernel_radius(RenderScale::FULL);
-        assert!(
-            REGION_MARGIN > worst,
-            "REGION_MARGIN {REGION_MARGIN} must exceed the tail's kernel radius {worst}"
-        );
-    }
 
     #[test]
     fn the_ladder_doubles_from_fit_to_the_buffer() {

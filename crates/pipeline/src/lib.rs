@@ -772,29 +772,36 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
         0
     };
     let local = stages::local_contrast::kernel_reach(&edits.local_contrast, scale);
-    sharp + local
+
+    // ⚠⚠ **Summed over the masks, not maximised.** Mask N runs on mask N-1's output, so a pixel
+    // at the region edge reads through every mask in turn — exactly the reason the global
+    // `sharp` and `local` above are added rather than maxed. Taking a max here is invisible with
+    // one mask and wrong with two; see `two_masked_clarities_reach_further_than_one`.
+    //
+    // ⚠ This is why no fixed region margin can be correct: the stack is unbounded, so the reach
+    // is a function of the edits and the caller must size its request from it.
+    let masked: usize = edits
+        .masks
+        .iter()
+        .map(|m| {
+            let a = &m.adjustments;
+            let s = if a.sharpening.is_active() {
+                stages::sharpening::max_kernel_radius(a.sharpening.radius, scale)
+            } else {
+                0
+            };
+            s + stages::local_contrast::kernel_reach(&a.local_contrast, scale)
+        })
+        .sum();
+
+    sharp + local + masked
 }
 
-/// [`tail_kernel_radius`] maximised over every representable setting — what a fixed render
-/// margin has to exceed.
-///
-/// Defined *through* `tail_kernel_radius` rather than duplicating the maxima, so the two
-/// cannot drift apart when a stage is added.
-pub fn max_tail_kernel_radius(scale: RenderScale) -> usize {
-    let worst = Edits {
-        sharpening: edit_model::Sharpening {
-            amount: 100.0,
-            radius: RADIUS_RANGE.1,
-            ..Default::default()
-        },
-        local_contrast: edit_model::LocalContrast {
-            texture: 100.0,
-            clarity: 100.0,
-        },
-        ..Edits::default()
-    };
-    tail_kernel_radius(&worst, scale)
-}
+/// ⚠⚠ **There is deliberately no `max_tail_kernel_radius` any more.** It maximised
+/// [`tail_kernel_radius`] over every representable setting, and a fixed region margin was
+/// checked against it. Masks now carry spatial adjustments and **chain**, so N masked clarities
+/// reach N x 120 px and no constant bounds the result. The caller derives its margin from
+/// `tail_kernel_radius` per render instead — see `Session::render_margin` in the app crate.
 
 #[cfg(test)]
 mod tests {
@@ -1652,6 +1659,46 @@ mod tests {
     /// ⚠ This was written *before* the stages joined the shared builder, so it passed from the
     /// start — a tripwire, not a red test. What makes it a real guard is the sabotage recorded
     /// with it: hand `edits.local_contrast` to the builder and watch this fail.
+    /// Two masked clarities reach twice as far as one.
+    ///
+    /// ⚠⚠ **A ONE-MASK TEST CANNOT SEE SUM-VERSUS-MAX** — with a single mask the two are
+    /// identical, so the wrong arithmetic passes. Two is the smallest fixture that discriminates,
+    /// the same shape as the same-month-in-two-years fixture.
+    ///
+    /// ⚠ The reaches compose because mask N runs on mask N-1's output, so a pixel at the region
+    /// edge reads through every mask in turn. Getting this wrong makes the region margin too
+    /// small, and the failure is silent: a subtly wrong band at the edge of the visible area.
+    #[test]
+    fn two_masked_clarities_reach_further_than_one() {
+        let masked = |clarity: f32| edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::default(),
+            adjustments: edit_model::LocalAdjustments {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 0.0,
+                    clarity,
+                },
+                ..Default::default()
+            },
+        };
+        let one = Edits {
+            masks: vec![masked(100.0)],
+            ..Edits::default()
+        };
+        let two = Edits {
+            masks: vec![masked(100.0), masked(100.0)],
+            ..Edits::default()
+        };
+
+        let r1 = tail_kernel_radius(&one, RenderScale::FULL);
+        let r2 = tail_kernel_radius(&two, RenderScale::FULL);
+        assert!(r1 > 0, "a masked clarity must contribute reach at all");
+        assert_eq!(
+            r2,
+            2 * r1,
+            "the reaches compose: two masks reach twice as far, not the same"
+        );
+    }
+
     #[test]
     fn the_global_tail_does_not_apply_the_mask_only_stages_twice() {
         let edits = Edits {
@@ -1976,16 +2023,19 @@ mod tests {
         };
         assert_eq!(tail_kernel_radius(&both, RenderScale::FULL), 129);
 
-        // The worst case must bound every representable setting.
-        let worst = max_tail_kernel_radius(RenderScale::FULL);
-        for e in [&neutral, &sharp, &clarity, &both, &all_edits()] {
-            assert!(
-                tail_kernel_radius(e, RenderScale::FULL) <= worst,
-                "an edit set exceeded max_tail_kernel_radius {worst}"
-            );
-        }
-        // And it must be tighter at a smaller render scale, or a preview would over-reserve.
-        assert!(max_tail_kernel_radius(RenderScale::new(0.25)) < worst);
+        // ⚠⚠ There used to be a worst-case bound here — `max_tail_kernel_radius`, asserted to
+        // cover every representable edit set. **That premise is now false and the function is
+        // gone.** Masks carry spatial adjustments and chain, so the reach is unbounded in the
+        // number of masks; no constant bounds it. The replacement is that the *caller* derives
+        // its margin from this function per render, which is what `Session::render_margin` does.
+        //
+        // What survives is the half that still means something: the reach must shrink with the
+        // render scale, or a preview would over-reserve.
+        assert!(
+            tail_kernel_radius(&both, RenderScale::new(0.25))
+                < tail_kernel_radius(&both, RenderScale::FULL),
+            "the reach must shrink with the render scale"
+        );
     }
 
     #[test]
