@@ -199,6 +199,43 @@ struct Peak {
     votes: f32,
 }
 
+/// Everything a caller needs to turn accumulator peaks into lines, without re-deriving the frame's
+/// geometry.
+///
+/// ⚠ Exists so [`verticals_with_floor`] and [`refine`] share one candidate pipeline — floor,
+/// direction gate, contiguity, peak ranking — and differ only in how they *choose*. Two pipelines
+/// would drift, which is the rule `test_support.rs` already states for duplicated helpers.
+struct Candidates {
+    /// Surviving peaks, strongest first.
+    peaks: Vec<Peak>,
+    cx: f32,
+    cy: f32,
+}
+
+impl Candidates {
+    /// No candidates at all — the degenerate frames.
+    fn empty() -> Self {
+        Self {
+            peaks: Vec::new(),
+            cx: 0.0,
+            cy: 0.0,
+        }
+    }
+
+    /// Where this peak's line crosses row `y`, in pixels.
+    fn at(&self, p: &Peak, y: f32) -> f32 {
+        self.cx + p.offset + (y - self.cy) * p.angle.tan()
+    }
+
+    /// A peak as a frame-normalised guide spanning the full height.
+    fn guide(&self, p: &Peak, w: usize, h: usize) -> Guide {
+        Guide {
+            from: [self.at(p, 0.0) / w as f32, 0.0],
+            to: [self.at(p, h as f32) / w as f32, 1.0],
+        }
+    }
+}
+
 /// Candidate near-vertical lines, best first, at most two.
 ///
 /// The plane is single-channel luminance of a frame `w` × `h`; the returned guides are in
@@ -220,9 +257,9 @@ pub fn verticals(luma: &[f32], w: usize, h: usize) -> Vec<Guide> {
 /// and [`verticals`] delegates here rather than the two sharing copied code.** A second
 /// implementation is how a swept value comes to be right for a detector nobody ships — the sweep
 /// must measure exactly what production runs.
-pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32) -> Vec<Guide> {
+fn candidates(luma: &[f32], w: usize, h: usize, floor_levels: f32) -> Candidates {
     if w < 8 || h < 8 || luma.len() != w * h {
-        return Vec::new();
+        return Candidates::empty();
     }
     // ⚠⚠ **Display-encoded before the Sobel, and this is what lets the floor below be an absolute
     // number.** `luma` arrives as `color::luminance` — linear, scene-referred ProPhoto — where a
@@ -315,7 +352,7 @@ pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32)
     let mut peaks: Vec<Peak> = Vec::new();
     let best = acc.iter().copied().fold(0.0f32, f32::max);
     if best <= 1e-6 {
-        return Vec::new();
+        return Candidates::empty();
     }
     // ⚠ Absolute as well as relative — see `MIN_RUN_FRACTION`. Without the absolute half a
     // photograph with no vertical in it still returns two. This is the cheap prefilter; the
@@ -357,14 +394,24 @@ pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32)
         longest_run(&g, w, h, cx, cy, p.angle, p.offset, floor, lean_max, band) >= min_run
     });
 
-    if peaks.is_empty() {
-        return Vec::new();
-    }
+    // ⚠ Strongest first, here rather than in either caller: both want that order, and sorting
+    // twice is how the two would come to disagree about which peak is "best".
     peaks.sort_by(|a, b| {
         b.votes
             .partial_cmp(&a.votes)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    Candidates { peaks, cx, cy }
+}
+
+/// Candidate near-vertical lines, best first, at most two.
+///
+/// ⚠ The choosing half. Everything before it lives in [`candidates`], which [`refine`] shares.
+pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32) -> Vec<Guide> {
+    let c = candidates(luma, w, h, floor_levels);
+    if c.peaks.is_empty() {
+        return Vec::new();
+    }
 
     // ⚠⚠ **Separation, not the top two by vote.** The strongest peak is taken, then the strongest
     // peak that is far enough from it — because a vanishing point from two nearly-coincident
@@ -372,26 +419,16 @@ pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32)
     // records as having been "reported in use as the image coming out rotated so that carefully
     // drawn vertical guides ended up not vertical at all."
     let min_sep = w as f32 * MIN_SEPARATION;
-    let mut chosen = vec![&peaks[0]];
-    if let Some(p) = peaks
+    let mut chosen = vec![&c.peaks[0]];
+    if let Some(p) = c
+        .peaks
         .iter()
         .skip(1)
-        .find(|p| (p.offset - peaks[0].offset).abs() >= min_sep)
+        .find(|p| (p.offset - c.peaks[0].offset).abs() >= min_sep)
     {
         chosen.push(p);
     }
-
-    // A peak becomes a guide spanning the frame, in `[0, 1]`.
-    chosen
-        .iter()
-        .map(|p| {
-            let at = |y: f32| (cx + p.offset + (y - cy) * p.angle.tan()) / w as f32;
-            Guide {
-                from: [at(0.0), 0.0],
-                to: [at(h as f32), 1.0],
-            }
-        })
-        .collect()
+    chosen.iter().map(|p| c.guide(p, w, h)).collect()
 }
 
 #[cfg(test)]
