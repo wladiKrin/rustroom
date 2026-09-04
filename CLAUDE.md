@@ -135,7 +135,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **✅ M5.4b IS CLOSED, AND WITH IT M5.4.** A display rendering, a per-camera `BaselineExposure`, and `ProfileToneCurve` read from the profile — **which is the answer to the design question that was blocking `ProfileLookTable` and creative 3-D LUTs (M7.5) as well.** Its section is **"M5.4b — a display rendering"** below, and the two defects found by using it are in it: the preference seam **overwriting every stored value on open** (which predated the rendering and was silently resetting lens corrections too), and the **0.945× saturation deficit** against the camera.
 >
-> **▶ NEXT ACTION: `m7.4-contrast-floor` is confirmed by use and awaits the user's word to merge** — 21 commits, **1858 → 1896 tests**, 53 goldens byte-identical, `fmt`/`clippy -D warnings`/`test --all` green together. ⚠ Also open, small and awaiting the user: **D's readout wording**, `■ 10 128 250`.
+> **▶ NEXT ACTION: pick the next milestone — nothing is in flight.** `main` is clean, no branches, no worktrees. See the open-items paragraph below and ⚠ verify each against the roadmap in the vault before proposing it, since some may have been closed under another name.
+>
+> **🎯 M7.4 IS MERGED (2026-09-04), fast-forward, and CONFIRMED BY USE** — 22 commits, **1858 → 1896 tests**, 53 goldens byte-identical, `fmt`/`clippy -D warnings`/`test --all` green together on the merged tree (whose hash was identical before and after, so nothing was combined). **W4 is fully closed with it**: track C's worktree and branch are merged and removed, and the repo has no outstanding branches at all.
+>
+> ✅ **D's readout wording is signed off (2026-09-04):** `■ 10 128 250` — a swatch plus a bare triple — stands.
 >
 > **✅ M7.4 IS DONE (2026-09-04), and the shape of the feature changed twice on the way.** Track C's detector was held out of W4 because it "put the guides at random". Two rounds fixed real faults in it and **neither made Auto usable**; the third round changed what the button is for. Specs `2026-09-03-detector-contrast-floor-design.md` and `2026-09-04-guide-refinement-design.md`.
 >
