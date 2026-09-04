@@ -12,7 +12,7 @@ would ship a subset of one capability. The name is left alone because the roadma
 
 ⚠ **Masked noise reduction and dehaze are a separate later slice**, for a structural reason given
 in §7, not for lack of effort. M7.2 does not close with them outstanding — this is M3.1's a/b/c
-shape, and the milestone's own "Done when" should be read against the tail three.
+shape, and the milestone's own "Done when" should be read against the four stages above.
 
 ---
 
@@ -195,4 +195,4 @@ fixture** before it is a finding about the guard.
    becomes the next milestone.
 4. **Skin softening is *not* among the gaps**, though the absence of masked NR suggests it: Texture
    is bipolar and −100 removes the fine band, softening edges within it. The commonest use of the
-   feature is covered by the tail three.
+   feature is covered by what ships here.
