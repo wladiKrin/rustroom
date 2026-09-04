@@ -1023,6 +1023,137 @@ impl LuminanceRange {
     }
 }
 
+/// A colour range mask: coverage is full inside the hue band `[low, high]` and ramps away
+/// outside it, gated so that near-neutral pixels are never selected.
+///
+/// The companion to [`LuminanceRange`], mirroring it field for field with **two deliberate
+/// differences**: hue wraps, and a chroma gate.
+///
+/// ⚠ **`low`/`high` are Oklab hue DEGREES, 0..=360** — the same angle `HslStage`'s `BAND_HUES`
+/// are measured in, so "red" means the same thing to both. As with [`LuminanceRange`], the
+/// conversion from a working-space pixel lives at the single call site in
+/// `pipeline::stages::mask`: `edit-model` deliberately has no `color` dependency, which is why
+/// there is no pixel-facing wrapper here and [`ColourRange::coverage_at`] takes the hue and
+/// chroma already in hand.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColourRange {
+    /// Lower edge of the fully-covered band, in Oklab hue degrees 0..=360.
+    pub low: f32,
+    /// Upper edge. ⚠⚠ May be **less** than `low`, which means the band crosses 0° — see
+    /// `a_range_across_zero_selects_red_and_not_everything_else`.
+    pub high: f32,
+    /// 0 = a hard edge at each end, 100 = the widest ramp.
+    ///
+    /// ⚠ Named and scaled to match [`LuminanceRange::feather`], [`RadialGradient::feather`] and
+    /// the vignette's, so the app keeps one feather idiom rather than four. Smoothstep, as there:
+    /// a linear ramp leaves a visible crease where its derivative jumps, which on a smooth sky is
+    /// exactly the artefact a range mask is reached for to avoid.
+    pub feather: f32,
+    /// Below this chroma a pixel is not selected at all.
+    ///
+    /// ⚠⚠ **Load-bearing, not a refinement.** A near-neutral pixel's hue is sensor noise:
+    /// `HslStage` measured chroma ~0.003 at ±0.6% noise against ~0.06 for a real colour, and
+    /// **37.8× noise amplification** without a taper. Exposed as a control rather than fixed
+    /// because what counts as "coloured enough" genuinely differs between a pastel skin tone and
+    /// a saturated sign — which is exactly the judgement HSL's fixed `CHROMA_FADE` cannot make.
+    pub min_chroma: f32,
+    /// Flip coverage, as every other shape does.
+    pub invert: bool,
+}
+
+/// ⚠ **Hand-written, not derived**, for [`LuminanceRange::default`]'s reason: the container-level
+/// `#[serde(default)]` fills a missing field from the *struct's* `Default`, so a derived one would
+/// give every partial sidecar a band of **zero width at 0°** plus `feather: 0` and
+/// `min_chroma: 0` — a mask that selects nothing, silently.
+///
+/// The default selects **the warm half of the wheel with a soft shoulder**: 0°..=120° spans reds,
+/// oranges and yellows, which is the band a colour range is most often reached for, and it is
+/// visibly a selection rather than a global adjustment. `min_chroma` starts at HSL's measured
+/// `CHROMA_FADE` — the value that separates a real colour from sensor noise on this project's own
+/// measurement — so the gate is doing its job before anyone touches the slider.
+impl Default for ColourRange {
+    fn default() -> Self {
+        Self {
+            low: 0.0,
+            high: 120.0,
+            feather: 50.0,
+            min_chroma: 0.02,
+            invert: false,
+        }
+    }
+}
+
+impl ColourRange {
+    /// The widest ramp `feather` can ask for, in hue degrees either side of the band.
+    ///
+    /// Half a turn, so feather 100 reaches all the way round from either edge and the mask
+    /// degenerates gracefully into "everything, weighted" rather than clipping — the analogue of
+    /// [`LuminanceRange::FEATHER_SCALE`] being half its 0..=100 scale.
+    const FEATHER_SCALE: f32 = 180.0;
+
+    /// Below this the ramp is treated as a hard edge.
+    ///
+    /// ⚠ Load-bearing for the same reason [`LuminanceRange::FEATHER_EPS`] is, and reachable by
+    /// the same two slider drags: with `w == 0` the shoulders are `0.0/0.0`, and a zero-width
+    /// band probed exactly on itself has no non-NaN operand for `f32::min` to fall back on.
+    /// `MaskStage`'s blend then propagates the NaN and the selected colours quantize to black.
+    const FEATHER_EPS: f32 = 1e-4;
+
+    /// The chroma over which coverage fades in, above `min_chroma`.
+    ///
+    /// ⚠ A taper rather than a cutoff, which is the shape `HslStage` arrived at by measurement:
+    /// a hard threshold puts a visible edge through a smooth gradient wherever the photograph
+    /// happens to cross it, in exactly the near-neutral region where the hue driving that edge is
+    /// noise. Its own `CHROMA_FADE` is this width.
+    const CHROMA_FADE: f32 = 0.02;
+
+    /// Coverage for a pixel of Oklab hue `hue_degrees` and Oklab chroma `chroma`, in `0.0..=1.0`.
+    ///
+    /// ⚠⚠ **The hue axis WRAPS, and that is the one place this must not mirror
+    /// [`LuminanceRange`].** Lightness is an interval and hue is a circle: sRGB red sits at 29.23°
+    /// and magenta at 328.36°, either side of 0°, so a non-wrapping band cannot express the single
+    /// most commonly masked colour. `low > high` therefore means the band **crosses 0°** —
+    /// `340 → 20` selects red — rather than being sorted into `20..340`, which is what
+    /// `LuminanceRange` correctly does with a crossed pair and would here select every colour but
+    /// the one asked for.
+    ///
+    /// ⚠ Both the offset and the span are taken with `rem_euclid(360)`, so the wrapped and
+    /// unwrapped cases are **one expression with no branch**. A branch on `low > high` is a second
+    /// rule that can disagree with the first.
+    pub fn coverage_at(&self, hue_degrees: f32, chroma: f32) -> f32 {
+        let span = (self.high - self.low).rem_euclid(360.0);
+        let offset = (hue_degrees - self.low).rem_euclid(360.0);
+        let w = (self.feather / 100.0).clamp(0.0, 1.0) * Self::FEATHER_SCALE;
+        let band = if w <= Self::FEATHER_EPS {
+            if offset <= span {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            // Distance outside the band, measured the short way round from whichever edge is
+            // nearer: 0 inside it, growing to at most half a turn opposite.
+            let past = (offset - span).max(0.0);
+            let before = (360.0 - offset).max(0.0);
+            let t = (1.0 - past.min(before) / w).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        // ⚠⚠ The chroma gate, applied BEFORE `invert`. Inverting must give "everything except
+        // these colours", and a near-neutral pixel has no colour to be excepted — putting the
+        // gate after the flip would make an inverted mask select every grey in the photograph,
+        // which is precisely the speckle this gate exists to prevent, at full strength.
+        let gate = ((chroma - self.min_chroma) / Self::CHROMA_FADE).clamp(0.0, 1.0);
+        let gate = gate * gate * (3.0 - 2.0 * gate);
+        let c = band * gate;
+        if self.invert {
+            1.0 - c
+        } else {
+            c
+        }
+    }
+}
+
 /// The mask primitives.
 ///
 /// ⚠ **Not `Copy`** — `Mask::Brush` carries a `Vec<BrushStroke>`. [`MaskedAdjustment`] is
@@ -2904,6 +3035,133 @@ mod tests {
         assert!(s.contains("Luminance"), "externally tagged: {s}");
         let back: Mask = serde_json::from_str(&s).unwrap();
         assert_eq!(back, m);
+    }
+
+    /// ⚠⚠ **Hue WRAPS and lightness does not — the one place this must not mirror
+    /// [`LuminanceRange`].** sRGB red sits at 29.23° in Oklab and magenta at 328.36°, both in
+    /// `BAND_HUES`, so without wrapping *the single most commonly masked colour is the one the
+    /// control cannot express*.
+    ///
+    /// ⚠ Asserts BOTH halves: that red is covered and that green is not. A wrap bug that selects
+    /// everything passes a coverage-only assertion.
+    #[test]
+    fn a_range_across_zero_selects_red_and_not_everything_else() {
+        let r = ColourRange {
+            low: 340.0,
+            high: 20.0,
+            feather: 0.0,
+            min_chroma: 0.01,
+            invert: false,
+        };
+        assert!(
+            r.coverage_at(350.0, 0.1) > 0.9,
+            "350° is inside a 340→20 band"
+        );
+        assert!(r.coverage_at(10.0, 0.1) > 0.9, "10° is inside it too");
+        assert!(
+            r.coverage_at(150.0, 0.1) < 0.1,
+            "green must NOT be selected"
+        );
+    }
+
+    /// ⚠⚠ **The chroma gate is load-bearing, not a refinement.** `HslStage` measured **37.8× noise
+    /// amplification** on a near-neutral patch without one: a near-neutral pixel's hue is sensor
+    /// noise, so neighbouring pixels land in different hues and get different treatment.
+    ///
+    /// ⚠ The fixture is a NOISY near-neutral, not a perfect grey — a perfect grey has an undefined
+    /// hue and passes against a broken gate too.
+    #[test]
+    fn a_near_neutral_pixel_is_not_selected_however_well_its_hue_matches() {
+        let r = ColourRange {
+            low: 0.0,
+            high: 60.0,
+            feather: 0.0,
+            min_chroma: 0.02,
+            invert: false,
+        };
+        // Hue dead-centre in the band, chroma at sensor-noise level.
+        assert!(
+            r.coverage_at(30.0, 0.003) < 0.1,
+            "noise-level chroma was selected"
+        );
+        assert!(
+            r.coverage_at(30.0, 0.06) > 0.9,
+            "a real colour must still be selected"
+        );
+    }
+
+    /// ⚠⚠ **Added because the sabotage step showed the test above could not see the field it
+    /// names.** Reading `min_chroma` as a fixed 0 leaves the `CHROMA_FADE` taper doing the work on
+    /// its own, which still rejects a noise-level 0.003 (coverage 0.06, under that test's 0.1
+    /// threshold) — so "ignore `min_chroma`" passed while the *control* did nothing. What
+    /// discriminates is that the same pixel must land on either side of the gate depending on
+    /// where the slider is put, which is the entire reason this is exposed rather than fixed.
+    #[test]
+    fn min_chroma_is_a_control_and_not_a_fixed_threshold() {
+        let at = |min_chroma| {
+            ColourRange {
+                low: 0.0,
+                high: 60.0,
+                feather: 0.0,
+                min_chroma,
+                invert: false,
+            }
+            .coverage_at(30.0, 0.03)
+        };
+        assert!(
+            at(0.0) > 0.9,
+            "with the gate open, a muted colour is selected"
+        );
+        assert!(
+            at(0.05) < 0.1,
+            "and with it raised past that colour's chroma, the same pixel is not"
+        );
+    }
+
+    /// ⚠⚠ Probe **ON** the boundary, not either side of it. `RadialGradient`'s
+    /// `feather_zero_is_a_hard_edge` probed either side and never on it, and so PASSED with its
+    /// guard deleted, because IEEE infinity clamped to the right answer.
+    #[test]
+    fn feather_zero_is_a_hard_edge_on_the_boundary_itself() {
+        let r = ColourRange {
+            low: 0.0,
+            high: 60.0,
+            feather: 0.0,
+            min_chroma: 0.0,
+            invert: false,
+        };
+        let on = r.coverage_at(60.0, 0.1);
+        assert!(on.is_finite(), "coverage on the boundary was {on}");
+        assert!(r.coverage_at(59.0, 0.1) > 0.9 && r.coverage_at(61.0, 0.1) < 0.1);
+    }
+
+    /// ⚠ Invert flips coverage, as every other shape does.
+    #[test]
+    fn invert_flips_the_band() {
+        let base = ColourRange {
+            low: 0.0,
+            high: 60.0,
+            feather: 0.0,
+            min_chroma: 0.0,
+            invert: false,
+        };
+        let inv = ColourRange {
+            invert: true,
+            ..base
+        };
+        assert!((base.coverage_at(30.0, 0.1) + inv.coverage_at(30.0, 0.1) - 1.0).abs() < 1e-6);
+    }
+
+    /// ⚠⚠ Hand-written `Default`, not derived. `LuminanceRange::default`'s comment records why: the
+    /// container-level `#[serde(default)]` fills a missing field from the struct's `Default`, so a
+    /// derived one gives every partial sidecar `feather: 0`, `min_chroma: 0` and a band of zero
+    /// width at 0° — a mask selecting nothing, silently.
+    #[test]
+    fn the_default_selects_a_recognisable_band_with_a_soft_shoulder() {
+        let d = ColourRange::default();
+        assert!(d.high > d.low, "a zero-width band selects nothing: {d:?}");
+        assert!(d.feather > 0.0);
+        assert!(d.min_chroma > 0.0);
     }
 
     #[test]
