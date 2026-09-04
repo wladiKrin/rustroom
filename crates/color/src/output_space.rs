@@ -150,9 +150,97 @@ impl OutputSpace {
     }
 }
 
+/// Whether this **working-space** (linear ProPhoto) colour falls outside `space`.
+///
+/// ⚠⚠ **Exact, not a threshold.** A colour is out of gamut when any channel lands below 0 or above
+/// 1 after conversion into the target's primaries and *before* clipping. There is no tuning
+/// constant here, and inventing one would be inventing a judgement.
+///
+/// ⚠⚠ **Measured before the transfer curve, on linear values, and that is what makes it able to
+/// fire at all.** [`OutputSpace::encode`] clamps to `[0, 1]` in every space, so a test taken after
+/// it is identically false for every colour and every target — the whole function would be inert.
+/// The curve is monotonic besides, so it can never bring a negative channel back into range;
+/// applying it first would only obscure by how much.
+///
+/// ⚠ It reuses [`OutputSpace::from_working`], the same matrix an export converts through, rather
+/// than carrying a second conversion path. Two paths is how the proof and the export come to
+/// disagree about what is in gamut, which would be worse than no proof at all.
+pub fn is_out_of_gamut(rgb: [f32; 3], space: OutputSpace) -> bool {
+    space.from_working(rgb).iter().any(|v| *v < 0.0 || *v > 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ **The discriminating fixture is a colour in gamut for ONE space and out for another.** A
+    /// colour flagged everywhere cannot tell a working test from one that ignores the space
+    /// argument entirely — which is the shape of bug this whole function exists to avoid.
+    #[test]
+    fn a_saturated_green_is_inside_prophoto_and_outside_srgb() {
+        // ProPhoto green, expressed in the working space.
+        let g = [0.0f32, 1.0, 0.0];
+        assert!(
+            !is_out_of_gamut(g, OutputSpace::ProPhoto),
+            "it is the working space"
+        );
+        assert!(
+            is_out_of_gamut(g, OutputSpace::Srgb),
+            "sRGB cannot hold ProPhoto green"
+        );
+    }
+
+    /// ⚠ Both halves. A test that flags everything and one that flags nothing each pass a
+    /// one-sided assertion.
+    #[test]
+    fn a_neutral_grey_is_in_gamut_everywhere() {
+        for s in OutputSpace::ALL {
+            assert!(
+                !is_out_of_gamut([0.5, 0.5, 0.5], s),
+                "grey flagged in {s:?}"
+            );
+        }
+    }
+
+    /// ⚠ Exact, not a threshold: out of gamut means a channel below 0 or above 1 after conversion,
+    /// and there is no tuning constant to get wrong.
+    #[test]
+    fn the_boundary_is_exact() {
+        assert!(
+            !is_out_of_gamut([1.0, 1.0, 1.0], OutputSpace::Srgb),
+            "white is in gamut"
+        );
+    }
+
+    /// ⚠ The other side of the boundary, which `the_boundary_is_exact` alone cannot see: a value
+    /// *above* white is out of gamut in every space, the working space included. Without this a
+    /// test of `< 0.0` only would pass the whole set.
+    #[test]
+    fn a_value_above_white_is_out_of_gamut_everywhere() {
+        for s in OutputSpace::ALL {
+            assert!(
+                is_out_of_gamut([1.2, 1.2, 1.2], s),
+                "{s:?} accepted a value above white"
+            );
+        }
+    }
+
+    /// ⚠⚠ The test that pins the *measurement point*: out of gamut is decided on the **linear**
+    /// values, before the transfer curve. The curve clamps to `[0, 1]`, so measuring after it
+    /// would make every colour in gamut in every space and the whole function inert.
+    #[test]
+    fn the_test_is_taken_before_the_transfer_curve() {
+        let g = [0.0f32, 1.0, 0.0];
+        // The proof the curve would destroy the signal: every encoded channel is inside [0, 1].
+        let encoded = OutputSpace::Srgb
+            .from_working(g)
+            .map(|v| OutputSpace::Srgb.encode(v));
+        assert!(
+            encoded.iter().all(|v| (0.0..=1.0).contains(v)),
+            "the curve clamps, so a post-curve test can never fire: {encoded:?}"
+        );
+        assert!(is_out_of_gamut(g, OutputSpace::Srgb));
+    }
 
     #[test]
     fn every_space_maps_white_to_white() {

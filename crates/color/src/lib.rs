@@ -11,7 +11,7 @@ pub mod output_space;
 pub mod spaces;
 pub mod wb;
 pub use oklab::{linear_srgb_to_oklab, oklab_to_linear_srgb};
-pub use output_space::OutputSpace;
+pub use output_space::{is_out_of_gamut, OutputSpace};
 pub use spaces::{prophoto_to_srgb, srgb_to_prophoto};
 
 /// Encode a linear-light sample to sRGB (the sRGB OETF). Input is clamped to `[0, 1]`.
