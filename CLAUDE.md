@@ -129,7 +129,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **State at handoff (2026-09-04):** **1975 tests, 54 goldens**, ⚠ and **M7.5 is CONFIRMED BY USE** after the handover fix — a look renders in the app for the first time, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
+> **State at handoff (2026-09-04):** **1975 tests, 54 goldens**, ⚠ and **ALL THREE W5 FEATURES ARE CONFIRMED BY USE** — creative LUTs (after the handover fix), soft proofing and colour range masks, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
 >
 > **🎯 PHASE 5 IS CLOSED (2026-09-03).** M5.3b — the spot-removal canvas tool and Visualize Spots — was the last milestone; its section is **"M5.3b — the spot-removal canvas tool"** below, with the **five rounds of defects found by using it**, every one in canvas/panel wiring and none caught by a test before it was reported. ⚠ Read its `suppressed_spot` story before giving any state two owners.
 >
@@ -140,11 +140,21 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > All three tracks merged fast-forward: **A** M7.5 creative LUTs, **C** M7.1b colour range masks,
 > **B** M6.4 soft proofing.
 >
-> **▶ NEXT ACTION: judge the two new features BY EYE — neither has ever been seen on a photograph** —
-> then **M7.2 masked spatial adjustments** as W6, which was held out of W5 because it collides with
-> C on `MaskStage` and with A on stage order.
+> **✅ ALL THREE W5 FEATURES ARE NOW CONFIRMED BY USE (2026-09-04)** — creative LUTs after the
+> handover fix, then **soft proofing and colour range masks**, both reported working on real
+> photographs. W5 is closed in the strong sense: merged, green, *and* seen.
 >
-> ⚠⚠ **A WRONG LUT SPACE DOES NOT LOOK WRONG, AND THAT IS THE THING TO CHECK.** Four real `.cube`
+> **▶ NEXT ACTION: M7.2 masked spatial adjustments as W6**, held out of W5 because it collides with
+> C on `MaskStage` and with A on stage order. ⚠ Brainstorm → spec → plan → executing-plans, inline,
+> on a branch; and read `docs/PARALLEL-WORK.md` before dispatching anything.
+>
+> ⚠⚠ **W5's own record is the argument for how to verify M7.2: the milestone whose maths was most
+> thoroughly tested shipped 100% non-functional.** Creative LUTs had four passing pipeline tests and
+> nothing proving the table ever reached the pipeline. **Ask what carries the data to the tested code,
+> and test that** — and get the feature in front of a photograph before calling it done.
+>
+> ⚠⚠ **A WRONG LUT SPACE DOES NOT LOOK WRONG — the finding stands even though the feature is now
+> signed off.** Four real `.cube`
 > files are installed at `<config>/rustroom/looks/`. On a *grade* a wrong `Linear` declaration is
 > unmissable — Sam Kolder clips **91.9% → 100%** of the frame into the shadows at saturation 0.9705.
 > On the **Kodak 2383 film emulation** all three spaces give **0.00% clipping** and a plausible
@@ -153,9 +163,12 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > declares `Input: Cineon Log`, which W5-0 ruled out — so all three of our options are wrong for it
 > and it still looks fine.
 >
-> ⚠ **C's colour range mask has never been judged on a photograph either**: its default band
-> (0°–120°), the `min_chroma` feel and its 0.15 ceiling are reasoned from measurements — sensor noise
-> ~0.003, an ordinary colour ~0.06, a saturated sRGB primary ~0.26 — not from looking.
+> ✅ **C's colour range mask is confirmed on a photograph (2026-09-04).** Its default band (0°–120°),
+> the `min_chroma` feel and its 0.15 ceiling were reasoned from measurements — sensor noise ~0.003, an
+> ordinary colour ~0.06, a saturated sRGB primary ~0.26 — and the reasoning held; no re-tuning was
+> asked for. ⚠ Contrast the vignette, which took **three** revisions before its feel was right: a
+> constant defended by measurement is not guaranteed to survive contact with a photograph, and this
+> one did.
 >
 > **⚠⚠ THE STALE-WORKTREE FAULT THAT COST W5 THREE WORKTREES WAS NOT A HARNESS BUG — READ
 > `PARALLEL-WORK.md` §3.** All three agents branched from `1523f38`, **134 commits behind**, with
