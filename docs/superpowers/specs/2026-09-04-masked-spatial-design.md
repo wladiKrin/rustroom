@@ -2,9 +2,13 @@
 
 **Status:** specced 2026-09-04. Branch `m7.2-masked-spatial`.
 
-A mask carries the **tail-native spatial stages** — Texture, Clarity and Sharpening — in addition
+A mask carries the **tail-native stages** — Texture, Clarity, Sharpening and **HSL** — in addition
 to the per-pixel adjustments it already carries. Sharpen the eyes, soften the skin, add clarity to
-the sky.
+the sky, pull the greens down in one corner.
+
+⚠ **HSL is not spatial, and the milestone's name undersells what ships.** It is included by
+decision (2026-09-04): it lives in the same tail, reaches through the same seam, and leaving it out
+would ship a subset of one capability. The name is left alone because the roadmap uses it.
 
 ⚠ **Masked noise reduction and dehaze are a separate later slice**, for a structural reason given
 in §7, not for lack of effort. M7.2 does not close with them outstanding — this is M3.1's a/b/c
@@ -35,8 +39,14 @@ pub struct LocalAdjustments {
     // ... existing per-pixel fields ...
     pub local_contrast: LocalContrast,   // texture, clarity
     pub sharpening: Sharpening,          // amount, radius, detail, masking
+    pub hsl: Hsl,                        // 8 bands x hue/saturation/luminance
 }
 ```
+
+⚠ `Hsl` is **24 values per mask**, an order of magnitude more state than anything else here. The
+panel needs no new widget — the existing `Hue │ Saturation │ Luminance` segmented selector shows
+eight band sliders at a time and works per-mask unchanged — but a mask's section becomes
+substantially taller, and that is the visible cost of parity.
 
 No new parameter types and no divergence between local and global. **Parity is therefore free** —
 a mask carries all four sharpening controls, exactly as the global panel does.
@@ -52,14 +62,14 @@ An earlier draft of this spec claimed all four exhaustive constructs would refus
 was wrong**, and checking it produced the more useful answer:
 
 - ✅ **`build_pipeline_split`'s own `LocalAdjustments` literal is exhaustive and WILL break.** It is
-  the global tail's caller — the exact site that must pass the two new fields as neutral. **So the
+  the global tail's caller — the exact site that must pass the new fields as neutral. **So the
   compiler forces §3's rule rather than leaving it to be remembered**, which is the best possible
   place for that decision to be made.
 - ⚠ **`merge_from` will NOT break, and that is correct.** It destructures `Edits`, not
   `LocalAdjustments`; a mask travels whole under `MASKS_GROUP`, so a masked sharpening rides along
   with its mask for free.
 - ⚠⚠ **`pipeline::all_edits` and `edit_model::all_nonneutral` will NOT break either — and that IS a
-  gap.** Both build their `LocalAdjustments` with `..Default::default()`, so two fields whose whole
+  gap.** Both build their `LocalAdjustments` with `..Default::default()`, so three fields whose whole
   purpose is to be non-neutral would land **untested by the very fixtures that exist to force a
   decision**, silently. They must be updated by hand and **nothing will remind anyone**. This is the
   project's own recorded failure shape — a construct that names exhaustiveness and does not deliver
@@ -71,7 +81,9 @@ was wrong**, and checking it produced the more useful answer:
 it naively would make the global tail apply them **twice**, since `build_pipeline_split` already
 places `LocalContrastStage` and `SharpenStage` itself.
 
-⚠⚠ **That exact problem is already solved in that function, for saturation.** The global caller
+⚠⚠ **That exact problem is already solved in that function, for saturation** — and it now applies
+to three fields rather than one: the global tail places local contrast, HSL and sharpening itself.
+**All three are passed neutral by the global caller.** The global caller
 passes `saturation: 0.0, vibrance: 0.0` with a comment reading *"passing the real values would
 silently move it earlier and change every golden."* Masked local contrast and sharpening follow the
 identical rule: **the global caller passes them neutral.**
@@ -80,8 +92,10 @@ identical rule: **the global caller passes them neutral.**
   taking a `RenderScale`, which the spatial stages need and the global caller already holds.
 - **Order inside a mask mirrors the global chain**, which is the rule a mask's adjustments already
   follow: white balance → exposure → contrast → tone regions → **local contrast** →
-  saturation/vibrance → **sharpening last**. Sharpening is last for the reason it is last globally:
-  it must not amplify what a later stage would then stretch.
+  saturation/vibrance → **HSL** → **sharpening last**. HSL sits after saturation for the reason it
+  does globally — it corrects colours that are *in* the picture, so it must see final tonality.
+  Sharpening is last for the reason it is last globally: it must not amplify what a later stage
+  would then stretch.
 
 ### The proof this is right
 
@@ -123,12 +137,27 @@ native zoom. Paid only by photos that actually carry those adjustments.
 
 ## 5. Cost, measured before it is optimised
 
-Global clarity is a measured **+8.8 ms** at preview, plus a clone (0.5 ms fit / 2.1 ms native) — and
-that is **per mask**. Three masked-clarity masks is roughly +27 ms on a 13 ms tail.
+⚠⚠ **HSL is the expensive one, not clarity, and an earlier draft of this spec got that backwards.**
+It called masked HSL "per-pixel and nearly free". Measured, global HSL is **+34.9 ms** at preview
+against clarity's **+8.8 ms** — about **4x**, and the most expensive thing a mask can carry. It is
+per-pixel, which says nothing about cost: the price is an Oklab round trip plus `atan2`, `cos` and
+`sin` for every pixel.
 
-**An early task measures it** — masked clarity at fit and at a native region, one mask and three —
-in a kept example beside `bench_preview`. **The number decides** whether the bounding-box
-optimisation ships here or is deferred a fourth time.
+Per mask, plus a clone (0.5 ms fit / 2.1 ms native). Three masked-clarity masks is roughly +27 ms on
+a 13 ms tail; **three masked-HSL masks is roughly +105 ms**, which is not a slider you can drag.
+
+⚠ `CLAUDE.md` already names the remedy and predicted this moment: *"a hue LUT is the obvious next
+optimization if it ever matters."* Masked HSL is when it might. **It is not in this milestone** —
+§5's measurement decides whether it becomes the next one.
+
+**An early task measures it** — masked clarity **and masked HSL**, at fit and at a native region,
+one mask and three — in a kept example beside `bench_preview`. **The number decides** whether the
+bounding-box optimisation ships here or is deferred a fourth time, and whether the hue LUT becomes
+the next milestone.
+
+⚠ The two want different remedies, which is why both are measured: the **bounding box** helps a
+small brush mask carrying either; the **hue LUT** helps HSL at any mask size, including the linear
+gradient and range masks the bounding box cannot help at all.
 
 ⚠ The bounding box only helps **brush and radial** masks. A linear gradient covers half the frame,
 and range and colour masks have no spatial bbox at all — they are per-pixel predicates over the
@@ -161,9 +190,9 @@ fixture** before it is a finding about the guard.
    curve has already stretched, which is a different operation from the global stage wearing the
    same name. Dehaze additionally estimates a frame-global airlight, which has no obvious meaning
    confined to a mask. Their own slice.
-2. **Masked HSL.** Per-pixel and nearly free, but a different feature — per-hue local adjustment —
-   rather than the spatial this milestone names.
-3. **The bounding-box optimisation**, unless §5's measurement asks for it.
+2. **The bounding-box optimisation**, unless §5's measurement asks for it.
+3. **The hue LUT.** Masked HSL is the first thing that makes it worth having; §5 decides whether it
+   becomes the next milestone.
 4. **Skin softening is *not* among the gaps**, though the absence of masked NR suggests it: Texture
    is bipolar and −100 removes the fine band, softening edges within it. The commonest use of the
    feature is covered by the tail three.
