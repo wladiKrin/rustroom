@@ -191,6 +191,17 @@ fn longest_run(
 /// pair in `the_two_lines_returned_are_separated_rather_than_the_two_strongest` by a wide margin
 /// and admits the 110 px spread of a real converging pair by a wider one.
 const MIN_SEPARATION: f32 = 0.15;
+/// How far a candidate may sit from the guide it refines, as a fraction of frame width.
+///
+/// ⚠⚠ **The bound is load-bearing, not a tuning detail.** Without it a strong edge that is not the
+/// one you aimed at captures your line — the person's silhouette beside Walhalla's building corner
+/// is the measured case — and refinement re-creates the very bug it exists to fix. It must be small
+/// enough that a wrong snap is close to impossible.
+///
+/// ⚠ Measured with `detect_overlay --refine`, not asserted. This milestone has already had one
+/// guess overturned by measurement: the spec's "starting band of 6–10 levels" for
+/// [`MIN_EDGE_LEVELS`] fired on 84% of frames.
+pub const SNAP_RADIUS: f32 = 0.03;
 
 /// One accumulator peak.
 struct Peak {
@@ -429,6 +440,51 @@ pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32)
         chosen.push(p);
     }
     chosen.iter().map(|p| c.guide(p, w, h)).collect()
+}
+
+/// Each guide replaced by the strongest real edge near it, or returned exactly as drawn.
+///
+/// ⚠⚠ **It reuses [`candidates`] whole — floor, direction gate, contiguity, peak ranking — and
+/// replaces only the choice.** So an edge that failed contiguity can never be snapped to, and every
+/// property the contrast-floor and contiguity work established still holds here.
+///
+/// ⚠ [`MIN_SEPARATION`] deliberately does **not** apply: it exists to stop the *detector* choosing
+/// an ill-conditioned pair, and here the pair is the user's own. Drawing two near-parallel guides is
+/// already possible and already ill-conditioned; this makes nothing worse.
+pub fn refine(luma: &[f32], w: usize, h: usize, guides: &[Guide]) -> Vec<Guide> {
+    let c = candidates(luma, w, h, MIN_EDGE_LEVELS);
+    let radius = SNAP_RADIUS * w as f32;
+    guides
+        .iter()
+        .map(|d| {
+            // ⚠ Verticals only, and the family test is `|dy| >= |dx|` — the same rule the guide
+            // overlay uses to colour a guide, so there is one definition of "vertical" rather than
+            // two that can disagree.
+            if (d.to[1] - d.from[1]).abs() < (d.to[0] - d.from[0]).abs() {
+                return *d;
+            }
+            // ⚠⚠ The metric is the **largest gap anywhere down the frame**, which subsumes angle
+            // and offset in one number: a candidate matching the angle but sitting 20 px away
+            // fails, and so does one starting on the line and diverging. Two thresholds in two
+            // different units would be a quantity nobody can judge by eye.
+            //
+            // ⚠ Evaluated at the two ends only. Both lines are straight, so their separation is
+            // monotonic between them and the maximum is necessarily at an endpoint.
+            let drawn_at = |y: f32| {
+                let t = y / h as f32;
+                (d.from[0] + (d.to[0] - d.from[0]) * t) * w as f32
+            };
+            // ⚠ `find` on a list already sorted strongest-first **is** "the strongest within the
+            // radius" — there is no second sort, and adding one would be a second ranking rule.
+            c.peaks
+                .iter()
+                .find(|p| {
+                    let gap = |y: f32| (c.at(p, y) - drawn_at(y)).abs();
+                    gap(0.0).max(gap(h as f32)) <= radius
+                })
+                .map_or(*d, |p| c.guide(p, w, h))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -775,6 +831,99 @@ mod tests {
             found.is_empty(),
             "horizontal bands bridged the gaps and promoted scattered stubs to a line: {found:?}"
         );
+    }
+
+    /// A guide drawn as a straight vertical at frame fraction `at`, spanning the full height.
+    fn drawn_at(at: f32) -> Guide {
+        Guide {
+            from: [at, 0.0],
+            to: [at, 1.0],
+        }
+    }
+
+    /// ⚠ A guide drawn slightly off a real edge lands on it — the feature working at all.
+    #[test]
+    fn a_guide_drawn_near_an_edge_snaps_onto_it() {
+        let (w, h) = (512, 342);
+        let mut p = dark(w, h);
+        let x = 0.5 * (w - 1) as f32;
+        line(&mut p, w, h, x, 2.0, x, h as f32 - 3.0);
+        // Drawn 1.5% of the frame width off the real edge, well inside the radius.
+        let out = refine(&p, w, h, &[drawn_at(0.515)]);
+        assert_eq!(out.len(), 1);
+        assert!(
+            (out[0].from[0] - 0.5).abs() < 0.01,
+            "the guide did not snap onto the edge: {:?}",
+            out[0]
+        );
+    }
+
+    /// ⚠⚠ **A guide with no candidate in range comes back BIT-IDENTICAL.** `assert_eq!` on the
+    /// guide, not a tolerance: "unchanged" is exact, and a tolerance would hide a small unwanted
+    /// move. Without this rule the silhouette beside Walhalla's building corner captures a line
+    /// aimed at the corner, and refinement re-creates the bug it exists to fix.
+    #[test]
+    fn a_guide_far_from_every_edge_is_returned_unchanged() {
+        let (w, h) = (512, 342);
+        let mut p = dark(w, h);
+        let x = 0.2 * (w - 1) as f32;
+        line(&mut p, w, h, x, 2.0, x, h as f32 - 3.0);
+        let drawn = drawn_at(0.8);
+        let out = refine(&p, w, h, &[drawn]);
+        assert_eq!(out, vec![drawn], "a guide was dragged to a distant edge");
+    }
+
+    /// ⚠⚠ **The one test that can distinguish "strongest in range" from "nearest in range."**
+    /// A weak edge sits 1% away and a strong one 2.5% away, both inside the radius. Every other
+    /// test here passes against either rule.
+    #[test]
+    fn inside_the_radius_the_strongest_candidate_wins_not_the_nearest() {
+        let (w, h) = (512, 342);
+        let mut p = dark(w, h);
+        let weak = 0.51 * (w - 1) as f32;
+        let strong = 0.475 * (w - 1) as f32;
+        // The weak edge is short, so it clears contiguity but collects far fewer votes.
+        line(&mut p, w, h, weak, 2.0, weak, 0.30 * h as f32);
+        line(&mut p, w, h, strong, 2.0, strong, h as f32 - 3.0);
+        let out = refine(&p, w, h, &[drawn_at(0.5)]);
+        assert_eq!(out.len(), 1);
+        assert!(
+            (out[0].from[0] - 0.475).abs() < 0.01,
+            "the nearer weak edge won over the stronger one: {:?}",
+            out[0]
+        );
+    }
+
+    /// ⚠ A horizontal-family guide has nothing to snap to — the detector finds verticals only —
+    /// so it is returned untouched even on a frame full of strong verticals. Silently "improving"
+    /// it would be inventing a result.
+    ///
+    /// ⚠⚠ **The guide is a SHORT, SHALLOW one, and that is what makes this test able to see the
+    /// family check at all.** A full-width horizontal guide sweeps x across the whole frame, so its
+    /// gap from any near-vertical candidate is enormous and the radius rejects it whether or not
+    /// the family check exists — the first fixture here was exactly that, and its sabotage went
+    /// uncaught. This one spans 2% of the width against 1.8% of the height: horizontal family by a
+    /// hair, and geometrically well inside the snap radius of the edge at 0.5.
+    ///
+    /// ⚠ So for a *typical* wide horizontal guide the family check is defence in depth, and it is
+    /// load-bearing only for a stub like this. Both facts are worth knowing before anyone removes
+    /// it.
+    #[test]
+    fn a_horizontal_guide_is_never_refined() {
+        let (w, h) = (512, 342);
+        let mut p = dark(w, h);
+        let x = 0.5 * (w - 1) as f32;
+        line(&mut p, w, h, x, 2.0, x, h as f32 - 3.0);
+        let drawn = Guide {
+            from: [0.50, 0.400],
+            to: [0.52, 0.418],
+        };
+        assert!(
+            (drawn.to[1] - drawn.from[1]).abs() < (drawn.to[0] - drawn.from[0]).abs(),
+            "fixture check: this guide must be horizontal-family"
+        );
+        let out = refine(&p, w, h, &[drawn]);
+        assert_eq!(out, vec![drawn], "a horizontal guide was refined");
     }
 
     #[test]
