@@ -276,37 +276,37 @@ pub fn model() -> Vec<Section> {
 /// the longest one reads better as a sequence of pushes than as a wall of literals.
 fn view_items() -> Vec<Item> {
     let mut items = vec![
-                action("Library", Command::ShowLibrary, Some(Shortcut::bare('G'))),
-                action("Develop", Command::ShowDevelop, Some(Shortcut::bare('D'))),
-                // ⚠⚠ Bare `C` is safe, and that was **verified in egui-winit's source** rather
-                // than assumed. `is_copy_command` is `modifiers.command && key == C`, so only
-                // the ⌘C chord is swallowed into `Event::Copy`; a bare `C` emits an ordinary
-                // `Event::Key`. Being bare, neither ever becomes a native accelerator — see
-                // `safe_as_native_accelerator` — so neither can steal a character typed into
-                // the search field or the new-collection field.
-                action("Compare", Command::ShowCompare, Some(Shortcut::bare('C'))),
-                action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
-                Item::Separator,
-                action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
-                action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),
-                action("Zoom to fit", Command::FitView, Some(Shortcut::cmd('0'))),
-                action("Zoom to 1:1", Command::ZoomActual, Some(Shortcut::cmd('1'))),
-                action(
-                    "Before / After",
-                    Command::ToggleBeforeAfter,
-                    Some(Shortcut::bare('\\')),
-                ),
-                Item::Separator,
-                action("Filmstrip", Command::ToggleFilmstrip, None),
-                action("Show mask overlay", Command::ToggleMaskOverlay, None),
-                // ⚠ A **bare** key, so it never becomes a native accelerator — see
-                // `safe_as_native_accelerator`. `O` is Lightroom's, which is the whole argument
-                // for it; ⌘O is Open file and the two chords are distinct.
-                action(
-                    "Composition guide",
-                    Command::CycleCompositionGuide,
-                    Some(Shortcut::bare('O')),
-                ),
+        action("Library", Command::ShowLibrary, Some(Shortcut::bare('G'))),
+        action("Develop", Command::ShowDevelop, Some(Shortcut::bare('D'))),
+        // ⚠⚠ Bare `C` is safe, and that was **verified in egui-winit's source** rather
+        // than assumed. `is_copy_command` is `modifiers.command && key == C`, so only
+        // the ⌘C chord is swallowed into `Event::Copy`; a bare `C` emits an ordinary
+        // `Event::Key`. Being bare, neither ever becomes a native accelerator — see
+        // `safe_as_native_accelerator` — so neither can steal a character typed into
+        // the search field or the new-collection field.
+        action("Compare", Command::ShowCompare, Some(Shortcut::bare('C'))),
+        action("Survey", Command::ShowSurvey, Some(Shortcut::bare('N'))),
+        Item::Separator,
+        action("Zoom in", Command::ZoomIn, Some(Shortcut::cmd('+'))),
+        action("Zoom out", Command::ZoomOut, Some(Shortcut::cmd('-'))),
+        action("Zoom to fit", Command::FitView, Some(Shortcut::cmd('0'))),
+        action("Zoom to 1:1", Command::ZoomActual, Some(Shortcut::cmd('1'))),
+        action(
+            "Before / After",
+            Command::ToggleBeforeAfter,
+            Some(Shortcut::bare('\\')),
+        ),
+        Item::Separator,
+        action("Filmstrip", Command::ToggleFilmstrip, None),
+        action("Show mask overlay", Command::ToggleMaskOverlay, None),
+        // ⚠ A **bare** key, so it never becomes a native accelerator — see
+        // `safe_as_native_accelerator`. `O` is Lightroom's, which is the whole argument
+        // for it; ⌘O is Open file and the two chords are distinct.
+        action(
+            "Composition guide",
+            Command::CycleCompositionGuide,
+            Some(Shortcut::bare('O')),
+        ),
     ];
 
     // ⚠⚠ **Appended, never inserted.** `PARALLEL-WORK.md` lists this menu among the surfaces any

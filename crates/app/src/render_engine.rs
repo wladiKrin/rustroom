@@ -2270,8 +2270,7 @@ mod tests {
             for warn in [false, true] {
                 let p = proofed(&buf, proof(space, warn));
                 assert_eq!(
-                    plain.hist,
-                    p.hist,
+                    plain.hist, p.hist,
                     "the proof reached the histogram ({space:?}, warn={warn})"
                 );
                 // ⚠ The sRGB instrument channel too. A colour readout built on the *texture*
@@ -2304,7 +2303,10 @@ mod tests {
             pipeline::Resampler::default(),
         );
         let off = proofed(&buf, None);
-        assert_eq!(*cold.rgba, *off.rgba, "the texture moved with the proof off");
+        assert_eq!(
+            *cold.rgba, *off.rgba,
+            "the texture moved with the proof off"
+        );
         assert_eq!(*cold.srgb, *off.srgb, "the sRGB channel moved");
         assert_eq!(cold.hist, off.hist, "the histogram moved");
         // ⚠ And the fixture is one a proof genuinely changes, or "unchanged" would be trivially
