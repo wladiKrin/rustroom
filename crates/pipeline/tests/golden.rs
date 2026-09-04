@@ -1635,3 +1635,136 @@ fn the_spot_goldens_do_not_clip_and_differ() {
         "clone should carry the source's brightness: patch {clone:.1} vs surround {surround:.1}"
     );
 }
+
+// ── M7.1b, colour range masks ────────────────────────────────────────────────────────────────
+//
+// ⚠ **Appended, never inserted** — PARALLEL-WORK.md rule 3, and another track adds goldens in this
+// same wave. A new case goes at the end of the file and its reference is a new PNG.
+
+/// The colour-mask golden, as a one-entry table.
+///
+/// ⚠ One list with two consumers — the golden test and the discrimination guard below — for the
+/// reason [`luminance_mask_cases`] and [`grading_cases`] both give: two copies of an edit set let
+/// the reference and the guard drift apart, and the guard would then be measuring an image no
+/// reference contains.
+fn colour_mask_cases() -> Vec<(&'static str, Edits)> {
+    vec![(
+        // ⚠⚠ **The band CROSSES 0°, which is the property no other golden here can witness.**
+        // 300 → 60 selects the magentas, reds and oranges either side of zero; read as a sorted
+        // 60..300 it would select everything *except* them, and the reference would record the
+        // exact complement of the intended mask while still looking like a plausible picture.
+        //
+        // ⚠ +0.55 EV, the value M3.1b settled on and the luminance goldens reuse: at +1.0 the
+        // brightest covered samples pin at 255 and the reference can no longer tell full coverage
+        // from any greater value.
+        "mask_colour_reds_across_zero",
+        Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Colour(edit_model::ColourRange {
+                    low: 300.0,
+                    high: 60.0,
+                    feather: 10.0,
+                    min_chroma: 0.02,
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.55,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    )]
+}
+
+fn colour_mask_case(name: &str) -> Edits {
+    colour_mask_cases()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .unwrap_or_else(|| panic!("no colour-mask case named {name}"))
+        .1
+}
+
+#[test]
+fn golden_mask_colour_reds_across_zero() {
+    // ⚠ `hue_sweep_chart` rather than a new chart: it is built to exercise hue, HSL's goldens
+    // already use it, and a colour mask and a hue rotation measured on one reference stay
+    // directly comparable.
+    check_golden_with(
+        "mask_colour_reds_across_zero",
+        &colour_mask_case("mask_colour_reds_across_zero"),
+        hue_sweep_chart(),
+    );
+}
+
+/// ⚠⚠ **Measured, not eyeballed** — clipping is invisible to the eye and fatal to a reference's
+/// discriminating power, and this project has regenerated two mask goldens for exactly that. The
+/// first three properties are [`the_luminance_mask_goldens_discriminate`]'s; the fourth is
+/// specific to a band that wraps.
+///
+/// Measured on the committed reference: **0 samples pinned at either end**, 1232 of 3072 moved
+/// and 1840 untouched — so the mask is unambiguously a selection, and every sample in it still
+/// encodes what the mask did rather than what the encoder ran out of room for.
+#[test]
+fn the_colour_mask_golden_discriminates() {
+    let neutral =
+        to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(hue_sweep_chart()));
+    for (name, edits) in colour_mask_cases() {
+        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(hue_sweep_chart()));
+        let hi = bytes.iter().filter(|&&c| c == 255).count();
+        let lo = bytes.iter().filter(|&&c| c == 0).count();
+        assert!(
+            hi == 0 && lo == 0,
+            "{name}: {hi} samples clipped high, {lo} clipped low — the golden cannot \
+             discriminate where it is pinned"
+        );
+        let moved = bytes.iter().zip(&neutral).filter(|(a, b)| a != b).count();
+        let total = bytes.len();
+        assert!(
+            moved * 8 >= total,
+            "{name}: only {moved}/{total} samples differ from the unmasked render — too few to \
+             witness a change"
+        );
+        // ⚠ "Enough is UNTOUCHED", not an upper bound on `moved`, for the reason the luminance
+        // guard records: `moved` counts a one-level partial change the same as a full one, and
+        // what distinguishes a selection from a global adjustment is that a real region comes
+        // back byte-identical.
+        let untouched = total - moved;
+        assert!(
+            untouched * 4 >= total,
+            "{name}: only {untouched}/{total} samples are untouched — the mask is covering \
+             everything, which a global adjustment would do too"
+        );
+
+        // ⚠⚠ **The wrap, asserted against the rendered reference and not only in a unit test.**
+        // The chart sweeps hue left to right, so a band crossing 0° must move BOTH ends of it and
+        // leave the middle alone. A sorted 60..300 band produces exactly the complement — the
+        // middle moves and the ends do not — which every assertion above would still accept.
+        let col_moved = |x: usize| {
+            (0..H).any(|y| {
+                let i = (y * W + x) * 3;
+                bytes[i..i + 3] != neutral[i..i + 3]
+            })
+        };
+        assert!(
+            col_moved(0) && col_moved(W - 1),
+            "{name}: a band across 0° must reach both ends of the hue sweep"
+        );
+        assert!(
+            !col_moved(W / 2),
+            "{name}: and must leave the far side of the wheel alone"
+        );
+        // ⚠ "Differs" is not "was lifted": a mask that darkened the reds would satisfy every
+        // assertion above. The payload is +0.55 EV, so the direction is part of the property.
+        let col_mean =
+            |b: &[u8], x: usize| (0..H).map(|y| b[(y * W + x) * 3] as f32).sum::<f32>() / H as f32;
+        for x in [0, W - 1] {
+            assert!(
+                col_mean(&bytes, x) > col_mean(&neutral, x) + 4.0,
+                "{name}: column {x} must be LIFTED, not merely changed: {:.1} -> {:.1}",
+                col_mean(&neutral, x),
+                col_mean(&bytes, x)
+            );
+        }
+    }
+}
