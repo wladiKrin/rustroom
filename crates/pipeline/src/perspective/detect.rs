@@ -482,26 +482,35 @@ pub fn refine(luma: &[f32], w: usize, h: usize, guides: &[Guide]) -> Vec<Guide> 
             if (d.to[1] - d.from[1]).abs() < (d.to[0] - d.from[0]).abs() {
                 return *d;
             }
-            // ⚠⚠ The metric is the **largest gap anywhere down the frame**, which subsumes angle
-            // and offset in one number: a candidate matching the angle but sitting 20 px away
-            // fails, and so does one starting on the line and diverging. Two thresholds in two
-            // different units would be a quantity nobody can judge by eye.
+            // ⚠⚠ The metric is the **largest gap over the segment the user actually drew**, which
+            // subsumes angle and offset in one number: a candidate matching the angle but sitting
+            // 20 px away fails, and so does one starting on the line and diverging. Two thresholds
+            // in two different units would be a quantity nobody can judge by eye.
             //
-            // ⚠ Evaluated at the two ends only. Both lines are straight, so their separation is
-            // monotonic between them and the maximum is necessarily at an endpoint.
-            let drawn_at = |y: f32| {
-                let t = y / h as f32;
-                (d.from[0] + (d.to[0] - d.from[0]) * t) * w as f32
-            };
+            // ⚠⚠ **Over the drawn segment, NOT the frame — and reading it as the frame was a real
+            // bug.** A guide's two x values are its positions at the y it was *drawn between*, so
+            // treating them as the frame's top and bottom understates the lean of any short guide
+            // by the ratio of the two extents. Tracing the top fifth of an edge leaning 8° read as
+            // a line leaning 1.7°, and a perfectly-placed guide was rejected. Reported in use.
+            //
+            // ⚠ Evaluated at the two drawn endpoints only. Both lines are straight, so their
+            // separation is monotonic between them and the maximum is necessarily at an endpoint —
+            // and the drawn line's x at those y *is* `d.from[0]` and `d.to[0]`, which is what makes
+            // this simpler than it looks.
+            let gap =
+                |p: &Peak, end: [f32; 2]| (c.at(p, end[1] * h as f32) - end[0] * w as f32).abs();
             // ⚠ `find` on a list already sorted strongest-first **is** "the strongest within the
             // radius" — there is no second sort, and adding one would be a second ranking rule.
             c.peaks
                 .iter()
-                .find(|p| {
-                    let gap = |y: f32| (c.at(p, y) - drawn_at(y)).abs();
-                    gap(0.0).max(gap(h as f32)) <= radius
+                .find(|p| gap(p, d.from).max(gap(p, d.to)) <= radius)
+                // ⚠⚠ **The refined guide keeps the y it was drawn between.** Replacing a traced
+                // segment with a full-height line discards a decision the user made deliberately,
+                // and was reported as refinement "redrawing them over the full frame".
+                .map_or(*d, |p| Guide {
+                    from: [c.at(p, d.from[1] * h as f32) / w as f32, d.from[1]],
+                    to: [c.at(p, d.to[1] * h as f32) / w as f32, d.to[1]],
                 })
-                .map_or(*d, |p| c.guide(p, w, h))
         })
         .collect()
 }
@@ -858,6 +867,76 @@ mod tests {
             from: [at, 0.0],
             to: [at, 1.0],
         }
+    }
+
+    /// ⚠⚠ **A refined guide keeps the EXTENT it was drawn with.** Reported in use: refinement
+    /// "redraws them over the full frame, even though before they were set to a shorter length".
+    /// A guide is a thing you placed deliberately; replacing a traced 30% of the frame with a
+    /// full-height line discards a decision the user made.
+    #[test]
+    fn refinement_keeps_the_length_the_guide_was_drawn_with() {
+        let (w, h) = (512, 342);
+        let mut p = dark(w, h);
+        let x = 0.5 * (w - 1) as f32;
+        line(&mut p, w, h, x, 2.0, x, h as f32 - 3.0);
+        let drawn = Guide {
+            from: [0.515, 0.40],
+            to: [0.515, 0.70],
+        };
+        let out = refine(&p, w, h, &[drawn]);
+        assert_eq!(out.len(), 1);
+        assert!(
+            (out[0].from[0] - 0.5).abs() < 0.01,
+            "it did not snap: {:?}",
+            out[0]
+        );
+        assert_eq!(
+            (out[0].from[1], out[0].to[1]),
+            (0.40, 0.70),
+            "the refined guide did not keep the extent it was drawn with"
+        );
+    }
+
+    /// ⚠⚠ **A guide is judged where it was DRAWN, not over the whole frame — and the first version
+    /// of this test could not see the difference.** The old metric read a guide's two x values as
+    /// its positions at the frame's top and bottom, ignoring the y it was actually drawn between.
+    /// For a full-height guide those coincide; for a short one they are a different line entirely.
+    ///
+    /// Here the edge leans across the frame and the guide traces its **top fifth**, exactly on it.
+    /// Judged over the drawn segment the gap is zero. Judged as though the guide spanned the frame,
+    /// its implied lean is five times too shallow and the gap at the bottom is 0.08 — far beyond
+    /// [`SNAP_RADIUS`] — so a perfectly-placed guide is rejected. That is what tracing part of a
+    /// leaning building edge does, which is the ordinary case.
+    #[test]
+    fn a_short_guide_is_judged_where_it_was_drawn_not_across_the_whole_frame() {
+        let (w, h) = (512, 342);
+        let mut p = dark(w, h);
+        // An edge from x=0.5 at the top to x=0.6 at the bottom: about 8.5° of lean.
+        line(
+            &mut p,
+            w,
+            h,
+            0.5 * w as f32,
+            2.0,
+            0.6 * w as f32,
+            h as f32 - 3.0,
+        );
+        // Traced along its top fifth, on the edge to within a pixel.
+        let drawn = Guide {
+            from: [0.50, 0.0],
+            to: [0.52, 0.2],
+        };
+        let out = refine(&p, w, h, &[drawn]);
+        assert_ne!(
+            out[0], drawn,
+            "a guide traced exactly along the edge was rejected, because its lean was read as \
+             though it spanned the whole frame"
+        );
+        assert_eq!(
+            (out[0].from[1], out[0].to[1]),
+            (0.0, 0.2),
+            "and it must keep the extent it was drawn with"
+        );
     }
 
     /// ⚠ A guide drawn slightly off a real edge lands on it — the feature working at all.

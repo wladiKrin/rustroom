@@ -86,7 +86,7 @@ fn detect_floor_levels() -> f32 {
 ///
 /// ⚠ Amber is the line as drawn, green the refined one, so the move is visible on the PNG. A guide
 /// that did not move prints `(UNCHANGED)` and its two colours coincide.
-fn probe_refine(path: &str, at: &[(f32, f32)]) {
+fn probe_refine(path: &str, at: &[(f32, f32, f32, f32)]) {
     let p = std::path::Path::new(path);
     let decoded = match raw_decode::decode_raw(p, &raw_decode::DecodeOptions::linear_scene()) {
         Ok(d) => d,
@@ -114,9 +114,9 @@ fn probe_refine(path: &str, at: &[(f32, f32)]) {
 
     let drawn: Vec<Guide> = at
         .iter()
-        .map(|&(top, bot)| Guide {
-            from: [top, 0.0],
-            to: [bot, 1.0],
+        .map(|&(top, bot, y0, y1)| Guide {
+            from: [top, y0],
+            to: [bot, y1],
         })
         .collect();
     let (luma, w, h) = perspective_detect::analysis_luma(
@@ -143,9 +143,11 @@ fn probe_refine(path: &str, at: &[(f32, f32)]) {
         // ⚠ The same metric `refine` uses: the largest gap at either end, as a fraction of width.
         let gap = (r.from[0] - d.from[0]).abs().max((r.to[0] - d.to[0]).abs());
         println!(
-            "  drawn {:.4}..{:.4} -> refined {:.4}..{:.4}   moved {:.4} of frame width{}",
+            "  drawn {:.4}..{:.4} (y {:.2}..{:.2}) -> refined {:.4}..{:.4}   moved {:.4}{}",
             d.from[0],
             d.to[0],
+            d.from[1],
+            d.to[1],
             r.from[0],
             r.to[0],
             gap,
@@ -180,13 +182,17 @@ fn main() {
         // ⚠ `top:bottom` so a guide can LEAN. Measuring a leaning building edge with a straight
         // vertical probe measures the wrong thing — the gap at one end is large however well the
         // line is placed — and a person tracing an edge traces its lean. A bare `x` means vertical.
-        let at: Vec<(f32, f32)> = at
+        // `x` | `top:bottom` | `top:bottom:y0:y1` — the last so a guide can be SHORT, which is the
+        // case the full-frame metric gets wrong.
+        let at: Vec<(f32, f32, f32, f32)> = at
             .iter()
-            .filter_map(|s| match s.split_once(':') {
-                Some((a, b)) => Some((a.parse().ok()?, b.parse().ok()?)),
-                None => {
-                    let x: f32 = s.parse().ok()?;
-                    Some((x, x))
+            .filter_map(|s| {
+                let f: Vec<f32> = s.split(':').filter_map(|v| v.parse().ok()).collect();
+                match f[..] {
+                    [x] => Some((x, x, 0.0, 1.0)),
+                    [a, b] => Some((a, b, 0.0, 1.0)),
+                    [a, b, y0, y1] => Some((a, b, y0, y1)),
+                    _ => None,
                 }
             })
             .collect();
