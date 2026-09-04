@@ -346,16 +346,26 @@ impl Default for RenderSpec {
     }
 }
 
-/// Build the per-pixel stages for one set of adjustments.
+/// Build the stages for one set of adjustments.
 ///
 /// ⚠ **One list, two consumers**: the global tail calls it with the values from `Edits`, and
 /// every mask calls it with its own `LocalAdjustments`. A stage added here reaches both — the
 /// same guard [`build_prefix_steps`] provides for the prefix, and the reason `LocalAdjustments`
 /// repeating field *names* from `Edits` is harmless: the duplication that would actually hurt
 /// is this logic, and it exists once.
-fn per_pixel_stages(
+///
+/// ⚠⚠ **Three of these are passed NEUTRAL by the global caller** — `local_contrast`, `hsl` and
+/// `sharpening` — because the global chain places each itself, at a position each has earned.
+/// Passing the real values would apply them twice and move every golden. This is the same rule
+/// `saturation` has followed here since masking landed; see the caller for both.
+///
+/// ⚠ `scale` reaches the spatial stages only. The per-pixel ones ignore it, which
+/// `per_pixel_stages_ignore_the_render_scale` still asserts bit for bit — and that test now
+/// doubles as the guard that the **global** path did not accidentally gain a spatial stage.
+fn adjustment_stages(
     a: &edit_model::LocalAdjustments,
     baseline: color::wb::Illuminant,
+    scale: RenderScale,
 ) -> Vec<Box<dyn PipelineStage>> {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
     if a.white_balance.is_active() {
@@ -383,8 +393,23 @@ fn per_pixel_stages(
             a.blacks,
         )));
     }
+    // Before saturation, mirroring the global chain: a local contrast measured after the tonal
+    // work is the one that describes what you actually see.
+    if a.local_contrast.is_active() {
+        out.push(Box::new(LocalContrastStage::new(&a.local_contrast, scale)));
+    }
     if a.saturation != 0.0 || a.vibrance != 0.0 {
         out.push(Box::new(SaturationStage::new(a.saturation, a.vibrance)));
+    }
+    // After saturation for the reason it is there globally: HSL corrects colours that are *in*
+    // the picture, so it must see final tonality.
+    if a.hsl != edit_model::Hsl::default() {
+        out.push(Box::new(HslStage::new(&a.hsl)));
+    }
+    // ⚠ Last, for the reason it is last globally: sharpening must not amplify anything a later
+    // stage would then stretch.
+    if a.sharpening.is_active() {
+        out.push(Box::new(SharpenStage::new(&a.sharpening, scale)));
     }
     out
 }
@@ -498,7 +523,7 @@ pub fn build_pipeline_split_in_region_with_brush(
     // would silently move it earlier and change every golden. Inside a mask there is no tone
     // curve, so ordering within `per_pixel_stages` is the whole story and saturation belongs
     // in it.
-    let mut tail: Vec<Box<dyn PipelineStage>> = per_pixel_stages(
+    let mut tail: Vec<Box<dyn PipelineStage>> = adjustment_stages(
         &edit_model::LocalAdjustments {
             white_balance: edits.white_balance,
             exposure: edits.exposure,
@@ -520,6 +545,7 @@ pub fn build_pipeline_split_in_region_with_brush(
             sharpening: edit_model::Sharpening::default(),
         },
         baseline,
+        scale,
     );
     if !edits.tone_curve.points.is_empty() {
         tail.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
@@ -1096,6 +1122,26 @@ mod tests {
                 }),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.75,
+                    // ⚠⚠ Set by hand, because this fixture **does not fail to compile** when
+                    // `LocalAdjustments` grows — it fills the rest with `..Default::default()`.
+                    // Left alone, three fields whose entire purpose is to be non-neutral would
+                    // land untested by the very construct that exists to force a decision about
+                    // them, and nothing would say so.
+                    local_contrast: edit_model::LocalContrast {
+                        texture: 35.0,
+                        clarity: -25.0,
+                    },
+                    sharpening: edit_model::Sharpening {
+                        amount: 60.0,
+                        ..Default::default()
+                    },
+                    hsl: edit_model::Hsl {
+                        bands: [edit_model::HslBand {
+                            hue: 8.0,
+                            saturation: -15.0,
+                            luminance: 5.0,
+                        }; 8],
+                    },
                     ..Default::default()
                 },
             }],
@@ -1594,6 +1640,46 @@ mod tests {
         let full = build_pipeline(&edits, RenderScale::FULL).run(img.clone());
         let quarter = build_pipeline(&edits, RenderScale::new(0.25)).run(img);
         assert_eq!(full.data(), quarter.data());
+    }
+
+    /// The global tail must not apply the mask-only stages twice.
+    ///
+    /// ⚠⚠ The trap this exists for. `adjustment_stages` has two consumers — the global tail and
+    /// every mask — and the global tail places local contrast, HSL and sharpening **itself**,
+    /// further down. So it passes those three **neutral** into the shared builder. Passing the
+    /// real values applies each twice: visibly over-sharpened, and every golden moves.
+    ///
+    /// ⚠ This was written *before* the stages joined the shared builder, so it passed from the
+    /// start — a tripwire, not a red test. What makes it a real guard is the sabotage recorded
+    /// with it: hand `edits.local_contrast` to the builder and watch this fail.
+    #[test]
+    fn the_global_tail_does_not_apply_the_mask_only_stages_twice() {
+        let edits = Edits {
+            local_contrast: edit_model::LocalContrast {
+                texture: 60.0,
+                clarity: 40.0,
+            },
+            sharpening: edit_model::Sharpening {
+                amount: 70.0,
+                ..Default::default()
+            },
+            hsl: edit_model::Hsl {
+                bands: [edit_model::HslBand {
+                    hue: 20.0,
+                    saturation: 0.0,
+                    luminance: 0.0,
+                }; 8],
+            },
+            ..Edits::default()
+        };
+        let names = build_pipeline(&edits, RenderScale::FULL).stage_names();
+        for stage in ["local_contrast", "sharpening", "hsl"] {
+            assert_eq!(
+                names.iter().filter(|n| **n == stage).count(),
+                1,
+                "{stage} ran twice: {names:?}"
+            );
+        }
     }
 
     #[test]

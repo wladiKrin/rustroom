@@ -5,7 +5,7 @@
 //! pipeline learns that masking exists, which is what keeps the `PipelineStage` seam opaque
 //! for the eventual GPU port.
 
-use crate::{per_pixel_stages, PipelineStage, Region, RenderScale};
+use crate::{adjustment_stages, PipelineStage, Region, RenderScale};
 use core_image::ImageBuf;
 use edit_model::{Geometry, MaskedAdjustment};
 
@@ -148,7 +148,7 @@ impl MaskStage {
         };
         Self {
             source,
-            stages: per_pixel_stages(&masked.adjustments, baseline),
+            stages: adjustment_stages(&masked.adjustments, baseline, scale),
             region,
         }
     }
