@@ -167,6 +167,11 @@ mod tests {
                 mode: edit_model::SpotMode::Clone,
             }],
             rendering: edit_model::Rendering::Camera,
+            look: edit_model::Look {
+                file: Some("portra.cube".into()),
+                space: edit_model::LutSpace::Linear,
+                strength: 80.0,
+            },
         };
         assert_eq!(decode(&encode(&rich)), Some(rich));
     }

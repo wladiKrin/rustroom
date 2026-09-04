@@ -904,6 +904,11 @@ mod tests {
                 mode: edit_model::SpotMode::Heal,
             }],
             rendering: edit_model::Rendering::Camera,
+            look: edit_model::Look {
+                file: Some("velvia.cube".into()),
+                space: edit_model::LutSpace::SrgbDisplay,
+                strength: 65.0,
+            },
         }
     }
 

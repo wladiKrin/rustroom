@@ -448,6 +448,93 @@ pub enum Rendering {
     Camera,
 }
 
+/// The colour space a `.cube` was authored against.
+///
+/// ⚠⚠ **This decides WHERE the look runs**, not merely how it is shaped — see the spec
+/// `2026-09-04-creative-luts-design.md` §2. A display-referred LUT *modifies* the camera
+/// rendering; a linear one runs **in place of** it, because it **is** the rendering. Stacking a
+/// film emulation on our S-curve double-renders — our tone curve, then the LUT's — giving crushed
+/// shadows and a clipped roll-off, which is the single most common way LUT support is reported as
+/// "looks wrong".
+///
+/// ⚠ Log encodings (LogC, S-Log3, ACEScct) are deliberately absent: each is a specific transfer
+/// function needing implementation *and* validation, and there is no footage here to validate
+/// against. Add a variant when there is something to check it with — never before. That is the
+/// position colour management C2 was in without its oracle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LutSpace {
+    /// sRGB primaries and the sRGB transfer curve. What most downloadable looks expect.
+    #[default]
+    SrgbDisplay,
+    /// Rec.709 primaries with **its own** transfer curve — not sRGB's, though the two are
+    /// routinely confused. Kept distinct rather than aliased because a LUT author chose one.
+    Rec709,
+    /// Scene-linear. A LUT declaring this **is** the display rendering.
+    Linear,
+}
+
+impl LutSpace {
+    /// Every variant, for the panel's dropdown. ⚠ Append only — the order is what the UI shows.
+    pub const ALL: [LutSpace; 3] = [LutSpace::SrgbDisplay, LutSpace::Rec709, LutSpace::Linear];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LutSpace::SrgbDisplay => "sRGB display",
+            LutSpace::Rec709 => "Rec.709",
+            LutSpace::Linear => "Linear",
+        }
+    }
+
+    /// Whether a LUT in this space **replaces** the camera rendering rather than following it.
+    ///
+    /// ⚠⚠ The one place this rule is written down. The pipeline's placement and the panel's
+    /// warning both read it here, so the render and the label it shows cannot disagree — the
+    /// invisible-state failure this project has recorded repeatedly.
+    pub fn is_the_rendering(self) -> bool {
+        matches!(self, LutSpace::Linear)
+    }
+}
+
+/// A creative look: a 3-D LUT applied as a display-referred grade.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Look {
+    /// The `.cube`'s filename, resolved against the looks directory.
+    ///
+    /// ⚠ A NAME, not a path: a preset carrying a look must be shareable, and an absolute path is
+    /// machine-specific. Camera profiles already behave this way. The accepted cost is that a
+    /// preset is portable only where the `.cube` is present — a missing file renders **without**
+    /// the look and says so, never silently and never as an error that stops the photo opening.
+    pub file: Option<String>,
+    pub space: LutSpace,
+    /// 0..=100. 100 is the LUT exactly as authored.
+    ///
+    /// ⚠ Default **100** so that applying a look does what its name says. A lower default means a
+    /// LUT never looks like what its author shipped until you find the slider.
+    pub strength: f32,
+}
+
+impl Default for Look {
+    /// ⚠⚠ **Hand-written, not derived.** `strength` is 100 at neutral, and the container-level
+    /// `#[serde(default)]` fills a *missing field* from this — so a derived `Default` would give
+    /// every partial sidecar `strength: 0`, i.e. a named look that silently does nothing.
+    /// `RadialGradient::default` records this trap twice.
+    fn default() -> Self {
+        Self {
+            file: None,
+            space: LutSpace::default(),
+            strength: 100.0,
+        }
+    }
+}
+
+impl Look {
+    /// True when this look actually changes pixels. Same rule as every other stage.
+    pub fn is_active(&self) -> bool {
+        self.file.is_some() && self.strength > 0.0
+    }
+}
+
 pub const EDIT_GROUP_NAMES: [&str; 10] = [
     "White Balance",
     "Tone",
@@ -1233,6 +1320,16 @@ pub struct Edits {
     pub rendering: Rendering,
     /// Spot removal patches, applied in order on the pre-geometry frame. Empty = no stage.
     pub spots: Vec<Spot>,
+    /// A creative look: a `.cube` laid over the finished photograph.
+    ///
+    /// ⚠ Rides the **`Rendering`** group, not `Color` — a look is a rendering decision. And its
+    /// declared [`LutSpace`] decides *where* it runs: a linear LUT replaces the camera rendering
+    /// rather than following it.
+    ///
+    /// ⚠ Inert by default (no file), which is what keeps `Edits::default()` strictly neutral and
+    /// all 53 goldens byte-identical.
+    #[serde(default)]
+    pub look: Look,
 }
 
 impl Edits {
@@ -1284,6 +1381,7 @@ impl Edits {
             masks,
             spots,
             rendering,
+            look,
         } = src;
 
         if groups.white_balance {
@@ -1331,6 +1429,11 @@ impl Edits {
         }
         if groups.rendering {
             self.rendering = *rendering;
+            // ⚠ A look rides `Rendering` rather than `Color`: it is a rendering decision, and a
+            // `Linear` one literally *is* the rendering. Splitting the two across groups would
+            // let a paste carry a linear look while leaving `rendering` behind, which is the
+            // half-applied state this partition exists to prevent.
+            self.look = look.clone();
         }
     }
 }
@@ -2110,6 +2213,11 @@ mod tests {
                 mode: SpotMode::Clone,
             }],
             rendering: Rendering::Camera,
+            look: Look {
+                file: Some("velvia.cube".into()),
+                space: LutSpace::Rec709,
+                strength: 65.0,
+            },
         }
     }
 
@@ -3151,5 +3259,55 @@ mod tests {
         // An older sidecar has no `spots` key and must load with none.
         let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
         assert!(e.spots.is_empty());
+    }
+
+    /// ⚠⚠ Hand-written `Default`, not derived: `strength` is 100 at neutral, and the
+    /// container-level `#[serde(default)]` fills a missing field from the struct's `Default` — so
+    /// a derived one gives every partial sidecar `strength: 0`, a look silently doing nothing.
+    /// `RadialGradient::default` and `ColorGrading::default` record this trap.
+    #[test]
+    fn a_looks_default_strength_is_full() {
+        assert_eq!(Look::default().strength, 100.0);
+        assert_eq!(Look::default().file, None);
+    }
+
+    /// ⚠ A look with no file is inert, so `Edits::default()` stays strictly neutral and every
+    /// golden is untouched.
+    #[test]
+    fn a_default_look_is_not_active() {
+        assert!(!Look::default().is_active());
+    }
+
+    /// ⚠ Strength 0 is not active either — it is the identity by definition, and inserting a
+    /// stage that does nothing costs a whole-image pass.
+    #[test]
+    fn a_look_at_zero_strength_is_not_active() {
+        let l = Look {
+            file: Some("x.cube".into()),
+            strength: 0.0,
+            ..Look::default()
+        };
+        assert!(!l.is_active());
+    }
+
+    /// ⚠⚠ The trap made concrete: a sidecar that names a look but omits `strength` must load at
+    /// **100**, not 0. This is the test a derived `Default` fails, and the reason it is written
+    /// against JSON rather than against `Look::default()` alone is that the failure only appears
+    /// through serde's field-level fill-in.
+    #[test]
+    fn a_sidecar_naming_a_look_without_a_strength_loads_at_full() {
+        let e: Edits = serde_json::from_str(r#"{"look":{"file":"portra.cube"}}"#).unwrap();
+        assert_eq!(e.look.file.as_deref(), Some("portra.cube"));
+        assert_eq!(e.look.strength, 100.0);
+        assert!(e.look.is_active(), "a named look must actually be applied");
+    }
+
+    /// ⚠ An older sidecar has no `look` key at all and must load inert — the property that keeps
+    /// every existing golden byte-identical.
+    #[test]
+    fn a_sidecar_without_a_look_loads_inert() {
+        let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
+        assert_eq!(e.look, Look::default());
+        assert!(!e.look.is_active());
     }
 }
