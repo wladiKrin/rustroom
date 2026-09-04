@@ -509,6 +509,15 @@ pub fn build_pipeline_split_in_region_with_brush(
             blacks: edits.blacks,
             saturation: 0.0,
             vibrance: 0.0,
+            // ⚠⚠ Neutral for the identical reason `saturation` above is zero: **this tail places
+            // each of these itself**, further down, at a position each has earned. Passing the
+            // real values would apply every one of them **twice** and move every golden.
+            //
+            // ⚠ Inside a mask there is no such second placement, so a mask passes its real
+            // values and the ordering within the shared builder is the whole story.
+            local_contrast: edit_model::LocalContrast::default(),
+            hsl: edit_model::Hsl::default(),
+            sharpening: edit_model::Sharpening::default(),
         },
         baseline,
     );

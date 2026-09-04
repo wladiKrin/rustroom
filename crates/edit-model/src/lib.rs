@@ -1258,6 +1258,22 @@ pub struct LocalAdjustments {
     pub blacks: f32,
     pub saturation: f32,
     pub vibrance: f32,
+    /// Fine and coarse local contrast, carried by the mask.
+    ///
+    /// ⚠ Negative `texture` is what makes skin softening reachable without masked noise
+    /// reduction, which is a later slice — it removes the fine band and softens edges within it.
+    pub local_contrast: LocalContrast,
+    /// ⚠ Full parity with the global control, `masking` included — which inside a mask is a
+    /// second gate inside a gate, since the mask has already answered *where*. Kept because
+    /// parity costs nothing here and an edge gate is defensible for a loose mask over mixed
+    /// content. A deliberate choice (2026-09-04), not an oversight.
+    pub sharpening: Sharpening,
+    /// ⚠ 24 values — an order of magnitude more state than anything else here, and the reason a
+    /// mask's panel section is markedly taller than it was. Also the **most expensive** thing a
+    /// mask can carry: measured, global HSL is +34.9 ms at preview against Clarity's +8.8 ms.
+    /// "Per-pixel" says nothing about cost — the price is an Oklab round trip plus `atan2`,
+    /// `cos` and `sin` for every pixel.
+    pub hsl: Hsl,
 }
 
 impl LocalAdjustments {
@@ -2263,6 +2279,41 @@ mod tests {
     ///
     /// Deliberately does NOT use `..Default::default()`: adding a field to `Edits` should
     /// break this function, forcing whoever adds it to give it a group.
+    /// A mask can carry the tail-native adjustments, and the default stays inert.
+    ///
+    /// ⚠ The second assertion is the load-bearing one: `Sharpening::default()` is **hand-written**
+    /// (radius 1.0, detail 50.0), not all-zeros. If `is_active` ever compared fields rather than
+    /// the whole struct against its default, every existing sidecar would silently gain stages.
+    #[test]
+    fn a_mask_can_carry_the_tail_native_adjustments() {
+        let a = LocalAdjustments {
+            local_contrast: LocalContrast {
+                texture: 40.0,
+                clarity: -30.0,
+            },
+            sharpening: Sharpening {
+                amount: 55.0,
+                ..Sharpening::default()
+            },
+            hsl: Hsl {
+                bands: [HslBand {
+                    hue: 12.0,
+                    saturation: 0.0,
+                    luminance: 0.0,
+                }; 8],
+            },
+            ..LocalAdjustments::default()
+        };
+        assert!(
+            a.is_active(),
+            "a mask carrying only spatial values must count as active"
+        );
+        assert!(
+            !LocalAdjustments::default().is_active(),
+            "the default must stay inert"
+        );
+    }
+
     fn all_nonneutral() -> Edits {
         let mut hsl = Hsl::default();
         hsl.bands[0].saturation = 20.0;
@@ -2350,6 +2401,26 @@ mod tests {
                 }),
                 adjustments: LocalAdjustments {
                     exposure: 0.75,
+                    // ⚠⚠ Set by hand, because this fixture **does not fail to compile** when
+                    // `LocalAdjustments` grows: it fills the rest with `..Default::default()`.
+                    // A construct that names exhaustiveness and does not deliver it through a
+                    // nested struct is exactly how a new field lands untested by the very thing
+                    // that exists to force a decision about it.
+                    local_contrast: LocalContrast {
+                        texture: 35.0,
+                        clarity: -25.0,
+                    },
+                    sharpening: Sharpening {
+                        amount: 60.0,
+                        ..Sharpening::default()
+                    },
+                    hsl: Hsl {
+                        bands: [HslBand {
+                            hue: 8.0,
+                            saturation: -15.0,
+                            luminance: 5.0,
+                        }; 8],
+                    },
                     ..Default::default()
                 },
             }],
