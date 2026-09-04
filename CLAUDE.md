@@ -129,13 +129,50 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **State at handoff (2026-09-03, later):** **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
+> **State at handoff (2026-09-04):** **1973 tests, 54 goldens**, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
 >
 > **🎯 PHASE 5 IS CLOSED (2026-09-03).** M5.3b — the spot-removal canvas tool and Visualize Spots — was the last milestone; its section is **"M5.3b — the spot-removal canvas tool"** below, with the **five rounds of defects found by using it**, every one in canvas/panel wiring and none caught by a test before it was reported. ⚠ Read its `suppressed_spot` story before giving any state two owners.
 >
 > **✅ M5.4b IS CLOSED, AND WITH IT M5.4.** A display rendering, a per-camera `BaselineExposure`, and `ProfileToneCurve` read from the profile — **which is the answer to the design question that was blocking `ProfileLookTable` and creative 3-D LUTs (M7.5) as well.** Its section is **"M5.4b — a display rendering"** below, and the two defects found by using it are in it: the preference seam **overwriting every stored value on open** (which predated the rendering and was silently resetting lens corrections too), and the **0.945× saturation deficit** against the camera.
 >
-> **▶ NEXT ACTION: DISPATCH W5. It is specced, planned and ready — nothing is in flight and `main` is clean, with no branches and no worktrees.**
+> **🎯 W5 IS CLOSED (2026-09-04). 1896 → 1973 tests, 53 → 54 goldens**, `fmt` / `clippy -D warnings`
+> / `test --all` green together on the merged tree, all 54 golden tests confirmed to have **run**.
+> All three tracks merged fast-forward: **A** M7.5 creative LUTs, **C** M7.1b colour range masks,
+> **B** M6.4 soft proofing.
+>
+> **▶ NEXT ACTION: judge the two new features BY EYE — neither has ever been seen on a photograph** —
+> then **M7.2 masked spatial adjustments** as W6, which was held out of W5 because it collides with
+> C on `MaskStage` and with A on stage order.
+>
+> ⚠⚠ **A WRONG LUT SPACE DOES NOT LOOK WRONG, AND THAT IS THE THING TO CHECK.** Four real `.cube`
+> files are installed at `<config>/rustroom/looks/`. On a *grade* a wrong `Linear` declaration is
+> unmissable — Sam Kolder clips **91.9% → 100%** of the frame into the shadows at saturation 0.9705.
+> On the **Kodak 2383 film emulation** all three spaces give **0.00% clipping** and a plausible
+> photograph (mean L 0.4697 / 0.4496 / 0.2757). **Nothing in the image tells you the space is
+> wrong**, so the control has to be obvious rather than discoverable. ⚠ That LUT's own header
+> declares `Input: Cineon Log`, which W5-0 ruled out — so all three of our options are wrong for it
+> and it still looks fine.
+>
+> ⚠ **C's colour range mask has never been judged on a photograph either**: its default band
+> (0°–120°), the `min_chroma` feel and its 0.15 ceiling are reasoned from measurements — sensor noise
+> ~0.003, an ordinary colour ~0.06, a saturated sRGB primary ~0.26 — not from looking.
+>
+> **⚠⚠ THE STALE-WORKTREE FAULT THAT COST W5 THREE WORKTREES WAS NOT A HARNESS BUG — READ
+> `PARALLEL-WORK.md` §3.** All three agents branched from `1523f38`, **134 commits behind**, with
+> `worktree.baseRef: head` present and correct. `1523f38` **is** `origin/main`, which is exactly what
+> the default `fresh` branches from: the setting had never been read, because the session entered the
+> repo with `change_directory` and dispatched **in the same turn**, and the working directory only
+> moves when that turn ends. ⚠ **Never dispatch a worktree agent in the same turn as
+> `change_directory`**, and put a **step-zero base check in every dispatch prompt** — a project
+> setting structurally cannot load before the project is the working directory, so the file can be
+> perfect and inert.
+>
+> **⚠⚠ AND THREE OF FOUR TRACK-B AGENTS DIED FOR NON-REASONING CAUSES.** One stopped correctly at a
+> real design blocker; one was killed when its session's process exited; one stalled on a watchdog.
+> The killed one had left **8 modified files, 749 insertions, uncommitted** in its worktree —
+> recovered by looking *before* `git worktree remove -f -f`, committed, and finished inline. ⚠ **Check
+> a dead agent's worktree for uncommitted work before releasing it**, and prefer inline once the
+> agent path has failed twice on one task.
 >
 > ⚠⚠ **`docs/PARALLEL-WORK.md` IS REQUIRED READING BEFORE DISPATCHING ANY AGENT**, and its **W5 entry** carries the ownership table, the merge order and the checkpoint. Do not re-derive the partition from this file.
 >
