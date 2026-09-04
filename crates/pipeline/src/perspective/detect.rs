@@ -562,6 +562,31 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **Every other fixture in this file is SQUARE, and the real analysis plane is 512×342.**
+    /// This project has recorded an aspect-ratio bug four times — `LinearGradient::coverage`,
+    /// `mask_tool::hit_test`, the brush radius and `lean_deg` — and a square fixture cannot see
+    /// one, because at `w == h` an x-normalisation and a y-normalisation are the same number.
+    ///
+    /// A vertical line painted at a known column must come back at that column.
+    #[test]
+    fn a_vertical_line_on_a_wide_frame_comes_back_where_it_was_painted() {
+        let (w, h) = (512, 342);
+        for &at in &[0.25f32, 0.5, 0.75] {
+            let x = at * (w - 1) as f32;
+            let mut p = dark(w, h);
+            line(&mut p, w, h, x, 2.0, x, h as f32 - 3.0);
+            let found = verticals(&p, w, h);
+            assert!(!found.is_empty(), "nothing found for a line at {at}");
+            let g = &found[0];
+            assert!(
+                (g.from[0] - at).abs() < 0.02 && (g.to[0] - at).abs() < 0.02,
+                "a vertical line painted at x={at} came back at ({:.4} -> {:.4})",
+                g.from[0],
+                g.to[0]
+            );
+        }
+    }
+
     #[test]
     fn a_flat_frame_finds_nothing() {
         assert!(verticals(&dark(128, 128), 128, 128).is_empty());
