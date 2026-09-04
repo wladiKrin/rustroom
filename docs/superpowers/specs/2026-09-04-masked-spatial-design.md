@@ -46,13 +46,24 @@ mask has already answered *where*. It is retained because parity costs nothing h
 edge gate is occasionally defensible for a loose mask over mixed content. Recorded as a deliberate
 choice, not an oversight.
 
-### The exhaustive sites
+### The exhaustive sites — checked, not assumed, and only one of them fires
 
-Two new fields on `LocalAdjustments` reach the constructs that exist to force a decision:
-`merge_from`'s destructure, `pipeline::all_edits`, `edit_model::all_nonneutral`, and
-`edit_clipboard`'s payload. Each should refuse to compile until answered. **That is what they are
-for** — if any of them compiles unchanged, that site is not as exhaustive as it claims and the gap
-is the finding.
+An earlier draft of this spec claimed all four exhaustive constructs would refuse to compile. **That
+was wrong**, and checking it produced the more useful answer:
+
+- ✅ **`build_pipeline_split`'s own `LocalAdjustments` literal is exhaustive and WILL break.** It is
+  the global tail's caller — the exact site that must pass the two new fields as neutral. **So the
+  compiler forces §3's rule rather than leaving it to be remembered**, which is the best possible
+  place for that decision to be made.
+- ⚠ **`merge_from` will NOT break, and that is correct.** It destructures `Edits`, not
+  `LocalAdjustments`; a mask travels whole under `MASKS_GROUP`, so a masked sharpening rides along
+  with its mask for free.
+- ⚠⚠ **`pipeline::all_edits` and `edit_model::all_nonneutral` will NOT break either — and that IS a
+  gap.** Both build their `LocalAdjustments` with `..Default::default()`, so two fields whose whole
+  purpose is to be non-neutral would land **untested by the very fixtures that exist to force a
+  decision**, silently. They must be updated by hand and **nothing will remind anyone**. This is the
+  project's own recorded failure shape — a construct that names exhaustiveness and does not deliver
+  it through a nested struct — and it is a finding about those fixtures, not only about this task.
 
 ## 3. The pipeline, and the trap that is already solved
 
@@ -65,8 +76,8 @@ passes `saturation: 0.0, vibrance: 0.0` with a comment reading *"passing the rea
 silently move it earlier and change every golden."* Masked local contrast and sharpening follow the
 identical rule: **the global caller passes them neutral.**
 
-- `per_pixel_stages` is **renamed** — it is no longer per-pixel. It also starts taking a
-  `RenderScale`, which the spatial stages need and the global caller already holds.
+- `per_pixel_stages` is **renamed `adjustment_stages`** — it is no longer per-pixel. It also starts
+  taking a `RenderScale`, which the spatial stages need and the global caller already holds.
 - **Order inside a mask mirrors the global chain**, which is the rule a mask's adjustments already
   follow: white balance → exposure → contrast → tone regions → **local contrast** →
   saturation/vibrance → **sharpening last**. Sharpening is last for the reason it is last globally:
