@@ -1579,6 +1579,18 @@ mod tests {
                 }),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.6,
+                    // ⚠⚠ **Masked spatial belongs in this edit set, and its absence would be
+                    // silent.** This test has already been insufficient in exactly that way
+                    // once: when sharpening landed it kept passing because its edits carried
+                    // none, so the weakened invariant it exists to cover went unexercised. A
+                    // masked clarity reaches 120 px on its own, *on top of* the global reach,
+                    // because masks chain — so if `tail_kernel_radius` ever stopped counting
+                    // them the inset below would be too small and this comparison would fail
+                    // at the edges, which is precisely the bug it should catch.
+                    local_contrast: edit_model::LocalContrast {
+                        texture: 0.0,
+                        clarity: 70.0,
+                    },
                     ..Default::default()
                 },
             }],
