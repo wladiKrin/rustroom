@@ -7,6 +7,13 @@
 pub struct Cube {
     pub size: usize,
     entries: Vec<[f32; 3]>,
+    /// The input domain the file declares, per channel. `[0, 1]` unless it says otherwise.
+    ///
+    /// ⚠⚠ Ignoring this is **silently** wrong rather than loudly wrong: the cube is simply indexed
+    /// over the wrong interval, misplacing every sample while still producing a plausible image.
+    /// A real ACES LMT declares `LUT_3D_INPUT_RANGE 0.0927061729 1.0196260353`.
+    dmin: [f32; 3],
+    dmax: [f32; 3],
 }
 
 /// Why a `.cube` could not be read.
@@ -19,16 +26,32 @@ pub enum CubeError {
     NoSize,
     BadSize(usize),
     WrongCount { want: usize, got: usize },
+    Shaper,
+    BadDomain,
 }
 
 impl std::fmt::Display for CubeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CubeError::NoSize => write!(f, "no LUT_3D_SIZE line"),
-            CubeError::BadSize(n) => write!(f, "LUT_3D_SIZE {n} is not usable (need 2..=64)"),
+            CubeError::BadSize(n) => write!(
+                f,
+                "LUT_3D_SIZE {n} is not usable (need 2..={})",
+                Cube::MAX_SIZE
+            ),
             CubeError::WrongCount { want, got } => {
                 write!(f, "expected {want} entries, found {got}")
             }
+            CubeError::BadDomain => write!(
+                f,
+                "the declared input domain is empty or inverted (DOMAIN_MIN/DOMAIN_MAX or \
+                 LUT_3D_INPUT_RANGE)"
+            ),
+            CubeError::Shaper => write!(
+                f,
+                "this .cube carries a 1-D input shaper (LUT_1D_SIZE), which means a log or \
+                 scene-referred input this build does not support"
+            ),
         }
     }
 }
@@ -36,13 +59,25 @@ impl std::fmt::Display for CubeError {
 impl std::error::Error for CubeError {}
 
 impl Cube {
-    /// The largest cube we will read. 64³ is 262 144 entries; beyond that a file is more likely
-    /// corrupt than intentional, and the allocation is the caller's memory.
-    const MAX_SIZE: usize = 64;
+    /// The largest cube we will read. 128³ is 2 097 152 entries, ~25 MB as `[f32; 3]`; 256³ — the
+    /// format's own ceiling — would be ~201 MB, which a malformed file must not be able to ask for.
+    ///
+    /// ⚠⚠ This was **64**, on the reasoning that "beyond that a file is more likely corrupt than
+    /// intentional". The first real `.cube` ever put through this project falsified that: **65³ is
+    /// Resolve's high-quality default**, and `resolve-LMT ACES v0.1.1.cube` is exactly 65. A bound
+    /// chosen from a guess about what files look like, rather than from what they are.
+    const MAX_SIZE: usize = 128;
 
     pub fn parse(text: &str) -> Result<Self, CubeError> {
         let mut size = None;
         let mut entries = Vec::new();
+        let mut dmin = [0.0f32; 3];
+        let mut dmax = [1.0f32; 3];
+        let nums = |rest: &str| -> Vec<f32> {
+            rest.split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect()
+        };
         for line in text.lines() {
             let line = line.trim();
             // ⚠ `#` comments and the metadata keywords this format allows are skipped rather than
@@ -53,6 +88,35 @@ impl Cube {
             }
             if let Some(rest) = line.strip_prefix("LUT_3D_SIZE") {
                 size = rest.trim().parse::<usize>().ok();
+                continue;
+            }
+            // ⚠⚠ A 1-D input shaper's values share the numeric stream with the cube's, so they
+            // would be read as entries. The count check does catch that — but reports "expected
+            // 274625 entries, found 278720", which is true and tells the user nothing. Refused by
+            // name instead, because a shaper means a log or scene-referred input that W5-0
+            // deliberately excluded.
+            if line.starts_with("LUT_1D_SIZE") {
+                return Err(CubeError::Shaper);
+            }
+            // ⚠ `LUT_3D_INPUT_RANGE lo hi` is scalar and applies to all three channels;
+            // `DOMAIN_MIN`/`DOMAIN_MAX` are per channel. Both say the same thing.
+            if let Some(rest) = line.strip_prefix("LUT_3D_INPUT_RANGE") {
+                if let [lo, hi] = nums(rest)[..] {
+                    dmin = [lo; 3];
+                    dmax = [hi; 3];
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("DOMAIN_MIN") {
+                if let [r, g, b] = nums(rest)[..] {
+                    dmin = [r, g, b];
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("DOMAIN_MAX") {
+                if let [r, g, b] = nums(rest)[..] {
+                    dmax = [r, g, b];
+                }
                 continue;
             }
             if line.starts_with(char::is_alphabetic) {
@@ -70,6 +134,18 @@ impl Cube {
         if !(2..=Self::MAX_SIZE).contains(&size) {
             return Err(CubeError::BadSize(size));
         }
+        // ⚠ Written through `partial_cmp` rather than as `hi <= lo`, because a **NaN** bound must
+        // be refused as well: NaN fails every comparison, so `hi <= lo` is false for it and the
+        // positive form would let it straight through to the division. `partial_cmp` returns
+        // `None` for NaN, which is neither `Greater` nor usable, so the one test covers both.
+        if (0..3).any(|c| {
+            !matches!(
+                dmax[c].partial_cmp(&dmin[c]),
+                Some(std::cmp::Ordering::Greater)
+            )
+        }) {
+            return Err(CubeError::BadDomain);
+        }
         let want = size * size * size;
         if entries.len() != want {
             return Err(CubeError::WrongCount {
@@ -77,7 +153,12 @@ impl Cube {
                 got: entries.len(),
             });
         }
-        Ok(Self { size, entries })
+        Ok(Self {
+            size,
+            entries,
+            dmin,
+            dmax,
+        })
     }
 
     /// The entry at integer cube coordinates. ⚠ Red varies fastest — the format's own ordering.
@@ -95,7 +176,10 @@ impl Cube {
             // above 1.0 there is nothing to scale — the `ProfileHueSatMap` trick of clamping the
             // index and applying to the real value does NOT transfer, because that table stores a
             // scale. See the spec, §4.
-            let x = rgb[c].clamp(0.0, 1.0) * n as f32;
+            // ⚠ Normalise out of the declared domain FIRST, then clamp. Clamping the raw value
+            // to [0, 1] before the remap would be the old bug wearing a different hat.
+            let t = (rgb[c] - self.dmin[c]) / (self.dmax[c] - self.dmin[c]);
+            let x = t.clamp(0.0, 1.0) * n as f32;
             let i = (x.floor() as usize).min(n.saturating_sub(1));
             lo[c] = i;
             fr[c] = x - i as f32;
@@ -206,5 +290,64 @@ mod tests {
                     0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
         let cube = Cube::parse(text).expect("parses despite the metadata");
         assert_eq!(cube.size, 2);
+    }
+
+    /// ⚠⚠ **65 is a STANDARD size, not a corrupt file.** Resolve's high-quality default is 65³,
+    /// and the checkpoint's real `resolve-LMT ACES v0.1.1.cube` is exactly that. The old
+    /// `MAX_SIZE = 64` refused it on the reasoning that "beyond 64 a file is more likely corrupt
+    /// than intentional", which the first real LUT tried on this project falsified.
+    #[test]
+    fn a_sixty_five_cube_is_accepted() {
+        let cube = Cube::parse(&identity_text(65)).expect("65 is a standard size");
+        assert_eq!(cube.size, 65);
+        assert_eq!(cube.lookup([0.5, 0.5, 0.5]), [0.5, 0.5, 0.5]);
+    }
+
+    /// ⚠⚠ **A DECLARED INPUT DOMAIN IS HONOURED, AND IGNORING IT IS SILENTLY WRONG.** The parser
+    /// skipped every line starting with a letter, so `LUT_3D_INPUT_RANGE` was dropped and the cube
+    /// was indexed over `[0, 1]` whatever it declared — misplacing every sample with no error.
+    /// The real ACES LMT declares `LUT_3D_INPUT_RANGE 0.0927061729 1.0196260353`.
+    #[test]
+    fn a_declared_input_range_is_honoured() {
+        // An identity cube over the domain [0, 2]: an input of 1.0 sits halfway along it, so it
+        // must come back as 0.5. Read over [0, 1] instead it would come back as 1.0.
+        let text = format!(
+            "LUT_3D_INPUT_RANGE 0.0 2.0
+{}",
+            identity_text(2)
+        );
+        let cube = Cube::parse(&text).expect("parses");
+        assert_eq!(cube.lookup([1.0, 1.0, 1.0]), [0.5, 0.5, 0.5]);
+    }
+
+    /// ⚠⚠ **A SHAPER LUT IS REFUSED BY NAME.** A `.cube` may carry a 1-D input shaper ahead of the
+    /// 3-D table; its values sit in the same numeric stream, so they would be read as cube entries.
+    /// The count check catches that today, but reports `expected 274625 entries, found 278720` —
+    /// true, and useless to anyone holding the file. A shaper carries a log/scene-referred input
+    /// that W5-0 deliberately excluded, so this says so instead of guessing.
+    /// ⚠⚠ **A DEGENERATE DOMAIN DIVIDES BY ZERO AND THE RESULT IS NaN, NOT AN ERROR.** `NaN`
+    /// survives `clamp` untouched, `NaN as usize` saturates to 0, and the lookup then returns the
+    /// cube's first entry for every pixel — a uniform image with nothing raised. Refused at parse,
+    /// where it is still describable.
+    #[test]
+    fn a_degenerate_domain_is_refused() {
+        let flat = format!("DOMAIN_MIN 1 1 1\nDOMAIN_MAX 1 1 1\n{}", identity_text(2));
+        assert_eq!(Cube::parse(&flat).err(), Some(CubeError::BadDomain));
+        let inverted = format!("LUT_3D_INPUT_RANGE 1.0 0.0\n{}", identity_text(2));
+        assert_eq!(Cube::parse(&inverted).err(), Some(CubeError::BadDomain));
+        // ⚠ `"nan".parse::<f32>()` succeeds, so a malformed file really can declare one — and NaN
+        // fails every comparison, so a naive `hi <= lo` test lets it through to the division.
+        let nan = format!("DOMAIN_MAX nan nan nan\n{}", identity_text(2));
+        assert_eq!(Cube::parse(&nan).err(), Some(CubeError::BadDomain));
+    }
+
+    #[test]
+    fn a_shaper_lut_is_refused_by_name() {
+        let text = "LUT_1D_SIZE 2\n\
+                    0 0 0\n1 1 1\n\
+                    LUT_3D_SIZE 2\n\
+                    0 0 0\n1 0 0\n0 1 0\n1 1 0\n\
+                    0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        assert_eq!(Cube::parse(text).err(), Some(CubeError::Shaper));
     }
 }
