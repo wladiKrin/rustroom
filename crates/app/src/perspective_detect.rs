@@ -113,6 +113,22 @@ pub fn detect_verticals_with_floor(
     detect::verticals_with_floor(&luma, w, h, floor_levels)
 }
 
+/// The drawn guides, each moved onto the strongest real edge near it.
+///
+/// ⚠ Same analysis plane as [`detect_verticals`] — Guide space, post lens correction and
+/// orientation, pre-straighten, pre-perspective, pre-crop — which is the space `Session.guides` are
+/// already in, so no coordinate conversion is needed or wanted.
+pub fn refine_guides(
+    buffer: &ImageBuf,
+    edits: &Edits,
+    lens: Option<LensShot>,
+    resampler: Resampler,
+    guides: &[Guide],
+) -> Vec<Guide> {
+    let (luma, w, h) = analysis_luma(buffer, edits, lens, resampler);
+    detect::refine(&luma, w, h, guides)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
