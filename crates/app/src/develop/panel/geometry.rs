@@ -296,14 +296,20 @@ pub fn show(
         // ⚠ The click is reported outward rather than acted on here: `show` takes `&mut Session`
         // and `auto_guides` needs `&mut RustroomApp`, which are not disjoint. `panel/mod.rs`
         // already applies `rename` after the panel closes for exactly that reason.
-        if ui
-            .button("Auto")
-            .on_hover_text(
-                "Find two vertical edges in the photograph and solve the tilt from them. The \
-                 guides it infers are left on screen so you can nudge or delete them.",
-            )
-            .clicked()
-        {
+        // ⚠⚠ **The label reports which of the two jobs the click will do**, because the behaviour
+        // depends on whether guides exist and nothing else on screen says so. One button doing two
+        // things silently is the shape that produced the greyed-out straighten-button confusion,
+        // whose lesson is "a rule the user cannot see is one they cannot correct."
+        let refining = !s.guides.is_empty();
+        let label = if refining { "Refine guides" } else { "Auto" };
+        let hint = if refining {
+            "Move each guide you drew onto the nearest strong edge. A guide with no edge near it \
+             is left exactly where you put it."
+        } else {
+            "Find two vertical edges in the photograph and solve the tilt from them. The guides \
+             it infers are left on screen so you can nudge, refine or delete them."
+        };
+        if ui.button(label).on_hover_text(hint).clicked() {
             *auto = true;
         }
     });
@@ -378,6 +384,50 @@ mod tests {
 
     fn click_in_panel(label: &str, s: &mut Session, lens: bool) -> Edited {
         click_in_panel_reporting(label, s, lens).0
+    }
+
+    /// ⚠⚠ **The label carries the state.** One button doing two things with nothing on screen
+    /// saying which is the shape that produced this project's greyed-out straighten-button
+    /// confusion, whose lesson is "a rule the user cannot see is one they cannot correct."
+    ///
+    /// ⚠ Asserts **both** labels, and that each is ABSENT in the other state. A test that only
+    /// looked for "Refine guides" would pass against a panel drawing both buttons at once.
+    #[test]
+    fn the_auto_button_says_which_of_its_two_jobs_it_will_do() {
+        let ctx = test_ui::ctx();
+        let seen = |label: &str, with_guide: bool| {
+            let mut s = session();
+            if with_guide {
+                s.guides.push(pipeline::perspective::guides::Guide {
+                    from: [0.2, 0.2],
+                    to: [0.2, 0.8],
+                });
+            }
+            let mut aspect = None;
+            let mut ed = Edited::default();
+            test_ui::find(&ctx, label, |ui| {
+                show(
+                    ui,
+                    &mut s,
+                    &mut aspect,
+                    &mut CompositionGuide::Off,
+                    false,
+                    &mut ed,
+                    &mut false,
+                );
+            })
+            .is_some()
+        };
+        assert!(
+            seen("Auto", false),
+            "with no guides it should offer to find them"
+        );
+        assert!(!seen("Refine guides", false), "nothing to refine yet");
+        assert!(
+            seen("Refine guides", true),
+            "with a guide it should offer to refine"
+        );
+        assert!(!seen("Auto", true), "the two labels must not both be drawn");
     }
 
     /// The one harness, with the Auto click it reports outward.

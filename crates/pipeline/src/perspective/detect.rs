@@ -198,9 +198,28 @@ const MIN_SEPARATION: f32 = 0.15;
 /// is the measured case — and refinement re-creates the very bug it exists to fix. It must be small
 /// enough that a wrong snap is close to impossible.
 ///
-/// ⚠ Measured with `detect_overlay --refine`, not asserted. This milestone has already had one
-/// guess overturned by measurement: the spec's "starting band of 6–10 levels" for
-/// [`MIN_EDGE_LEVELS`] fired on 84% of frames.
+/// ⚠ **Measured with `detect_overlay --refine`, not asserted** — this milestone has already had one
+/// guess overturned by measurement, the spec's "starting band of 6–10 levels" for
+/// [`MIN_EDGE_LEVELS`], which fired on 84% of frames.
+///
+/// Guides traced 1–3% off the true edge on the author's two known frames had to move:
+///
+/// | frame | drawn | moved |
+/// |---|---|---|
+/// | Abbey | 0.90 → 0.98 | 0.011 |
+/// | Abbey | 0.87 → 0.95 | 0.021 |
+/// | Abbey | 0.31 → 0.32 | 0.027 |
+/// | Walhalla | 0.55 → 0.59 | 0.022 |
+/// | Walhalla | 0.59 → 0.63 | 0.024 |
+///
+/// So 0.03 admits every observed placement error with a little margin. ⚠ The competing wrong edge
+/// on those frames — Walhalla's sky line against its building corner — is **0.16 away, five times
+/// the radius**, so there is no case here where a guide aimed at the building could capture it.
+///
+/// ⚠⚠ **A guide traced along a LEANING edge is the case that matters, and measuring with a
+/// straight vertical probe measures the wrong thing**: against an edge leaning 16° the gap at one
+/// end is large however well the line is placed, so the first measurement showed the abbey never
+/// snapping at all. `--refine` takes `top:bottom` for that reason.
 pub const SNAP_RADIUS: f32 = 0.03;
 
 /// One accumulator peak.

@@ -217,17 +217,49 @@ impl RustroomApp {
         let Some(s) = self.session.as_mut() else {
             return false;
         };
-        let found = rustroom_app::perspective_detect::detect_verticals(
-            &s.buffer,
-            &s.edits,
-            s.lens.shot.clone(),
-            s.resampler,
-        );
+        // ⚠⚠ **Refinement when guides exist, detection when they do not.** The whole tail below —
+        // `show_guides`, the re-solve, the render request and the single history push — is shared,
+        // because one click must stay one Ctrl+Z whichever job it did.
+        let refining = !s.guides.is_empty();
+        let found = if refining {
+            let drawn = s.guides.clone();
+            let out = rustroom_app::perspective_detect::refine_guides(
+                &s.buffer,
+                &s.edits,
+                s.lens.shot.clone(),
+                s.resampler,
+                &drawn,
+            );
+            // ⚠ Report **both** outcomes. Without this you cannot tell a guide that snapped from
+            // one that did not, which is the difference between a precise line and a rough one.
+            let moved = out.iter().zip(&drawn).filter(|(a, b)| a != b).count();
+            let missed = drawn.len() - moved;
+            self.status = if missed == 0 {
+                format!("Refined {moved} of {}.", drawn.len())
+            } else {
+                format!(
+                    "Refined {moved} of {} — no edge found near the {}.",
+                    drawn.len(),
+                    if missed == 1 { "other" } else { "others" }
+                )
+            };
+            out
+        } else {
+            rustroom_app::perspective_detect::detect_verticals(
+                &s.buffer,
+                &s.edits,
+                s.lens.shot.clone(),
+                s.resampler,
+            )
+        };
         // ⚠⚠ **Two are required, and fewer must SAY SO rather than doing nothing.**
         // `guides::solve` needs exactly two per family — "one line has no vanishing point at all"
         // — and a button that silently does nothing is the worst outcome this feature can have.
         // The status cluster is where this app already reports what it just did.
-        if found.len() < 2 {
+        // ⚠⚠ **Detection only.** Refining one guide is legitimate — the second may be drawn
+        // afterwards — and "Draw them by hand in Guide Mode" is nonsense advice to someone who
+        // already has.
+        if !refining && found.len() < 2 {
             self.status = format!(
                 "Found {} vertical{} — need two. Draw them by hand in Guide Mode.",
                 found.len(),
@@ -249,7 +281,12 @@ impl RustroomApp {
             // in `canvas/mod.rs::show` already follows.
             s.history.push(s.edits.clone());
         }
-        self.status = "Perspective solved from two detected verticals.".to_string();
+        // ⚠⚠ **Detection only, or it destroys the refinement message written above it.** This
+        // assignment was unconditional, one line after the branch that reports how many guides
+        // snapped.
+        if !refining {
+            self.status = "Perspective solved from two detected verticals.".to_string();
+        }
         solved
     }
 }
@@ -308,6 +345,47 @@ mod tests {
 
     /// ⚠⚠ **Two guides per family are required, and the sabotage step is what forced this test.**
     /// A single line has no vanishing point at all, so one guide must leave the edits alone rather
+    /// ⚠⚠ **The branch itself, and it needed its own test.** The panel test proves the *label*
+    /// changes; it cannot see which code path the click takes. A sabotage calling `detect_verticals`
+    /// unconditionally left the label test green — predicted by the plan and confirmed.
+    ///
+    /// ⚠ Asserts on the **status line**, because that is the one outcome that differs
+    /// unambiguously: refinement reports how many guides moved, detection reports a solve. Both
+    /// halves are asserted — a test that only checked the refining case would pass against a build
+    /// that always refined.
+    #[test]
+    fn auto_refines_when_guides_exist_and_detects_when_they_do_not() {
+        use pipeline::perspective::guides::Guide;
+        let ctx = crate::test_ui::ctx();
+
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+        app.session.as_mut().unwrap().guides.push(Guide {
+            from: [0.3, 0.0],
+            to: [0.3, 1.0],
+        });
+        app.auto_guides();
+        assert!(
+            app.status.starts_with("Refined"),
+            "with a guide drawn, Auto should have refined it: {:?}",
+            app.status
+        );
+        assert_eq!(
+            app.session.as_ref().unwrap().guides.len(),
+            1,
+            "refinement must not add or drop guides"
+        );
+
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+        app.auto_guides();
+        assert!(
+            !app.status.starts_with("Refined"),
+            "with no guides, Auto should have detected rather than refined: {:?}",
+            app.status
+        );
+    }
+
     /// than solving from nothing — and nothing covered that until a sabotage making one guide
     /// sufficient went **uncaught**.
     #[test]
