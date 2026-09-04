@@ -195,6 +195,13 @@ come to disagree about what is in gamut — which would be worse than no proof a
 
 - [ ] **Step 3: Implement** — `pack` takes the proof space and the warning flag.
 
+⚠⚠ **AMENDED TWICE — read the spec's §2 for both, because the second supersedes the first.** A
+*single* ProPhoto run does **not** hold the histogram: measured over 12 real frames, 12 of 12 differ,
+worst **5 levels** with the camera rendering off, because ProPhoto's encode ceilings scene headroom
+before the sRGB matrix mixes channels. **Run the tail TWICE while proofing** — `space: Srgb` for the
+histogram, `space: ProPhoto` for the texture and the warning — so the histogram is bit-identical by
+construction. The first amendment follows, and its ProPhoto half still stands for the texture.
+
 ⚠⚠ **AMENDED 2026-09-04.** "The proof replaces the space it converts into" is **not** sufficient:
 sRGB is contained in all four targets, so converting already-clipped sRGB into P3 reveals nothing and
 §8 could not be met. Instead: **`render_engine` passes `space: ProPhoto` to the tail while proofing**

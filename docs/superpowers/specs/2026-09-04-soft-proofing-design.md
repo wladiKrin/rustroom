@@ -51,7 +51,28 @@ the proof space; and encodes into the proof space for the texture.
   oversaturation, not missing gamut — showing colour beyond sRGB is soft-proofing, a different
   feature."* This **is** that different feature, and the space passed is an identity rather than the
   monitor's.
-- ⚠⚠ **The histogram's byte-for-byte equality must be MEASURED, not assumed.** With the proof on it
+- ⚠⚠ **SUPERSEDED 2026-09-04 (second correction) — THE SINGLE ProPhoto RUN DOES NOT HOLD THE
+  HISTOGRAM, AND IT WAS MEASURED RATHER THAN ARGUED.** Track B built `proof_hist_probe` and ran the
+  real pipeline over 12 X-T4 frames: **12 of 12 histograms differ.** With the camera rendering ON,
+  213 of 61 516 800 samples move by at most **1** level — the irreducible f32 cost of `v^(1/1.8)`
+  then `^1.8`. With the rendering **OFF** it is not rounding at all: **1 541 samples move, worst 5
+  levels**, because the data is still scene-referred and **ProPhoto's `encode` ceilings 5 776
+  samples of genuine headroom at 1.0 *before* the sRGB matrix mixes the channels**, where the direct
+  path clamps only afterwards. ⚠⚠ The previous correction's claim — *"the display rendering bounds
+  the data before it, so the residue is negligible"* — is **false for every photo whose rendering is
+  off, which is every golden, the CLI and `Edits::default()`.**
+
+  **The decision (user, 2026-09-04): while proofing, run the tail TWICE.** Once with `space: Srgb`
+  for the histogram, once with `space: ProPhoto` for the texture and the warning. The histogram then
+  comes from an unmodified sRGB run and is **bit-identical by construction** rather than by luck, so
+  `the_histogram_is_unaffected_by_the_soft_proof` passes for a structural reason. ⚠ Cost: one extra
+  tail run per proofed frame — ~7 ms at fit, ~13 ms at a native rung, from this repo's own
+  measurements — paid **only while the proof is switched on**. ⚠ Still entirely inside
+  `render_engine`: no pipeline edit, no new `OutputSpace` variant, nothing added to the export
+  dropdown.
+
+- ⚠ Superseded by the bullet above, and kept because it is *why* the two-run design exists:
+  **The histogram's byte-for-byte equality must be MEASURED, not assumed.** With the proof on it
   is derived through a ProPhoto encode/decode round trip; that is f32-accurate to ~1e-7 and will
   almost certainly quantise identically, but a sample sitting exactly on an 8-bit rounding boundary
   could flip by one level. **If it cannot hold byte for byte, stop and report** — do not widen the
