@@ -85,6 +85,27 @@ agent would branch from `origin/main` and silently **miss everything Wave 1 merg
 so each worktree branches from local `HEAD`. **Verify this before dispatching a wave that depends on
 the previous one.**
 
+⚠⚠ **AND VERIFYING THE FILE IS NOT ENOUGH — W5 LOST ALL THREE WORKTREES TO THIS, WITH THE SETTING
+PRESENT AND CORRECT.** Every W5 agent came up on `1523f38`, **134 commits behind `main`**, carrying
+neither its own spec nor 25 of the 53 goldens. The cause was not the harness: **`1523f38` was exactly
+`origin/main`**, which is what `baseRef: "fresh"` — the default — branches from. The setting had
+simply never been read.
+
+**Because the session moved into this repo with `change_directory` and dispatched in the SAME TURN.**
+The working directory (and with it `.claude/settings.json`) only moves **when that turn ends**, so
+the worktrees were created while the session was still rooted elsewhere and no project settings
+existed. ⚠ **Never dispatch a worktree agent in the same turn as `change_directory` — end the turn
+first.** The same applies to any session that starts outside the repo.
+
+⚠ This setting lives in **project** settings, which by construction cannot load before the project is
+the working directory. So the file can be perfect and still be inert. The durable guard is therefore
+in the *prompt*, not the file: **every dispatch must open with a step-zero base check** — have the
+agent name a file that exists only post-merge, run `cargo test --all`, and **stop and report** rather
+than self-repair if the numbers are wrong. Two W5 agents recovered only because they checked; one
+correctly refused to start. ⚠ A belt-and-braces alternative is `worktree.baseRef` in
+`~/.claude/settings.json`, which loads whatever the working directory — at the cost of applying to
+every repository on the machine.
+
 **Every dispatch prompt must carry:**
 - the build environment, or the agent cannot compile at all:
   `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"`
