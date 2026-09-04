@@ -57,6 +57,15 @@ regex**. **If a sabotage does not fail, suspect the fixture first.**
 
 ## ⚠⚠ Read this before writing anything
 
+⚠⚠ **CORRECTED 2026-09-04 — READ THE SPEC'S §2 FIRST.** The three-step description below is accurate
+about `pack` and **wrong about what it implies**: the tail is built with `space: Srgb` and every
+`encode` clamps to `[0, 1]`, so `pack`'s input is already gamut-clipped and an exact warning there
+can never fire. The user settled it: **while proofing, pass `space: OutputSpace::ProPhoto` to the
+tail** — the documented bit-exact identity — so `pack` receives near-unclipped data, then derive the
+sRGB histogram, compute the exact warning, and encode into the proof space for the texture. Task 2
+below is amended accordingly. **`is_out_of_gamut` therefore takes WORKING-space input**, which is
+what its Task 1 fixtures already assume.
+
 `render_engine::pack` already:
 
 1. runs the pipeline,
@@ -184,8 +193,18 @@ come to disagree about what is in gamut — which would be worse than no proof a
 
 - [ ] **Step 2: Run, expect failure.**
 
-- [ ] **Step 3: Implement** — `pack` takes the proof space and the warning flag. The proof replaces
-  the space it converts into; the warning is painted **after the histogram and before the display
+- [ ] **Step 3: Implement** — `pack` takes the proof space and the warning flag.
+
+⚠⚠ **AMENDED 2026-09-04.** "The proof replaces the space it converts into" is **not** sufficient:
+sRGB is contained in all four targets, so converting already-clipped sRGB into P3 reveals nothing and
+§8 could not be met. Instead: **`render_engine` passes `space: ProPhoto` to the tail while proofing**
+(an identity — `OutputSpace::ProPhoto => c`), and `pack` then, in this order, (1) derives the sRGB
+histogram exactly as today, (2) computes the exact warning against the **proof** space from the
+near-unclipped data, (3) encodes into the proof space for the texture. ⚠ **Measure the histogram's
+byte-for-byte equality rather than assuming it** — the proof path reaches it through a ProPhoto
+round trip. **If it cannot hold byte for byte, STOP AND REPORT; never widen the assertion.**
+
+The warning is painted **after the histogram and before the display
   transform**, following Visualize Spots:
 
 ```rust

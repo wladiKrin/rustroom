@@ -19,6 +19,51 @@ gamut-warning overlay** marking the pixels that space cannot hold.
 
 ---
 
+## 2. ⚠⚠ CORRECTED 2026-09-04 — the seam does NOT already exist, and this is not merely wiring
+
+**Everything under this heading below the correction was written before the clipping was checked and
+is wrong in its conclusion.** Track B stopped on it rather than choosing, `PARALLEL-WORK.md` §6
+applied, and the user settled it. What follows is the decision; the original text is kept beneath so
+the reasoning that failed is legible.
+
+**The fault.** `crates/color/src/output_space.rs`'s `encode` clamps to `[0, 1]` in **every** space,
+and `render_engine.rs` builds the tail with `space: OutputSpace::Srgb` — its own comment says *"The
+**pipeline** is always sRGB."* So `pack` receives sRGB-encoded, **already gamut-clipped** data. Two
+consequences, both fatal to the plan as written:
+
+- ⚠⚠ **An exact out-of-gamut test at `pack` is identically FALSE for all four spaces**, because
+  `color`'s own `srgb_fits_inside_every_display_space` proves sRGB fits inside each of them. The
+  overlay would mark nothing and §4's sabotage could not fail.
+- ⚠⚠ **"The proof replaces the space `pack` converts into" cannot satisfy §8.** sRGB is contained
+  in all four targets, so converting already-clipped sRGB into P3 reveals no colour that was not
+  already on screen.
+
+**The decision (user, 2026-09-04): when proofing, `render_engine` passes `space:
+OutputSpace::ProPhoto` to the tail.** That is the **documented bit-exact identity** —
+`OutputSpace::ProPhoto => c` converts nothing — so `pack` receives near-unclipped data. `pack` then,
+in this order: derives the sRGB histogram exactly as today; computes the **exact** warning against
+the proof space; and encodes into the proof space for the texture.
+
+- ⚠ **No pipeline file is edited.** `RenderSpec.space` is already a parameter set from
+  `render_engine.rs`, so this stays inside track B's surfaces and track A's stage order is untouched.
+- ⚠ **This does NOT reopen the display-profile rejection.** `CLAUDE.md` rejected
+  `build_pipeline_to(.., display_space)` for the *display profile* on the grounds that *"the bug is
+  oversaturation, not missing gamut — showing colour beyond sRGB is soft-proofing, a different
+  feature."* This **is** that different feature, and the space passed is an identity rather than the
+  monitor's.
+- ⚠⚠ **The histogram's byte-for-byte equality must be MEASURED, not assumed.** With the proof on it
+  is derived through a ProPhoto encode/decode round trip; that is f32-accurate to ~1e-7 and will
+  almost certainly quantise identically, but a sample sitting exactly on an 8-bit rounding boundary
+  could flip by one level. **If it cannot hold byte for byte, stop and report** — do not widen the
+  assertion to a tolerance, which is the "never weaken the test" rule this project records.
+- ⚠ **"Exact" now means exact within ProPhoto.** A value outside ProPhoto is still clipped by its
+  encode. ProPhoto contains essentially every real colour and the display rendering bounds the data
+  before it, so the residue is negligible — stated so it is not later found as a bug.
+
+---
+
+### The original §2, kept because its conclusion was wrong
+
 ## 2. ⚠⚠ The seam already exists — this track is mostly wiring
 
 `RenderRequest` already carries `display_space: color::OutputSpace`, and `render_engine::pack`
@@ -59,6 +104,10 @@ Painted in **`pack`**, following the rule Visualize Spots established:
 ⚠⚠ **Out-of-gamut is EXACT, not a threshold.** A pixel is out of gamut when any channel falls below
 0 or above 1 *after conversion into the target space* and before clipping. There is no tuning
 constant here, and inventing one would be inventing a judgement.
+
+⚠⚠ **AND §2's correction is what makes that reachable.** "Before clipping" is only satisfiable
+because the tail is rendered into ProPhoto while proofing; against the sRGB tail this paragraph
+describes a test that can never fire. Read §2 before implementing this section.
 
 ⚠ The warning colour must be **fixed, not the theme accent**: the accent is user-switchable
 including a `Neutral` setting whose whole point is to have no colour, which would defeat the
