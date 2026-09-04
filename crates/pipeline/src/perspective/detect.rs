@@ -21,12 +21,30 @@ use crate::spatial;
 /// 180° accumulator is pure waste with one family.
 pub const MAX_LEAN_DEG: f32 = 30.0;
 
-/// A gradient magnitude below this fraction of the frame's strongest edge casts no vote.
+/// The contrast an edge must carry to cast a vote, in **8-bit levels across the edge**.
 ///
-/// ⚠ Unchanged from the plan's starting value of 0.25. Measured against the synthetic fixtures it
-/// is what keeps a flat frame silent while still admitting an edge painted at 0.6 of the
-/// strongest one — the `the_two_lines_returned_are_separated_…` fixture's weaker line.
-const MAG_FRACTION: f32 = 0.25;
+/// ⚠⚠ **Absolute, where this was a fraction of the frame's own strongest gradient — and that
+/// relative form was the direct cause of both of M7.4's measured failures.** It was simultaneously
+/// too permissive on a soft frame, where a smooth sky gradient clears a quarter of a small maximum
+/// (Walhalla: two lines found *in the sky*, giving Vertical −42.5 and columns leaning left), and
+/// too strict on a contrasty one, where something brighter than the building sets the bar above the
+/// building's own edges (Weltenburg Abbey: nothing found at all). ⚠ A relative threshold also
+/// structurally cannot express *"there is no vertical in this photograph"*, which is why
+/// [`MIN_LENGTH_FRACTION`] had to be added mid-flight just to stop a landscape returning two lines.
+///
+/// ⚠ Only meaningful because [`verticals`] display-encodes first: in linear light the same number
+/// is a strong edge in shadow and an invisible one near white.
+///
+/// ⚠⚠ **Chosen from the sweep, not asserted.** `detect_probe --sweep` reports precision and recall
+/// against a hand-labelled corpus; record the numbers here when it sets this value, or nobody can
+/// revisit the choice — the rule `MEDIAN_TARGET` and `TEXTURE_GUIDED_EPS` both follow.
+pub const MIN_EDGE_LEVELS: f32 = 8.0;
+
+/// Sobel's response to a unit step: the kernel sums to 4 on the leading side.
+///
+/// ⚠ Dividing by it is what makes [`MIN_EDGE_LEVELS`] mean the contrast *across an edge* rather
+/// than a raw Sobel magnitude, which is four times larger and a quantity nobody can reason about.
+const SOBEL_STEP_GAIN: f32 = 4.0;
 
 /// How many angle bins the accumulator uses across the window.
 ///
@@ -108,15 +126,41 @@ struct Peak {
 /// one edge of one building are the commonest way that happens, and taking them makes the solve
 /// unstable while looking like success.
 pub fn verticals(luma: &[f32], w: usize, h: usize) -> Vec<Guide> {
+    verticals_with_floor(luma, w, h, MIN_EDGE_LEVELS)
+}
+
+/// As [`verticals`], with the contrast floor supplied in 8-bit levels.
+///
+/// ⚠⚠ **Exists so `detect_probe --sweep` can measure a candidate floor against a labelled corpus,
+/// and [`verticals`] delegates here rather than the two sharing copied code.** A second
+/// implementation is how a swept value comes to be right for a detector nobody ships — the sweep
+/// must measure exactly what production runs.
+pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32) -> Vec<Guide> {
     if w < 8 || h < 8 || luma.len() != w * h {
         return Vec::new();
     }
-    let g = spatial::sobel(luma, w, h);
-    let strongest = g.mag.iter().copied().fold(0.0f32, f32::max);
-    if strongest <= 1e-6 {
-        return Vec::new();
-    }
-    let floor = strongest * MAG_FRACTION;
+    // ⚠⚠ **Display-encoded before the Sobel, and this is what lets the floor below be an absolute
+    // number.** `luma` arrives as `color::luminance` — linear, scene-referred ProPhoto — where a
+    // gradient of 0.01 is a strongly visible edge in shadow and invisible near white. One
+    // threshold cannot be right across a frame in that space.
+    //
+    // ⚠⚠ This project has the identical bug on record in the Whites slider: "the region weights
+    // read as perceptual thirds… but `l` arrives as **linear** luminance, where 2/3 is sRGB 0.85
+    // and 1/3 is sRGB 0.60", so "the Whites slider did nothing on most photographs". The weights
+    // are taken on display-encoded luminance now, and so is this.
+    //
+    // ⚠ Done **here** rather than in `perspective_detect::analysis_luma`, so a caller cannot hand
+    // this function the wrong colour space — the reasoning `LensCorrectionStage` records for
+    // building its own `Corrector` rather than accepting one: handing it in "would make a size
+    // mismatch representable, and it would be silently wrong rather than an error."
+    //
+    // ⚠ `linear_to_srgb` clamps to [0, 1], which also bounds the scene-referred range. Nothing is
+    // lost: a clipped highlight has no gradient to find.
+    let encoded: Vec<f32> = luma.iter().copied().map(color::linear_to_srgb).collect();
+    let g = spatial::sobel(&encoded, w, h);
+    // ⚠ An absolute floor, in the encoded units the Sobel just measured. Nothing about the rest of
+    // the frame can raise or lower it — which is the whole point.
+    let floor = floor_levels / 255.0 * SOBEL_STEP_GAIN;
 
     let lean_max = MAX_LEAN_DEG.to_radians();
     let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
@@ -412,6 +456,88 @@ mod tests {
     }
 
     /// A photograph of a wall must produce nothing, not two lines through noise.
+    /// Two vertical edges of the **same linear contrast**, one in deep shadow and one near white.
+    ///
+    /// The shadow pair steps 0.02 → 0.06 linear, the highlight pair 0.90 → 0.94: both a linear
+    /// delta of exactly 0.04.
+    fn same_linear_delta(w: usize, h: usize, low: f32) -> Vec<f32> {
+        let mut p = vec![low; w * h];
+        for y in 0..h {
+            for x in w / 2..w {
+                p[y * w + x] = low + 0.04;
+            }
+        }
+        p
+    }
+
+    /// ⚠⚠ **The encode is what makes an absolute floor mean anything, and this is the only test
+    /// that can see it deleted.** Under a *linear* Sobel these two frames are identical — the same
+    /// 0.04 delta — so any threshold treats them alike. Display-encoded, the sRGB curve expands the
+    /// shadows: **0.02 → 0.06 spans 30.6 8-bit levels while 0.90 → 0.94 spans 4.7** — a factor of
+    /// six and a half. The shadow edge is strongly visible and the highlight edge is nearly
+    /// invisible, which is exactly the judgement the detector must make and cannot make on linear
+    /// values.
+    ///
+    /// ⚠ Those two numbers were computed, not estimated; recompute them if the fixture's values
+    /// change, because a wrong number in this comment is what would make a later reader trust the
+    /// wrong threshold.
+    ///
+    /// ⚠ This project has the same bug on record in the Whites slider: perceptual thirds read off
+    /// linear luminance meant "the Whites slider did nothing on most photographs".
+    #[test]
+    fn a_shadow_edge_and_a_highlight_edge_of_equal_linear_contrast_are_not_equal() {
+        let (w, h) = (128, 128);
+        let shadow = verticals(&same_linear_delta(w, h, 0.02), w, h);
+        let highlight = verticals(&same_linear_delta(w, h, 0.90), w, h);
+        assert!(
+            !shadow.is_empty(),
+            "the shadow edge — about 31 levels of contrast — was not detected"
+        );
+        assert!(
+            highlight.is_empty(),
+            "the highlight edge — under 5 levels — was detected: {highlight:?}, so the plane is \
+             being measured linearly and the floor means nothing"
+        );
+    }
+
+    /// A single vertical step of a known contrast, in 8-bit levels, on a mid-grey field.
+    ///
+    /// Built in **display** units and converted back to linear, because that is the space the
+    /// constant is expressed in and [`verticals`] re-encodes internally.
+    fn step_of_levels(w: usize, h: usize, levels: f32) -> Vec<f32> {
+        let base = 0.5f32;
+        let hi = base + levels / 255.0;
+        let mut p = vec![color::srgb_to_linear(base); w * h];
+        for y in 0..h {
+            for x in w / 2..w {
+                p[y * w + x] = color::srgb_to_linear(hi);
+            }
+        }
+        p
+    }
+
+    /// ⚠⚠ **The constant means what it says.** Without dividing the Sobel response by its step
+    /// gain the threshold is four times what the name claims, and **no "does it detect?" test can
+    /// see a silent factor of four** — it would simply behave as though the constant were 4×
+    /// larger, which reads as a tuning choice rather than a bug.
+    ///
+    /// ⚠ Asserts **both halves**: a floor that admits everything and one that admits nothing each
+    /// pass a one-sided test.
+    #[test]
+    fn the_floor_is_expressed_in_levels_of_edge_contrast() {
+        let (w, h) = (128, 128);
+        let below = MIN_EDGE_LEVELS - 2.0;
+        let above = MIN_EDGE_LEVELS + 2.0;
+        assert!(
+            verticals(&step_of_levels(w, h, below), w, h).is_empty(),
+            "an edge of {below} levels cleared a floor of {MIN_EDGE_LEVELS}"
+        );
+        assert!(
+            !verticals(&step_of_levels(w, h, above), w, h).is_empty(),
+            "an edge of {above} levels did not clear a floor of {MIN_EDGE_LEVELS}"
+        );
+    }
+
     #[test]
     fn a_flat_frame_finds_nothing() {
         assert!(verticals(&dark(128, 128), 128, 128).is_empty());
@@ -461,12 +587,24 @@ mod tests {
     /// **every** pixel carries a strong purely-vertical gradient. Ungated, every pixel votes,
     /// every candidate line collects a full frame-height of votes, and the detector confidently
     /// returns two edges of a building that is not there. Gated, nothing votes at all.
+    /// ⚠⚠ **The fixture's amplitude had to be raised when the contrast floor landed, and NOT
+    /// raising it would have silently disarmed this test.** It was a single smooth ramp spanning
+    /// 0.1 → 0.9 over 256 rows, i.e. **0.64 8-bit levels per row** once display-encoded — far below
+    /// [`MIN_EDGE_LEVELS`]. So the floor rejected every pixel before the direction gate ever saw
+    /// one, and deleting the gate outright left the whole suite green. Verified by sabotage at the
+    /// time, which is the only reason it was caught.
+    ///
+    /// ⚠ It is a **repeating** ramp now — period 8 rows, 0.05 → 0.95 linear, about **25 levels per
+    /// row** — so every pixel still carries a purely vertical gradient and now every pixel is also
+    /// allowed to vote. The property under test is unchanged; only the contrast is, and it is
+    /// changed because the model moved, never to make a red test green.
     #[test]
     fn a_gradient_sky_casts_no_votes() {
         let (w, h) = (256, 256);
+        const PERIOD: usize = 8;
         let mut p = vec![0.0f32; w * h];
         for y in 0..h {
-            let v = 0.1 + 0.8 * y as f32 / (h - 1) as f32;
+            let v = 0.05 + 0.9 * (y % PERIOD) as f32 / (PERIOD - 1) as f32;
             for x in 0..w {
                 p[y * w + x] = v;
             }
