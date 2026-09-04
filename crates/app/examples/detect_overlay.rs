@@ -53,7 +53,14 @@ fn support(luma: &[f32], w: usize, h: usize, g: &Guide) {
     for y in 0..h {
         let t = y as f32 / (h - 1).max(1) as f32;
         let x = ((g.from[0] + (g.to[0] - g.from[0]) * t) * (w - 1) as f32).round() as i64;
-        let voting = (0..w as i64).contains(&x) && sob.mag[y * w + x as usize] >= floor;
+        // ⚠ Search a ±2 px band, not the single rounded column. An offset bin is a few pixels
+        // wide, so the accumulator's own support is not confined to one column — and a
+        // single-column probe UNDERSTATES contiguity for any line that is not exactly axis-aligned,
+        // which was the first version of this measurement and would have set the threshold too low.
+        let voting = (-2i64..=2).any(|d| {
+            let xi = x + d;
+            (0..w as i64).contains(&xi) && sob.mag[y * w + xi as usize] >= floor
+        });
         if voting {
             total += 1;
             run += 1;

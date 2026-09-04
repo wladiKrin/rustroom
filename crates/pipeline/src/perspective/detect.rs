@@ -38,26 +38,28 @@ pub const MAX_LEAN_DEG: f32 = 30.0;
 /// ⚠⚠ **Read off `detect_probe --sweep`, and the evidence is recorded here so the choice can be
 /// revisited — the rule `MEDIAN_TARGET` and `TEXTURE_GUIDED_EPS` both follow.**
 ///
-/// Across 70 of the author's RAWs, the fraction firing (two lines found) against the floor:
+/// Across 70 of the author's RAWs, the fraction firing (two lines found) against the floor —
+/// and the whole table moves once [`MIN_RUN_FRACTION`] is doing the noise rejection:
 ///
-/// | levels | 2 | 4 | 6 | 8 | 12 | 16 | **24** | 32 | 48 | 64 | 96 |
+/// | levels | 2 | 4 | 6 | **8** | 12 | 16 | 24 | 32 | 48 | 64 | 96 |
 /// |---|---|---|---|---|---|---|---|---|---|---|---|
-/// | fires | 97% | 96% | 93% | 84% | 53% | 34% | **29%** | 27% | 20% | 13% | 7% |
+/// | fires, votes counted anywhere | 97% | 96% | 93% | 84% | 53% | 34% | 29% | 27% | 20% | 13% | 7% |
+/// | fires, run required contiguous | 54% | 37% | 29% | **26%** | 20% | 16% | 13% | 11% | 6% | 4% | 1% |
 ///
-/// ⚠⚠ **24 is an upper bound, not a preference: Weltenburg Abbey — the frame this feature exists
-/// for — is still detected at 24 and is LOST at 32.** So the constant cannot go higher without
-/// breaking the case that motivated the milestone, and the fire rate at 24 is 29% against the
-/// 54% the relative threshold produced.
+/// ⚠⚠ **The two constants trade off, and that is why this is 8 rather than 24.** Without
+/// contiguity the floor was the *only* thing rejecting noise, so it had to be high — 24, where the
+/// fire rate was 29%. With contiguity, floor 8 fires on **26%**, better than 24 ever managed, *and*
+/// Weltenburg Abbey is detected again: its stonework is faint under an overcast sky, so it needs a
+/// low floor, and it is lost above about 10.
 ///
-/// ⚠ **A starting value of 8 was measured and rejected**: it fires on 84% of frames, *worse* than
-/// the relative threshold it replaces, because display-encoding expands exactly the soft shadow
-/// gradients that were previously too weak to vote. The spec's "starting band of 6–10" was a
-/// guess and the measurement overturned it.
+/// ⚠ **A value of 24 was shipped briefly and was wrong for a reason worth keeping**: it was chosen
+/// while the length test still counted votes scattered anywhere along a line, so it was
+/// compensating for a different bug. Fixing that bug moved the right answer.
 ///
 /// ⚠ **Still outstanding: this is a fire *rate*, not precision and recall.** A rate cannot
 /// distinguish "fires less" from "fires better", and the labelled corpus that would is the user's
-/// to write. 24 is the best-justified value available, not a signed-off one.
-pub const MIN_EDGE_LEVELS: f32 = 24.0;
+/// to write.
+pub const MIN_EDGE_LEVELS: f32 = 8.0;
 
 /// Sobel's response to a unit step: the kernel sums to 4 on the leading side.
 ///
@@ -117,7 +119,71 @@ const PEAK_FRACTION: f32 = 0.25;
 /// height. A count says what the constant claims to say, and is independent of how contrasty the
 /// edge happens to be. The magnitudes still decide which peak is *best*, which is what keeps a
 /// strong edge preferred over a faint one of the same length.
-const MIN_LENGTH_FRACTION: f32 = 0.35;
+///
+/// ⚠⚠ **The run must be CONTIGUOUS, and that is the whole rule.** Counting votes anywhere along
+/// the infinite line lets a candidate reach its threshold from fragments scattered over the frame —
+/// a silhouette here, a railing there, a cloud edge — and be declared a building edge. Reported in
+/// use as the guides being "put at random, not fixed to the building", and measured: on the
+/// author's frames the winning lines had 24–41% of rows voting but a longest contiguous run of
+/// **7–13%**. They were statistically collinear noise, not edges.
+///
+/// ⚠ The accumulated *count* is still used, as a cheap prefilter: a contiguous run can never
+/// exceed the total, so `count < MIN_RUN_FRACTION · h` rules a bin out without walking it.
+///
+/// ⚠ Measured on real frames, a genuine building edge reaches about **28%** of the frame height,
+/// which is what bounds this from above — a building rarely fills the frame, so its verticals are
+/// shorter than the frame is tall.
+const MIN_RUN_FRACTION: f32 = 0.20;
+
+/// How far either side of a candidate line the contiguity walk looks for support, in pixels.
+///
+/// ⚠ It is the offset **bin** half-width, not a tuning knob: the accumulator collects a line's
+/// votes into a bin a few pixels wide, so support is not confined to one column. A single-column
+/// walk understates the run for any line that is not exactly axis-aligned — which was the first
+/// version of this measurement, and it would have set the threshold far too low.
+fn offset_band(off_max: f32) -> i64 {
+    ((off_max / (OFFSET_BINS - 1) as f32).ceil() as i64).max(1)
+}
+
+/// The longest run of consecutive rows in which this line has support.
+///
+/// ⚠ It repeats the vote condition exactly — magnitude over the floor **and** the direction gate —
+/// because a horizontal edge crossing the candidate is not evidence for it. Dropping the gate here
+/// would let the very frames the gate exists to reject supply contiguous support.
+#[allow(clippy::too_many_arguments)]
+fn longest_run(
+    g: &crate::spatial::Gradient,
+    w: usize,
+    h: usize,
+    cx: f32,
+    cy: f32,
+    angle: f32,
+    offset: f32,
+    floor: f32,
+    lean_max: f32,
+    band: i64,
+) -> usize {
+    let t = angle.tan();
+    let (mut best, mut run) = (0usize, 0usize);
+    for y in 0..h {
+        let x = (cx + offset + (y as f32 - cy) * t).round() as i64;
+        let supported = (-band..=band).any(|d| {
+            let c = x + d;
+            if !(0..w as i64).contains(&c) {
+                return false;
+            }
+            let i = y * w + c as usize;
+            g.mag[i] >= floor && g.gy[i].atan2(g.gx[i].abs().max(1e-9)).abs() <= lean_max
+        });
+        if supported {
+            run += 1;
+            best = best.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    best
+}
 
 /// How far apart, as a fraction of the frame width, two chosen lines' offsets must be.
 ///
@@ -251,9 +317,10 @@ pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32)
     if best <= 1e-6 {
         return Vec::new();
     }
-    // ⚠ Absolute as well as relative — see `MIN_LENGTH_FRACTION`. Without the absolute half a
-    // photograph with no vertical in it still returns two.
-    let min_len = MIN_LENGTH_FRACTION * h as f32;
+    // ⚠ Absolute as well as relative — see `MIN_RUN_FRACTION`. Without the absolute half a
+    // photograph with no vertical in it still returns two. This is the cheap prefilter; the
+    // contiguity walk below is what actually decides.
+    let min_len = MIN_RUN_FRACTION * h as f32;
     for ab in 0..ANGLE_BINS {
         for ob in 1..OFFSET_BINS - 1 {
             let v = acc[ab * OFFSET_BINS + ob];
@@ -280,6 +347,16 @@ pub fn verticals_with_floor(luma: &[f32], w: usize, h: usize, floor_levels: f32)
             });
         }
     }
+    // ⚠⚠ **Hough finds candidates; this is what verifies them.** The accumulator cannot express
+    // contiguity — it sums independent votes — so a candidate is walked once and kept only if its
+    // support is one unbroken run. Done here rather than per bin because the prefilter above has
+    // already discarded almost everything, and the walk is O(h) per survivor.
+    let band = offset_band(off_max);
+    let min_run = (MIN_RUN_FRACTION * h as f32).ceil() as usize;
+    peaks.retain(|p| {
+        longest_run(&g, w, h, cx, cy, p.angle, p.offset, floor, lean_max, band) >= min_run
+    });
+
     if peaks.is_empty() {
         return Vec::new();
     }
@@ -477,18 +554,13 @@ mod tests {
     /// A photograph of a wall must produce nothing, not two lines through noise.
     /// Two vertical edges of the **same linear contrast**, one in deep shadow and one near white.
     ///
-    /// The shadow pair steps 0.02 → 0.10 linear, the highlight pair 0.86 → 0.94: both a linear
-    /// delta of exactly 0.08.
-    ///
-    /// ⚠ The delta is 0.08 rather than a smaller one so that **neither half sits near
-    /// [`MIN_EDGE_LEVELS`]**: at 0.04 the shadow edge measured 30.6 levels, which silently made
-    /// this test an upper bound on the constant — raising the floor past 30 would have failed it
-    /// for a reason having nothing to do with the encode it exists to check.
+    /// The shadow pair steps 0.02 → 0.06 linear, the highlight pair 0.86 → 0.90: both a linear
+    /// delta of exactly 0.04, giving 30.6 and 4.4 8-bit levels once encoded.
     fn same_linear_delta(w: usize, h: usize, low: f32) -> Vec<f32> {
         let mut p = vec![low; w * h];
         for y in 0..h {
             for x in w / 2..w {
-                p[y * w + x] = low + 0.08;
+                p[y * w + x] = low + 0.04;
             }
         }
         p
@@ -497,8 +569,8 @@ mod tests {
     /// ⚠⚠ **The encode is what makes an absolute floor mean anything, and this is the only test
     /// that can see it deleted.** Under a *linear* Sobel these two frames are identical — the same
     /// 0.04 delta — so any threshold treats them alike. Display-encoded, the sRGB curve expands the
-    /// shadows: **0.02 → 0.10 spans 50.4 8-bit levels while 0.86 → 0.94 spans 9.5** — a factor of
-    /// five and a third. The shadow edge is strongly visible and the highlight edge is nearly
+    /// shadows: **0.02 → 0.06 spans 30.6 8-bit levels while 0.86 → 0.90 spans 4.4** — a factor of
+    /// seven. The shadow edge is strongly visible and the highlight edge is nearly
     /// invisible, which is exactly the judgement the detector must make and cannot make on linear
     /// values.
     ///
@@ -511,15 +583,20 @@ mod tests {
     #[test]
     fn a_shadow_edge_and_a_highlight_edge_of_equal_linear_contrast_are_not_equal() {
         let (w, h) = (128, 128);
-        let shadow = verticals(&same_linear_delta(w, h, 0.02), w, h);
-        let highlight = verticals(&same_linear_delta(w, h, 0.86), w, h);
+        // ⚠⚠ An **explicit** floor, not [`MIN_EDGE_LEVELS`]. This test is about the *encode*, so
+        // tuning the shipped constant must not be able to perturb it — which it silently did once,
+        // when the constant moved past the shadow edge's own contrast and turned a test of the
+        // colour space into an upper bound on a tuning value.
+        const FLOOR: f32 = 15.0;
+        let shadow = verticals_with_floor(&same_linear_delta(w, h, 0.02), w, h, FLOOR);
+        let highlight = verticals_with_floor(&same_linear_delta(w, h, 0.86), w, h, FLOOR);
         assert!(
             !shadow.is_empty(),
-            "the shadow edge — about 50 levels of contrast — was not detected"
+            "the shadow edge — about 31 levels of contrast — was not detected"
         );
         assert!(
             highlight.is_empty(),
-            "the highlight edge — under 10 levels — was detected: {highlight:?}, so the plane is \
+            "the highlight edge — under 5 levels — was detected: {highlight:?}, so the plane is \
              being measured linearly and the floor means nothing"
         );
     }
@@ -585,6 +662,82 @@ mod tests {
                 g.to[0]
             );
         }
+    }
+
+    /// ⚠⚠ **The test that names the contiguity rule, and the two fixtures carry the SAME total
+    /// number of voting pixels — only their distribution differs.** That is what makes it a test of
+    /// contiguity rather than of length: a rule counting votes anywhere along the line cannot tell
+    /// these two apart, and that is exactly the bug it exists for.
+    ///
+    /// Reported in use as the guides being "put at random, not fixed to the building". Measured on
+    /// the author's own frames, the winning lines had 24–41% of rows voting but a longest
+    /// *contiguous* run of 7–13% — scattered collinear noise, not an edge.
+    #[test]
+    fn scattered_collinear_fragments_are_not_a_line_but_one_run_of_them_is() {
+        let (w, h) = (512, 342);
+        let x = 0.5 * (w - 1) as f32;
+        // Half the frame height of voting pixels, in eight short fragments spread over all of it.
+        let mut scattered = dark(w, h);
+        let seg = h / 16;
+        for k in 0..8 {
+            let y0 = (k * 2 * seg + 2) as f32;
+            line(&mut scattered, w, h, x, y0, x, y0 + seg as f32);
+        }
+        // The same total, in one unbroken run.
+        let mut solid = dark(w, h);
+        line(&mut solid, w, h, x, 2.0, x, 2.0 + (8 * seg) as f32);
+
+        assert!(
+            verticals(&scattered, w, h).is_empty(),
+            "eight scattered fragments were read as a building edge: {:?}",
+            verticals(&scattered, w, h)
+        );
+        assert!(
+            !verticals(&solid, w, h).is_empty(),
+            "one continuous edge of the same total length was not detected"
+        );
+    }
+
+    /// ⚠⚠ **The contiguity walk repeats the direction gate, and this is the only fixture that can
+    /// see it dropped.** Found by sabotage: removing the gate from `longest_run` left every other
+    /// test green, because in every one of them a candidate's gaps contain nothing at all.
+    ///
+    /// Here the gaps between scattered vertical fragments are filled by strong **horizontal**
+    /// bands. Gated, they are not evidence for a near-vertical line, the run stays as short as the
+    /// fragments, and the candidate is rejected. Ungated, they bridge every gap and eight unrelated
+    /// stubs are promoted into one full-height "building edge" — which is the original bug wearing
+    /// a different hat.
+    #[test]
+    fn horizontal_bands_crossing_a_candidate_are_not_support_for_it() {
+        let (w, h) = (512, 342);
+        let x = 0.5 * (w - 1) as f32;
+        let seg = h / 16;
+        let mut p = dark(w, h);
+        for k in 0..8 {
+            let y0 = (k * 2 * seg + 2) as f32;
+            line(&mut p, w, h, x, y0, x, y0 + seg as f32);
+        }
+        // ⚠⚠ The gaps are filled with a repeating vertical RAMP, not with bands. A symmetric band
+        // has zero vertical derivative at its own centre, so it bridges only its flanks — a first
+        // attempt using σ = 1.2 bands covered about five rows of a twenty-one row gap and the
+        // sabotage went uncaught. A sawtooth gives **every** row a strong purely-vertical gradient,
+        // which is exactly the thing the direction gate must refuse to count.
+        const PERIOD: usize = 8;
+        for k in 0..8 {
+            let gap = (k * 2 * seg + 2 + seg)..((k + 1) * 2 * seg + 2).min(h);
+            for y in gap {
+                let v = 0.05 + 0.9 * (y % PERIOD) as f32 / (PERIOD - 1) as f32;
+                for xi in 0..w {
+                    let cell = &mut p[y * w + xi];
+                    *cell = cell.max(v);
+                }
+            }
+        }
+        let found = verticals(&p, w, h);
+        assert!(
+            found.is_empty(),
+            "horizontal bands bridged the gaps and promoted scattered stubs to a line: {found:?}"
+        );
     }
 
     #[test]
