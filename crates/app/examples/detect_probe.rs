@@ -15,7 +15,12 @@
 //! **maximum radial displacement** so the two can be told apart.
 //!
 //! `cargo run --release -p app --example detect_probe -- <raw> [more raws...]`
+//!
+//! Or, to choose `MIN_EDGE_LEVELS` from a labelled corpus rather than by assertion:
+//!
+//! `cargo run --release -p app --example detect_probe -- --sweep <labels-file>`
 
+use core_image::ImageBuf;
 use edit_model::Edits;
 use pipeline::perspective::guides::{self, Guide};
 use pipeline::Resampler;
@@ -67,14 +72,8 @@ fn describe(label: &str, gs: &[Guide], aspect: f32) {
     }
 }
 
-fn main() {
-    let paths: Vec<String> = std::env::args().skip(1).collect();
-    if paths.is_empty() {
-        eprintln!("usage: detect_probe <raw> [more raws...]");
-        std::process::exit(2);
-    }
-
-    for path in &paths {
+fn probe_lenses(paths: &[String]) {
+    for path in paths {
         let p = std::path::Path::new(path);
         println!("\n=== {}", p.display());
         let decoded = match raw_decode::decode_raw(p, &raw_decode::DecodeOptions::linear_scene()) {
@@ -173,6 +172,203 @@ fn main() {
             println!("  ⚠ IDENTICAL — read the max-displacement line above to say which case.");
         } else {
             println!("  → the lens step changes the detected geometry.");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The sweep: choosing MIN_EDGE_LEVELS from a labelled corpus rather than by assertion.
+// ---------------------------------------------------------------------------------------------
+
+/// One labelled frame.
+struct Labelled {
+    path: std::path::PathBuf,
+    /// Whether the detector *should* find two verticals here.
+    fire: bool,
+}
+
+/// Read a labels file: `<fire|silent> <path>` per line; `#` comments and blank lines ignored.
+///
+/// ⚠ The file is deliberately **not committed** — it names photographs on one machine, the
+/// convention this project already uses for `RAW_FIXTURE` and `DCP_FIXTURE`.
+fn read_labels(p: &std::path::Path) -> std::io::Result<Vec<Labelled>> {
+    let text = std::fs::read_to_string(p)?;
+    let mut out = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((verdict, path)) = line.split_once(char::is_whitespace) else {
+            eprintln!(
+                "  ⚠ line {}: no path after the verdict, skipping: {line}",
+                n + 1
+            );
+            continue;
+        };
+        let fire = match verdict.trim() {
+            "fire" => true,
+            "silent" => false,
+            other => {
+                eprintln!("  ⚠ line {}: unknown verdict {other:?}, skipping", n + 1);
+                continue;
+            }
+        };
+        out.push(Labelled {
+            path: std::path::PathBuf::from(path.trim()),
+            fire,
+        });
+    }
+    Ok(out)
+}
+
+/// Precision, recall, false fires and misses for one floor value.
+///
+/// ⚠⚠ **Recall is the half that matters and the half the old evidence lacked.** The statistic
+/// track C had was a fire *rate* — "fires on 54% of 70" — against which a floor that silences
+/// everything scores perfectly and is useless. Only recall against the frames that *should* fire
+/// exposes that.
+fn score(results: &[(bool, bool)]) -> (f32, f32, usize, usize) {
+    let tp = results.iter().filter(|(want, got)| *want && *got).count();
+    let fp = results.iter().filter(|(want, got)| !*want && *got).count();
+    let misses = results.iter().filter(|(want, got)| *want && !*got).count();
+    let precision = if tp + fp == 0 {
+        f32::NAN
+    } else {
+        tp as f32 / (tp + fp) as f32
+    };
+    let recall = if tp + misses == 0 {
+        f32::NAN
+    } else {
+        tp as f32 / (tp + misses) as f32
+    };
+    (precision, recall, fp, misses)
+}
+
+/// The candidate floors the sweep reports, in 8-bit levels.
+const SWEEP: &[f32] = &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0];
+
+fn sweep(labels_path: &std::path::Path) {
+    let labels = match read_labels(labels_path) {
+        Ok(l) if !l.is_empty() => l,
+        Ok(_) => {
+            eprintln!("{} holds no usable labels.", labels_path.display());
+            eprintln!("Write one `fire <path>` or `silent <path>` per line.");
+            std::process::exit(2);
+        }
+        Err(e) => {
+            eprintln!("cannot read {}: {e}", labels_path.display());
+            eprintln!("The labels file is not in the repo by design — see the module doc.");
+            std::process::exit(2);
+        }
+    };
+    let want_fire = labels.iter().filter(|l| l.fire).count();
+    println!(
+        "{} labelled frames: {want_fire} should fire, {} should stay silent\n",
+        labels.len(),
+        labels.len() - want_fire
+    );
+
+    // ⚠ Decode once per frame and hold the analysis inputs, not once per (frame × floor): a RAW
+    // decode is seconds and the sweep has eight rungs.
+    let mut prepared: Vec<(&Labelled, ImageBuf, Edits, Option<lens_profile::LensShot>)> =
+        Vec::new();
+    for l in &labels {
+        let decoded =
+            match raw_decode::decode_raw(&l.path, &raw_decode::DecodeOptions::linear_scene()) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("  ⚠ {}: decode failed: {e}", l.path.display());
+                    continue;
+                }
+            };
+        let m = &decoded.metadata;
+        let lens = m.lens.as_ref().and_then(|li| {
+            let db = lens_profile::Catalogue::bundled().ok()?;
+            let profile = db.find(&m.make, &m.model, &li.name)?;
+            Some(lens_profile::LensShot {
+                profile,
+                shot: lens_profile::Shot {
+                    focal: li.focal,
+                    aperture: li.aperture,
+                },
+            })
+        });
+        // Lens correction ON, as the app does by default for a RAW.
+        let mut edits = Edits::default();
+        edits.lens_correction.distortion = true;
+        edits.lens_correction.tca = true;
+        edits.lens_correction.vignetting = true;
+        prepared.push((l, decoded.image, edits, lens));
+    }
+    if prepared.is_empty() {
+        eprintln!("nothing decoded — no sweep to report.");
+        std::process::exit(2);
+    }
+
+    println!("levels  precision  recall  false-fires  misses");
+    let mut wrong_at: Vec<(f32, Vec<String>)> = Vec::new();
+    for &floor in SWEEP {
+        let mut results = Vec::new();
+        let mut wrong = Vec::new();
+        for (l, buf, edits, lens) in &prepared {
+            let found = perspective_detect::detect_verticals_with_floor(
+                buf,
+                edits,
+                lens.clone(),
+                Resampler::default(),
+                floor,
+            );
+            let got = found.len() >= 2;
+            if got != l.fire {
+                let name = l
+                    .path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| l.path.display().to_string());
+                wrong.push(format!(
+                    "{name} ({})",
+                    if l.fire { "missed" } else { "fired" }
+                ));
+            }
+            results.push((l.fire, got));
+        }
+        let (p, r, fp, misses) = score(&results);
+        println!("{floor:5.1}      {p:5.2}    {r:5.2}     {fp:6}   {misses:7}");
+        wrong_at.push((floor, wrong));
+    }
+
+    println!("\nWhich frames each floor gets wrong — judge by the photographs, not the number:");
+    for (floor, wrong) in &wrong_at {
+        if wrong.is_empty() {
+            println!("  {floor:5.1}  (none)");
+        } else {
+            println!("  {floor:5.1}  {}", wrong.join(", "));
+        }
+    }
+    println!(
+        "\n⚠ Read the value off the curve and record the numbers in MIN_EDGE_LEVELS' doc comment.\n\
+         ⚠ Prefer recall where the curve is flat: a miss is a button that looks broken with nothing\n\
+         \x20  on screen to act on, while a false fire draws a visible, editable guide. That is the\n\
+         \x20  same asymmetry MAX_LEAN_DEG was chosen on."
+    );
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.split_first() {
+        Some((first, rest)) if first == "--sweep" => match rest {
+            [labels] => sweep(std::path::Path::new(labels)),
+            _ => {
+                eprintln!("usage: detect_probe --sweep <labels-file>");
+                std::process::exit(2);
+            }
+        },
+        Some(_) => probe_lenses(&args),
+        None => {
+            eprintln!("usage: detect_probe <raw> [more raws...]");
+            eprintln!("       detect_probe --sweep <labels-file>");
+            std::process::exit(2);
         }
     }
 }

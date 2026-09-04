@@ -97,6 +97,22 @@ pub fn detect_verticals(
     detect::verticals(&luma, w, h)
 }
 
+/// As [`detect_verticals`], with the contrast floor supplied in 8-bit levels.
+///
+/// ⚠ For `detect_probe --sweep` alone: `detect::MIN_EDGE_LEVELS` is a `const`, so a sweep over
+/// candidate values needs the floor injected. Production calls [`detect_verticals`], which is
+/// defined through the same code path.
+pub fn detect_verticals_with_floor(
+    buffer: &ImageBuf,
+    edits: &Edits,
+    lens: Option<LensShot>,
+    resampler: Resampler,
+    floor_levels: f32,
+) -> Vec<Guide> {
+    let (luma, w, h) = analysis_luma(buffer, edits, lens, resampler);
+    detect::verticals_with_floor(&luma, w, h, floor_levels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

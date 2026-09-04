@@ -16,3 +16,8 @@ Cargo.lock.orig
 
 # Agent worktrees (parallel-work sessions) — never part of the repo
 .claude/worktrees/
+
+
+# ⚠ The detector sweep's labels file names photographs on one machine — the RAW_FIXTURE
+# convention. See crates/app/examples/detect_probe.rs.
+*.labels
