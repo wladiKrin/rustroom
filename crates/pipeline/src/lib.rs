@@ -22,6 +22,11 @@ impl BrushCoverage {
     }
 }
 pub mod auto_tone;
+/// ⚠ A **`.cube` parser and sampler, with no image and no stage** — deliberately separate from
+/// `stages::creative_look`, which owns the colour-space shaping. Keeping the table pure means the
+/// index-order and interpolation guards can be written against a string literal, with no fixture
+/// on disk and no working-space assumptions to get wrong.
+pub mod lut;
 pub mod perspective;
 /// ⚠ Its own module rather than a section of [`spatial`]: that one holds *separable blur*
 /// primitives (box, Gaussian, guided) and is already 889 lines. A resampling kernel reads at a
