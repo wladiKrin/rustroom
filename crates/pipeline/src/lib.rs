@@ -797,11 +797,11 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
     sharp + local + masked
 }
 
-/// ⚠⚠ **There is deliberately no `max_tail_kernel_radius` any more.** It maximised
-/// [`tail_kernel_radius`] over every representable setting, and a fixed region margin was
-/// checked against it. Masks now carry spatial adjustments and **chain**, so N masked clarities
-/// reach N x 120 px and no constant bounds the result. The caller derives its margin from
-/// `tail_kernel_radius` per render instead — see `Session::render_margin` in the app crate.
+// ⚠⚠ **There is deliberately no `max_tail_kernel_radius` any more.** It maximised
+// `tail_kernel_radius` over every representable setting, and a fixed region margin was checked
+// against it. Masks now carry spatial adjustments and **chain**, so N masked clarities reach
+// N x 120 px and no constant bounds the result. The caller derives its margin from
+// `tail_kernel_radius` per render instead — see `Session::render_margin` in the app crate.
 
 #[cfg(test)]
 mod tests {

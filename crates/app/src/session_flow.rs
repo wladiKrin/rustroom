@@ -54,6 +54,30 @@ impl Session {
     /// boundary and put it right until the next slider move.
     ///
     /// ⚠ The original hazard is still handled, at its source: `pump_full_res` clears the region
+    /// The [`pipeline::RenderScale`] the worker will use for a render at `max_dim`.
+    ///
+    /// ⚠ Delegates to the engine's own function rather than re-deriving it. The canvas needs this
+    /// to size its region request, and a second derivation would be two facts that can disagree —
+    /// the shape `render_max_dim`, `fit_image_size` and `geometry_mode` were each fixed for.
+    pub(crate) fn render_scale(&self, max_dim: usize) -> pipeline::RenderScale {
+        rustroom_app::render_engine::scale_from_full(self.full_long, self.buffer_long, max_dim)
+    }
+
+    /// How far beyond the visible rect a region render must reach, in **rendered** pixels.
+    ///
+    /// ⚠⚠ Derived per render from the edits, because no constant can do it: masks carry spatial
+    /// adjustments and **chain**, so N masked clarities reach N x 120 px and the stack is
+    /// unbounded. This replaced `view_region::REGION_MARGIN`, which had 57 px of slack against a
+    /// worst case that masks made meaningless.
+    ///
+    /// ⚠ Takes the edits **actually being rendered** rather than `self.edits`, so a before/after
+    /// view reserves what it draws. The failure direction is safe either way — `view_edits` only
+    /// ever drops adjustments, never adds — but reserving the truth is cheaper than reserving a
+    /// bound.
+    pub(crate) fn render_margin(&self, edits: &Edits, max_dim: usize) -> usize {
+        pipeline::tail_kernel_radius(edits, self.render_scale(max_dim))
+    }
+
     /// **and** resets this rung, so the two cannot drift apart there either.
     pub(crate) fn render_max_dim(&self) -> usize {
         self.render_rung
@@ -743,6 +767,41 @@ mod tests {
         assert_eq!(
             none.looks_dir, None,
             "the handover invented a looks directory"
+        );
+    }
+
+    /// The region margin grows when the edits reach further.
+    ///
+    /// ⚠⚠ A fixed constant structurally cannot do this. Masks chain, so N masked clarities reach
+    /// N x 120 px into the input and no constant covers an unbounded stack — which is why
+    /// `REGION_MARGIN` is gone rather than merely enlarged.
+    ///
+    /// ⚠ The failure mode this guards is **silent**: too small a margin renders a subtly wrong
+    /// band at the edge of the visible area, and nothing errors.
+    #[test]
+    fn the_render_margin_follows_the_edits_it_will_render() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 64, 48);
+        let s = app.session.as_mut().expect("session");
+        let rung = s.buffer_long;
+
+        let plain = s.render_margin(&s.edits.clone(), rung);
+        s.edits.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::default(),
+            adjustments: edit_model::LocalAdjustments {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 0.0,
+                    clarity: 100.0,
+                },
+                ..Default::default()
+            },
+        });
+        let masked = s.render_margin(&s.edits.clone(), rung);
+
+        assert!(
+            masked > plain,
+            "the margin ignored a masked clarity: {masked} vs {plain}"
         );
     }
 

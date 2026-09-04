@@ -133,6 +133,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // the whole image can be visible at a higher rung, and cropping to it
                     // would gain nothing while starving `fit_image_size` — which is only
                     // taken from whole-image frames — of any refresh.
+                    // ⚠⚠ Computed **once** and used for both the margin and the request. The
+                    // region must be large enough for the reach of the edits it will be rendered
+                    // with, so deriving the margin from a different value than the render uses is
+                    // exactly the two-facts-that-disagree failure — and a silent one, showing as
+                    // a subtly wrong band at the edge of the visible area.
+                    let shown_edits = s.view_edits(tool);
                     let want = if native {
                         let vis = view_region::visible_rect(
                             iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
@@ -144,7 +150,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                 vis,
                                 iw,
                                 ih,
-                                view_region::REGION_MARGIN,
+                                // ⚠ Derived per render, not a constant: masks chain, so N masked
+                                // clarities reach N x 120 px and no fixed number covers an
+                                // unbounded stack. See `Session::render_margin`.
+                                s.render_margin(&shown_edits, max_dim),
                             ))
                         }
                     } else {
@@ -161,7 +170,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     if (!covered && s.requested_region != want) || max_dim != s.render_rung {
                         s.requested_region = want;
                         s.render_rung = max_dim;
-                        s.request(s.view_edits(tool), max_dim, want);
+                        s.request(shown_edits, max_dim, want);
                     }
 
                     // Place using the *texture's* own render resolution, not the current

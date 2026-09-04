@@ -6,13 +6,12 @@
 
 pub use crate::render_engine::RegionRect;
 
-/// Rendered beyond the visible rect so small pans reuse the existing texture — and, since
-/// the spatial tail stages run on the cropped region, so their edge band falls outside what
-/// is displayed. See `the_region_margin_exceeds_every_tail_kernel_radius`.
-///
-/// 192 rather than a tighter fit over Clarity's 120 px reach: 72 px of headroom costs about
-/// 20% more pixels in the region tail (~1.5 ms) and buys room for the next spatial stage.
-pub const REGION_MARGIN: usize = 192;
+// ⚠⚠ **There is deliberately no `REGION_MARGIN` constant, and one must not come back.**
+// It was 192 px, checked against a worst case of 135. Masks now carry spatial adjustments and
+// **chain**, so N masked clarities reach N x 120 px into the input: the stack is unbounded and no
+// constant covers it. The margin is derived per render by `Session::render_margin`, from the same
+// `pipeline::tail_kernel_radius` the pipeline itself uses — one fact, read twice, because a second
+// derivation here would fail silently as a subtly wrong band at the edge of the visible area.
 
 /// The closest the view can be zoomed out: fit, where the whole image is on screen.
 pub const MIN_ZOOM: f32 = 1.0;
@@ -170,8 +169,6 @@ pub fn contains(outer: RegionRect, inner: RegionRect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pipeline::RenderScale;
-
 
     #[test]
     fn the_ladder_doubles_from_fit_to_the_buffer() {

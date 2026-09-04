@@ -357,6 +357,30 @@ fn render_scale(buffer_long: usize, rendered_long: usize, source_scale: f32) -> 
     RenderScale::new(source_scale * rendered_long as f32 / buffer_long as f32)
 }
 
+/// The [`RenderScale`] for a render at `max_dim`, expressed from the **full-resolution** long edge.
+///
+/// ⚠⚠ Algebraically identical to [`render_scale`], and phrased this way on purpose. At the
+/// full-resolution handover `buffer_long` doubles and `source_scale` halves, while `full_long`
+/// does **not move** — that invariance is the property it was created for. A caller deriving from
+/// it therefore cannot be silently wrong by 2x for having failed to update a `source_scale` at the
+/// handover: that bug is unrepresentable rather than merely tested.
+/// `scale_from_full_agrees_with_the_engines_own_scale` pins the equality on both sides of it.
+///
+/// ⚠ `pub`, not `pub(crate)`, and that is **forced** rather than lax — the same reason
+/// `requests_issued` is unconditional. This module is in the **lib**; `canvas.rs` and `Session`
+/// are in the **bin**, which is a separate crate, so `pub(crate)` would not reach them.
+///
+/// It is needed because the **canvas** sizes its region request from
+/// `pipeline::tail_kernel_radius`, which is measured in rendered pixels, so it needs exactly the
+/// scale the worker will use. Re-deriving it there would be two facts that can disagree, with a
+/// silent failure mode — a subtly wrong band at the edge of the visible area, and no error.
+pub fn scale_from_full(full_long: usize, buffer_long: usize, max_dim: usize) -> RenderScale {
+    if full_long == 0 {
+        return RenderScale::FULL;
+    }
+    RenderScale::new(rendered_long_edge(buffer_long, max_dim) as f32 / full_long as f32)
+}
+
 /// Pack a rendered sRGB image into an RGBA8 frame.
 ///
 /// The quantization lives on `ImageBuf`, where the buffer and rayon already are — which is also
@@ -1016,6 +1040,33 @@ fn edge_image(out: &ImageBuf, threshold: f32) -> ImageBuf {
 
 #[cfg(test)]
 mod tests {
+
+    /// `scale_from_full` is the engine's own `render_scale`, phrased from the invariant edge.
+    ///
+    /// ⚠⚠ The two must agree **on both sides of the full-resolution handover**, which is the
+    /// whole reason the second phrasing exists: `buffer_long` doubles and `source_scale` halves
+    /// at the upgrade, while `full_long` does not move. A caller that derives from `full_long`
+    /// therefore cannot be wrong by 2x for having missed the handover — that bug is
+    /// unrepresentable rather than merely tested.
+    #[test]
+    fn scale_from_full_agrees_with_the_engines_own_scale() {
+        // (buffer_long, source_scale) before and after a RAW's handover, same photo.
+        for (buffer_long, source_scale) in [(3123usize, 0.5f32), (6246, 1.0)] {
+            let full_long = (buffer_long as f32 / source_scale).round() as usize;
+            for max_dim in [1600usize, 3200, 6246] {
+                let rendered = rendered_long_edge(buffer_long, max_dim);
+                let engine = render_scale(buffer_long, rendered, source_scale);
+                let derived = scale_from_full(full_long, buffer_long, max_dim);
+                assert!(
+                    (engine.get() - derived.get()).abs() < 1e-6,
+                    "disagreed at buffer={buffer_long} max_dim={max_dim}: \
+                     engine {} vs derived {}",
+                    engine.get(),
+                    derived.get()
+                );
+            }
+        }
+    }
     use super::*;
 
     fn tiny() -> Arc<ImageBuf> {
