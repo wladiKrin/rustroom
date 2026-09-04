@@ -1,6 +1,7 @@
 //! The five edit-group sections of the Develop panel.
 
 use crate::develop::panel::color_wheel;
+use crate::develop::panel::hsl_bands;
 use crate::develop::panel::tone_curve;
 use crate::develop::panel::Edited;
 use edit_model::HslBand;
@@ -359,21 +360,8 @@ pub fn show(
         ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance");
         ed.slider(ui, &mut edits.saturation, -100.0..=100.0, "Saturation");
         ui.separator();
-        // ⚠ A selector, not three nested CollapsingHeaders. Nesting cost a third level *and*
-        // put a "Saturation" header under a "Saturation" slider meaning something else.
-        ui.horizontal(|ui| {
-            for c in HslChannel::ALL {
-                ui.selectable_value(hsl_channel, c, c.label());
-            }
-        });
-        for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
-            ed.slider(
-                ui,
-                hsl_channel.value_mut(&mut edits.hsl.bands[i]),
-                -100.0..=100.0,
-                name,
-            );
-        }
+        // ⚠ Shared with a mask's own HSL block — see `hsl_bands`. One layout learned once.
+        hsl_bands::show(ui, &mut edits.hsl, hsl_channel, ed);
 
         // ⚠ A hairline and a plain label, not a nested CollapsingHeader — the idiom already
         // used for the Presence block inside Tone. Colour grading belongs to the `Color` edit

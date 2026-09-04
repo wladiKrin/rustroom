@@ -933,7 +933,11 @@ fn a_masked_clarity_leaves_uncovered_pixels_bit_identical() {
 /// where a local-contrast band has almost nothing to act on.
 #[test]
 fn golden_mask_clarity() {
-    check_golden_with("mask_clarity", &masked_clarity_edits(), local_contrast_chart());
+    check_golden_with(
+        "mask_clarity",
+        &masked_clarity_edits(),
+        local_contrast_chart(),
+    );
 }
 
 #[test]

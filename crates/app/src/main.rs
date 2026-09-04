@@ -335,6 +335,11 @@ struct RustroomApp {
     /// Which HSL channel the Color section's selector is showing. View state, per app —
     /// like a brush size, it is a property of the tool and not of the photograph.
     hsl_channel: develop::panel::adjustments::HslChannel,
+    /// The channel a **mask's** HSL block is showing. View state, like `hsl_channel`.
+    ///
+    /// ⚠ Its own field rather than sharing `hsl_channel`: switching to a mask would otherwise
+    /// silently change which channel the global panel shows when you switch back.
+    mask_hsl_channel: develop::panel::adjustments::HslChannel,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
@@ -569,6 +574,7 @@ impl RustroomApp {
             show_mask_tint: true,
             show_spots: true,
             hsl_channel: Default::default(),
+            mask_hsl_channel: Default::default(),
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),

@@ -133,6 +133,7 @@ pub fn for_test() -> RustroomApp {
         show_mask_tint: true,
         show_spots: true,
         hsl_channel: Default::default(),
+        mask_hsl_channel: Default::default(),
         grade_range: Default::default(),
         new_collection: String::new(),
         new_smart: String::new(),

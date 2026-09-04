@@ -29,7 +29,13 @@ pub struct BrushTool<'a> {
 ///
 /// ⚠ No `CollapsingHeader` of its own — the panel supplies the heading. A header inside a
 /// header is a nesting level this rework exists to remove.
-pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut Edited) {
+pub fn show(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    mask_hsl: &mut super::adjustments::HslChannel,
+    brush: BrushTool<'_>,
+    ed: &mut Edited,
+) {
     // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
     // nothing and keeps the later mutable borrows disjoint.
     let baseline = s.wb_baseline;
@@ -196,22 +202,7 @@ pub fn show(ui: &mut egui::Ui, s: &mut Session, brush: BrushTool<'_>, ed: &mut E
                 );
             }
             ui.separator();
-            let a = &mut m.adjustments;
-            // ⚠ The same control as the global one, and the same baseline: a mask declares the
-            // light *this region* was under, measured against what the whole photo is balanced
-            // to. Two different meanings for one number is how they drift.
-            super::adjustments::white_balance(ui, &mut a.white_balance, baseline, None, ed);
-            ed.slider(ui, &mut a.exposure, -5.0..=5.0, "Exposure");
-            ed.slider(ui, &mut a.contrast, -100.0..=100.0, "Contrast");
-            ed.slider(ui, &mut a.highlights, -100.0..=100.0, "Highlights");
-            ed.slider(ui, &mut a.shadows, -100.0..=100.0, "Shadows");
-            ed.slider(ui, &mut a.whites, -100.0..=100.0, "Whites");
-            ed.slider(ui, &mut a.blacks, -100.0..=100.0, "Blacks");
-            // ⚠ The same order as the global panel: White Balance, then Tone, then
-            // Color with Vibrance first. One layout learned once, and it keeps
-            // holding as either list changes.
-            ed.slider(ui, &mut a.vibrance, -100.0..=100.0, "Vibrance");
-            ed.slider(ui, &mut a.saturation, -100.0..=100.0, "Saturation");
+            super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, ed);
         }
     }
 
@@ -260,11 +251,14 @@ mod tests {
         let mut ed = Edited::default();
         let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
         let (mut erase, mut tint) = (false, true);
+        // ⚠ A local: a test must not be able to assert about the *global* panel's channel.
+        let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         test_ui::click(&ctx, label, |ui| {
             ed = Edited::default();
             show(
                 ui,
                 s,
+                &mut channel,
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -371,10 +365,13 @@ mod tests {
         let mut ed = Edited::default();
         let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
         let (mut erase, mut tint) = (false, true);
+        // ⚠ A local: a test must not be able to assert about the *global* panel's channel.
+        let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         let mut body = |ui: &mut egui::Ui, ed: &mut Edited| {
             show(
                 ui,
                 s,
+                &mut channel,
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -425,11 +422,14 @@ mod tests {
         let ctx = test_ui::ctx();
         let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
         let (mut erase, mut tint) = (false, true);
+        // ⚠ A local: a test must not be able to assert about the *global* panel's channel.
+        let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let mut ed = Edited::default();
             show(
                 ui,
                 s,
+                &mut channel,
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -443,6 +443,45 @@ mod tests {
         .into_iter()
         .map(|(l, _)| l)
         .collect()
+    }
+
+    /// Every tail-native slider is present on a selected mask **and wired to that mask's field**.
+    ///
+    /// ⚠⚠ That a slider *exists* proves nothing about what it edits. This project has shipped
+    /// exactly that bug — the Library grid drew a name field bound to the wrong string for a
+    /// week — so each drag is asserted against the mask's own value, not merely against `Edited`.
+    ///
+    /// ⚠ All four in one test on purpose: they arrived together and share one wiring path, so a
+    /// per-slider test would be four copies of one assertion. If they ever stop sharing it, this
+    /// is the test that should be split.
+    #[test]
+    fn the_tail_native_sliders_edit_the_selected_mask() {
+        for (label, read) in [
+            (
+                "Texture",
+                (|a: &edit_model::LocalAdjustments| a.local_contrast.texture)
+                    as fn(&edit_model::LocalAdjustments) -> f32,
+            ),
+            ("Clarity", |a| a.local_contrast.clarity),
+            ("Amount", |a| a.sharpening.amount),
+            // ⚠ The HSL block's first band. It reaches through the *shared* `hsl_bands` widget,
+            // so this is also what proves the extraction is wired to the mask rather than to
+            // the global panel's HSL.
+            ("Red", |a| a.hsl.bands[0].hue),
+        ] {
+            let mut s = session();
+            click_in_panel("Add graduated filter", &mut s);
+            let before = read(&s.edits.masks[0].adjustments);
+
+            let ed = drag_in_panel(label, &mut s);
+            let after = read(&s.edits.masks[0].adjustments);
+
+            assert!(ed.changed, "dragging {label} reported no edit");
+            assert_ne!(
+                after, before,
+                "the {label} slider is not wired to the selected mask"
+            );
+        }
     }
 
     #[test]
