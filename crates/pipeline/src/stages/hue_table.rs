@@ -1,5 +1,7 @@
 //! The hue model `HslStage` applies, and the table it is sampled through.
 
+use edit_model::HslBand;
+
 /// Oklab hue angle (degrees) at each band's centre, in `HSL_BAND_NAMES` order. Derived from
 /// the canonical sRGB colours (#FF0000, #FF8000, #FFFF00, #00FF00, #00FFFF, #0000FF,
 /// #8000FF, #FF00FF) with our own conversion — `band_centers_match_canonical_colors` in
@@ -86,6 +88,60 @@ pub fn band_weights(h: f32) -> [f32; 8] {
     w
 }
 
+/// The band-weighted slider values `[dh, sat, lum]` sampled uniformly over the hue circle.
+///
+/// ⚠⚠ It holds the **parameters**, not a finished rotation factor. The chroma fade multiplies
+/// `dh`/`sat`/`lum` **before** they are used, so a table of finished factors would be valid only
+/// where `chroma >= CHROMA_FADE` and would need a second code path below it — and on a dark or
+/// desaturated frame that "slow" path becomes the common one, making the stage's cost depend on
+/// the picture. Holding parameters keeps one table, one path, no branch.
+///
+/// ⚠ It also makes interpolation across the 360 -> 0 seam simply correct. A table of complex
+/// factors would interpolate along a chord there rather than an arc.
+pub struct HueTable {
+    entries: Box<[[f32; 3]]>,
+}
+
+impl HueTable {
+    /// ⚠ Built once per `HslStage`, which means once per mask as well as once globally. The cost
+    /// is `n` evaluations of `band_pair` against a render measured in tens of milliseconds.
+    pub fn build(bands: &[HslBand; 8], n: usize) -> Self {
+        let entries = (0..n)
+            .map(|i| {
+                let h = i as f32 * 360.0 / n as f32;
+                let (a, b, s) = band_pair(h);
+                let (w0, w1) = (1.0 - s, s);
+                [
+                    w0 * bands[a].hue + w1 * bands[b].hue,
+                    w0 * bands[a].saturation + w1 * bands[b].saturation,
+                    w0 * bands[a].luminance + w1 * bands[b].luminance,
+                ]
+            })
+            .collect();
+        Self { entries }
+    }
+
+    /// Linear interpolation between the two bracketing entries.
+    ///
+    /// ⚠ The `% n` on the second index is load-bearing and wrong only in the final cell: without
+    /// it, a hue in `[360 - 360/n, 360)` indexes one past the end.
+    /// `the_last_cell_interpolates_across_the_seam` is the only test that can see it.
+    #[inline]
+    pub fn sample(&self, hue: f32) -> [f32; 3] {
+        let n = self.entries.len();
+        let x = hue * (n as f32 / 360.0);
+        let i0 = (x as usize) % n;
+        let t = x - x.floor();
+        let a = self.entries[i0];
+        let b = self.entries[(i0 + 1) % n];
+        [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +176,72 @@ mod tests {
                 }
             };
             assert!(delta < span + 1e-3, "h={h} is not inside span {i}");
+        }
+    }
+
+    fn probe_bands() -> [HslBand; 8] {
+        // Deliberately all different, so a table that collapsed two entries would show.
+        let mut b = [HslBand::default(); 8];
+        for (i, band) in b.iter_mut().enumerate() {
+            band.hue = -70.0 + 20.0 * i as f32;
+            band.saturation = 90.0 - 21.0 * i as f32;
+            band.luminance = -40.0 + 11.0 * i as f32;
+        }
+        b
+    }
+
+    /// ⚠⚠ THE SWEEP LANDS BETWEEN SAMPLES ON PURPOSE. A test that probed the table's own sample
+    /// points would compare each entry against the value it was built from and pass with the
+    /// interpolation deleted — it is the colour-grading trap, where a table test stayed green
+    /// under a wrong convention because both sides called the same function.
+    #[test]
+    fn the_table_agrees_with_direct_evaluation_between_its_samples() {
+        let bands = probe_bands();
+        let n = 1024;
+        let t = HueTable::build(&bands, n);
+        let mut worst = 0.0f32;
+        for k in 0..200_000u32 {
+            // An irrational-ish stride so probes do not land on sample points.
+            let h = (k as f32 * 0.0017341) % 360.0;
+            let w = band_weights(h);
+            let exact = [
+                (0..8).map(|i| w[i] * bands[i].hue).sum::<f32>(),
+                (0..8).map(|i| w[i] * bands[i].saturation).sum::<f32>(),
+                (0..8).map(|i| w[i] * bands[i].luminance).sum::<f32>(),
+            ];
+            let got = t.sample(h);
+            for c in 0..3 {
+                worst = worst.max((got[c] - exact[c]).abs());
+            }
+        }
+        // Slider units, where the whole range is 200 wide.
+        assert!(
+            worst < 0.05,
+            "table drifts {worst:.5} slider units at n={n}"
+        );
+    }
+
+    /// ⚠⚠ THE WRAPAROUND IS WRONG ONLY IN THE FINAL CELL — `hue` in `[360 - 360/n, 360)` — so a
+    /// coarse sweep steps straight over it. This probes deliberately inside that cell, where the
+    /// table must interpolate from the last entry back to the first across the 360 -> 0 seam.
+    #[test]
+    fn the_last_cell_interpolates_across_the_seam() {
+        let bands = probe_bands();
+        let n = 64;
+        let t = HueTable::build(&bands, n);
+        let step = 360.0 / n as f32;
+        let last = 360.0 - step;
+        let a = t.sample(last);
+        let b = t.sample(0.0);
+        for f in [0.25f32, 0.5, 0.75] {
+            let got = t.sample(last + step * f);
+            for c in 0..3 {
+                let want = a[c] + (b[c] - a[c]) * f;
+                assert!(
+                    (got[c] - want).abs() < 1e-4,
+                    "seam cell at f={f}, channel {c}: {got:?} vs lerp {want}"
+                );
+            }
         }
     }
 
