@@ -163,6 +163,78 @@ gradient and range masks the bounding box cannot help at all.
 and range and colour masks have no spatial bbox at all — they are per-pixel predicates over the
 whole frame. Any estimate of its value has to say which mask kind it is talking about.
 
+### Measured (2026-09-05), and what it decides
+
+X-T4 `.RAF` (DSCF6223), 3123x2085 half-size buffer, release, best of 5.
+`cargo run --release -p app --example bench_masked <raw>`, kept.
+
+| edit | fit, whole image @1600 | native region tail 1400x900 |
+|---|---|---|
+| neutral | 12.7 ms | 6.6 ms |
+| 1 masked clarity (gradient) | 22.7 (**+10.1**) | 13.3 (**+6.7**) |
+| 3 masked clarity (gradient) | 41.4 (+28.8) | 30.4 (+23.8) |
+| 1 masked HSL (gradient) | 45.8 (**+33.1**) | 34.4 (**+27.8**) |
+| 3 masked HSL (gradient) | 111.9 (+99.3) | 88.8 (+82.2) |
+| 1 masked clarity (**small radial**) | 23.5 (+10.8) | 15.5 (+8.9) |
+| 1 masked HSL (**small radial**) | 45.9 (+33.2) | 34.7 (+28.1) |
+
+**The spec's own estimates held.** Masked clarity landed at +10.1 ms against a predicted +8.8, and
+masked HSL at +33.1 against +34.9. Three masked HSL is +99.3 ms against the predicted +105 — a
+slider you cannot drag, exactly as written.
+
+⚠⚠ **A SMALL RADIAL COSTS THE SAME AS A FRAME-COVERING GRADIENT — +33.2 AGAINST +33.1 — WHICH IS
+THE DIRECT MEASUREMENT THAT NO BOUNDING BOX EXISTS.** The radial's own bbox is 0.24 x 0.24, about
+**5.8% of the frame**, and it is paying for 100% of it. That row is the bounding box's whole case,
+stated as a number rather than as an argument.
+
+⚠ **The masked delta scales with the pixels the mask runs over**, which is the premise a bounding
+box rests on. Measured at two region sizes a quarter apart (1400x900 = 1.26 Mpx, 700x450 =
+0.315 Mpx):
+
+| | clarity | HSL |
+|---|---|---|
+| 1400x900 | +7.2 ms | +27.9 ms |
+| 700x450 | +2.4 ms | +7.1 ms |
+| ratio | **3.0x** | **3.9x** |
+
+HSL is **exactly** linear in pixel count (3.9x of a possible 4x), which is what "purely per-pixel"
+predicts and what makes a LUT the right instrument. Clarity is sublinear at 3.0x, because
+`wide_blur`'s radius is fixed in pixels and does not shrink with the region — so a bounding box
+returns less on clarity than a naive area argument suggests.
+
+⚠ **Three masks cost ~18% more than three times one** at the region (+23.8 against 3 x 6.7 = 20.1
+for clarity; HSL is linear at +82.2 against 83.4). `MaskStage` clones the image per mask, so three
+masks is three clones, and the chained reach means mask N runs on mask N-1's output.
+
+#### Decision 1 — the bounding box does NOT ship here. Deferred a fourth time, now on a number.
+
+It is worth roughly **17x on a small radial or brush mask** (5.8% of the frame instead of 100%) and
+**nothing at all** on a linear gradient, a luminance range or a colour range mask — three of the
+five mask kinds, and they include the commonest masked-spatial gesture there is: darken the sky
+with a gradient and add clarity to it. The measured gradient rows are the ones a real edit sits on,
+and a bounding box cannot move them by a millisecond.
+
+⚠ Worth recording for whoever picks it up: **a brush mask already carries its box.** `CoverageMap`
+has been bbox-bounded since M3.1c-A — the box is computed, `MaskStage` simply does not use it to
+bound the sub-pipeline. A radial's box is analytic and trivial. So the work is in `MaskStage`, not
+in the masks.
+
+#### Decision 2 — the hue LUT DOES become the next milestone.
+
+Masked HSL is **3.3x** masked clarity and is the only thing here that is slow at *one* mask: +33.1
+ms on a 12.7 ms fit render takes a frame from 79 fps to 22. Three of them is 9 fps.
+
+Three properties of the measurement point at the LUT rather than at the box:
+
+1. The cost is **exactly linear in pixel count**, so it is per-pixel arithmetic and nothing else —
+   an Oklab round trip plus `atan2`, `cos` and `sin`. That is precisely what a table replaces.
+2. It is **independent of mask kind**, so a LUT helps every mask, including the three a bounding
+   box cannot touch.
+3. It also helps the **global** HSL slider, which is +34.9 ms today and which every user moves.
+
+⚠ `CLAUDE.md` predicted this moment in the HSL section — *"a hue LUT is the obvious next
+optimization if it ever matters"*. It matters now, and the number that says so is +99.3 ms.
+
 ## 6. Testing — the three that would otherwise name what they cannot detect
 
 This project has recorded **eighteen** instances of a test naming a bug it could not see. These are
