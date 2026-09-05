@@ -2,15 +2,10 @@ use crate::PipelineStage;
 // ⚠ The **ProPhoto** pair, not the sRGB one: this stage converts the working space in
 // and out again, and mixing the two directions produces a smooth, plausible colour shift
 // that is very hard to attribute later.
+use super::hue_table::{band_pair, MAX_HUE_SHIFT_DEG};
 use color::oklab::{oklab_to_prophoto, prophoto_to_oklab};
 use core_image::ImageBuf;
 use edit_model::{Hsl, HslBand};
-
-/// Oklab hue angle (degrees) at each band's center, in `HSL_BAND_NAMES` order. Derived from
-/// the canonical sRGB colors (#FF0000, #FF8000, #FFFF00, #00FF00, #00FFFF, #0000FF,
-/// #8000FF, #FF00FF) with our own conversion — `band_centers_match_canonical_colors`
-/// recomputes them and fails if this table drifts.
-const BAND_HUES: [f32; 8] = [29.23, 52.98, 109.77, 142.50, 194.77, 264.05, 293.94, 328.36];
 
 /// Below this chroma a pixel is neutral: it has no meaningful hue to band-match.
 const EPS: f32 = 1e-6;
@@ -22,33 +17,6 @@ const EPS: f32 = 1e-6;
 /// the honest behavior: you cannot meaningfully "select the orange" in something barely
 /// orange.
 const CHROMA_FADE: f32 = 0.02;
-/// Hue slider at ±100 rotates by this many degrees.
-const MAX_HUE_SHIFT_DEG: f32 = 30.0;
-
-/// Weights for the 8 bands at hue `h` (degrees): a smoothstep blend between the two
-/// bracketing band centers, zero elsewhere. The band spans tile the circle, so the weights
-/// always sum to 1 — which is what makes an equal setting on every band behave exactly like
-/// the corresponding global adjustment.
-fn band_weights(h: f32) -> [f32; 8] {
-    let mut w = [0.0f32; 8];
-    let n = BAND_HUES.len();
-    for i in 0..n {
-        let next = (i + 1) % n;
-        let span = (BAND_HUES[next] - BAND_HUES[i] + 360.0) % 360.0;
-        let delta = (h - BAND_HUES[i] + 360.0) % 360.0;
-        if delta < span {
-            let t = delta / span;
-            let s = t * t * (3.0 - 2.0 * t); // smoothstep
-            w[i] = 1.0 - s;
-            w[next] = s;
-            return w;
-        }
-    }
-    // Unreachable: the spans cover the full circle. Stay total rather than silently zeroing.
-    w[0] = 1.0;
-    w
-}
-
 /// Per-hue Hue/Saturation/Luminance, applied in Oklab so bands are perceptually even and a
 /// lightness change doesn't drag hue with it.
 pub struct HslStage {
@@ -70,7 +38,7 @@ impl PipelineStage for HslStage {
         let bands = self.bands;
         image.map_pixels(|rgb| {
             let [l, a, b] = prophoto_to_oklab(rgb);
-            let chroma = a.hypot(b);
+            let chroma = (a * a + b * b).sqrt();
             if chroma < EPS {
                 return rgb; // neutral — nothing to band-match
             }
@@ -83,13 +51,11 @@ impl PipelineStage for HslStage {
                 }
             };
 
-            let w = band_weights(hue);
-            let (mut dh, mut sat, mut lum) = (0.0, 0.0, 0.0);
-            for i in 0..8 {
-                dh += w[i] * bands[i].hue;
-                sat += w[i] * bands[i].saturation;
-                lum += w[i] * bands[i].luminance;
-            }
+            let (bi, bj, s) = band_pair(hue);
+            let (w0, w1) = (1.0 - s, s);
+            let mut dh = w0 * bands[bi].hue + w1 * bands[bj].hue;
+            let mut sat = w0 * bands[bi].saturation + w1 * bands[bj].saturation;
+            let mut lum = w0 * bands[bi].luminance + w1 * bands[bj].luminance;
 
             // Fade the whole adjustment out as chroma approaches zero, where hue is noise.
             let t = (chroma / CHROMA_FADE).min(1.0);
@@ -111,6 +77,7 @@ impl PipelineStage for HslStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stages::hue_table::{band_weights, BAND_HUES};
 
     /// Oklab hue (degrees) of a linear RGB triple.
     fn hue_of(rgb: [f32; 3]) -> f32 {
