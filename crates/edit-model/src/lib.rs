@@ -1239,14 +1239,26 @@ impl Mask {
     }
 }
 
-/// What a mask can carry: the **per-pixel** adjustments, and only those.
+/// What a mask can carry: **everything the tail applies per pixel or per mask**, which since
+/// M7.2 is most of the tail.
 ///
-/// ⚠ Not an arbitrary subset. It is exactly the set where "apply the stage, then blend the
-/// result by coverage" is both correct and cheap, because each output pixel depends only on
-/// its own input pixel. A spatial stage — noise reduction, sharpening, clarity, dehaze, HSL —
-/// reads neighbours *outside* the mask, so "masked" needs a separate decision for each and is
-/// out of scope here.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+/// ⚠ Not an arbitrary subset, and no longer the per-pixel set the earlier version of this
+/// comment described. It is exactly the set that lives in the **tail**, where "run the stage on
+/// a clone, then blend the result by coverage" is correct. A spatial stage in that list —
+/// local contrast, sharpening — reads neighbours from *outside* the mask, which is what avoids
+/// a hard edge at the mask boundary and is the behaviour wanted.
+///
+/// ⚠⚠ **What is NOT here is the prefix: dehaze and noise reduction.** Both run before geometry
+/// while [`crate::Edits::masks`] is applied in the tail, so a masked one would act *after* the
+/// tone curve — a different operation from the global stage wearing the same name, which is the
+/// failure the Whites slider already cost this project once. Dehaze additionally estimates a
+/// frame-global airlight, which has no meaning confined to a region. See `docs/BACKLOG.md`,
+/// "The rest of the stages inside a mask", Part B.
+///
+/// ⚠ **Not `Copy`** — [`ToneCurve`] carries a `Vec`. [`MaskedAdjustment`] was already not `Copy`
+/// for [`Mask::Brush`]'s stroke list, so dropping it here cost **zero** call sites, measured
+/// with `cargo check --workspace --all-targets` rather than assumed. Still `Clone`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct LocalAdjustments {
     pub white_balance: WhiteBalance,
@@ -1256,6 +1268,13 @@ pub struct LocalAdjustments {
     pub shadows: f32,
     pub whites: f32,
     pub blacks: f32,
+    /// A point tone curve confined to the mask — dodge and burn with a curve.
+    ///
+    /// ⚠ Runs **after** the tone regions and **before** local contrast, mirroring the global
+    /// chain: a local contrast measured before the curve would then be re-mapped by it.
+    ///
+    /// ⚠ This field is why [`LocalAdjustments`] is not `Copy`.
+    pub tone_curve: ToneCurve,
     pub saturation: f32,
     pub vibrance: f32,
     /// Fine and coarse local contrast, carried by the mask.
@@ -1274,6 +1293,21 @@ pub struct LocalAdjustments {
     /// "Per-pixel" says nothing about cost — the price is an Oklab round trip plus `atan2`,
     /// `cos` and `sin` for every pixel.
     pub hsl: Hsl,
+    /// Three-way colour grading confined to the mask — split-tone a sky, warm a face.
+    ///
+    /// ⚠ Runs **after** HSL, mirroring the global chain: HSL corrects colours that are *in* the
+    /// picture while a grade is laid on top, so reversed an HSL band tweak would act on the tint
+    /// just added.
+    ///
+    /// ⚠⚠ **Its exclusion from masks was re-decided, not inherited (2026-09-05).** The stated
+    /// reason was *"`LocalAdjustments` is per-pixel-only and a grade is global look"*; M7.2 made
+    /// the first half false, and the second half is a judgement about taste rather than about
+    /// structure.
+    ///
+    /// ⚠ `blending` and `balance` are carried too. They are properties of the *range
+    /// decomposition* shared by all four wheels, so omitting them would make a masked grade a
+    /// different control from the global one wearing the same name.
+    pub color_grading: ColorGrading,
 }
 
 impl LocalAdjustments {
@@ -1613,6 +1647,58 @@ pub enum EditLoadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠ Both halves. A mask carrying only a curve, and a mask carrying only a grade, must each
+    /// read as active on their own — a test that set both could not tell a wired field from an
+    /// unwired one sitting next to a wired one.
+    #[test]
+    fn a_masked_curve_or_a_masked_grade_makes_the_set_active() {
+        assert!(
+            !LocalAdjustments::default().is_active(),
+            "the default set must stay inactive, or every mask would insert stages"
+        );
+
+        let curved = LocalAdjustments {
+            tone_curve: ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]],
+            },
+            ..Default::default()
+        };
+        assert!(curved.is_active(), "a masked tone curve must be active");
+
+        let graded = LocalAdjustments {
+            color_grading: ColorGrading {
+                shadows: GradeWheel {
+                    hue: 220.0,
+                    saturation: 40.0,
+                    luminance: -10.0,
+                },
+                ..ColorGrading::default()
+            },
+            ..Default::default()
+        };
+        assert!(graded.is_active(), "a masked colour grade must be active");
+    }
+
+    /// ⚠ A sidecar written before today has neither field. It must read as neutral, and the grade
+    /// must come back with `blending: 50` from `ColorGrading`'s hand-written `Default` — a derived
+    /// one would give it 0, i.e. hard-edged ranges, silently.
+    #[test]
+    fn a_mask_written_before_these_fields_reads_them_neutral() {
+        let json = r#"{"mask":{"Linear":{"from":[0.0,0.0],"to":[1.0,0.0]}},
+                       "adjustments":{"exposure":0.5}}"#;
+        let m: MaskedAdjustment = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            m.adjustments.exposure, 0.5,
+            "fixture check: the json was read"
+        );
+        assert!(m.adjustments.tone_curve.points.is_empty());
+        assert_eq!(m.adjustments.color_grading, ColorGrading::default());
+        assert_eq!(
+            m.adjustments.color_grading.blending, 50.0,
+            "a missing grade must come back at the hand-written neutral, not f32::default()"
+        );
+    }
 
     /// Every state reachable from the identity by the four buttons.
     fn reachable() -> std::collections::BTreeSet<(u8, bool)> {

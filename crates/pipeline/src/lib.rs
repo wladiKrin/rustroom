@@ -544,8 +544,14 @@ pub fn build_pipeline_split_in_region_with_brush(
             //
             // ⚠ Inside a mask there is no such second placement, so a mask passes its real
             // values and the ordering within the shared builder is the whole story.
+            //
+            // ⚠ `ToneCurve::default()` is an empty point list, which inserts no stage at all —
+            // the same "be exactly neutral by inserting nothing rather than trusting the
+            // arithmetic to land on the identity" rule `white_balance` follows above.
+            tone_curve: edit_model::ToneCurve::default(),
             local_contrast: edit_model::LocalContrast::default(),
             hsl: edit_model::Hsl::default(),
+            color_grading: edit_model::ColorGrading::default(),
             sharpening: edit_model::Sharpening::default(),
         },
         baseline,
