@@ -1835,3 +1835,70 @@ fn the_colour_mask_golden_discriminates() {
         }
     }
 }
+
+#[test]
+fn golden_mask_curve() {
+    // A lifted-midtone curve confined to the left half of the chart, so the reference carries
+    // both the curve's shape and the coverage ramp across it.
+    //
+    // ⚠ The curve lifts rather than crushes, and stops at 0.62 rather than higher, so nothing
+    // pins at 255: a clipped sample cannot tell this curve from a stronger one, which is the
+    // weakness the radial exposure golden had to be re-authored to remove.
+    check_golden(
+        "mask_curve",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 0.0],
+                    invert: true,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    tone_curve: edit_model::ToneCurve {
+                        points: vec![[0.0, 0.0], [0.4, 0.62], [1.0, 1.0]],
+                    },
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
+
+#[test]
+fn golden_mask_grade() {
+    // A split tone confined to a diagonal gradient: cool shadows, warm highlights, with
+    // blending and balance both off their neutral so the reference covers the range
+    // decomposition rather than only the wheels.
+    check_golden(
+        "mask_grade",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.1, 0.0],
+                    to: [0.9, 1.0],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    color_grading: edit_model::ColorGrading {
+                        shadows: edit_model::GradeWheel {
+                            hue: 240.0,
+                            saturation: 45.0,
+                            luminance: -10.0,
+                        },
+                        highlights: edit_model::GradeWheel {
+                            hue: 50.0,
+                            saturation: 40.0,
+                            luminance: 8.0,
+                        },
+                        blending: 65.0,
+                        balance: 20.0,
+                        ..edit_model::ColorGrading::default()
+                    },
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+    );
+}
