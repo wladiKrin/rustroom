@@ -12,8 +12,8 @@
 //!    which is exactly the evidence that no bounding box exists — and the radial is the only
 //!    one of the two a bounding box could ever help.
 use edit_model::{
-    Edits, Hsl, LinearGradient, LocalAdjustments, LocalContrast, Mask, MaskedAdjustment,
-    RadialGradient,
+    ColorGrading, Edits, GradeWheel, Hsl, LinearGradient, LocalAdjustments, LocalContrast, Mask,
+    MaskedAdjustment, RadialGradient, ToneCurve,
 };
 use rustroom_app::render_engine::render_once;
 use std::time::Instant;
@@ -56,6 +56,39 @@ fn hsl_adjust() -> LocalAdjustments {
     hsl.bands[0].saturation = 30.0;
     LocalAdjustments {
         hsl,
+        ..Default::default()
+    }
+}
+
+/// A masked tone curve. ⚠ `ToneCurveStage::new` builds a **1024**-entry LUT per construction,
+/// against colour grading's 256 — so of the two stages Part A added, the curve is the larger
+/// table build, which is the opposite of what the backlog entry implied.
+fn curve() -> LocalAdjustments {
+    LocalAdjustments {
+        tone_curve: ToneCurve {
+            points: vec![[0.0, 0.0], [0.4, 0.6], [1.0, 1.0]],
+        },
+        ..Default::default()
+    }
+}
+
+/// A masked split tone. ⚠ The **third** consumer of `ColorGradingStage::new`, whose 256-entry
+/// table is built per stage — i.e. per mask per render rather than per pixel.
+fn grade() -> LocalAdjustments {
+    LocalAdjustments {
+        color_grading: ColorGrading {
+            shadows: GradeWheel {
+                hue: 240.0,
+                saturation: 45.0,
+                luminance: -10.0,
+            },
+            highlights: GradeWheel {
+                hue: 50.0,
+                saturation: 40.0,
+                luminance: 8.0,
+            },
+            ..ColorGrading::default()
+        },
         ..Default::default()
     }
 }
@@ -110,10 +143,16 @@ fn main() {
             "3 masked HSL      (gradient)",
             masked(3, gradient, hsl_adjust),
         ),
+        ("1 masked curve    (gradient)", masked(1, gradient, curve)),
+        ("3 masked curve    (gradient)", masked(3, gradient, curve)),
+        ("1 masked grade    (gradient)", masked(1, gradient, grade)),
+        ("3 masked grade    (gradient)", masked(3, gradient, grade)),
         (
             "1 masked clarity  (small radial)",
             masked(1, radial, clarity),
         ),
+        ("1 masked curve    (small radial)", masked(1, radial, curve)),
+        ("1 masked grade    (small radial)", masked(1, radial, grade)),
         (
             "1 masked HSL      (small radial)",
             masked(1, radial, hsl_adjust),
