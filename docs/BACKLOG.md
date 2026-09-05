@@ -310,6 +310,27 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
+
+The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
+is two things and neither is a tweak.** Decomposed shares of the *original* cost:
+
+1. **The Oklab round trip — ~27%, and now the largest single item.** Three `cbrt` in, three cubes
+   out. ⚠ Cutting it means approximating `cbrt`, which is a different accuracy question and affects
+   **every** Oklab consumer — `hsl`, `noise_reduction`, `sharpening`, `local_contrast`,
+   `color_grading` — not just this stage. A bit-manipulation seed plus one Newton step is the usual
+   answer; the argument to make is about error in *Oklab* units, where this project has no
+   established budget.
+2. **`atan2` — ~13%.** ⚠⚠ **A table can be built over ANY monotonic parameterisation of hue**, so
+   indexing by a cheap *pseudo-angle* (one divide, no trig) would delete `atan2` outright and stay
+   exact in kind, because the table is sampled in whatever coordinate it is indexed by. Deliberately
+   not taken with the LUT: it needs a sampling-density argument the uniform-in-hue table does not,
+   since the pseudo-angle is non-uniform in true hue.
+
+⚠ **Do not scope either from the old "~2×" figure in this file's history.** That estimate was wrong
+three times running; `cargo run --release -p app --example bench_hsl <raw>` decomposes the stage and
+is the only thing to trust here.
+
 - **Brush: incremental splatting.** Region-scoped coverage brought a paint frame to ~16.6 ms, of
   which ~9 ms is rasterization. ⚠ The remaining cost is **dab area, not frame area** — at 1:1 a dab
   is 125 px across — so incremental splatting is the lever if this ever needs to be faster.
