@@ -1648,6 +1648,23 @@ pub enum EditLoadError {
 mod tests {
     use super::*;
 
+    /// ⚠⚠ The fixtures do not fail to compile when `LocalAdjustments` grows, so this asserts what
+    /// the type system cannot: that `all_nonneutral`'s mask really carries every field
+    /// non-neutral. Without it a new field lands untested by the construct that exists to force
+    /// a decision about it, silently, with nothing to say so.
+    #[test]
+    fn the_exhaustive_fixture_carries_a_non_neutral_curve_and_grade() {
+        let a = &all_nonneutral().masks[0].adjustments;
+        assert!(
+            !a.tone_curve.points.is_empty(),
+            "all_nonneutral's mask must carry a real curve"
+        );
+        assert!(
+            a.color_grading.is_active(),
+            "all_nonneutral's mask must carry a real grade"
+        );
+    }
+
     /// ⚠ Both halves. A mask carrying only a curve, and a mask carrying only a grade, must each
     /// read as active on their own — a test that set both could not tell a wired field from an
     /// unwired one sitting next to a wired one.
@@ -2506,6 +2523,24 @@ mod tests {
                             saturation: -15.0,
                             luminance: 5.0,
                         }; 8],
+                    },
+                    tone_curve: ToneCurve {
+                        points: vec![[0.0, 0.0], [0.45, 0.6], [1.0, 1.0]],
+                    },
+                    color_grading: ColorGrading {
+                        shadows: GradeWheel {
+                            hue: 210.0,
+                            saturation: 30.0,
+                            luminance: -8.0,
+                        },
+                        highlights: GradeWheel {
+                            hue: 45.0,
+                            saturation: 25.0,
+                            luminance: 6.0,
+                        },
+                        blending: 60.0,
+                        balance: 15.0,
+                        ..ColorGrading::default()
                     },
                     ..Default::default()
                 },

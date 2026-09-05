@@ -1159,6 +1159,18 @@ mod tests {
                             luminance: 5.0,
                         }; 8],
                     },
+                    tone_curve: edit_model::ToneCurve {
+                        points: vec![[0.0, 0.0], [0.45, 0.6], [1.0, 1.0]],
+                    },
+                    color_grading: edit_model::ColorGrading {
+                        shadows: edit_model::GradeWheel {
+                            hue: 210.0,
+                            saturation: 30.0,
+                            luminance: -8.0,
+                        },
+                        blending: 60.0,
+                        ..edit_model::ColorGrading::default()
+                    },
                     ..Default::default()
                 },
             }],
