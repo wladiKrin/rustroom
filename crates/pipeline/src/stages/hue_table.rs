@@ -50,6 +50,26 @@ pub fn band_pair(h: f32) -> (usize, usize, f32) {
     (0, 1, 0.0)
 }
 
+/// ⚠⚠ The polynomials below are accurate ONLY over `|δ| ≤ MAX_HUE_SHIFT_DEG` in radians. If that
+/// constant is ever raised they degrade **smoothly and silently** — there is no value at which a
+/// test suddenly starts failing — so the bound is a build error rather than a slow drift. Same
+/// instrument as `MID_BUDGET_BYTES` and `MIN_RADIUS`.
+const _: () = assert!(MAX_HUE_SHIFT_DEG <= 30.0);
+
+/// `sin δ` for `|δ| ≤ 0.5236` rad, to within 2.1e-6. A truncated Taylor series, not a libm call.
+#[inline]
+pub fn sin_small(d: f32) -> f32 {
+    let d2 = d * d;
+    d * (1.0 - d2 * (1.0 / 6.0 - d2 * (1.0 / 120.0)))
+}
+
+/// `cos δ` for `|δ| ≤ 0.5236` rad, to within 1.4e-7.
+#[inline]
+pub fn cos_small(d: f32) -> f32 {
+    let d2 = d * d;
+    1.0 - d2 * (0.5 - d2 * (1.0 / 24.0 - d2 * (1.0 / 720.0)))
+}
+
 /// The eight weights at hue `h`. **Derived from `band_pair`** so the two cannot disagree about
 /// which bands are live.
 ///
@@ -101,6 +121,38 @@ mod tests {
             };
             assert!(delta < span + 1e-3, "h={h} is not inside span {i}");
         }
+    }
+
+    /// ⚠ The bound is what the whole approximation rests on, so the sweep must reach the very
+    /// edge of the domain — the error grows as δ⁷, so a test that only probed small angles
+    /// would pass against a polynomial that is useless at ±30°.
+    #[test]
+    fn the_small_angle_pair_is_accurate_across_the_whole_hue_range() {
+        let limit = MAX_HUE_SHIFT_DEG.to_radians();
+        let (mut worst_sin, mut worst_cos) = (0.0f32, 0.0f32);
+        for k in -10_000..=10_000i32 {
+            let d = limit * k as f32 / 10_000.0;
+            worst_sin = worst_sin.max((sin_small(d) - d.sin()).abs());
+            worst_cos = worst_cos.max((cos_small(d) - d.cos()).abs());
+        }
+        assert!(worst_sin < 3e-6, "sin_small worst error {worst_sin:e}");
+        assert!(worst_cos < 3e-7, "cos_small worst error {worst_cos:e}");
+    }
+
+    /// ⚠ The rotation built from these is orthogonal only to the extent that
+    /// `cos² + sin² == 1`, and a TRUNCATED series does not satisfy that exactly. This pins how
+    /// far off it is, because it is what makes a pure hue shift change chroma by ~1e-6 where the
+    /// shipped code left it bit-exact. Stated as a number rather than discovered later.
+    #[test]
+    fn the_pair_is_orthogonal_to_within_a_millionth() {
+        let limit = MAX_HUE_SHIFT_DEG.to_radians();
+        let mut worst = 0.0f32;
+        for k in -10_000..=10_000i32 {
+            let d = limit * k as f32 / 10_000.0;
+            let n = sin_small(d) * sin_small(d) + cos_small(d) * cos_small(d);
+            worst = worst.max((n - 1.0).abs());
+        }
+        assert!(worst < 5e-6, "cos^2 + sin^2 deviates by {worst:e}");
     }
 
     /// The weights are a partition of unity at every hue — the property that makes an equal

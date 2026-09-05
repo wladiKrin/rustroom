@@ -2,7 +2,7 @@ use crate::PipelineStage;
 // ⚠ The **ProPhoto** pair, not the sRGB one: this stage converts the working space in
 // and out again, and mixing the two directions produces a smooth, plausible colour shift
 // that is very hard to attribute later.
-use super::hue_table::{band_pair, MAX_HUE_SHIFT_DEG};
+use super::hue_table::{band_pair, cos_small, sin_small, MAX_HUE_SHIFT_DEG};
 use color::oklab::{oklab_to_prophoto, prophoto_to_oklab};
 use core_image::ImageBuf;
 use edit_model::{Hsl, HslBand};
@@ -64,11 +64,20 @@ impl PipelineStage for HslStage {
             sat *= strength;
             lum *= strength;
 
-            let hue2 = (hue + dh * MAX_HUE_SHIFT_DEG / 100.0).to_radians();
-            let chroma2 = (chroma * (1.0 + sat / 100.0)).max(0.0);
+            // ⚠⚠ `cos(hue)` and `sin(hue)` are already in hand — they are `a / chroma` and
+            // `b / chroma`. Expanding `cos(hue + δ)` and multiplying by the new chroma, the
+            // chroma CANCELS, so the rotation costs two small-angle polynomials and four
+            // multiplies instead of two libm calls, and it never performs the division the
+            // naive form of this identity would need. It also drops the `atan2 -> cos` round
+            // trip, so `hue` survives only as an index into the band model.
+            let delta = (dh * MAX_HUE_SHIFT_DEG / 100.0).to_radians();
+            let (cd, sd) = (cos_small(delta), sin_small(delta));
+            // ⚠ Unreachable given the ±100 slider range, which puts `k` in [0, 2]: defence in
+            // depth, and an unreachable guard is an untested one.
+            let k = (1.0 + sat / 100.0).max(0.0);
             let l2 = (l * (1.0 + lum / 200.0)).max(0.0);
 
-            let out = oklab_to_prophoto([l2, chroma2 * hue2.cos(), chroma2 * hue2.sin()]);
+            let out = oklab_to_prophoto([l2, k * (a * cd - b * sd), k * (a * sd + b * cd)]);
             [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
         })
     }
@@ -232,6 +241,41 @@ mod tests {
             let delta = (after - before + 360.0) % 360.0;
             assert!((delta - 30.0).abs() < 1.0, "{px:?}: rotated {delta}°");
         }
+    }
+
+    /// ⚠⚠ THE DISCRIMINATING FIXTURE FOR THE ROTATION IDENTITY, and both of its properties are
+    /// load-bearing. A fixture at **δ = 0** cannot see a swapped `cos`/`sin` or a flipped sign,
+    /// because `cos 0 = 1` and `sin 0 = 0` make the whole thing the identity. A **neutral** pixel
+    /// cannot see it either, since `a = b = 0` scales anything to zero. So: a saturated pixel, a
+    /// non-zero shift, and an assertion on the resulting HUE measured independently — not merely
+    /// that the pixel moved.
+    #[test]
+    fn a_partial_hue_shift_rotates_by_the_fraction_it_names() {
+        let mut hsl = Hsl::default();
+        hsl.bands[0].hue = 50.0; // half the slider -> +15 degrees
+        let before = hue_of(RED_ISH);
+        let after = hue_of(apply_one(&hsl, RED_ISH));
+        let moved = after - before;
+        assert!(
+            (moved - 15.0).abs() < 0.5,
+            "expected about +15 degrees, got {moved:.3} ({before:.3} -> {after:.3})"
+        );
+    }
+
+    /// ⚠ A pure hue rotation must not change chroma — the rotation is orthogonal. It is
+    /// orthogonal only to the accuracy of the truncated polynomials, so this asserts a TOLERANCE
+    /// where the shipped code was bit-exact. `the_pair_is_orthogonal_to_within_a_millionth` in
+    /// `hue_table` is where that budget is pinned; this is the same fact reaching a pixel.
+    #[test]
+    fn a_pure_hue_shift_leaves_chroma_alone() {
+        let mut hsl = Hsl::default();
+        hsl.bands[0].hue = 100.0;
+        let before = chroma_of(RED_ISH);
+        let after = chroma_of(apply_one(&hsl, RED_ISH));
+        assert!(
+            (after - before).abs() < 1e-5,
+            "chroma moved {before:.9} -> {after:.9}"
+        );
     }
 
     #[test]
