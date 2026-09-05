@@ -35,6 +35,10 @@ pub mod resample;
 pub mod spatial;
 pub(crate) mod spline;
 mod stages;
+/// ⚠ The one stage-internal module that is public, re-exported rather than opening `stages`
+/// wholesale — which would make every stage public API for the sake of one benchmark. `bench_hsl`
+/// needs the table and the small-angle pair to sweep table sizes against real pixels.
+pub use stages::hue_table;
 
 pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;

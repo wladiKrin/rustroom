@@ -23,10 +23,28 @@ pub struct HslStage {
     table: HueTable,
 }
 
-/// Entries in the hue table. ⚠ Chosen by measurement in `bench_hsl`, against two criteria:
-/// drift below half an 8-bit level so no golden moves, and no cost regression from a table too
-/// large to stay in cache. The precedent is `ProfileToneCurve`'s LUT, raised 1024 -> 4096 when
-/// 1024 drifted 0.61 of a level.
+/// Entries in the hue table — 12 KB. Chosen by measurement (`bench_hsl`, X-T4 frame at 1600 px,
+/// drift against a direct evaluation of the same maths):
+///
+/// | n | worst 8-bit | mean | samples differing | cost |
+/// |---|---|---|---|---|
+/// | 64 | 1 | 0.00020 | 0.0205% | 20.84 ms |
+/// | 256 | 1 | 0.00002 | 0.0016% | 21.43 ms |
+/// | 512 | 1 | 0.00000 | 0.0003% | 21.14 ms |
+/// | **1024** | **1** | **0.00000** | **0.0001%** | **21.57 ms** |
+/// | 4096 | 1 | 0.00000 | 0.0000% | 21.29 ms |
+///
+/// ⚠⚠ **Two things the design got wrong, corrected here.** (1) The plan said to pick the smallest
+/// `n` whose worst drift is **0**. No `n` reaches 0, 4096 included: a worst of 1 is a handful of
+/// samples sitting exactly on a quantisation boundary, which is inherent to changing the last
+/// bits at all and is not a table-size property. What the table size actually controls is the
+/// *share* of such samples, and that is already 0.0001% at 1024. All 55 goldens are
+/// byte-identical there. (2) The concern that a 48 KB table would fall out of L1 and cost more
+/// than it saves was **unfounded** — cost is flat across the whole sweep, inside run-to-run
+/// noise, because hue is spatially coherent so the access pattern stays cached.
+///
+/// 1024 rather than 4096 because the accuracy difference is invisible and the table is built
+/// **per mask** as well as globally, so the memory is multiplied by the number of masks.
 const TABLE_SIZE: usize = 1024;
 
 impl HslStage {

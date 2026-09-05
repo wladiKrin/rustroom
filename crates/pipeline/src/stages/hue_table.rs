@@ -75,11 +75,11 @@ pub fn cos_small(d: f32) -> f32 {
 /// The eight weights at hue `h`. **Derived from `band_pair`** so the two cannot disagree about
 /// which bands are live.
 ///
-/// ⚠ `#[cfg(test)]` because it has no production caller: the hot path takes the pair directly and
-/// the table build does too. `mod stages` is private, so a `pub fn` nobody calls is dead code
-/// under `-D warnings` — the trap this project records for binary crates, reproduced inside a
-/// library by a private module. Same handling as `DialogSize::ALL` and `theme::base_fill`.
-#[cfg(test)]
+/// ⚠ It has no caller inside the crate — the hot path takes the pair directly and so does the
+/// table build. It survives `-D warnings` only because `lib.rs` re-exports this module, which
+/// makes it reachable public API; `bench_hsl` is the caller. Were that re-export removed it
+/// would need `#[cfg(test)]`, the trap this project records for binary crates and which a
+/// private module reproduces inside a library.
 pub fn band_weights(h: f32) -> [f32; 8] {
     let (i, j, s) = band_pair(h);
     let mut w = [0.0f32; 8];
