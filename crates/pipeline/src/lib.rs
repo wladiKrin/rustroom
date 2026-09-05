@@ -397,6 +397,14 @@ fn adjustment_stages(
             a.blacks,
         )));
     }
+    // After the tone regions and before local contrast, mirroring the global chain: a local
+    // contrast measured before the curve would then be re-mapped by it.
+    //
+    // ⚠ Empty points insert nothing — the global rule, and what keeps a mask with a default
+    // curve from paying for a 1024-entry identity LUT on every render.
+    if !a.tone_curve.points.is_empty() {
+        out.push(Box::new(ToneCurveStage::new(&a.tone_curve.points)));
+    }
     // Before saturation, mirroring the global chain: a local contrast measured after the tonal
     // work is the one that describes what you actually see.
     if a.local_contrast.is_active() {
@@ -1749,6 +1757,67 @@ mod tests {
                 "{stage} ran twice: {names:?}"
             );
         }
+    }
+
+    /// A mask's tone curve runs after its tone regions and before its local contrast.
+    ///
+    /// ⚠⚠ **Order, not merely presence.** A masked curve that ran in the wrong place still
+    /// produces a plausible photograph, so a test asserting only that the stage exists would
+    /// pass against the wrong chain. The rule it pins is the global one, mirrored: a local
+    /// contrast measured before the curve would then be re-mapped by it.
+    ///
+    /// ⚠ Asserted on the **mask's own sub-pipeline**, which `stage_names()` cannot see through
+    /// `MaskStage`, so it calls the shared builder directly.
+    #[test]
+    fn a_masked_tone_curve_runs_after_the_tone_regions_and_before_local_contrast() {
+        let a = edit_model::LocalAdjustments {
+            shadows: 20.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.65], [1.0, 1.0]],
+            },
+            local_contrast: edit_model::LocalContrast {
+                texture: 0.0,
+                clarity: 30.0,
+            },
+            ..Default::default()
+        };
+        let names: Vec<&'static str> =
+            adjustment_stages(&a, color::wb::Illuminant::default(), RenderScale::FULL)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+        let at = |n: &str| names.iter().position(|x| *x == n);
+        assert_eq!(
+            names.iter().filter(|n| **n == "tone_curve").count(),
+            1,
+            "exactly one curve stage: {names:?}"
+        );
+        assert!(
+            at("tone_regions") < at("tone_curve"),
+            "the curve must follow the tone regions: {names:?}"
+        );
+        assert!(
+            at("tone_curve") < at("local_contrast"),
+            "the curve must precede local contrast: {names:?}"
+        );
+    }
+
+    /// An empty curve inserts no stage at all.
+    ///
+    /// ⚠ Exactly the global rule: empty is what keeps `ToneCurveStage` out of the pipeline, so a
+    /// mask with a default curve pays nothing rather than running a 1024-entry identity LUT.
+    #[test]
+    fn a_masked_curve_with_no_points_inserts_no_stage() {
+        let a = edit_model::LocalAdjustments {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let names: Vec<&'static str> =
+            adjustment_stages(&a, color::wb::Illuminant::default(), RenderScale::FULL)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+        assert!(!names.contains(&"tone_curve"), "{names:?}");
     }
 
     #[test]
