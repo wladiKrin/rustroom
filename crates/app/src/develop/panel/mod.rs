@@ -231,6 +231,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             ui,
                             s,
                             &mut app.mask_hsl_channel,
+                            &mut app.mask_grade_range,
                             masks::BrushTool {
                                 size: &mut app.brush_size,
                                 hardness: &mut app.brush_hardness,

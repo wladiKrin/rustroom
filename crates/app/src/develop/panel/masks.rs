@@ -33,6 +33,7 @@ pub fn show(
     ui: &mut egui::Ui,
     s: &mut Session,
     mask_hsl: &mut super::adjustments::HslChannel,
+    mask_grade: &mut super::color_wheel::GradeRange,
     brush: BrushTool<'_>,
     ed: &mut Edited,
 ) {
@@ -202,7 +203,7 @@ pub fn show(
                 );
             }
             ui.separator();
-            super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, ed);
+            super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, mask_grade, ed);
         }
     }
 
@@ -253,12 +254,15 @@ mod tests {
         let (mut erase, mut tint) = (false, true);
         // ⚠ A local: a test must not be able to assert about the *global* panel's channel.
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
+        // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
+        let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
         test_ui::click(&ctx, label, |ui| {
             ed = Edited::default();
             show(
                 ui,
                 s,
                 &mut channel,
+                &mut grade,
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -367,11 +371,14 @@ mod tests {
         let (mut erase, mut tint) = (false, true);
         // ⚠ A local: a test must not be able to assert about the *global* panel's channel.
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
+        // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
+        let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
         let mut body = |ui: &mut egui::Ui, ed: &mut Edited| {
             show(
                 ui,
                 s,
                 &mut channel,
+                &mut grade,
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -424,12 +431,15 @@ mod tests {
         let (mut erase, mut tint) = (false, true);
         // ⚠ A local: a test must not be able to assert about the *global* panel's channel.
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
+        // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
+        let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
         test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let mut ed = Edited::default();
             show(
                 ui,
                 s,
                 &mut channel,
+                &mut grade,
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,

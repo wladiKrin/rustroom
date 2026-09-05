@@ -340,6 +340,12 @@ struct RustroomApp {
     /// ⚠ Its own field rather than sharing `hsl_channel`: switching to a mask would otherwise
     /// silently change which channel the global panel shows when you switch back.
     mask_hsl_channel: develop::panel::adjustments::HslChannel,
+    /// Which colour-grading range a **mask's** wheel is showing. View state, like
+    /// `mask_hsl_channel`.
+    ///
+    /// ⚠ Its own field rather than sharing `grade_range`: switching to a mask would otherwise
+    /// silently change which wheel the global panel shows when you switch back.
+    mask_grade_range: develop::panel::color_wheel::GradeRange,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
@@ -575,6 +581,7 @@ impl RustroomApp {
             show_spots: true,
             hsl_channel: Default::default(),
             mask_hsl_channel: Default::default(),
+            mask_grade_range: Default::default(),
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),
