@@ -129,7 +129,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **State at handoff (2026-09-05):** **1991 tests, 55 goldens**, `fmt` / `clippy -D warnings` / `test --all` all green together, all 55 golden tests confirmed to have **run**, and 54 of them byte-identical — the proof M7.2 did not double-apply, and unmoved again by the hue LUT. ⚠ Branch `hue-lut`, unmerged. ✅ **M7.2 is merged fast-forward and confirmed by use.** ⚠ **The repo has ONE branch and no worktrees as of 2026-09-05** — every merged branch was deleted, and so was the last unmerged one (`worktree-agent-ab5ea8896e38512e2`, `34417d9`, the killed track-B agent's recovered soft-proofing WIP): its feature is in `main` with twelve named tests and is confirmed by use, so the branch was a superseded draft. ⚠ Force-deleted on the user's explicit say-so after checking `main` really holds the feature — **not** on the strength of my own earlier claim that it did. ⚠ Superseded handoff follows: **1975 tests, 54 goldens**, ⚠ and **ALL THREE W5 FEATURES ARE CONFIRMED BY USE** — creative LUTs (after the handover fix), soft proofing and colour range masks, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
+> **State at handoff (2026-09-05):** **1991 tests, 55 goldens**, `fmt` / `clippy -D warnings` / `test --all` all green together, all 55 golden tests confirmed to have **run**, and 54 of them byte-identical — the proof M7.2 did not double-apply, and unmoved again by the hue LUT. ⚠ **The repo is back to `main` alone** — no other branches, no worktrees. ✅ **M7.2 is merged fast-forward and confirmed by use.** ⚠ **The repo has ONE branch and no worktrees as of 2026-09-05** — every merged branch was deleted, and so was the last unmerged one (`worktree-agent-ab5ea8896e38512e2`, `34417d9`, the killed track-B agent's recovered soft-proofing WIP): its feature is in `main` with twelve named tests and is confirmed by use, so the branch was a superseded draft. ⚠ Force-deleted on the user's explicit say-so after checking `main` really holds the feature — **not** on the strength of my own earlier claim that it did. ⚠ Superseded handoff follows: **1975 tests, 54 goldens**, ⚠ and **ALL THREE W5 FEATURES ARE CONFIRMED BY USE** — creative LUTs (after the handover fix), soft proofing and colour range masks, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
 >
 > **🎯 PHASE 5 IS CLOSED (2026-09-03).** M5.3b — the spot-removal canvas tool and Visualize Spots — was the last milestone; its section is **"M5.3b — the spot-removal canvas tool"** below, with the **five rounds of defects found by using it**, every one in canvas/panel wiring and none caught by a test before it was reported. ⚠ Read its `suppressed_spot` story before giving any state two owners.
 >
@@ -165,10 +165,9 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > half**, and note it re-opens colour grading's exclusion, whose stated reason (*"`LocalAdjustments`
 > is per-pixel-only"*) M7.2 has since made false.
 >
-> **🎯 THE HUE LUT IS BUILT (2026-09-05).** `HslStage` is **1.47–1.66×** faster, masked HSL at fit
-> goes **+33.1 → +23.0 ms**, and all 55 goldens stayed byte-identical. Its section is **"The hue
-> LUT"** below. ⚠ **Green and unseen** — the GUI check is outstanding: drag a masked HSL slider at
-> 1:1, the case reported as *"a bit slow, but still usable"*, and say whether it now feels different.
+> **🎯 THE HUE LUT IS CLOSED (2026-09-05) — MERGED AND CONFIRMED BY USE.** `HslStage` is
+> **1.47–1.66×** faster, masked HSL at fit goes **+33.1 → +23.0 ms**, and all 55 goldens stayed
+> byte-identical at every task. Its section is **"The hue LUT"** below.
 >
 > ⚠⚠ **AND MEASURING IT DEMOLISHED THE SCOPE THIS FILE HAD RECORDED. `cos`/`sin` was under 10% of
 > the cost; the BAND WEIGHTING was 42%, because float `%` is `fmodf` and it sat in the hot loop.**
@@ -176,10 +175,12 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > comparing against colour grading instead of decomposing. **Read the section before trusting any
 > remaining performance claim about this stage.**
 >
-> **▶ NEXT ACTION: run the hue LUT's GUI check, then merge.** After that the open items are the two
-> in `docs/BACKLOG.md` — **"The rest of the stages inside a mask"** (Part A cheap, Part B blocked on
-> a design question) and, if HSL ever needs to be faster still, the **Oklab round trip** at ~27% and
-> **`atan2`** at ~13%, which are what is left.
+> **▶ NEXT ACTION: the two open items in `docs/BACKLOG.md`.** **"The rest of the stages inside a
+> mask"** is the one that was asked for — ⚠ two jobs of very different size, **Part A** (colour
+> grading and the tone curve, tail-native, re-runs M7.2's playbook) and **Part B** (dehaze and noise
+> reduction, blocked on the prefix/tail design question). And if HSL ever needs to be faster still,
+> what is left is the **Oklab round trip** at ~27% and **`atan2`** at ~13%, both deliberately
+> untouched and both with their reasons recorded.
 >
 > ⚠⚠ **W5's own record is the argument for how to verify M7.2: the milestone whose maths was most
 > thoroughly tested shipped 100% non-functional.** Creative LUTs had four passing pipeline tests and
@@ -375,7 +376,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > ⚠ **The GUI binary is now `Rustroom`, not `rustroom-gui`** — `cargo test -p app --bin Rustroom`. The name is what macOS shows as the application menu's title.
 
-**The hue LUT (2026-09-05) — and the measurement that reshaped the milestone before a line was written.** `HslStage` is ~1.5–1.7× faster and a photograph is unchanged. 1982 → **1991 tests**, **all 55 goldens byte-identical throughout**, which is the whole acceptance test — this changes how the stage computes, not what it computes. Spec `2026-09-05-hue-lut-design.md`, plan `2026-09-05-hue-lut.md`.
+**The hue LUT (2026-09-05) — and the measurement that reshaped the milestone before a line was written. ✅ CONFIRMED BY USE.** `HslStage` is ~1.5–1.7× faster and a photograph is unchanged. 1982 → **1991 tests**, **all 55 goldens byte-identical throughout**, which is the whole acceptance test — this changes how the stage computes, not what it computes. Spec `2026-09-05-hue-lut-design.md`, plan `2026-09-05-hue-lut.md`.
 
 - **⚠⚠ THE MILESTONE WAS SCOPED ON A BELIEF THAT MEASURING DEMOLISHED, AND IT WAS THE THIRD TIME HSL'S COST HAD BEEN MIS-REASONED HERE.** M7.2 recorded the cost as `atan2`/`cos`/`sin` and the fix as a LUT worth ~2×, from comparing HSL (+34.9 ms) against colour grading (+15.0 ms) — same Oklab round trip — and attributing the ~20 ms gap to the transcendentals, because they are the visible difference in the source. **Nobody looked inside `band_weights`.** Decomposed (`bench_hsl`, kept), above a harness floor:
 
@@ -407,7 +408,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   | **shipped stage** | **19.7–20.4 ms** | **1.47–1.66×** |
 
   And what a user touches, from `bench_masked`: **one masked HSL at fit +33.1 → +23.0 ms (−30%)**; **three masked HSL +99.3 → +72.2 ms (−27%)**. ⚠ **Under the ~1.75× the spec predicted** — the table lookup plus rotation costs more than the ~2.5 ms estimated.
-- **⚠ A photograph is unchanged, measured on real pixels rather than only on the charts:** against the original kernel, **worst 1 of 255, mean 0.00000, 0.0001% of samples differing**.
+- **⚠ A photograph is unchanged, measured on real pixels rather than only on the charts:** against the original kernel, **worst 1 of 255, mean 0.00000, 0.0001% of samples differing**. ✅ **And confirmed by use the same day** — the GUI check was run and reported good. ⚠ The three things it was pointed at, because they are where a bug in *this* change would hide and no test here covers them well: **the 360°→0° seam in reds and magentas** (a wraparound bug shows as a hue discontinuity, not a shift), **±100 hue shifts on saturated colour** (the outer edge of the polynomials' domain), and **pastels and skin** (the chroma-fade region, where a wrong band selection reads as speckle rather than as a colour change).
 - **Accepted caveats:** (1) **the Oklab round trip is untouched and is now the largest remaining cost at ~27%** — cutting it means approximating `cbrt`, a different accuracy question affecting every Oklab consumer (`hsl`, `noise_reduction`, `sharpening`, `local_contrast`, `color_grading`); (2) **`atan2` stays**, ~13% — a table indexed by a *pseudo-angle* would delete it, since a table can be built over any monotonic parameterisation of hue, and it was deliberately not taken because it needs a sampling-density argument the uniform table does not; (3) a pure hue shift moves chroma by ~1e-6 where it used to be bit-exact; (4) **the `hypot` → `sqrt` change may be worth nothing** — it measured −0.47 ms on one run and **+0.4 ms on another**, i.e. inside noise, and it is kept because it is also the simpler code; (5) nothing here helps colour grading, which already has its LUT.
 
 **M7.2 — masked spatial adjustments (2026-09-05). ✅ CONFIRMED BY USE.** A mask carries **Texture, Clarity, Sharpening and HSL** in addition to the per-pixel adjustments it already had. Sharpen the eyes, soften the skin, add clarity to the sky, pull the greens down in one corner. 1975 → **1982 tests**, 54 → **55 goldens**, and **the 54 stayed byte-identical** — which is the acceptance criterion, not a nicety. Spec `2026-09-04-masked-spatial-design.md`, plan `2026-09-04-masked-spatial.md`.
