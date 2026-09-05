@@ -358,10 +358,11 @@ impl Default for RenderSpec {
 /// repeating field *names* from `Edits` is harmless: the duplication that would actually hurt
 /// is this logic, and it exists once.
 ///
-/// ⚠⚠ **Three of these are passed NEUTRAL by the global caller** — `local_contrast`, `hsl` and
-/// `sharpening` — because the global chain places each itself, at a position each has earned.
-/// Passing the real values would apply them twice and move every golden. This is the same rule
-/// `saturation` has followed here since masking landed; see the caller for both.
+/// ⚠⚠ **FIVE of these are passed NEUTRAL by the global caller** — `tone_curve`,
+/// `local_contrast`, `hsl`, `color_grading` and `sharpening` — because the global chain places
+/// each itself, at a position each has earned. Passing the real values would apply them twice
+/// and move every golden. This is the same rule `saturation` has followed here since masking
+/// landed; see the caller for all of them.
 ///
 /// ⚠ `scale` reaches the spatial stages only. The per-pixel ones ignore it, which
 /// `per_pixel_stages_ignore_the_render_scale` still asserts bit for bit — and that test now
@@ -417,6 +418,19 @@ fn adjustment_stages(
     // the picture, so it must see final tonality.
     if a.hsl != edit_model::Hsl::default() {
         out.push(Box::new(HslStage::new(&a.hsl)));
+    }
+    // After HSL, mirroring the global chain: HSL corrects colours that are *in* the picture
+    // while a grade is laid on top, so reversed an HSL band tweak would act on the tint just
+    // added.
+    //
+    // ⚠ `is_active` is wheels-only, so blending and balance alone insert nothing — they shape
+    // ranges that tint nothing until a wheel is turned up.
+    //
+    // ⚠ A third consumer of `ColorGradingStage::new`, which builds a 256-entry table per
+    // construction. Per render rather than per pixel, and measured rather than assumed — see
+    // `cargo run --release -p app --example bench_masked`.
+    if a.color_grading.is_active() {
+        out.push(Box::new(ColorGradingStage::new(&a.color_grading)));
     }
     // ⚠ Last, for the reason it is last globally: sharpening must not amplify anything a later
     // stage would then stretch.
@@ -1818,6 +1832,78 @@ mod tests {
                 .map(|s| s.name())
                 .collect();
         assert!(!names.contains(&"tone_curve"), "{names:?}");
+    }
+
+    /// A mask's colour grade runs after its HSL and before its sharpening.
+    ///
+    /// ⚠⚠ **After HSL is the load-bearing half.** HSL corrects colours that are *in* the picture
+    /// while a grade is laid on top; reversed, an HSL band tweak would act on the tint just
+    /// added. Before sharpening for the reason sharpening is last anywhere: it must not amplify
+    /// what a later stage would then stretch.
+    #[test]
+    fn a_masked_colour_grade_runs_after_hsl_and_before_sharpening() {
+        let mut hsl = edit_model::Hsl::default();
+        hsl.bands[0].saturation = 20.0;
+        let a = edit_model::LocalAdjustments {
+            hsl,
+            color_grading: edit_model::ColorGrading {
+                shadows: edit_model::GradeWheel {
+                    hue: 220.0,
+                    saturation: 45.0,
+                    luminance: -12.0,
+                },
+                ..edit_model::ColorGrading::default()
+            },
+            sharpening: edit_model::Sharpening {
+                amount: 50.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let names: Vec<&'static str> =
+            adjustment_stages(&a, color::wb::Illuminant::default(), RenderScale::FULL)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+        let at = |n: &str| names.iter().position(|x| *x == n);
+        assert_eq!(
+            names.iter().filter(|n| **n == "color_grading").count(),
+            1,
+            "exactly one grade stage: {names:?}"
+        );
+        assert!(
+            at("hsl") < at("color_grading"),
+            "the grade must follow HSL: {names:?}"
+        );
+        assert!(
+            at("color_grading") < at("sharpening"),
+            "the grade must precede sharpening: {names:?}"
+        );
+    }
+
+    /// Blending and balance alone insert no stage.
+    ///
+    /// ⚠ The rule `NoiseReduction::is_active` and `Vignette::is_active` already follow, reused
+    /// here rather than reinvented: they shape ranges that tint nothing until a wheel is turned
+    /// up, so dragging one alone must not insert a stage that would cost an Oklab round trip for
+    /// no change at all.
+    #[test]
+    fn masked_grading_modifiers_alone_insert_no_stage() {
+        let a = edit_model::LocalAdjustments {
+            exposure: 0.5,
+            color_grading: edit_model::ColorGrading {
+                blending: 90.0,
+                balance: -40.0,
+                ..edit_model::ColorGrading::default()
+            },
+            ..Default::default()
+        };
+        let names: Vec<&'static str> =
+            adjustment_stages(&a, color::wb::Illuminant::default(), RenderScale::FULL)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+        assert!(!names.contains(&"color_grading"), "{names:?}");
     }
 
     #[test]
