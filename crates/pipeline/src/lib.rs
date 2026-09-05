@@ -1696,9 +1696,17 @@ mod tests {
     /// The global tail must not apply the mask-only stages twice.
     ///
     /// ⚠⚠ The trap this exists for. `adjustment_stages` has two consumers — the global tail and
-    /// every mask — and the global tail places local contrast, HSL and sharpening **itself**,
-    /// further down. So it passes those three **neutral** into the shared builder. Passing the
-    /// real values applies each twice: visibly over-sharpened, and every golden moves.
+    /// every mask — and the global tail places the tone curve, local contrast, HSL, colour
+    /// grading and sharpening **itself**, further down. So it passes those five **neutral** into
+    /// the shared builder. Passing the real values applies each twice: visibly over-sharpened,
+    /// and every golden moves.
+    ///
+    /// ⚠⚠ **IT NAMED THREE OF FIVE AND WAS THEREFORE BLIND TO A WHOLE MILESTONE.** When the tone
+    /// curve and colour grading joined the shared builder, the double-application sabotage left
+    /// this test **green** and was caught only by six moving goldens. A guard that enumerates a
+    /// list has to be extended with the list, or it silently stops guarding the newest entries —
+    /// which are exactly the ones nobody has habits about yet. Add every field the caller passes
+    /// neutral, and add it here in the same commit.
     ///
     /// ⚠ This was written *before* the stages joined the shared builder, so it passed from the
     /// start — a tripwire, not a red test. What makes it a real guard is the sabotage recorded
@@ -1761,10 +1769,27 @@ mod tests {
                     luminance: 0.0,
                 }; 8],
             },
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.45, 0.6], [1.0, 1.0]],
+            },
+            color_grading: edit_model::ColorGrading {
+                shadows: edit_model::GradeWheel {
+                    hue: 210.0,
+                    saturation: 30.0,
+                    luminance: -8.0,
+                },
+                ..edit_model::ColorGrading::default()
+            },
             ..Edits::default()
         };
         let names = build_pipeline(&edits, RenderScale::FULL).stage_names();
-        for stage in ["local_contrast", "sharpening", "hsl"] {
+        for stage in [
+            "local_contrast",
+            "sharpening",
+            "hsl",
+            "tone_curve",
+            "color_grading",
+        ] {
             assert_eq!(
                 names.iter().filter(|n| **n == stage).count(),
                 1,
