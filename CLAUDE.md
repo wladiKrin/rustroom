@@ -129,7 +129,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ Workflow:** every feature goes brainstorm → spec → plan → executing-plans, **inline** (the user has chosen inline every single time; offer the choice but expect that answer). Specs land in `docs/superpowers/specs/`, plans in `docs/superpowers/plans/`.
 >
-> **State at handoff (2026-09-05):** **1982 tests, 55 goldens**, `fmt` / `clippy -D warnings` / `test --all` all green together, all 55 golden tests confirmed to have **run**, and 54 of them byte-identical — the proof M7.2 did not double-apply. ⚠ **M7.2 is NOT confirmed by use yet**; its checklist is in its section below. Branch `m7.2-masked-spatial`, unmerged. ⚠ Superseded handoff follows: **1975 tests, 54 goldens**, ⚠ and **ALL THREE W5 FEATURES ARE CONFIRMED BY USE** — creative LUTs (after the handover fix), soft proofing and colour range masks, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
+> **State at handoff (2026-09-05):** **1982 tests, 55 goldens**, `fmt` / `clippy -D warnings` / `test --all` all green together, all 55 golden tests confirmed to have **run**, and 54 of them byte-identical — the proof M7.2 did not double-apply. ✅ **M7.2 is merged fast-forward and confirmed by use.** ⚠ **Every merged branch was deleted on 2026-09-05** — the repo now has `main` plus **one deliberately-kept unmerged branch, `worktree-agent-ab5ea8896e38512e2`** (`34417d9`), the killed track-B agent's recovered soft-proofing WIP. Its *feature* shipped and is confirmed by use, so the branch is a superseded draft and deleting it needs `-D`; left standing rather than force-deleted without being asked. ⚠ Superseded handoff follows: **1975 tests, 54 goldens**, ⚠ and **ALL THREE W5 FEATURES ARE CONFIRMED BY USE** — creative LUTs (after the handover fix), soft proofing and colour range masks, W5 merged, working tree clean; five fully-merged branches left for the user to delete. ⚠ Superseded handoff follows: **1815 tests, 53 goldens**, `cargo fmt`/`clippy -D warnings`/`test --all` all green, working tree clean, `m5.3b-spot-removal-canvas` merged fast-forward and deleted. ⚠ A fully-merged `w3-followups` branch still exists locally; harmless, left for the user to delete. ⚠ **The unpushed count is deliberately not written here** — the user pushes himself and any number goes stale immediately; run the command at the top of this block.
 >
 > **🎯 PHASE 5 IS CLOSED (2026-09-03).** M5.3b — the spot-removal canvas tool and Visualize Spots — was the last milestone; its section is **"M5.3b — the spot-removal canvas tool"** below, with the **five rounds of defects found by using it**, every one in canvas/panel wiring and none caught by a test before it was reported. ⚠ Read its `suppressed_spot` story before giving any state two owners.
 >
@@ -153,6 +153,17 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > ⚠⚠ **AND THE ONE RESERVATION IS THE ONE THE MEASUREMENT PREDICTED**: masked HSL at 1:1 is *"a bit
 > slow, but still usable"*. +33.1 ms on a 12.7 ms render is 22 fps. The number named the worst case
 > in the feature before anyone touched it, and the person using it named the same slider.
+>
+> **▶ ASKED FOR AT M7.2's MERGE (2026-09-05): the REST of the stages inside a mask — *"I'd also like
+> to add the dehaze and rest to masks."*** ⚠⚠ **It is two jobs of very different size and must not be
+> scoped as one milestone.** **Part A** — colour grading and the tone curve — is **tail-native**, so
+> it re-runs M7.2's playbook with no structural question at all. **Part B** — dehaze and noise
+> reduction — is **blocked on a design question**: both live in the *prefix*, before geometry, while
+> `MaskStage` is in the tail, so a masked one runs *after* the tone curve and is a different
+> operation from the global stage wearing the same name. ⚠⚠ **The full entry is in
+> `docs/BACKLOG.md` under "The rest of the stages inside a mask" — read it before scoping either
+> half**, and note it re-opens colour grading's exclusion, whose stated reason (*"`LocalAdjustments`
+> is per-pixel-only"*) M7.2 has since made false.
 >
 > **▶ NEXT ACTION: the hue LUT**, chosen from a measurement rather than from taste. ⚠⚠ **Read the
 > ceiling before scoping it: the Oklab round trip is a floor a LUT cannot go below.** Colour grading

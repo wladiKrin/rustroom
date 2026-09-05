@@ -175,6 +175,61 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 
 ## Editing tools
 
+### ⚠⚠ The rest of the stages inside a mask — dehaze, noise reduction, and the tail-native two (asked for 2026-09-05, at M7.2's merge)
+
+**Asked for directly**: *"I'd also like to add the dehaze and rest to masks."* M7.2 gave a mask
+Texture, Clarity, Sharpening and HSL. This is the remainder.
+
+⚠⚠ **IT IS TWO JOBS, NOT ONE, AND THEY ARE NOT COMPARABLE IN SIZE. Do not scope this as a single
+milestone.** The split is by *where the stage lives in the pipeline*, which is the whole difficulty:
+
+#### Part A — the tail-native two: colour grading and the tone curve. **Cheap, and M7.2 built the road.**
+
+Both already run in the tail, beside the four a mask now carries. They need exactly what M7.2 needed
+— a field on `LocalAdjustments`, a line in `adjustment_stages`, a neutral pass from the global
+caller in `build_pipeline_split`, the two `..Default::default()` fixtures updated **by hand** (⚠ they
+will not break; see M7.2's record), and panel sliders. **No structural question at all.**
+
+⚠ Colour grading was excluded from masks on a *stated reason* that M7.2 has since weakened:
+*"`LocalAdjustments` is per-pixel-only and a grade is global look."* The first half is no longer
+true — a mask carries three spatial stages now. The second half is a judgement about taste, not
+structure, and a masked split-tone on a sky is an ordinary request. **Re-decide it rather than
+inheriting it.** ⚠ Note grading's own LUT is built per stage from constants, so a mask carrying one
+pays a 256-entry table build per render, not per pixel — cheap, but it is a *third* consumer of
+`ColorGradingStage::new` and should be measured, not assumed, given M7.2 found HSL 4× its estimate.
+
+⚠ A masked **tone curve** is the more obviously wanted of the two (dodge and burn with a curve) and
+also the more expensive in panel space: it is a whole widget, not a row of sliders.
+
+#### Part B — dehaze and noise reduction. **Blocked on a design question, exactly as M7.2 §7 said.**
+
+Both live in the **prefix**, before geometry; `MaskStage` lives in the **tail**. So a masked one
+would run *after* the tone curve, denoising or dehazing pixels the curve has already stretched —
+**a different operation from the global stage wearing the same name.** Three ways out, none free:
+
+1. **Accept the tail position and say so.** Masked NR after the curve is *not* the global stage
+   confined to a mask; it is a smoothing tool with different behaviour on the same slider. ⚠ This
+   project has been bitten by exactly that shape before — the Whites slider read perceptual thirds
+   off linear luminance. Two things with one name that behave differently is the failure to avoid.
+2. **A second, prefix-side masking stage.** Correct semantics, and expensive: prefix stages run
+   **whole-buffer**, so the coverage would have to be evaluated at prefix resolution *before*
+   geometry — which is a different coordinate space from the one every mask is authored in.
+   ⚠ Brush strokes are already anchored pre-geometry, so they are the easy case; a linear gradient
+   and both range masks are frame-relative and are not.
+3. **Duplicate the stage, tuned for its position.** Honest, and doubles the surface to maintain.
+
+⚠ **Dehaze additionally estimates a frame-global airlight from the brightest 0.1% of pixels.**
+Confined to a mask that has no obvious meaning — the airlight is a property of the *scene*, not of
+the region. Decide whether a masked dehaze uses the frame's airlight (defensible, and the reason it
+can stay one number) or the mask's own (which would make the same slider read differently per mask).
+
+⚠ **Skin softening is NOT a reason to do Part B**, and thinking it is would be the trap: Texture is
+bipolar and −100 removes the fine band, so M7.2 already covers the commonest use anyone reaches for
+NR-in-a-mask to get.
+
+**Order:** A is a small milestone that mostly re-runs M7.2's playbook. B needs a brainstorm before a
+plan — it is blocked on a decision, not on effort.
+
 ### ⚠⚠ Anchor strokes and spots in sensor space (recorded 2026-09-03 — blocked on a MISSING MAP)
 
 **Not "extend `FrameMap`", and the name matters.** `FrameMap` is not wrong: it models
