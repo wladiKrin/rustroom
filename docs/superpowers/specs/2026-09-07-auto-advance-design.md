@@ -1,7 +1,7 @@
 # Auto-advance after rating — design
 
 Date: 2026-09-07
-Status: **designed, not built.**
+Status: **built 2026-09-07.** Plan `2026-09-07-auto-advance.md`.
 
 **M6.5c**, the last item of **M6.5 — Culling throughput**. With **M6.2** it closes **Phase 6**.
 
@@ -48,7 +48,14 @@ inherits that meaning rather than adding a second one.
 selection, which would collapse "compare exactly these" to one photo and silently widen the pool to
 the entire folder. That rule is already in the arrow path and is inherited with it.
 
-### 2. In the grid and the filmstrip, advance PAST the whole selection
+### 2. In the Library grid, advance PAST the whole selection
+
+⚠⚠ **CORRECTED WHILE PLANNING: the filmstrip is NOT in scope, because it cannot rate anything.**
+`interaction::culling_key` has exactly three callers — `library.rs`, `compare.rs`, `survey.rs` —
+and `filmstrip.rs` contains no key handling at all. That follows from the rule `CLAUDE.md` already
+records for the digit collision: *digits cull in Library, select tools in Develop*, and the
+filmstrip lives in Develop. Scope is the grid and Compare.
+
 
 `apply_mark` deliberately acts on the **selection**, not the active photo — *"select a run of frames
 and press X"*. So advancing one step from the active photo would leave you **inside the run you just
