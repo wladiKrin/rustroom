@@ -406,25 +406,6 @@ impl RustroomApp {
         rustroom_app::xmp_sync::write_for_all(cat, files);
     }
 
-    /// Apply a culling action to every selected photo.
-    ///
-    /// ⚠ The **selection**, not the active photo — the rule a paste, a preset and a sync already
-    /// follow, and culling is where it matters most: select a run of frames and press `X`.
-    pub(crate) fn apply_mark(&mut self, action: rustroom_app::marks::MarkAction) {
-        let chosen: Vec<PhotoId> = self
-            .library
-            .as_ref()
-            .map(|l| {
-                l.selection
-                    .iter()
-                    .filter_map(|i| l.entries.get(i))
-                    .map(|e| e.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.apply_mark_to(&chosen, action);
-    }
-
     /// Mark exactly these photos.
     ///
     /// ⚠⚠ **Compare and Survey cull one tile, where the grid culls the whole selection — and

@@ -51,6 +51,22 @@ impl Library {
         self.selection.retain_visible(&self.visible);
     }
 
+    /// Every selected row's [`PhotoId`].
+    ///
+    /// ⚠⚠ **The selection, not the active photo** — the rule a paste, a preset and a sync already
+    /// follow, and culling is where it matters most: select a run of frames and press `X`.
+    ///
+    /// ⚠ It exists as a method rather than being read inline **so the targets can be captured
+    /// before auto-advance moves the selection.** `library.rs` records that ordering; this is the
+    /// one place that decides which photos a culling key acts on.
+    pub(crate) fn selected_ids(&self) -> Vec<PhotoId> {
+        self.selection
+            .iter()
+            .filter_map(|i| self.entries.get(i))
+            .map(|e| e.id.clone())
+            .collect()
+    }
+
     /// The thumbnail request for row `i`, using `live` in place of the stored edits when that
     /// row is the photo currently open.
     ///

@@ -239,7 +239,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut badge_clicked: Option<(PhotoId, String)> = None;
     // ⚠ Declared out here, like `open_index` and `rename`: applying it needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`.
-    let mut mark: Option<rustroom_app::marks::MarkAction> = None;
+    // ⚠⚠ **The targets travel WITH the action, and that is the whole safety of auto-advance.**
+    // The advance below moves the selection, and `apply_mark` used to read the targets out of the
+    // live selection *after* the frame — so rating a run of five frames would have rated the wrong
+    // photo, silently. Carrying the ids here makes "a mark without its targets" unrepresentable
+    // rather than something a comment asks the next reader to remember.
+    let mut mark: Option<(Vec<PhotoId>, rustroom_app::marks::MarkAction)> = None;
     // Pinch on a trackpad, or ctrl/cmd+scroll, resizes the grid — the same gesture the develop
     // canvas uses to zoom the photo.
     //
@@ -357,7 +362,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             //
             // ⚠ The key table lives in `interaction::culling_key`, shared with Compare and
             // Survey, so the three views cannot drift about what a digit means.
-            mark = crate::interaction::culling_key(i);
+            if let Some(a) = crate::interaction::culling_key(i) {
+                mark = Some((lib.selected_ids(), a));
+            }
         });
 
         // ⚠ How many rows of prefetch to keep resident beyond the drawn ones. Latency, not
@@ -588,8 +595,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         lib.sync_thumb_window(&window);
     });
 
-    if let Some(a) = mark {
-        app.apply_mark(a);
+    if let Some((targets, a)) = mark {
+        app.apply_mark_to(&targets, a);
     }
     if let Some((id, text)) = badge_clicked {
         // ⚠ Opening the label draft closes any file-rename draft: two open fields in one cell
