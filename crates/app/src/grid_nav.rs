@@ -33,6 +33,26 @@ pub fn step_by(visible: &[usize], cur: usize, delta: i64) -> Option<usize> {
     Some(visible[target.clamp(0, last) as usize])
 }
 
+/// The photo to land on after rating `selected`.
+///
+/// ⚠⚠ **One past the LAST selected photo, not one past the active one.** A culling key acts on the
+/// whole selection, so a single step from the active photo lands *inside* the run just rated.
+///
+/// ⚠ `visible` is sorted ascending, so the largest selected visible index **is** the last one in
+/// visible order — no separate ordering pass, and none should be added: a second notion of "last"
+/// is how the two would drift.
+///
+/// ⚠ `None` when nothing selected is visible. The selection is kept inside `visible` by
+/// `retain_visible`, so that means there is nothing to advance from.
+pub fn advance_past(visible: &[usize], selected: &[usize]) -> Option<usize> {
+    let last = selected
+        .iter()
+        .copied()
+        .filter(|i| visible.binary_search(i).is_ok())
+        .max()?;
+    step_by(visible, last, 1)
+}
+
 /// How far into the viewport a followed row is allowed to sit before the view moves, as a
 /// fraction of the viewport's height.
 ///
@@ -235,5 +255,42 @@ mod tests {
             follow_offset(30, 3, 100.0, 400.0, 20, f32::NAN),
             Some(800.0)
         );
+    }
+
+    /// ⚠⚠ **Past the whole selection, not one step from the active photo.** A culling key acts on
+    /// the *selection* — "select a run of frames and press X" — so stepping one from the active
+    /// photo would leave you standing inside the run you just rated.
+    #[test]
+    fn advance_past_steps_past_the_whole_selection() {
+        let visible: Vec<usize> = (0..10).collect();
+        assert_eq!(
+            advance_past(&visible, &[3, 4, 5]),
+            Some(6),
+            "landed inside the run that was just rated"
+        );
+        // ⚠ The order the caller happens to hand them in must not matter.
+        assert_eq!(advance_past(&visible, &[5, 3, 4]), Some(6));
+    }
+
+    /// ⚠ Clamped, never wrapping — `step_by`'s rule, and for its reason: wrapping to the top of a
+    /// folder mid-cull is disorienting, and the end of the list is information.
+    #[test]
+    fn advance_past_clamps_at_the_end() {
+        let visible: Vec<usize> = (0..4).collect();
+        assert_eq!(
+            advance_past(&visible, &[3]),
+            Some(3),
+            "it wrapped or vanished"
+        );
+    }
+
+    /// ⚠ A hidden photo cannot be the anchor: the selection is pruned to the visible list by
+    /// `retain_visible`, so one that is not there is stale and stepping from it would jump
+    /// somewhere nobody selected.
+    #[test]
+    fn advance_past_ignores_a_selection_with_nothing_visible_in_it() {
+        let visible = vec![0usize, 2, 4];
+        assert_eq!(advance_past(&visible, &[1, 3]), None);
+        assert_eq!(advance_past(&visible, &[]), None);
     }
 }
