@@ -423,6 +423,60 @@ Gradient **17.1** against small radial **17.6** — indistinguishable, on the on
 could ever shrink. And for *both* range masks a bbox is meaningless **by construction**: a tonal or
 hue band has no bounding box.
 
+---
+
+#### ⚠⚠ ROUND 2 (2026-09-07): THE REPORTER'S MASK WAS A GRADIENT/RADIAL, AND THAT EXONERATES THE RENDER PIPELINE
+
+**Asked and answered:** the stutter was seen with a **linear gradient / radial** mask — the +2.7 ms
+case, not the +16.9 ms one. So the colour-range finding above is real and worth fixing on its own
+merits, but **it is not this bug**, and the coverage cache is not this bug's fix.
+
+**A drag frame at fit priced end to end** (1600x1068, warm prefix — `tail + to_rgba8 + histogram`,
+which is everything `render_cached` and `pack` do per delivered frame):
+
+| case | tail | pack | hist | **total** |
+|---|---|---|---|---|
+| neutral | 8.1 | 0.4 | 1.5 | **10.0 ms** |
+| global exposure | 9.4 | 0.4 | 1.5 | **11.3 ms** |
+| masked exposure, gradient | 12.2 | 0.4 | 1.5 | **14.1 ms** |
+| masked exposure, small radial | 14.2 | 0.4 | 1.5 | **16.2 ms** |
+
+⚠⚠ **14.1 ms IS 71 FPS, AND 71 FPS DOES NOT STUTTER. The render pipeline does not explain the
+report.** The mask adds 2.8 ms to a frame that was already 11.3 ms without it — which is exactly
+what the reporter said from the other direction: *"it also did before"*. Two independent
+measurements agree on the mask's share (+2.7 via `render_once`, +2.8 via the warm-prefix tail), so
+this is not a measurement artefact.
+
+⚠ **And the pack was the other plausible suspect; it is 0.4 ms.** The histogram is 1.5 ms. Neither
+is worth touching.
+
+**⚠⚠ SO THE SEARCH MOVED TO THE WRONG THREAD, AND THAT IS THE FINDING.** Rendering happens on a
+**background worker**. A slow background render cannot jank the UI — it can only make the preview
+*lag behind the slider*, which is a different complaint from a stutter. A stutter is the **UI
+thread** missing frames, and nothing measured so far runs on the UI thread.
+
+**▶ NEXT MEASUREMENT: UI-thread frame times during a drag, in the running app.** Not pipeline
+throughput — that question is now answered. The two candidates, both on the UI thread and neither
+yet measured:
+
+1. **Rayon starving the UI thread.** The render saturates every core; the UI thread then competes
+   with it for a core each frame. This predicts exactly the observed dose-response — *more* render
+   work (a mask, a bigger image) means *more* starvation — and it predicts a stutter rather than
+   simple lag, which is the detail the throughput numbers cannot account for.
+2. **The per-frame texture handover.** `shell.rs` builds an `egui::ColorImage` from `frame.rgba`
+   (~6.8 MB allocated and converted at the fit rung) and calls `ctx.load_texture` for every
+   delivered frame, both on the UI thread.
+
+⚠ **Checked and NOT implicated, so nobody re-checks them:** the history push and the sidecar write
+are gated on `ed.settled`, not `ed.changed`, so a drag writes neither; render requests **coalesce**
+(the worker drains `req_rx` to the newest, `poll_latest` keeps only the newest frame), so nothing
+queues up and the stutter is not accumulated lag; the full-resolution upgrade is a one-off gated on
+an 800 ms dwell, not per-frame work.
+
+⚠ **A brush row was added and is +19.0 ms — but UNCACHED**, and must not be read as a drag frame:
+the bench builds without a prebuilt coverage map, so it rasterizes per call where the app's
+`BrushCache` rasterizes once. It prices what that cache saves, which is most of a brush.
+
 ### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
 
 The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
