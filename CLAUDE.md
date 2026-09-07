@@ -219,12 +219,19 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > wrong summary statistic, and the first time by `max`. ⚠ **Reopen only on a fresh report, and add
 > timestamps to `RUSTROOM_DEBUG_RENDER` before changing anything.**
 >
-> **▶ NEXT ACTION: none agreed — pick one and brainstorm it.** The strongest *measured* candidate is
-> a **coverage cache for range masks**, worth **+16.9 ms against a gradient's +2.7** on an identical
-> adjustment, with `BrushCache` as the precedent and the invalidation rule as its design question
-> (`docs/BACKLOG.md` → Performance). Otherwise the roadmap has **Phase 6 🟡** (M6.5c auto-advance)
-> and **Phase 7 🟡** (M7.6 tool gaps), plus the two **M5.4b leftovers**. ⚠ Whatever is chosen:
-> brainstorm → spec → plan → executing-plans, inline, on a branch. ⚠ Measure before theorising — this area's record is
+> ⚠ **THE RANGE-MASK COVERAGE COST IS DECOMPOSED AND DELIBERATELY NOT OPTIMISED (2026-09-07).**
+> `bench_range_mask` is kept, both its kernels cross-checked bit-identical. **Oklab round trip 42%,
+> `atan2` 26%, `coverage_at` 25%** — and ⚠⚠ **the `fmodf` lead was 6.6%, not the 42% it is in
+> `HslStage`**, which is the fifth cost estimate overturned by decomposition in this area.
+> ⚠⚠ **`docs/BACKLOG.md` retracts two claims made while scoping it** — that the base pixel is the
+> cached prefix output (it is the *global tail's* output), and that `BrushCache` is the precedent
+> (a brush's coverage is positional; a range mask's depends on pixel values). **Read that entry
+> before picking this up**: it also proves a raw-spread pre-gate cannot be sound, and names the two
+> candidate approaches.
+>
+> **▶ NEXT ACTION: none agreed — pick one and brainstorm it.** The roadmap has **Phase 6 🟡**
+> (M6.5c auto-advance) and **Phase 7 🟡** (M7.6 tool gaps), plus the two **M5.4b leftovers**. ⚠
+> Whatever is chosen: brainstorm → spec → plan → executing-plans, inline, on a branch. ⚠ Measure before theorising — this area's record is
 > four reasoned-wrong, measured-right findings in a row, and this session added two more.
 >
 > ⚠ Also open and measured, in the same entry: **a coverage cache for range masks**, worth
