@@ -126,15 +126,49 @@ impl MaskStage {
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
         baseline: color::wb::Illuminant,
     ) -> Self {
-        // No spatial sub-stage yet: every adjustment a mask can carry is per-pixel. The stroke
-        // radius scales through `FrameMap`, not through this.
-        let _ = scale;
-        // ⚠⚠ **Exhaustive on purpose — a catch-all here is a trap.** It used to read
-        // `other => Analytic(other.clone())`, so a new variant whose `analytic_coverage` returns
-        // `None` would fall through to `unwrap_or(0.0)` and produce a mask covering **nothing**,
-        // silently. That is precisely the failure `analytic_coverage`'s `Option` exists to make
-        // impossible, defeated one layer up. Adding a variant is now a compile error here.
-        let source = match &masked.mask {
+        Self {
+            source: Self::coverage_source(masked, geometry, prebuilt),
+            stages: adjustment_stages(&masked.adjustments, baseline, scale),
+            region,
+        }
+    }
+
+    /// For the **prefix** half of a mask: its corrections of the capture.
+    ///
+    /// ⚠⚠ **There is no `region` parameter, and that is the point rather than an omission.** The
+    /// prefix always runs whole-buffer, which is what makes dehaze's frame-global airlight
+    /// correct *and* stable as the user pans. A `Region` here would reintroduce precisely the bug
+    /// the placement exists to avoid — the same pixel rendering differently depending on where
+    /// the viewport was.
+    ///
+    /// ⚠ Identical to [`Self::new_in_region`] but for the sub-stage builder, and both go through
+    /// one [`Self::coverage_source`], so a new `Mask` variant stays a compile error in one place.
+    pub fn new_capture(
+        masked: &MaskedAdjustment,
+        scale: RenderScale,
+        geometry: &Geometry,
+        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+    ) -> Self {
+        Self {
+            source: Self::coverage_source(masked, geometry, prebuilt),
+            stages: crate::capture_stages(&masked.adjustments, scale),
+            region: None,
+        }
+    }
+
+    /// How this mask's coverage is obtained, shared by both constructors.
+    ///
+    /// ⚠⚠ **Exhaustive on purpose — a catch-all here is a trap.** It used to read
+    /// `other => Analytic(other.clone())`, so a new variant whose `analytic_coverage` returns
+    /// `None` would fall through to `unwrap_or(0.0)` and produce a mask covering **nothing**,
+    /// silently. That is precisely the failure `analytic_coverage`'s `Option` exists to make
+    /// impossible, defeated one layer up. Adding a variant is a compile error here.
+    fn coverage_source(
+        masked: &MaskedAdjustment,
+        geometry: &Geometry,
+        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+    ) -> CoverageSource {
+        match &masked.mask {
             edit_model::Mask::Brush(b) => CoverageSource::Painted {
                 brush: b.clone(),
                 geometry: *geometry,
@@ -145,11 +179,6 @@ impl MaskStage {
             m @ (edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_)) => {
                 CoverageSource::Analytic(m.clone())
             }
-        };
-        Self {
-            source,
-            stages: adjustment_stages(&masked.adjustments, baseline, scale),
-            region,
         }
     }
 }

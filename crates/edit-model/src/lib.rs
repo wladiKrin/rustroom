@@ -2605,6 +2605,12 @@ mod tests {
                             luminance: 5.0,
                         }; 8],
                     },
+                    noise_reduction: NoiseReduction {
+                        luminance: 35.0,
+                        color: 25.0,
+                        ..Default::default()
+                    },
+                    dehaze: Dehaze { amount: 40.0 },
                     tone_curve: ToneCurve {
                         points: vec![[0.0, 0.0], [0.45, 0.6], [1.0, 1.0]],
                     },

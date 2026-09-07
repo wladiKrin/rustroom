@@ -177,6 +177,12 @@ pub enum PrefixStepKey {
     Geometry(edit_model::Geometry, Resampler),
     NoiseReduction(edit_model::NoiseReduction),
     Dehaze(edit_model::Dehaze),
+    /// One mask's capture corrections.
+    ///
+    /// ⚠⚠ Holds the **projection**, never the whole `MaskedAdjustment` — see
+    /// [`capture_projection`]. Keyed on the whole thing, a masked-exposure drag would re-run a
+    /// whole-buffer denoise.
+    MaskedCapture(edit_model::MaskedAdjustment),
 }
 
 /// One prefix stage together with the key identifying its output, so the renderer can cache
@@ -273,6 +279,31 @@ pub fn build_prefix_steps(
         });
     }
 
+    // ⚠ After the global pair, mirroring the tail's own rule that a mask acts on the global look
+    // rather than being re-mapped by it.
+    //
+    // ⚠ One step per mask that actually carries a capture correction; a mask with only tail
+    // adjustments costs nothing here.
+    for m in &edits.masks {
+        let p = capture_projection(m);
+        if !p.adjustments.noise_reduction.is_active() && !p.adjustments.dehaze.is_active() {
+            continue;
+        }
+        steps.push(PrefixStep {
+            // ⚠⚠ The key holds **the projection the stage was built from**, so the key and the
+            // stage cannot drift — the property this function exists to guarantee.
+            key: PrefixStepKey::MaskedCapture(p.clone()),
+            // ⚠⚠ **`None` for the prebuilt coverage, and it must stay that way.** The render
+            // engine's `BrushCache` is sized from the *prefix output's* dimensions, which do not
+            // exist until the prefix has run — so a prebuilt map is unavailable here even in
+            // principle. `MaskStage::apply` rasterizes its own when handed `None`, and with
+            // `region: None` that is the whole frame at exactly the right size. **It costs
+            // nothing per frame because this whole step is cached**: the rasterization happens
+            // when the mask's shape or its capture sliders change, not on every render.
+            stage: Box::new(MaskStage::new_capture(&p, scale, &edits.geometry, None)),
+        });
+    }
+
     steps
 }
 
@@ -302,6 +333,8 @@ impl PrefixKey {
         // never to key it. Consequence, stated rather than discovered: with no corrector the step
         // is skipped, so this key can be one entry longer than the real prefix — harmless,
         // because whether a corrector exists is constant for a photo and the engine is per photo.
+        // ⚠ `None` for `brush` for the same reason as `lens`: a coverage map is needed to RUN
+        // the stage, never to KEY it — the key is derived from the edits, and
         let steps = build_prefix_steps(edits, scale, None, resampler);
         Self::upto(&steps, steps.len(), scale)
     }
@@ -438,6 +471,59 @@ fn adjustment_stages(
         out.push(Box::new(SharpenStage::new(&a.sharpening, scale)));
     }
     out
+}
+
+/// The **prefix** stages for one set of adjustments: the corrections of the capture.
+///
+/// ⚠⚠ **Its own builder rather than a branch inside [`adjustment_stages`], because these run in
+/// a different half of the pipeline.** Noise reduction and dehaze are placed where the *global*
+/// stages of the same name run — after geometry, before every tonal adjustment — so a masked
+/// Luminance 50 means what a global Luminance 50 means.
+///
+/// ⚠⚠ **Dehaze is why the placement is forced rather than preferred.** Its airlight is estimated
+/// from the brightest 0.1% of the buffer it is handed. The tail may run on the visible *region*,
+/// so a tail-side masked dehaze would re-estimate the airlight as the user panned and the
+/// photograph would change under them. The prefix always runs whole-buffer.
+///
+/// ⚠ Noise reduction before dehaze, mirroring the global prefix for its stated reason: dehaze is
+/// a contrast stretch that amplifies noise.
+///
+/// ⚠ This and [`adjustment_stages`] **partition** a mask's adjustments — a stage built by both
+/// would run twice. `the_two_mask_builders_do_not_overlap` is the guard.
+fn capture_stages(
+    a: &edit_model::LocalAdjustments,
+    scale: RenderScale,
+) -> Vec<Box<dyn PipelineStage>> {
+    let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
+    if a.noise_reduction.is_active() {
+        out.push(Box::new(NoiseReductionStage::new(
+            &a.noise_reduction,
+            scale,
+        )));
+    }
+    if a.dehaze.is_active() {
+        out.push(Box::new(DehazeStage::new(&a.dehaze, scale)));
+    }
+    out
+}
+
+/// A mask reduced to just its capture corrections — what the prefix stage is built from **and**
+/// what its cache key holds, so the two cannot drift.
+///
+/// ⚠⚠ **The projection is what stops the prefix cache thrashing.** Keyed on the whole
+/// [`edit_model::MaskedAdjustment`], every masked-*exposure* drag would invalidate the checkpoint
+/// and re-run a whole-buffer noise reduction — 117 ms at native, for a slider that has nothing to
+/// do with it. `the_prefix_key_follows_a_masks_capture_corrections_and_ignores_the_rest` pins
+/// both directions.
+fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdjustment {
+    edit_model::MaskedAdjustment {
+        mask: m.mask.clone(),
+        adjustments: edit_model::LocalAdjustments {
+            noise_reduction: m.adjustments.noise_reduction,
+            dehaze: m.adjustments.dehaze,
+            ..Default::default()
+        },
+    }
 }
 
 /// The develop pipeline in two halves, split where the preview cache checkpoints.
@@ -1189,6 +1275,12 @@ mod tests {
                             luminance: 5.0,
                         }; 8],
                     },
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 35.0,
+                        color: 25.0,
+                        ..Default::default()
+                    },
+                    dehaze: edit_model::Dehaze { amount: 40.0 },
                     tone_curve: edit_model::ToneCurve {
                         points: vec![[0.0, 0.0], [0.45, 0.6], [1.0, 1.0]],
                     },
@@ -1473,7 +1565,7 @@ mod tests {
         };
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default());
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default());
-        assert_eq!(steps_a.len(), 5);
+        assert_eq!(steps_a.len(), 6);
 
         // Same up to and including noise reduction...
         for n in 0..=4 {
@@ -1527,7 +1619,7 @@ mod tests {
     }
 
     #[test]
-    fn the_prefix_holds_perspective_spots_geometry_noise_reduction_and_dehaze() {
+    fn the_prefix_holds_the_capture_stages_and_the_capture_masks() {
         // The tripwire: if a stage is later inserted into the prefix region, this fails and
         // forces PrefixKey to be updated with its parameters.
         //
@@ -1541,7 +1633,11 @@ mod tests {
                 "spot_removal",
                 "geometry",
                 "noise_reduction",
-                "dehaze"
+                "dehaze",
+                // ⚠ The fixture's mask carries capture corrections, so it contributes a
+                // whole-buffer `MaskStage` here — after the global pair, mirroring the tail's
+                // rule that a mask acts on the global look.
+                "mask"
             ]
         );
         for name in tail.stage_names() {
@@ -1579,8 +1675,9 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            5,
-            "all five prefix stages should be active"
+            6,
+            "all six prefix stages should be active — the five global ones plus the fixture's \
+             masked capture correction"
         );
 
         let variants = [
@@ -1635,10 +1732,18 @@ mod tests {
                     ..base.clone()
                 },
             ),
+            // ⚠ The masked capture correction is a prefix step like any other, and its key must
+            // move with its own parameters and nothing else — the same property the five above
+            // assert, extended to the step this milestone added.
+            (5, {
+                let mut e = base.clone();
+                e.masks[0].adjustments.noise_reduction.luminance = 90.0;
+                e
+            }),
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..5 {
+            for i in 0..6 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -1937,6 +2042,106 @@ mod tests {
                 .map(|s| s.name())
                 .collect();
         assert!(!names.contains(&"color_grading"), "{names:?}");
+    }
+
+    /// A mask's capture corrections run in the **prefix**, after the global pair, in mask order.
+    ///
+    /// ⚠⚠ This is the whole placement decision as a test. In the tail a masked dehaze would
+    /// re-estimate its airlight from the visible region and change as the user panned.
+    #[test]
+    fn masked_capture_corrections_run_in_the_prefix_after_the_global_pair() {
+        let masked = |amount: f32| edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::default(),
+            adjustments: edit_model::LocalAdjustments {
+                dehaze: edit_model::Dehaze { amount },
+                ..Default::default()
+            },
+        };
+        let edits = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 30.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 20.0 },
+            masks: vec![masked(50.0), masked(70.0)],
+            ..Edits::default()
+        };
+        let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+        assert_eq!(
+            prefix.stage_names(),
+            vec!["noise_reduction", "dehaze", "mask", "mask"],
+            "the capture masks follow the global pair, one per active mask"
+        );
+        assert!(
+            tail.stage_names()
+                .iter()
+                .all(|n| *n != "noise_reduction" && *n != "dehaze"),
+            "no capture stage may leak into the tail: {:?}",
+            tail.stage_names()
+        );
+    }
+
+    /// A mask with no capture correction costs nothing in the prefix.
+    #[test]
+    fn a_mask_without_capture_corrections_adds_no_prefix_stage() {
+        let edits = Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::default(),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 0.8,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        };
+        let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
+        assert!(
+            prefix.stage_names().is_empty(),
+            "{:?}",
+            prefix.stage_names()
+        );
+    }
+
+    /// Inside one mask, noise reduction precedes dehaze — the global prefix's own order, and for
+    /// its reason: dehaze is a contrast stretch that amplifies noise.
+    #[test]
+    fn a_masks_capture_stages_denoise_before_dehazing() {
+        let a = edit_model::LocalAdjustments {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 40.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 50.0 },
+            ..Default::default()
+        };
+        let names: Vec<&'static str> = capture_stages(&a, RenderScale::FULL)
+            .iter()
+            .map(|s| s.name())
+            .collect();
+        assert_eq!(names, vec!["noise_reduction", "dehaze"]);
+    }
+
+    /// ⚠ `capture_stages` and `adjustment_stages` **partition** a mask's adjustments — a stage
+    /// built by both would run twice.
+    #[test]
+    fn the_two_mask_builders_do_not_overlap() {
+        let a = all_edits().masks[0].adjustments.clone();
+        let cap: Vec<&'static str> = capture_stages(&a, RenderScale::FULL)
+            .iter()
+            .map(|s| s.name())
+            .collect();
+        let tail: Vec<&'static str> =
+            adjustment_stages(&a, color::wb::Illuminant::default(), RenderScale::FULL)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+        for n in &cap {
+            assert!(!tail.contains(n), "{n} is built by both builders");
+        }
+        assert!(
+            !cap.is_empty(),
+            "fixture check: all_edits' mask must carry capture corrections"
+        );
     }
 
     #[test]
