@@ -356,6 +356,39 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⚠ Dragging a masked exposure stutters a bit (reported 2026-09-06, from using Part B)
+
+**Reported in use**, and reported carefully: *"the exposure dragging does stutter a bit, but it also
+did before, and without a masked dehaze, if I am being honest."*
+
+⚠⚠ **That qualification is the whole entry, and it was the reporter's, not a diagnosis made here.**
+It rules out the two things this would otherwise most plausibly be: a regression from the masked
+capture corrections, and a failure of `capture_projection` to keep masked-exposure drags off the
+prefix cache. Neither is implicated — the stutter predates the milestone and occurs with no masked
+dehaze in play. **Do not scope this as prefix work.**
+
+**What is known without measuring anything new:**
+
+- `MaskStage` **clones the whole image per mask**, so every drag frame pays a clone plus each
+  sub-stage over the full frame. `CLAUDE.md`'s M7.2 section measures the consequence from the other
+  direction: *"three masks cost ~18% more than three times one … `MaskStage` clones the image per
+  mask, so three masks is three clones."*
+- The tail is what re-runs on a slider drag; the prefix is cached. So this is tail cost.
+- ⚠ **`bench_masked` has no row for a masked exposure**, which is why there is no number here. Every
+  masked row in it carries something expensive (clarity, HSL, a grade, a curve); the *cheap* masked
+  adjustment — the one that should feel instant and reportedly does not quite — has never been
+  timed on its own.
+
+**Start by measuring, not by optimising.** A masked-exposure row in `bench_masked` would say
+immediately whether the cost is the clone, the coverage evaluation, or neither — and this project's
+record is that cost in this area has been reasoned wrong and measured right four times running.
+
+⚠ **The bounding box is the obvious suspect and may well be innocent.** It is deferred a sixth time
+and its measured value is ~17× on a small radial and *nothing* on a gradient or either range mask —
+so if the stutter shows up on a gradient mask, a bbox cannot be the answer.
+
+## Performance
+
 ### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
 
 The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
