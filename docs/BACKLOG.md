@@ -366,8 +366,9 @@ coverage, its blend and the bounding box deferred here for the sixth time — wa
 **The cause was the render rung.** The rounds below are kept because the *method* is the reusable
 part, and because two of the findings are still open work.
 
-**▶ STILL OPEN, and split out of this entry: the frame-time VARIANCE.** At one rung on one photo
-the instrumented log ran **94.9 → 242.3 ms**, a 2.5× spread. A uniform 138 ms reads as lag; that
+**▶ STILL OPEN, and split out of this entry: the frame-time VARIANCE.** ⚠ **The fix did not touch
+it**: after the interactive rung landed, rung 1600 still ran **27.0 → 268.4 ms** across 357 drag
+frames whose mean was 40.0. Before it, one rung on one photo ran **94.9 → 242.3 ms**, a 2.5× spread. A uniform 138 ms reads as lag; that
 spread reads as stutter, which is the word actually used in the report. Undiagnosed, and distinct
 from the mean this fix addressed.
 
