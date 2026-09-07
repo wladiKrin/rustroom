@@ -479,6 +479,59 @@ the bench builds without a prebuilt coverage map, so it rasterizes per call wher
 
 ---
 
+#### ✅ ROUND 4 (2026-09-07): MEASURED IN THE RUNNING APP — 7.2 FPS AT RUNG 3200, AND THE MASK IS NOT INVOLVED AT ALL
+
+**`RUSTROOM_DEBUG_RENDER=1`, 167 real drag frames on the user's own display and photograph:**
+
+| rung | frame | region | frames | min | mean | max | fps |
+|---|---|---|---|---|---|---|---|
+| 1600 (fit) | 1.7 Mpx | no | 2 | 33.6 | **35.2** | 36.9 | **28** |
+| **3200** | **6.8 Mpx** | **no** | **131** | **94.9** | **137.9** | **242.3** | **7.2** |
+| 6246 | 6.2 Mpx | yes | 29 | 93.2 | 116.9 | 201.8 | 8.6 |
+
+⚠⚠ **`prefix_ran 0` ON ALL 167 FRAMES.** The prefix cache is perfect and this is entirely tail +
+pack. Every earlier suspicion about the prefix, the projection and the capture corrections is
+closed by that one column.
+
+⚠⚠ **AND THE REPORTER SETTLED IT INDEPENDENTLY: A *GLOBAL* EXPOSURE DRAG BEHAVES IDENTICALLY.**
+So `MaskStage` is not involved — not its clone, not its coverage, not its blend, and not the
+bounding box. **The whole entry's original framing was wrong, and it was wrong from the title
+down.** What is left is the rung.
+
+**ROOT CAUSE, CONFIRMED ON THE RUNNING APP: a photo that *looks* fitted is rendered whole-image at
+a NATIVE rung.** `fit_cap` is 1600, but `tier_max_dim` climbs a doubling ladder as soon as the
+viewport exceeds the fit texture — and on a large/HiDPI window that lands on **3200**, whole-image,
+**6.8 Mpx against the fit rung's 1.7**. Four times the pixels, four times the time, on every drag
+frame. The measured ratio (137.9 / 35.2 = **3.9×**) matches the pixel ratio (4.0×) almost exactly,
+which is what confirms it is the rung and not something incidental to it.
+
+⚠ **The bench understated this by ~2.6×** — it predicted 53 ms at 6.5 Mpx where the app measures
+137.9 at 6.8. The bench renders a near-neutral photo; the user's tail carries the real stack (the
+camera rendering, their adjustments, a mask). ⚠ **A synthetic bench prices a stage, not a session** —
+read `bench_masked` for deltas between rows, never as a prediction of a drag frame.
+
+⚠ **The variance is the "stutter" as distinct from "slow"**: 94.9 → 242.3 ms at one rung on one
+photo. A uniform 138 ms would read as lag; a 2.5× spread reads as stutter. Not yet diagnosed, and
+secondary to a mean of 7.2 fps.
+
+**▶⚠⚠ THE FIX IS AN INTERACTIVE RUNG, AND THIS PROJECT HAS BUILT IT BEFORE AND REMOVED IT — READ
+`CLAUDE.md`'s "progressive fit resolution" SECTION BEFORE RE-DERIVING ANY OF IT.** That feature
+rendered at 1600 while interacting and re-rendered at the higher rung ~200 ms after; it was shipped,
+debugged three times and deleted on 2026-08-13, and **its three bugs are recorded there** —
+an oscillating gate (the condition went false the frame the sharp render landed), sharpening the
+wrong buffer, and a gate made unreachable by the clamp fix.
+
+⚠⚠ **AND ITS REMOVAL REASON IS AN ARGUMENT *FOR* DOING THIS, NOT AGAINST IT — the inversion is the
+finding.** It was removed because *"the user could not see it on or off"*: the question then was
+**"is the sharper render visible?"** (no). The question now is **"is the slower render felt?"**
+(yes — 7.2 fps, reported twice). If a higher rung is not visibly sharper in a still frame, then
+dropping to the fit rung *during a drag* costs nothing perceptually and buys 4× the frame rate.
+⚠ Stated honestly: that "could not see it" was measured at a **1.44× residual**, and 1600 → 3200 is
+**2×**, so it is suggestive rather than conclusive at this ratio — and this project's rule is that a
+judgement about a photograph gets settled on a photograph.
+
+---
+
 #### ⚠⚠ ROUND 3 (2026-09-07): IT IS THE RUNG, AND EVERY NUMBER ABOVE WAS BLIND TO IT
 
 **The symptom was pinned down first, and it is not a stutter.** Asked directly, the reporter says
