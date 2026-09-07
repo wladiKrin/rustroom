@@ -4,6 +4,13 @@
 //!
 //! Run: `cargo run --release -p app --example bench_masked <raw>`
 //!
+//! ⚠⚠ **The masked NR and dehaze rows are the COLD cost, and the two columns say opposite
+//! things about them on purpose.** Both run in the **prefix**, so the `fit` loop — which calls
+//! `render_once` and rebuilds the prefix every iteration — reports what it costs *when you move
+//! that slider*. The `native region` loop times the tail alone on a warm prefix, so those two
+//! rows read ~0, **which is the correct answer**: a slider that is not theirs re-renders from the
+//! checkpoint after them and pays nothing. Read the fit column as "on change", not "per frame".
+//!
 //! ⚠ Two things this measures deliberately, because the decision turns on both:
 //!
 //! 1. **One mask against three.** `tail_kernel_radius` sums over masks and mask N runs on
@@ -12,8 +19,8 @@
 //!    which is exactly the evidence that no bounding box exists — and the radial is the only
 //!    one of the two a bounding box could ever help.
 use edit_model::{
-    ColorGrading, Edits, GradeWheel, Hsl, LinearGradient, LocalAdjustments, LocalContrast, Mask,
-    MaskedAdjustment, RadialGradient, ToneCurve,
+    ColorGrading, Dehaze, Edits, GradeWheel, Hsl, LinearGradient, LocalAdjustments, LocalContrast,
+    Mask, MaskedAdjustment, NoiseReduction, RadialGradient, ToneCurve,
 };
 use rustroom_app::render_engine::render_once;
 use std::time::Instant;
@@ -93,6 +100,28 @@ fn grade() -> LocalAdjustments {
     }
 }
 
+/// A masked denoise. ⚠⚠ **Whole-buffer by construction** — it runs in the *prefix*, so a small
+/// radial pays for the entire frame. That is the strongest case yet made for the deferred
+/// bounding box, and it is still not this milestone.
+fn denoise() -> LocalAdjustments {
+    LocalAdjustments {
+        noise_reduction: NoiseReduction {
+            luminance: 50.0,
+            color: 50.0,
+            ..NoiseReduction::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// A masked dehaze. ⚠ Its airlight comes from the whole frame, which is why it is in the prefix.
+fn haze() -> LocalAdjustments {
+    LocalAdjustments {
+        dehaze: Dehaze { amount: 60.0 },
+        ..Default::default()
+    }
+}
+
 fn masked(n: usize, mask: fn() -> Mask, adj: fn() -> LocalAdjustments) -> Edits {
     Edits {
         masks: (0..n)
@@ -153,6 +182,12 @@ fn main() {
         ),
         ("1 masked curve    (small radial)", masked(1, radial, curve)),
         ("1 masked grade    (small radial)", masked(1, radial, grade)),
+        ("1 masked NR       (gradient)", masked(1, gradient, denoise)),
+        ("1 masked dehaze   (gradient)", masked(1, gradient, haze)),
+        (
+            "1 masked NR       (small radial)",
+            masked(1, radial, denoise),
+        ),
         (
             "1 masked HSL      (small radial)",
             masked(1, radial, hsl_adjust),
