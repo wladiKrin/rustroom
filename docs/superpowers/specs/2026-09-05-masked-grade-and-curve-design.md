@@ -258,7 +258,10 @@ an orphaned `///` and an unused `use` left by removing a guard test.
 
 ## 7. What this deliberately does not deliver
 
-- **⚠⚠ Masked dehaze and masked noise reduction — Part B, blocked on a design question.** Both
+- **⚠⚠ Masked dehaze and masked noise reduction — Part B.** ⛔ **CORRECTED 2026-09-06: the reason
+  given below is WRONG.** Both run *after* geometry, so the coordinate-space objection never
+  applied; the real obstacle was dehaze's frame-global airlight under a region render, and Part B
+  shipped by placing both in the prefix. The superseded text follows. Both
   live in the **prefix**, before geometry, while `MaskStage` lives in the **tail**. So a masked one
   would run *after* the tone curve, denoising or dehazing pixels the curve has already stretched —
   **a different operation from the global stage wearing the same name**, which is the Whites-slider

@@ -175,7 +175,7 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
 
 ## Editing tools
 
-### ⚠⚠ The rest of the stages inside a mask — dehaze, noise reduction, and the tail-native two (asked for 2026-09-05, at M7.2's merge)
+### ✅ The rest of the stages inside a mask — CLOSED 2026-09-06 (asked for 2026-09-05, at M7.2's merge)
 
 **Asked for directly**: *"I'd also like to add the dehaze and rest to masks."* M7.2 gave a mask
 Texture, Clarity, Sharpening and HSL. This is the remainder.
@@ -207,7 +207,41 @@ curve was only more expensive in *panel space*, which the collapsed blocks answe
 of the frame costs slightly *more* than a frame-covering gradient (+6.7 vs +5.4 curve, +16.6 vs
 +15.8 grade). Same as M7.2 measured for clarity and HSL.
 
-#### Part B — dehaze and noise reduction. **Blocked on a design question, exactly as M7.2 §7 said.**
+#### ✅ Part B — dehaze and noise reduction. **DONE 2026-09-06.**
+
+Spec `2026-09-06-masked-capture-corrections-design.md`, plan
+`2026-09-06-masked-capture-corrections.md`. Both run in the **prefix**, where the global stages of
+the same name run: a `capture_stages` builder beside `adjustment_stages`, a second `MaskStage`
+constructor taking no region at all, and a `PrefixStepKey::MaskedCapture` keyed on a projection.
+
+⚠⚠ **THE BLOCKER BELOW WAS FACTUALLY WRONG, AND CORRECTING IT WAS MOST OF THE MILESTONE.** It is
+kept verbatim as a record. **Noise reduction and dehaze run *after* geometry**, not before —
+`build_prefix_steps`' own tripwire spells the order out — so the prefix output *is* the
+post-geometry image, which is exactly the space every mask is authored in. **The coordinate-space
+objection, the load-bearing half, was never true.** The sentence had propagated into four
+documents, including Part A's spec written the day before.
+
+⚠ The second objection was weaker than it read too: *"runs at a different point than its global
+twin"* is already true of **every** masked adjustment, since masked exposure runs after the global
+tone curve. Accepted since M3.1a.
+
+⚠⚠ **The REAL blocker was different and dehaze-only:** `MaskStage::apply` runs its sub-stages on
+the buffer it is handed, which in a region render is the *region*, and `airlight` reads the
+brightest 0.1% of it — so a tail-side masked dehaze would re-estimate its airlight as you panned
+and the photograph would change under you. **Placement answers it rather than working around it**,
+and the master region invariant is what proves that: moving the capture stages into the tail fails
+it with *"the region's interior must match the whole render bit for bit"*.
+
+⚠ **Measured, and the second column is the point:** masked NR **+29.9 ms at fit, ~0 at the native
+region tail**; masked dehaze +28.7 / ~0. Being in the prefix means they are **cached** — ~29 ms
+when their own slider moves and nothing at all on every other frame, where masked HSL costs
++17.9 ms every time.
+
+⚠ Accepted and pinned by a test: a **range mask selects on pre-tonal pixels in its capture half**.
+For a correction of the capture that is arguably the more correct answer, and it is what the global
+stages already do.
+
+**The superseded reasoning, kept as a record:**
 
 Both live in the **prefix**, before geometry; `MaskStage` lives in the **tail**. So a masked one
 would run *after* the tone curve, denoising or dehazing pixels the curve has already stretched —
@@ -233,9 +267,14 @@ can stay one number) or the mask's own (which would make the same slider read di
 bipolar and −100 removes the fine band, so M7.2 already covers the commonest use anyone reaches for
 NR-in-a-mask to get.
 
-**Order:** ✅ A is done (2026-09-05) and did re-run M7.2's playbook, as predicted. **B is what
-remains, and A landing says nothing about it** — that is the whole reason the two were split. B
-needs a brainstorm before a plan: it is blocked on a decision, not on effort.
+**Order:** ✅ Both done — A 2026-09-05, B 2026-09-06. The split was right: A re-ran M7.2's playbook
+as predicted, and B turned out to be blocked on a *different* question from the one recorded here,
+which only a brainstorm would have found.
+
+⚠ **What is still OUTSIDE a mask, so nobody reads this entry as "masks now carry everything":** lens
+correction, perspective, spot removal and geometry (all upstream of where a mask's coverage is even
+defined), the vignette and the creative look (frame-wide by nature), and the output transform. A
+mask carries every *adjustment*; it does not carry the geometry or the delivery.
 
 ### ⚠⚠ Anchor strokes and spots in sensor space (recorded 2026-09-03 — blocked on a MISSING MAP)
 
