@@ -1744,6 +1744,11 @@ mod tests {
             a.color_grading.is_active(),
             "all_nonneutral's mask must carry a real grade"
         );
+        assert!(
+            a.noise_reduction.is_active(),
+            "all_nonneutral's mask must carry a real noise reduction"
+        );
+        assert!(a.dehaze.is_active(), "and a real dehaze");
     }
 
     /// ⚠ Both halves. A mask carrying only a curve, and a mask carrying only a grade, must each

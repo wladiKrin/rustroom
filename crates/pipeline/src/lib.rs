@@ -1661,6 +1661,74 @@ mod tests {
         }
     }
 
+    /// ⚠⚠ **Both directions, and the second is the one that matters.** The prefix key must
+    /// change when a mask's noise reduction changes — and must NOT change when its *exposure*
+    /// does, or every masked-exposure drag would re-run a whole-buffer denoise (117 ms at
+    /// native) for a slider that has nothing to do with it. That is what `capture_projection`
+    /// buys, and the "does not change" half is the only thing that can see it.
+    #[test]
+    fn the_prefix_key_follows_a_masks_capture_corrections_and_ignores_the_rest() {
+        let base = Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::default(),
+                adjustments: edit_model::LocalAdjustments {
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 30.0,
+                        ..Default::default()
+                    },
+                    exposure: 0.5,
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        };
+        let key = |e: &Edits| PrefixKey::new(e, RenderScale::FULL, Resampler::default());
+
+        let mut louder = base.clone();
+        louder.masks[0].adjustments.noise_reduction.luminance = 80.0;
+        assert_ne!(
+            key(&base),
+            key(&louder),
+            "a masked noise-reduction change must invalidate the prefix"
+        );
+
+        let mut brighter = base.clone();
+        brighter.masks[0].adjustments.exposure = 2.0;
+        assert_eq!(
+            key(&base),
+            key(&brighter),
+            "a masked EXPOSURE change must not re-run a whole-buffer denoise"
+        );
+
+        let mut hazier = base.clone();
+        hazier.masks[0].adjustments.dehaze.amount = 40.0;
+        assert_ne!(
+            key(&base),
+            key(&hazier),
+            "masked dehaze must invalidate too"
+        );
+
+        let mut moved = base.clone();
+        moved.masks[0].mask = edit_model::Mask::Radial(edit_model::RadialGradient::default());
+        assert_ne!(
+            key(&base),
+            key(&moved),
+            "the mask's SHAPE decides which pixels are denoised, so it belongs in the key"
+        );
+    }
+
+    /// ⚠ The fixtures do not fail to compile when `LocalAdjustments` grows, so this asserts what
+    /// the type system cannot. Part A's equivalent caught exactly this omission.
+    #[test]
+    fn the_exhaustive_fixture_carries_masked_capture_corrections() {
+        let a = &all_edits().masks[0].adjustments;
+        assert!(
+            a.noise_reduction.is_active(),
+            "all_edits' mask must carry a real noise reduction"
+        );
+        assert!(a.dehaze.is_active(), "and a real dehaze");
+    }
+
     #[test]
     fn every_prefix_step_has_its_own_key() {
         // Each step's key must move with that step's parameters and with nothing else. If two
