@@ -422,36 +422,54 @@ fn main() {
     // point: if the pack is comparable to the tail, then the *baseline* frame is expensive and no
     // amount of work on `MaskStage` can fix a stutter — which is exactly the reading the masked
     // rows above force, since a gradient-masked exposure adds under 3 ms.
+    //
+    // ⚠⚠ **AND IT SWEEPS THE RUNG, WHICH IS THE WHOLE POINT OF THE SECOND ROW OF NUMBERS.**
+    // `fit_cap` is `min(buffer_long, 1600)`, but `tier_max_dim` climbs a doubling ladder as soon
+    // as the viewport is bigger than the fit texture — so on a large or HiDPI window a photo that
+    // *looks* fitted is rendered at a **native rung, as a region covering the whole frame**. Every
+    // other number in this file is a 1600 px number; if the app is really sitting on the top rung,
+    // none of them describe what the user is waiting for.
     {
-        use pipeline::{build_pipeline_split_in_region, RenderScale};
+        use pipeline::{build_pipeline_split_in_region, Region, RenderScale};
         let sc = RenderScale::new(scale);
-        let fit_src = buf.downscale_to(PREVIEW_MAX_DIM);
-        let (prefix, _) = build_pipeline_split_in_region(&Edits::default(), sc, None);
-        let mid = prefix.run(fit_src);
-        println!(
-            "\n  a drag frame at fit ({}x{}, warm prefix): tail + pack",
-            mid.width(),
-            mid.height()
-        );
-        for (label, edits) in [
-            ("neutral", Edits::default()),
-            ("global exposure", global_exposure()),
-            ("masked exposure (gradient)", masked(1, gradient, exposure)),
-            (
-                "masked exposure (small radial)",
-                masked(1, radial, exposure),
-            ),
-        ] {
-            let (_, tail) = build_pipeline_split_in_region(&edits, sc, None);
-            let tail_ms = best_of(|| tail.run(mid.clone())) - best_of(|| mid.clone());
-            let out = tail.run(mid.clone());
-            let pack_ms = best_of(|| out.to_rgba8());
-            let bytes = out.to_rgba8();
-            let hist_ms = best_of(|| rustroom_app::histogram::histogram_rgba(&bytes));
+        for rung in [PREVIEW_MAX_DIM, buffer_long] {
+            let src = buf.downscale_to(rung);
+            let (prefix, _) = build_pipeline_split_in_region(&Edits::default(), sc, None);
+            let mid = prefix.run(src);
+            // At a native rung the app renders a *region*; with the whole photo visible that
+            // region covers the whole frame, which is the case timed here.
+            let region = (rung > PREVIEW_MAX_DIM).then_some(Region {
+                full_w: mid.width(),
+                full_h: mid.height(),
+                x0: 0,
+                y0: 0,
+            });
+            let mpx = (mid.width() * mid.height()) as f64 / 1e6;
             println!(
-                "   tail {tail_ms:5.1}  pack {pack_ms:5.1}  hist {hist_ms:5.1}  = {:5.1} ms  {label}",
-                tail_ms + pack_ms + hist_ms
+                "\n  a drag frame at rung {rung} ({}x{} = {mpx:.1} Mpx, warm prefix): tail + pack",
+                mid.width(),
+                mid.height()
             );
+            for (label, edits) in [
+                ("neutral", Edits::default()),
+                ("global exposure", global_exposure()),
+                ("masked exposure (gradient)", masked(1, gradient, exposure)),
+                (
+                    "masked exposure (small radial)",
+                    masked(1, radial, exposure),
+                ),
+            ] {
+                let (_, tail) = build_pipeline_split_in_region(&edits, sc, region);
+                let tail_ms = best_of(|| tail.run(mid.clone())) - best_of(|| mid.clone());
+                let out = tail.run(mid.clone());
+                let pack_ms = best_of(|| out.to_rgba8());
+                let bytes = out.to_rgba8();
+                let hist_ms = best_of(|| rustroom_app::histogram::histogram_rgba(&bytes));
+                println!(
+                    "   tail {tail_ms:5.1}  pack {pack_ms:5.1}  hist {hist_ms:5.1}  = {:5.1} ms  {label}",
+                    tail_ms + pack_ms + hist_ms
+                );
+            }
         }
     }
 }

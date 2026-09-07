@@ -269,6 +269,14 @@ impl RenderEngine {
                     })
                     .map(|(_, c)| c);
 
+                // ⚠ Env-gated, like `RUSTROOM_DEBUG_DISPLAY` below and `RUSTROOM_DEBUG_BRUSH`
+                // before it, and added for the same reason both of those were: what a drag frame
+                // costs depends on the **rung** the viewport put it on, and no benchmark can
+                // guess that — `bench_masked` measures 1.7 Mpx at rung 1600 and 6.5 Mpx at the
+                // native rung, a 4x spread, with only the running window able to say which one a
+                // user is actually waiting for.
+                let debug_render = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
+                let t0 = std::time::Instant::now();
                 let (frame, _stages_run) = render_cached(
                     &buffer,
                     &edits,
@@ -284,6 +292,18 @@ impl RenderEngine {
                     &mut cache,
                     &mut brush_cache,
                 );
+                if debug_render {
+                    eprintln!(
+                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {_stages_run}",
+                        t0.elapsed().as_secs_f64() * 1000.0,
+                        req.spec.max_dim,
+                        frame.width,
+                        frame.height,
+                        (frame.width * frame.height) as f64 / 1e6,
+                        if frame.region.is_some() { "yes" } else { "no " },
+                        edits.masks.len(),
+                    );
+                }
                 if res_tx.send(frame).is_err() {
                     return;
                 }
