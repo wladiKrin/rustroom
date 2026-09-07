@@ -71,6 +71,26 @@ fn colour_range() -> Mask {
     Mask::Colour(ColourRange::default())
 }
 
+/// A painted brush — one diagonal stroke across the frame.
+///
+/// ⚠⚠ **THIS ROW DOES NOT MEASURE WHAT THE APP PAYS, AND MUST NOT BE READ AS IF IT DID.** Both
+/// loops below build their pipelines with **no prebuilt coverage**, so `MaskStage::apply`
+/// rasterizes the stroke *on every single call*. The running app never does that: its
+/// `BrushCache` rasterizes once and hands the map in. Read this row as the price of the cache —
+/// what a brush would cost without it — and not as a drag frame.
+fn brush() -> Mask {
+    Mask::Brush(edit_model::Brush {
+        strokes: vec![edit_model::BrushStroke {
+            points: (0..40)
+                .map(|i| [i as f32 / 40.0, i as f32 / 40.0])
+                .collect(),
+            radius: 0.06,
+            ..Default::default()
+        }],
+        invert: false,
+    })
+}
+
 fn clarity() -> LocalAdjustments {
     LocalAdjustments {
         local_contrast: LocalContrast {
@@ -236,6 +256,10 @@ fn main() {
             "1 masked exposure (colour range)",
             masked(1, colour_range, exposure),
         ),
+        (
+            "1 masked exposure (brush) ⚠uncached",
+            masked(1, brush, exposure),
+        ),
         ("1 masked clarity  (gradient)", masked(1, gradient, clarity)),
         ("3 masked clarity  (gradient)", masked(3, gradient, clarity)),
         (
@@ -384,5 +408,50 @@ fn main() {
             "           clone {clone_ms:5.1}   exposure {exp_ms:5.1}   blend {blend_ms:5.1}   sum {:5.1} ms",
             clone_ms + exp_ms + blend_ms
         );
+    }
+
+    // --- WHAT A DRAG FRAME ACTUALLY COSTS, at fit, which is where the stutter was reported.
+    //
+    // ⚠⚠ **Neither column above measures this, and that is why this section exists.** The `fit`
+    // column calls `render_once`, which rebuilds the **prefix** every iteration — the running app
+    // caches it, so that column overstates a drag. The `native region` column times
+    // `tail.run(..)` alone, which understates one: it stops at the pipeline and the app then
+    // packs the result to RGBA8 and buckets a histogram **on every frame**, in `pack`.
+    //
+    // A drag frame is `tail + to_rgba8 + histogram`. Measuring the two halves separately is the
+    // point: if the pack is comparable to the tail, then the *baseline* frame is expensive and no
+    // amount of work on `MaskStage` can fix a stutter — which is exactly the reading the masked
+    // rows above force, since a gradient-masked exposure adds under 3 ms.
+    {
+        use pipeline::{build_pipeline_split_in_region, RenderScale};
+        let sc = RenderScale::new(scale);
+        let fit_src = buf.downscale_to(PREVIEW_MAX_DIM);
+        let (prefix, _) = build_pipeline_split_in_region(&Edits::default(), sc, None);
+        let mid = prefix.run(fit_src);
+        println!(
+            "\n  a drag frame at fit ({}x{}, warm prefix): tail + pack",
+            mid.width(),
+            mid.height()
+        );
+        for (label, edits) in [
+            ("neutral", Edits::default()),
+            ("global exposure", global_exposure()),
+            ("masked exposure (gradient)", masked(1, gradient, exposure)),
+            (
+                "masked exposure (small radial)",
+                masked(1, radial, exposure),
+            ),
+        ] {
+            let (_, tail) = build_pipeline_split_in_region(&edits, sc, None);
+            let tail_ms = best_of(|| tail.run(mid.clone())) - best_of(|| mid.clone());
+            let out = tail.run(mid.clone());
+            let pack_ms = best_of(|| out.to_rgba8());
+            let bytes = out.to_rgba8();
+            let hist_ms = best_of(|| rustroom_app::histogram::histogram_rgba(&bytes));
+            println!(
+                "   tail {tail_ms:5.1}  pack {pack_ms:5.1}  hist {hist_ms:5.1}  = {:5.1} ms  {label}",
+                tail_ms + pack_ms + hist_ms
+            );
+        }
     }
 }
