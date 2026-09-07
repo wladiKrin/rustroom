@@ -161,6 +161,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let view = &mut app.compare_view;
     let library = &mut app.library;
     let pan_binding = app.settings.pan_drag;
+    let auto_advance = app.settings.auto_advance;
     let compare_focus = app.compare_focus;
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -202,30 +203,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             if typing {
                 return;
             }
+            // ⚠⚠ **What moves the bordered pane is decided ONCE, below.** The arrows and
+            // auto-advance both set this flag rather than each carrying their own copy of the
+            // step: two implementations of "step the bordered pane" is exactly how the two would
+            // come to disagree about which pane the border means.
+            let mut step_forward: Option<bool> = None;
             for (key, forward) in [(egui::Key::ArrowRight, true), (egui::Key::ArrowLeft, false)] {
-                if !i.key_pressed(key) {
-                    continue;
-                }
-                // ⚠⚠ **The arrows move the BORDERED pane**, which is the same rule the culling
-                // keys follow — "the border is where the buttons work" has to mean every key or
-                // it means none of them. It shipped moving the candidate whichever pane was
-                // bordered, which made the border a half-truth.
-                //
-                // ⚠ Stepping the reference is `step` with the roles swapped: the function's job
-                // is "walk the pool, skipping this one photo", and which of the two is being
-                // held still is the caller's business. No second traversal.
-                if focus == 0 {
-                    if let Some(next) = compare_pair::step(
-                        &pool,
-                        cand_or(candidate, reference),
-                        Some(reference),
-                        forward,
-                    ) {
-                        out.reference = Some(next);
-                    }
-                } else if let Some(next) = compare_pair::step(&pool, reference, candidate, forward)
-                {
-                    out.candidate = Some(lib.entries.get(next).map(|e| e.id.clone()));
+                if i.key_pressed(key) {
+                    step_forward = Some(forward);
                 }
             }
             // ⚠⚠ **Enter moves the border, it does not move the photographs** (user's call,
@@ -251,12 +236,47 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if let Some(e) = lib.entries.get(t) {
                     out.mark = Some((e.id.clone(), a));
                 }
+                // ⚠⚠ **Auto-advance is the arrow's forward step and nothing else** — it goes
+                // through the one block below, so the border means the same thing to both keys.
+                //
+                // ⚠ This is *not* the removal reversed on 2026-09-02: removal takes a frame out
+                // of the comparison, advancing steps to the next frame to compare against.
+                if auto_advance && a.advances() {
+                    step_forward = Some(true);
+                }
                 // ⚠⚠ **Compare's keys mark and nothing else** (user's call, 2026-09-02). It
                 // shipped for one round with `P` also removing the photo from the comparison,
                 // which was a misreading: the subtractive act belongs to **Survey**, where the
                 // wall you are narrowing is the whole point. Compare holds two frames still and
                 // lets you decide between them; taking one away mid-comparison is the opposite
                 // of that.
+            }
+            // ⚠⚠ **The arrows and auto-advance both land here, and this moves the BORDERED
+            // pane** — "the border is where the buttons work" has to mean every key or it means
+            // none of them. It shipped moving the candidate whichever pane was bordered, which
+            // made the border a half-truth.
+            //
+            // ⚠ Stepping the reference is `step` with the roles swapped: the function's job is
+            // "walk the pool, skipping this one photo", and which of the two is being held still
+            // is the caller's business. No second traversal.
+            //
+            // ⚠ Reads the frame's *incoming* `focus`, so an Enter in the same frame moves the
+            // border for the next one rather than redirecting this step — which is what the
+            // arrows already did.
+            if let Some(forward) = step_forward {
+                if focus == 0 {
+                    if let Some(next) = compare_pair::step(
+                        &pool,
+                        cand_or(candidate, reference),
+                        Some(reference),
+                        forward,
+                    ) {
+                        out.reference = Some(next);
+                    }
+                } else if let Some(next) = compare_pair::step(&pool, reference, candidate, forward)
+                {
+                    out.candidate = Some(lib.entries.get(next).map(|e| e.id.clone()));
+                }
             }
         });
 
@@ -878,5 +898,62 @@ mod tests {
                 c as u32
             );
         }
+    }
+
+    /// ⚠⚠ **Auto-advance is exactly the arrow-key step on the bordered pane**, and both halves
+    /// matter: rating the candidate must move the candidate, and rating the *reference* must move
+    /// the reference. "The border is where the buttons work" has to mean every key or it means
+    /// none of them.
+    ///
+    /// ⚠ This is **not** the removal that was reversed on 2026-09-02. Removal takes a frame out
+    /// of the comparison; advancing steps to the next frame to compare against.
+    #[test]
+    fn rating_advances_the_bordered_pane() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(8);
+        app.library.as_mut().unwrap().selection.click(2);
+        crate::test_app::catalog_library(&mut app);
+
+        // Border on the candidate: the right pane moves, the reference holds.
+        app.compare_focus = 1;
+        let before = app.compare_candidate.clone();
+        frame(&mut app, &ctx, vec![key(egui::Key::Num3)]);
+        assert_eq!(
+            app.library.as_ref().unwrap().selection.active(),
+            Some(2),
+            "the reference moved while the border was on the candidate"
+        );
+        assert_ne!(
+            app.compare_candidate, before,
+            "the candidate did not advance"
+        );
+
+        // Border on the reference: the left pane moves.
+        app.compare_focus = 0;
+        frame(&mut app, &ctx, vec![key(egui::Key::Num4)]);
+        assert_ne!(
+            app.library.as_ref().unwrap().selection.active(),
+            Some(2),
+            "the reference did not advance while the border was on it"
+        );
+    }
+
+    /// ⚠ The same correction rule the grid follows, re-asserted here because this view has its
+    /// own `ui.input` block and could have forgotten it.
+    #[test]
+    fn a_correction_does_not_advance_in_compare() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = app_with(8);
+        app.library.as_mut().unwrap().selection.click(2);
+        crate::test_app::catalog_library(&mut app);
+        app.compare_focus = 1;
+        let before = app.compare_candidate.clone();
+
+        frame(&mut app, &ctx, vec![key(egui::Key::U)]);
+
+        assert_eq!(
+            app.compare_candidate, before,
+            "clearing a flag moved on to the next candidate"
+        );
     }
 }
