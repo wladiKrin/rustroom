@@ -1902,3 +1902,125 @@ fn golden_mask_grade() {
         },
     );
 }
+
+#[test]
+fn golden_mask_nr() {
+    // Luminance and colour noise reduction confined to the left half, so one reference carries
+    // the denoised and the untouched halves of the same noisy chart side by side.
+    //
+    // ⚠ `noise_chart`, not the plain chart: with no noise there is nothing to remove and the
+    // reference could not discriminate this edit from a stronger one.
+    check_golden_with(
+        "mask_nr",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 0.0],
+                    invert: true,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 60.0,
+                        color: 60.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+        noise_chart(),
+    );
+}
+
+#[test]
+fn golden_mask_dehaze() {
+    // Haze cleared from the left half only.
+    //
+    // ⚠⚠ The airlight is estimated from the **whole** chart — the untouched half still
+    // contributes to it — which is the placement's whole point and is baked into this reference.
+    check_golden_with(
+        "mask_dehaze",
+        &Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 0.0],
+                    invert: true,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    dehaze: edit_model::Dehaze { amount: 70.0 },
+                    ..Default::default()
+                },
+            }],
+            ..Edits::default()
+        },
+        hazy_chart(),
+    );
+}
+
+/// ⚠⚠ **Proof the masked capture stages actually reach the pixels**, which the two goldens above
+/// cannot give on their own: a stage that never ran would produce a reference identical to a
+/// neutral render of the same chart, and the golden test would then pass against it forever.
+///
+/// Compared against the *same chart with the mask removed*, so nothing but the mask can explain
+/// the difference.
+#[test]
+fn a_masked_capture_correction_really_changes_the_chart() {
+    let cases: [(&str, Edits, ImageBuf); 2] = [
+        (
+            "noise reduction",
+            Edits {
+                masks: vec![edit_model::MaskedAdjustment {
+                    mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                        from: [0.0, 0.0],
+                        to: [1.0, 0.0],
+                        invert: true,
+                    }),
+                    adjustments: edit_model::LocalAdjustments {
+                        noise_reduction: edit_model::NoiseReduction {
+                            luminance: 60.0,
+                            color: 60.0,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                }],
+                ..Edits::default()
+            },
+            noise_chart(),
+        ),
+        (
+            "dehaze",
+            Edits {
+                masks: vec![edit_model::MaskedAdjustment {
+                    mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                        from: [0.0, 0.0],
+                        to: [1.0, 0.0],
+                        invert: true,
+                    }),
+                    adjustments: edit_model::LocalAdjustments {
+                        dehaze: edit_model::Dehaze { amount: 70.0 },
+                        ..Default::default()
+                    },
+                }],
+                ..Edits::default()
+            },
+            hazy_chart(),
+        ),
+    ];
+
+    for (what, edits, chart) in cases {
+        let masked = build_pipeline(&edits, RenderScale::FULL).run(chart.clone());
+        let neutral = build_pipeline(&Edits::default(), RenderScale::FULL).run(chart);
+        let a = to_rgb8(&masked);
+        let b = to_rgb8(&neutral);
+        let moved = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+        assert!(
+            moved > a.len() / 20,
+            "masked {what} moved only {moved} of {} samples — it may not be running at all",
+            a.len()
+        );
+    }
+}
