@@ -56,6 +56,30 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
     // mutable borrow. `CompositionGuide` is `Copy`, so this is a copy rather than a borrow.
     let app_guide = app.settings.composition_guide;
+    // ⚠⚠ **The interactive rung's gate.** Hoisted before `app.session` is borrowed: `app.settings`
+    // is a disjoint field, but reading it *through* `app` after the borrow is E0502 — the rule
+    // `tool` and `app_guide` already follow. `DragQuality` is `Copy`, so this is free.
+    //
+    // ⚠ `is_decidedly_dragging` rather than `any_down`: its condition includes
+    // `!could_any_button_be_click() && !any_click()`, which is what stops a plain click costing
+    // two renders — one down to the low rung and one back up. Verified in egui 0.35's source,
+    // not assumed.
+    //
+    // ⚠⚠ **A gate on the POINTER, never on the render — and that is what makes it structurally
+    // unable to oscillate.** The 2026-08-13 progressive-fit feature asked "is the showing
+    // resolution not yet sharp?", a question the render itself answers; so the render answered
+    // it, the gate flipped, and it counted that as interaction and reset its own timer. Nothing
+    // a render does can change this one.
+    //
+    // ⚠ Its two documented edges are both benign: it is false on the *first* frame of a drag and
+    // can be true on the *release* frame. The render worker drains its queue to the newest
+    // request, so the first frame's full-rung request is discarded before it renders; the release
+    // is restored one frame later.
+    let app_drag_drop = if ui.ctx().input(|i| i.pointer.is_decidedly_dragging()) {
+        app.settings.drag_quality.rungs_dropped()
+    } else {
+        0
+    };
     let app_brush_size = app.brush_size;
     let app_brush_hardness = app.brush_hardness;
     let app_brush_erase = app.brush_erase;
@@ -117,7 +141,20 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // the crop tool zoom and pan. Guide Mode was already the exception for
                     // exactly this reason; there is no longer an exception to make.
                     let rung = view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom);
-                    let max_dim = rung;
+                    // ⚠⚠ **The interactive rung.** A live gesture renders `app_drag_drop` rungs
+                    // lower and the release restores full quality — measured at 137.9 ms against
+                    // 35.2 ms on the reporter's window. There is **no settle timer**: the
+                    // `max_dim != s.render_rung` disjunction below already re-requests on any
+                    // rung change, so the release edge triggers the full-quality render by
+                    // itself, one frame later rather than 200 ms.
+                    //
+                    // ⚠⚠ `native` is computed from the DROPPED `max_dim`, which is the *opposite*
+                    // of the 2026-08-13 spec's warning — and correct, because this override goes
+                    // DOWN where that one went up. Theirs could report native at fit zoom and make
+                    // the whole image vanish; this one cannot. At rung 1600 whole-image is right,
+                    // and a fitted view at a high rung is caught by `covers_whole_image` below.
+                    let max_dim =
+                        view_region::rung_below(rung, fit_cap, s.buffer_long, app_drag_drop);
                     let native = view_region::is_native(max_dim, fit_cap);
 
                     // Screen pixels per rendered pixel. `k` compares the two *caps*, so
