@@ -670,6 +670,55 @@ mod tests {
         }
     }
 
+    /// ⚠⚠ **A range mask selects on PRE-TONAL pixels in its capture half — accepted (2026-09-06),
+    /// and pinned here so it is a documented property rather than something found later and
+    /// filed as a bug.**
+    ///
+    /// `MaskStage` computes coverage from the buffer it is applied to. The capture half runs in
+    /// the **prefix**, before every tonal adjustment, so a luminance range selects the tones of
+    /// the *scene* rather than of the rendered photograph — while the same mask's tail half
+    /// selects post-tonal. One mask, two selections.
+    ///
+    /// For a correction of the *capture* that is arguably the more correct answer rather than a
+    /// compromise, and it is what the global stages already do: global noise reduction is applied
+    /// to pre-tonal data too.
+    #[test]
+    fn a_luminance_range_selects_pre_tonal_tones_in_the_capture_half() {
+        let src = ramp(16, 32);
+        let masked = MaskedAdjustment {
+            mask: Mask::Luminance(edit_model::LuminanceRange {
+                low: 0.0,
+                high: 30.0,
+                feather: 0.0,
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                dehaze: edit_model::Dehaze { amount: 90.0 },
+                ..Default::default()
+            },
+        };
+        let out = MaskStage::new_capture(
+            &masked,
+            RenderScale::FULL,
+            &edit_model::Geometry::default(),
+            None,
+        )
+        .apply(src.clone());
+
+        let moved = |y: usize| (out.pixel(8, y)[0] - src.pixel(8, y)[0]).abs();
+        // ⚠ Rows are lightness: row 0 is black, row 31 white. The band is the dark end.
+        assert!(
+            moved(2) > 1e-4,
+            "a dark row is inside the band and must be corrected, moved {}",
+            moved(2)
+        );
+        assert!(
+            moved(30) < 1e-4,
+            "a bright row is outside it and must not be, moved {}",
+            moved(30)
+        );
+    }
+
     #[test]
     fn an_inverted_luminance_range_lifts_everything_outside_the_band() {
         let src = ramp(4, 64);
