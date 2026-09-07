@@ -10,6 +10,7 @@ use rustroom_app::settings::{Accent, DragQuality, PanDrag, ThemeChoice};
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut confirm = app.settings.confirm_preset_delete;
     let mut write_xmp = app.settings.write_xmp;
+    let mut auto_advance = app.settings.auto_advance;
     let mut tier = app.settings.view_demosaic;
     let mut resampler = app.settings.resampler;
     let mut theme_choice = app.settings.theme;
@@ -40,6 +41,16 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
              survive. Turning this off does not stop Rustroom reading sidecars somebody else \
              changed, and turning it back on updates each photo at its next rating or keyword \
              change rather than all at once.",
+            );
+            ui.separator();
+
+            ui.checkbox(&mut auto_advance, "Move to the next photo after rating");
+            theme::hint(
+                ui,
+                "In the Library grid a rating, a flag or a colour label steps past everything \
+                 that was selected; in Compare it steps the bordered pane, exactly as the arrow \
+                 keys do. Clearing a rating with 0 or a flag with U never moves on — a \
+                 correction should leave you on the photo you are fixing.",
             );
             ui.separator();
 
@@ -254,6 +265,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     // rewritten on every frame the dialog is open.
     if drag_quality != app.settings.drag_quality {
         app.settings.drag_quality = drag_quality;
+        app.save_settings();
+    }
+    // ⚠ A change guard like its neighbours, and for `pan_drag`'s weaker reason: this has no side
+    // effect beyond the write, because both views read `settings.auto_advance` afresh every
+    // frame. The guard is here so the settings file is not rewritten on every frame the dialog
+    // is open.
+    if auto_advance != app.settings.auto_advance {
+        app.settings.auto_advance = auto_advance;
         app.save_settings();
     }
     if close {
