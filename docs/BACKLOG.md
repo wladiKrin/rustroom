@@ -477,6 +477,49 @@ an 800 ms dwell, not per-frame work.
 the bench builds without a prebuilt coverage map, so it rasterizes per call where the app's
 `BrushCache` rasterizes once. It prices what that cache saves, which is most of a brush.
 
+---
+
+#### ⚠⚠ ROUND 3 (2026-09-07): IT IS THE RUNG, AND EVERY NUMBER ABOVE WAS BLIND TO IT
+
+**The symptom was pinned down first, and it is not a stutter.** Asked directly, the reporter says
+the **UI stays smooth and the preview trails the slider and catches up**. That rules out both
+UI-thread candidates round 2 proposed — rayon starvation and the texture handover would both make
+the *slider* jerk. It is background-render **latency**, so the thing to measure is what one render
+costs at the size the app actually renders.
+
+**And the size is the variable nothing had measured.** `fit_cap` is `min(buffer_long, 1600)`, but
+`tier_max_dim` climbs a **doubling ladder** as soon as the viewport is larger than the fit texture
+— and `is_native` then makes it a **region render covering the whole frame**. On a large or HiDPI
+window a photo that *looks* fitted is not being rendered at 1600 at all.
+
+| rung | frame | neutral | global exposure | masked exposure (gradient) |
+|---|---|---|---|---|
+| 1600 (fit) | 1600x1068, 1.7 Mpx | 13.0 ms | 11.0 ms | **14.3 ms** |
+| 3123 (native) | 3123x2085, **6.5 Mpx** | **38.0 ms** | **41.9 ms** | **53.2 ms** |
+
+⚠⚠ **53 ms IS 19 FPS, AND THAT IS THE REPORT.** ⚠⚠ **AND THE NEUTRAL ROW AT THAT RUNG IS 38 ms,
+WHICH IS THE OTHER HALF OF THE REPORT** — *"it also did before"*. The mask adds ~11 ms to a frame
+that was already ~40 ms without it. **The mask was never the problem; the rung was**, and the mask
+is simply the largest of several things stacked on an already-slow frame.
+
+⚠ Every earlier number in this entry, and in `bench_masked` generally, is a **1600 px** number. The
+4x pixel spread between the rungs is larger than any effect measured in rounds 1 and 2 put together
+— **the benchmark was measuring a case the user may never be in.** ⚠ Note this is on a **half-size**
+buffer; after the full-resolution upgrade `buffer_long` is 6246 and the ladder is 1600 -> 3200 ->
+6246, so a large window sits at 3200 and this is if anything the optimistic reading.
+
+**▶ TO CONFIRM BEFORE DESIGNING ANYTHING: which rung is the user's window actually on.** The bench
+cannot answer it and neither can reasoning — only the running app can. `RUSTROOM_DEBUG_RENDER=1`
+now prints, per frame, the render time, the rung, the frame size in Mpx, whether it is a region,
+and how many prefix stages ran. ⚠ **This is a measurement, not a diagnosis, exactly as round 1's
+was**, and it is the fourth time in a row this entry has been redirected by one.
+
+⚠ **If it confirms the native rung, the shape of the fix is a rung question, not a pipeline
+question** — e.g. dragging at the fit rung and settling to the native one, which is the
+render-during-interaction pattern the app already applies elsewhere. **Do not scope it as
+`MaskStage` work**: at 1600 the whole masked delta is 2.8 ms, and no amount of optimising it moves
+a 53 ms frame meaningfully.
+
 ### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
 
 The LUT took the stage from ~29–34 ms to ~20 ms above a harness floor (1.47–1.66×). **What remains
