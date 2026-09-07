@@ -366,9 +366,48 @@ coverage, its blend and the bounding box deferred here for the sixth time — wa
 **The cause was the render rung.** The rounds below are kept because the *method* is the reusable
 part, and because two of the findings are still open work.
 
-**▶ STILL OPEN, and split out of this entry: the frame-time VARIANCE.** ⚠ **The fix did not touch
-it**: after the interactive rung landed, rung 1600 still ran **27.0 → 268.4 ms** across 357 drag
-frames whose mean was 40.0. Before it, one rung on one photo ran **94.9 → 242.3 ms**, a 2.5× spread. A uniform 138 ms reads as lag; that
+**▶ THE FRAME-TIME VARIANCE — MEASURED 2026-09-07, AND IT IS NOT IN THE RENDER PATH.**
+
+⚠⚠ **CORRECTION TO THIS ENTRY'S OWN EARLIER NUMBER: "27.0 → 268.4 ms" IS A RANGE STATISTIC DRIVEN
+BY ONE FRAME, AND QUOTING IT OVERSTATED THE PROBLEM.** The real distribution over 357 rung-1600
+drag frames is **median 33.4 ms, p75 41.7, p90 56.1** — 92% fall between 27 and 60 ms, 9 frames
+exceed 100, and exactly **one** reached 268. ⚠ This project already records *"a whole-image mean is
+the wrong statistic"* twice; `max` is worse, being defined entirely by the single most extreme
+sample.
+
+**Split by position in the session, with the two rungs separated** (mixing them is its own
+confound — the last decile's alarming 93.6 ms mean was 18 legitimate *full-rung release* frames):
+
+| decile | n | mean | frames > 60 ms |
+|---|---|---|---|
+| 1–2 (session start) | 76 | 52.3 / 48.4 ms | 12 |
+| **3–6 (quiet)** | **156** | **30.1–32.2 ms** | **0** |
+| 7–9 (zooming, mode switches) | 104 | 41.9–54.2 ms | 15 |
+
+⚠⚠ **156 CONSECUTIVE DRAG FRAMES AT 30–32 ms WITH ZERO OUTLIERS.** The render path is steady at
+~32 fps when nothing else is running, so there is nothing to optimise *in it*. The variance is
+bursty and has two identified sources:
+
+1. **Background work contending for cores.** Frames 2–3 of the session render at rung **3123** —
+   the *half-size* buffer's top rung — so the full-resolution upgrade had not landed: ~3 s of
+   rayon-parallel libraw decode, plus `ThumbLoader`'s 6 workers. ⚠ `CLAUDE.md` predicted this in
+   words when that loader was parallelised: *"a loader that saturated every core would make editing
+   sluggish for as long as a folder takes to load."* The mitigation chosen then — `cores − 1`,
+   capped at 6 — reduces the contention without removing it.
+2. **Rung transitions**, measured at **103.8 ms mean against 48.1 ms for non-transition frames**,
+   with 67% of them over 60 ms. `prefix_ran` is 0 on both, so no extra pipeline stage runs — the
+   same work simply takes longer, which points at allocator and page-fault cost when the buffer
+   size alternates rather than at anything in the pipeline.
+
+⚠ **What would be needed to go further, stated because the current instrument cannot:
+`RUSTROOM_DEBUG_RENDER` logs no timestamps**, so "front-loaded" above is inferred from frame index
+rather than measured against wall-clock, and nothing correlates a slow frame with what the decode
+worker or thumbnail loader were doing at that moment. **Add a timestamp and an in-flight count
+before theorising further.**
+
+⚠ **Whether this is worth fixing at all is a judgement, not a measurement.** The reporter's verdict
+after the interactive rung landed was *"much better now, no stuttering anymore"* — with these
+bursts still present. They coincide with a folder opening, which is when nobody is yet editing. A uniform 138 ms reads as lag; that
 spread reads as stutter, which is the word actually used in the report. Undiagnosed, and distinct
 from the mean this fix addressed.
 
