@@ -189,30 +189,29 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > comparing against colour grading instead of decomposing. **Read the section before trusting any
 > remaining performance claim about this stage.**
 >
-> **▶ NEXT ACTION (agreed 2026-09-06, for a fresh session): FIX THE MASKED-EXPOSURE STUTTER.**
-> Reported from using Part B and **explicitly not Part B's doing** — the reporter volunteered that
-> it predates the milestone and happens with no masked dehaze active, which rules out both a
-> regression and a failure of the projection. `docs/BACKLOG.md` → Performance → *"TO FIX — dragging
-> a masked exposure stutters"*.
+> **✅ THE MASKED-EXPOSURE STUTTER IS FIXED (2026-09-07) — AND IT WAS NEVER THE MASK.** The
+> section is **"The interactive rung"** below. Spec `2026-09-07-interactive-rung-design.md`, plan
+> `2026-09-07-interactive-rung.md`.
 >
-> ⚠⚠ **START WITH A MEASUREMENT, NOT A CHANGE.** `bench_masked` has **no row for a masked
-> exposure** — every masked row in it carries something expensive (clarity, HSL, a grade, a curve),
-> so the *cheap* masked adjustment, the one that should feel instant, has never been timed on its
-> own. The first commit should be a number. Cost in this area has been reasoned wrong and measured
-> right four times running, the most recent being five days ago.
+> ⚠⚠ **EVERY SUSPECT THIS BLOCK NAMED WAS INNOCENT, AND THE REPORTER CLOSED IT IN ONE SENTENCE:
+> "the global exposure actually exhibits the same behavior."** Not `MaskStage`'s clone (0.4 ms of a
+> 3.0 ms stage), not its coverage, not its blend, and not the bounding box this block deferred for
+> the sixth time. **The whole entry was wrong from its title down.** What it was: on a large
+> window a *fitted* photo renders whole-image at a **native rung** — 6.8 Mpx against the fit rung's
+> 1.7 — at **137.9 ms mean over 131 instrumented drag frames, 7.2 fps**, with `prefix_ran 0` on
+> every one of 167 frames.
 >
-> ⚠ What is known and is **not** a diagnosis: `MaskStage` clones the whole image per mask, so every
-> drag frame pays a clone plus each sub-stage over the full frame. And the bounding box is the
-> obvious suspect that **may well be innocent** — it is worth ~17× on a small radial and *nothing*
-> on a gradient or either range mask, so if the stutter shows on a gradient mask a bbox cannot be
-> the answer.
+> ⚠⚠ **AND THE HIGH RUNG IS NOT WASTE — a framing this file briefly carried and which was wrong.**
+> `tier_max_dim`'s `needed` is the viewport's long edge **in points**, so rung 3200 on a 2× display
+> is being *upsampled*, not thrown away. The 137.9 ms buys resolution the display can genuinely
+> use, so there was nothing to reclaim: the only moves are **render less** or **render faster**.
 >
-> ⚠ **The bounding box is now deferred a SIXTH time and has never had a stronger case**: a capture
-> mask runs whole-buffer by construction, so a small radial pays for the entire frame (+27.9 ms
-> against a frame-covering gradient's +29.9). The work is in `MaskStage`, not in the masks. And if
-> HSL ever needs to be faster still, what is left is the **Oklab round trip** at ~27% and
-> **`atan2`** at ~13%, both deliberately untouched and both with their reasons recorded.
->
+> **▶ NEXT ACTION (open, 2026-09-07): the frame-time VARIANCE, which is a different question from
+> the mean.** At one rung on one photo the log ran **94.9 → 242.3 ms**, a 2.5× spread. A uniform
+> 138 ms reads as lag; that spread reads as stutter, and it is undiagnosed. `docs/BACKLOG.md` →
+> Performance. ⚠ Measure before theorising — this area's record is four reasoned-wrong,
+> measured-right findings in a row, and this session added two more.
+
 > ⚠⚠ **W5's own record is the argument for how to verify M7.2: the milestone whose maths was most
 > thoroughly tested shipped 100% non-functional.** Creative LUTs had four passing pipeline tests and
 > nothing proving the table ever reached the pipeline. **Ask what carries the data to the tested code,
@@ -441,6 +440,23 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   And what a user touches, from `bench_masked`: **one masked HSL at fit +33.1 → +23.0 ms (−30%)**; **three masked HSL +99.3 → +72.2 ms (−27%)**. ⚠ **Under the ~1.75× the spec predicted** — the table lookup plus rotation costs more than the ~2.5 ms estimated.
 - **⚠ A photograph is unchanged, measured on real pixels rather than only on the charts:** against the original kernel, **worst 1 of 255, mean 0.00000, 0.0001% of samples differing**. ✅ **And confirmed by use the same day** — the GUI check was run and reported good. ⚠ The three things it was pointed at, because they are where a bug in *this* change would hide and no test here covers them well: **the 360°→0° seam in reds and magentas** (a wraparound bug shows as a hue discontinuity, not a shift), **±100 hue shifts on saturated colour** (the outer edge of the polynomials' domain), and **pastels and skin** (the chroma-fade region, where a wrong band selection reads as speckle rather than as a colour change).
 - **Accepted caveats:** (1) **the Oklab round trip is untouched and is now the largest remaining cost at ~27%** — cutting it means approximating `cbrt`, a different accuracy question affecting every Oklab consumer (`hsl`, `noise_reduction`, `sharpening`, `local_contrast`, `color_grading`); (2) **`atan2` stays**, ~13% — a table indexed by a *pseudo-angle* would delete it, since a table can be built over any monotonic parameterisation of hue, and it was deliberately not taken because it needs a sampling-density argument the uniform table does not; (3) a pure hue shift moves chroma by ~1e-6 where it used to be bit-exact; (4) **the `hypot` → `sqrt` change may be worth nothing** — it measured −0.47 ms on one run and **+0.4 ms on another**, i.e. inside noise, and it is kept because it is also the simpler code; (5) nothing here helps colour grading, which already has its LUT.
+
+**The interactive rung (2026-09-07) — a responsive drag on a large window, and the measurement that demolished the question it was asked to answer.** A live gesture renders one or two ladder rungs lower and the release restores full quality: **137.9 ms → ~35 ms**, 7.2 → 28 fps. 2017 → **2024 tests**; every golden byte-identical, which is the proof no pixel path moved. Spec `2026-09-07-interactive-rung-design.md`, plan `2026-09-07-interactive-rung.md`.
+
+- **⚠⚠ THE REPORTED BUG WAS "DRAGGING A MASKED EXPOSURE STUTTERS" AND THE MASK HAD NOTHING TO DO WITH IT.** Three rounds of measurement were spent inside `MaskStage` before the reporter closed it in one sentence: *"the global exposure actually exhibits the same behavior."* **`bench_masked` now prices a masked exposure at every mask kind, and none of it was the answer** — the clone is **0.4 ms of a 3.0 ms stage** where the backlog's headline suspect had been the clone; the blend is 60% and costs more than twice the adjustment it blends. ⚠ **A question that names a component is a hypothesis, not a scope.** The one datum that settled it cost the reporter a sentence and no measurement at all.
+- **⚠⚠ AND THE MASK-KIND SPREAD IS A REAL FINDING THAT IS NOT THIS BUG.** Identical adjustment, identical pixels: gradient **+2.7 ms**, colour range **+16.9 ms** — 6×, because `hue_chroma` runs `prophoto_to_oklab` (three `cbrt`), `atan2` and `hypot` on **every pixel in the frame** to decide coverage, ahead of a one-multiply exposure. **A range mask's coverage is a pure function of the `base` pixel, which during a tail-only drag is the unchanging cached prefix output** — so it could be rasterized once and reused, exactly as `BrushCache` already does for a brush. Backlogged, not built.
+- **⚠⚠ THE ROOT CAUSE, AND IT WAS INVISIBLE TO EVERY BENCHMARK IN THE REPO.** `fit_cap` is 1600, but `tier_max_dim` climbs a **doubling ladder** as soon as the viewport exceeds the fit texture — so a photo that *looks* fitted renders whole-image at **rung 3200, 6.8 Mpx**. `RUSTROOM_DEBUG_RENDER=1` over 167 real frames: **137.9 ms mean, 7.2 fps**, against **35.2 ms** at the fit rung. The time ratio (3.9×) matches the pixel ratio (4.0×), which is what identifies the rung rather than something incidental to it. ⚠ **`prefix_ran 0` on all 167 frames** closed the prefix, the projection and the checkpoint chain in one column.
+- **⚠⚠ THE BENCH UNDERSTATED THE APP BY 2.6× — 53 ms predicted against 137.9 measured.** `bench_masked` renders a near-neutral photo; a real session carries the whole tail. **A synthetic bench prices a stage, not a session.** Read its rows as *deltas between rows*, never as a prediction of a drag frame.
+- **⚠⚠ AND THE HIGH RUNG IS NOT WASTE, WHICH CORRECTS A FRAMING THIS WORK BRIEFLY ADOPTED.** `needed` is the viewport's long edge **in points**, so rung 3200 on a 2× display is *upsampled* — the 2026-08-13 spec measured the same thing and called it "a 1.44× residual". The 137.9 ms buys resolution the display can use. **There was nothing to reclaim**, which is why the fix trades resolution rather than removing waste.
+- **⚠⚠ THIS FEATURE WAS BUILT AND DELETED ONCE — AND ITS DELETION REASON IS THE ARGUMENT FOR REBUILDING IT.** `2026-08-13-progressive-fit-resolution-design.md` rendered at 1600 while interacting and sharpened when idle; it was removed because *"the user could not see it on or off"*. **The question then was "is the sharper render visible?" (no). The question now is "is the slower render felt?" (yes.)** If a higher rung is not visibly sharper in a still frame, dropping one during a gesture costs little and buys 4×. ⚠ Honestly: that was measured at a **1.44× residual** and this drop is **2× linear**, so it is suggestive rather than conclusive. ⚠ **The problem also worsened since**: that spec's own table put rung 3200 at **59.5 ms**, against today's 137.9 — the tail has roughly doubled with display rendering, creative looks, masks, colour grading and soft proofing.
+- **⚠⚠ THE GATE IS A QUESTION ABOUT THE POINTER, NEVER ABOUT THE RENDER — and that is what makes it structurally unable to oscillate.** The deleted feature asked *"is the showing resolution not yet sharp?"*, which the render itself answers: so the render answered it, the gate flipped, and it counted that as interaction and reset its own timer. `is_decidedly_dragging()` cannot be affected by anything a render does. ⚠ It also **excludes a plain click** (`!could_any_button_be_click() && !any_click()`), which is what stops a click costing two renders — verified in egui 0.35's source, not assumed.
+- **⚠⚠ NO SETTLE TIMER, unlike the deleted feature's 200 ms.** `canvas/mod.rs`'s `max_dim != s.render_rung` disjunction already re-requests on any rung change, so the release edge triggers the full-quality render by itself, one frame later. **Do not "simplify" that disjunction away** — it is also what keeps a stale `rendered_region`, measured at a *different* rung, from being compared as though it were current.
+- **⚠⚠ `rung_below` REBUILDS THE LADDER AND STEPS BACK; IT MUST NEVER HALVE.** The ladder doubles from `fit_cap` and **clamps** at `buffer_long`, so its top rung is **6246, not 6400** — halving gives **3123, a value `tier_max_dim` can never produce**. Feeding one to the renderer mints a new `max_dim`, hence a new `CacheKey`, and grows the prefix cache's key set without bound **while looking entirely correct on screen**. Sabotage-verified: a naive halving fails three tests, one reporting `3123` against `3200`.
+- **⚠ `native` is computed from the DROPPED `max_dim`, the *opposite* of the 2026-08-13 spec's §2 warning** — and correct, because this override goes **down** where that one went up. Theirs could report native at fit zoom and make the whole image vanish; this one cannot.
+- **⚠⚠ `Settings.drag_quality` IS THE DELETION MECHANISM, and that was the user's call rather than the design's.** `DragQuality { Full, Faster, Fastest }` → 0 / 1 / 2 rungs. **`Full` is zero, so when the GPU port lands the feature is switched off from Settings rather than removed from the code.** It also lets a machine pick its own point on the trade. ⚠ `n == 0` returns the rung unchanged, so **the disabled path is the same code** rather than a branch around it. ⚠ `Fastest` equals `Faster` in the fitted view, differing only when zoomed — a two-rung drop from 3200 clamps at `fit_cap`.
+- **⚠⚠ DOES THE GPU PORT MAKE THIS REDUNDANT? Substantially, and it is still worth having** — the M7.2 note's three tests, applied again. The tail at 6.8 Mpx is the ideal GPU workload, realistically 5–15×, and a GPU tail deletes `pack` and the upload as well. **But Phase 8 is two phases away**; this *is* Phase 8's opening move, which is literally "cheap wins, then `wgpu`"; and it survives the port, since three masked HSLs is ~330 ms at 6.8 Mpx and still 33 ms after a 10× win. ⚠ The honest counter-argument, recorded: after the port the fitted case stops needing this, so the setting is what makes carrying it cheap.
+- **⚠⚠ AND THE MEASUREMENT THAT SHAPED THE FEATURE SAYS A SCALE-AWARE STAGE CAN BE PROPORTIONATE AND STILL INVISIBLE.** `rung_visibility` (kept) renders neutral against edited **within** each rung. Sharpening 70: **0.419 → 0.001 mean 8-bit levels between 3200 and 1600 — 420× weaker, 0.14% of samples moved.** It vanishes. Texture drops 3.1× and survives; clarity is only 8% weaker (σ 40 full-res px is still 10 px at 1600); NR and dehaze barely move. ⚠ **The control row is what makes the rest believable**: exposure has no kernel and reads flat to three decimals across the ladder, so the harness is sound before any spatial row is trusted. ⚠ The collapse is specific to the drop **into** the fit rung — zoomed, 6246 → 3200 leaves sharpening at 37.88% moved.
+- **Accepted caveats:** (1) **sharpening reads at nothing mid-drag** and appears on release — the user's call, one gate over a per-slider table, and `CLAUDE.md` already directs that it be judged at 1:1 where the drop keeps it visible; (2) texture drops 3.1×; (3) **the image is visibly softer during a gesture** — at `Faster` roughly a 2.9× upsample on a large HiDPI window; that is the trade, not a side effect; (4) the first drag frame may render at the full rung, usually coalesced away; (5) `Fastest` equals `Faster` when fitted; (6) **`FINALS_CAP` stays at 2** against the old spec's 3 — its three rungs were live within one mode, ours are two per mode — and `prefix_ran` is the instrument that says whether that holds; (7) nothing here makes the tail faster, it renders less of it.
 
 **Masked noise reduction and dehaze (2026-09-06) — Part B, and the whole "rest of the stages inside a mask" request closes with it. ✅ CONFIRMED BY USE.** A mask carries **noise reduction** and **dehaze**, running in the **prefix** where the global pair run. 2003 → **2017 tests**, 57 → **59 goldens** with the 57 **byte-identical**. Spec `2026-09-06-masked-capture-corrections-design.md`, plan `2026-09-06-masked-capture-corrections.md`.
 

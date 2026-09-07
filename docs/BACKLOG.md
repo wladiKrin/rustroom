@@ -356,7 +356,29 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
-### 🔧 TO FIX — dragging a masked exposure stutters (reported 2026-09-06, MEASURED 2026-09-07)
+### ✅ FIXED 2026-09-07 — "dragging a masked exposure stutters", which was never the mask
+
+**✅ FIXED by the interactive rung** — `docs/superpowers/specs/2026-09-07-interactive-rung-design.md`.
+A live gesture drops a render ladder rung and the release restores full quality: **137.9 → ~35 ms,
+7.2 → 28 fps**. ⚠⚠ **Nothing in this entry's original framing survived**: the reporter closed it
+with *"the global exposure actually exhibits the same behavior"*, and `MaskStage` — its clone, its
+coverage, its blend and the bounding box deferred here for the sixth time — was never involved.
+**The cause was the render rung.** The rounds below are kept because the *method* is the reusable
+part, and because two of the findings are still open work.
+
+**▶ STILL OPEN, and split out of this entry: the frame-time VARIANCE.** At one rung on one photo
+the instrumented log ran **94.9 → 242.3 ms**, a 2.5× spread. A uniform 138 ms reads as lag; that
+spread reads as stutter, which is the word actually used in the report. Undiagnosed, and distinct
+from the mean this fix addressed.
+
+**▶ ALSO STILL OPEN: a coverage cache for range masks.** Measured here at **+16.9 ms for a
+colour-range-masked exposure against a gradient's +2.7** — 6× for an identical adjustment, because
+`hue_chroma` runs three `cbrt`, `atan2` and `hypot` per pixel to decide coverage. ⚠ **A range
+mask's coverage is a pure function of the `base` pixel, and during a tail-only drag the base pixel
+*is* the cached prefix output** — constant across drag frames, so it could be rasterized once and
+reused the way `BrushCache` already does for a brush. The invalidation rule is the design question.
+
+---
 
 **▶ AGREED TO FIX (user's call, 2026-09-06).** ✅ **The measurement is done and committed** —
 `cb96916`, a masked-exposure row plus the three other mask kinds and a decomposition of
