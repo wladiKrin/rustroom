@@ -418,12 +418,67 @@ them nothing correlates a spike with what the decode worker or thumbnail loader 
 spread reads as stutter, which is the word actually used in the report. Undiagnosed, and distinct
 from the mean this fix addressed.
 
-**▶ ALSO STILL OPEN: a coverage cache for range masks.** Measured here at **+16.9 ms for a
-colour-range-masked exposure against a gradient's +2.7** — 6× for an identical adjustment, because
-`hue_chroma` runs three `cbrt`, `atan2` and `hypot` per pixel to decide coverage. ⚠ **A range
-mask's coverage is a pure function of the `base` pixel, and during a tail-only drag the base pixel
-*is* the cached prefix output** — constant across drag frames, so it could be rasterized once and
-reused the way `BrushCache` already does for a brush. The invalidation rule is the design question.
+**▶ ALSO OPEN — RANGE-MASK COVERAGE COST. DECOMPOSED 2026-09-07; NOT OPTIMISED (user's call).**
+`cargo run --release -p app --example bench_range_mask <raw>` is kept. ⚠ Both its kernels are
+cross-checked **bit-identical** — one against `MaskStage`, one against `ColourRange::coverage_at` —
+so the ablation cannot silently describe something that no longer ships, which is what happened to
+`bench_hsl` once.
+
+| step | ms above floor | share |
+|---|---|---|
+| **Oklab round trip (3 `cbrt`)** | 5.89 | **42%** |
+| `hypot` (chroma) | +1.00 | 7% |
+| **`atan2` (hue)** | +3.64 | **26%** |
+| `coverage_at` (band + gate) | +3.56 | 25% |
+| — *of which `fmodf` + hoisting `span`/`w`* | *0.93* | *6.6%* |
+| **total coverage, 1600 px** | **14.09** | |
+
+For contrast a **luminance** range is **4.49 ms** above the same floor, of which **1.42 is
+`linear_to_srgb`'s `powf`** — `lightness()` is about a third the cost of `hue_chroma()`.
+
+⚠⚠ **TWO CLAIMS THIS ENTRY PREVIOUSLY MADE WERE WRONG, AND BOTH WERE MINE.**
+
+1. **"During a tail-only drag the base pixel *is* the cached prefix output."** **False.** The masks
+   loop runs **after the entire global tail** — white balance, exposure, contrast, tone regions,
+   tone curve, local contrast, saturation, HSL, colour grading. So a range mask's `base` is the
+   *global tail's output* and moves whenever any of those change. Cacheable across a drag of the
+   mask's **own** sliders; invalidated every frame by a **global** slider.
+2. **"`BrushCache` is the precedent."** Much weaker than it reads. A brush's coverage is a pure
+   function of `(strokes, geometry, frame dims)` — **positional**, which is exactly why its cache is
+   easy. A range mask's is a function of **pixel values at that point in the pipeline**, so its key
+   must cover everything upstream of it in the tail.
+
+⚠⚠ **AND THE `fmodf` LEAD DID NOT PAN OUT — 6.6%, NOT THE 42% THE HUE LUT FOUND IN `HslStage`.**
+`coverage_at` really does call `rem_euclid` twice per pixel and really does recompute `span` and `w`
+from constants, which is the identical shape to the hue LUT's largest item. **It is worth 0.93 ms.**
+Recorded because the hypothesis was stated confidently one message before it was measured: **the
+same code shape can carry completely different weight in two stages.**
+
+**⚠⚠ 75.3% OF PIXELS ON A REAL PHOTOGRAPH SIT BELOW `min_chroma` AND PRODUCE COVERAGE EXACTLY 0** —
+three quarters of the 14.09 ms produces nothing.
+
+⚠⚠ **BUT A CHEAP PRE-GATE ON RAW RGB SPREAD CANNOT BE MADE SOUND, AND THAT IS PROVABLE RATHER THAN
+EMPIRICAL.** Scale a pixel by *s*: `l`, `m`, `s` scale by *s*, their cube roots by *s*^(1/3), so the
+Oklab chroma scales by **s^(1/3)** while the RGB spread scales by **s**. The ratio diverges as the
+pixel approaches black, so **no finite `K` satisfies `chroma ≤ K · spread`**. The bench's measured
+worst ratio of **16.42** is merely this image's darkest coloured pixel, and a naive `spread < 0.01`
+gate got **28,769 pixels wrong**. ⚠ A gate on spread *and* brightness together might be sound; it
+was not pursued.
+
+**Two candidate approaches for whoever picks this up, neither built:**
+
+- **Approximate the coverage path** — a fast `cbrt` plus a pseudo-angle replacing `atan2`, targeting
+  **68%** of the cost. ⚠⚠ **The accuracy argument is much weaker here than the one `CLAUDE.md`
+  records for deferring an approximate `cbrt` globally, and that is the whole point:** there the
+  concern is every Oklab consumer's **output pixels**; here the value feeds a **smoothstep gate**,
+  so an error invisible in the gate is acceptable where the same error in `HslStage`'s output is
+  not. Helps every frame, global drags included; needs no cache and no invalidation rule.
+- **Cache the coverage** — removes all 14.09 ms, but only while the base holds still (see
+  correction 1), and costs a full-frame buffer per mask plus that invalidation key.
+
+⚠ **Stopped here deliberately (user's call, 2026-09-07): the measurement was the point.** 14 ms on a
+~35 ms frame is real but no longer urgent now the interactive rung has taken the reported drag from
+7 to 25 fps.
 
 ---
 
