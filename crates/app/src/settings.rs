@@ -117,6 +117,52 @@ impl PanDrag {
     }
 }
 
+/// How much resolution a live gesture may trade for responsiveness.
+///
+/// ⚠⚠ **`Full` is zero rungs dropped, and that is the whole reason this is a setting rather than
+/// a constant.** When the GPU port lands and the tail runs 5–15× faster, the feature is switched
+/// off from Settings rather than removed from the code — **the setting is the deletion
+/// mechanism.** It also lets a slower or faster machine pick its own point on the trade, which a
+/// hardcoded rung cannot.
+///
+/// ⚠ `ALL`, `label` and `rungs_dropped` live **beside the type**, the rule `EDIT_GROUP_NAMES`,
+/// `Tool::ALL` and `FlagSet::ALL` already follow, so the Settings UI cannot invent a second
+/// ordering or a second mapping.
+///
+/// ⚠ `Fastest` differs from `Faster` **only when zoomed**: fitted, a two-rung drop from 3200
+/// clamps at `fit_cap` and lands where one rung already did. Recorded so it is not later filed
+/// as a bug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DragQuality {
+    /// Render a drag at the same rung as an idle view — the behaviour before this existed.
+    Full,
+    #[default]
+    Faster,
+    Fastest,
+}
+
+impl DragQuality {
+    pub const ALL: [DragQuality; 3] =
+        [DragQuality::Full, DragQuality::Faster, DragQuality::Fastest];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DragQuality::Full => "Full quality",
+            DragQuality::Faster => "Faster",
+            DragQuality::Fastest => "Fastest",
+        }
+    }
+
+    /// How many rungs of the render ladder a live gesture drops.
+    pub fn rungs_dropped(self) -> u32 {
+        match self {
+            DragQuality::Full => 0,
+            DragQuality::Faster => 1,
+            DragQuality::Fastest => 2,
+        }
+    }
+}
+
 /// User preferences that survive a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -313,6 +359,16 @@ pub struct Settings {
     /// would use `bool`'s own default of `false` instead, silently disabling the feature for
     /// every existing user. The same trap `snapshot_strip_height` documents.
     pub write_xmp: bool,
+    /// How much resolution a live gesture may trade for responsiveness.
+    ///
+    /// ⚠⚠ **Measured, not assumed:** on a large window a fitted photo renders at rung 3200
+    /// (6.8 Mpx) at **137.9 ms mean over 131 instrumented drag frames — 7.2 fps** — where the fit
+    /// rung renders the same photo in 35.2 ms. Dropping one rung is 4× fewer pixels.
+    ///
+    /// ⚠ Not an `Edits` field: it is a rendering-quality preference rather than part of the
+    /// photograph's description, so it must not travel with a paste, a preset, a sync or a
+    /// sidecar — `resampler`'s rule, for `resampler`'s reason.
+    pub drag_quality: DragQuality,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -510,6 +566,7 @@ impl Default for Settings {
             panel_order: PanelSection::ALL.to_vec(),
             composition_guide: crate::composition_guides::CompositionGuide::Off,
             write_xmp: true,
+            drag_quality: DragQuality::default(),
         }
     }
 }
@@ -781,6 +838,36 @@ mod tests {
     }
 
     #[test]
+    fn drag_quality_maps_to_rungs() {
+        // ⚠⚠ `Full` must be exactly zero. It is the off switch: when the GPU port lands, the
+        // feature is disabled from Settings rather than removed from the code, and
+        // `rung_below` returns its input unchanged at n == 0.
+        assert_eq!(DragQuality::Full.rungs_dropped(), 0);
+        assert_eq!(DragQuality::Faster.rungs_dropped(), 1);
+        assert_eq!(DragQuality::Fastest.rungs_dropped(), 2);
+        // Every variant is in ALL, so the Settings combo cannot silently omit one.
+        assert_eq!(DragQuality::ALL.len(), 3);
+        for q in DragQuality::ALL {
+            assert!(!q.label().is_empty(), "{q:?} has no label");
+        }
+    }
+
+    #[test]
+    fn a_settings_file_from_before_drag_quality_still_loads() {
+        // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
+        // *every* setting — which is why each new field needs this.
+        let f = TempFile::new("drag_quality_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete":false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert_eq!(
+            loaded.drag_quality,
+            DragQuality::Faster,
+            "an absent drag_quality must default to Faster"
+        );
+    }
+
+    #[test]
     fn a_settings_file_from_before_the_composition_guide_still_loads() {
         // ⚠ `SettingsStore::load` is infallible, so a field that fails to parse silently reverts
         // *every* setting — which is why each new field needs this.
@@ -995,6 +1082,9 @@ mod tests {
             // Likewise non-default: it defaults to *on*, so persisting `false` is what proves
             // it round-trips rather than being re-defaulted.
             write_xmp: false,
+            // Non-default for the same reason: `Faster` is the default, so only `Full` proves the
+            // value survives a round trip rather than being re-defaulted underneath the test.
+            drag_quality: DragQuality::Full,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
