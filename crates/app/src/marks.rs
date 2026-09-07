@@ -13,6 +13,22 @@ pub enum MarkAction {
     Label(u8),
 }
 
+impl MarkAction {
+    /// Whether applying this mark should move on to the next photo.
+    ///
+    /// ⚠⚠ **Beside the type, never in a view.** The grid and Compare both consult it, and a rule
+    /// written in two places is one that will disagree in one of them — the rule
+    /// `EDIT_GROUP_NAMES`, `Tool::ALL`, `FlagSet::ALL` and `DragQuality` already follow.
+    ///
+    /// ⚠ `Rating(0)` and `Flag::None` are **corrections**: they clear a judgement rather than
+    /// making one, and advancing off a photo you were in the middle of fixing is the one thing
+    /// that would make this feature annoying rather than fast. Survey records the same reasoning
+    /// about `U` for the same reason. A deliberate divergence from Lightroom.
+    pub fn advances(self) -> bool {
+        !matches!(self, MarkAction::Rating(0) | MarkAction::Flag(Flag::None))
+    }
+}
+
 /// The culling key for `c`, if it is one.
 ///
 /// ⚠⚠ **Library only.** `1`–`4` select rail tools in Develop, which is exactly where Lightroom
@@ -143,5 +159,43 @@ mod tests {
         assert!(passes(three, 3));
         assert!(passes(five, 3), "5 stars must pass a 3-star filter");
         assert!(!passes(three, 4));
+    }
+
+    /// ⚠⚠ **Only a decision advances; a correction does not.** `0` clears a rating and `U` clears
+    /// a flag — both *undo* a judgement rather than making one, and moving on after a correction
+    /// walks away from the very photo you were fixing. Survey already records the same reasoning
+    /// about the same key: "un-flagging undoes a decision, so a photo made undecided again
+    /// belongs back on the wall."
+    ///
+    /// ⚠ A deliberate divergence from Lightroom, which advances on every rating including 0.
+    ///
+    /// ⚠ Asserted over the **whole** vocabulary rather than on one example: a rule that
+    /// enumerates a list stops guarding the moment the list grows, and this file's own
+    /// `action_for` is that list.
+    #[test]
+    fn only_a_decision_advances() {
+        for r in 1..=5 {
+            assert!(
+                MarkAction::Rating(r).advances(),
+                "{r} stars is a decision and must advance"
+            );
+        }
+        for l in 1..=4 {
+            assert!(
+                MarkAction::Label(l).advances(),
+                "a colour label is a decision"
+            );
+        }
+        assert!(MarkAction::Flag(Flag::Pick).advances());
+        assert!(MarkAction::Flag(Flag::Reject).advances());
+
+        assert!(
+            !MarkAction::Rating(0).advances(),
+            "0 clears a rating — a correction, not a decision"
+        );
+        assert!(
+            !MarkAction::Flag(Flag::None).advances(),
+            "U clears a flag — a correction, not a decision"
+        );
     }
 }
