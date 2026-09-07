@@ -366,7 +366,7 @@ coverage, its blend and the bounding box deferred here for the sixth time — wa
 **The cause was the render rung.** The rounds below are kept because the *method* is the reusable
 part, and because two of the findings are still open work.
 
-**▶ THE FRAME-TIME VARIANCE — MEASURED 2026-09-07, AND IT IS NOT IN THE RENDER PATH.**
+**✅ THE FRAME-TIME VARIANCE — CLOSED 2026-09-07 (user's call), ACCEPTED RATHER THAN FIXED.**
 
 ⚠⚠ **CORRECTION TO THIS ENTRY'S OWN EARLIER NUMBER: "27.0 → 268.4 ms" IS A RANGE STATISTIC DRIVEN
 BY ONE FRAME, AND QUOTING IT OVERSTATED THE PROBLEM.** The real distribution over 357 rung-1600
@@ -405,9 +405,16 @@ rather than measured against wall-clock, and nothing correlates a slow frame wit
 worker or thumbnail loader were doing at that moment. **Add a timestamp and an in-flight count
 before theorising further.**
 
-⚠ **Whether this is worth fixing at all is a judgement, not a measurement.** The reporter's verdict
-after the interactive rung landed was *"much better now, no stuttering anymore"* — with these
-bursts still present. They coincide with a folder opening, which is when nobody is yet editing. A uniform 138 ms reads as lag; that
+⚠⚠ **CLOSED ON THE JUDGEMENT, NOT ON A FIX — and the judgement is the right kind.** The reporter's
+verdict after the interactive rung landed was *"much better now, no stuttering anymore"*, **with
+these bursts still present**. They coincide with a folder opening, which is when nobody is yet
+editing, and the one mechanism that could be attacked — `ThumbLoader`'s worker count — was already
+tuned down to `cores − 1` for exactly this reason.
+
+⚠ **Reopen it only on a fresh report, and instrument before changing anything.** The evidence that
+would justify reopening is a slow frame *outside* a folder-open burst, which the quiet 156-frame
+run says does not currently happen. **Add timestamps to `RUSTROOM_DEBUG_RENDER` first** — without
+them nothing correlates a spike with what the decode worker or thumbnail loader were doing. A uniform 138 ms reads as lag; that
 spread reads as stutter, which is the word actually used in the report. Undiagnosed, and distinct
 from the mean this fix addressed.
 
