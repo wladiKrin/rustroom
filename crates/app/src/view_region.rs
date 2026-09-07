@@ -82,6 +82,36 @@ pub fn is_native(max_dim: usize, fit_long: usize) -> bool {
     max_dim > fit_long
 }
 
+/// The rung `n` steps below `rung` on the ladder [`tier_max_dim`] walks, floored at `fit_long`.
+///
+/// ⚠⚠ **It rebuilds the ladder and steps back along it; it must never halve.** The ladder doubles
+/// from `fit_long` and **clamps** at `buffer_long`, so its top rung is uneven — 6246, not 6400 —
+/// and halving that gives 3123, a value [`tier_max_dim`] can never produce. Feeding one to the
+/// renderer mints a new `max_dim`, hence a new `CacheKey`, and grows the prefix cache's key set
+/// without bound while looking entirely correct on screen.
+///
+/// ⚠ `n == 0` returns `rung` unchanged, so the disabled path is the **same code** rather than a
+/// branch around it — there is no second route through the renderer to keep in step.
+///
+/// ⚠ A `rung` that is not on the ladder is returned unchanged rather than snapped to one. That
+/// means a bug upstream, and inventing a nearby rung would hide it behind a fabricated `max_dim`.
+pub fn rung_below(rung: usize, fit_long: usize, buffer_long: usize, n: u32) -> usize {
+    if n == 0 {
+        return rung;
+    }
+    let fit_long = fit_long.max(1);
+    let mut ladder = vec![fit_long];
+    let mut r = fit_long;
+    while r < buffer_long {
+        r = (r * 2).min(buffer_long);
+        ladder.push(r);
+    }
+    let Some(i) = ladder.iter().position(|&v| v == rung) else {
+        return rung;
+    };
+    ladder[i.saturating_sub(n as usize)]
+}
+
 /// The long edge a fit render is *capped* to — the ladder's bottom rung.
 ///
 /// ⚠ **This is not the same as the size a fit render comes out at, and confusing the two is a
@@ -185,6 +215,64 @@ mod tests {
         assert_eq!(tier_max_dim(1600, 6246, 1.0, 2.0), 3200);
         assert_eq!(tier_max_dim(1600, 6246, 1.0, 2.01), 6246);
         assert_eq!(tier_max_dim(1600, 6246, 1.0, 9.0), 6246);
+    }
+
+    #[test]
+    fn rung_below_is_the_identity_at_zero() {
+        // ⚠ The disabled path is the SAME CODE, not a branch around it — there is no second
+        // route through the renderer to keep in step.
+        for rung in [1600, 3200, 6246] {
+            assert_eq!(rung_below(rung, 1600, 6246, 0), rung);
+        }
+    }
+
+    #[test]
+    fn rung_below_steps_down_the_uneven_top_rung() {
+        // ⚠⚠ **The halving trap.** The ladder doubles from fit_cap and *clamps* at buffer_long,
+        // so its top rung is 6246, not 6400. Halving gives 3123 — a value `tier_max_dim` can
+        // never produce, which would mint a new max_dim, a new CacheKey, and grow the prefix
+        // cache's key set without bound while looking entirely correct on screen.
+        assert_eq!(rung_below(6246, 1600, 6246, 1), 3200);
+        assert_ne!(rung_below(6246, 1600, 6246, 1), 3123);
+        assert_eq!(rung_below(3200, 1600, 6246, 1), 1600);
+    }
+
+    #[test]
+    fn rung_below_floors_at_the_fit_cap() {
+        assert_eq!(rung_below(6246, 1600, 6246, 2), 1600);
+        // Deeper than the ladder is deep still lands on the fit rung rather than below it.
+        assert_eq!(rung_below(6246, 1600, 6246, 9), 1600);
+        assert_eq!(rung_below(1600, 1600, 6246, 1), 1600);
+        // A buffer no larger than the fit cap has a one-rung ladder and nowhere to go.
+        assert_eq!(rung_below(1200, 1200, 1200, 2), 1200);
+    }
+
+    #[test]
+    fn rung_below_returns_a_real_ladder_rung() {
+        // The property the halving trap violates, asserted over the whole ladder: every result
+        // must be a value `tier_max_dim` itself can produce.
+        for &buffer in &[3123usize, 6246, 7728] {
+            let reachable: Vec<usize> = (0..=48)
+                .map(|i| tier_max_dim(1600, buffer, 1.0, 1.0 + i as f32 * 0.25))
+                .collect();
+            for &rung in &reachable {
+                for n in 0..=4 {
+                    let got = rung_below(rung, 1600, buffer, n);
+                    assert!(
+                        reachable.contains(&got),
+                        "rung_below({rung}, 1600, {buffer}, {n}) = {got}, \
+                         which tier_max_dim cannot produce"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rung_below_leaves_a_rung_it_does_not_recognise_alone() {
+        // A rung off the ladder means a bug elsewhere. Returning it unchanged is the answer that
+        // invents nothing; stepping back from a guessed position would fabricate a max_dim.
+        assert_eq!(rung_below(2500, 1600, 6246, 1), 2500);
     }
 
     #[test]
