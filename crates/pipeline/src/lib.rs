@@ -551,6 +551,14 @@ pub fn build_pipeline_split_in_region_with_brush(
     // in it.
     let mut tail: Vec<Box<dyn PipelineStage>> = adjustment_stages(
         &edit_model::LocalAdjustments {
+            // ⚠⚠ **Neutral because these two do not run here at all** — unlike the five below,
+            // which this tail places itself further down. `noise_reduction` and `dehaze` are
+            // built by `capture_stages` and run in the **prefix**, where the global pair run.
+            // Passing them here would apply a capture correction after the tone curve, on a
+            // buffer that may be only the visible region — which for dehaze means an airlight
+            // that changes as you pan.
+            noise_reduction: edit_model::NoiseReduction::default(),
+            dehaze: edit_model::Dehaze::default(),
             white_balance: edits.white_balance,
             exposure: edits.exposure,
             contrast: edits.contrast,

@@ -1255,12 +1255,33 @@ impl Mask {
 /// frame-global airlight, which has no meaning confined to a region. See `docs/BACKLOG.md`,
 /// "The rest of the stages inside a mask", Part B.
 ///
+/// ⚠⚠ **Two of these run in the PREFIX and the rest in the tail.** `noise_reduction` and `dehaze`
+/// are corrections of the *capture*, and they are placed where the global stages of the same name
+/// run rather than where [`MaskedAdjustment`] happens to be applied. `pipeline::capture_stages`
+/// builds that pair; `pipeline::adjustment_stages` builds everything else, and the two partition
+/// this struct.
+///
 /// ⚠ **Not `Copy`** — [`ToneCurve`] carries a `Vec`. [`MaskedAdjustment`] was already not `Copy`
 /// for [`Mask::Brush`]'s stroke list, so dropping it here cost **zero** call sites, measured
 /// with `cargo check --workspace --all-targets` rather than assumed. Still `Clone`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct LocalAdjustments {
+    /// Noise reduction confined to the mask — denoise a shadowed corner without smearing the
+    /// rest of the frame.
+    ///
+    /// ⚠⚠ **This runs in the PREFIX, not where the mask's other adjustments run** — the only
+    /// field here that does, together with `dehaze`. It is placed exactly where the global stage
+    /// runs, so a masked Luminance 50 means what a global Luminance 50 means.
+    pub noise_reduction: NoiseReduction,
+    /// Dehaze confined to the mask — clear a distant ridge and leave the foreground alone.
+    ///
+    /// ⚠⚠ **Prefix, like `noise_reduction`, and for a sharper reason: the airlight.** It is
+    /// estimated from the brightest 0.1% of the buffer the stage is handed. In the tail that
+    /// buffer is the visible *region*, so a tail-side masked dehaze would re-estimate its
+    /// airlight as you panned and the photograph would change under you. The prefix always runs
+    /// whole-buffer, which is what makes a frame-global airlight possible at all.
+    pub dehaze: Dehaze,
     pub white_balance: WhiteBalance,
     pub exposure: f32,
     pub contrast: f32,
@@ -1647,6 +1668,66 @@ pub enum EditLoadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠ Both halves, and both on their own. A test setting both could not tell a wired field
+    /// from an unwired one sitting beside a wired one.
+    #[test]
+    fn a_masked_noise_reduction_or_dehaze_makes_the_set_active() {
+        assert!(!LocalAdjustments::default().is_active());
+
+        let denoised = LocalAdjustments {
+            noise_reduction: NoiseReduction {
+                luminance: 40.0,
+                ..NoiseReduction::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            denoised.is_active(),
+            "masked noise reduction must be active"
+        );
+
+        let hazed = LocalAdjustments {
+            dehaze: Dehaze { amount: 60.0 },
+            ..Default::default()
+        };
+        assert!(hazed.is_active(), "masked dehaze must be active");
+    }
+
+    /// ⚠ `is_active` is amount-only on both, reused rather than reinvented: Detail and Smoothness
+    /// shape an effect that is off until Luminance or Color is turned up, so moving one alone
+    /// must not insert a whole-buffer stage into the prefix.
+    #[test]
+    fn masked_noise_reduction_modifiers_alone_are_inert() {
+        let a = LocalAdjustments {
+            noise_reduction: NoiseReduction {
+                detail: 90.0,
+                smoothness: 10.0,
+                ..NoiseReduction::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !a.noise_reduction.is_active(),
+            "detail and smoothness alone must insert no stage"
+        );
+    }
+
+    /// ⚠ A sidecar written before today has neither field, and both must read as neutral — with
+    /// `detail` and `smoothness` at 50 from `NoiseReduction`'s hand-written `Default`, not 0.
+    #[test]
+    fn a_mask_written_before_the_capture_fields_reads_them_neutral() {
+        let json = r#"{"mask":{"Linear":{"from":[0.0,0.0],"to":[1.0,0.0]}},
+                       "adjustments":{"exposure":0.5}}"#;
+        let m: MaskedAdjustment = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            m.adjustments.exposure, 0.5,
+            "fixture check: the json was read"
+        );
+        assert_eq!(m.adjustments.noise_reduction, NoiseReduction::default());
+        assert_eq!(m.adjustments.noise_reduction.detail, 50.0);
+        assert_eq!(m.adjustments.dehaze, Dehaze::default());
+    }
 
     /// ⚠⚠ The fixtures do not fail to compile when `LocalAdjustments` grows, so this asserts what
     /// the type system cannot: that `all_nonneutral`'s mask really carries every field
