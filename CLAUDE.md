@@ -189,10 +189,23 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > comparing against colour grading instead of decomposing. **Read the section before trusting any
 > remaining performance claim about this stage.**
 >
-> **▶ NEXT ACTION: pick from `docs/BACKLOG.md`.** ⚠ Its newest entry is the one that came out of
-> using Part B and is **not** Part B's doing: **dragging a masked exposure stutters a bit**,
-> reported with the qualification that it predates this milestone and happens with no masked
-> dehaze active. Nobody has measured a masked *exposure* drag yet.
+> **▶ NEXT ACTION (agreed 2026-09-06, for a fresh session): FIX THE MASKED-EXPOSURE STUTTER.**
+> Reported from using Part B and **explicitly not Part B's doing** — the reporter volunteered that
+> it predates the milestone and happens with no masked dehaze active, which rules out both a
+> regression and a failure of the projection. `docs/BACKLOG.md` → Performance → *"TO FIX — dragging
+> a masked exposure stutters"*.
+>
+> ⚠⚠ **START WITH A MEASUREMENT, NOT A CHANGE.** `bench_masked` has **no row for a masked
+> exposure** — every masked row in it carries something expensive (clarity, HSL, a grade, a curve),
+> so the *cheap* masked adjustment, the one that should feel instant, has never been timed on its
+> own. The first commit should be a number. Cost in this area has been reasoned wrong and measured
+> right four times running, the most recent being five days ago.
+>
+> ⚠ What is known and is **not** a diagnosis: `MaskStage` clones the whole image per mask, so every
+> drag frame pays a clone plus each sub-stage over the full frame. And the bounding box is the
+> obvious suspect that **may well be innocent** — it is worth ~17× on a small radial and *nothing*
+> on a gradient or either range mask, so if the stutter shows on a gradient mask a bbox cannot be
+> the answer.
 >
 > ⚠ **The bounding box is now deferred a SIXTH time and has never had a stronger case**: a capture
 > mask runs whole-buffer by construction, so a small radial pays for the entire frame (+27.9 ms

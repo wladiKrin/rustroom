@@ -356,10 +356,18 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
-### ⚠ Dragging a masked exposure stutters a bit (reported 2026-09-06, from using Part B)
+### 🔧 TO FIX — dragging a masked exposure stutters (reported 2026-09-06, agreed to fix 2026-09-06)
+
+**▶ AGREED TO FIX (user's call, 2026-09-06), to be picked up in a fresh session.** This is a
+decision, not a wish: it is the next piece of work on this list, and it starts with a measurement.
 
 **Reported in use**, and reported carefully: *"the exposure dragging does stutter a bit, but it also
 did before, and without a masked dehaze, if I am being honest."*
+
+**▶ FIRST STEP, and do not skip it: add a masked-exposure row to `bench_masked` and run it.**
+Everything below is what is *known*; none of it is a diagnosis. This project's record is that cost
+in this area has been reasoned wrong and measured right four times running, most recently five days
+ago — so the first commit of this work should be a number, not a change.
 
 ⚠⚠ **That qualification is the whole entry, and it was the reporter's, not a diagnosis made here.**
 It rules out the two things this would otherwise most plausibly be: a regression from the masked
@@ -386,8 +394,6 @@ record is that cost in this area has been reasoned wrong and measured right four
 ⚠ **The bounding box is the obvious suspect and may well be innocent.** It is deferred a sixth time
 and its measured value is ~17× on a small radial and *nothing* on a gradient or either range mask —
 so if the stutter shows up on a gradient mask, a bbox cannot be the answer.
-
-## Performance
 
 ### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
 
