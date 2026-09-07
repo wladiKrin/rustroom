@@ -19,9 +19,11 @@
 //!    which is exactly the evidence that no bounding box exists — and the radial is the only
 //!    one of the two a bounding box could ever help.
 use edit_model::{
-    ColorGrading, Dehaze, Edits, GradeWheel, Hsl, LinearGradient, LocalAdjustments, LocalContrast,
-    Mask, MaskedAdjustment, NoiseReduction, RadialGradient, ToneCurve,
+    ColorGrading, ColourRange, Dehaze, Edits, GradeWheel, Hsl, LinearGradient, LocalAdjustments,
+    LocalContrast, LuminanceRange, Mask, MaskedAdjustment, NoiseReduction, RadialGradient,
+    ToneCurve,
 };
+use pipeline::PipelineStage;
 use rustroom_app::render_engine::render_once;
 use std::time::Instant;
 
@@ -48,12 +50,48 @@ fn radial() -> Mask {
     })
 }
 
+/// A luminance range, at its default band.
+///
+/// ⚠⚠ **Its coverage is evaluated per pixel, and `lightness` runs `linear_to_srgb` — a `powf` —
+/// on every one of them.** A bounding box is worth *nothing* here by construction: the selected
+/// pixels are wherever that tonal band happens to fall, which is typically scattered over the
+/// whole frame. If the cheap adjustments are slow under this mask and fast under a gradient, the
+/// coverage evaluation is the cost and no bbox can touch it.
+fn lum_range() -> Mask {
+    Mask::Luminance(LuminanceRange::default())
+}
+
+/// A colour range, at its default 0°–120° band.
+///
+/// ⚠ **The most expensive coverage of the four**: `prophoto_to_oklab` is three `cbrt`, then
+/// `atan2` and `hypot`, per pixel, per frame. `HslStage`'s own decomposition put the Oklab round
+/// trip at ~27% of that stage and `atan2` at ~13% — this mask pays both before any adjustment
+/// runs at all.
+fn colour_range() -> Mask {
+    Mask::Colour(ColourRange::default())
+}
+
 fn clarity() -> LocalAdjustments {
     LocalAdjustments {
         local_contrast: LocalContrast {
             texture: 0.0,
             clarity: 70.0,
         },
+        ..Default::default()
+    }
+}
+
+/// A masked exposure — **the cheapest adjustment this pipeline has**, and the one reported as
+/// stuttering. One sub-stage, per-pixel, no table, no kernel, no neighbourhood.
+///
+/// ⚠⚠ **That is exactly what makes it the diagnostic row.** Every other masked row in this file
+/// carries something expensive, so its cost tells you about the adjustment. This one has almost
+/// no adjustment in it, so whatever it costs above the `global exposure` row **is the mask
+/// machinery itself** — the clone, the coverage evaluation and the blend — with nothing else to
+/// hide behind.
+fn exposure() -> LocalAdjustments {
+    LocalAdjustments {
+        exposure: 0.5,
         ..Default::default()
     }
 }
@@ -134,6 +172,20 @@ fn masked(n: usize, mask: fn() -> Mask, adj: fn() -> LocalAdjustments) -> Edits 
     }
 }
 
+/// The same exposure move with **no mask around it**.
+///
+/// ⚠⚠ **The reference row this file has never had, and without it a masked delta means nothing.**
+/// Every other line here is measured against `neutral`, which answers "what does this feature
+/// cost". The stutter question is a different one — "what does the *mask* cost" — and only the
+/// gap between this row and `1 masked exposure` answers it, because both apply the identical
+/// adjustment to the identical pixels.
+fn global_exposure() -> Edits {
+    Edits {
+        exposure: 0.5,
+        ..Edits::default()
+    }
+}
+
 fn best_of<F: FnMut() -> T, T>(mut f: F) -> f64 {
     let mut best = f64::MAX;
     for _ in 0..5 {
@@ -162,6 +214,28 @@ fn main() {
 
     let cases: Vec<(&str, Edits)> = vec![
         ("neutral", Edits::default()),
+        // The stutter rows. ⚠ Read them against `global exposure`, not against `neutral`.
+        ("global exposure  (no mask)", global_exposure()),
+        (
+            "1 masked exposure (gradient)",
+            masked(1, gradient, exposure),
+        ),
+        (
+            "3 masked exposure (gradient)",
+            masked(3, gradient, exposure),
+        ),
+        (
+            "1 masked exposure (small radial)",
+            masked(1, radial, exposure),
+        ),
+        (
+            "1 masked exposure (luminance range)",
+            masked(1, lum_range, exposure),
+        ),
+        (
+            "1 masked exposure (colour range)",
+            masked(1, colour_range, exposure),
+        ),
         ("1 masked clarity  (gradient)", masked(1, gradient, clarity)),
         ("3 masked clarity  (gradient)", masked(3, gradient, clarity)),
         (
@@ -273,5 +347,42 @@ fn main() {
             };
             println!("           {label:>9}: clarity {cl:+6.1} ms   HSL {hs:+6.1} ms");
         }
+
+        // --- Where does a masked exposure's time actually GO? `MaskStage::apply` is three
+        // things, and only one of them is the adjustment the user asked for. Timing them
+        // separately means the total above can be *accounted for* rather than attributed by
+        // eye — and this project has reasoned this area's cost wrong four times running.
+        //
+        // ⚠ The blend here reproduces `MaskStage`'s own closure for the analytic case. It is a
+        // deliberate copy: the point is to price that exact loop, and calling the real stage
+        // would fold all three parts back into one number again.
+        println!("\n  where a masked exposure's time goes (region {rw}x{rh}, gradient)");
+        let clone_ms = best_of(|| sub.clone());
+        let exp = pipeline::ExposureStage::new(0.5);
+        let exp_ms = best_of(|| exp.apply(sub.clone())) - clone_ms;
+        let adjusted = exp.apply(sub.clone());
+        let m = gradient();
+        let (fw, fh) = (mid.width(), mid.height());
+        let aspect = fw as f32 / fh as f32;
+        let blend_ms = best_of(|| {
+            sub.map_pixels_xy(|x, y, base| {
+                let u = x as f32 / fw as f32;
+                let v = y as f32 / fh as f32;
+                let c = m
+                    .analytic_coverage(u, v, aspect)
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                let adj = adjusted.pixel(x, y);
+                [
+                    base[0] + (adj[0] - base[0]) * c,
+                    base[1] + (adj[1] - base[1]) * c,
+                    base[2] + (adj[2] - base[2]) * c,
+                ]
+            })
+        });
+        println!(
+            "           clone {clone_ms:5.1}   exposure {exp_ms:5.1}   blend {blend_ms:5.1}   sum {:5.1} ms",
+            clone_ms + exp_ms + blend_ms
+        );
     }
 }
