@@ -356,44 +356,72 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
-### 🔧 TO FIX — dragging a masked exposure stutters (reported 2026-09-06, agreed to fix 2026-09-06)
+### 🔧 TO FIX — dragging a masked exposure stutters (reported 2026-09-06, MEASURED 2026-09-07)
 
-**▶ AGREED TO FIX (user's call, 2026-09-06), to be picked up in a fresh session.** This is a
-decision, not a wish: it is the next piece of work on this list, and it starts with a measurement.
+**▶ AGREED TO FIX (user's call, 2026-09-06).** ✅ **The measurement is done and committed** —
+`cb96916`, a masked-exposure row plus the three other mask kinds and a decomposition of
+`MaskStage::apply`. The first commit was a number, as this entry demanded.
 
 **Reported in use**, and reported carefully: *"the exposure dragging does stutter a bit, but it also
 did before, and without a masked dehaze, if I am being honest."*
 
-**▶ FIRST STEP, and do not skip it: add a masked-exposure row to `bench_masked` and run it.**
-Everything below is what is *known*; none of it is a diagnosis. This project's record is that cost
-in this area has been reasoned wrong and measured right four times running, most recently five days
-ago — so the first commit of this work should be a number, not a change.
+**Measured** — X-T4 `DSCF6223.RAF`, buffer 3123x2085, fit at 1600 px, best of 5:
 
-⚠⚠ **That qualification is the whole entry, and it was the reporter's, not a diagnosis made here.**
-It rules out the two things this would otherwise most plausibly be: a regression from the masked
-capture corrections, and a failure of `capture_projection` to keep masked-exposure drags off the
-prefix cache. Neither is implicated — the stutter predates the milestone and occurs with no masked
-dehaze in play. **Do not scope this as prefix work.**
+| case | fit total | vs `neutral` | **vs `global exposure`** |
+|---|---|---|---|
+| neutral | 12.7 ms | — | — |
+| global exposure (no mask) | 14.4 ms | +1.6 | — |
+| 1 masked exposure, gradient | 17.1 ms | +4.4 | **+2.7** |
+| 1 masked exposure, small radial | 17.6 ms | +4.9 | **+3.2** |
+| 1 masked exposure, luminance range | 20.7 ms | +7.9 | **+6.3** |
+| 1 masked exposure, colour range | 31.3 ms | +18.6 | **+16.9** |
+| 3 masked exposure, gradient | 25.2 ms | +12.5 | +10.8 (3.6 each) |
 
-**What is known without measuring anything new:**
+Tail-only on a warm prefix at 1400x900 — **what a drag frame actually costs when zoomed** — says
+the same thing louder: neutral 8.7 ms, gradient **10.9**, luminance range **13.4**, colour range
+**22.3**.
 
-- `MaskStage` **clones the whole image per mask**, so every drag frame pays a clone plus each
-  sub-stage over the full frame. `CLAUDE.md`'s M7.2 section measures the consequence from the other
-  direction: *"three masks cost ~18% more than three times one … `MaskStage` clones the image per
-  mask, so three masks is three clones."*
-- The tail is what re-runs on a slider drag; the prefix is cached. So this is tail cost.
-- ⚠ **`bench_masked` has no row for a masked exposure**, which is why there is no number here. Every
-  masked row in it carries something expensive (clarity, HSL, a grade, a curve); the *cheap* masked
-  adjustment — the one that should feel instant and reportedly does not quite — has never been
-  timed on its own.
+**Decomposition of `MaskStage::apply`** (region 1400x900, gradient):
+`clone 0.4 ms | exposure 0.8 ms | blend 1.8 ms | sum 3.0 ms`.
 
-**Start by measuring, not by optimising.** A masked-exposure row in `bench_masked` would say
-immediately whether the cost is the clone, the coverage evaluation, or neither — and this project's
-record is that cost in this area has been reasoned wrong and measured right four times running.
+⚠⚠ **THE CLONE — THIS ENTRY'S OWN HEADLINE SUSPECT — IS 13% OF THE STAGE.** It is real, it is
+`0.4 ms`, and it is not the problem. The **blend** pass is 60%, and it costs **more than twice the
+adjustment it is blending**. That is the fifth consecutive time cost in this area has been reasoned
+wrong and measured right, and the wrong reasoning was written **in this entry**, one bullet from the
+instruction not to trust it.
 
-⚠ **The bounding box is the obvious suspect and may well be innocent.** It is deferred a sixth time
-and its measured value is ~17× on a small radial and *nothing* on a gradient or either range mask —
-so if the stutter shows up on a gradient mask, a bbox cannot be the answer.
+⚠⚠ **THE VARIABLE THAT MATTERS IS THE MASK KIND, AND IT SPANS 6x.** Identical adjustment, identical
+pixels, identical everything else: a gradient adds **+2.7 ms**, a colour range adds **+16.9 ms**.
+The cost is `hue_chroma()` — `prophoto_to_oklab` (three `cbrt`), `atan2`, `hypot` — evaluated on
+**every pixel of the frame** to decide coverage, ahead of a one-multiply adjustment. **The coverage
+evaluation is the cost.** Neither the clone nor the adjustment nor the blend arithmetic explains
+any of the spread.
+
+⚠ **So the diagnosis depends on which mask kind was being dragged, and the two answers are
+different pieces of work:**
+- **A range mask (luminance or colour)** — the numbers explain the report outright, and there is a
+  fix with a precedent: **a range mask's coverage is a pure function of the `base` pixel**, and
+  during a tail-only drag the base pixel *is the cached prefix output*, which does not change
+  between drag frames. Coverage could be rasterized once per (mask, prefix output) and reused, the
+  way `BrushCache` already does it for a brush. ⚠ The invalidation rule is the whole design
+  question — see `CoverageSource`'s note that a range mask is keyed on `base` precisely so it does
+  not chase its own effect.
+- **A gradient or radial** — **+2.7 ms is not a stutter**, and the cause is then not in this stage
+  at all. The investigation would be scoped wrong and should restart from what else runs per frame.
+
+**Verified rather than assumed, while measuring:**
+
+- ✅ **A masked-exposure drag provably never touches the prefix cache.** `build_prefix_steps`
+  `continue`s unless the projection's NR or dehaze is active, so no `MaskedCapture` step exists for
+  an exposure-only mask. This entry asserted it; it is now checked.
+- ✅ **Drag requests coalesce.** The worker drains `req_rx` to the newest request and `poll_latest`
+  drops all but the newest frame, so nothing queues up and the stutter is genuine per-frame cost,
+  not accumulated lag.
+
+⚠ **The bounding box is innocent for the SEVENTH time, and now on stronger evidence than before.**
+Gradient **17.1** against small radial **17.6** — indistinguishable, on the one mask shape a bbox
+could ever shrink. And for *both* range masks a bbox is meaningless **by construction**: a tonal or
+hue band has no bounding box.
 
 ### ⚠ What is left in `HslStage` after the hue LUT (recorded 2026-09-05)
 
