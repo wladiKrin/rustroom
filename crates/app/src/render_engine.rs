@@ -1591,6 +1591,23 @@ mod tests {
                         texture: 0.0,
                         clarity: 70.0,
                     },
+                    // ⚠⚠ **The capture corrections belong in this edit set, and their absence
+                    // would be silent.** They run in the *prefix*, whole-buffer, and that is the
+                    // entire reason for their placement: dehaze estimates its airlight from the
+                    // brightest 0.1% of the buffer it is handed, so if it ever ran on the
+                    // visible region instead, the same pixel would render differently depending
+                    // on where the viewport happened to be — and this comparison is what catches
+                    // it. There is no other test that can.
+                    //
+                    // ⚠ They contribute **nothing** to `inset` below, because neither is in the
+                    // tail. If this ever fails at the edges, the placement is wrong — do not
+                    // widen the inset.
+                    noise_reduction: edit_model::NoiseReduction {
+                        luminance: 40.0,
+                        color: 30.0,
+                        ..Default::default()
+                    },
+                    dehaze: edit_model::Dehaze { amount: 45.0 },
                     ..Default::default()
                 },
             }],
