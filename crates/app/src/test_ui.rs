@@ -14,7 +14,8 @@ use eframe::egui;
 
 /// The screen rect every headless harness uses.
 ///
-/// ⚠⚠ **Tall enough that a whole panel fits, which 300 pt no longer was.** These harnesses draw
+/// ⚠⚠ **Tall enough that a whole panel fits, which 300 pt no longer was — nor did 700 pt once a
+/// mask's section gained noise reduction (2026-09-06).** These harnesses draw
 /// a panel body into a *root* `Ui` with no scroll area, so a widget laid out past the bottom of
 /// this rect is simply outside the window: `find` still reports its bounds from AccessKit — so
 /// nothing panics — but `click` then presses a point egui ignores, and the test reads as "the
@@ -27,7 +28,7 @@ use eframe::egui;
 /// ⚠ Deliberately separate from `develop::canvas::test_support::screen`, which stays 400×300:
 /// the canvas tests derive real image placement from it, so its size is part of what they test.
 pub fn screen() -> egui::Rect {
-    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 700.0))
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 1400.0))
 }
 
 /// A context with AccessKit on, which is what makes [`find`] work.

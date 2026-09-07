@@ -182,7 +182,12 @@ pub enum PrefixStepKey {
     /// ⚠⚠ Holds the **projection**, never the whole `MaskedAdjustment` — see
     /// [`capture_projection`]. Keyed on the whole thing, a masked-exposure drag would re-run a
     /// whole-buffer denoise.
-    MaskedCapture(edit_model::MaskedAdjustment),
+    ///
+    /// ⚠ **Boxed**, and clippy is why: at 296 bytes against the next-largest variant's 25, an
+    /// inline `MaskedAdjustment` would make **every** entry in a `PrefixKey`'s `Vec` that size —
+    /// including the zero-sized ones. The same `large_enum_variant` answer `ActionKind::Sync`
+    /// already gives.
+    MaskedCapture(Box<edit_model::MaskedAdjustment>),
 }
 
 /// One prefix stage together with the key identifying its output, so the renderer can cache
@@ -292,7 +297,7 @@ pub fn build_prefix_steps(
         steps.push(PrefixStep {
             // ⚠⚠ The key holds **the projection the stage was built from**, so the key and the
             // stage cannot drift — the property this function exists to guarantee.
-            key: PrefixStepKey::MaskedCapture(p.clone()),
+            key: PrefixStepKey::MaskedCapture(Box::new(p.clone())),
             // ⚠⚠ **`None` for the prebuilt coverage, and it must stay that way.** The render
             // engine's `BrushCache` is sized from the *prefix output's* dimensions, which do not
             // exist until the prefix has run — so a prebuilt map is unavailable here even in
