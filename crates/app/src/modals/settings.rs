@@ -4,7 +4,7 @@ use super::dialog;
 use crate::decode::view_quality_hint;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::settings::{Accent, PanDrag, ThemeChoice};
+use rustroom_app::settings::{Accent, DragQuality, PanDrag, ThemeChoice};
 
 /// The Settings window: preferences that survive a restart.
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
@@ -15,6 +15,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
     let mut pan_drag = app.settings.pan_drag;
+    let mut drag_quality = app.settings.drag_quality;
     let mut display_space = app.settings.display_space;
     // Copied out before the closure borrows `app`.
     let os_manages_colour = app.os_manages_colour;
@@ -180,6 +181,26 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             );
 
             ui.separator();
+
+            ui.horizontal(|ui| {
+                ui.label("Preview while dragging");
+                egui::ComboBox::from_id_salt("drag_quality_pick")
+                    .selected_text(drag_quality.label())
+                    .show_ui(ui, |ui| {
+                        for q in DragQuality::ALL {
+                            ui.selectable_value(&mut drag_quality, q, q.label());
+                        }
+                    });
+            });
+            theme::hint(
+                ui,
+                "Renders at a lower resolution while a slider or the canvas is being dragged, \
+                 then at full quality the moment you let go. Each step is about a quarter as \
+                 many pixels. Sharpening is the one adjustment that reads weakly while dragging \
+                 — judge it at 1:1, or choose Full quality.",
+            );
+
+            ui.separator();
             if ui.button("Close").clicked() {
                 close = true;
             }
@@ -225,6 +246,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     // rewritten on every frame the dialog is open.
     if pan_drag != app.settings.pan_drag {
         app.settings.pan_drag = pan_drag;
+        app.save_settings();
+    }
+    // ⚠ A change guard like its neighbours, and for `pan_drag`'s weaker reason: this has no side
+    // effect beyond the write, because the canvas reads `settings.drag_quality` afresh every
+    // frame — no worker rebuild, no re-decode. The guard is here so the settings file is not
+    // rewritten on every frame the dialog is open.
+    if drag_quality != app.settings.drag_quality {
+        app.settings.drag_quality = drag_quality;
         app.save_settings();
     }
     if close {
