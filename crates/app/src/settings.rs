@@ -369,6 +369,18 @@ pub struct Settings {
     /// photograph's description, so it must not travel with a paste, a preset, a sync or a
     /// sidecar — `resampler`'s rule, for `resampler`'s reason.
     pub drag_quality: DragQuality,
+    /// Move on to the next photo after a rating, a flag or a colour label.
+    ///
+    /// ⚠ Defaults to **true**: it is the whole point of M6.5c, and a culling feature nobody finds
+    /// is a feature that did not ship. The correction case that usually argues for defaulting off
+    /// is answered by [`crate::marks::MarkAction::advances`] instead — `0` and `U` do not advance,
+    /// so fixing a mis-rating does not run away from you.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field falls back to this struct's `Default` — which is `true`. A field-level one
+    /// would use `bool`'s own default of `false` instead, silently disabling the feature for every
+    /// existing user. The same trap `write_xmp` and `snapshot_strip_height` both document.
+    pub auto_advance: bool,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -567,6 +579,7 @@ impl Default for Settings {
             composition_guide: crate::composition_guides::CompositionGuide::Off,
             write_xmp: true,
             drag_quality: DragQuality::default(),
+            auto_advance: true,
         }
     }
 }
@@ -1085,6 +1098,9 @@ mod tests {
             // Non-default for the same reason: `Faster` is the default, so only `Full` proves the
             // value survives a round trip rather than being re-defaulted underneath the test.
             drag_quality: DragQuality::Full,
+            // Non-default for the same reason as its neighbours: the preference defaults to *on*,
+            // so persisting `false` is what proves it round-trips rather than being re-defaulted.
+            auto_advance: false,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -1819,6 +1835,25 @@ mod tests {
             got.panel_order(),
             PanelSection::ALL.to_vec(),
             "and an absent order must give the default"
+        );
+    }
+
+    #[test]
+    fn a_settings_file_from_before_auto_advance_still_loads() {
+        // ⚠⚠ The forgiving-load property, and the trap `snapshot_strip_height` and `write_xmp`
+        // both document: `load()` is infallible, so a field that fails to parse does not surface
+        // an error — it silently reverts *every* setting. A **field-level** `#[serde(default)]`
+        // would be worse still: it would use `bool`'s own default of `false` and ship the feature
+        // disabled for everyone who already has a settings file, which is most people.
+        //
+        // ⚠ Asserts the **value**, not the mechanism, so it catches either way round.
+        let f = TempFile::new("auto_advance_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert!(
+            loaded.auto_advance,
+            "an existing settings file must get the feature, not silently opt out of it"
         );
     }
 }
