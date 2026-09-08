@@ -137,7 +137,9 @@ of an existing user's next export — it gains camera, exposure, keywords and ra
 point of the milestone, and what every other tool does by default. It is the one deliberate
 exception to the M6.1 seam's "defaults to do nothing" rule, and this paragraph is where that is
 recorded. The dialog offers the two as a radio pair under the three fields; the section header's
-"doing something" dot shows for `All` always, and for `CopyrightOnly` when a field is filled.
+"doing something" dot shows when a field is filled **or the scope is not the default** — `All`
+is the default and therefore not hidden state, which is the rule
+`a_section_that_is_doing_something_says_so_in_its_header` guards. *(Corrected while planning.)*
 
 **The three preset strings become defaults that a photo's own value overrides.** A photo's
 non-blank title, caption, copyright or creator wins; a blank one falls back to the preset's. The

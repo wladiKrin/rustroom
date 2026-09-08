@@ -56,7 +56,7 @@ fn delivery_sections(ui: &mut egui::Ui, opts: &mut ExportOptions) {
     // the crop aspect lock and the `Filter:` button were each fixed for.
     let on = |b: bool| if b { " ·" } else { "" };
 
-    egui::CollapsingHeader::new(format!("Metadata{}", on(!opts.metadata.is_empty())))
+    egui::CollapsingHeader::new(format!("Metadata{}", on(opts.metadata.is_active())))
         .id_salt("export_metadata")
         .show(ui, |ui| {
             egui::Grid::new("export_metadata_grid")
@@ -72,6 +72,16 @@ fn delivery_sections(ui: &mut egui::Ui, opts: &mut ExportOptions) {
                     ui.label("Caption");
                     ui.text_edit_singleline(&mut opts.metadata.caption);
                     ui.end_row();
+                    ui.label("Include");
+                    ui.horizontal(|ui| {
+                        for s in [
+                            export::MetadataScope::All,
+                            export::MetadataScope::CopyrightOnly,
+                        ] {
+                            ui.selectable_value(&mut opts.metadata.scope, s, s.label());
+                        }
+                    });
+                    ui.end_row();
                 });
             // ⚠ The load-bearing sentence in this whole dialog. Rustroom's promise is
             // that it never writes to the negative, and a field marked "Copyright" is
@@ -79,7 +89,9 @@ fn delivery_sections(ui: &mut egui::Ui, opts: &mut ExportOptions) {
             theme::hint(
                 ui,
                 "Written into the exported file as XMP. The original is never modified. \
-                 Leave a field empty to write nothing for it.",
+                 A photo's own title, caption, copyright and creator (Information dialog) win \
+                 over the fields above; leave a field empty to write nothing for it. \
+                 \"All metadata\" also writes the camera, exposure, keywords and rating.",
             );
         });
 
@@ -660,5 +672,25 @@ mod tests {
                 "{want} is active and its header does not say so: {busy:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_narrowed_scope_marks_the_metadata_header() {
+        // ⚠ `All` is the default and therefore not hidden state; `CopyrightOnly` is a choice
+        // someone made and forgot, which is exactly what the marker exists for.
+        let narrowed = with_app(|app| {
+            app.export_draft.metadata.scope = export::MetadataScope::CopyrightOnly;
+        });
+        assert!(
+            narrowed
+                .iter()
+                .any(|l| l.starts_with("Metadata") && l.len() > "Metadata".len()),
+            "a changed scope must show in the header: {narrowed:?}"
+        );
+        let idle = with_app(|_| {});
+        assert!(
+            idle.iter().any(|l| l == "Metadata"),
+            "All is the default and must carry no marker: {idle:?}"
+        );
     }
 }
