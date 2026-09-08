@@ -23,19 +23,19 @@ still carries the reasoning that matters — read the entry, then build it under
 
 | Backlog entry | Now |
 | --- | --- |
-| Creative 3-D LUTs | **M7.5** — ⚠⚠ **SPECCED AND SCHEDULED as W5 track A (2026-09-04).** M5.4b supplied the *seam*, not the answer: the blocker below — a `.cube` does not declare its input space — was still open, and W5-0 settled it. See `specs/2026-09-04-creative-luts-design.md`. |
+| Creative 3-D LUTs | ✅ **M7.5, shipped 2026-09-04** and confirmed by use (after the handover fix). ⚠⚠ Was specced as W5 track A. M5.4b supplied the *seam*, not the answer: the blocker below — a `.cube` does not declare its input space — was still open, and W5-0 settled it. See `specs/2026-09-04-creative-luts-design.md`. |
 | `ProfileToneCurve` / `ProfileLookTable` | **answered by M5.4b** — the same display-rendering question |
-| Soft-proofing · gamut mapping / rendering intents | **M6.4** — ⚠ **soft proofing is SPECCED as W5 track B (2026-09-04)**; gamut mapping and rendering intents are *not* in it and stay deferred. `specs/2026-09-04-soft-proofing-design.md`. |
+| Soft-proofing · gamut mapping / rendering intents | ✅ **M6.4 soft proofing shipped 2026-09-04**, confirmed by use; gamut mapping and rendering intents are *not* in it and stay deferred. `specs/2026-09-04-soft-proofing-design.md`. |
 | EXIF/IPTC metadata editing | ✅ **M6.2, 2026-09-08** — edited in the catalog, embedded at export, in the sidecar |
-| Export filename templating · output/print sharpening | **M6.1a** / **M6.1d** |
-| Mask intersection and subtraction | **M7.1c** |
-| A better interpolator for the geometric stages | **M7.3a** — ⚠ the highest-value entry in this file |
-| Fuse perspective into `GeometryStage` | **M7.3b** |
-| Automatic vertical detection (Hough) | **M7.4** |
-| Auto-mask brush · dehaze bright subjects · negative Texture · Clarity halos · grading in masks | **M7.6** |
-| Lens correction row batching · sequential export · incremental splatting | **M8.1** |
+| Export filename templating · output/print sharpening | ✅ **M6.1a** / ✅ **M6.1d**, both 2026-09-01 |
+| Mask intersection and subtraction | **M7.1c** — ⬜ still open (2026-09-08), the one M7.1 slice not built |
+| A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
+| Fuse perspective into `GeometryStage` | **M7.3b** — ⬜ still open (2026-09-08) |
+| Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
+| Auto-mask brush · dehaze bright subjects · negative Texture · Clarity halos · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; the other four ⬜ (2026-09-08) |
+| ~~Lens correction row batching~~ · sequential export · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); the other two ⬜ |
 | On-disk thumbnail cache | **M8.2** |
-| `main.rs` is too large | **W0** — with `canvas.rs`, before Phase 5 |
+| `main.rs` is too large | ✅ **W0, 2026-09-01** — 4,375 → 681 (917 as of 2026-09-08); `canvas.rs` 1,890 → 7 modules |
 | The in-window menu bar has never been run | **M9.2** |
 | Immich integration | **M9.1** |
 | Contributor-facing documentation | **M9.3** |
@@ -160,7 +160,7 @@ Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for d
   "Camera Velvia" and "Adobe Standard" for one body. ⚠ It puts a *decode* parameter into `Edits`,
   which must then travel through the sidecar, presets, copy/paste, sync **and the buffer-cache
   key** — that key is where the work is.
-- **Soft-proofing.** The preview still cannot show colour outside sRGB even when exporting P3,
+- ✅ **Soft-proofing — shipped as M6.4, 2026-09-04.** As recorded: the preview still cannot show colour outside sRGB even when exporting P3,
   because the pipeline clips to sRGB before the display transform. The macOS colorspace work makes
   this easier: tag the layer P3 and render P3.
 - **Gamut mapping / rendering intents at export.** Out-of-gamut colour currently clips per channel
@@ -313,7 +313,7 @@ above. Only *anchoring* wants the forward map.
   half is the follow-up, at the cost of the tool behaving differently either side of zero.
 - **Clarity has no halo suppressor**; the midtone weight is the mitigation. A `Detail`-style
   suppressor is a contained follow-up.
-- **No output/print sharpening** for resized exports.
+- ~~**No output/print sharpening** for resized exports.~~ ✅ **M6.1d, 2026-09-01** — in the file's display space, deliberately.
 - **Brush strokes shift when lens corrections are toggled.** Strokes are anchored in
   "pre-geometry" coordinates, which means *the input to `GeometryStage`* — and lens correction now
   runs ahead of it, so enabling or disabling it redefines that basis. The shift is up to ~3.5% at
@@ -323,7 +323,7 @@ above. Only *anchoring* wants the forward map.
   **forward** distortion map and the `lensfun` crate exposes only the inverse, so it means an
   iterative solve per stroke point. Deferred on the grounds that lens corrections are enabled once,
   early, not toggled mid-edit.
-- **Automatic vertical detection** (recorded 2026-08-31, the last slice of perspective). Find the
+- ✅ **Automatic vertical detection** — **shipped as M7.4, 2026-09-04.** Kept for the `mod_pc` correction below. (recorded 2026-08-31, the last slice of perspective). Find the
   lines a guided correction would need, without the user drawing them. ⚠ Needs a **Hough
   transform** over an edge map — a new image-analysis subsystem, not a UI job — and it still needs
   the manual controls underneath it for when the detection is wrong. ⚠ The solve itself is already
@@ -335,7 +335,7 @@ above. Only *anchoring* wants the forward map.
   from its own estimated focal length, which cannot be decomposed exactly into our fixed-`F_NORM`
   sliders, while solving in our own model is closed-form. Do not send the next reader to that API.
 
-- **A better interpolator for the geometric stages** (recorded 2026-08-31). ⚠⚠ **This is the
+- ✅ **A better interpolator for the geometric stages** — **shipped as M7.3, 2026-09-01.** (recorded 2026-08-31). ⚠⚠ **This is the
   larger win and it was found by accident** while measuring something else. Mean-absolute-Laplacian
   acutance on a real X-T4 frame: neutral **0.03186**, after **one** bilinear resample **0.01661** —
   a **48% loss from a single pass**. That already applies to straighten and to lens correction,
@@ -349,8 +349,7 @@ above. Only *anchoring* wants the forward map.
   that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
   with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
   perspective's own cache checkpoint, so every crop drag would re-run the resample.
-- **Colour grading does not reach masks.** `LocalAdjustments` is per-pixel-only and a grade is
-  global look. Also **no visual feedback of the grading range boundaries** on canvas or histogram.
+- ~~**Colour grading does not reach masks.**~~ ✅ **Shipped 2026-09-05** (Part A of "the rest of the stages inside a mask"). Still open: **no visual feedback of the grading range boundaries** on canvas or histogram.
 
 ---
 
@@ -721,7 +720,7 @@ is the only thing to trust here.
 - **Brush: incremental splatting.** Region-scoped coverage brought a paint frame to ~16.6 ms, of
   which ~9 ms is rasterization. ⚠ The remaining cost is **dab area, not frame area** — at 1:1 a dab
   is 125 px across — so incremental splatting is the lever if this ever needs to be faster.
-- **⚠ `LensCorrectionStage` calls the lensfun API one pixel at a time, and it is measured at 7.7×
+- ✅ **FIXED 2026-09-01** — one lensfun call per row and rayon over output rows; the 3200 rung's prefix 1178 → 309 ms. ⚠ The resampler is now ~2/3 of what is left. The entry as recorded: **`LensCorrectionStage` calls the lensfun API one pixel at a time, and it is measured at 7.7×
   the cost of the comparable stage.** A full-resolution render goes 4.59 s → 6.15 s (+1.56 s on
   26 Mpx), against `GeometryStage`'s 203 ms for a whole-buffer rotation at the same size. The cause
   is not the maths: `apply_geometry_distortion`, `apply_subpixel_distortion` and
@@ -733,7 +732,7 @@ is the only thing to trust here.
   `PipelineStage` seam that exists for the GPU port.
 - **Export is sequential**, deliberately: pipeline stages are already rayon-parallel internally, so
   parallel export would contend for the same cores while multiplying peak memory.
-- **Demosaic is ~93% of a full-resolution decode**, and the Phase 5 `wgpu` port would **not** fix it
+- **Demosaic is ~93% of a full-resolution decode**, and the Phase 8 (formerly 5) `wgpu` port would **not** fix it
   — that time is inside libraw's `dcraw_process`, entirely upstream of the stages wgpu would touch.
 
 - **⚠ Exports are not bit-reproducible across runs** (found 2026-09-01 while validating M7.3).
@@ -749,8 +748,7 @@ is the only thing to trust here.
 
 ## App and UI
 
-- **`main.rs` is ~4,375 lines** (⚠ the figure here read 1,345 until 2026-09-01 and was badly stale) — state types, decode functions and lifecycle orchestration. A
-  plausible third split, **now scheduled as W0**: with four agents working concurrently it hurts.
+- ✅ **`main.rs` — split by W0 on 2026-09-01**, 4,375 → 681, 917 as of 2026-09-08. ⚠ The files now over the ~600 marker are `settings.rs`, `edit-model/src/lib.rs`, `catalog/src/db.rs`, `batch_export.rs`, `panel/geometry.rs` and `library.rs`; `CLAUDE.md` names each when touched.
 - **The in-window menu bar has never been run**, only unit-tested — there is no Linux machine here
   and macOS never shows it. Flip the `!cfg!(target_os = "macos")` guard in `shell.rs` to look at it.
   Relatedly, **`native_menu.rs` can rot silently**, since CI never compiles it.
@@ -758,7 +756,7 @@ is the only thing to trust here.
 - **The accent colour reaches only egui's own widgets.** The crop overlay, histogram and thumbnail
   selection border are painted by hand with hardcoded colours — most visible in **light** mode,
   which has barely been looked at.
-- **Export has no filename templating** — `<stem>.<ext>` into a chosen folder.
+- ~~**Export has no filename templating**~~ ✅ **M6.1a, 2026-09-01.**
 - **Presets: no import/export, no folders, no rename.**
 - **Library:** no on-disk thumbnail cache, no subfolders, no vertical filmstrip.
 - **A nicer decode placeholder** — run the pipeline over the thumbnail for an instant low-res
@@ -772,7 +770,9 @@ CLAUDE.md section.
 
 ## EXIF/IPTC metadata editing (deferred 2026-08-26 — blocked on a DESIGN question)
 
-**Status:** ⛔ blocked on a decision, not on effort. Split out of M4.2 before designing it.
+**Status:** ✅ **SHIPPED as M6.2, 2026-09-08** — the design question dissolved under a narrower scope (see the table at the top). The entry below is kept as the record of why it was blocked.
+
+~~**Status:** ⛔ blocked on a decision, not on effort. Split out of M4.2 before designing it.~~
 
 **What is wanted:** displaying EXIF and IPTC properly (we surface almost nothing today — camera,
 lens, focal length, orientation), and *editing* IPTC fields like caption, copyright and creator.
