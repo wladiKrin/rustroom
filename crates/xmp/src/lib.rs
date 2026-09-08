@@ -1,5 +1,5 @@
-//! Reading and writing the few XMP fields Rustroom shares with Lightroom: rating, colour label
-//! and keywords, in a `stem.xmp` sidecar.
+//! Reading and writing the few XMP fields Rustroom shares with Lightroom: rating, colour label,
+//! keywords and the four description fields, in a `stem.xmp` sidecar.
 //!
 //! ⚠ Zero GUI and zero catalog dependency: the app decides what a label *means* and where a
 //! sidecar lives; this crate only turns text into a [`Sidecar`] and back.
@@ -20,6 +20,15 @@ pub struct Sidecar {
     /// Keyword paths, root first: `["Europe", "France", "Paris"]`. A flat `dc:subject` is a path
     /// of one.
     pub keywords: Vec<Vec<String>>,
+    /// `dc:title`, the `x-default` alternative.
+    pub title: Option<String>,
+    /// `dc:description` — what the app calls the caption.
+    pub caption: Option<String>,
+    /// `dc:rights` — what the app calls the copyright.
+    pub rights: Option<String>,
+    /// `dc:creator`. ⚠ A multi-entry sequence reads as its **first** and is written back as one:
+    /// the catalog holds one creator string, and a co-credit is not a field Rustroom has.
+    pub creator: Option<String>,
 }
 
 /// Why a sidecar could not be read or rewritten.
@@ -66,13 +75,17 @@ const NS_DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const NS_LR: &[u8] = b"http://ns.adobe.com/lightroom/1.0/";
 const NS_RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
-/// The four fields this crate owns, wherever and however they appear.
+/// The eight fields this crate owns, wherever and however they appear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Owned {
     Rating,
     Label,
     Subject,
     Hierarchical,
+    Title,
+    Description,
+    Rights,
+    Creator,
 }
 
 /// Which owned field a resolved name is, if any.
@@ -89,6 +102,10 @@ fn owned(ns: &ResolveResult<'_>, local: &[u8]) -> Option<Owned> {
         (NS_XMP, b"Label") => Some(Owned::Label),
         (NS_DC, b"subject") => Some(Owned::Subject),
         (NS_LR, b"hierarchicalSubject") => Some(Owned::Hierarchical),
+        (NS_DC, b"title") => Some(Owned::Title),
+        (NS_DC, b"description") => Some(Owned::Description),
+        (NS_DC, b"rights") => Some(Owned::Rights),
+        (NS_DC, b"creator") => Some(Owned::Creator),
         _ => None,
     }
 }
@@ -157,6 +174,14 @@ fn push_unique(paths: &mut Vec<Vec<String>>, p: Vec<String>) {
     }
 }
 
+/// Set `slot` to `t` unless it already holds a value — the first `rdf:li` of an `Alt` or `Seq`
+/// wins, and an attribute seen earlier is not overwritten by an element seen later.
+fn first(slot: &mut Option<String>, t: String) {
+    if slot.is_none() {
+        *slot = Some(t);
+    }
+}
+
 /// Read the owned attributes off an `rdf:Description` tag.
 fn description_attributes(
     reader: &NsReader<&[u8]>,
@@ -175,6 +200,10 @@ fn description_attributes(
         match owned(&ns, local.as_ref()) {
             Some(Owned::Rating) => out.rating = parse_rating(&value()?),
             Some(Owned::Label) => out.label = Some(value()?.into_owned()),
+            Some(Owned::Title) => first(&mut out.title, value()?.into_owned()),
+            Some(Owned::Description) => first(&mut out.caption, value()?.into_owned()),
+            Some(Owned::Rights) => first(&mut out.rights, value()?.into_owned()),
+            Some(Owned::Creator) => first(&mut out.creator, value()?.into_owned()),
             _ => {}
         }
     }
@@ -216,9 +245,15 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
                         let t = text_of(&mut reader, &e)?;
                         match bag {
                             Some(Owned::Hierarchical) => push_unique(&mut hier, split_path(&t)),
-                            _ => {
-                                push_unique(&mut flat, split_path(&t).into_iter().take(1).collect())
-                            }
+                            Some(Owned::Subject) => push_unique(
+                                &mut flat,
+                                split_path(&t).into_iter().take(1).collect(),
+                            ),
+                            Some(Owned::Title) => first(&mut out.title, t),
+                            Some(Owned::Description) => first(&mut out.caption, t),
+                            Some(Owned::Rights) => first(&mut out.rights, t),
+                            Some(Owned::Creator) => first(&mut out.creator, t),
+                            Some(Owned::Rating) | Some(Owned::Label) | None => {}
                         }
                     }
                     Kind::Description => {
@@ -383,6 +418,26 @@ fn bag(tag: &str, ns: &str, items: &[String]) -> String {
 }
 
 const NS_RDF_STR: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const NS_DC_STR: &str = "http://purl.org/dc/elements/1.1/";
+
+/// A language-alternative property with one `x-default` entry — `dc:title`, `dc:description`,
+/// `dc:rights`.
+fn lang_alt(tag: &str, v: &str) -> String {
+    format!(
+        "   <{tag} xmlns:dc=\"{NS_DC_STR}\"><rdf:Alt xmlns:rdf=\"{NS_RDF_STR}\">\
+         <rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></{tag}>\n",
+        esc(v)
+    )
+}
+
+/// A sequence with one entry — `dc:creator`.
+fn seq_one(tag: &str, v: &str) -> String {
+    format!(
+        "   <{tag} xmlns:dc=\"{NS_DC_STR}\"><rdf:Seq xmlns:rdf=\"{NS_RDF_STR}\">\
+         <rdf:li>{}</rdf:li></rdf:Seq></{tag}>\n",
+        esc(v)
+    )
+}
 
 /// The children injected into the first `rdf:Description`.
 ///
@@ -407,6 +462,18 @@ fn injection(s: &Sidecar) -> String {
             std::str::from_utf8(NS_XMP).unwrap_or_default(),
             esc(l)
         ));
+    }
+    if let Some(t) = &s.title {
+        out.push_str(&lang_alt("dc:title", t));
+    }
+    if let Some(c) = &s.caption {
+        out.push_str(&lang_alt("dc:description", c));
+    }
+    if let Some(r) = &s.rights {
+        out.push_str(&lang_alt("dc:rights", r));
+    }
+    if let Some(c) = &s.creator {
+        out.push_str(&seq_one("dc:creator", c));
     }
     if !s.keywords.is_empty() {
         let mut flat: Vec<String> = Vec::new();
@@ -738,6 +805,101 @@ mod tests {
         assert_eq!(s.label.as_deref(), Some("R&D"));
     }
 
+    /// The four description fields the way Lightroom writes them — as elements — beside a
+    /// develop setting that must survive.
+    const DESCRIBED: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+   crs:Exposure2012="+0.50">
+   <dc:title>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Harbour at dusk</rdf:li>
+    </rdf:Alt>
+   </dc:title>
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Boats &amp; nets</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+   <dc:rights>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">© 2026 W</rdf:li>
+    </rdf:Alt>
+   </dc:rights>
+   <dc:creator>
+    <rdf:Seq>
+     <rdf:li>W</rdf:li>
+     <rdf:li>Second Credit</rdf:li>
+    </rdf:Seq>
+   </dc:creator>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+    #[test]
+    fn the_four_description_fields_read_from_elements() {
+        let s = read(DESCRIBED).unwrap();
+        assert_eq!(s.title.as_deref(), Some("Harbour at dusk"));
+        assert_eq!(s.caption.as_deref(), Some("Boats & nets"), "entity not unescaped");
+        assert_eq!(s.rights.as_deref(), Some("© 2026 W"));
+        // ⚠ A multi-entry creator reads as its **first**: the catalog holds one creator string
+        // and a co-credit is not a field Rustroom has. Spec §4's accepted caveat.
+        assert_eq!(s.creator.as_deref(), Some("W"));
+    }
+
+    #[test]
+    fn a_description_field_reads_from_an_attribute() {
+        let text = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"
+   dc:title="Attr title" dc:rights="Attr rights"/>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        let s = read(text).unwrap();
+        assert_eq!(s.title.as_deref(), Some("Attr title"));
+        assert_eq!(s.rights.as_deref(), Some("Attr rights"));
+        assert_eq!(s.caption, None);
+    }
+
+    #[test]
+    fn a_fresh_packet_writes_the_description_fields_and_omits_unset_ones() {
+        let s = Sidecar {
+            title: Some("T".into()),
+            caption: None,
+            rights: Some("R & Co".into()),
+            creator: Some("C".into()),
+            ..Sidecar::default()
+        };
+        let text = write(&s, None).unwrap();
+        assert!(text.contains("<dc:title"), "{text}");
+        assert!(!text.contains("dc:description"), "{text}");
+        assert!(text.contains("R &amp; Co"), "{text}");
+        assert!(text.contains("<rdf:Seq"), "creator is a sequence:\n{text}");
+        assert_eq!(read(&text).unwrap(), s, "did not survive the round trip");
+    }
+
+    #[test]
+    fn merging_replaces_a_foreign_title_and_keeps_every_other_byte() {
+        let ours = Sidecar {
+            title: Some("Our title".into()),
+            caption: None,
+            ..Sidecar::default()
+        };
+        let out = write(&ours, Some(DESCRIBED)).unwrap();
+        assert!(out.contains(r#"crs:Exposure2012="+0.50""#), "develop setting lost:\n{out}");
+        let back = read(&out).unwrap();
+        assert_eq!(back.title.as_deref(), Some("Our title"));
+        // ⚠ Owned fields we do not set are **removed**, not kept: the catalog holds the truth
+        // (a newer sidecar imported before we ever wrote), and this is what lets a caption
+        // deleted in Rustroom disappear from Lightroom — the rule the rating already follows.
+        assert_eq!(back.caption, None, "a stale caption survived the merge:\n{out}");
+        assert_eq!(back.rights, None);
+        assert_eq!(back.creator, None);
+        assert_eq!(out.matches("<dc:title").count(), 1, "a second title appeared:\n{out}");
+    }
+
     // ─── writing: a fresh packet ──────────────────────────────────────────────────────────
 
     fn sample() -> Sidecar {
@@ -748,6 +910,7 @@ mod tests {
                 vec!["Europe".into(), "France".into(), "Paris".into()],
                 vec!["Cat".into()],
             ],
+            ..Sidecar::default()
         }
     }
 
@@ -798,6 +961,7 @@ mod tests {
             rating: None,
             label: Some("R&D".into()),
             keywords: vec![vec!["Rock & Roll".into(), "<2>".into()]],
+            ..Sidecar::default()
         };
         let text = write(&s, None).unwrap();
         assert!(text.contains("Rock &amp; Roll"), "{text}");
