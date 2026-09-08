@@ -58,6 +58,18 @@ impl GradeRange {
             Self::Global => &mut g.global,
         }
     }
+
+    /// The range the grade range view shows for this selection — `None` for Global, which is
+    /// a constant rather than a range.
+    pub fn view(self) -> Option<rustroom_app::grade_view::GradeRangeView> {
+        use rustroom_app::grade_view::GradeRangeView;
+        match self {
+            Self::Shadows => Some(GradeRangeView::Shadows),
+            Self::Midtones => Some(GradeRangeView::Midtones),
+            Self::Highlights => Some(GradeRangeView::Highlights),
+            Self::Global => None,
+        }
+    }
 }
 
 /// Lightness samples across the range strip. The weight curves are smooth, so 256 across a
@@ -370,6 +382,17 @@ mod tests {
         assert_eq!(g.midtones.hue, 22.0, "Midtones wrote the wrong wheel");
         assert_eq!(g.highlights.hue, 33.0, "Highlights wrote the wrong wheel");
         assert_eq!(g.global.hue, 44.0, "Global wrote the wrong wheel");
+    }
+
+    /// The four-way selector maps onto the three-way view, Global to nothing: Global is a
+    /// constant, not a range, and there is nothing of it to show.
+    #[test]
+    fn every_range_but_global_has_a_view() {
+        use rustroom_app::grade_view::GradeRangeView;
+        assert_eq!(GradeRange::Shadows.view(), Some(GradeRangeView::Shadows));
+        assert_eq!(GradeRange::Midtones.view(), Some(GradeRangeView::Midtones));
+        assert_eq!(GradeRange::Highlights.view(), Some(GradeRangeView::Highlights));
+        assert_eq!(GradeRange::Global.view(), None);
     }
 
     #[test]

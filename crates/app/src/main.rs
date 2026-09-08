@@ -817,6 +817,23 @@ pub struct Session {
     /// on a photo switch, like `selected_spot`; `select_tool` also clears it, since a canvas
     /// stuck in the grey edge view after switching to Edit reads as a broken render.
     visualize: Option<f32>,
+    /// The "Show range" checkbox in the Color Grading block.
+    ///
+    /// ⚠ View state on `Session`, beside `visualize` and for its reason: `Session::request` is
+    /// the one funnel every render goes through and cannot reach the app. Resets per photo and
+    /// clears on a tool switch. ⚠ Never `Edits` — it must not reach the sidecar or a paste.
+    show_grade_range: bool,
+    /// What the request carries: the checkbox AND a non-Global selection, or `None`.
+    ///
+    /// ⚠ Two fields, one derivation site. The value depends on the checkbox and on
+    /// `app.grade_range`, which lives on the app and which `request` cannot see; the panel
+    /// derives this with a change guard in the one place both are in scope. Under Global it is
+    /// `None` while the box stays ticked — one `Option` would untick the box the moment Global
+    /// was selected.
+    grade_view: Option<rustroom_app::grade_view::GradeRangeView>,
+    /// The view's plane as a texture, set where the frame lands and dropped by the same
+    /// assignment when a frame arrives without one.
+    grade_view_texture: Option<egui::TextureHandle>,
     /// The straighten-line gesture is armed: the next drag under `Tool::Crop` draws a line
     /// instead of moving the crop rectangle.
     ///

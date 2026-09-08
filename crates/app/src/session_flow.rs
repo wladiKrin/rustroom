@@ -117,7 +117,7 @@ impl Session {
                     space,
                     warn: self.gamut_warning,
                 }),
-                grade_view: None,
+                grade_view: self.grade_view,
             },
         );
     }
@@ -408,6 +408,9 @@ impl RustroomApp {
                 .effective_display_space(self.os_manages_colour),
             resampler: self.settings.resampler,
             visualize: None,
+            show_grade_range: false,
+            grade_view: None,
+            grade_view_texture: None,
             straighten_armed: false,
             straighten_drag: None,
             straighten_line: None,

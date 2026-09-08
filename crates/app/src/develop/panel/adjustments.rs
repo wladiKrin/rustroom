@@ -334,6 +334,8 @@ pub fn show(
     edits: &mut edit_model::Edits,
     hsl_channel: &mut HslChannel,
     grade_range: &mut color_wheel::GradeRange,
+    show_grade_range: &mut bool,
+    grade_view: &mut Option<rustroom_app::grade_view::GradeRangeView>,
     source: SourceInfo<'_>,
     picking: Option<&mut bool>,
     ed: &mut Edited,
@@ -399,6 +401,20 @@ pub fn show(
         ui.separator();
         ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
         ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
+        // ⚠⚠ A VIEW MODE, not an edit — `visualize`'s rule. It writes two session fields and
+        // never `Edits`, so it re-renders (`ed.changed`) without a history entry.
+        ui.checkbox(show_grade_range, "Show range").on_hover_text(
+            "Tints the photograph where the selected range reaches. Affects only what you see — \
+             never the render, the export or the histogram.",
+        );
+        // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
+        // checkbox and the selector are both in scope. Change-guarded: this body runs every
+        // frame, and an unguarded write would request a render sixty times a second.
+        let wanted = show_grade_range.then(|| grade_range.view()).flatten();
+        if *grade_view != wanted {
+            *grade_view = wanted;
+            ed.changed = true;
+        }
     });
 
     section(ui, SECTIONS[3], false, |ui| {
@@ -638,6 +654,7 @@ mod tests {
         };
         let mut channel = HslChannel::default();
         let mut grade = color_wheel::GradeRange::default();
+        let (mut show_range, mut view) = (false, None);
         let mut ed = Edited::default();
         let mut body = |ui: &mut egui::Ui| {
             ed = Edited::default();
@@ -646,6 +663,8 @@ mod tests {
                 &mut edits,
                 &mut channel,
                 &mut grade,
+                &mut show_range,
+                &mut view,
                 SourceInfo {
                     lens: Some("XF23mmF2 R WR"),
                     lens_profile_found: true,
@@ -666,6 +685,138 @@ mod tests {
             "the last untick collapsed to undecided"
         );
         assert!(ed.settled, "one click, one history entry");
+    }
+
+    /// The Edit panel with the state the range view reads and writes, held together so a
+    /// click's borrows end when the click does.
+    struct RangePanel {
+        edits: edit_model::Edits,
+        channel: HslChannel,
+        grade: color_wheel::GradeRange,
+        show_range: bool,
+        view: Option<rustroom_app::grade_view::GradeRangeView>,
+        ed: Edited,
+        buf: core_image::ImageBuf,
+        looks: rustroom_app::looks::LooksState,
+    }
+
+    impl RangePanel {
+        fn new(show_range: bool) -> Self {
+            Self {
+                edits: edit_model::Edits::default(),
+                channel: HslChannel::default(),
+                grade: color_wheel::GradeRange::default(),
+                show_range,
+                view: None,
+                ed: Edited::default(),
+                buf: tone_fixture(),
+                looks: rustroom_app::looks::LooksState::default(),
+            }
+        }
+
+        /// Click `label` in the panel; `ed` reports that one frame.
+        fn click(&mut self, ctx: &egui::Context, label: &str) {
+            let Self {
+                edits,
+                channel,
+                grade,
+                show_range,
+                view,
+                ed,
+                buf,
+                looks,
+            } = self;
+            crate::test_ui::click(ctx, label, |ui| {
+                *ed = Edited::default();
+                show(
+                    ui,
+                    edits,
+                    channel,
+                    grade,
+                    show_range,
+                    view,
+                    SourceInfo {
+                        lens: None,
+                        lens_profile_found: false,
+                        wb_baseline: color::wb::Illuminant::default(),
+                        baseline_ev: None,
+                        buffer: buf,
+                        looks,
+                    },
+                    None,
+                    ed,
+                );
+            });
+        }
+    }
+
+    /// A context whose collapsing headers open on the click, not over an animation.
+    fn instant_ctx() -> egui::Context {
+        let ctx = crate::test_ui::ctx();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        ctx
+    }
+
+    /// ⚠⚠ "Show range" is a VIEW MODE, not an edit — `visualize`'s test, re-run here: it asks
+    /// for a render (`ed.changed`), pushes no history entry, and leaves `Edits` untouched.
+    #[test]
+    fn ticking_show_range_requests_the_selected_range_without_editing_anything() {
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(false);
+        let before = p.edits.clone();
+        p.click(&ctx, "Color");
+        p.click(&ctx, "Show range");
+        assert!(p.show_range, "the checkbox did not take");
+        assert_eq!(
+            p.view,
+            Some(rustroom_app::grade_view::GradeRangeView::Shadows),
+            "the default selection is Shadows, and the view must carry it"
+        );
+        assert!(p.ed.changed, "the view asked for no render, so the canvas would not change");
+        assert!(!p.ed.settled, "a view toggle pushed a history entry");
+        assert_eq!(p.edits, before, "a view toggle edited the photograph");
+    }
+
+    /// ⚠ The derivation is change-guarded: this body runs every frame, and with the view on
+    /// and nothing touched it must ask for nothing — or the canvas re-renders at 60 Hz for as
+    /// long as the box is ticked. Sabotage: an unguarded write fails it.
+    #[test]
+    fn drawing_the_panel_with_the_view_on_requests_nothing() {
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(true);
+        p.view = Some(rustroom_app::grade_view::GradeRangeView::Shadows);
+        p.click(&ctx, "Color");
+        assert!(!p.ed.changed, "drawing the panel asked for a render");
+        assert!(!p.ed.settled, "drawing the panel pushed a history entry");
+    }
+
+    /// ⚠ Two inputs, one value on the wire: switching the selector while the box is ticked
+    /// re-renders with the new range; Global carries `None` and leaves the box ticked, so
+    /// stepping back to a range brings the view straight back.
+    #[test]
+    fn the_selector_drives_the_view_and_global_carries_none() {
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(true);
+        p.click(&ctx, "Color");
+        p.click(&ctx, "Mid");
+        assert_eq!(
+            p.view,
+            Some(rustroom_app::grade_view::GradeRangeView::Midtones),
+            "the selector did not reach the view"
+        );
+        assert!(p.ed.changed, "a new range asked for no render");
+        p.click(&ctx, "Global");
+        assert_eq!(p.view, None, "Global must carry no view");
+        assert!(p.ed.changed, "leaving a range asked for no render");
+        p.click(&ctx, "High");
+        assert!(p.show_range, "Global unticked the box");
+        assert_eq!(
+            p.view,
+            Some(rustroom_app::grade_view::GradeRangeView::Highlights),
+            "the view did not come back after Global"
+        );
     }
 
     /// ⚠⚠ **The panel must forward the session's baseline into the solve, and nothing else can

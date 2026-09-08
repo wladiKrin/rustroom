@@ -98,6 +98,11 @@ impl RustroomApp {
             // `t != Tool::Retouch` guard was tried and its sabotage went uncaught — an
             // unreachable guard is an untested one.
             s.visualize = None;
+            // ⚠ The grade range view goes off here too, unconditionally, for the same reason:
+            // its checkbox is only in the Edit panel, so every change that reaches this line is
+            // a change away from it.
+            s.show_grade_range = false;
+            s.grade_view = None;
             // ⚠ The straighten line goes too. It is drawn only under `Tool::Crop`, so leaving it
             // would simply reappear on the way back — but a tool change can also interrupt the
             // drag itself, and neither the canvas nor the panel gets its release frame in that
@@ -544,6 +549,31 @@ mod tests {
     /// per-photo, while `Tool` lives on `RustroomApp` — so nothing in a tool switch can touch
     /// them. Asserted rather than assumed, because "it happens to work" and "it is guaranteed"
     /// look identical until someone adds a reset.
+    /// ⚠ The grade range view goes off on a tool switch, unconditionally, beside `visualize`:
+    /// the checkbox lives in the Edit panel, so every change that reaches `select_tool` is a
+    /// change away from it, and a canvas still tinted under Crop reads as a broken render.
+    /// Both directions, so a `t != Tool::Edit` guard on the clear cannot pass.
+    #[test]
+    fn a_tool_switch_clears_the_grade_range_view() {
+        use rustroom_app::grade_view::GradeRangeView;
+        use rustroom_app::tool::Tool;
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+        for (from, to) in [(Tool::Edit, Tool::Crop), (Tool::Crop, Tool::Edit)] {
+            app.tool = from;
+            {
+                let s = app.session.as_mut().unwrap();
+                s.show_grade_range = true;
+                s.grade_view = Some(GradeRangeView::Midtones);
+            }
+            app.select_tool(to);
+            let s = app.session.as_ref().unwrap();
+            assert!(!s.show_grade_range, "{from:?} -> {to:?}: the checkbox survived");
+            assert_eq!(s.grade_view, None, "{from:?} -> {to:?}: the view survived");
+        }
+    }
+
     #[test]
     fn guides_survive_switching_tools() {
         use pipeline::perspective::guides::Guide;
