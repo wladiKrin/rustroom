@@ -591,6 +591,83 @@ mod tests {
         );
     }
 
+    /// ⚠ The checkbox writes `Some` in both directions. `None` on untick would read as
+    /// never-asked, and the preference would switch the rendering back on at the next open —
+    /// the exact bug the `Option` exists to end.
+    #[test]
+    fn unticking_the_rendering_decides_off_rather_than_forgetting() {
+        let ctx = crate::test_ui::ctx();
+        let buf = tone_fixture();
+        let mut edits = edit_model::Edits {
+            rendering: Some(edit_model::Rendering::Camera),
+            ..Default::default()
+        };
+        let mut ed = Edited::default();
+        crate::test_ui::click(&ctx, "Camera rendering", |ui| {
+            ed = Edited::default();
+            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
+        });
+        assert_eq!(edits.rendering, Some(edit_model::Rendering::None));
+        assert_ne!(
+            edits,
+            edit_model::Edits::default(),
+            "decided off must not be neutral"
+        );
+    }
+
+    /// Same for the lens boxes: unticking the last one leaves `Some(off)`, not `None`.
+    ///
+    /// ⚠ Drives the whole panel, because the Lens section is drawn inline in `show` and starts
+    /// collapsed — so the header is clicked first, with animation off (the `mask_adjust`
+    /// harness's rule: left on, the body is still zero-height when the click lands and the
+    /// test passes for the wrong reason).
+    #[test]
+    fn unticking_the_last_lens_correction_decides_off() {
+        let ctx = crate::test_ui::ctx();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
+        }
+        let buf = tone_fixture();
+        let looks = rustroom_app::looks::LooksState::default();
+        let mut edits = edit_model::Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut channel = HslChannel::default();
+        let mut grade = color_wheel::GradeRange::default();
+        let mut ed = Edited::default();
+        let mut body = |ui: &mut egui::Ui| {
+            ed = Edited::default();
+            show(
+                ui,
+                &mut edits,
+                &mut channel,
+                &mut grade,
+                SourceInfo {
+                    lens: Some("XF23mmF2 R WR"),
+                    lens_profile_found: true,
+                    wb_baseline: color::wb::Illuminant::default(),
+                    baseline_ev: None,
+                    buffer: &buf,
+                    looks: &looks,
+                },
+                None,
+                &mut ed,
+            );
+        };
+        crate::test_ui::click(&ctx, "Lens", &mut body);
+        crate::test_ui::click(&ctx, "Distortion", &mut body);
+        assert_eq!(
+            edits.lens_correction,
+            Some(edit_model::LensCorrection::default()),
+            "the last untick collapsed to undecided"
+        );
+        assert!(ed.settled, "one click, one history entry");
+    }
+
     /// ⚠⚠ **The panel must forward the session's baseline into the solve, and nothing else can
     /// see it drop.** Auto Tone and the display rendering both place the level: with the
     /// rendering on, the scene is lifted by a baseline exposure before the curve, so a solve
