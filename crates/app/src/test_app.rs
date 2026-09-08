@@ -318,6 +318,7 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
             region: None,
             hist: [[0; 256]; 3],
             max_dim: 8,
+            grade_view: None,
         },
         source_scale: 1.0,
         lens: LensFacts::default(),

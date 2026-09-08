@@ -145,6 +145,7 @@ impl Pane {
                     // output colour. A proof is a Develop view mode and lives on `Session`,
                     // which a `Pane` deliberately is not.
                     soft_proof: None,
+                    grade_view: None,
                 },
             );
         }

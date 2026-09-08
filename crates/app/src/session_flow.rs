@@ -117,6 +117,7 @@ impl Session {
                     space,
                     warn: self.gamut_warning,
                 }),
+                grade_view: None,
             },
         );
     }
@@ -395,6 +396,7 @@ impl RustroomApp {
                 // unproofed — matching the field's initialiser below rather than reaching for a
                 // state that does not exist yet.
                 soft_proof: None,
+                grade_view: None,
             },
         );
         // Non-RAW formats are decoded at full size, so their buffer is already the real thing.

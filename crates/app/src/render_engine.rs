@@ -48,6 +48,13 @@ pub struct RenderedFrame {
     /// a fit render" — an inference that a cropped photo can make false, since a native rung
     /// times a small crop factor lands below the preview cap. This makes it a fact.
     pub max_dim: usize,
+    /// The grade range view's plane — one byte per pixel, the selected range's weight — or
+    /// `None` when the view is off.
+    ///
+    /// ⚠ Taken at the grading stage's **input** (`TailHalves::before_grade`'s output), the only
+    /// place the ranges are exact; see `grade_view`. `width × height` bytes, the frame's own
+    /// dimensions, by construction: no stage after the tap changes a buffer's size.
+    pub grade_view: Option<Arc<Vec<u8>>>,
 }
 
 /// A requested crop of the rendered image, in post-geometry pixels.
@@ -134,6 +141,16 @@ pub struct FrameSpec {
     /// checkpoint, because `CacheKey` is `(PrefixKey, max_dim)` and the whole proof lives in the
     /// tail.
     pub soft_proof: Option<Proof>,
+    /// The grade range view, or `None` when it is off.
+    ///
+    /// ⚠ A view-only property of the *request*, like `visualize` and `soft_proof`: never
+    /// `Edits`, never the sidecar, an export or the CLI, and it invalidates no checkpoint,
+    /// because `CacheKey` is `(PrefixKey, max_dim)` and the whole tap lives in the tail.
+    ///
+    /// ⚠ Unlike `visualize` it is **not** a post-step in `pack`: `pack` sees the output
+    /// transform's result, and the ranges are selected on lightness before the display
+    /// rendering — see `render_cached`.
+    pub grade_view: Option<crate::grade_view::GradeRangeView>,
 }
 
 impl FrameSpec {
@@ -153,6 +170,7 @@ impl FrameSpec {
             resampler: pipeline::Resampler::default(),
             visualize: None,
             soft_proof: None,
+            grade_view: None,
         }
     }
 }
@@ -508,6 +526,7 @@ fn pack(
         hist,
         region,
         max_dim,
+        grade_view: None,
     }
 }
 
@@ -842,6 +861,7 @@ fn render_cached(
         resampler,
         visualize,
         soft_proof,
+        grade_view,
     } = spec;
     let buffer_long = buffer.width().max(buffer.height());
     let scale = render_scale(
@@ -989,18 +1009,40 @@ fn render_cached(
     });
     // ⚠ The **pipeline** is always sRGB here, whatever the proof does. The display transform is a
     // post-step in `pack`, deliberately outside the pipeline so the histogram stays image-referred.
-    let tail = build_tail(color::OutputSpace::Srgb);
-    (
-        pack(
-            tail.run(input),
-            proofed,
-            region,
-            max_dim,
-            display_space,
-            visualize,
-        ),
-        ran,
-    )
+    //
+    // ⚠⚠ The grade range view taps the tail at the grading stage's INPUT, not `pack`'s output:
+    // the ranges are selected on Oklab L before the grade's own luminance offsets, the masks,
+    // the display rendering S-curve and the creative LUT move it. `None` is the path that
+    // existed before this — one tail, one run, no clone. `Some` runs the same stages in the same
+    // order with one read between two halves, so the frame's pixels are identical too
+    // (`the_grade_view_does_not_touch_the_photograph`).
+    let (out, plane) = match grade_view {
+        Some(range) => {
+            let (_, halves) = pipeline::build_pipeline_split_tapped(
+                edits,
+                scale,
+                region,
+                Some(&coverage),
+                pipeline::RenderSpec {
+                    space: color::OutputSpace::Srgb,
+                    resampler,
+                    baseline: wb_baseline,
+                },
+                None,
+                profile,
+            );
+            let mid = halves.before_grade.run(input);
+            // ⚠ Blending and Balance are read from the edits whether or not the grade is
+            // active: the ranges exist before a wheel is turned.
+            let g = &edits.color_grading;
+            let plane = crate::grade_view::coverage(&mid, range, g.blending, g.balance);
+            (halves.from_grade.run(mid), Some(Arc::new(plane)))
+        }
+        None => (build_tail(color::OutputSpace::Srgb).run(input), None),
+    };
+    let mut frame = pack(out, proofed, region, max_dim, display_space, visualize);
+    frame.grade_view = plane;
+    (frame, ran)
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -1136,6 +1178,7 @@ mod tests {
                     resampler: k,
                     visualize: None,
                     soft_proof: None,
+                    grade_view: None,
                 },
                 1.0,
                 None,
@@ -1696,6 +1739,7 @@ mod tests {
                 resampler: pipeline::Resampler::default(),
                 visualize: None,
                 soft_proof: None,
+                grade_view: None,
             },
             1.0,
             None,
@@ -1816,6 +1860,7 @@ mod tests {
                 resampler: pipeline::Resampler::default(),
                 visualize: None,
                 soft_proof: None,
+                grade_view: None,
             },
             1.0,
             None,
@@ -2332,6 +2377,7 @@ mod tests {
                 resampler: pipeline::Resampler::default(),
                 visualize,
                 soft_proof,
+                grade_view: None,
             },
             1.0,
             None,
@@ -2573,6 +2619,7 @@ mod tests {
             resampler: pipeline::Resampler::default(),
             visualize: None,
             soft_proof: None,
+            grade_view: None,
         };
         let engine = RenderEngine::new(
             Arc::new(ImageBuf::new(4, 2)),
@@ -2590,5 +2637,165 @@ mod tests {
 
         engine.request(Edits::default(), spec());
         assert_eq!(engine.requests_issued(), 2, "each request counts");
+    }
+
+    // ---- the grade range view ------------------------------------------------------------
+
+    use crate::grade_view::GradeRangeView;
+
+    /// Six greys spanning black to above white, a saturated blue and a red — 8×1.
+    fn ramp_fixture() -> Arc<ImageBuf> {
+        let px = [
+            [0.005f32, 0.005, 0.005],
+            [0.05, 0.05, 0.05],
+            [0.18, 0.18, 0.18],
+            [0.5, 0.5, 0.5],
+            [1.0, 1.0, 1.0],
+            [1.4, 1.4, 1.4],
+            [0.01, 0.025, 0.45],
+            [0.5, 0.1, 0.1],
+        ];
+        let mut buf = ImageBuf::new(px.len(), 1);
+        for (i, p) in px.iter().enumerate() {
+            buf.set_pixel(i, 0, *p);
+        }
+        Arc::new(buf)
+    }
+
+    /// A grade that is active (saturation on all three wheels), with `luminance` on every wheel
+    /// set to `lum` — the offset that moves L *after* the tap.
+    fn graded(lum: f32, rendering: Option<edit_model::Rendering>) -> Edits {
+        let wheel = |hue: f32| edit_model::GradeWheel {
+            hue,
+            saturation: 70.0,
+            luminance: lum,
+        };
+        Edits {
+            color_grading: edit_model::ColorGrading {
+                shadows: wheel(240.0),
+                midtones: wheel(120.0),
+                highlights: wheel(45.0),
+                ..edit_model::ColorGrading::default()
+            },
+            rendering,
+            ..Default::default()
+        }
+    }
+
+    /// Render through the cached path at the fixture's own resolution, with the view.
+    fn viewed(
+        buf: &Arc<ImageBuf>,
+        edits: &Edits,
+        grade_view: Option<GradeRangeView>,
+        region: Option<RegionRect>,
+    ) -> RenderedFrame {
+        render_cached(
+            buf,
+            edits,
+            FrameSpec {
+                max_dim: buf.width().max(buf.height()),
+                region,
+                display_space: color::OutputSpace::Srgb,
+                resampler: pipeline::Resampler::default(),
+                visualize: None,
+                soft_proof: None,
+                grade_view,
+            },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            &mut PrefixCache::default(),
+            &mut BrushCache::default(),
+        )
+        .0
+    }
+
+    fn plane(f: &RenderedFrame) -> Vec<u8> {
+        f.grade_view
+            .as_ref()
+            .map(|p| p.as_ref().clone())
+            .expect("the frame carries no plane")
+    }
+
+    /// ⚠⚠ The view is an overlay, never a change to the photograph: pixels, sRGB channel and
+    /// histogram are byte-identical with the view on and off. Sabotage: painting the tint into
+    /// `out` fails it. And `None` is the old path — no plane at all.
+    #[test]
+    fn the_grade_view_does_not_touch_the_photograph() {
+        let buf = ramp_fixture();
+        let edits = graded(0.0, None);
+        let off = viewed(&buf, &edits, None, None);
+        let on = viewed(&buf, &edits, Some(GradeRangeView::Shadows), None);
+        assert!(off.grade_view.is_none(), "the view-off frame carries a plane");
+        assert_eq!(on.rgba, off.rgba, "the view changed the texture");
+        assert_eq!(on.srgb, off.srgb, "the view changed the instrument channel");
+        assert_eq!(on.hist, off.hist, "the view changed the histogram");
+        let p = plane(&on);
+        assert_eq!(p.len(), on.width * on.height);
+        // The ramp's ends: the darkest grey is mostly shadow, the brightest barely — at the
+        // fixture's default Blending of 50 the ranges overlap widely, so "mostly" is the honest
+        // reading (143 of 255 at L = 0.17), not the near-255 a Blending of 0 would give.
+        assert!(p[0] > 128 && p[5] < 16, "the plane is not the shadow weight: {p:?}");
+    }
+
+    /// ⚠⚠ The plane is taken BEFORE the grade. A luminance wheel at +100 shifts L by 0.15 on
+    /// every pixel it weights; tapped after the stage, the plane would move. Sabotage: run
+    /// `from_grade` before taking the plane.
+    #[test]
+    fn the_plane_is_taken_before_the_grade() {
+        let buf = ramp_fixture();
+        for range in GradeRangeView::ALL {
+            let flat = plane(&viewed(&buf, &graded(0.0, None), Some(range), None));
+            let lifted = plane(&viewed(&buf, &graded(100.0, None), Some(range), None));
+            assert_eq!(flat, lifted, "{range:?}: the grade's own luminance moved the plane");
+        }
+        // The premise: the lift really changes the photograph, so the equality above is not
+        // vacuous.
+        let a = viewed(&buf, &graded(0.0, None), None, None);
+        let b = viewed(&buf, &graded(100.0, None), None, None);
+        assert_ne!(a.srgb, b.srgb, "premise: +100 luminance changed nothing");
+    }
+
+    /// ⚠⚠ The plane is taken BEFORE the display rendering — the test that encodes spec §1 and
+    /// would have failed the pack-side design outright. Sabotage: tap after
+    /// `DisplayRenderingStage` (i.e. from `pack`'s output).
+    #[test]
+    fn the_plane_is_taken_before_the_display_rendering() {
+        let buf = ramp_fixture();
+        let colorimetric = graded(0.0, None);
+        let rendered = graded(0.0, Some(edit_model::Rendering::Camera));
+        for range in GradeRangeView::ALL {
+            let a = plane(&viewed(&buf, &colorimetric, Some(range), None));
+            let b = plane(&viewed(&buf, &rendered, Some(range), None));
+            assert_eq!(a, b, "{range:?}: the S-curve moved the plane");
+        }
+        let a = viewed(&buf, &colorimetric, None, None);
+        let b = viewed(&buf, &rendered, None, None);
+        assert_ne!(a.srgb, b.srgb, "premise: the rendering changed nothing");
+    }
+
+    /// On a region render the plane covers the rendered slice — `w * h` of the frame, not of
+    /// the whole image. `ColorImage::from_rgba_unmultiplied` panics on a mismatch rather than
+    /// reporting one, so this is pinned here.
+    #[test]
+    fn the_plane_has_the_frames_dimensions() {
+        let mut buf = ImageBuf::new(8, 6);
+        for y in 0..6 {
+            for x in 0..8 {
+                let v = (x + y * 8) as f32 / 48.0;
+                buf.set_pixel(x, y, [v, v, v]);
+            }
+        }
+        let buf = Arc::new(buf);
+        let region = Some(RegionRect {
+            x: 2,
+            y: 1,
+            w: 4,
+            h: 3,
+        });
+        let f = viewed(&buf, &graded(0.0, None), Some(GradeRangeView::Midtones), region);
+        assert_eq!((f.width, f.height), (4, 3));
+        assert_eq!(plane(&f).len(), 12);
     }
 }
