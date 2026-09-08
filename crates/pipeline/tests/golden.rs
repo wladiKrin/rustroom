@@ -961,6 +961,7 @@ fn golden_mask_brush_exposure() {
                         hardness: 40.0,
                         flow: 100.0,
                         erase: false,
+                        ..Default::default()
                     }],
                     invert: false,
                 }),
@@ -990,6 +991,7 @@ fn golden_mask_brush_erase() {
                             hardness: 60.0,
                             flow: 100.0,
                             erase: false,
+                            ..Default::default()
                         },
                         edit_model::BrushStroke {
                             points: vec![[0.3, 0.5], [0.7, 0.5]],
@@ -997,6 +999,7 @@ fn golden_mask_brush_erase() {
                             hardness: 100.0,
                             flow: 100.0,
                             erase: true,
+                            ..Default::default()
                         },
                     ],
                     invert: false,
@@ -1028,6 +1031,7 @@ fn golden_mask_brush_flow_buildup() {
         hardness: 30.0,
         flow: 35.0,
         erase: false,
+        ..Default::default()
     };
     check_golden(
         "mask_brush_flow_buildup",

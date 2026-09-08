@@ -89,6 +89,8 @@ pub(super) fn draw_mask_overlay(
                         hardness: brush.hardness,
                         flow: brush.flow,
                         erase: brush.erase,
+                        // Filled in when the Auto Mask controls land.
+                        ..Default::default()
                     });
                     // ⚠⚠ **Deliberately does NOT set `moved`.** Requesting a render here starts a
                     // full-resolution render of a ONE-POINT stroke you are about to extend. At

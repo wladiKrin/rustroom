@@ -2048,6 +2048,7 @@ mod tests {
                         hardness: 50.0,
                         flow: 100.0,
                         erase: false,
+                        ..Default::default()
                     }],
                     invert: false,
                 }),

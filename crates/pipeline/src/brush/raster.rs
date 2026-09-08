@@ -342,6 +342,7 @@ mod tests {
             hardness,
             flow: 100.0,
             erase,
+            ..Default::default()
         }
     }
 
@@ -441,6 +442,7 @@ mod tests {
                 hardness: 100.0,
                 flow: 100.0,
                 erase: false,
+                ..Default::default()
             }]),
             &Geometry::default(),
             80,
@@ -488,6 +490,7 @@ mod tests {
             hardness: 0.0,
             flow: 100.0,
             erase: false,
+            ..Default::default()
         }]);
         // ⚠⚠ The sample is compared against a SINGLE dab at the same place, not against a
         // range. An earlier version asserted only `> 0 && < 250` on a perpendicular sample —
@@ -519,6 +522,7 @@ mod tests {
             hardness: 100.0,
             flow: 100.0,
             erase: false,
+            ..Default::default()
         }]);
         for x in 12..68 {
             assert_eq!(m.at(x, 20), 255, "gap at x = {x}");
@@ -669,6 +673,7 @@ mod tests {
             hardness: 0.0,
             flow: 40.0,
             erase: false,
+            ..Default::default()
         }]);
         assert_eq!(
             dragged.at(40, 20),
@@ -775,6 +780,7 @@ mod tests {
             hardness: 40.0,
             flow: 100.0,
             erase: false,
+            ..Default::default()
         }])
     }
 
