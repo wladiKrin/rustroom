@@ -611,7 +611,10 @@ mod tests {
         // changed", the rule `a_section_that_is_doing_something_says_so_in_its_header` guards.
         let m = ExportMetadata::default();
         assert_eq!(m.scope, MetadataScope::All);
-        assert!(!m.is_active(), "an untouched section must not claim activity");
+        assert!(
+            !m.is_active(),
+            "an untouched section must not claim activity"
+        );
         let filled = ExportMetadata {
             copyright: "(c)".into(),
             ..ExportMetadata::default()
@@ -621,7 +624,10 @@ mod tests {
             scope: MetadataScope::CopyrightOnly,
             ..ExportMetadata::default()
         };
-        assert!(narrowed.is_active(), "a changed scope is state worth showing");
+        assert!(
+            narrowed.is_active(),
+            "a changed scope is state worth showing"
+        );
     }
 
     #[test]
@@ -664,7 +670,10 @@ mod tests {
         let r = FileMetadata::resolve(&defaults(), photo());
         assert_eq!(r.caption, "Boats", "the photo's caption beat the preset's");
         assert_eq!(r.copyright, "(c) preset", "an empty field fell back");
-        assert_eq!(r.creator, "Preset Person", "a whitespace field fell back too");
+        assert_eq!(
+            r.creator, "Preset Person",
+            "a whitespace field fell back too"
+        );
         assert_eq!(r.title, "Harbour", "the preset has no title to offer");
         assert_eq!(r.rating, 4);
         assert_eq!(r.keywords.len(), 2);
@@ -681,7 +690,13 @@ mod tests {
         assert_eq!(r.copyright, "(c) preset");
         assert_eq!(r.creator, "Preset Person");
         assert_eq!(
-            (r.title.as_str(), r.caption.as_str(), r.rating, r.label, r.keywords.len()),
+            (
+                r.title.as_str(),
+                r.caption.as_str(),
+                r.rating,
+                r.label,
+                r.keywords.len()
+            ),
             ("", "", 0, None, 0)
         );
         assert_eq!(r.capture, core_image::Capture::default());
@@ -717,14 +732,21 @@ mod tests {
             "<exif:FNumber>56/10</exif:FNumber>",
             "<exif:FocalLength>230/10</exif:FocalLength>",
         ] {
-            assert_eq!(x.matches(want).count(), 1, "{want} not exactly once in\n{x}");
+            assert_eq!(
+                x.matches(want).count(),
+                1,
+                "{want} not exactly once in\n{x}"
+            );
         }
     }
 
     #[test]
     fn keywords_land_in_both_forms_lightroom_reads() {
         let x = xmp_packet(&FileMetadata::resolve(&defaults(), photo())).unwrap();
-        assert!(x.contains("<rdf:li>Europe|UK</rdf:li>"), "no hierarchy:\n{x}");
+        assert!(
+            x.contains("<rdf:li>Europe|UK</rdf:li>"),
+            "no hierarchy:\n{x}"
+        );
         assert!(x.contains("<rdf:li>UK</rdf:li>"), "no leaf:\n{x}");
         assert!(x.contains("<rdf:li>Sea</rdf:li>"), "{x}");
         assert!(
@@ -752,7 +774,10 @@ mod tests {
         p.capture = core_image::Capture::default();
         let x = xmp_packet(&FileMetadata::resolve(&defaults(), p)).unwrap();
         for absent in ["tiff:", "exif:D", "exif:I", "exif:E", "exif:F", "aux:L"] {
-            assert!(!x.contains(&format!("<{absent}")), "{absent} appeared:\n{x}");
+            assert!(
+                !x.contains(&format!("<{absent}")),
+                "{absent} appeared:\n{x}"
+            );
         }
         // The Dublin Core half is still there.
         assert!(x.contains("<dc:title>"));
@@ -774,7 +799,10 @@ mod tests {
     fn a_date_is_naive_wall_clock_with_no_zone() {
         // ⚠ `Capture::taken` is naive wall-clock by rule; a `Z` or an offset here would claim a
         // zone the value never had.
-        assert_eq!(date_text(1_787_824_800).as_deref(), Some("2026-08-27T10:00:00"));
+        assert_eq!(
+            date_text(1_787_824_800).as_deref(),
+            Some("2026-08-27T10:00:00")
+        );
         assert_eq!(date_text(0).as_deref(), Some("1970-01-01T00:00:00"));
     }
 
@@ -879,7 +907,10 @@ mod tests {
             // ⚠ The **full** payload, so the container surgery is exercised against the biggest
             // packet this crate writes — the copyright from the preset and a capture fact from
             // the photo.
-            for needle in [&b"(c) preset"[..], b"<exif:ExposureTime>1/250</exif:ExposureTime>"] {
+            for needle in [
+                &b"(c) preset"[..],
+                b"<exif:ExposureTime>1/250</exif:ExposureTime>",
+            ] {
                 assert!(
                     bytes.windows(needle.len()).any(|w| w == needle),
                     "{fmt:?}: {} is not in the file",

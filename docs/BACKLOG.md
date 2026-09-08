@@ -26,7 +26,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | Creative 3-D LUTs | **M7.5** — ⚠⚠ **SPECCED AND SCHEDULED as W5 track A (2026-09-04).** M5.4b supplied the *seam*, not the answer: the blocker below — a `.cube` does not declare its input space — was still open, and W5-0 settled it. See `specs/2026-09-04-creative-luts-design.md`. |
 | `ProfileToneCurve` / `ProfileLookTable` | **answered by M5.4b** — the same display-rendering question |
 | Soft-proofing · gamut mapping / rendering intents | **M6.4** — ⚠ **soft proofing is SPECCED as W5 track B (2026-09-04)**; gamut mapping and rendering intents are *not* in it and stay deferred. `specs/2026-09-04-soft-proofing-design.md`. |
-| EXIF/IPTC metadata editing | **M6.2** — ⚠ its blocker dissolves at export scope; see below |
+| EXIF/IPTC metadata editing | ✅ **M6.2, 2026-09-08** — edited in the catalog, embedded at export, in the sidecar |
 | Export filename templating · output/print sharpening | **M6.1a** / **M6.1d** |
 | Mask intersection and subtraction | **M7.1c** |
 | A better interpolator for the geometric stages | **M7.3a** — ⚠ the highest-value entry in this file |

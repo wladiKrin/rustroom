@@ -86,14 +86,20 @@ mod tests {
         assert_eq!(d.original.title, "Stored");
         assert_eq!(d.edited, d.original);
         // No catalog at all (single-file mode) is an empty draft, not a panic.
-        assert_eq!(DescriptionDraft::open(None, &photo), DescriptionDraft::default());
+        assert_eq!(
+            DescriptionDraft::open(None, &photo),
+            DescriptionDraft::default()
+        );
     }
 
     #[test]
     fn commit_writes_only_when_the_draft_changed() {
         let (cat, photo) = catalogued();
         let unchanged = DescriptionDraft::open(Some(&cat), &photo);
-        assert!(!commit(&cat, &photo, &unchanged), "an untouched draft wrote");
+        assert!(
+            !commit(&cat, &photo, &unchanged),
+            "an untouched draft wrote"
+        );
         assert_eq!(cat.description_of(&photo).unwrap(), None);
 
         let mut d = unchanged;

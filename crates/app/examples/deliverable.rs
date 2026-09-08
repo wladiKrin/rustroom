@@ -80,10 +80,36 @@ fn main() {
             &o,
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
-            &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+            &export::FileMetadata::resolve(&o.metadata, described()),
         ) {
             Ok(()) => println!("wrote {}", dest.display()),
             Err(e) => println!("FAILED {}: {e}", dest.display()),
         }
+    }
+}
+
+/// A photo that says everything a catalog can say about one — so `exiftool` on the output shows
+/// every property M6.2 writes: title, caption, rating, label, both keyword forms, and the
+/// capture facts.
+fn described() -> export::FileMetadata {
+    export::FileMetadata {
+        title: "Deliverable probe".into(),
+        caption: "Every field the packet can carry, for exiftool to read back".into(),
+        rating: 4,
+        label: Some("Blue".into()),
+        keywords: vec![
+            vec!["Europe".into(), "Germany".into(), "Munich".into()],
+            vec!["Probe".into()],
+        ],
+        capture: core_image::Capture {
+            taken: Some(1_787_824_800),
+            camera: Some("FUJIFILM X-T4".into()),
+            lens: Some("XF23mmF2 R WR".into()),
+            iso: Some(1600),
+            shutter: Some(0.004),
+            aperture: Some(5.6),
+            focal_len: Some(23.0),
+        },
+        ..export::FileMetadata::default()
     }
 }

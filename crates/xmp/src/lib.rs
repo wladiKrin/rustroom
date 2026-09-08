@@ -245,10 +245,9 @@ pub fn read(text: &str) -> Result<Sidecar, XmpError> {
                         let t = text_of(&mut reader, &e)?;
                         match bag {
                             Some(Owned::Hierarchical) => push_unique(&mut hier, split_path(&t)),
-                            Some(Owned::Subject) => push_unique(
-                                &mut flat,
-                                split_path(&t).into_iter().take(1).collect(),
-                            ),
+                            Some(Owned::Subject) => {
+                                push_unique(&mut flat, split_path(&t).into_iter().take(1).collect())
+                            }
                             Some(Owned::Title) => first(&mut out.title, t),
                             Some(Owned::Description) => first(&mut out.caption, t),
                             Some(Owned::Rights) => first(&mut out.rights, t),
@@ -842,7 +841,11 @@ mod tests {
     fn the_four_description_fields_read_from_elements() {
         let s = read(DESCRIBED).unwrap();
         assert_eq!(s.title.as_deref(), Some("Harbour at dusk"));
-        assert_eq!(s.caption.as_deref(), Some("Boats & nets"), "entity not unescaped");
+        assert_eq!(
+            s.caption.as_deref(),
+            Some("Boats & nets"),
+            "entity not unescaped"
+        );
         assert_eq!(s.rights.as_deref(), Some("© 2026 W"));
         // ⚠ A multi-entry creator reads as its **first**: the catalog holds one creator string
         // and a co-credit is not a field Rustroom has. Spec §4's accepted caveat.
@@ -888,16 +891,26 @@ mod tests {
             ..Sidecar::default()
         };
         let out = write(&ours, Some(DESCRIBED)).unwrap();
-        assert!(out.contains(r#"crs:Exposure2012="+0.50""#), "develop setting lost:\n{out}");
+        assert!(
+            out.contains(r#"crs:Exposure2012="+0.50""#),
+            "develop setting lost:\n{out}"
+        );
         let back = read(&out).unwrap();
         assert_eq!(back.title.as_deref(), Some("Our title"));
         // ⚠ Owned fields we do not set are **removed**, not kept: the catalog holds the truth
         // (a newer sidecar imported before we ever wrote), and this is what lets a caption
         // deleted in Rustroom disappear from Lightroom — the rule the rating already follows.
-        assert_eq!(back.caption, None, "a stale caption survived the merge:\n{out}");
+        assert_eq!(
+            back.caption, None,
+            "a stale caption survived the merge:\n{out}"
+        );
         assert_eq!(back.rights, None);
         assert_eq!(back.creator, None);
-        assert_eq!(out.matches("<dc:title").count(), 1, "a second title appeared:\n{out}");
+        assert_eq!(
+            out.matches("<dc:title").count(),
+            1,
+            "a second title appeared:\n{out}"
+        );
     }
 
     // ─── writing: a fresh packet ──────────────────────────────────────────────────────────

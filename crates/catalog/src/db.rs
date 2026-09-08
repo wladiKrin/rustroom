@@ -2844,7 +2844,10 @@ mod tests {
             creator: "W".into(),
         };
         cat.set_description(Path::new("/a/one.RAF"), &d).unwrap();
-        assert_eq!(cat.description_of(Path::new("/a/one.RAF")).unwrap(), Some(d));
+        assert_eq!(
+            cat.description_of(Path::new("/a/one.RAF")).unwrap(),
+            Some(d)
+        );
         // A photo the catalog has never seen is `None`, not an error.
         assert_eq!(cat.description_of(Path::new("/a/ghost.RAF")).unwrap(), None);
     }

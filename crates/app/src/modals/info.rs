@@ -281,7 +281,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             if rustroom_app::description::commit(cat, &id.path, &draft) {
                 // ⚠ Not gated on `is_original()` the way `apply_mark_to` is: a description is
                 // per **file**, so editing it from a copy's dialog changes what the sidecar says.
-                app.write_xmp_for(&[id.path.clone()]);
+                app.write_xmp_for(std::slice::from_ref(&id.path));
             }
         }
         app.modal = Modal::None;
@@ -368,7 +368,11 @@ mod tests {
         crate::test_ui::click(&ctx, "Close", |_| show(&mut app, &ctx));
         assert!(app.modal == Modal::None);
         assert_eq!(
-            app.catalog.as_ref().unwrap().description_of(&id.path).unwrap(),
+            app.catalog
+                .as_ref()
+                .unwrap()
+                .description_of(&id.path)
+                .unwrap(),
             None,
             "an unchanged draft produced a row"
         );

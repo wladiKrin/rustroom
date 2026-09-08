@@ -1,7 +1,7 @@
 # Metadata writing — design
 
 Date: 2026-09-08
-Status: **design agreed, ready to plan.**
+Status: **built 2026-09-08.** Plan `2026-09-08-metadata-writing.md`.
 
 **M6.2**, the last open item of **Phase 6 — Delivery & interchange**. With M6.5c already merged,
 this closes the phase.

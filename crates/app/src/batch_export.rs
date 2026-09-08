@@ -583,11 +583,9 @@ fn run(
             break;
         }
 
-        match decoded
-            .and_then(|(img, baseline)| {
-                export_one(img, &edits, &dest, &opts, resampler, baseline, &meta)
-            })
-        {
+        match decoded.and_then(|(img, baseline)| {
+            export_one(img, &edits, &dest, &opts, resampler, baseline, &meta)
+        }) {
             Ok(()) => {
                 report.exported += 1;
                 claimed.insert(dest);
@@ -858,9 +856,18 @@ mod tests {
         let bytes = std::fs::read(d.0.join("one.tif")).unwrap();
         let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
         assert!(has("Harbour at dusk"), "the title never reached the file");
-        assert!(has("Boats returning"), "the photo's caption never reached the file");
-        assert!(!has("preset caption"), "the preset's caption overrode the photo's");
-        assert!(has("(c) preset"), "the preset's copyright did not fill the blank");
+        assert!(
+            has("Boats returning"),
+            "the photo's caption never reached the file"
+        );
+        assert!(
+            !has("preset caption"),
+            "the preset's caption overrode the photo's"
+        );
+        assert!(
+            has("(c) preset"),
+            "the preset's copyright did not fill the blank"
+        );
         assert!(has("<xmp:Rating>4</xmp:Rating>"), "the rating is missing");
         assert!(has("<xmp:Label>Blue</xmp:Label>"), "label 2 is Blue");
         assert!(has("Europe|UK"), "the keyword path is missing");
@@ -882,7 +889,10 @@ mod tests {
         let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
         assert!(has("(c) preset"));
         assert!(!has("Boats returning"), "the scope was not applied");
-        assert!(!has("xmp:Rating"), "the scope was not applied to the rating");
+        assert!(
+            !has("xmp:Rating"),
+            "the scope was not applied to the rating"
+        );
     }
 
     #[test]
