@@ -31,7 +31,7 @@ fn main() {
         let mut panels = Vec::new();
         for r in [edit_model::Rendering::None, edit_model::Rendering::Camera] {
             let edits = edit_model::Edits {
-                rendering: r,
+                rendering: Some(r),
                 ..Default::default()
             };
             let px = pipeline::build_pipeline(&edits, pipeline::RenderScale::new(1.0))

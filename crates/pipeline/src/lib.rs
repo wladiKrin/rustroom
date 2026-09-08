@@ -213,17 +213,18 @@ pub fn build_prefix_steps(
     // ⚠ First, ahead of geometry: the calibration is defined in the uncropped, unrotated sensor
     // frame, so it must precede both the crop and the straighten. A missing corrector — an
     // unlisted lens, or a JPEG — skips the step silently, which is the ordinary case.
-    if edits.lens_correction.is_active() {
+    let lens_correction = edits.applied_lens_correction();
+    if lens_correction.is_active() {
         if let Some(c) = lens {
             steps.push(PrefixStep {
-                key: PrefixStepKey::LensCorrection(edits.lens_correction, resampler),
+                key: PrefixStepKey::LensCorrection(lens_correction, resampler),
                 stage: Box::new(LensCorrectionStage::new(
                     c,
                     lens_profile::Corrections {
-                        distortion: edits.lens_correction.distortion,
-                        tca: edits.lens_correction.tca,
-                        vignetting: edits.lens_correction.vignetting,
-                        scale: edits.lens_correction.scale,
+                        distortion: lens_correction.distortion,
+                        tca: lens_correction.tca,
+                        vignetting: lens_correction.vignetting,
+                        scale: lens_correction.scale,
                     },
                     resampler,
                 )),
@@ -781,7 +782,7 @@ pub fn build_pipeline_split_in_region_with_brush(
     // ⚠ Conditioned on `look.is_some()`, not on the declared space alone: see above.
     let look_is_the_rendering = look.is_some() && edits.look.space.is_the_rendering();
 
-    match edits.rendering {
+    match edits.applied_rendering() {
         edit_model::Rendering::None => {}
         _ if look_is_the_rendering => {
             // The linear LUT *is* the rendering. Suppressed deliberately — the Rendering panel
@@ -954,7 +955,7 @@ mod tests {
     #[test]
     fn the_rendering_runs_last_before_the_output_transform() {
         let edits = Edits {
-            rendering: edit_model::Rendering::Camera,
+            rendering: Some(edit_model::Rendering::Camera),
             ..Default::default()
         };
         let names = build_pipeline(&edits, RenderScale::new(1.0)).stage_names();
@@ -1016,7 +1017,7 @@ mod tests {
         let cube = a_cube();
         let with = |space| {
             let edits = Edits {
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 look: edit_model::Look {
                     file: Some("x.cube".into()),
                     space,
@@ -1052,7 +1053,7 @@ mod tests {
         let cube = a_cube();
         for space in edit_model::LutSpace::ALL {
             let edits = Edits {
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 look: edit_model::Look {
                     file: Some("x.cube".into()),
                     space,
@@ -1076,7 +1077,7 @@ mod tests {
     fn a_look_with_no_table_leaves_the_camera_rendering_alone() {
         for space in edit_model::LutSpace::ALL {
             let edits = Edits {
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 look: edit_model::Look {
                     file: Some("gone.cube".into()),
                     space,
@@ -1131,7 +1132,7 @@ mod tests {
     #[test]
     fn the_builder_falls_back_to_the_built_in_for_an_identity_curve() {
         let edits = Edits {
-            rendering: edit_model::Rendering::Camera,
+            rendering: Some(edit_model::Rendering::Camera),
             ..Default::default()
         };
         let render = |curve: Option<&[[f32; 2]]>| {
@@ -1232,12 +1233,12 @@ mod tests {
                 masking: 40.0,
                 ..Default::default()
             },
-            lens_correction: edit_model::LensCorrection {
+            lens_correction: Some(edit_model::LensCorrection {
                 distortion: true,
                 tca: false,
                 vignetting: true,
                 scale: 80.0,
-            },
+            }),
             perspective: edit_model::Perspective {
                 vertical: 30.0,
                 horizontal: -15.0,
@@ -1308,7 +1309,7 @@ mod tests {
                 feather: 30.0,
                 mode: edit_model::SpotMode::Heal,
             }],
-            rendering: edit_model::Rendering::Camera,
+            rendering: Some(edit_model::Rendering::Camera),
             look: edit_model::Look {
                 file: Some("velvia.cube".into()),
                 space: edit_model::LutSpace::SrgbDisplay,
@@ -2625,10 +2626,10 @@ mod tests {
     fn lens_correction_runs_first_in_the_prefix() {
         // Before geometry, because the calibration is defined in the uncropped sensor frame.
         let edits = Edits {
-            lens_correction: edit_model::LensCorrection {
+            lens_correction: Some(edit_model::LensCorrection {
                 distortion: true,
                 ..Default::default()
-            },
+            }),
             geometry: edit_model::Geometry {
                 angle: 2.0,
                 ..Default::default()
@@ -2649,10 +2650,10 @@ mod tests {
     fn lens_correction_is_skipped_when_no_profile_matched() {
         // ⚠ The ordinary case for an unlisted lens, and it must be silent rather than an error.
         let edits = Edits {
-            lens_correction: edit_model::LensCorrection {
+            lens_correction: Some(edit_model::LensCorrection {
                 distortion: true,
                 ..Default::default()
-            },
+            }),
             ..Edits::default()
         };
         assert!(
@@ -2663,10 +2664,10 @@ mod tests {
     #[test]
     fn the_lens_scale_alone_inserts_no_stage() {
         let edits = Edits {
-            lens_correction: edit_model::LensCorrection {
+            lens_correction: Some(edit_model::LensCorrection {
                 scale: 0.0,
                 ..Default::default()
-            },
+            }),
             ..Edits::default()
         };
         assert!(build_prefix_steps(

@@ -689,28 +689,35 @@ impl Settings {
             Some(e) => e,
             None => edit_model::Edits {
                 lens_correction: self.initial_lens_correction(),
-                rendering: self.default_rendering,
+                rendering: self.initial_rendering(),
                 ..edit_model::Edits::default()
             },
         }
     }
 
-    /// What a **fresh** photo's lens corrections start as.
+    /// What a **fresh** photo's rendering starts as.
+    ///
+    /// ⚠ `None` — *undecided* — when the preference is off, **not** `Some(Rendering::None)`:
+    /// decided-off is a fact worth a sidecar, and seeding it would write a file for every photo
+    /// ever opened under an off preference, where today none is written.
+    pub fn initial_rendering(&self) -> Option<edit_model::Rendering> {
+        (self.default_rendering != edit_model::Rendering::None).then_some(self.default_rendering)
+    }
+
+    /// What a **fresh** photo's lens corrections start as — `None`, undecided, when the
+    /// preference is off, for `initial_rendering`'s reason.
     ///
     /// ⚠ No `has_sidecar` parameter any more: the "only when there is no sidecar" half of the
     /// rule lives in [`Self::initial_edits`], where it applies to every preference at once
     /// rather than being repeated per field and got wrong for the second one.
-    pub fn initial_lens_correction(&self) -> edit_model::LensCorrection {
-        if self.auto_lens_correction {
-            edit_model::LensCorrection {
+    pub fn initial_lens_correction(&self) -> Option<edit_model::LensCorrection> {
+        self.auto_lens_correction
+            .then(|| edit_model::LensCorrection {
                 distortion: true,
                 tca: true,
                 vignetting: true,
                 ..Default::default()
-            }
-        } else {
-            edit_model::LensCorrection::default()
-        }
+            })
     }
 
     /// The space the *renderer* should convert into.
@@ -1526,8 +1533,8 @@ mod tests {
             "a fresh RAW must not open colorimetric-only"
         );
         let fresh = s.initial_edits(None);
-        assert_eq!(fresh.rendering, edit_model::Rendering::Camera);
-        assert!(fresh.lens_correction.is_active(), "and corrected");
+        assert_eq!(fresh.rendering, Some(edit_model::Rendering::Camera));
+        assert!(fresh.applied_lens_correction().is_active(), "and corrected");
     }
 
     /// ⚠⚠ **THE BUG THIS FUNCTION EXISTS FOR, and it was reported from using the app: the
@@ -1543,19 +1550,19 @@ mod tests {
         let s = Settings::default();
         let stored = edit_model::Edits {
             // The opposite of what each preference would impose, so neither can pass by accident.
-            rendering: edit_model::Rendering::None,
-            lens_correction: edit_model::LensCorrection::default(),
+            rendering: Some(edit_model::Rendering::None),
+            lens_correction: Some(edit_model::LensCorrection::default()),
             exposure: 0.75,
             ..edit_model::Edits::default()
         };
         let got = s.initial_edits(Some(stored.clone()));
         assert_eq!(
             got.rendering,
-            edit_model::Rendering::None,
+            Some(edit_model::Rendering::None),
             "the stored rendering was overwritten by the preference"
         );
         assert!(
-            !got.lens_correction.is_active(),
+            !got.applied_lens_correction().is_active(),
             "the stored lens correction was overwritten by the preference"
         );
         assert_eq!(got, stored, "a stored photo must come back untouched");
@@ -1570,8 +1577,8 @@ mod tests {
             ..Settings::default()
         };
         let fresh = off.initial_edits(None);
-        assert_eq!(fresh.rendering, edit_model::Rendering::None);
-        assert!(!fresh.lens_correction.is_active());
+        assert_eq!(fresh.rendering, None, "undecided, not decided off");
+        assert_eq!(fresh.lens_correction, None);
         assert_eq!(
             fresh,
             edit_model::Edits::default(),
@@ -1603,12 +1610,12 @@ mod tests {
             ..Settings::default()
         };
         assert!(
-            on.initial_edits(None).lens_correction.is_active(),
+            on.initial_edits(None).applied_lens_correction().is_active(),
             "fresh photo"
         );
         assert!(
             !on.initial_edits(Some(edit_model::Edits::default()))
-                .lens_correction
+                .applied_lens_correction()
                 .is_active(),
             "a photo with a sidecar must be left alone"
         );
@@ -1620,7 +1627,11 @@ mod tests {
             auto_lens_correction: false,
             ..Settings::default()
         };
-        assert!(!off.initial_lens_correction().is_active());
+        assert_eq!(
+            off.initial_lens_correction(),
+            None,
+            "undecided, not decided off — or every photo would get a sidecar"
+        );
     }
 
     #[test]
@@ -1629,7 +1640,7 @@ mod tests {
             auto_lens_correction: true,
             ..Settings::default()
         };
-        let l = s.initial_lens_correction();
+        let l = s.initial_lens_correction().expect("the preference is on");
         assert!(l.distortion && l.tca && l.vignetting, "{l:?}");
         assert_eq!(l.scale, 100.0, "and autoscale by default");
     }

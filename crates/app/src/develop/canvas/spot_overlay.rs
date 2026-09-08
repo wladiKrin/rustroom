@@ -419,10 +419,10 @@ pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
             w,
             h,
             lens_profile::Corrections {
-                distortion: s.edits.lens_correction.distortion,
-                tca: s.edits.lens_correction.tca,
-                vignetting: s.edits.lens_correction.vignetting,
-                scale: s.edits.lens_correction.scale,
+                distortion: s.edits.applied_lens_correction().distortion,
+                tca: s.edits.applied_lens_correction().tca,
+                vignetting: s.edits.applied_lens_correction().vignetting,
+                scale: s.edits.applied_lens_correction().scale,
             },
         )
     });

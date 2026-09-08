@@ -54,7 +54,7 @@ fn main() {
         let cam = pixels(&render(
             &small,
             &edit_model::Edits {
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 ..Default::default()
             },
         ));

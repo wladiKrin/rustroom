@@ -830,6 +830,63 @@ mod tests {
         };
         assert!(!two.is_neutral(), "a copy is worth keeping the file for");
     }
+
+    fn only_original(edits: Edits) -> Sidecar {
+        let mut s = Sidecar::default();
+        s.copies.push(CopyEntry {
+            copy: 0,
+            label: None,
+            edits,
+            snapshots: Vec::new(),
+            snapshot_hwm: 0,
+        });
+        s
+    }
+
+    /// ⚠⚠ THE M5.4b LEFTOVER, AS A TEST. Before the `Option`, an otherwise-untouched photo whose
+    /// rendering was switched off read as `Edits::default()`, so `persist` deleted its sidecar
+    /// and the preference switched the rendering back on at the next open. Decided off is not
+    /// the default now, so the file is written and kept.
+    #[test]
+    fn a_decided_off_rendering_or_lens_is_worth_a_sidecar() {
+        for edits in [
+            Edits {
+                rendering: Some(edit_model::Rendering::None),
+                ..Edits::default()
+            },
+            Edits {
+                lens_correction: Some(edit_model::LensCorrection::default()),
+                ..Edits::default()
+            },
+        ] {
+            assert!(
+                !only_original(edits.clone()).is_neutral(),
+                "decided-off read as neutral: {edits:?}"
+            );
+        }
+    }
+
+    /// And the other half: a fresh photo under off-preferences is `None`/`None`, which IS
+    /// neutral, so no sidecar is written for it — no litter.
+    #[test]
+    fn an_undecided_photo_is_still_neutral() {
+        assert!(only_original(Edits::default()).is_neutral());
+    }
+
+    /// End to end on disk: persist a decided-off rendering, load it back, and it is still
+    /// decided off — the reported symptom was that it came back *on*.
+    #[test]
+    fn a_decided_off_rendering_survives_persist_and_load() {
+        let dir = TempDir::new("decided_off");
+        let photo = dir.0.join("a.RAF");
+        let off = Edits {
+            rendering: Some(edit_model::Rendering::None),
+            ..Edits::default()
+        };
+        persist(&photo, &off).unwrap();
+        assert!(path(&photo).exists(), "the sidecar was deleted as neutral");
+        assert_eq!(load(&photo), Some(off));
+    }
     /// A sidecar with copy 0 at `e0` and copy 1 at `e1`.
     fn two_copies(photo: &Path, e0: f32, e1: f32) {
         save_all(

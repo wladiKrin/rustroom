@@ -80,7 +80,7 @@ pub fn analyse(
 /// about a stop too bright — measured at −1.00 EV against the camera's own JPEG before this was
 /// threaded through. `median_target_for` is the one place that decision lives.
 pub fn apply(edits: &mut Edits, buffer: &ImageBuf, baseline_ev: Option<f32>) -> AutoTone {
-    let target = auto_tone::median_target_for(edits.rendering, baseline_ev);
+    let target = auto_tone::median_target_for(edits.applied_rendering(), baseline_ev);
     let (_, a) = analyse(buffer, &edits.geometry, target);
     edits.exposure = a.exposure;
     edits.whites = a.whites;

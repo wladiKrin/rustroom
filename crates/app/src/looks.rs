@@ -205,7 +205,9 @@ pub fn notes(edits: &edit_model::Edits, looks: &LooksState) -> Vec<String> {
     // ⚠⚠ The invisible-state guard. A `Linear` look means `DisplayRenderingStage` does not run,
     // because that LUT *is* the rendering — two renderings apparently both switched on with one
     // silently ignored is the failure this project keeps recording.
-    if edits.look.space.is_the_rendering() && edits.rendering == edit_model::Rendering::Camera {
+    if edits.look.space.is_the_rendering()
+        && edits.applied_rendering() == edit_model::Rendering::Camera
+    {
         out.push("This look is the rendering — camera rendering is not applied".to_owned());
     }
     // ⚠⚠ **Two sources, because they answer at different times.** "Not installed" is decided
@@ -439,7 +441,7 @@ mod tests {
 
     fn a_look(file: &str, space: edit_model::LutSpace) -> edit_model::Edits {
         edit_model::Edits {
-            rendering: edit_model::Rendering::Camera,
+            rendering: Some(edit_model::Rendering::Camera),
             look: edit_model::Look {
                 file: Some(file.into()),
                 space,
@@ -468,7 +470,7 @@ mod tests {
         );
 
         let off = edit_model::Edits {
-            rendering: edit_model::Rendering::None,
+            rendering: Some(edit_model::Rendering::None),
             ..linear.clone()
         };
         assert!(

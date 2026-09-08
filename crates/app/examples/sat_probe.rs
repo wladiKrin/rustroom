@@ -46,7 +46,7 @@ fn main() {
         }
         let out = pipeline::build_pipeline(
             &edit_model::Edits {
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 ..Default::default()
             },
             pipeline::RenderScale::new(1.0),

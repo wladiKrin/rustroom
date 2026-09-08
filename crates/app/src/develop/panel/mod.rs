@@ -443,7 +443,7 @@ mod tests {
                 s.baseline_ev = baseline;
                 // ⚠ The correction applies only under the camera rendering; with `None` the two
                 // do not stack, the target is unchanged, and this test could see nothing.
-                s.edits.rendering = edit_model::Rendering::Camera;
+                s.edits.rendering = Some(edit_model::Rendering::Camera);
             }
             crate::test_ui::click(&ctx, "Auto", |ui| {
                 show(&mut app, ui);

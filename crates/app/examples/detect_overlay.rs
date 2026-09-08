@@ -107,10 +107,15 @@ fn probe_refine(path: &str, at: &[(f32, f32, f32, f32)]) {
             },
         })
     });
-    let mut edits = Edits::default();
-    edits.lens_correction.distortion = true;
-    edits.lens_correction.tca = true;
-    edits.lens_correction.vignetting = true;
+    let edits = Edits {
+        lens_correction: Some(edit_model::LensCorrection {
+            distortion: true,
+            tca: true,
+            vignetting: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
 
     let drawn: Vec<Guide> = at
         .iter()
@@ -224,10 +229,15 @@ fn main() {
                 },
             })
         });
-        let mut edits = Edits::default();
-        edits.lens_correction.distortion = true;
-        edits.lens_correction.tca = true;
-        edits.lens_correction.vignetting = true;
+        let edits = Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
 
         let (luma, w, h) = perspective_detect::analysis_luma(
             &decoded.image,

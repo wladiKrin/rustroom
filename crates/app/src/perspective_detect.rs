@@ -50,14 +50,15 @@ pub fn analysis_luma(
     resampler: Resampler,
 ) -> (Vec<f32>, usize, usize) {
     let small = buffer.downscale_to(ANALYSIS_DIM);
-    let small = match (edits.lens_correction.is_active(), lens) {
+    let lc = edits.applied_lens_correction();
+    let small = match (lc.is_active(), lens) {
         (true, Some(c)) => LensCorrectionStage::new(
             c,
             lens_profile::Corrections {
-                distortion: edits.lens_correction.distortion,
-                tca: edits.lens_correction.tca,
-                vignetting: edits.lens_correction.vignetting,
-                scale: edits.lens_correction.scale,
+                distortion: lc.distortion,
+                tca: lc.tca,
+                vignetting: lc.vignetting,
+                scale: lc.scale,
             },
             resampler,
         )

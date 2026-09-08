@@ -84,7 +84,7 @@ fn main() {
         let cam = render(
             &small,
             &edit_model::Edits {
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 ..Default::default()
             },
         );

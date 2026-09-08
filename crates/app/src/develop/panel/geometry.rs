@@ -98,18 +98,17 @@ pub fn show(
     // ⚠ Not a second *feature* with two homes — the Presets panel was removed for being that.
     // It is one field, relevant to two different decisions, edited from whichever view can see
     // its effect.
-    if lens_profile_found && s.edits.lens_correction.distortion {
+    if lens_profile_found && s.edits.applied_lens_correction().distortion {
         ui.label("Lens");
         // ⚠ "Lens scale" here, plain "Scale" in the Edit panel's Lens section — the same field,
         // labelled to disambiguate only in the one view where a *second* Scale slider (the
         // perspective one below) is on screen at the same time. Two adjacent sliders both called
         // "Scale" is ambiguous once the headings have scrolled out of view.
-        ed.slider(
-            ui,
-            &mut s.edits.lens_correction.scale,
-            0.0..=100.0,
-            "Lens scale",
-        );
+        // ⚠ `if let Some`: drawn only while distortion is on, which means the field is already
+        // decided — binding through `get_or_insert` would turn drawing into deciding.
+        if let Some(l) = &mut s.edits.lens_correction {
+            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Lens scale");
+        }
         ui.separator();
     }
 
@@ -979,7 +978,10 @@ mod tests {
         let ctx = test_ui::ctx();
         let seen = |lens: bool, distortion: bool| {
             let mut s = session();
-            s.edits.lens_correction.distortion = distortion;
+            s.edits.lens_correction = Some(edit_model::LensCorrection {
+                distortion,
+                ..Default::default()
+            });
             let mut aspect = None;
             let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
             let mut ed = Edited::default();
@@ -1014,7 +1016,10 @@ mod tests {
     fn the_lens_scale_and_the_perspective_scale_have_different_labels() {
         let ctx = test_ui::ctx();
         let mut s = session();
-        s.edits.lens_correction.distortion = true;
+        s.edits.lens_correction = Some(edit_model::LensCorrection {
+            distortion: true,
+            ..Default::default()
+        });
         let mut aspect = None;
         let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut ed = Edited::default();

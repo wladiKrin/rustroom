@@ -262,7 +262,7 @@ pub(crate) fn tone(
     // state, turning scene-referred light into something a screen can show. It is also the first
     // thing anyone reaches for when a RAW opens looking flat, which is the other reason it is
     // first.
-    let mut rendered = edits.rendering == edit_model::Rendering::Camera;
+    let mut rendered = edits.applied_rendering() == edit_model::Rendering::Camera;
     if ui
         .checkbox(&mut rendered, "Camera rendering")
         .on_hover_text(
@@ -271,11 +271,13 @@ pub(crate) fn tone(
         )
         .changed()
     {
-        edits.rendering = if rendered {
+        // ⚠ Always `Some`: a click is a decision, and *decided off* is what survives a photo
+        // switch — `None` would read as never-asked and the preference would switch it back on.
+        edits.rendering = Some(if rendered {
             edit_model::Rendering::Camera
         } else {
             edit_model::Rendering::None
-        };
+        });
         // ⚠ `mark_changed`, not a slider's `changed()`: a click is a complete act, so it is one
         // history entry immediately rather than waiting for a `drag_stopped` that never comes.
         ed.mark_changed();
@@ -437,18 +439,17 @@ pub fn show(
         // ⚠ Disabled rather than hidden: a greyed row that names the unmatched lens explains
         // itself, and an absent row does not.
         ui.add_enabled_ui(lens_profile_found, |ui| {
-            let l = &mut edits.lens_correction;
-            if ui.checkbox(&mut l.distortion, "Distortion").changed() {
-                ed.discrete();
-            }
-            if ui.checkbox(&mut l.tca, "Chromatic aberration").changed() {
-                ed.discrete();
-            }
+            // ⚠ Read the applied value into a local and write the whole struct back as `Some`
+            // on any change: a click decides, and decided-off must not collapse back to
+            // undecided. Binding the boxes to an `Option`'s inside would need it to be `Some`
+            // first, which would turn merely *looking* at the panel into a decision.
+            let mut l = edits.applied_lens_correction();
+            let mut touched = false;
+            touched |= ui.checkbox(&mut l.distortion, "Distortion").changed();
+            touched |= ui.checkbox(&mut l.tca, "Chromatic aberration").changed();
             // ⚠ Not the creative Vignette, which stays in Effects. This one is corrective and
             // pre-crop; that one is creative and post-crop. The section heading keeps them apart.
-            if ui.checkbox(&mut l.vignetting, "Vignetting").changed() {
-                ed.discrete();
-            }
+            touched |= ui.checkbox(&mut l.vignetting, "Vignetting").changed();
             // ⚠ Also surfaced in the **Crop** tool, and that is not duplication for its own sake:
             // Scale is only *judgeable* against the uncropped frame, which is what crop mode
             // shows. Here it is often invisible — if you have cropped at all, the empty corners
@@ -456,7 +457,13 @@ pub fn show(
             //
             // ⚠ "Scale", not "Crop": only *pincushion* correction empties the frame, and barrel
             // correction's autoscale is exactly 1, so on many photos this does nothing at all.
-            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Scale");
+            let scaled = ed.slider(ui, &mut l.scale, 0.0..=100.0, "Scale").changed();
+            if touched || scaled {
+                edits.lens_correction = Some(l);
+            }
+            if touched {
+                ed.discrete();
+            }
         });
     });
 
@@ -568,7 +575,7 @@ mod tests {
         });
         assert_eq!(
             edits.rendering,
-            edit_model::Rendering::Camera,
+            Some(edit_model::Rendering::Camera),
             "ticking it did not turn the rendering on"
         );
         assert!(ed.changed && ed.settled, "one click, one history entry");
@@ -579,7 +586,7 @@ mod tests {
         });
         assert_eq!(
             edits.rendering,
-            edit_model::Rendering::None,
+            Some(edit_model::Rendering::None),
             "unticking it did not turn the rendering off"
         );
     }
@@ -600,7 +607,7 @@ mod tests {
             let mut edits = edit_model::Edits {
                 // ⚠ The correction applies only under the camera rendering; with `None` the two
                 // do not stack and the target is unchanged, so this test could not see anything.
-                rendering: edit_model::Rendering::Camera,
+                rendering: Some(edit_model::Rendering::Camera),
                 ..Default::default()
             };
             let mut ed = Edited::default();

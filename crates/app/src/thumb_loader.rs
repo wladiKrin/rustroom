@@ -100,7 +100,8 @@ fn load_thumbnail(req: &ThumbRequest, resampler: pipeline::Resampler) -> Option<
 /// keeps the camera's own rendering and the canvas gains ours, so the two converge.
 fn thumbnail_edits(edits: &Edits) -> Edits {
     Edits {
-        rendering: edit_model::Rendering::None,
+        // ⚠ Undecided, not decided off — a render input, not a choice anyone made.
+        rendering: None,
         ..edits.clone()
     }
 }
@@ -317,16 +318,12 @@ mod tests {
     #[test]
     fn a_thumbnail_is_never_rendered_twice() {
         let edits = Edits {
-            rendering: edit_model::Rendering::Camera,
+            rendering: Some(edit_model::Rendering::Camera),
             exposure: 0.5,
             ..Default::default()
         };
         let t = thumbnail_edits(&edits);
-        assert_eq!(
-            t.rendering,
-            edit_model::Rendering::None,
-            "the thumbnail path kept the rendering"
-        );
+        assert_eq!(t.rendering, None, "the thumbnail path kept the rendering");
         // ⚠ And it keeps everything else — a thumbnail that dropped the edits would stop being
         // edit-accurate, which is the whole reason it renders at all.
         assert_eq!(t.exposure, 0.5, "it dropped the other edits too");

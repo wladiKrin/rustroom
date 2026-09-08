@@ -165,7 +165,7 @@ fn main() {
     println!("== stage lists (rendering = Camera) ==");
     for space in LutSpace::ALL {
         let e = Edits {
-            rendering: Rendering::Camera,
+            rendering: Some(Rendering::Camera),
             look: Look {
                 file: Some("x.cube".into()),
                 space,
@@ -180,7 +180,7 @@ fn main() {
         );
     }
     let no_look = Edits {
-        rendering: Rendering::Camera,
+        rendering: Some(Rendering::Camera),
         ..Default::default()
     };
     println!("{:>14}: {}", "no look", stage_names(&no_look, None));
@@ -228,7 +228,7 @@ fn main() {
         // is the unit the difference would have to be visible in.
         for space in [LutSpace::SrgbDisplay, LutSpace::Rec709] {
             let e = Edits {
-                rendering: Rendering::Camera,
+                rendering: Some(Rendering::Camera),
                 look: Look {
                     file: Some("x.cube".into()),
                     space,
@@ -267,7 +267,7 @@ fn main() {
         for (name, cube) in &cubes {
             for space in LutSpace::ALL {
                 let e = Edits {
-                    rendering: Rendering::Camera,
+                    rendering: Some(Rendering::Camera),
                     look: Look {
                         file: Some("x.cube".into()),
                         space,

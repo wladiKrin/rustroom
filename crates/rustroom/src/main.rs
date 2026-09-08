@@ -185,7 +185,7 @@ fn render(
     // Resolve a lens profile, if the file names a lens we know and any correction is wanted.
     // ⚠ `Catalogue::bundled()` decompresses 56 XML files, so it is built once here and never
     // inside a loop. A miss is an ordinary answer, not an error: the stage is simply skipped.
-    let lens = if edits.lens_correction.is_active() {
+    let lens = if edits.applied_lens_correction().is_active() {
         decoded.metadata.lens.as_ref().and_then(|l| {
             let db = lens_profile::Catalogue::bundled().ok()?;
             let p = db.find(&decoded.metadata.make, &decoded.metadata.model, &l.name)?;
@@ -200,7 +200,7 @@ fn render(
     } else {
         None
     };
-    if edits.lens_correction.is_active() {
+    if edits.applied_lens_correction().is_active() {
         match (&decoded.metadata.lens, &lens) {
             (Some(l), Some(_)) => {
                 eprintln!("Lens profile: {} ({} mm f/{})", l.name, l.focal, l.aperture)

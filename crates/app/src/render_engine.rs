@@ -245,7 +245,9 @@ impl RenderEngine {
                     req.edits
                 } else {
                     edit_model::Edits {
-                        rendering: edit_model::Rendering::None,
+                        // ⚠ Undecided, not decided off: a stripped copy is a render
+                        // input, not a choice anyone made.
+                        rendering: None,
                         ..req.edits
                     }
                 };

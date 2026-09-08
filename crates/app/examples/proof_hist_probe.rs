@@ -110,7 +110,7 @@ fn run(paths: &[String], rendering: Rendering, label: &str) {
         );
 
         let edits = Edits {
-            rendering,
+            rendering: Some(rendering),
             ..Edits::default()
         };
 

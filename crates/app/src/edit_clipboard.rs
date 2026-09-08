@@ -132,10 +132,10 @@ mod tests {
                 amount: 55.0,
                 ..Default::default()
             },
-            lens_correction: edit_model::LensCorrection {
+            lens_correction: Some(edit_model::LensCorrection {
                 distortion: true,
                 ..Default::default()
-            },
+            }),
             vignette: edit_model::Vignette {
                 amount: -25.0,
                 ..Default::default()
@@ -166,7 +166,7 @@ mod tests {
                 feather: 30.0,
                 mode: edit_model::SpotMode::Clone,
             }],
-            rendering: edit_model::Rendering::Camera,
+            rendering: Some(edit_model::Rendering::Camera),
             look: edit_model::Look {
                 file: Some("portra.cube".into()),
                 space: edit_model::LutSpace::Linear,

@@ -82,7 +82,7 @@ fn main() {
 
     // A 50% centre crop — the case reported.
     let cropped = Edits {
-        lens_correction: lens_on,
+        lens_correction: Some(lens_on),
         geometry: Geometry {
             crop: CropRect {
                 left: 0.25,

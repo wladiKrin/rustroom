@@ -1523,7 +1523,14 @@ pub struct Edits {
     pub noise_reduction: NoiseReduction,
     pub vignette: Vignette,
     pub sharpening: Sharpening,
-    pub lens_correction: LensCorrection,
+    /// The lens corrections. `None` = **never decided**, which applies as none;
+    /// `Some(LensCorrection::default())` = **decided off**, a different fact that survives a
+    /// photo switch. Read through [`Edits::applied_lens_correction`].
+    ///
+    /// ⚠ `skip_serializing_if`: undecided is *absent* from the sidecar, never `null`, so a photo
+    /// that was never asked writes the same bytes it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens_correction: Option<LensCorrection>,
     pub perspective: Perspective,
     pub geometry: Geometry,
     /// Local adjustments, each confined to a mask. Applied in order, after the global
@@ -1531,12 +1538,14 @@ pub struct Edits {
     pub masks: Vec<MaskedAdjustment>,
     /// How the scene is mapped onto a display. See [`Rendering`].
     ///
-    /// ⚠ `None` by default, which is what keeps `Edits::default()` strictly neutral — and
-    /// therefore what keeps all 53 goldens and the CLI untouched. The GUI applies
-    /// `Settings::default_rendering` to a photo with no sidecar yet, the rule
-    /// `initial_lens_correction` already follows.
-    #[serde(default)]
-    pub rendering: Rendering,
+    /// ⚠ `None` = **never decided**, which applies as `Rendering::None` — what keeps
+    /// `Edits::default()` strictly neutral, and therefore all 59 goldens and the CLI untouched.
+    /// `Some(Rendering::None)` = **decided off**: not the default, so a sidecar holding it is
+    /// kept, which is the whole fix. The GUI seeds `Some(Settings::default_rendering)` on a
+    /// photo with no sidecar, the rule `initial_lens_correction` follows.
+    /// Read through [`Edits::applied_rendering`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendering: Option<Rendering>,
     /// Spot removal patches, applied in order on the pre-geometry frame. Empty = no stage.
     pub spots: Vec<Spot>,
     /// A creative look: a `.cube` laid over the finished photograph.
@@ -1549,6 +1558,21 @@ pub struct Edits {
     /// all 53 goldens byte-identical.
     #[serde(default)]
     pub look: Look,
+}
+
+impl Edits {
+    /// What the pipeline applies: the decided rendering, else none.
+    ///
+    /// ⚠ **The one read rule** — every consumer goes through here, so "undecided renders as
+    /// off" is written once.
+    pub fn applied_rendering(&self) -> Rendering {
+        self.rendering.unwrap_or_default()
+    }
+
+    /// What the pipeline applies: the decided lens corrections, else none. Same rule.
+    pub fn applied_lens_correction(&self) -> LensCorrection {
+        self.lens_correction.unwrap_or_default()
+    }
 }
 
 impl Edits {
@@ -2430,17 +2454,83 @@ mod tests {
     /// what keeps all 53 goldens and the CLI untouched. A default of `Camera` would move every
     /// one of them.
     #[test]
-    fn the_default_rendering_is_colorimetric_only() {
-        assert_eq!(Edits::default().rendering, Rendering::None);
+    fn the_default_rendering_is_undecided_and_applies_as_colorimetric() {
+        assert_eq!(Edits::default().rendering, None);
+        assert_eq!(Edits::default().applied_rendering(), Rendering::None);
+        assert_eq!(Edits::default().lens_correction, None);
+        assert!(!Edits::default().applied_lens_correction().is_active());
     }
 
-    /// ⚠ Serde ignores what it does not know, so an existing sidecar reads as `None` — exactly
-    /// right, since that is what those photos were rendered with.
+    /// ⚠⚠ THE DISTINCTION THIS CHANGE EXISTS FOR: decided off is not the default. Before it, a
+    /// photo whose rendering was switched off read as neutral, its sidecar was deleted, and the
+    /// preference switched it back on at the next open.
+    #[test]
+    fn a_decided_off_is_not_the_default() {
+        let off = Edits {
+            rendering: Some(Rendering::None),
+            ..Default::default()
+        };
+        assert_ne!(
+            off,
+            Edits::default(),
+            "decided-off rendering read as neutral"
+        );
+        assert_eq!(
+            off.applied_rendering(),
+            Rendering::None,
+            "but still applies as off"
+        );
+        let lens_off = Edits {
+            lens_correction: Some(LensCorrection::default()),
+            ..Default::default()
+        };
+        assert_ne!(
+            lens_off,
+            Edits::default(),
+            "decided-off lens read as neutral"
+        );
+        assert!(!lens_off.applied_lens_correction().is_active());
+    }
+
+    /// ⚠ Serde ignores what it does not know, so a sidecar from before either field reads as
+    /// *undecided* — which applies as off, exactly what those photos were rendered with.
     #[test]
     fn a_sidecar_written_before_the_rendering_still_loads() {
         let e: Edits = serde_json::from_str(r#"{"exposure":0.5}"#).expect("parses");
-        assert_eq!(e.rendering, Rendering::None);
+        assert_eq!(e.rendering, None);
+        assert_eq!(e.lens_correction, None);
         assert_eq!(e.exposure, 0.5);
+    }
+
+    /// ⚠ A sidecar that already says `"None"` was written by whoever switched the rendering off,
+    /// so *decided off* is the reading they meant — and nothing existing changes meaning.
+    #[test]
+    fn an_existing_off_in_a_sidecar_reads_as_decided_off() {
+        let e: Edits = serde_json::from_str(r#"{"rendering":"None"}"#).unwrap();
+        assert_eq!(e.rendering, Some(Rendering::None));
+        let e: Edits = serde_json::from_str(r#"{"rendering":"Camera"}"#).unwrap();
+        assert_eq!(e.rendering, Some(Rendering::Camera));
+        let e: Edits = serde_json::from_str(r#"{"lens_correction":{"distortion":false}}"#).unwrap();
+        assert_eq!(e.lens_correction, Some(LensCorrection::default()));
+    }
+
+    /// ⚠ Undecided is **absent** from the file, never `null`: a photo that was never asked
+    /// writes the same bytes it always did.
+    #[test]
+    fn an_undecided_field_is_absent_from_the_sidecar() {
+        let text = serde_json::to_string(&Edits::default()).unwrap();
+        assert!(!text.contains("\"rendering\""), "{text}");
+        assert!(!text.contains("\"lens_correction\""), "{text}");
+        let decided = Edits {
+            rendering: Some(Rendering::None),
+            lens_correction: Some(LensCorrection::default()),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&decided).unwrap();
+        assert!(text.contains("\"rendering\":\"None\""), "{text}");
+        assert!(text.contains("\"lens_correction\""), "{text}");
+        let back: Edits = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, decided);
     }
 
     /// ⚠ Included in `EditGroups::default()` because a rendering is a *look* — it should follow
@@ -2450,7 +2540,7 @@ mod tests {
         assert!(EditGroups::default().get(RENDERING_GROUP));
 
         let src = Edits {
-            rendering: Rendering::Camera,
+            rendering: Some(Rendering::Camera),
             exposure: 1.0,
             ..Default::default()
         };
@@ -2458,7 +2548,7 @@ mod tests {
         dst.merge_from(&src, EditGroups::only(RENDERING_GROUP));
         assert_eq!(
             dst.rendering,
-            Rendering::Camera,
+            Some(Rendering::Camera),
             "the rendering did not transfer"
         );
         assert_eq!(dst.exposure, 0.0, "its group carried something else too");
@@ -2553,12 +2643,12 @@ mod tests {
                 amount: 60.0,
                 ..Default::default()
             },
-            lens_correction: LensCorrection {
+            lens_correction: Some(LensCorrection {
                 distortion: true,
                 tca: true,
                 vignetting: false,
                 scale: 60.0,
-            },
+            }),
             perspective: Perspective {
                 vertical: 40.0,
                 horizontal: -20.0,
@@ -2644,7 +2734,7 @@ mod tests {
                 feather: 30.0,
                 mode: SpotMode::Clone,
             }],
-            rendering: Rendering::Camera,
+            rendering: Some(Rendering::Camera),
             look: Look {
                 file: Some("velvia.cube".into()),
                 space: LutSpace::Rec709,
@@ -3627,8 +3717,8 @@ mod tests {
         // 100 at neutral, so `Default` must be hand-written. A derived one would give every
         // partial sidecar zero scale — black edges — silently.
         let e: Edits = serde_json::from_str(r#"{"lens_correction":{"distortion":true}}"#).unwrap();
-        assert_eq!(e.lens_correction.scale, 100.0);
-        assert!(e.lens_correction.distortion);
+        assert_eq!(e.lens_correction.unwrap().scale, 100.0);
+        assert!(e.lens_correction.unwrap().distortion);
     }
 
     #[test]
@@ -3679,8 +3769,7 @@ mod tests {
         let mut only_detail = Edits::default();
         only_detail.merge_from(&src, EditGroups::only(3));
         assert_eq!(
-            only_detail.lens_correction,
-            LensCorrection::default(),
+            only_detail.lens_correction, None,
             "the Detail group must not carry lens corrections"
         );
         assert_eq!(only_detail.noise_reduction, src.noise_reduction);

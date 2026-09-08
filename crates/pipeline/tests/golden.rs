@@ -1422,12 +1422,12 @@ fn lens_shot() -> lens_profile::LensShot {
 fn check_lens_golden(name: &str, c: lens_profile::Corrections) {
     let chart = grid_chart();
     let edits = Edits {
-        lens_correction: edit_model::LensCorrection {
+        lens_correction: Some(edit_model::LensCorrection {
             distortion: c.distortion,
             tca: c.tca,
             vignetting: c.vignetting,
             scale: c.scale,
-        },
+        }),
         ..Edits::default()
     };
     let (prefix, tail) = pipeline::build_pipeline_split_in_region_with_brush(
