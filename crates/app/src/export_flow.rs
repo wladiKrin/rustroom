@@ -30,6 +30,9 @@ impl RustroomApp {
                     name: None,
                     edits,
                     capture: core_image::Capture::default(),
+                    description: Default::default(),
+                    marks: Default::default(),
+                    keywords: Vec::new(),
                 })
                 .collect();
         };
@@ -51,11 +54,29 @@ impl RustroomApp {
                 // copy of a file shares it — the split `Library.captures` already documents. An
                 // uncatalogued or EXIF-less file gets the default, which the template collapses.
                 let capture = lib.captures.get(&id.path).cloned().unwrap_or_default();
+                // ⚠ Per **file**, like `capture`, and read here rather than held on `Library`:
+                // nothing reads descriptions per frame, so a per-folder map would be machinery
+                // for a consumer that does not exist (spec §1). One query per selected photo.
+                let description = self
+                    .catalog
+                    .as_ref()
+                    .and_then(|c| c.description_of(&id.path).ok().flatten())
+                    .unwrap_or_default();
+                // ⚠ Per **copy** — the rating and label of *this* version.
+                let marks = lib.marks.get(&id).copied().unwrap_or_default();
+                let keywords = self
+                    .catalog
+                    .as_ref()
+                    .map(|c| rustroom_app::xmp_sync::keyword_paths(c, &id.path))
+                    .unwrap_or_default();
                 ExportJob {
                     id,
                     name,
                     edits,
                     capture,
+                    description,
+                    marks,
+                    keywords,
                 }
             })
             .collect()

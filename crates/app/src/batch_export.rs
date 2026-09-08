@@ -38,6 +38,13 @@ pub struct ExportJob {
     /// own thread and has no catalog connection. ⚠ An all-`None` `Capture` is the ordinary answer
     /// for a file with no EXIF and for single-file mode, where there is no Library to ask.
     pub capture: core_image::Capture,
+    /// What the photo says about itself, from the catalog. ⚠ Carried for the same reason as
+    /// `capture`: the worker has no catalog connection. Per **file**.
+    pub description: catalog::db::Description,
+    /// This copy's marks — the rating and label the export carries. Per **copy**.
+    pub marks: catalog::db::Marks,
+    /// The file's keyword paths, root first, from `xmp_sync::keyword_paths`.
+    pub keywords: Vec<Vec<String>>,
 }
 
 /// What to export, and how.
@@ -320,6 +327,24 @@ pub fn scale_for(source_long: usize, max_edge: Option<usize>) -> pipeline::Rende
 /// `downscale_to` here operates on the linear decode, where averaging is meaningful. It is
 /// also the path the preview already takes, and it is faster, since every stage then runs on
 /// fewer pixels.
+/// The unresolved payload a job carries, in the export crate's terms.
+///
+/// ⚠ This is the one place a catalog `Description`, `Marks` and keyword paths become the plain
+/// `FileMetadata` the packet is written from. `FileMetadata::resolve` then lays the preset's
+/// defaults under it and applies the scope.
+pub fn file_metadata(job: &ExportJob) -> export::FileMetadata {
+    export::FileMetadata {
+        title: job.description.title.clone(),
+        caption: job.description.caption.clone(),
+        copyright: job.description.copyright.clone(),
+        creator: job.description.creator.clone(),
+        rating: job.marks.rating,
+        label: crate::xmp_sync::label_to_xmp(job.marks.label).map(str::to_string),
+        keywords: job.keywords.clone(),
+        capture: job.capture.clone(),
+    }
+}
+
 pub fn export_one(
     image: ImageBuf,
     edits: &Edits,
@@ -327,6 +352,7 @@ pub fn export_one(
     opts: &ExportOptions,
     resampler: pipeline::Resampler,
     wb_baseline: color::wb::Illuminant,
+    meta: &export::FileMetadata,
 ) -> Result<(), String> {
     let source_long = image.width().max(image.height());
     let scaled = match opts.max_edge {
@@ -358,7 +384,7 @@ pub fn export_one(
     export::watermark::apply(&mut rendered, &opts.watermark);
     export::save(&rendered, dest, opts.format, opts.quality, opts.space)
         .map_err(|e| e.to_string())?;
-    export::metadata::embed(dest, opts.format, &opts.metadata).map_err(|e| e.to_string())
+    export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
 }
 
 /// A running batch export.
@@ -451,16 +477,17 @@ fn run(
         return;
     }
 
-    for (
-        done,
-        ExportJob {
+    for (done, job) in jobs.into_iter().enumerate() {
+        // ⚠ Resolved per job, before the loop takes the job apart: the preset's defaults under
+        // this photo's own words, cut to the scope. `export_one` then only embeds.
+        let meta = export::FileMetadata::resolve(&opts.metadata, file_metadata(&job));
+        let ExportJob {
             id,
             name,
             edits,
             capture,
-        },
-    ) in jobs.into_iter().enumerate()
-    {
+            ..
+        } = job;
         let source = id.path.clone();
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
@@ -557,7 +584,9 @@ fn run(
         }
 
         match decoded
-            .and_then(|(img, baseline)| export_one(img, &edits, &dest, &opts, resampler, baseline))
+            .and_then(|(img, baseline)| {
+                export_one(img, &edits, &dest, &opts, resampler, baseline, &meta)
+            })
         {
             Ok(()) => {
                 report.exported += 1;
@@ -677,6 +706,7 @@ mod tests {
             &opts(&d, None),
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
+            &export::FileMetadata::default(),
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -693,6 +723,7 @@ mod tests {
             &opts(&d, Some(10)),
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
+            &export::FileMetadata::default(),
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (10, 5));
@@ -710,6 +741,7 @@ mod tests {
             &opts(&d, Some(999)),
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
+            &export::FileMetadata::default(),
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -749,6 +781,7 @@ mod tests {
             &base,
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
+            &export::FileMetadata::resolve(&base.metadata, export::FileMetadata::default()),
         )
         .unwrap();
         let mut changed = base.clone();
@@ -761,6 +794,7 @@ mod tests {
             &changed,
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
+            &export::FileMetadata::resolve(&changed.metadata, export::FileMetadata::default()),
         )
         .unwrap();
         (
@@ -795,6 +829,60 @@ mod tests {
             pixels(&tagged),
             "the metadata moved a pixel"
         );
+    }
+
+    #[test]
+    fn a_photos_own_caption_reaches_the_file_and_beats_the_presets() {
+        // ⚠⚠ The carrier test W5 taught: the packet writer is thoroughly tested in its own
+        // crate, and nothing there proves the worker builds the payload from the job. Deleting
+        // the `file_metadata` call leaves `export` green and this red.
+        let d = TempDir::new("e2e_desc");
+        let mut opts = opts(&d, None);
+        opts.format = ExportFormat::Tiff8;
+        opts.metadata.caption = "preset caption".into();
+        opts.metadata.copyright = "(c) preset".into();
+        let mut job = jobs(&d, &["one.RAF"]).remove(0);
+        job.description = catalog::db::Description {
+            title: "Harbour at dusk".into(),
+            caption: "Boats returning".into(),
+            ..Default::default()
+        };
+        job.marks = catalog::db::Marks {
+            rating: 4,
+            label: 2,
+            ..Default::default()
+        };
+        job.keywords = vec![vec!["Europe".into(), "UK".into()]];
+        let (report, _) = run_export(vec![job], opts, Vec::new(), ok_decode());
+        assert_eq!(report.exported, 1, "{:?}", report.failed);
+        let bytes = std::fs::read(d.0.join("one.tif")).unwrap();
+        let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
+        assert!(has("Harbour at dusk"), "the title never reached the file");
+        assert!(has("Boats returning"), "the photo's caption never reached the file");
+        assert!(!has("preset caption"), "the preset's caption overrode the photo's");
+        assert!(has("(c) preset"), "the preset's copyright did not fill the blank");
+        assert!(has("<xmp:Rating>4</xmp:Rating>"), "the rating is missing");
+        assert!(has("<xmp:Label>Blue</xmp:Label>"), "label 2 is Blue");
+        assert!(has("Europe|UK"), "the keyword path is missing");
+    }
+
+    #[test]
+    fn copyright_only_strips_the_photos_own_words_at_export() {
+        let d = TempDir::new("e2e_scope");
+        let mut opts = opts(&d, None);
+        opts.format = ExportFormat::Tiff8;
+        opts.metadata.copyright = "(c) preset".into();
+        opts.metadata.scope = export::MetadataScope::CopyrightOnly;
+        let mut job = jobs(&d, &["one.RAF"]).remove(0);
+        job.description.caption = "Boats returning".into();
+        job.marks.rating = 5;
+        let (report, _) = run_export(vec![job], opts, Vec::new(), ok_decode());
+        assert_eq!(report.exported, 1);
+        let bytes = std::fs::read(d.0.join("one.tif")).unwrap();
+        let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
+        assert!(has("(c) preset"));
+        assert!(!has("Boats returning"), "the scope was not applied");
+        assert!(!has("xmp:Rating"), "the scope was not applied to the rating");
     }
 
     #[test]
@@ -836,7 +924,8 @@ mod tests {
             &dest,
             &opts(&d, None),
             pipeline::Resampler::default(),
-            color::wb::Illuminant::default()
+            color::wb::Illuminant::default(),
+            &export::FileMetadata::default(),
         )
         .is_err());
     }
@@ -901,6 +990,9 @@ mod tests {
                 name: None,
                 edits: Edits::default(),
                 capture: core_image::Capture::default(),
+                description: Default::default(),
+                marks: Default::default(),
+                keywords: Vec::new(),
             })
             .collect()
     }
@@ -919,6 +1011,9 @@ mod tests {
                 name: None,
                 edits: Edits::default(),
                 capture: c.clone(),
+                description: Default::default(),
+                marks: Default::default(),
+                keywords: Vec::new(),
             })
             .collect()
     }

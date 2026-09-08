@@ -80,6 +80,7 @@ fn main() {
             &o,
             pipeline::Resampler::default(),
             color::wb::Illuminant::default(),
+            &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
         ) {
             Ok(()) => println!("wrote {}", dest.display()),
             Err(e) => println!("FAILED {}: {e}", dest.display()),
