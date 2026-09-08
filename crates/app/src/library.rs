@@ -208,7 +208,11 @@ pub fn apply_cell_action(
             app.rename_draft = Some((id, shown));
         }
         CellAction::Info => {
-            app.modal = crate::modals::Modal::PhotoInfo { id, dims: None };
+            app.modal = crate::modals::Modal::PhotoInfo {
+                id,
+                dims: None,
+                description: None,
+            };
         }
         // ⚠ These two act on the targets, not on `index` — see `menu_targets`.
         CellAction::AddToCollection(cid) => app.add_targets_to_collection(cid, index),

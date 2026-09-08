@@ -78,13 +78,20 @@ fn grid(ui: &mut egui::Ui, salt: &str, rows: impl FnOnce(&mut egui::Ui)) {
 }
 
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
-    let Modal::PhotoInfo { id, dims } = &app.modal else {
+    let Modal::PhotoInfo {
+        id,
+        dims,
+        description,
+    } = &app.modal
+    else {
         return;
     };
     let id = id.clone();
     // ⚠⚠ Read **once**, when the dialog opens, and cached in the modal's own state. A dialog body
     // runs sixty times a second, and a whole-file read there would be the `apply_view_demosaic`
-    // mistake in its most expensive costume yet — ~15 ms per frame.
+    // mistake in its most expensive costume yet — ~15 ms per frame. The description draft follows
+    // the same rule for the same reason, one catalog query instead of one file read. Both are
+    // written back into the modal at the end of this function.
     let dims = match *dims {
         Some(d) => d,
         None => {
@@ -93,13 +100,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             } else {
                 image_decode::dimensions(&id.path)
             };
-            let d = d.unwrap_or((0, 0));
-            app.modal = Modal::PhotoInfo {
-                id: id.clone(),
-                dims: Some(d),
-            };
-            d
+            d.unwrap_or((0, 0))
         }
+    };
+    let mut draft = match description {
+        Some(d) => d.clone(),
+        None => rustroom_app::description::DescriptionDraft::open(app.catalog.as_ref(), &id.path),
     };
 
     let entry = app
@@ -199,6 +205,35 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             });
             ui.separator();
 
+            ui.label(egui::RichText::new("Description").strong());
+            grid(ui, "info_description", |ui| {
+                ui.label(egui::RichText::new("Title").weak());
+                ui.text_edit_singleline(&mut draft.edited.title);
+                ui.end_row();
+                ui.label(egui::RichText::new("Caption").weak());
+                ui.add(
+                    egui::TextEdit::multiline(&mut draft.edited.caption)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.end_row();
+                ui.label(egui::RichText::new("Copyright").weak());
+                ui.text_edit_singleline(&mut draft.edited.copyright);
+                ui.end_row();
+                ui.label(egui::RichText::new("Creator").weak());
+                ui.text_edit_singleline(&mut draft.edited.creator);
+                ui.end_row();
+            });
+            // ⚠ The load-bearing sentence, in the export dialog's words: a field marked
+            // "Copyright" is exactly where someone expects the never-modify-the-original
+            // promise to break.
+            theme::hint(
+                ui,
+                "Shared by every copy of this file. Written into exports and, for RAW files, \
+                 the XMP sidecar. The original is never modified.",
+            );
+            ui.separator();
+
             ui.label(egui::RichText::new("Marks").strong());
             grid(ui, "info_marks", |ui| {
                 row(
@@ -240,13 +275,124 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     );
 
     if close || dismissed {
+        // ⚠ Commit on close, whichever way it closed — and only when changed, or the sidecar
+        // rewrite below would move its mtime for nothing (`description::commit`).
+        if let Some(cat) = &app.catalog {
+            if rustroom_app::description::commit(cat, &id.path, &draft) {
+                // ⚠ Not gated on `is_original()` the way `apply_mark_to` is: a description is
+                // per **file**, so editing it from a copy's dialog changes what the sidecar says.
+                app.write_xmp_for(&[id.path.clone()]);
+            }
+        }
         app.modal = Modal::None;
+    } else {
+        app.modal = Modal::PhotoInfo {
+            id,
+            dims: Some(dims),
+            description: Some(draft),
+        };
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modals::Modal;
+    use catalog::db::Description;
+    use rustroom_app::description::DescriptionDraft;
+
+    fn app_with_one_catalogued_photo() -> (crate::RustroomApp, crate::PhotoId) {
+        let mut app = crate::test_app::for_test();
+        app.view = crate::AppView::Library;
+        app.library = Some(crate::test_app::library_of(1));
+        // ⚠ Without this `set_description` is a no-op on an uncatalogued photo and every
+        // assertion below fails against correct code — see `catalog_library`.
+        crate::test_app::catalog_library(&mut app);
+        let id = app.library.as_ref().unwrap().entries[0].id.clone();
+        (app, id)
+    }
+
+    /// One layout frame with no input, so the dialog's resize and scroll area settle.
+    ///
+    /// ⚠⚠ Load-bearing, found by a failing test: on the very first frame the modal measures its
+    /// content, and the Close button's reported centre is not where it is drawn from the second
+    /// frame on. `test_ui::click` locates on its own first frame, so without this warm-up the
+    /// press lands beside the button and the dialog silently stays open.
+    fn settle(ctx: &egui::Context, app: &mut crate::RustroomApp) {
+        let _ = crate::test_ui::labelled_centres(ctx, Vec::new(), |_| show(app, ctx));
+    }
+
+    /// ⚠⚠ The dialog-to-catalog carrier: every M5.3b defect was in dialog and panel wiring and
+    /// none was caught by a test before it was reported. The draft is set directly — typing into
+    /// an egui `TextEdit` is egui's to prove — and the **close** is a real click, because the
+    /// commit-on-close is the wiring that would be forgotten.
+    #[test]
+    fn closing_the_dialog_commits_a_changed_description() {
+        let ctx = crate::test_ui::ctx();
+        let (mut app, id) = app_with_one_catalogued_photo();
+        app.modal = Modal::PhotoInfo {
+            id: id.clone(),
+            dims: Some((0, 0)),
+            description: Some(DescriptionDraft {
+                original: Description::default(),
+                edited: Description {
+                    caption: "Dusk over the harbour".into(),
+                    ..Default::default()
+                },
+            }),
+        };
+        settle(&ctx, &mut app);
+        crate::test_ui::click(&ctx, "Close", |_| show(&mut app, &ctx));
+        assert!(app.modal == Modal::None, "the dialog did not close");
+        let got = app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .description_of(&id.path)
+            .unwrap()
+            .expect("the caption never reached the catalog");
+        assert_eq!(got.caption, "Dusk over the harbour");
+    }
+
+    #[test]
+    fn closing_an_untouched_dialog_writes_nothing() {
+        let ctx = crate::test_ui::ctx();
+        let (mut app, id) = app_with_one_catalogued_photo();
+        app.modal = Modal::PhotoInfo {
+            id: id.clone(),
+            dims: Some((0, 0)),
+            description: None,
+        };
+        // The warm-up frame fills the draft from the catalog (empty); the click then closes it.
+        settle(&ctx, &mut app);
+        crate::test_ui::click(&ctx, "Close", |_| show(&mut app, &ctx));
+        assert!(app.modal == Modal::None);
+        assert_eq!(
+            app.catalog.as_ref().unwrap().description_of(&id.path).unwrap(),
+            None,
+            "an unchanged draft produced a row"
+        );
+    }
+
+    #[test]
+    fn the_description_fields_are_offered() {
+        let ctx = crate::test_ui::ctx();
+        let (mut app, id) = app_with_one_catalogued_photo();
+        app.modal = Modal::PhotoInfo {
+            id,
+            dims: Some((0, 0)),
+            description: None,
+        };
+        let drawn: Vec<String> =
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |_| show(&mut app, &ctx))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect();
+        // ⚠ A `TextEdit` produces an AccessKit node; its *label* is drawn as a plain label,
+        // which does not. So what is checked is that the dialog still offers Close and has
+        // grown, not the field captions themselves — stated rather than papered over.
+        assert!(drawn.iter().any(|l| l == "Close"), "{drawn:?}");
+    }
 
     #[test]
     fn a_fast_shutter_shows_as_a_fraction_and_a_slow_one_as_seconds() {

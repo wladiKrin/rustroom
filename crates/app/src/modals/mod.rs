@@ -155,6 +155,9 @@ pub enum Modal {
     PhotoInfo {
         id: crate::PhotoId,
         dims: Option<(u32, u32)>,
+        /// The editable description, read from the catalog on the **first frame** and cached
+        /// here like `dims`, then committed when the dialog closes — see `info::show`.
+        description: Option<rustroom_app::description::DescriptionDraft>,
     },
     /// Confirming that a folder is removed from the catalog.
     ///
