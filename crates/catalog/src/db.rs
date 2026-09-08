@@ -16,7 +16,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -104,6 +104,36 @@ impl Marks {
             flag: self.flag,
             label: self.label.min(Self::MAX_LABEL),
         }
+    }
+}
+
+/// What a photograph says about itself, in words: the four IPTC-shaped fields Rustroom edits.
+///
+/// ⚠⚠ **Per FILE, not per copy** — keyed like `photo_capture` and `photo_keywords`. A title says
+/// what is *in* the picture, which every copy shares; only marks describe the image you made.
+/// Lightroom gives virtual copies independent metadata; this is a recorded divergence (spec §1).
+///
+/// ⚠ Stored in the catalog only, and written into **exports** and the **XMP sidecar** — never
+/// into an original. That is what dissolved the design conflict `docs/BACKLOG.md` held.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Description {
+    pub title: String,
+    pub caption: String,
+    pub copyright: String,
+    pub creator: String,
+}
+
+impl Description {
+    /// Whether every field is blank.
+    ///
+    /// ⚠ Trimmed, so a field holding only spaces counts as absent — the rule
+    /// `ExportMetadata::is_empty` follows, and for the same reason: a tag whose whole content is
+    /// whitespace is the blank-copyright problem in a costume.
+    pub fn is_empty(&self) -> bool {
+        self.title.trim().is_empty()
+            && self.caption.trim().is_empty()
+            && self.copyright.trim().is_empty()
+            && self.creator.trim().is_empty()
     }
 }
 
@@ -366,6 +396,29 @@ impl Catalog {
                 "BEGIN;
                  ALTER TABLE photos ADD COLUMN xmp_mtime INTEGER NOT NULL DEFAULT 0;
                  PRAGMA user_version = 6;
+                 COMMIT;",
+            )?;
+        }
+        if from < 7 {
+            // ⚠⚠ A **new gate**, never an edit to versions 1–6. Sixth time this rule meets a
+            // database holding real user data.
+            //
+            // ⚠ Keyed on the **file**, like `photo_capture`: a description says what is in the
+            // picture, which every copy shares. See `Description`. Every column is NOT NULL with
+            // an empty default, and `set_description` deletes the row when all four are blank,
+            // so the table holds only photos that say something.
+            self.conn.execute_batch(
+                "BEGIN;
+                 CREATE TABLE photo_description (
+                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     file_name TEXT NOT NULL,
+                     title     TEXT NOT NULL DEFAULT '',
+                     caption   TEXT NOT NULL DEFAULT '',
+                     copyright TEXT NOT NULL DEFAULT '',
+                     creator   TEXT NOT NULL DEFAULT '',
+                     PRIMARY KEY (folder_id, file_name)
+                 );
+                 PRAGMA user_version = 7;
                  COMMIT;",
             )?;
         }
@@ -809,6 +862,65 @@ impl Catalog {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// What a photo says about itself, or `None` when it says nothing.
+    ///
+    /// ⚠ `None` is the ordinary state, not an error: only photos with a description have a row.
+    pub fn description_of(&self, photo: &Path) -> Result<Option<Description>, CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(None);
+        };
+        let row = self.conn.query_row(
+            "SELECT d.title, d.caption, d.copyright, d.creator
+             FROM photo_description d JOIN folders f ON f.id = d.folder_id
+             WHERE f.path = ?1 AND d.file_name = ?2",
+            rusqlite::params![folder, name],
+            |r| {
+                Ok(Description {
+                    title: r.get(0)?,
+                    caption: r.get(1)?,
+                    copyright: r.get(2)?,
+                    creator: r.get(3)?,
+                })
+            },
+        );
+        match row {
+            Ok(d) => Ok(Some(d)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Record what a photo says about itself.
+    ///
+    /// ⚠ An all-blank description **deletes** the row rather than storing four empty strings,
+    /// so "absent" and "blank" are one state — see `Description::is_empty`.
+    ///
+    /// ⚠ A photo whose folder the catalog does not know is silently skipped: the catalog is not
+    /// authoritative and must never be a reason an action fails — the `add_to_collection` rule.
+    pub fn set_description(&self, photo: &Path, d: &Description) -> Result<(), CatalogError> {
+        let Some((folder, name)) = split(photo) else {
+            return Ok(());
+        };
+        if d.is_empty() {
+            self.conn.execute(
+                "DELETE FROM photo_description
+                 WHERE file_name = ?2
+                   AND folder_id = (SELECT id FROM folders WHERE path = ?1)",
+                rusqlite::params![folder, name],
+            )?;
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO photo_description
+                 (folder_id, file_name, title, caption, copyright, creator)
+             SELECT id, ?2, ?3, ?4, ?5, ?6 FROM folders WHERE path = ?1
+             ON CONFLICT(folder_id, file_name) DO UPDATE SET
+                 title = ?3, caption = ?4, copyright = ?5, creator = ?6",
+            rusqlite::params![folder, name, d.title, d.caption, d.copyright, d.creator],
+        )?;
+        Ok(())
     }
 
     /// The file names in `folder` with no capture row yet — the background pass's queue.
@@ -1971,7 +2083,8 @@ mod tests {
             // was exactly that — the failure is loud, but only if this test exists.
             cat.conn
                 .execute_batch(
-                    "DROP TABLE smart_collections;
+                    "DROP TABLE photo_description;
+                     DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
                      DROP TABLE photo_keywords;
                      DROP TABLE keywords;
@@ -2153,7 +2266,8 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "DROP TABLE smart_collections;
+                    "DROP TABLE photo_description;
+                     DROP TABLE smart_collections;
                      DROP TABLE photo_capture;
                      DROP TABLE photo_keywords;
                      DROP TABLE keywords;
@@ -2200,7 +2314,8 @@ mod tests {
             .unwrap();
             cat.conn
                 .execute_batch(
-                    "ALTER TABLE photos DROP COLUMN xmp_mtime;
+                    "DROP TABLE photo_description;
+                     ALTER TABLE photos DROP COLUMN xmp_mtime;
                      PRAGMA user_version = 5;",
                 )
                 .unwrap();
@@ -2676,6 +2791,117 @@ mod tests {
             vec!["two.RAF".to_string()],
             "a file recorded as having no EXIF must not be queued again"
         );
+    }
+
+    #[test]
+    fn a_description_round_trips_and_an_unknown_photo_is_none() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        assert_eq!(cat.description_of(Path::new("/a/one.RAF")).unwrap(), None);
+        let d = Description {
+            title: "Harbour at dusk".into(),
+            caption: "Fishing boats returning, Whitby.".into(),
+            copyright: "© 2026 W".into(),
+            creator: "W".into(),
+        };
+        cat.set_description(Path::new("/a/one.RAF"), &d).unwrap();
+        assert_eq!(cat.description_of(Path::new("/a/one.RAF")).unwrap(), Some(d));
+        // A photo the catalog has never seen is `None`, not an error.
+        assert_eq!(cat.description_of(Path::new("/a/ghost.RAF")).unwrap(), None);
+    }
+
+    #[test]
+    fn two_copies_of_one_file_share_a_description() {
+        // ⚠ Per **file**, like keywords and capture: a title says what is in the picture, which
+        // every copy shares. Only marks describe the image you made. Spec §1.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.add_copy(Path::new("/a/one.RAF"), 1).unwrap();
+        let d = Description {
+            title: "Shared".into(),
+            ..Description::default()
+        };
+        cat.set_description(Path::new("/a/one.RAF"), &d).unwrap();
+        // There is no copy argument to ask with; the one row serves both.
+        assert_eq!(
+            cat.description_of(Path::new("/a/one.RAF")).unwrap(),
+            Some(d)
+        );
+    }
+
+    #[test]
+    fn an_all_empty_description_removes_the_row() {
+        // ⚠ "Absent" and "blank" are one state, so the table holds only photos that say
+        // something — and a reader cannot mistake four empty strings for a deliberate
+        // assertion of no rights, the blank-copyright problem `ExportMetadata` documents.
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(Path::new("/a"), &entries_in("/a", &["one.RAF"]))
+            .unwrap();
+        cat.set_description(
+            Path::new("/a/one.RAF"),
+            &Description {
+                caption: "gone soon".into(),
+                ..Description::default()
+            },
+        )
+        .unwrap();
+        cat.set_description(
+            Path::new("/a/one.RAF"),
+            &Description {
+                caption: "   ".into(),
+                ..Description::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cat.description_of(Path::new("/a/one.RAF")).unwrap(), None);
+        let left: i64 = cat
+            .conn
+            .query_row("SELECT count(*) FROM photo_description", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "a blank row survived");
+    }
+
+    #[test]
+    fn a_version_six_catalog_upgrades_and_keeps_everything() {
+        // ⚠⚠ The sixth migration to meet real user data. Adding a table must touch nothing else.
+        let db = TempDb::new("v6v7");
+        {
+            let cat = Catalog::open(&db.0).unwrap();
+            cat.sync_folder(Path::new("/x"), &[entry("a.RAF")]).unwrap();
+            let k = cat.create_keyword("Paris", None).unwrap();
+            cat.assign_keyword(k, Path::new("/x/a.RAF")).unwrap();
+            cat.set_marks(
+                Path::new("/x/a.RAF"),
+                0,
+                Marks {
+                    rating: 3,
+                    ..Marks::default()
+                },
+            )
+            .unwrap();
+            cat.set_xmp_mtime(Path::new("/x/a.RAF"), 42).unwrap();
+            cat.conn
+                .execute_batch(
+                    "DROP TABLE photo_description;
+                     PRAGMA user_version = 6;",
+                )
+                .unwrap();
+        }
+
+        let cat = Catalog::open(&db.0).expect("a v6 catalog must upgrade");
+
+        assert_eq!(cat.version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(cat.photo_count().unwrap(), 1);
+        assert_eq!(cat.keywords().unwrap()[0].count, 1, "keyword kept");
+        assert_eq!(cat.marks(Path::new("/x/a.RAF"), 0).unwrap().rating, 3);
+        assert_eq!(
+            cat.xmp_mtimes_in(Path::new("/x")).unwrap(),
+            vec![(PathBuf::from("/x/a.RAF"), 42)],
+            "the sidecar clock kept"
+        );
+        assert_eq!(cat.description_of(Path::new("/x/a.RAF")).unwrap(), None);
     }
 
     #[test]
