@@ -33,10 +33,16 @@ impl GradeRangeView {
     }
 }
 
-/// The tint the plane is painted in: teal. ⚠ Not red — the brush tint is red and the two must
-/// never be confusable — and not one of the four theme accents, so it cannot read as active
-/// state. Off the skin-tone axis, for the reason the accent list excludes amber.
-pub const TINT: [u8; 3] = [0, 190, 210];
+/// The tint the plane is painted in: **the brush tint's red**, `mask_tint`'s `(255, 40, 40)`.
+///
+/// ⚠ It shipped teal first, chosen so the two tints could never be confused — and the user's
+/// report from the first GUI check (2026-09-08) was *"very subtle and a bit confusing"*. At the
+/// default Blending of 50 the weights sit around a third to a half over the whole frame, and a
+/// teal at half that alpha is a faint wash, not a region. Red at the same alpha rule reads at a
+/// glance, it is the tint people have already learned means "this is where the tool reaches",
+/// and the two are never on screen together: the brush tint is drawn under the Masks tool and
+/// this under Edit, and `select_tool` clears this view on the way across. **User's call.**
+pub const TINT: [u8; 3] = [255, 40, 40];
 
 /// One byte per pixel: the selected range's weight at that pixel's Oklab lightness, 0..=255.
 ///
@@ -93,7 +99,8 @@ pub fn coverage(buf: &ImageBuf, range: GradeRangeView, blending: f32, balance: f
 }
 
 /// The plane as RGBA bytes for a texture: [`TINT`] with alpha `weight / 2`, so full membership
-/// reads as a 50% tint and a soft range edge reads as a soft edge — the brush tint's rule.
+/// reads as a 50% tint and a soft range edge reads as a soft edge — the brush tint's rule, and
+/// since the tint is the brush's too, the same picture means the same thing under both tools.
 pub fn tint_rgba(plane: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(plane.len() * 4);
     for &a in plane {
@@ -184,7 +191,7 @@ mod tests {
         let rgba = tint_rgba(&[0, 255, 128]);
         assert_eq!(
             rgba,
-            vec![0, 190, 210, 0, 0, 190, 210, 127, 0, 190, 210, 64],
+            vec![255, 40, 40, 0, 255, 40, 40, 127, 255, 40, 40, 64],
             "one RGBA quad per byte: TINT, alpha = weight / 2"
         );
     }
