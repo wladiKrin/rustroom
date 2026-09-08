@@ -72,6 +72,31 @@ pub fn labelled_centres(
         .collect()
 }
 
+/// The numeric value of every widget that reports one — a `Slider` or a `DragValue` — after
+/// laying `body` out once.
+///
+/// ⚠ A `DragValue` has **no AccessKit label**: egui gives it `Role::SpinButton` with a numeric
+/// value and nothing else (`response.rs`, `WidgetInfo::drag_value`), so [`labelled_centres`]
+/// cannot see it at all — found by a test that looked for a field by its value and got the
+/// whole panel back without it. This is the query that can.
+pub fn numeric_values(ctx: &egui::Context, body: impl FnMut(&mut egui::Ui)) -> Vec<f64> {
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen()),
+            ..Default::default()
+        },
+        body,
+    );
+    let Some(update) = out.platform_output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| node.numeric_value())
+        .collect()
+}
+
 /// Where the widget labelled `label` sits, after laying `body` out once.
 pub fn find(
     ctx: &egui::Context,

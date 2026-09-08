@@ -501,8 +501,14 @@ mod tests {
             bottom: 0.4,
         };
         let out = swap_orientation(c, a);
-        assert!(((out.left + out.right) - (c.left + c.right)).abs() < 1e-6, "{out:?}");
-        assert!(((out.top + out.bottom) - (c.top + c.bottom)).abs() < 1e-6, "{out:?}");
+        assert!(
+            ((out.left + out.right) - (c.left + c.right)).abs() < 1e-6,
+            "{out:?}"
+        );
+        assert!(
+            ((out.top + out.bottom) - (c.top + c.bottom)).abs() < 1e-6,
+            "{out:?}"
+        );
         assert!((pixel_ratio(&out, a) * pixel_ratio(&c, a) - 1.0).abs() < 1e-5);
     }
 
@@ -518,7 +524,10 @@ mod tests {
             bottom: 0.75,
         };
         let once = swap_orientation(c, a);
-        assert!(!close(once, c), "fixture check: the swap must change this rect");
+        assert!(
+            !close(once, c),
+            "fixture check: the swap must change this rect"
+        );
         let out = swap_orientation(once, a);
         assert!(close(out, c), "{out:?} vs {c:?}");
     }
@@ -538,7 +547,10 @@ mod tests {
         assert!(inside_frame(&out), "{out:?}");
         let want = pixel_ratio(&c, a).recip();
         assert!((pixel_ratio(&out, a) - want).abs() < 1e-5, "{out:?}");
-        assert!(out.bottom - out.top > 0.99, "it should use the full height: {out:?}");
+        assert!(
+            out.bottom - out.top > 0.99,
+            "it should use the full height: {out:?}"
+        );
     }
 
     #[test]

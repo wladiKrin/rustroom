@@ -10,11 +10,74 @@ use eframe::egui;
 use rustroom_app::composition_guides::CompositionGuide;
 use rustroom_app::crop_tool;
 
+/// One entry of the aspect row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Chip {
+    Free,
+    /// A preset, as a pixel ratio.
+    Preset(f32),
+    Custom,
+}
+
+/// The preset chips, in the order they are drawn.
+const PRESETS: [(&str, f32); 4] = [
+    ("1:1", 1.0),
+    ("3:2", 1.5),
+    ("4:3", 4.0 / 3.0),
+    ("16:9", 16.0 / 9.0),
+];
+
+fn same_ratio(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-4
+}
+
+/// Whether `chip` is lit for the current `lock`, with `custom` the stored custom ratio.
+///
+/// ⚠ A ratio chip is lit by its ratio **or its inverse**, so 3:2 stays lit after a swap to 2:3
+/// and `Swap` shows which way it faces. `Custom` is lit by the stored ratio or its inverse
+/// **only when no preset matched** — a custom 3:2 lights 3:2, not both. Pure, so the rule is
+/// testable without a window.
+fn chip_state(chip: Chip, lock: Option<f32>, custom: f32) -> bool {
+    let matches =
+        |ratio: f32| lock.is_some_and(|cur| same_ratio(ratio, cur) || same_ratio(1.0 / ratio, cur));
+    match chip {
+        Chip::Free => lock.is_none(),
+        Chip::Preset(ratio) => matches(ratio),
+        Chip::Custom => matches(custom) && !PRESETS.iter().any(|(_, p)| matches(*p)),
+    }
+}
+
+/// Lock to `ratio` (a pixel ratio) and snap the crop to it, centred and maximal — what a
+/// preset chip and the Custom chip both do.
+fn lock_to(
+    ratio: f32,
+    img_aspect: f32,
+    s: &mut Session,
+    crop_aspect: &mut Option<f32>,
+    ed: &mut Edited,
+) {
+    *crop_aspect = Some(ratio);
+    s.edits.geometry.crop = crop_tool::snap_to_aspect(ratio / img_aspect);
+    ed.discrete();
+}
+
+/// The crop's aspect state — both halves tool state on `RustroomApp`, neither an edit.
+///
+/// ⚠ One struct rather than two parameters because `show` reached clippy's seven-argument
+/// line, the same answer `FrameSpec` and `NameField` gave when they did. Both are `&mut` into
+/// disjoint fields, so the caller builds it without cloning anything.
+pub struct AspectLock<'a> {
+    /// The pixel ratio the crop is locked to, or `None` for a free crop.
+    pub lock: &'a mut Option<f32>,
+    /// The stored custom ratio, W : H — persisted by the caller on change.
+    pub custom: &'a mut [u32; 2],
+}
+
 /// Draw the geometry controls. The caller decides whether geometry mode is on.
 pub fn show(
     ui: &mut egui::Ui,
     s: &mut Session,
-    crop_aspect: &mut Option<f32>,
+    aspect: AspectLock<'_>,
     composition_guide: &mut CompositionGuide,
     lens_profile_found: bool,
     ed: &mut Edited,
@@ -85,35 +148,96 @@ pub fn show(
         }
     });
     let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
-    let presets: [(&str, Option<f32>); 5] = [
-        ("Free", None),
-        ("1:1", Some(1.0)),
-        ("3:2", Some(1.5)),
-        ("4:3", Some(4.0 / 3.0)),
-        ("16:9", Some(16.0 / 9.0)),
-    ];
+    let custom_ratio = {
+        let [w, h] = *aspect.custom;
+        let r = rustroom_app::settings::CUSTOM_ASPECT_RANGE;
+        w.clamp(r.0, r.1) as f32 / h.clamp(r.0, r.1) as f32
+    };
     // ⚠ `selectable_label`, not `button`: the lock is otherwise **invisible state**. Without a
     // shown selection there is no way to tell a locked crop from a free one until you drag a
     // handle and it refuses to move the way you expected.
+    //
+    // ⚠ Which chip is lit is `chip_state`'s decision, pure and tested, including the rule that
+    // a preset stays lit after a swap to its inverse.
     ui.horizontal(|ui| {
-        for (label, pa) in presets {
-            let active = match (pa, *crop_aspect) {
-                (None, None) => true,
-                (Some(a), Some(cur)) => (a - cur).abs() < 1e-4,
-                _ => false,
-            };
-            if ui.selectable_label(active, label).clicked() {
-                *crop_aspect = pa;
-                // ⚠ Only a *ratio* reshapes the crop. "Free" merely unlocks, leaving the crop
-                // where it is — it used to reset to the full frame, which made unlocking
-                // destructive and is now the job of "Reset crop" below.
-                if let Some(a) = pa {
-                    s.edits.geometry.crop = crop_tool::snap_to_aspect(a / img_aspect);
-                    ed.discrete();
-                }
+        if ui
+            .selectable_label(chip_state(Chip::Free, *aspect.lock, custom_ratio), "Free")
+            .clicked()
+        {
+            // ⚠ "Free" merely unlocks, leaving the crop where it is — it used to reset to the
+            // full frame, which made unlocking destructive and is now "Reset geometry"'s job.
+            *aspect.lock = None;
+        }
+        for (label, ratio) in PRESETS {
+            if ui
+                .selectable_label(
+                    chip_state(Chip::Preset(ratio), *aspect.lock, custom_ratio),
+                    label,
+                )
+                .clicked()
+            {
+                lock_to(ratio, img_aspect, s, aspect.lock, ed);
             }
         }
+        let custom_lit = chip_state(Chip::Custom, *aspect.lock, custom_ratio);
+        if ui
+            .selectable_label(custom_lit, "Custom")
+            .on_hover_text("Lock to the ratio below")
+            .clicked()
+        {
+            lock_to(custom_ratio, img_aspect, s, aspect.lock, ed);
+        }
+        // ⚠ A text label, not a glyph: `⬍`/`⬌` already mean *flip* two rows up, and a swap
+        // that looks like a flip is the wrong model.
+        if ui
+            .button("Swap")
+            .on_hover_text("Turn the crop between landscape and portrait")
+            .clicked()
+        {
+            s.edits.geometry.crop = crop_tool::swap_orientation(s.edits.geometry.crop, img_aspect);
+            // ⚠ A free crop stays free and merely turns; a lock inverts. The custom pair is
+            // exchanged only when Custom is the lit chip, so the numbers on screen agree with
+            // the lock — under a preset the chip keeps its label and stays lit by `chip_state`.
+            *aspect.lock = aspect.lock.map(|a| 1.0 / a);
+            if custom_lit {
+                let [w, h] = *aspect.custom;
+                *aspect.custom = [h, w];
+            }
+            ed.discrete();
+        }
     });
+    if chip_state(Chip::Custom, *aspect.lock, custom_ratio) {
+        // ⚠ Drawn only while Custom is lit: two number fields under a preset would be state
+        // that edits nothing, which is worse than absent.
+        ui.horizontal(|ui| {
+            let r = rustroom_app::settings::CUSTOM_ASPECT_RANGE;
+            let field = |ui: &mut egui::Ui, v: &mut u32| -> egui::Response {
+                ui.add(egui::DragValue::new(v).range(r.0..=r.1))
+            };
+            let [w, h] = &mut *aspect.custom;
+            let rw = field(ui, w);
+            ui.label(":");
+            let rh = field(ui, h);
+            // ⚠ Re-lock on any change so the crop follows as you drag or type. A drag settles
+            // on release and a typed value settles on commit — `changed()` with no drag in
+            // progress — so either way one edit is one Ctrl+Z. `ed.absorb` alone would never
+            // settle a typed value, since a `TextEdit` commit stops no drag.
+            let changed = rw.changed() || rh.changed();
+            if changed {
+                let ratio = {
+                    let [w, h] = *aspect.custom;
+                    w.clamp(r.0, r.1) as f32 / h.clamp(r.0, r.1) as f32
+                };
+                *aspect.lock = Some(ratio);
+                s.edits.geometry.crop = crop_tool::snap_to_aspect(ratio / img_aspect);
+                ed.changed = true;
+            }
+            let dragging = rw.dragged() || rh.dragged();
+            if rw.drag_stopped() || rh.drag_stopped() || (changed && !dragging) {
+                ed.settled = true;
+            }
+        });
+    }
     // ⚠⚠ Labelled **Composition**, never "Guide" — this panel already has a "Guide Mode" toggle
     // further down for the *perspective* guides you trace onto a building, and two unrelated
     // controls sharing a word in one panel is how someone learns the wrong model. The menu item
@@ -404,12 +528,16 @@ mod tests {
                 });
             }
             let mut aspect = None;
+            let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
             let mut ed = Edited::default();
             test_ui::find(&ctx, label, |ui| {
                 show(
                     ui,
                     &mut s,
-                    &mut aspect,
+                    AspectLock {
+                        lock: &mut aspect,
+                        custom: &mut custom,
+                    },
                     &mut CompositionGuide::Off,
                     false,
                     &mut ed,
@@ -435,9 +563,21 @@ mod tests {
     /// ⚠ `click_in_panel` is a thin wrapper over this rather than a second copy: a helper
     /// duplicated per test is how two harnesses come to disagree about what a click is.
     fn click_in_panel_reporting(label: &str, s: &mut Session, lens: bool) -> (Edited, bool) {
+        let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        click_in_panel_with(label, s, lens, &mut aspect, &mut custom)
+    }
+
+    /// The harness with the lock and the stored custom ratio exposed, for the aspect tests.
+    fn click_in_panel_with(
+        label: &str,
+        s: &mut Session,
+        lens: bool,
+        aspect: &mut Option<f32>,
+        custom: &mut [u32; 2],
+    ) -> (Edited, bool) {
         let ctx = test_ui::ctx();
         let mut ed = Edited::default();
-        let mut aspect = None;
         let mut auto = false;
         test_ui::click(&ctx, label, |ui| {
             ed = Edited::default();
@@ -445,7 +585,10 @@ mod tests {
             show(
                 ui,
                 s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut *aspect,
+                    custom: &mut *custom,
+                },
                 &mut CompositionGuide::Off,
                 lens,
                 &mut ed,
@@ -486,13 +629,17 @@ mod tests {
         let ctx = test_ui::ctx();
         let mut s = session();
         let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut guide = CompositionGuide::Off;
         let labels: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let mut ed = Edited::default();
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut guide,
                 false,
                 &mut ed,
@@ -519,13 +666,17 @@ mod tests {
         let ctx = test_ui::ctx();
         let mut s = session();
         let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut guide = CompositionGuide::Off;
         test_ui::click(&ctx, CompositionGuide::Diagonals.label(), |ui| {
             let mut ed = Edited::default();
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut guide,
                 false,
                 &mut ed,
@@ -543,6 +694,7 @@ mod tests {
         let ctx = test_ui::ctx();
         let mut s = session();
         let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut guide = CompositionGuide::Grid;
         let mut ed = Edited::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -550,7 +702,10 @@ mod tests {
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut guide,
                 false,
                 &mut ed,
@@ -618,6 +773,165 @@ mod tests {
     }
 
     #[test]
+    fn a_ratio_chip_is_lit_by_its_ratio_and_by_its_inverse() {
+        // ⚠ The inverse too: after a swap the lock is 2:3 and the 3:2 chip must stay lit, with
+        // Swap showing which way it faces. A chip that went dark on swap would read as "no
+        // preset", which is false.
+        assert!(chip_state(Chip::Preset(1.5), Some(1.5), 1.25));
+        assert!(chip_state(Chip::Preset(1.5), Some(1.0 / 1.5), 1.25));
+        assert!(!chip_state(Chip::Preset(1.5), Some(1.0), 1.25));
+        assert!(!chip_state(Chip::Preset(1.5), None, 1.25));
+    }
+
+    #[test]
+    fn free_is_lit_only_with_no_lock() {
+        assert!(chip_state(Chip::Free, None, 1.25));
+        assert!(!chip_state(Chip::Free, Some(1.0), 1.25));
+    }
+
+    #[test]
+    fn custom_is_lit_by_the_stored_ratio_unless_a_preset_already_matches() {
+        assert!(chip_state(Chip::Custom, Some(1.25), 1.25));
+        assert!(chip_state(Chip::Custom, Some(0.8), 1.25), "its inverse too");
+        assert!(!chip_state(Chip::Custom, Some(1.5), 1.25));
+        assert!(!chip_state(Chip::Custom, None, 1.25));
+        // ⚠ The tie-break: a custom ratio equal to a preset lights the preset, not both.
+        assert!(!chip_state(Chip::Custom, Some(1.5), 1.5));
+        assert!(chip_state(Chip::Preset(1.5), Some(1.5), 1.5));
+    }
+
+    /// The image the harness opens is 80×40, aspect 2.0 — every crop below is on that.
+    const IMG_ASPECT: f32 = 2.0;
+
+    #[test]
+    fn custom_and_swap_are_offered() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        let mut ed = Edited::default();
+        let drawn: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(
+                ui,
+                &mut s,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+                &mut false,
+            );
+        })
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
+        for want in ["Custom", "Swap"] {
+            assert!(drawn.iter().any(|l| l == want), "{want} missing: {drawn:?}");
+        }
+    }
+
+    #[test]
+    fn swap_under_a_lock_inverts_it_and_transposes_the_crop() {
+        let mut s = session();
+        s.edits.geometry.crop = asymmetric();
+        let mut aspect = Some(1.5);
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        let (ed, _) = click_in_panel_with("Swap", &mut s, false, &mut aspect, &mut custom);
+        assert!(ed.settled, "a swap is one undo step");
+        assert!((aspect.unwrap() - 1.0 / 1.5).abs() < 1e-6, "{aspect:?}");
+        assert_crop_close(
+            s.edits.geometry.crop,
+            crate::crop_tool::swap_orientation(asymmetric(), IMG_ASPECT),
+        );
+        assert_eq!(
+            custom,
+            rustroom_app::settings::DEFAULT_CUSTOM_ASPECT,
+            "not a custom chip"
+        );
+    }
+
+    #[test]
+    fn swap_on_a_free_crop_only_transposes() {
+        let mut s = session();
+        s.edits.geometry.crop = asymmetric();
+        let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        let (ed, _) = click_in_panel_with("Swap", &mut s, false, &mut aspect, &mut custom);
+        assert!(ed.settled);
+        assert_eq!(aspect, None, "a free crop stays free");
+        assert_crop_close(
+            s.edits.geometry.crop,
+            crate::crop_tool::swap_orientation(asymmetric(), IMG_ASPECT),
+        );
+    }
+
+    #[test]
+    fn clicking_custom_locks_to_the_stored_ratio_and_snaps() {
+        let mut s = session();
+        s.edits.geometry.crop = asymmetric();
+        let mut aspect = None;
+        let mut custom = [21, 9];
+        let (ed, _) = click_in_panel_with("Custom", &mut s, false, &mut aspect, &mut custom);
+        assert!(ed.settled);
+        assert!((aspect.unwrap() - 21.0 / 9.0).abs() < 1e-6, "{aspect:?}");
+        assert_crop_close(
+            s.edits.geometry.crop,
+            crate::crop_tool::snap_to_aspect((21.0 / 9.0) / IMG_ASPECT),
+        );
+    }
+
+    #[test]
+    fn swap_under_custom_exchanges_the_stored_pair() {
+        let mut s = session();
+        let mut aspect = Some(21.0 / 9.0);
+        let mut custom = [21, 9];
+        click_in_panel_with("Swap", &mut s, false, &mut aspect, &mut custom);
+        assert_eq!(
+            custom,
+            [9, 21],
+            "the numbers on screen must agree with the lock"
+        );
+        assert!((aspect.unwrap() - 9.0 / 21.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_ratio_fields_are_drawn_only_while_custom_is_lit() {
+        let ctx = test_ui::ctx();
+        let values_with = |lock: Option<f32>| {
+            let mut s = session();
+            let mut aspect = lock;
+            let mut custom = [21, 9];
+            let mut ed = Edited::default();
+            test_ui::numeric_values(&ctx, |ui| {
+                show(
+                    ui,
+                    &mut s,
+                    AspectLock {
+                        lock: &mut aspect,
+                        custom: &mut custom,
+                    },
+                    &mut CompositionGuide::Off,
+                    false,
+                    &mut ed,
+                    &mut false,
+                );
+            })
+        };
+        // ⚠ By numeric value, not by label: a `DragValue` has no AccessKit label at all, so
+        // `labelled_centres` returns the whole panel without it — see `test_ui::numeric_values`.
+        // 21 and 9 are values no other control in this panel sits at.
+        let has = |vs: &[f64], v: f64| vs.iter().any(|x| (x - v).abs() < 1e-9);
+        let lit = values_with(Some(21.0 / 9.0));
+        assert!(has(&lit, 21.0) && has(&lit, 9.0), "fields missing: {lit:?}");
+        let dark = values_with(Some(1.5));
+        assert!(!has(&dark, 21.0), "fields drawn under a preset: {dark:?}");
+        let free = values_with(None);
+        assert!(!has(&free, 21.0), "fields drawn under Free: {free:?}");
+    }
+
+    #[test]
     fn the_lens_scale_appears_only_when_a_profile_matched_and_distortion_is_on() {
         // ⚠ The slider is here *as well as* in the Lens section because this is the one view
         // where its effect is visible — crop mode previews the uncropped frame. Showing it with
@@ -627,12 +941,16 @@ mod tests {
             let mut s = session();
             s.edits.lens_correction.distortion = distortion;
             let mut aspect = None;
+            let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
             let mut ed = Edited::default();
             test_ui::find(&ctx, "Lens scale", |ui| {
                 show(
                     ui,
                     &mut s,
-                    &mut aspect,
+                    AspectLock {
+                        lock: &mut aspect,
+                        custom: &mut custom,
+                    },
                     &mut CompositionGuide::Off,
                     lens,
                     &mut ed,
@@ -658,12 +976,16 @@ mod tests {
         let mut s = session();
         s.edits.lens_correction.distortion = true;
         let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut ed = Edited::default();
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut CompositionGuide::Off,
                 true,
                 &mut ed,
@@ -686,12 +1008,16 @@ mod tests {
         let ctx = test_ui::ctx();
         let mut s = session();
         let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut ed = Edited::default();
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
@@ -759,12 +1085,16 @@ mod tests {
         let ctx = test_ui::ctx();
         let mut s = session();
         let mut aspect = None;
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let mut ed = Edited::default();
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
@@ -789,11 +1119,15 @@ mod tests {
         let ctx = test_ui::ctx();
         let mut s = session();
         let (mut aspect, mut ed) = (None, Edited::default());
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let found = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
@@ -864,11 +1198,15 @@ mod tests {
         });
         // One frame with nothing touched: the guides must survive it.
         let (mut aspect, mut ed) = (None, Edited::default());
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         let _ = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             show(
                 ui,
                 &mut s,
-                &mut aspect,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
                 &mut CompositionGuide::Off,
                 false,
                 &mut ed,
@@ -964,6 +1302,7 @@ mod tests {
             to: [0.2, 0.9],
         });
         let (mut aspect, mut ed) = (None, Edited::default());
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
         for change in [10.0f32, -40.0] {
             s.edits.perspective.aspect = change;
             s.edits.perspective.scale = change;
@@ -971,7 +1310,10 @@ mod tests {
                 show(
                     ui,
                     &mut s,
-                    &mut aspect,
+                    AspectLock {
+                        lock: &mut aspect,
+                        custom: &mut custom,
+                    },
                     &mut CompositionGuide::Off,
                     false,
                     &mut ed,

@@ -1186,15 +1186,23 @@ mod tests {
 
     #[test]
     fn a_hand_edited_custom_aspect_is_repaired_rather_than_dividing_by_zero() {
-        let mut s = Settings::default();
-        s.custom_aspect = [0, 7];
+        let mut s = Settings {
+            custom_aspect: [0, 7],
+            ..Default::default()
+        };
         let r = s.custom_aspect_ratio();
         assert!(r.is_finite() && r > 0.0, "{r}");
-        assert!((r - 1.0 / 7.0).abs() < 1e-6, "a zero repairs to the minimum: {r}");
+        assert!(
+            (r - 1.0 / 7.0).abs() < 1e-6,
+            "a zero repairs to the minimum: {r}"
+        );
         s.custom_aspect = [5, 4];
         assert!((s.custom_aspect_ratio() - 1.25).abs() < 1e-6);
         s.custom_aspect = [50_000, 1];
-        assert!((s.custom_aspect_ratio() - 1000.0).abs() < 1e-6, "clamped at the top");
+        assert!(
+            (s.custom_aspect_ratio() - 1000.0).abs() < 1e-6,
+            "clamped at the top"
+        );
     }
 
     #[test]

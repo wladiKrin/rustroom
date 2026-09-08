@@ -106,6 +106,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // this body runs every frame: writing unconditionally would rewrite the file sixty times a
     // second, the `apply_view_demosaic` rule.
     let guide_before = app.settings.composition_guide;
+    let custom_before = app.settings.custom_aspect;
     egui::Panel::right("panel")
         .default_size(240.0)
         .show(ui, |ui| {
@@ -220,7 +221,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             geometry::show(
                                 ui,
                                 s,
-                                &mut app.crop_aspect,
+                                geometry::AspectLock {
+                                    lock: &mut app.crop_aspect,
+                                    custom: &mut app.settings.custom_aspect,
+                                },
                                 &mut app.settings.composition_guide,
                                 found,
                                 &mut ed,
@@ -287,8 +291,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
             });
         });
 
-    // ⚠ Guarded on an actual change, and outside the closure — see `guide_before`.
-    if app.settings.composition_guide != guide_before {
+    // ⚠ Guarded on an actual change, and outside the closure — see `guide_before`. The custom
+    // crop ratio is the second setting this panel edits in place.
+    if app.settings.composition_guide != guide_before || app.settings.custom_aspect != custom_before
+    {
         app.save_settings();
     }
 
