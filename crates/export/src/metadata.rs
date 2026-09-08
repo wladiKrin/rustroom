@@ -8,9 +8,9 @@
 //! deliverable carries its credit, the negative is untouched, and nothing new appears on disk
 //! beside the photographs.
 //!
-//! ⚠ The consequence, stated so it is not later found as a gap: these fields describe the
-//! *export*, not the photograph. Nothing reads them back, they are not in the sidecar, and
-//! re-exporting is what changes them.
+//! ⚠ Since M6.2 the per-photo half of these fields lives in the catalog (`Description`) and
+//! reaches this crate as a [`FileMetadata`]; the three preset strings are its defaults. Nothing
+//! is ever read back from an export, and re-exporting is what changes them.
 //!
 //! # Why XMP, and why hand-written
 //!
@@ -201,19 +201,67 @@ fn escape(s: &str) -> String {
     out
 }
 
+/// A non-blank `s`, trimmed.
+fn present(s: &str) -> Option<&str> {
+    let t = s.trim();
+    (!t.is_empty()).then_some(t)
+}
+
+/// `5.6` → `56/10`. ⚠ Not reduced: exiftool renders `56/10` as `5.6` and `230/10` as
+/// `23.0 mm`; a reduced fraction would be prettier in the XML and identical everywhere anyone
+/// looks.
+fn tenths(x: f32) -> String {
+    format!("{}/10", (x * 10.0).round() as i64)
+}
+
+/// An exposure time as a photographer wrote it: `1/250` below a second, tenths from one up.
+fn exposure_rational(secs: f32) -> String {
+    if secs < 1.0 {
+        format!("1/{}", (1.0 / secs).round() as i64)
+    } else {
+        tenths(secs)
+    }
+}
+
+/// `Capture::taken` as `YYYY-MM-DDThh:mm:ss`, no zone.
+///
+/// ⚠ No zone, and that is the point: the value is naive wall-clock by `Capture::taken`'s own
+/// rule, so writing a `Z` or an offset would claim a zone the value never had.
+fn date_text(secs: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp(secs, 0).map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string())
+}
+
+/// An `rdf:Bag` of `items` under `tag`.
+fn bag(tag: &str, items: &[String]) -> String {
+    let mut s = format!("   <{tag}><rdf:Bag>\n");
+    for it in items {
+        s.push_str(&format!("    <rdf:li>{}</rdf:li>\n", escape(it)));
+    }
+    s.push_str(&format!("   </rdf:Bag></{tag}>\n"));
+    s
+}
+
 /// The XMP packet for `meta`, or `None` when there is nothing to say.
 ///
-/// ⚠ The properties are the Dublin Core ones Lightroom writes, so the values land where other
-/// software already looks: `dc:rights` (exiftool "Rights"), `dc:creator` ("Creator"),
-/// `dc:description` ("Description").
+/// ⚠ Every property is one the Dublin Core, XMP, Lightroom, TIFF, EXIF or `aux` namespace
+/// already names, so the values land where other software looks: `dc:rights` (exiftool
+/// "Rights"), `dc:creator` ("Creator"), `dc:description` ("Description"), `dc:title` ("Title"),
+/// `xmp:Rating`, `xmp:Label`, `dc:subject` and `lr:hierarchicalSubject` (Lightroom's two keyword
+/// forms), `tiff:Model`, `aux:Lens`, `exif:DateTimeOriginal`, `exif:ISOSpeedRatings`,
+/// `exif:ExposureTime`, `exif:FNumber`, `exif:FocalLength`.
 ///
-/// ⚠ `rights` and `description` are language alternatives (`rdf:Alt` with `x-default`) while
-/// `creator` is an ordered list (`rdf:Seq`) — that asymmetry is the Dublin Core schema's, not a
-/// slip: a caption can be translated, an author cannot.
-pub fn xmp_packet(meta: &ExportMetadata) -> Option<String> {
-    if meta.is_empty() {
-        return None;
-    }
+/// ⚠ `rights`, `description` and `title` are language alternatives (`rdf:Alt` with `x-default`)
+/// while `creator` and `ISOSpeedRatings` are sequences — those asymmetries are the schemas' own,
+/// not a slip.
+///
+/// ⚠⚠ **`tiff:Model` carries the whole stored camera name and there is no `tiff:Make`.** The
+/// catalog holds one normalised `"{MAKE} {model}"` string (`Capture::camera_name`), and the make
+/// cannot be split back off it soundly — `NIKON CORPORATION NIKON Z 6`. Writing the name whole
+/// is honest; inventing a Make is not. Spec §3's accepted caveat.
+///
+/// ⚠ The scope has already been applied by [`FileMetadata::resolve`]: this writes what is
+/// present and knows nothing about `CopyrightOnly`.
+pub fn xmp_packet(meta: &FileMetadata) -> Option<String> {
     let mut body = String::new();
     let alt = |tag: &str, v: &str| {
         format!(
@@ -221,23 +269,88 @@ pub fn xmp_packet(meta: &ExportMetadata) -> Option<String> {
             escape(v)
         )
     };
-    if !meta.copyright.trim().is_empty() {
-        body.push_str(&alt("dc:rights", meta.copyright.trim()));
+    let seq = |tag: &str, v: &str| {
+        format!(
+            "   <{tag}><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></{tag}>\n",
+            escape(v)
+        )
+    };
+    let text = |tag: &str, v: &str| format!("   <{tag}>{}</{tag}>\n", escape(v));
+
+    if let Some(t) = present(&meta.title) {
+        body.push_str(&alt("dc:title", t));
     }
-    if !meta.creator.trim().is_empty() {
-        body.push_str(&format!(
-            "   <dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>\n",
-            escape(meta.creator.trim())
-        ));
+    if let Some(c) = present(&meta.caption) {
+        body.push_str(&alt("dc:description", c));
     }
-    if !meta.caption.trim().is_empty() {
-        body.push_str(&alt("dc:description", meta.caption.trim()));
+    if let Some(r) = present(&meta.copyright) {
+        body.push_str(&alt("dc:rights", r));
+    }
+    if let Some(c) = present(&meta.creator) {
+        body.push_str(&seq("dc:creator", c));
+    }
+    if meta.rating > 0 {
+        body.push_str(&text("xmp:Rating", &meta.rating.to_string()));
+    }
+    if let Some(l) = meta.label.as_deref().and_then(present) {
+        body.push_str(&text("xmp:Label", l));
+    }
+    if !meta.keywords.is_empty() {
+        // ⚠ Both forms, Lightroom's own habit: the hierarchy in `lr:hierarchicalSubject`, and
+        // each path's **leaf** in the flat `dc:subject` bag, which is all an application that
+        // reads only the flat form can use. The same six lines live in `xmp::injection`; the
+        // spec (§3) records why the two skeletons are not shared.
+        let mut leaves: Vec<String> = Vec::new();
+        for p in &meta.keywords {
+            if let Some(leaf) = p.last() {
+                if !leaves.contains(leaf) {
+                    leaves.push(leaf.clone());
+                }
+            }
+        }
+        let paths: Vec<String> = meta.keywords.iter().map(|p| p.join("|")).collect();
+        body.push_str(&bag("dc:subject", &leaves));
+        body.push_str(&bag("lr:hierarchicalSubject", &paths));
+    }
+
+    let c = &meta.capture;
+    let positive = |v: &f32| *v > 0.0 && v.is_finite();
+    if let Some(m) = c.camera.as_deref().and_then(present) {
+        body.push_str(&text("tiff:Model", m));
+    }
+    if let Some(l) = c.lens.as_deref().and_then(present) {
+        body.push_str(&text("aux:Lens", l));
+    }
+    if let Some(d) = c.taken.and_then(date_text) {
+        body.push_str(&text("exif:DateTimeOriginal", &d));
+    }
+    if let Some(i) = c.iso {
+        body.push_str(&seq("exif:ISOSpeedRatings", &i.to_string()));
+    }
+    if let Some(s) = c.shutter.filter(positive) {
+        body.push_str(&text("exif:ExposureTime", &exposure_rational(s)));
+    }
+    if let Some(a) = c.aperture.filter(positive) {
+        body.push_str(&text("exif:FNumber", &tenths(a)));
+    }
+    if let Some(f) = c.focal_len.filter(positive) {
+        body.push_str(&text("exif:FocalLength", &tenths(f)));
+    }
+
+    if body.is_empty() {
+        return None;
     }
     Some(format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n\
          <x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Rustroom\">\n\
          \x20<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n\
-         \x20 <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
+         \x20 <rdf:Description rdf:about=\"\"\n\
+         \x20   xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n\
+         \x20   xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n\
+         \x20   xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"\n\
+         \x20   xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\"\n\
+         \x20   xmlns:exif=\"http://ns.adobe.com/exif/1.0/\"\n\
+         \x20   xmlns:aux=\"http://ns.adobe.com/exif/1.0/aux/\">\n\
          {body}\
          \x20 </rdf:Description>\n\
          \x20</rdf:RDF>\n\
@@ -252,9 +365,9 @@ pub fn xmp_packet(meta: &ExportMetadata) -> Option<String> {
 /// crate offers no such hook for anything but ICC. The file is read, rewritten and replaced;
 /// the pixels are never re-encoded, so this cannot change what the photograph looks like.
 ///
-/// ⚠ A no-op when `meta` is empty — including no read and no write — so an export by anyone who
-/// has not filled the fields in is byte-for-byte what it was before this existed.
-pub fn embed(path: &Path, format: ExportFormat, meta: &ExportMetadata) -> Result<(), ExportError> {
+/// ⚠ A no-op when the packet would be empty — including no read and no write — so an export
+/// with nothing to say is byte-for-byte what it was before this existed.
+pub fn embed(path: &Path, format: ExportFormat, meta: &FileMetadata) -> Result<(), ExportError> {
     let Some(packet) = xmp_packet(meta) else {
         return Ok(());
     };
@@ -476,13 +589,18 @@ mod tests {
     use super::*;
     use core_image::ImageBuf;
 
-    fn meta(copyright: &str, creator: &str, caption: &str) -> ExportMetadata {
-        ExportMetadata {
-            copyright: copyright.into(),
-            creator: creator.into(),
-            caption: caption.into(),
-            scope: MetadataScope::All,
-        }
+    /// The three preset strings, resolved with no photo of their own — what every export before
+    /// M6.2 wrote, so the pre-existing tests below keep their exact assertions.
+    fn meta(copyright: &str, creator: &str, caption: &str) -> FileMetadata {
+        FileMetadata::resolve(
+            &ExportMetadata {
+                copyright: copyright.into(),
+                creator: creator.into(),
+                caption: caption.into(),
+                scope: MetadataScope::All,
+            },
+            FileMetadata::default(),
+        )
     }
 
     #[test]
@@ -570,8 +688,99 @@ mod tests {
     }
 
     #[test]
+    fn all_metadata_writes_each_property_once_where_other_software_looks() {
+        let mut p = photo();
+        p.capture = core_image::Capture {
+            taken: Some(1_787_824_800), // 2026-08-27 10:00:00, naive wall-clock
+            camera: Some("FUJIFILM X-T4".into()),
+            lens: Some("XF23mmF2 R WR".into()),
+            iso: Some(1600),
+            shutter: Some(0.004),
+            aperture: Some(5.6),
+            focal_len: Some(23.0),
+        };
+        let x = xmp_packet(&FileMetadata::resolve(&defaults(), p)).unwrap();
+        // ⚠ Asserted as `<property>…value…</property>`: the discriminating sabotage is swapping
+        // two fields, which a bare `contains` cannot see.
+        for want in [
+            "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Harbour</rdf:li>",
+            "<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Boats</rdf:li>",
+            "<dc:rights><rdf:Alt><rdf:li xml:lang=\"x-default\">(c) preset</rdf:li>",
+            "<dc:creator><rdf:Seq><rdf:li>Preset Person</rdf:li></rdf:Seq></dc:creator>",
+            "<xmp:Rating>4</xmp:Rating>",
+            "<xmp:Label>Red</xmp:Label>",
+            "<tiff:Model>FUJIFILM X-T4</tiff:Model>",
+            "<aux:Lens>XF23mmF2 R WR</aux:Lens>",
+            "<exif:DateTimeOriginal>2026-08-27T10:00:00</exif:DateTimeOriginal>",
+            "<exif:ISOSpeedRatings><rdf:Seq><rdf:li>1600</rdf:li></rdf:Seq></exif:ISOSpeedRatings>",
+            "<exif:ExposureTime>1/250</exif:ExposureTime>",
+            "<exif:FNumber>56/10</exif:FNumber>",
+            "<exif:FocalLength>230/10</exif:FocalLength>",
+        ] {
+            assert_eq!(x.matches(want).count(), 1, "{want} not exactly once in\n{x}");
+        }
+    }
+
+    #[test]
+    fn keywords_land_in_both_forms_lightroom_reads() {
+        let x = xmp_packet(&FileMetadata::resolve(&defaults(), photo())).unwrap();
+        assert!(x.contains("<rdf:li>Europe|UK</rdf:li>"), "no hierarchy:\n{x}");
+        assert!(x.contains("<rdf:li>UK</rdf:li>"), "no leaf:\n{x}");
+        assert!(x.contains("<rdf:li>Sea</rdf:li>"), "{x}");
+        assert!(
+            !x.contains("<rdf:li>Europe</rdf:li>"),
+            "an interior level leaked into the flat bag:\n{x}"
+        );
+        assert_eq!(x.matches("<dc:subject>").count(), 1);
+        assert_eq!(x.matches("<lr:hierarchicalSubject>").count(), 1);
+    }
+
+    #[test]
+    fn a_shutter_below_a_second_is_a_unit_fraction_and_above_it_is_tenths() {
+        // ⚠ `1/250` is what a photographer wrote; `4/1000` is not. Over a second, tenths.
+        assert_eq!(exposure_rational(0.004), "1/250");
+        assert_eq!(exposure_rational(0.5), "1/2");
+        assert_eq!(exposure_rational(2.5), "25/10");
+        assert_eq!(exposure_rational(30.0), "300/10");
+        assert_eq!(tenths(5.6), "56/10");
+        assert_eq!(tenths(1.8), "18/10");
+    }
+
+    #[test]
+    fn an_exif_less_capture_writes_no_capture_property() {
+        let mut p = photo();
+        p.capture = core_image::Capture::default();
+        let x = xmp_packet(&FileMetadata::resolve(&defaults(), p)).unwrap();
+        for absent in ["tiff:", "exif:D", "exif:I", "exif:E", "exif:F", "aux:L"] {
+            assert!(!x.contains(&format!("<{absent}")), "{absent} appeared:\n{x}");
+        }
+        // The Dublin Core half is still there.
+        assert!(x.contains("<dc:title>"));
+    }
+
+    #[test]
+    fn an_unrated_unlabelled_photo_writes_neither() {
+        // ⚠ 0 is "unrated", which XMP spells as the property being **absent** — the rule the
+        // sidecar already follows — so a reader cannot mistake it for a deliberate zero.
+        let mut p = photo();
+        p.rating = 0;
+        p.label = None;
+        let x = xmp_packet(&FileMetadata::resolve(&defaults(), p)).unwrap();
+        assert!(!x.contains("xmp:Rating"), "{x}");
+        assert!(!x.contains("xmp:Label"), "{x}");
+    }
+
+    #[test]
+    fn a_date_is_naive_wall_clock_with_no_zone() {
+        // ⚠ `Capture::taken` is naive wall-clock by rule; a `Z` or an offset here would claim a
+        // zone the value never had.
+        assert_eq!(date_text(1_787_824_800).as_deref(), Some("2026-08-27T10:00:00"));
+        assert_eq!(date_text(0).as_deref(), Some("1970-01-01T00:00:00"));
+    }
+
+    #[test]
     fn an_empty_metadata_writes_no_packet() {
-        assert!(xmp_packet(&ExportMetadata::default()).is_none());
+        assert!(xmp_packet(&FileMetadata::default()).is_none());
         // ⚠ Whitespace counts as absent, or a stray space produces a blank copyright tag —
         // worse than none, because nothing can tell it from a deliberate assertion.
         assert!(xmp_packet(&meta("  ", "\t", "\n")).is_none());
@@ -635,7 +844,7 @@ mod tests {
     /// ⚠ Decoding the *result* is the load-bearing half: a container edited with a wrong length,
     /// a wrong CRC or a dangling offset still contains the marker string, so a byte search alone
     /// would pass on a file no reader can open.
-    fn round_trip(fmt: ExportFormat, m: &ExportMetadata) -> (Vec<u8>, Vec<u8>) {
+    fn round_trip(fmt: ExportFormat, m: &FileMetadata) -> (Vec<u8>, Vec<u8>) {
         let img = ramp(9, 5);
         let path = tmp(&format!("rt.{}", fmt.extension()));
         crate::save(&img, &path, fmt, 95, color::OutputSpace::Srgb).unwrap();
@@ -653,7 +862,10 @@ mod tests {
 
     #[test]
     fn every_format_carries_the_packet_and_still_decodes() {
-        let m = meta("(c) 2026 Rustroom", "Wladi", "Probe");
+        let mut p = photo();
+        p.capture.taken = Some(1_787_824_800);
+        p.capture.shutter = Some(0.004);
+        let m = FileMetadata::resolve(&defaults(), p);
         for fmt in ExportFormat::ALL {
             let (bytes, _) = round_trip(fmt, &m);
             // ⚠ `x:xmpmeta`, not the `http://ns.adobe.com/xap/1.0/` URL — that string is the
@@ -664,11 +876,16 @@ mod tests {
                 bytes.windows(needle.len()).any(|w| w == needle),
                 "{fmt:?}: no XMP packet in the file"
             );
-            let c = b"(c) 2026 Rustroom";
-            assert!(
-                bytes.windows(c.len()).any(|w| w == c),
-                "{fmt:?}: the copyright is not in the file"
-            );
+            // ⚠ The **full** payload, so the container surgery is exercised against the biggest
+            // packet this crate writes — the copyright from the preset and a capture fact from
+            // the photo.
+            for needle in [&b"(c) preset"[..], b"<exif:ExposureTime>1/250</exif:ExposureTime>"] {
+                assert!(
+                    bytes.windows(needle.len()).any(|w| w == needle),
+                    "{fmt:?}: {} is not in the file",
+                    String::from_utf8_lossy(needle)
+                );
+            }
         }
     }
 
@@ -681,7 +898,7 @@ mod tests {
             let path = tmp(&format!("noop.{}", fmt.extension()));
             crate::save(&img, &path, fmt, 95, color::OutputSpace::Srgb).unwrap();
             let before = std::fs::read(&path).unwrap();
-            embed(&path, fmt, &ExportMetadata::default()).unwrap();
+            embed(&path, fmt, &FileMetadata::default()).unwrap();
             let after = std::fs::read(&path).unwrap();
             assert_eq!(before, after, "{fmt:?}");
             let _ = std::fs::remove_file(&path);

@@ -29,6 +29,10 @@ ab_glyph = "0.2"
 # about who publishes a `static [u8]`. Chosen over vendoring a font because it is already in this
 # tree at exactly our version, so it adds nothing to the binary that was not already there.
 epaint_default_fonts = "0.35"
+# ⚠ For `exif:DateTimeOriginal` alone — see `metadata::date_text`. Pure Rust, already in the
+# tree via `app`. A hand-rolled civil-date conversion is a dozen lines and a thing to get
+# silently wrong: the CRC-32 argument again.
+chrono = "0.4.45"
 
 [dev-dependencies]
 serde_json = { workspace = true }
