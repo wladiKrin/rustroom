@@ -87,6 +87,17 @@ impl eframe::App for RustroomApp {
                     &frame.rgba,
                 );
                 s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+                // ⚠ The grade range view's plane becomes a texture in the same place the frame
+                // does, so the two can never describe different frames — and a frame that
+                // arrives without a plane (box unticked, Global, a tool switch) drops the
+                // texture in this same assignment. No separate clear.
+                s.grade_view_texture = frame.grade_view.as_ref().map(|plane| {
+                    let img = egui::ColorImage::from_rgba_unmultiplied(
+                        [frame.width, frame.height],
+                        &rustroom_app::grade_view::tint_rgba(plane),
+                    );
+                    ctx.load_texture("grade_view", img, egui::TextureOptions::LINEAR)
+                });
                 s.rendered_region = frame.region.map(|r| RegionRect {
                     x: r.x0,
                     y: r.y0,

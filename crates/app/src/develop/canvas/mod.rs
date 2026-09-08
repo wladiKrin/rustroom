@@ -250,6 +250,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
 
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                     egui::Image::new(shown).paint_at(ui, resp.rect);
+                    // ⚠ The grade range view, over the photograph and under every tool overlay.
+                    // `resp.rect` is `img_rect` — the rendered slice — and this texture covers
+                    // exactly that, whether the frame was whole or a region; the readout's
+                    // exception, for the readout's reason. Every other overlay is frame-relative.
+                    if let Some(tint) = &s.grade_view_texture {
+                        egui::Image::new(tint).paint_at(ui, resp.rect);
+                    }
 
                     // ⚠ A behaviour change, and an intended one: mask handles and brush
                     // painting now belong to the Masks tool rather than to "any mode that is
@@ -922,6 +929,54 @@ mod tests {
             guiding,
             idle + 1,
             "expected one extra mesh — the loupe — in Guide Mode; got {guiding}, idle {idle}"
+        );
+    }
+
+    /// How many **textured rectangles** a frame paints with no pointer over it.
+    /// `egui::Image::paint_at` — the frame and the tint alike — emits a `RectShape` with a
+    /// brush, not a mesh; the loupe's `painter.image` is what emits meshes.
+    fn textured_rects(app: &mut crate::RustroomApp, ctx: &egui::Context) -> usize {
+        fn count(s: &egui::Shape) -> usize {
+            match s {
+                egui::Shape::Rect(r) if r.brush.is_some() => 1,
+                egui::Shape::Vec(v) => v.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(super::test_support::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                super::show(app, ui, &c);
+            },
+        );
+        out.shapes.iter().map(|s| count(&s.shape)).sum()
+    }
+
+    /// ⚠ The view's texture is one extra textured rect over the photograph, painted at the
+    /// image rect; absent, it paints nothing. Counted, the way the loupe is.
+    #[test]
+    fn a_landed_plane_is_painted_over_the_photograph() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 60);
+        let idle = textured_rects(&mut app, &ctx);
+        assert_eq!(idle, 1, "setup: the photograph itself is one textured rect");
+        {
+            let s = app.session.as_mut().expect("a session");
+            let rgba = rustroom_app::grade_view::tint_rgba(&vec![200u8; 80 * 60]);
+            let img = egui::ColorImage::from_rgba_unmultiplied([80, 60], &rgba);
+            s.grade_view_texture =
+                Some(ctx.load_texture("grade_view_test", img, egui::TextureOptions::LINEAR));
+        }
+        let tinted = textured_rects(&mut app, &ctx);
+        assert_eq!(
+            tinted,
+            idle + 1,
+            "expected one extra textured rect — the range tint; got {tinted} tinted, {idle} idle"
         );
     }
 
