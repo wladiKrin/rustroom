@@ -4,7 +4,7 @@ pub mod metadata;
 pub mod output_sharpen;
 pub mod watermark;
 
-pub use metadata::{ExportMetadata, MetadataScope};
+pub use metadata::{ExportMetadata, FileMetadata, MetadataScope};
 pub use output_sharpen::OutputSharpening;
 pub use watermark::{Watermark, WatermarkCorner};
 

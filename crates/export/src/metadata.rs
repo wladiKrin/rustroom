@@ -95,6 +95,77 @@ impl ExportMetadata {
     }
 }
 
+/// Everything one exported file says about its photograph — the payload the packet is written
+/// from.
+///
+/// ⚠ Plain strings and a `Capture`, no catalog types: this crate has no catalog dependency and
+/// keeps none. The app converts its `Description`, `Marks` and keyword paths into this.
+///
+/// ⚠ `label` is already the XMP text (`Red`, `Blue`…): what a catalog label is *called* is the
+/// app's rule (`xmp_sync::LABELS`), not this crate's.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FileMetadata {
+    pub title: String,
+    pub caption: String,
+    pub copyright: String,
+    pub creator: String,
+    /// 0 is unrated and writes nothing.
+    pub rating: u8,
+    pub label: Option<String>,
+    /// Keyword paths, root first: `["Europe", "France", "Paris"]`.
+    pub keywords: Vec<Vec<String>>,
+    pub capture: core_image::Capture,
+}
+
+impl FileMetadata {
+    /// `opts`'s three default strings under `photo`'s own values, then cut to `opts.scope`.
+    ///
+    /// ⚠ The photo's non-blank field wins; a blank one takes the preset's. The preset has no
+    /// title and gains none — a title is per photo by nature.
+    ///
+    /// ⚠⚠ The scope is applied **here and nowhere else**: `CopyrightOnly` clears everything but
+    /// rights and creator, so the packet writer has one rule — write what is present — and
+    /// cannot forget a field the scope should have hidden.
+    pub fn resolve(opts: &ExportMetadata, photo: FileMetadata) -> FileMetadata {
+        fn pick(own: String, fallback: &str) -> String {
+            if own.trim().is_empty() {
+                fallback.trim().to_string()
+            } else {
+                own
+            }
+        }
+        let FileMetadata {
+            title,
+            caption,
+            copyright,
+            creator,
+            rating,
+            label,
+            keywords,
+            capture,
+        } = photo;
+        let copyright = pick(copyright, &opts.copyright);
+        let creator = pick(creator, &opts.creator);
+        match opts.scope {
+            MetadataScope::All => FileMetadata {
+                title,
+                caption: pick(caption, &opts.caption),
+                copyright,
+                creator,
+                rating,
+                label,
+                keywords,
+                capture,
+            },
+            MetadataScope::CopyrightOnly => FileMetadata {
+                copyright,
+                creator,
+                ..FileMetadata::default()
+            },
+        }
+    }
+}
+
 /// The largest XMP packet a JPEG APP1 segment can carry.
 ///
 /// A JPEG segment's length field is a `u16` covering itself, so the payload is at most
@@ -442,6 +513,60 @@ mod tests {
         let m: ExportMetadata = serde_json::from_str(json).unwrap();
         assert_eq!(m.scope, MetadataScope::All);
         assert_eq!(m.copyright, "(c) me");
+    }
+
+    fn photo() -> FileMetadata {
+        FileMetadata {
+            title: "Harbour".into(),
+            caption: "Boats".into(),
+            copyright: "".into(),
+            creator: "  ".into(),
+            rating: 4,
+            label: Some("Red".into()),
+            keywords: vec![vec!["Europe".into(), "UK".into()], vec!["Sea".into()]],
+            capture: core_image::Capture {
+                camera: Some("FUJIFILM X-T4".into()),
+                iso: Some(200),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn defaults() -> ExportMetadata {
+        ExportMetadata {
+            copyright: "(c) preset".into(),
+            creator: "Preset Person".into(),
+            caption: "preset caption".into(),
+            scope: MetadataScope::All,
+        }
+    }
+
+    #[test]
+    fn the_photos_own_field_wins_and_a_blank_one_falls_back() {
+        let r = FileMetadata::resolve(&defaults(), photo());
+        assert_eq!(r.caption, "Boats", "the photo's caption beat the preset's");
+        assert_eq!(r.copyright, "(c) preset", "an empty field fell back");
+        assert_eq!(r.creator, "Preset Person", "a whitespace field fell back too");
+        assert_eq!(r.title, "Harbour", "the preset has no title to offer");
+        assert_eq!(r.rating, 4);
+        assert_eq!(r.keywords.len(), 2);
+        assert_eq!(r.capture.iso, Some(200));
+    }
+
+    #[test]
+    fn copyright_only_keeps_rights_and_creator_and_nothing_else() {
+        let opts = ExportMetadata {
+            scope: MetadataScope::CopyrightOnly,
+            ..defaults()
+        };
+        let r = FileMetadata::resolve(&opts, photo());
+        assert_eq!(r.copyright, "(c) preset");
+        assert_eq!(r.creator, "Preset Person");
+        assert_eq!(
+            (r.title.as_str(), r.caption.as_str(), r.rating, r.label, r.keywords.len()),
+            ("", "", 0, None, 0)
+        );
+        assert_eq!(r.capture, core_image::Capture::default());
     }
 
     #[test]
