@@ -49,12 +49,31 @@ pub const TINT: [u8; 3] = [0, 190, 210];
 ///
 /// ⚠ `range_weights` is the stage's own, never a copy: the stage, the panel strip and this view
 /// therefore cannot drift.
+///
+/// ⚠⚠ **The weights come from a 256-entry table, interpolated — the stage's own design, for the
+/// stage's own reason, and it was MEASURED into place rather than reasoned.** Calling
+/// `range_weights` per pixel is a `powf` for the width and three `exp`, and it cost **15.3 ms at
+/// fit and 25.3 ms at a 2000×1400 region** (X-T4, release, best of 5) — the plane was the
+/// most expensive thing in the frame while the spec had predicted single digits. Tabulated,
+/// the per-pixel work is three `cbrt` and one lerp; the numbers after are in `CLAUDE.md`. The
+/// table is built per plane, so Blending and Balance are read exactly once, from the stage.
 pub fn coverage(buf: &ImageBuf, range: GradeRangeView, blending: f32, balance: f32) -> Vec<u8> {
     let (w, h) = (buf.width(), buf.height());
     if w == 0 || h == 0 {
         return Vec::new();
     }
     let k = range.index();
+    // ⚠ 256 with linear interpolation, like the stage: the weight curves are smooth, so the
+    // interpolation error is ~1e-4 of a weight, well inside the byte the plane is quantised to.
+    // A nearest-entry lookup would NOT do — at Blending 0 the curve climbs ~12 weight units per
+    // unit L, i.e. ~12 of 255 between adjacent entries.
+    const TABLE: usize = 256;
+    let table: Vec<f32> = (0..TABLE)
+        .map(|i| {
+            let l = i as f32 / (TABLE - 1) as f32;
+            pipeline::ColorGradingStage::range_weights(l, blending, balance)[k]
+        })
+        .collect();
     let mut out = vec![0u8; w * h];
     // Parallel over rows: each row is a substantial task and reads nothing but itself, so the
     // result is identical to the sequential loop.
@@ -63,7 +82,10 @@ pub fn coverage(buf: &ImageBuf, range: GradeRangeView, blending: f32, balance: f
         .for_each(|(row_out, row_in)| {
             for (dst, px) in row_out.iter_mut().zip(row_in.as_chunks::<3>().0) {
                 let l = color::oklab::prophoto_to_oklab(*px)[0].clamp(0.0, 1.0);
-                let wgt = pipeline::ColorGradingStage::range_weights(l, blending, balance)[k];
+                let x = l * (TABLE - 1) as f32;
+                let i = (x as usize).min(TABLE - 2);
+                let f = x - i as f32;
+                let wgt = table[i] * (1.0 - f) + table[i + 1] * f;
                 *dst = (wgt * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         });
@@ -140,7 +162,11 @@ mod tests {
         assert!(by_y < 0.1, "premise: by luminance it is not, got {by_y}");
 
         let plane = coverage(&buf_of(&[px]), GradeRangeView::Shadows, 0.0, 0.0);
-        assert!(plane[0] > 230, "the view did not follow Oklab L: {}", plane[0]);
+        assert!(
+            plane[0] > 230,
+            "the view did not follow Oklab L: {}",
+            plane[0]
+        );
     }
 
     /// A scene-referred pixel above white (`L > 1`) is a pure highlight, as the stage reads it.

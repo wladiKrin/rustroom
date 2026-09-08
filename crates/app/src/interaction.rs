@@ -569,7 +569,10 @@ mod tests {
             }
             app.select_tool(to);
             let s = app.session.as_ref().unwrap();
-            assert!(!s.show_grade_range, "{from:?} -> {to:?}: the checkbox survived");
+            assert!(
+                !s.show_grade_range,
+                "{from:?} -> {to:?}: the checkbox survived"
+            );
             assert_eq!(s.grade_view, None, "{from:?} -> {to:?}: the view survived");
         }
     }

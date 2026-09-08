@@ -391,7 +391,10 @@ mod tests {
         use rustroom_app::grade_view::GradeRangeView;
         assert_eq!(GradeRange::Shadows.view(), Some(GradeRangeView::Shadows));
         assert_eq!(GradeRange::Midtones.view(), Some(GradeRangeView::Midtones));
-        assert_eq!(GradeRange::Highlights.view(), Some(GradeRangeView::Highlights));
+        assert_eq!(
+            GradeRange::Highlights.view(),
+            Some(GradeRangeView::Highlights)
+        );
         assert_eq!(GradeRange::Global.view(), None);
     }
 

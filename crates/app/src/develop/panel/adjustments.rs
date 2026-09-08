@@ -774,7 +774,10 @@ mod tests {
             Some(rustroom_app::grade_view::GradeRangeView::Shadows),
             "the default selection is Shadows, and the view must carry it"
         );
-        assert!(p.ed.changed, "the view asked for no render, so the canvas would not change");
+        assert!(
+            p.ed.changed,
+            "the view asked for no render, so the canvas would not change"
+        );
         assert!(!p.ed.settled, "a view toggle pushed a history entry");
         assert_eq!(p.edits, before, "a view toggle edited the photograph");
     }

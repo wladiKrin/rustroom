@@ -2727,7 +2727,10 @@ mod tests {
         let edits = graded(0.0, None);
         let off = viewed(&buf, &edits, None, None);
         let on = viewed(&buf, &edits, Some(GradeRangeView::Shadows), None);
-        assert!(off.grade_view.is_none(), "the view-off frame carries a plane");
+        assert!(
+            off.grade_view.is_none(),
+            "the view-off frame carries a plane"
+        );
         assert_eq!(on.rgba, off.rgba, "the view changed the texture");
         assert_eq!(on.srgb, off.srgb, "the view changed the instrument channel");
         assert_eq!(on.hist, off.hist, "the view changed the histogram");
@@ -2736,7 +2739,10 @@ mod tests {
         // The ramp's ends: the darkest grey is mostly shadow, the brightest barely — at the
         // fixture's default Blending of 50 the ranges overlap widely, so "mostly" is the honest
         // reading (143 of 255 at L = 0.17), not the near-255 a Blending of 0 would give.
-        assert!(p[0] > 128 && p[5] < 16, "the plane is not the shadow weight: {p:?}");
+        assert!(
+            p[0] > 128 && p[5] < 16,
+            "the plane is not the shadow weight: {p:?}"
+        );
     }
 
     /// ⚠⚠ The plane is taken BEFORE the grade. A luminance wheel at +100 shifts L by 0.15 on
@@ -2748,7 +2754,10 @@ mod tests {
         for range in GradeRangeView::ALL {
             let flat = plane(&viewed(&buf, &graded(0.0, None), Some(range), None));
             let lifted = plane(&viewed(&buf, &graded(100.0, None), Some(range), None));
-            assert_eq!(flat, lifted, "{range:?}: the grade's own luminance moved the plane");
+            assert_eq!(
+                flat, lifted,
+                "{range:?}: the grade's own luminance moved the plane"
+            );
         }
         // The premise: the lift really changes the photograph, so the equality above is not
         // vacuous.
@@ -2794,7 +2803,12 @@ mod tests {
             w: 4,
             h: 3,
         });
-        let f = viewed(&buf, &graded(0.0, None), Some(GradeRangeView::Midtones), region);
+        let f = viewed(
+            &buf,
+            &graded(0.0, None),
+            Some(GradeRangeView::Midtones),
+            region,
+        );
         assert_eq!((f.width, f.height), (4, 3));
         assert_eq!(plane(&f).len(), 12);
     }
