@@ -30,6 +30,45 @@ const AIRLIGHT_PATCH_DIV: usize = 32;
 /// Floor on each channel of the airlight. Load-bearing: `I_c / A_c` divides by it.
 const A_MIN: f32 = 1e-3;
 
+/// Distance from the airlight, in **linear working-space** units and as the largest per-channel
+/// difference, within which a pixel is read as an object of that colour rather than as haze.
+///
+/// ⚠⚠ **Measured, not reasoned** (`dehaze_bright_probe`, 415 X-T4 frames, 2026-09-08). The
+/// dark-channel prior reads a white wall as dense haze — its dark channel is high — and pushes
+/// every wall pixel darker than the airlight estimate further from it, which at +100 darkened
+/// the two white-kitten frames **15.7–18.7%** on average and 38–48% in their worst decile, with
+/// a blue-grey tint (Oklab chroma +0.013). Swept at +100:
+///
+/// | K | white wall (DSCF6546 / 6557) | synthetic haze residual | depth-aware test |
+/// | --- | --- | --- | --- |
+/// | 0 | 18.7% / 15.7% darker | 0.336 | pass |
+/// | 0.06 | 10.4% / 3.8% | — | pass |
+/// | **0.1** | **3.4% / 0.8%** | **0.380** | pass |
+/// | 0.2 | 0.0% / 0.0% | — | **FAILS** — the depth gradient is swallowed |
+///
+/// 0.1 is the smallest value that removes the white-wall case, and 0.2 is past the ceiling.
+/// The cost is ~13% less removal of dense haze (0.336 → 0.380 of the haze left), because dense
+/// haze is near the airlight by definition; `synthetic_haze_is_removed`'s bound of 0.5 is what
+/// keeps that honest. Cloudy skies (~15% at +100) are *not* near the airlight and are untouched —
+/// deliberately, since the +60 renders show the sky effect people reach for Dehaze to get.
+///
+/// ⚠ A fixed constant, no slider: Lightroom exposes none, and the Clarity halo suppressor set the
+/// precedent that this is part of what the tool means.
+const AIRLIGHT_TOLERANCE: f32 = 0.1;
+
+/// The tolerance rule: `t` raised toward 1 as `dist` falls below `tolerance`.
+///
+/// Continuous: 1 for `dist <= tolerance·t`, `t·tolerance/dist` between there and `tolerance`
+/// (reaching exactly `t`), and `t` beyond. Only the derivative kinks, and the guided refinement
+/// this runs ahead of smooths that spatially, as it already smooths the patch minimum's blocks.
+/// A zero tolerance is the identity.
+fn tolerant_transmission(t: f32, dist: f32, tolerance: f32) -> f32 {
+    if tolerance <= 0.0 {
+        return t;
+    }
+    (t * (tolerance / dist.max(1e-6)).max(1.0)).min(1.0)
+}
+
 /// Rec.709 luma, in linear light. Same as the sharpening and local-contrast stages.
 fn luma(px: &[f32]) -> f32 {
     // ⚠ Delegates to `color::luminance`, which carries the **working space's** weights. This
@@ -94,6 +133,20 @@ pub fn airlight(image: &ImageBuf) -> [f32; 3] {
 
 /// The refined transmission map for `image`: how much of each pixel survived the haze.
 pub fn transmission(image: &ImageBuf, a: [f32; 3], scale: RenderScale) -> Vec<f32> {
+    transmission_with(image, a, scale, AIRLIGHT_TOLERANCE)
+}
+
+/// [`transmission`] with the airlight tolerance overridden.
+///
+/// ⚠ Exists for the tests: "the object was left alone" is a comparison against the untreated
+/// stage, and a tolerance of 0 is exactly that. Production only ever calls it through
+/// [`transmission`], with [`AIRLIGHT_TOLERANCE`].
+pub(crate) fn transmission_with(
+    image: &ImageBuf,
+    a: [f32; 3],
+    scale: RenderScale,
+    tolerance: f32,
+) -> Vec<f32> {
     let (w, h) = (image.width(), image.height());
     // min over channels of I_c / A_c, then min over the patch.
     let normalized: Vec<f32> = image
@@ -102,7 +155,24 @@ pub fn transmission(image: &ImageBuf, a: [f32; 3], scale: RenderScale) -> Vec<f3
         .map(|px| (px[0] / a[0]).min(px[1] / a[1]).min(px[2] / a[2]))
         .collect();
     let dark = min_filter(&normalized, w, h, scaled_radius(PATCH_RADIUS_FULL, scale));
-    let coarse: Vec<f32> = dark.iter().map(|&d| 1.0 - OMEGA * d).collect();
+    // ⚠ The tolerance is applied to the COARSE map, before the refinement, so the kink at its
+    // breakpoints is smoothed along with everything else. Largest per-channel distance: a pixel
+    // is "the airlight's colour" only when every channel is within the tolerance.
+    let dist: Vec<f32> = image
+        .data()
+        .par_chunks_exact(3)
+        .map(|px| {
+            (px[0] - a[0])
+                .abs()
+                .max((px[1] - a[1]).abs())
+                .max((px[2] - a[2]).abs())
+        })
+        .collect();
+    let coarse: Vec<f32> = dark
+        .iter()
+        .zip(&dist)
+        .map(|(&d, &ds)| tolerant_transmission(1.0 - OMEGA * d, ds, tolerance))
+        .collect();
 
     // Refine against image luma. Without this the map is blocky, and any plain blur of it
     // produces halos at depth discontinuities — sky against ridge, which is where dehaze is
@@ -118,11 +188,6 @@ pub fn transmission(image: &ImageBuf, a: [f32; 3], scale: RenderScale) -> Vec<f3
     )
 }
 
-/// Dehaze via the dark-channel prior, on the haze model `I = J·t + A·(1 − t)`.
-///
-/// The model is **radiometric**, so it holds exactly in this pipeline's linear working space
-/// and only approximately in the gamma-encoded space most published implementations use.
-///
 /// Both slider directions share one expression. With `k = amount/100` and
 /// `t_k = 1 − |k|·(1 − t)`: positive **inverts** the model to remove haze, negative **applies**
 /// it to add haze. At `k = 0`, `t_k = 1` and both collapse to `J = I` exactly. Because `t`
@@ -147,12 +212,20 @@ impl PipelineStage for DehazeStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
+        self.apply_with(image, AIRLIGHT_TOLERANCE)
+    }
+}
+
+impl DehazeStage {
+    /// [`PipelineStage::apply`] with the airlight tolerance overridden — the tests' seam, the
+    /// `local_contrast::apply_with` precedent. Production only ever calls `apply`.
+    pub(crate) fn apply_with(&self, image: ImageBuf, tolerance: f32) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
         if w == 0 || h == 0 || !self.params.is_active() {
             return image;
         }
         let a = airlight(&image);
-        let t = transmission(&image, a, self.scale);
+        let t = transmission_with(&image, a, self.scale, tolerance);
         let k = (self.params.amount / 100.0).clamp(-1.0, 1.0);
         let remove = k > 0.0;
         let mag = k.abs();
@@ -244,6 +317,110 @@ mod tests {
 
     fn run(amount: f32, img: ImageBuf) -> ImageBuf {
         DehazeStage::new(&Dehaze { amount }, RenderScale::FULL).apply(img)
+    }
+
+    fn run_with_tolerance(amount: f32, img: ImageBuf, tolerance: f32) -> ImageBuf {
+        DehazeStage::new(&Dehaze { amount }, RenderScale::FULL).apply_with(img, tolerance)
+    }
+
+    /// Mean luma over a rectangle.
+    fn mean_luma(img: &ImageBuf, x0: usize, x1: usize, y0: usize, y1: usize) -> f32 {
+        let mut sum = 0.0f32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                sum += luma(&img.pixel(x, y));
+            }
+        }
+        sum / ((x1 - x0) * (y1 - y0)) as f32
+    }
+
+    /// ⚠⚠ The artifact as a test, shaped like the frames that showed it: a large white wall
+    /// with a 3% brightness falloff (flash, or a window at one side) inside a hazy scene. The
+    /// wall's brightest rows out-brighten the haze's dark channel and **become the airlight
+    /// estimate** — exactly as on the real white-wall frames — so every wall pixel below them
+    /// reads as haze and is pushed away from the estimate. The band ~1% below the top is
+    /// measured: **0.3% darker with the tolerance, 9.0% without** (measured, 2026-09-08).
+    ///
+    /// ⚠ Three things about the fixture were each found by a failing assertion, not designed:
+    /// (1) a **flat** patch at 0.99 × A becomes the airlight itself and is untouched with or
+    /// without the tolerance (`(Â − Â)/t + Â = Â`) — the falloff is what puts pixels *below* the
+    /// estimate, which is the whole mechanism; (2) hazed with the **same** airlight colour, the
+    /// far hazy corner ties with the wall top for the estimate, which then sits above the band
+    /// in some channels and below it in others — so the scene is hazed 10% darker than the wall;
+    /// (3) the guided refinement's reach is **twice** its radius (120 px at full scale, the
+    /// `local_contrast::kernel_reach` finding), so a band 60 px below the wall's top edge was
+    /// still averaged with the hazy rows above it and read a transmission of 0.17 rather than
+    /// ~0.06. The wall therefore spans the **full image height** — no top edge inside the frame —
+    /// and the band is inset 120 px from the wall's sides. ⚠ Even so the refinement averages the
+    /// band with rows whose transmission is higher, so the untreated darkening is 9%, not the
+    /// ~15% the per-pixel arithmetic predicts; the premise bound is 5%, a measured 4.5× margin
+    /// over the treated case rather than a number reasoned from the model.
+    ///
+    /// Sabotage: `AIRLIGHT_TOLERANCE = 0.0` fails the first assertion.
+    #[test]
+    fn a_bright_object_near_the_airlight_is_left_alone() {
+        let a = [0.75f32, 0.78, 0.85];
+        let (w, h) = (384usize, 256usize);
+        let mut hazy = add_haze(&scene(w, h), [0.9 * a[0], 0.9 * a[1], 0.9 * a[2]]);
+        // The wall: x 40..340 over the whole height, 1.00 × A at the top row falling to 0.97 × A.
+        let (px0, px1) = (40usize, 340usize);
+        for y in 0..h {
+            let f = 1.0 - 0.03 * y as f32 / (h - 1) as f32;
+            for x in px0..px1 {
+                hazy.set_pixel(x, y, [f * a[0], f * a[1], f * a[2]]);
+            }
+        }
+        // The band where f is 0.989..0.991 — about 1% below the top — 120 px in from each side.
+        let (ix0, ix1, iy0, iy1) = (px0 + 120, px1 - 120, 77usize, 93usize);
+        let before = mean_luma(&hazy, ix0, ix1, iy0, iy1);
+
+        let with = run(100.0, hazy.clone());
+        let darkening = 1.0 - mean_luma(&with, ix0, ix1, iy0, iy1) / before;
+        assert!(
+            darkening < 0.02,
+            "the wall near the airlight was darkened {:.1}%",
+            darkening * 100.0
+        );
+
+        // The premise, asserted rather than assumed: without the tolerance the same band IS
+        // read as haze and darkened well past what the first assertion allows.
+        let without = run_with_tolerance(100.0, hazy, 0.0);
+        let untreated = 1.0 - mean_luma(&without, ix0, ix1, iy0, iy1) / before;
+        assert!(
+            untreated > 0.05,
+            "premise: without the tolerance the wall darkened only {:.1}%",
+            untreated * 100.0
+        );
+    }
+
+    /// The rule is continuous in the distance from the airlight: 1 close to it, the raw
+    /// transmission far from it, and no jump at either breakpoint (`K·t` and `K`). Sabotage: a
+    /// hard `if dist < K { 1.0 } else { t }` fails it at `dist = K`.
+    #[test]
+    fn the_tolerance_is_continuous() {
+        let (t, k) = (0.3f32, AIRLIGHT_TOLERANCE);
+        let n = 2000;
+        let mut prev = tolerant_transmission(t, 0.0, k);
+        assert!(
+            (prev - 1.0).abs() < 1e-6,
+            "at the airlight itself t must be 1"
+        );
+        for i in 1..=n {
+            let dist = 2.0 * k * i as f32 / n as f32;
+            let cur = tolerant_transmission(t, dist, k);
+            assert!(
+                (cur - prev).abs() < 0.01,
+                "jump of {} at dist {dist}",
+                (cur - prev).abs()
+            );
+            prev = cur;
+        }
+        assert!(
+            (prev - t).abs() < 1e-6,
+            "far from the airlight t must be untouched"
+        );
+        // And a zero tolerance is the identity, whatever the distance.
+        assert_eq!(tolerant_transmission(t, 0.001, 0.0), t);
     }
 
     /// Mean absolute per-channel difference over the interior.
