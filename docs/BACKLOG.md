@@ -349,7 +349,7 @@ above. Only *anchoring* wants the forward map.
   that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
   with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
   perspective's own cache checkpoint, so every crop drag would re-run the resample.
-- ~~**Colour grading does not reach masks.**~~ ✅ **Shipped 2026-09-05** (Part A of "the rest of the stages inside a mask"). Still open: **no visual feedback of the grading range boundaries** on canvas or histogram.
+- ~~**Colour grading does not reach masks.**~~ ✅ **Shipped 2026-09-05** (Part A of "the rest of the stages inside a mask"). ~~Still open: no visual feedback of the grading range boundaries on canvas or histogram.~~ ✅ **2026-09-08** — the grade range view (`grade_view.rs`): a "Show range" checkbox tints the photograph where the selected range reaches, read from a tap at the grading stage's *input* — the histogram and the packed pixels both sit past the display S-curve, so neither could have shown it honestly. Spec `2026-09-08-grade-range-view-design.md`.
 
 ---
 

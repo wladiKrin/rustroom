@@ -1,6 +1,6 @@
 # Grade range view — design
 
-**Status:** specced 2026-09-08. Branch `m7.6-grade-range-view`. The first of M7.6's five
+**Status:** implemented 2026-09-08, confirmed by use. Branch `m7.6-grade-range-view`. ⚠ Two corrections made after this was written are marked in place: the tint (§6) and an inert sabotage (§7). The first of M7.6's five
 remaining gaps (user's call, 2026-09-08).
 
 A **"Show range"** checkbox in the Color Grading block paints, over the photograph, where the
@@ -219,13 +219,20 @@ assignment. No separate clear.
 rendered slice*, which is exactly what `img_rect` spans, whether the frame was rendered whole or as
 a region. Every other overlay is frame-relative; this one is frame-*sized*.
 
-**The tint** is one fixed colour, teal `(0, 190, 210)`, alpha `weight / 2` — so full membership
-reads as a 50% tint and the soft edge of a range reads as a soft edge, the brush tint's rule
-("a weak stroke reads as a weak tint — which is what makes Flow legible"). ⚠ Teal because the
-brush tint is **red** and the two must never be confusable, because none of the four theme
-accents is teal so it cannot read as active state, and because it sits off the skin-tone axis,
-the reason the accent list excludes amber. ⚠ **Not the strip's three legend tints** — they are
-low-chroma by design so the strip reads as a legend, and at 50% over a photograph they vanish.
+**The tint** is one fixed colour, alpha `weight / 2` — so full membership reads as a 50% tint
+and the soft edge of a range reads as a soft edge, the brush tint's rule ("a weak stroke reads
+as a weak tint — which is what makes Flow legible"). ⚠ **Not the strip's three legend tints** —
+they are low-chroma by design so the strip reads as a legend, and at 50% over a photograph they
+vanish.
+
+⚠⚠ **Corrected by use (2026-09-08): the tint is the brush tint's red, `(255, 40, 40)`, not the
+teal this section first chose.** Teal was picked so the two tints could never be confused. The
+first GUI check reported it *"very subtle and a bit confusing"* — at the default Blending of 50
+the weights sit around a third to a half over the whole frame, and a teal at half that alpha is
+a faint wash rather than a region. Red at the same alpha rule reads at a glance and is the tint
+people have already learned means "this is where the tool reaches"; the two are never on screen
+together, since the brush tint is drawn under the Masks tool and this under Edit, and
+`select_tool` clears this view on the way across. User's call.
 
 ## 7. Testing — and the sabotage each test exists to catch
 
@@ -238,7 +245,9 @@ inactive; `from_grade` begins with `color_grading` when active. Sabotage: split 
 - `a_chromatic_pixel_is_placed_by_oklab_lightness` — a saturated pixel whose `luminance()` and
   Oklab L put it in *different* ranges lands where L says. Sabotage: `color::luminance` fails it.
 - `a_pixel_above_white_is_a_highlight` — `L > 1` reads as pure highlight, as the stage's clamp
-  makes it. Sabotage: dropping the clamp fails it (the Gaussian tails fall off past the centre).
+  makes it. ⚠ **Corrected at plan time: the sabotage this bullet named — dropping the clamp — is
+  inert.** The weights are normalised, so for `L > 1` the highlight weight is ≈1 clamped or not;
+  the clamp is parity with the stage's *table index*, and the test pins the behaviour.
 - `tint_rgba_is_the_fixed_tint_with_alpha_from_the_weight`, both ends.
 
 **render_engine** (through the cached path, the proof tests' harness):
