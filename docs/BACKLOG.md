@@ -32,7 +32,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
 | Fuse perspective into `GeometryStage` | **M7.3b** — ⬜ still open (2026-09-08) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
-| Auto-mask brush · dehaze bright subjects · negative Texture · Clarity halos · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; the other four ⬜ (2026-09-08) |
+| Auto-mask brush · dehaze bright subjects · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); auto-mask and dehaze ⬜ (2026-09-08) |
 | ~~Lens correction row batching~~ · sequential export · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); the other two ⬜ |
 | On-disk thumbnail cache | **M8.2** |
 | `main.rs` is too large | ✅ **W0, 2026-09-01** — 4,375 → 681 (917 as of 2026-09-08); `canvas.rs` 1,890 → 7 modules |
@@ -308,11 +308,14 @@ above. Only *anchoring* wants the forward map.
 - **Dehaze over-corrects bright achromatic subjects** — snow, white walls, a white cat read as haze.
   The classic dark-channel-prior artifact, inherent to the model; a real fix needs large-bright-
   region detection and is its own feature.
-- **Negative Texture is not edge-aware**, so it softens edges within its band. Deliberate — noise
+- ~~**Negative Texture is not edge-aware**, so it softens edges within its band. Deliberate — noise
   reduction already owns edge-aware smoothing and is upstream. A guided-filter base for the negative
-  half is the follow-up, at the cost of the tool behaving differently either side of zero.
-- **Clarity has no halo suppressor**; the midtone weight is the mitigation. A `Detail`-style
-  suppressor is a contained follow-up.
+  half is the follow-up, at the cost of the tool behaving differently either side of zero.~~
+  ✅ **2026-09-02, W3 track D** (`TEXTURE_GUIDED_EPS`, retuned by use). ⚠ Struck only on
+  2026-09-08: this bullet outlived the code by six days and was copied into a "still open" list.
+- ~~**Clarity has no halo suppressor**; the midtone weight is the mitigation. A `Detail`-style
+  suppressor is a contained follow-up.~~ ✅ **2026-09-02, W3 track D** (`halo_suppression`,
+  `169984b`). Same lapse as the bullet above.
 - ~~**No output/print sharpening** for resized exports.~~ ✅ **M6.1d, 2026-09-01** — in the file's display space, deliberately.
 - **Brush strokes shift when lens corrections are toggled.** Strokes are anchored in
   "pre-geometry" coordinates, which means *the input to `GeometryStage`* — and lens correction now
