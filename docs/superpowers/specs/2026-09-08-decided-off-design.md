@@ -1,7 +1,7 @@
 # "Decided off" for the rendering and the lens corrections — design
 
 Date: 2026-09-08
-Status: **design agreed, ready to plan.**
+Status: **built 2026-09-08.** Plan `2026-09-08-decided-off.md`.
 
 The first of the two **M5.4b leftovers**, widened (user's call) to the lens corrections, which
 have the identical bug.
