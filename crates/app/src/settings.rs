@@ -281,6 +281,18 @@ pub struct Settings {
     /// ⚠ Clamped by [`Settings::clamped_survey_cell`] rather than trusted — the file is
     /// hand-editable, `library_cell`'s rule.
     pub survey_cell: u32,
+    /// The last custom crop ratio entered in the Geometry panel, as whole numbers W : H.
+    ///
+    /// ⚠ `u32`, for the two reasons `library_cell` carries: `Settings` derives `Eq`, which no
+    /// float satisfies, and a NaN ratio is **unrepresentable** rather than guarded. Whole
+    /// numbers cover the decimal cases — 2.35:1 is 235:100.
+    ///
+    /// ⚠ Read through [`Settings::custom_aspect_ratio`], which repairs a hand-edited zero:
+    /// the file is user-editable and a zero divides by zero.
+    ///
+    /// ⚠ No field-level `#[serde(default)]` — the container-level one fills a missing field
+    /// from this struct's `Default`, the `snapshot_strip_height` rule.
+    pub custom_aspect: [u32; 2],
     /// Which Library panel sections are expanded. ⚠ Persisted because egui's own collapsing
     /// state does not survive a restart here — see [`PanelSections`].
     pub panel_sections: PanelSections,
@@ -387,6 +399,10 @@ pub struct Settings {
 pub const DEFAULT_CELL: u32 = 168;
 /// The smallest and largest cell the buttons will reach.
 pub const CELL_RANGE: (u32, u32) = (108, 320);
+/// The custom crop ratio's default, 5:4 — a print ratio none of the five preset chips offers.
+pub const DEFAULT_CUSTOM_ASPECT: [u32; 2] = [5, 4];
+/// Each side of a custom ratio, inclusive. 1000 lets 2.35:1 be written as 235:100.
+pub const CUSTOM_ASPECT_RANGE: (u32, u32) = (1, 1000);
 
 /// Survey's tile range, in points. ⚠ Wider at the top than the grid's: a survey of three photos
 /// on a large monitor should be able to fill it, which is the whole complaint that put a size
@@ -418,6 +434,14 @@ impl Settings {
     /// The grid cell size in points, guaranteed usable.
     pub fn clamped_cell(&self) -> f32 {
         self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
+    }
+
+    /// The custom crop ratio as a pixel width / height, guaranteed finite and positive.
+    pub fn custom_aspect_ratio(&self) -> f32 {
+        let [w, h] = self.custom_aspect;
+        let w = w.clamp(CUSTOM_ASPECT_RANGE.0, CUSTOM_ASPECT_RANGE.1) as f32;
+        let h = h.clamp(CUSTOM_ASPECT_RANGE.0, CUSTOM_ASPECT_RANGE.1) as f32;
+        w / h
     }
 
     /// Survey's tile size in points, guaranteed usable.
@@ -572,6 +596,7 @@ impl Default for Settings {
             library_sort: catalog::SortOrder::default(),
             library_cell: DEFAULT_CELL,
             survey_cell: DEFAULT_SURVEY_CELL,
+            custom_aspect: DEFAULT_CUSTOM_ASPECT,
             panel_sections: PanelSections::default(),
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT,
             dialog_sizes: std::collections::BTreeMap::new(),
@@ -1072,6 +1097,7 @@ mod tests {
             library_sort: catalog::SortOrder::ModifiedDesc,
             library_cell: DEFAULT_CELL + CELL_STEP,
             survey_cell: DEFAULT_SURVEY_CELL,
+            custom_aspect: DEFAULT_CUSTOM_ASPECT,
             // Likewise non-default, and inside `STRIP_HEIGHT_RANGE` so `clamped_strip_height`
             // cannot mask a field that failed to round-trip.
             snapshot_strip_height: DEFAULT_STRIP_HEIGHT + 20,
@@ -1145,6 +1171,30 @@ mod tests {
             raw_decode::Demosaic::Fast,
             "and the new one must default to what linear_scene() already hardcoded"
         );
+    }
+
+    #[test]
+    fn a_settings_file_from_before_custom_aspect_still_loads() {
+        // ⚠ `load()` is infallible, so a field that fails to parse silently reverts *every*
+        // setting. The container-level `#[serde(default)]` is what fills the new field.
+        let f = TempFile::new("custom_aspect_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old fields must survive");
+        assert_eq!(loaded.custom_aspect, DEFAULT_CUSTOM_ASPECT);
+    }
+
+    #[test]
+    fn a_hand_edited_custom_aspect_is_repaired_rather_than_dividing_by_zero() {
+        let mut s = Settings::default();
+        s.custom_aspect = [0, 7];
+        let r = s.custom_aspect_ratio();
+        assert!(r.is_finite() && r > 0.0, "{r}");
+        assert!((r - 1.0 / 7.0).abs() < 1e-6, "a zero repairs to the minimum: {r}");
+        s.custom_aspect = [5, 4];
+        assert!((s.custom_aspect_ratio() - 1.25).abs() < 1e-6);
+        s.custom_aspect = [50_000, 1];
+        assert!((s.custom_aspect_ratio() - 1000.0).abs() < 1e-6, "clamped at the top");
     }
 
     #[test]
