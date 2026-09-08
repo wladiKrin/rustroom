@@ -60,12 +60,29 @@ const HARDNESS_EPS: f32 = 1e-4;
 /// A radius below this in frame pixels cannot paint anything visible.
 const MIN_RADIUS_PX: f32 = 0.5;
 
+/// Linear working-space RGB at a **frame** pixel, for the auto-mask gate.
+///
+/// ⚠ **Frame coordinates, not region coordinates.** Dab positions are frame-space and a clip only
+/// bounds the output box, so a sampler expecting region coordinates would read the wrong pixels —
+/// silently, since the result would still be a plausible mask.
+///
+/// ⚠ Must be **total**. The rasterizer only ever asks inside its own clip, but an implementation
+/// is still required to answer rather than panic.
+pub trait BasePixels {
+    fn at(&self, x: usize, y: usize) -> [f32; 3];
+}
+
 /// One splat: centre, radius and profile in frame pixels.
 struct Dab {
     x: f32,
     y: f32,
     r: f32,
     hard: f32,
+    /// `(reference in Oklab, ceiling)` when this dab was painted with Auto Mask on.
+    ///
+    /// ⚠ The **ceiling** is precomputed per stroke rather than the raw tolerance, so the inner
+    /// pixel loop does a distance and a smoothstep and nothing else.
+    gate: Option<([f32; 3], f32)>,
 }
 
 /// One stroke's dabs, with the properties that apply to the stroke as a whole.
@@ -89,7 +106,7 @@ pub fn rasterize(
     frame_w: usize,
     frame_h: usize,
 ) -> CoverageMap {
-    rasterize_in(brush, geometry, frame_w, frame_h, None)
+    rasterize_in(brush, geometry, frame_w, frame_h, None, None)
 }
 
 /// Rasterize only what falls inside `clip` — the rendered region, as `(x0, y0, w, h)` in **frame
@@ -108,6 +125,7 @@ pub fn rasterize_in(
     frame_w: usize,
     frame_h: usize,
     clip: Option<(usize, usize, usize, usize)>,
+    base: Option<&dyn BasePixels>,
 ) -> CoverageMap {
     // ⚠ An inverted brush with no strokes covers everything, not nothing.
     let outside = if brush.invert { 255 } else { 0 };
@@ -143,6 +161,29 @@ pub fn rasterize_in(
         let hard = (s.hardness / 100.0).clamp(0.0, 1.0);
         let pts: Vec<(f32, f32)> = s.points.iter().map(|p| map.point(*p)).collect();
         let Some(first) = pts.first() else { continue };
+        // ⚠ Converted once per point, never per pixel. `refs` is display-referred sRGB, so it
+        // decodes through the sRGB transfer and the sRGB primaries; a base pixel is linear
+        // ProPhoto. Both land in Oklab, which is absolute — see the design doc's §3.
+        //
+        // ⚠ `refs.get(i)` rather than indexing: a `refs` shorter than `points` is survivable by
+        // design, since sidecars are hand-editable and a dropped sample while painting produces
+        // exactly that shape. A dab with no reference paints positionally.
+        let ceiling = auto_mask_ceiling(s.tolerance);
+        let gate_of = |i: usize| -> Option<([f32; 3], f32)> {
+            if !s.auto_mask {
+                return None;
+            }
+            s.refs.get(i).map(|c| {
+                (
+                    color::linear_srgb_to_oklab([
+                        color::srgb_to_linear(c[0]),
+                        color::srgb_to_linear(c[1]),
+                        color::srgb_to_linear(c[2]),
+                    ]),
+                    ceiling,
+                )
+            })
+        };
         // ⚠ A single point still paints one dab: a click without a drag is one point, so the
         // interpolation below must not be the only thing that emits dabs.
         // A dab entirely outside the clip cannot affect any pixel inside it, so it is dropped
@@ -168,9 +209,10 @@ pub fn rasterize_in(
                 y: first.1,
                 r,
                 hard,
+                gate: gate_of(0),
             });
         }
-        for pair in pts.windows(2) {
+        for (seg, pair) in pts.windows(2).enumerate() {
             let (a, b) = (pair[0], pair[1]);
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
             let len = (dx * dx + dy * dy).sqrt();
@@ -180,11 +222,16 @@ pub fn rasterize_in(
                 let t = i as f32 / n as f32;
                 let (px, py) = (a.0 + dx * t, a.1 + dy * t);
                 if keep(px, py) {
+                    // ⚠ The NEARER endpoint's reference, never a blend of the two. Interpolating
+                    // two colours across a ridge invents a reference that matches neither side —
+                    // exactly the edge this tool exists to stop at.
+                    let src = if t < 0.5 { seg } else { seg + 1 };
                     dabs.push(Dab {
                         x: px,
                         y: py,
                         r,
                         hard,
+                        gate: gate_of(src),
                     });
                 }
             }
@@ -225,6 +272,28 @@ pub fn rasterize_in(
     }
     let (w, h) = (x1 - x0, y1 - y0);
 
+    // ⚠ One Oklab conversion per pixel of the box, eagerly, rather than one per pixel *per dab*.
+    // Dabs are laid a quarter of a radius apart (`SPACING`) and overlap heavily, so a lazy
+    // per-dab conversion would convert the same pixel a dozen times over. Built only when
+    // something actually gates, so a plain brush pays nothing at all.
+    let base_lab: Option<Vec<[f32; 3]>> = match base {
+        Some(b)
+            if strokes
+                .iter()
+                .flat_map(|s| s.dabs.iter())
+                .any(|d| d.gate.is_some()) =>
+        {
+            let mut v = Vec::with_capacity(w * h);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    v.push(color::oklab::prophoto_to_oklab(b.at(x, y)));
+                }
+            }
+            Some(v)
+        }
+        _ => None,
+    };
+
     let mut cov = vec![0.0f32; w * h];
     // ⚠ One scratch buffer, reused per stroke. Within a stroke the dabs combine with `max` so a
     // slow drag is not darker than a fast one; the stroke's result is then composited into `cov`,
@@ -263,6 +332,21 @@ pub fn rasterize_in(
                         + ((y as f32 + 0.5) - d.y).powi(2))
                     .sqrt();
                     let a = dab_alpha(dist, d.r, d.hard);
+                    // ⚠⚠ The gate multiplies the dab's alpha **before** the per-stroke `max`
+                    // below, and that is what per-dab references force: two dabs on opposite
+                    // sides of a ridge carry different references, so a gate applied after the
+                    // `max` could only ever honour one of them.
+                    //
+                    // ⚠ With no base — the CLI before this landed, or the tint outside the
+                    // rendered region — an auto-masked dab paints positionally. Documented
+                    // degradation, not an error; `Brush::needs_base` plus `BrushCache`'s refusal
+                    // are what stop the *render* ever taking that path.
+                    let a = match (&d.gate, &base_lab) {
+                        (Some((r, ceil)), Some(lab)) => {
+                            a * auto_mask_gate(lab[(y - y0) * w + (x - x0)], *r, *ceil)
+                        }
+                        _ => a,
+                    };
                     if a <= 0.0 {
                         continue;
                     }
@@ -308,6 +392,62 @@ pub fn rasterize_in(
         data,
         outside,
     }
+}
+
+/// The smallest Oklab chroma distance the gate accepts, at tolerance 0.
+///
+/// ⚠ Not zero. A tolerance of 0 must still paint the pixel the reference was sampled from, and a
+/// ceiling of zero would both refuse it and collapse the ramp below.
+const AUTO_MASK_MIN_DELTA: f32 = 0.01;
+/// The Oklab chroma distance accepted at tolerance 100.
+///
+/// ⚠ **A starting value, swept against real photographs before this milestone closes.** The
+/// vignette needed three revisions before its feel was right and the colour range mask's constants
+/// survived first contact; neither outcome is predictable from a spec.
+///
+/// ⚠⚠ **It has a measured floor.** The reference is sampled from the displayed frame and compared
+/// against the pre-display buffer, and `auto_mask_space_probe` measures the chroma disagreement
+/// between those two spaces at up to **0.040** on a real frame. A ceiling near that would be
+/// flipped by the space mismatch alone, so this must stay comfortably above it.
+const AUTO_MASK_MAX_DELTA: f32 = 0.35;
+/// The fraction of the ceiling at which the gate starts falling off.
+///
+/// ⚠ The gate is a smoothstep rather than a cut because a hard boundary aliases along a ridge,
+/// which is the case this tool exists for. It is also why no `EPS` guard is needed here, unlike
+/// [`RadialGradient::FEATHER_EPS`]: the ramp's width is a positive constant fraction of a ceiling
+/// that is itself never zero.
+const AUTO_MASK_SOFT: f32 = 0.5;
+
+/// The Oklab chroma distance at which a pixel stops being painted, for a 0..=100 tolerance.
+pub fn auto_mask_ceiling(tolerance: f32) -> f32 {
+    let t = (tolerance / 100.0).clamp(0.0, 1.0);
+    AUTO_MASK_MIN_DELTA + t * (AUTO_MASK_MAX_DELTA - AUTO_MASK_MIN_DELTA)
+}
+
+/// How much of a dab's coverage survives at a pixel, given that dab's reference colour.
+///
+/// Both arguments are **Oklab**. ⚠⚠ **The lightness term is deliberately ignored, and that is a
+/// measurement rather than a simplification.** The reference is sampled from the *displayed* frame
+/// — after the display rendering's S-curve — while the pixel comes from `MaskStage`'s input,
+/// before it. `auto_mask_space_probe` measured the resulting lightness disagreement at a mean of
+/// **+0.07 to +0.11** across four frames, 7-10x the chroma disagreement, with the same curve on
+/// every frame: it is the S-curve's signature, not the picture's. Against a ceiling of 0.35 that
+/// would be a third of the control's whole range contributed by nothing at all.
+///
+/// ⚠ The cost, stated so it is not later found as a bug: **a purely tonal edge is invisible to
+/// this gate.** A white wall against a grey one is one region. Both of the feature's headline
+/// cases survive because each is a chroma edge — sky against ridge, skin against hair.
+pub fn auto_mask_gate(pixel: [f32; 3], reference: [f32; 3], ceiling: f32) -> f32 {
+    let d = ((pixel[1] - reference[1]).powi(2) + (pixel[2] - reference[2]).powi(2)).sqrt();
+    let lo = ceiling * (1.0 - AUTO_MASK_SOFT);
+    if d <= lo {
+        return 1.0;
+    }
+    if d >= ceiling {
+        return 0.0;
+    }
+    let q = (d - lo) / (ceiling - lo);
+    1.0 - q * q * (3.0 - 2.0 * q)
 }
 
 /// A dab's alpha at distance `d` from its centre.
@@ -401,6 +541,246 @@ mod tests {
         assert_eq!(tall.at(27, 40), 255, "7 px right on a tall frame");
         assert_eq!(tall.at(20, 47), 255, "7 px down on a tall frame");
         assert_eq!(tall.at(20, 52), 0, "12 px down must still be outside");
+    }
+
+    /// A base image split down the middle, in **linear ProPhoto**, which is what `BasePixels`
+    /// promises.
+    struct SplitBase {
+        split_x: usize,
+        left: [f32; 3],
+        right: [f32; 3],
+    }
+    impl BasePixels for SplitBase {
+        fn at(&self, x: usize, _y: usize) -> [f32; 3] {
+            if x < self.split_x {
+                self.left
+            } else {
+                self.right
+            }
+        }
+    }
+
+    const LEFT: [f32; 3] = [0.05, 0.20, 0.05];
+    const RIGHT: [f32; 3] = [0.60, 0.15, 0.50];
+
+    /// The reference the canvas would have sampled on the left half: display-referred sRGB.
+    fn left_reference() -> [f32; 3] {
+        [
+            color::linear_to_srgb(color::prophoto_to_srgb(LEFT)[0]).clamp(0.0, 1.0),
+            color::linear_to_srgb(color::prophoto_to_srgb(LEFT)[1]).clamp(0.0, 1.0),
+            color::linear_to_srgb(color::prophoto_to_srgb(LEFT)[2]).clamp(0.0, 1.0),
+        ]
+    }
+
+    #[test]
+    fn an_auto_masked_stroke_stops_at_a_colour_edge() {
+        let base = SplitBase {
+            split_x: 40,
+            left: LEFT,
+            right: RIGHT,
+        };
+        let r = left_reference();
+        let m = brush(vec![BrushStroke {
+            points: vec![[0.1, 0.5], [0.9, 0.5]],
+            radius: 0.3,
+            hardness: 100.0,
+            flow: 100.0,
+            erase: false,
+            auto_mask: true,
+            tolerance: 30.0,
+            refs: vec![r, r],
+        }]);
+        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+        assert!(
+            cov.at(10, 10) > 200,
+            "the matching side must be painted: {}",
+            cov.at(10, 10)
+        );
+        assert_eq!(cov.at(70, 10), 0, "the far colour must not be painted");
+    }
+
+    #[test]
+    fn the_same_stroke_without_auto_mask_crosses_the_edge() {
+        // ⚠ The discriminating half. A test asserting only that the far side is empty would pass
+        // against a rasterizer that painted nothing at all.
+        let base = SplitBase {
+            split_x: 40,
+            left: LEFT,
+            right: RIGHT,
+        };
+        let m = brush(vec![BrushStroke {
+            points: vec![[0.1, 0.5], [0.9, 0.5]],
+            radius: 0.3,
+            hardness: 100.0,
+            flow: 100.0,
+            erase: false,
+            ..Default::default()
+        }]);
+        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+        assert!(
+            cov.at(70, 10) > 200,
+            "a plain stroke must cross: {}",
+            cov.at(70, 10)
+        );
+    }
+
+    #[test]
+    fn each_dab_gates_against_its_own_reference() {
+        // ⚠⚠ The test that discriminates the whole per-dab design, and the one the fixtures above
+        // cannot: they give every point the same reference, so a rasterizer that used only the
+        // FIRST reference for the whole stroke would pass all of them. Here the stroke starts on
+        // the left colour and ends on the right one, referencing each in turn — so both halves
+        // must paint. With one reference for the stroke, whichever half it came from would be the
+        // only one covered.
+        let base = SplitBase {
+            split_x: 40,
+            left: LEFT,
+            right: RIGHT,
+        };
+        let enc = |c: [f32; 3]| {
+            let s = color::prophoto_to_srgb(c);
+            [
+                color::linear_to_srgb(s[0]).clamp(0.0, 1.0),
+                color::linear_to_srgb(s[1]).clamp(0.0, 1.0),
+                color::linear_to_srgb(s[2]).clamp(0.0, 1.0),
+            ]
+        };
+        let m = brush(vec![BrushStroke {
+            points: vec![[0.1, 0.5], [0.9, 0.5]],
+            radius: 0.3,
+            hardness: 100.0,
+            flow: 100.0,
+            erase: false,
+            auto_mask: true,
+            tolerance: 30.0,
+            refs: vec![enc(LEFT), enc(RIGHT)],
+        }]);
+        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+        assert!(
+            cov.at(10, 10) > 200,
+            "the left half references LEFT and must paint: {}",
+            cov.at(10, 10)
+        );
+        assert!(
+            cov.at(70, 10) > 200,
+            "the right half references RIGHT and must paint too: {}",
+            cov.at(70, 10)
+        );
+    }
+
+    #[test]
+    fn an_auto_masked_stroke_with_no_base_paints_positionally() {
+        // ⚠ Documented degradation, not an error. `MaskStage` always supplies a base for a brush
+        // that needs one — `Brush::needs_base` plus `BrushCache`'s refusal make that so — and the
+        // tint may legitimately have no pixels outside the rendered region.
+        let r = left_reference();
+        let m = brush(vec![BrushStroke {
+            points: vec![[0.1, 0.5], [0.9, 0.5]],
+            radius: 0.3,
+            hardness: 100.0,
+            flow: 100.0,
+            erase: false,
+            auto_mask: true,
+            tolerance: 30.0,
+            refs: vec![r, r],
+        }]);
+        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, None);
+        assert!(cov.at(70, 10) > 200);
+    }
+
+    #[test]
+    fn a_truncated_refs_list_is_survivable() {
+        // Sidecars are hand-editable and a dropped sample while painting produces this shape, so
+        // it must degrade rather than panic.
+        let base = SplitBase {
+            split_x: 40,
+            left: LEFT,
+            right: RIGHT,
+        };
+        let m = brush(vec![BrushStroke {
+            points: vec![[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]],
+            radius: 0.3,
+            hardness: 100.0,
+            flow: 100.0,
+            erase: false,
+            auto_mask: true,
+            tolerance: 30.0,
+            refs: vec![left_reference()],
+        }]);
+        let _ = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+    }
+
+    #[test]
+    fn a_pixel_matching_its_reference_is_fully_painted() {
+        let r = [0.5, 0.02, -0.03];
+        assert_eq!(auto_mask_gate(r, r, auto_mask_ceiling(35.0)), 1.0);
+    }
+
+    #[test]
+    fn a_pixel_far_from_its_reference_is_not_painted_at_all() {
+        let r = [0.5, 0.02, -0.03];
+        assert_eq!(
+            auto_mask_gate([0.5, 0.30, 0.30], r, auto_mask_ceiling(35.0)),
+            0.0
+        );
+    }
+
+    #[test]
+    fn the_gate_ignores_lightness() {
+        // ⚠⚠ The property M1 forced, and the one most likely to be "fixed" by a later reader who
+        // sees a three-component Oklab value and a two-component distance. The reference is
+        // sampled from the displayed frame and the pixel from before the display rendering, so
+        // the lightness terms are systematically 7-10x further apart than the chroma terms.
+        let r = [0.2, 0.05, 0.05];
+        let same_colour_much_brighter = [0.9, 0.05, 0.05];
+        assert_eq!(
+            auto_mask_gate(same_colour_much_brighter, r, auto_mask_ceiling(35.0)),
+            1.0
+        );
+    }
+
+    #[test]
+    fn the_gate_is_continuous_rather_than_a_hard_cut() {
+        // ⚠ The discriminating property, and the reason the gate is a smoothstep: a hard cut
+        // aliases along a ridge, which is exactly where this tool is used. Sweeping for the
+        // largest step between neighbouring samples is what a probe at two chosen points could
+        // not see.
+        let r = [0.5, 0.0, 0.0];
+        let ceil = auto_mask_ceiling(50.0);
+        let mut prev = auto_mask_gate(r, r, ceil);
+        let mut worst = 0.0f32;
+        for i in 1..=400 {
+            let d = ceil * 1.5 * i as f32 / 400.0;
+            let g = auto_mask_gate([0.5, d, 0.0], r, ceil);
+            worst = worst.max((g - prev).abs());
+            prev = g;
+        }
+        assert!(worst < 0.05, "gate jumps by {worst}, which is a hard cut");
+    }
+
+    #[test]
+    fn a_larger_tolerance_selects_more() {
+        // ⚠ Asserts the DIRECTION, which a single-tolerance probe cannot. Both readings are kept
+        // off the ends of the ramp so neither saturates and turns the difference into noise.
+        let r = [0.5, 0.0, 0.0];
+        let p = [0.5, 0.08, 0.0];
+        let low = auto_mask_gate(p, r, auto_mask_ceiling(20.0));
+        let high = auto_mask_gate(p, r, auto_mask_ceiling(80.0));
+        assert!(
+            high > low,
+            "tolerance 80 gave {high}, tolerance 20 gave {low}"
+        );
+    }
+
+    #[test]
+    fn the_ceiling_is_never_zero_or_inverted() {
+        // A tolerance of 0 must still paint the pixel its reference was sampled from, and must
+        // never make the ramp divide by zero.
+        for t in [-50.0, 0.0, 50.0, 100.0, 500.0] {
+            let c = auto_mask_ceiling(t);
+            assert!(c > 0.0, "tolerance {t} gave ceiling {c}");
+            assert_eq!(auto_mask_gate([0.5, 0.0, 0.0], [0.5, 0.0, 0.0], c), 1.0);
+        }
     }
 
     #[test]
@@ -794,7 +1174,7 @@ mod tests {
         let g = Geometry::default();
         let whole = rasterize(&b, &g, 80, 40);
         let clip = (30usize, 12usize, 20usize, 16usize);
-        let part = rasterize_in(&b, &g, 80, 40, Some(clip));
+        let part = rasterize_in(&b, &g, 80, 40, Some(clip), None);
         for y in clip.1..clip.1 + clip.3 {
             for x in clip.0..clip.0 + clip.2 {
                 assert_eq!(part.at(x, y), whole.at(x, y), "at frame ({x}, {y})");
@@ -809,7 +1189,7 @@ mod tests {
         // to mistake for a mask that "drifts".
         let b = brush(vec![dot(0.5, 0.5, 0.05, 100.0, false)]);
         let g = Geometry::default();
-        let part = rasterize_in(&b, &g, 80, 40, Some((30, 12, 20, 16)));
+        let part = rasterize_in(&b, &g, 80, 40, Some((30, 12, 20, 16)), None);
         assert_eq!(part.at(40, 20), 255, "the dab centre is at frame (40, 20)");
         assert_eq!(part.at(31, 13), 0, "the clip's own corner is not painted");
     }
@@ -820,7 +1200,14 @@ mod tests {
         // checked — because the bounding box is clamped to the clip either way. The skip is an
         // optimisation and its comment says so.
         let far = brush(vec![dot(0.9, 0.9, 0.03, 100.0, false)]);
-        let part = rasterize_in(&far, &Geometry::default(), 80, 40, Some((0, 0, 20, 10)));
+        let part = rasterize_in(
+            &far,
+            &Geometry::default(),
+            80,
+            40,
+            Some((0, 0, 20, 10)),
+            None,
+        );
         assert!(part.is_inert(), "nothing inside the clip should be painted");
     }
 
@@ -831,7 +1218,7 @@ mod tests {
             strokes: vec![dot(0.5, 0.5, 0.05, 100.0, false)],
             invert: true,
         };
-        let part = rasterize_in(&b, &Geometry::default(), 80, 40, Some((0, 0, 20, 10)));
+        let part = rasterize_in(&b, &Geometry::default(), 80, 40, Some((0, 0, 20, 10)), None);
         assert_eq!(part.at(5, 5), 255, "inverted coverage inside the clip");
         assert_eq!(part.at(40, 20), 255, "and outside it, via `outside`");
     }
@@ -841,7 +1228,7 @@ mod tests {
         let b = wide_stroke();
         let g = Geometry::default();
         assert_eq!(
-            rasterize_in(&b, &g, 80, 40, None),
+            rasterize_in(&b, &g, 80, 40, None, None),
             rasterize(&b, &g, 80, 40)
         );
     }
@@ -852,7 +1239,7 @@ mod tests {
         // through.
         let b = wide_stroke();
         let g = Geometry::default();
-        let part = rasterize_in(&b, &g, 80, 40, Some((0, 0, 9999, 9999)));
+        let part = rasterize_in(&b, &g, 80, 40, Some((0, 0, 9999, 9999)), None);
         assert_eq!(part, rasterize(&b, &g, 80, 40));
     }
 }

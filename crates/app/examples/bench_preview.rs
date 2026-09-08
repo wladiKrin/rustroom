@@ -388,6 +388,7 @@ fn main() {
                 6246,
                 4170,
                 Some((2400, 1600, 1400, 900)),
+                None,
             );
             std::hint::black_box(&cov);
             best = best.min(t.elapsed().as_secs_f64() * 1000.0);

@@ -1785,8 +1785,6 @@ mod tests {
         );
     }
 
-    use super::*;
-
     /// ⚠ Both halves, and both on their own. A test setting both could not tell a wired field
     /// from an unwired one sitting beside a wired one.
     #[test]

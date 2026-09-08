@@ -824,12 +824,25 @@ impl BrushCache {
             .masks
             .iter()
             .map(|m| match &m.mask {
+                // ⚠⚠ **A brush that gates is deliberately NOT cached.** Its coverage depends on
+                // pixel values, and this cache's key covers `(strokes, geometry, frame dims,
+                // region)` — none of which changes when the image under the strokes does. Serving
+                // a prebuilt map would render it positionally while the canvas tint showed it
+                // stopping at an edge: a silent divergence between preview and export, which is
+                // the failure mode this project has recorded more than any other.
+                //
+                // Returning `None` routes it to `MaskStage::apply`'s own rasterizing path, which
+                // has the buffer in hand. ⚠ If the cost proves material, the answer is to widen
+                // the key with a cheap identity of the base buffer — never to reintroduce the
+                // unkeyed map.
+                edit_model::Mask::Brush(b) if b.needs_base() => None,
                 edit_model::Mask::Brush(b) => Some(Arc::new(pipeline::brush::rasterize_in(
                     b,
                     &edits.geometry,
                     fw,
                     fh,
                     region,
+                    None,
                 ))),
                 _ => None,
             })
@@ -1593,6 +1606,45 @@ mod tests {
             out.extend_from_slice(&f.rgba[start..start + w * 4]);
         }
         out
+    }
+
+    #[test]
+    fn the_brush_cache_declines_a_brush_that_needs_the_image() {
+        // ⚠⚠ **What makes the dangerous state unrepresentable rather than documented.** A
+        // prebuilt map is rasterized without pixels, so an auto-masked brush served from this
+        // cache would render positionally while the canvas tint showed it stopping at an edge — a
+        // silent divergence between preview and export.
+        let gating = |auto: bool, refs: Vec<[f32; 3]>| {
+            let mut e = Edits::default();
+            e.masks.push(edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![edit_model::BrushStroke {
+                        points: vec![[0.3, 0.3], [0.7, 0.7]],
+                        radius: 0.2,
+                        auto_mask: auto,
+                        refs,
+                        ..Default::default()
+                    }],
+                    invert: false,
+                }),
+                adjustments: Default::default(),
+            });
+            e
+        };
+        let mut cache = BrushCache::default();
+        let built = cache.get_or_build(&gating(true, vec![[0.3, 0.4, 0.5]]), 64, 64, None);
+        assert!(
+            built.maps[0].is_none(),
+            "an auto-masked brush must not be prebuilt"
+        );
+
+        // ⚠ The discriminating half: a plain brush must STILL be cached, or this would be a
+        // performance regression wearing a correctness fix.
+        let built = cache.get_or_build(&gating(false, vec![]), 64, 64, None);
+        assert!(
+            built.maps[0].is_some(),
+            "a plain brush must still be cached"
+        );
     }
 
     #[test]

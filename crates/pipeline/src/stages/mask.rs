@@ -183,6 +183,31 @@ impl MaskStage {
     }
 }
 
+/// A view of the buffer [`MaskStage::apply`] was handed, addressed in **frame** coordinates.
+///
+/// ⚠ Under a region render the buffer *is* the region, so a frame coordinate is offset by the
+/// region's origin. Out of range answers black rather than panicking: the rasterizer only asks
+/// inside its own clip, which is derived from the same rectangle, so that arm is unreachable in
+/// practice and exists to keep [`crate::brush::BasePixels`]'s totality promise.
+struct BaseView<'a> {
+    image: &'a ImageBuf,
+    x0: usize,
+    y0: usize,
+}
+
+impl crate::brush::BasePixels for BaseView<'_> {
+    fn at(&self, x: usize, y: usize) -> [f32; 3] {
+        if x < self.x0 || y < self.y0 {
+            return [0.0; 3];
+        }
+        let (lx, ly) = (x - self.x0, y - self.y0);
+        if lx >= self.image.width() || ly >= self.image.height() {
+            return [0.0; 3];
+        }
+        self.image.pixel(lx, ly)
+    }
+}
+
 impl PipelineStage for MaskStage {
     fn name(&self) -> &'static str {
         "mask"
@@ -228,8 +253,23 @@ impl PipelineStage for MaskStage {
                 // derive from the same `RegionRect`. A mismatch would not error — it would read
                 // `outside` across the difference, fading the mask out partway across the image.
                 let clip = self.region.map(|r| (r.x0, r.y0, w, h));
+                // ⚠⚠ **The buffer is in hand here and has not been cloned yet**, so the sampler
+                // costs nothing at all. This is also the *only* path an auto-masked brush can
+                // take: `render_engine`'s `BrushCache` declines to prebuild a map for a brush
+                // whose `needs_base()` is true, which is what stops a gated brush ever rendering
+                // positionally while the canvas tint shows it stopping at an edge.
+                let view = BaseView {
+                    image: &image,
+                    x0,
+                    y0,
+                };
                 Some(std::sync::Arc::new(crate::brush::rasterize_in(
-                    brush, geometry, fw, fh, clip,
+                    brush,
+                    geometry,
+                    fw,
+                    fh,
+                    clip,
+                    Some(&view),
                 )))
             }
         };
@@ -293,6 +333,70 @@ impl PipelineStage for MaskStage {
 mod tests {
     use super::*;
     use edit_model::{LinearGradient, LocalAdjustments, Mask};
+
+    #[test]
+    fn a_masked_brush_gates_against_the_buffer_it_is_handed() {
+        // ⚠⚠ The wiring test. The gate's arithmetic is proven in `brush::raster`, and nothing
+        // there says `MaskStage` ever hands it a base at all. Sabotaging the `Some(&BaseView…)`
+        // back to `None` leaves every raster test green and fails only this one.
+        use edit_model::{Brush, BrushStroke};
+
+        // ⚠⚠ **A COLOUR edge, not a tonal one, and the first version of this test got that
+        // wrong in an instructive way.** It split the frame dark-grey against light-grey — and
+        // the far side was lifted 0.8 -> 2.26, i.e. the gate did nothing. That is correct
+        // behaviour: the gate compares chroma and hue only (M1 measured the lightness term as
+        // unusable), so two neutrals are one region to it however far apart their lightness is.
+        // The accidental demonstration of accepted caveat 8 is kept in this comment rather than
+        // the test being weakened to accommodate it.
+        const LEFT: [f32; 3] = [0.05, 0.20, 0.05];
+        const RIGHT: [f32; 3] = [0.60, 0.15, 0.50];
+        let mut img = ImageBuf::new(80, 20);
+        for y in 0..20 {
+            for x in 0..80 {
+                let c = if x < 40 { LEFT } else { RIGHT };
+                let i = (y * 80 + x) * 3;
+                img.data_mut()[i..i + 3].copy_from_slice(&c);
+            }
+        }
+        let enc = |c: [f32; 3]| {
+            let s = color::prophoto_to_srgb(c);
+            [
+                color::linear_to_srgb(s[0]).clamp(0.0, 1.0),
+                color::linear_to_srgb(s[1]).clamp(0.0, 1.0),
+                color::linear_to_srgb(s[2]).clamp(0.0, 1.0),
+            ]
+        };
+        let masked = MaskedAdjustment {
+            mask: Mask::Brush(Brush {
+                strokes: vec![BrushStroke {
+                    points: vec![[0.05, 0.5], [0.95, 0.5]],
+                    radius: 0.3,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    auto_mask: true,
+                    tolerance: 25.0,
+                    refs: vec![enc(LEFT), enc(LEFT)],
+                    ..Default::default()
+                }],
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                exposure: 1.5,
+                ..Default::default()
+            },
+        };
+        let out = MaskStage::new(&masked, RenderScale::new(1.0), &Geometry::default()).apply(img);
+        assert!(
+            out.pixel(10, 10)[0] > LEFT[0] * 1.5,
+            "the matching side must be lifted: {}",
+            out.pixel(10, 10)[0]
+        );
+        assert!(
+            (out.pixel(70, 10)[0] - RIGHT[0]).abs() < 1e-6,
+            "the far colour must be untouched: {}",
+            out.pixel(70, 10)[0]
+        );
+    }
 
     /// A flat mid-grey image.
     fn flat(w: usize, h: usize) -> ImageBuf {
