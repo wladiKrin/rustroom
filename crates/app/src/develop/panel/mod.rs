@@ -170,9 +170,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 ui,
                                 &mut s.edits,
                                 &mut app.hsl_channel,
-                                &mut app.grade_range,
-                                &mut s.show_grade_range,
-                                &mut s.grade_view,
+                                adjustments::GradeUi {
+                                    range: &mut app.grade_range,
+                                    show_range: &mut s.show_grade_range,
+                                    view: &mut s.grade_view,
+                                },
                                 adjustments::SourceInfo {
                                     lens: s.lens.name.as_deref(),
                                     lens_profile_found: s.lens.shot.is_some(),

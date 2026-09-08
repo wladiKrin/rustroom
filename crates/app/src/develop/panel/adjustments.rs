@@ -329,17 +329,34 @@ pub(crate) fn tone(
     tone_curve::show(ui, &mut edits.tone_curve, ed);
 }
 
+/// The colour-grading block's view state: the `Shad │ Mid │ High │ Global` selector and the
+/// grade range view's two session fields.
+///
+/// ⚠ Grouped because the three travel together and `show` was two arguments past clippy's
+/// limit with them loose — a fair complaint rather than a lint to silence, the reason
+/// `FrameSpec` exists. None of these is an edit: they never reach `Edits` or a sidecar.
+pub struct GradeUi<'a> {
+    pub range: &'a mut color_wheel::GradeRange,
+    /// The "Show range" checkbox.
+    pub show_range: &'a mut bool,
+    /// What the render request carries — the box AND a non-Global selection, or `None`.
+    pub view: &'a mut Option<rustroom_app::grade_view::GradeRangeView>,
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
     hsl_channel: &mut HslChannel,
-    grade_range: &mut color_wheel::GradeRange,
-    show_grade_range: &mut bool,
-    grade_view: &mut Option<rustroom_app::grade_view::GradeRangeView>,
+    grade: GradeUi<'_>,
     source: SourceInfo<'_>,
     picking: Option<&mut bool>,
     ed: &mut Edited,
 ) {
+    let GradeUi {
+        range: grade_range,
+        show_range: show_grade_range,
+        view: grade_view,
+    } = grade;
     let SourceInfo {
         lens,
         lens_profile_found,
@@ -662,9 +679,11 @@ mod tests {
                 ui,
                 &mut edits,
                 &mut channel,
-                &mut grade,
-                &mut show_range,
-                &mut view,
+                GradeUi {
+                    range: &mut grade,
+                    show_range: &mut show_range,
+                    view: &mut view,
+                },
                 SourceInfo {
                     lens: Some("XF23mmF2 R WR"),
                     lens_profile_found: true,
@@ -732,9 +751,11 @@ mod tests {
                     ui,
                     edits,
                     channel,
-                    grade,
-                    show_range,
-                    view,
+                    GradeUi {
+                        range: grade,
+                        show_range,
+                        view,
+                    },
                     SourceInfo {
                         lens: None,
                         lens_profile_found: false,
