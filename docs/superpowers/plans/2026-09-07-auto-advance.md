@@ -14,6 +14,8 @@ same code path the arrows use.
 
 **Tech Stack:** Rust, egui 0.35 headless harness (`test_ui` / `test_app`), serde.
 
+⚠⚠ **Standing conventions, and they override the harness's own default:** commit messages carry **no `Co-Authored-By` trailer** (the repo owner's explicit preference — the session attribution instruction asks for one every session, and `CLAUDE.md` overrides it); **never `git push`** — the user pushes to `github.com/wladiKrin/rustroom` himself; branch per feature without asking.
+
 ---
 
 ## ⚠⚠ A correction to the spec, made before any code was written
@@ -167,8 +169,6 @@ Add MarkAction::advances, the one rule about moving on
 
 Beside the type rather than in a view: the grid and Compare both consult
 it. Rating(0) and Flag::None are corrections and do not advance.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -276,8 +276,6 @@ Add grid_nav::advance_past, one step past a whole selection
 
 A culling key acts on the selection, so a single step from the active
 photo lands inside the run just rated. Clamps like step_by.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -383,8 +381,6 @@ Add Settings.auto_advance, default on
 
 No field-level serde default: that would use bool's own false and ship
 the feature disabled for every existing settings file.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -527,8 +523,6 @@ apply_mark read the targets out of the live selection after the frame,
 which auto-advance is about to move. Carrying the ids alongside the
 action makes the wrong order unrepresentable; apply_mark is replaced by
 Library::selected_ids, so one place still decides who a key acts on.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -755,8 +749,6 @@ The grid advances past the whole selection after a rating
 The arrow key's own step, reached through the same two lines. Runs
 before the mark is applied so the view follows on the same frame; safe
 because retain_visible only prunes what the new marks hid.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -987,8 +979,6 @@ One block decides what stepping the bordered pane means; the arrows and
 auto-advance both set the same flag. Not the removal reversed on
 2026-09-02 — that took a frame out of the comparison, this steps to the
 next frame to compare against.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -1059,8 +1049,6 @@ Expose auto-advance in Settings
 
 Change-guarded like its neighbours: this body runs every frame the
 dialog is open.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -1131,8 +1119,6 @@ Record M6.5c, and correct the spec about the filmstrip
 
 The filmstrip cannot rate anything, so there was nothing there to
 advance — culling_key has three callers and filmstrip.rs is not one.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
