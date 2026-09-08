@@ -1,7 +1,7 @@
 # Custom aspect ratios and an orientation swap — design
 
 Date: 2026-09-08
-Status: **design agreed, ready to plan.**
+Status: **built 2026-09-08.** Plan `2026-09-08-custom-aspect.md`.
 
 **M5.5c**, the last outstanding sub-slice of **M5.5 — Crop and straighten usability**, and the
 roadmap inconsistency `CLAUDE.md` raised on 2026-09-07: Phase 5 is marked ✅ in both documents
