@@ -19,13 +19,16 @@ use edit_model::CropRect;
 
 /// Where the median lands, in linear light.
 ///
-/// ⚠ **0.22, raised from the 0.16 this shipped at** — the results read as a bit too dark (user's
-/// call, 2026-09-02, after looking at three frames). Each doubling is one stop, so this is
-/// +0.46 EV across the board.
+/// ⚠ **0.20, re-judged under the camera rendering (user's call, 2026-09-08)** — the M5.4b
+/// leftover. 0.22 had been chosen on 2026-09-02 when nothing followed Auto Tone; with the
+/// S-curve now after it the results read *"a tad too bright, but not always"*, and one step
+/// down (−0.14 EV) *"looks right"*. The "not always" is the frames' own histograms, not the
+/// constant, and was deliberately not chased. Before that: 0.16 at first, raised to 0.22 as
+/// too dark. Each doubling is one stop.
 ///
 /// ⚠ Still a **tuned** value rather than a measured one: it is judged by looking at photographs,
 /// which is what `auto_tone_probe` exists to produce.
-pub const MEDIAN_TARGET: f32 = 0.22;
+pub const MEDIAN_TARGET: f32 = 0.20;
 /// Where the 99.9th percentile lands after the whites solve.
 pub const WHITE_TARGET: f32 = 0.98;
 /// Where the 0.1th percentile lands after the blacks solve.
