@@ -21,6 +21,7 @@ pub mod file_rename;
 pub mod filename_template;
 pub mod format_filter;
 pub mod full_res;
+pub mod grade_view;
 pub mod grid_nav;
 pub mod histogram;
 pub mod history;

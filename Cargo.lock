@@ -282,6 +282,7 @@ dependencies = [
  "pipeline",
  "raw-decode",
  "raw-window-handle",
+ "rayon",
  "rfd",
  "serde",
  "serde_json",
