@@ -339,8 +339,8 @@ pub struct Settings {
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
     /// missing field already falls back to this struct's `Default`.
     pub composition_guide: crate::composition_guides::CompositionGuide,
-    /// Write a `stem.xmp` sidecar beside every RAW when its rating, colour label or keywords
-    /// change, so Lightroom and exiftool can read them.
+    /// Write a `stem.xmp` sidecar beside every RAW when its rating, colour label, keywords or
+    /// description change, so Lightroom and exiftool can read them.
     ///
     /// ⚠ Defaults to **true**: the whole point of the milestone is that a week of keywording
     /// does not stay locked inside a SQLite catalog no other application can read, and a

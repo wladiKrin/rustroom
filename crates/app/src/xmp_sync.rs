@@ -1,6 +1,7 @@
 //! Keeping a photo's `stem.xmp` sidecar and the catalog in step.
 //!
-//! Ratings, colour labels and keywords are the three things Rustroom shares with Lightroom.
+//! Ratings, colour labels, keywords and the four description fields are what Rustroom shares
+//! with Lightroom.
 //! This module owns every rule about *when* and *how*: which files get a sidecar, what a colour
 //! label is called in XMP, how a keyword path is created, and the conflict rule.
 //!
@@ -119,6 +120,12 @@ pub fn keyword_paths(cat: &Catalog, photo: &Path) -> Vec<Vec<String>> {
 /// sidecar; keywords are per file and shared by every copy anyway.
 pub fn sidecar_of(cat: &Catalog, photo: &Path) -> xmp::Sidecar {
     let m = cat.marks(photo, 0).unwrap_or_default();
+    let d = cat.description_of(photo).ok().flatten().unwrap_or_default();
+    // ⚠ Blank means absent, so a sidecar never carries an empty `dc:title`.
+    let field = |s: &str| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    };
     xmp::Sidecar {
         // ⚠ `0` is "unrated", which XMP spells as the property being **absent** rather than as
         // `xmp:Rating` 0 — so an unrated photo's sidecar carries no rating and a reader cannot
@@ -126,6 +133,10 @@ pub fn sidecar_of(cat: &Catalog, photo: &Path) -> xmp::Sidecar {
         rating: (m.rating > 0).then_some(m.rating),
         label: label_to_xmp(m.label).map(str::to_string),
         keywords: keyword_paths(cat, photo),
+        title: field(&d.title),
+        caption: field(&d.caption),
+        rights: field(&d.copyright),
+        creator: field(&d.creator),
     }
 }
 
@@ -187,7 +198,8 @@ pub fn write_for_all(cat: &Catalog, photos: &[PathBuf]) {
     }
 }
 
-/// Put a sidecar's rating, label and keywords into the catalog, for copy 0.
+/// Put a sidecar's rating, label, keywords and description into the catalog, for copy 0 (the
+/// description is per file).
 ///
 /// ⚠ The **flag is preserved**: pick and reject never round-trip in either direction, because
 /// Lightroom keeps them catalog-only itself and there is no field to write them to. Importing
@@ -208,6 +220,17 @@ pub fn apply(cat: &Catalog, photo: &Path, s: &xmp::Sidecar) {
             rating: s.rating.unwrap_or(0),
             flag: now.flag,
             label,
+        },
+    );
+    // ⚠ Absent means cleared, the rating's rule: `set_description` deletes the row when all
+    // four are blank, so a sidecar with no description leaves no row behind.
+    let _ = cat.set_description(
+        photo,
+        &catalog::db::Description {
+            title: s.title.clone().unwrap_or_default(),
+            caption: s.caption.clone().unwrap_or_default(),
+            copyright: s.rights.clone().unwrap_or_default(),
+            creator: s.creator.clone().unwrap_or_default(),
         },
     );
     for path in &s.keywords {
@@ -398,6 +421,7 @@ mod tests {
                 rating: Some(4),
                 label: Some("Blue".into()),
                 keywords: Vec::new(),
+                ..xmp::Sidecar::default()
             },
         );
         let m = cat.marks(&photo, 0).unwrap();
@@ -425,6 +449,7 @@ mod tests {
                 rating: Some(2),
                 label: Some("Purple".into()),
                 keywords: Vec::new(),
+                ..xmp::Sidecar::default()
             },
         );
         let m = cat.marks(&photo, 0).unwrap();
@@ -555,6 +580,47 @@ mod tests {
             back.keywords,
             vec![vec!["Europe".to_string(), "Paris".to_string()]]
         );
+    }
+
+    #[test]
+    fn a_description_reaches_the_sidecar_and_comes_back() {
+        let (_d, cat, photo) = one_raw("desc");
+        let d = catalog::db::Description {
+            title: "Harbour".into(),
+            caption: "Boats".into(),
+            copyright: "© W".into(),
+            creator: "W".into(),
+        };
+        cat.set_description(&photo, &d).unwrap();
+        assert!(write_for(&cat, &photo));
+        let text = std::fs::read_to_string(sidecar_path(&photo)).unwrap();
+        let back = xmp::read(&text).unwrap();
+        assert_eq!(back.title.as_deref(), Some("Harbour"));
+        assert_eq!(back.caption.as_deref(), Some("Boats"));
+        assert_eq!(back.rights.as_deref(), Some("© W"));
+        assert_eq!(back.creator.as_deref(), Some("W"));
+
+        // And the other direction, from a fresh catalog.
+        let (_d2, cat2, photo2) = one_raw("desc_back");
+        apply(&cat2, &photo2, &back);
+        assert_eq!(cat2.description_of(&photo2).unwrap(), Some(d));
+    }
+
+    #[test]
+    fn an_absent_description_field_clears_the_catalogs() {
+        // ⚠ The rating's rule, one field over: *no* `dc:description` in a newer sidecar means
+        // the caption was removed elsewhere, and that must reach us.
+        let (_d, cat, photo) = one_raw("desc_clear");
+        cat.set_description(
+            &photo,
+            &catalog::db::Description {
+                caption: "stale".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        apply(&cat, &photo, &xmp::Sidecar::default());
+        assert_eq!(cat.description_of(&photo).unwrap(), None);
     }
 
     #[test]
