@@ -11,6 +11,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut confirm = app.settings.confirm_preset_delete;
     let mut write_xmp = app.settings.write_xmp;
     let mut auto_advance = app.settings.auto_advance;
+    let mut camera_rendering = app.settings.default_rendering == edit_model::Rendering::Camera;
+    let mut auto_lens = app.settings.auto_lens_correction;
     let mut tier = app.settings.view_demosaic;
     let mut resampler = app.settings.resampler;
     let mut theme_choice = app.settings.theme;
@@ -30,6 +32,28 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         theme::DialogSize::Standard,
         |ui| {
             ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+            ui.separator();
+
+            // ⚠⚠ Both preferences existed since M5.4b and M3.2 and had NO control — they lived
+            // only in the settings file, and this file's own handoff told the user to change one
+            // "in Settings". Reported 2026-09-08. They apply to a photo with no sidecar; a photo
+            // already edited keeps what it stored (`Settings::initial_edits`).
+            ui.checkbox(
+                &mut camera_rendering,
+                "Open new photos with the camera rendering",
+            );
+            theme::hint(
+                ui,
+                "A RAW that has never been edited opens rendered the way the camera would. Off \
+             opens it colorimetric, which looks flat. A photo you have already edited keeps \
+             its own setting either way.",
+            );
+            ui.checkbox(&mut auto_lens, "Apply lens corrections to new photos");
+            theme::hint(
+                ui,
+                "Distortion, chromatic aberration and vignetting from the lens profile, on a \
+             RAW that has never been edited. A photo you have already edited keeps its own.",
+            );
             ui.separator();
 
             ui.checkbox(&mut write_xmp, "Write XMP sidecars beside RAW files");
@@ -229,6 +253,21 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
         app.settings.write_xmp = write_xmp;
         app.save_settings();
     }
+    // ⚠ Change-guarded for the same reason. Neither needs a re-decode or a re-render: both are
+    // read at the next photo *open*, by `initial_edits`, and nothing on screen changes now.
+    let want_rendering = if camera_rendering {
+        edit_model::Rendering::Camera
+    } else {
+        edit_model::Rendering::None
+    };
+    if want_rendering != app.settings.default_rendering {
+        app.settings.default_rendering = want_rendering;
+        app.save_settings();
+    }
+    if auto_lens != app.settings.auto_lens_correction {
+        app.settings.auto_lens_correction = auto_lens;
+        app.save_settings();
+    }
     // ⚠ The inequality is what stops the worker being rebuilt and a decode fired on
     // *every frame* the dialog is open — `settings_modal` runs once per frame.
     // ⚠ The same one-frame rule: `show` runs once per frame the dialog is open, so an
@@ -277,5 +316,68 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     if close {
         app.modal = Modal::None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{test_app, test_ui};
+
+    /// One layout frame with no input, so the modal's resize and scroll settle — the
+    /// `modals::info` tests' rule: the Close button's centre on the very first frame is not
+    /// where it is drawn from the second on, and a click aimed from it lands beside the widget.
+    fn settle(ctx: &egui::Context, app: &mut RustroomApp) {
+        let _ = test_ui::labelled_centres(ctx, Vec::new(), |_| show(app, ctx));
+    }
+
+    fn open_settings() -> (egui::Context, RustroomApp) {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.modal = Modal::Settings;
+        (ctx, app)
+    }
+
+    /// ⚠⚠ The report: *"I don't see the option in the settings … to turn off the automatic
+    /// camera rendering."* There was none. This is the control existing and reaching the
+    /// preference — the half a test on `initial_edits` cannot see.
+    #[test]
+    fn the_camera_rendering_preference_has_a_control_that_reaches_it() {
+        let (ctx, mut app) = open_settings();
+        assert_eq!(
+            app.settings.default_rendering,
+            edit_model::Rendering::Camera
+        );
+        settle(&ctx, &mut app);
+        test_ui::click(&ctx, "Open new photos with the camera rendering", |_| {
+            show(&mut app, &ctx)
+        });
+        assert_eq!(
+            app.settings.default_rendering,
+            edit_model::Rendering::None,
+            "the click never reached the preference"
+        );
+        settle(&ctx, &mut app);
+        test_ui::click(&ctx, "Open new photos with the camera rendering", |_| {
+            show(&mut app, &ctx)
+        });
+        assert_eq!(
+            app.settings.default_rendering,
+            edit_model::Rendering::Camera
+        );
+    }
+
+    #[test]
+    fn the_lens_correction_preference_has_a_control_that_reaches_it() {
+        let (ctx, mut app) = open_settings();
+        assert!(app.settings.auto_lens_correction);
+        settle(&ctx, &mut app);
+        test_ui::click(&ctx, "Apply lens corrections to new photos", |_| {
+            show(&mut app, &ctx)
+        });
+        assert!(
+            !app.settings.auto_lens_correction,
+            "the click never reached the preference"
+        );
     }
 }

@@ -431,6 +431,23 @@ pub const STRIP_HEIGHT_RANGE: (u32, u32) = (28, 400);
 pub const MAX_DIALOG_EDGE: f32 = 2000.0;
 
 impl Settings {
+    /// The Library filter a session starts with: the persisted format filter, nothing else.
+    ///
+    /// ⚠⚠ **This is the read half of `hidden_formats`, and it did not exist.** The toggle wrote
+    /// the setting on every change and `RustroomApp::new` built its filter from
+    /// `LibraryFilter::default()`, so the file said "JPEGs hidden" and the app hid nothing —
+    /// reported as *"the setting does not persist over sessions"*. The serde round-trip test
+    /// beside it passed throughout: it could see the file and not the wiring.
+    ///
+    /// ⚠ The search text and the mark sets deliberately start empty — they are about the question
+    /// being asked now, the filter bar's own rule; only the format is a standing preference.
+    pub fn initial_filter(&self) -> crate::library_filter::LibraryFilter {
+        crate::library_filter::LibraryFilter {
+            format: self.hidden_formats.clone(),
+            ..Default::default()
+        }
+    }
+
     /// The grid cell size in points, guaranteed usable.
     pub fn clamped_cell(&self) -> f32 {
         self.library_cell.clamp(CELL_RANGE.0, CELL_RANGE.1) as f32
@@ -854,10 +871,30 @@ mod tests {
         assert_eq!(loaded.export.format, export::ExportFormat::default());
     }
 
+    /// ⚠⚠ The wiring half, which the round-trip test below cannot see: a persisted format
+    /// filter must reach the session's filter, or the file is written and never read — which is
+    /// exactly how it shipped, and how it was reported.
+    #[test]
+    fn the_hidden_formats_reach_the_filter_at_startup() {
+        let mut s = Settings::default();
+        s.hidden_formats.toggle("jpg");
+        let f = s.initial_filter();
+        assert!(
+            f.format.is_hidden("jpg"),
+            "the persisted filter never reached the session"
+        );
+        assert!(
+            f.text.is_empty() && f.stars.is_empty(),
+            "only the format is a standing preference"
+        );
+    }
+
     #[test]
     fn the_hidden_formats_survive_a_restart() {
         // ⚠ A standing preference — "I shoot RAW+JPEG and only want the RAWs" is true of every
         // folder. Persisting it here is what stops it resetting on each source switch.
+        // ⚠ This test alone was blind to the bug it was written for: it proves the *file*, and
+        // `the_hidden_formats_reach_the_filter_at_startup` proves the *wiring*.
         let f = TempFile::new("hidden_formats_rt");
         let store = SettingsStore::new(f.0.clone());
         let mut s = Settings::default();

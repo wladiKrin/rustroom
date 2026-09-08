@@ -538,7 +538,9 @@ impl RustroomApp {
             }
         };
         Self {
-            filter: rustroom_app::library_filter::LibraryFilter::default(),
+            // ⚠ From the settings, not `default()`: the format filter is persisted and this is
+            // where it is read back — see `Settings::initial_filter`.
+            filter: settings.initial_filter(),
             metadata: rustroom_app::metadata_scanner::MetadataScanner::new({
                 let ctx = ctx.clone();
                 move || ctx.request_repaint()
