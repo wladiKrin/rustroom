@@ -34,16 +34,20 @@ fn same_ratio(a: f32, b: f32) -> bool {
 /// Whether `chip` is lit for the current `lock`, with `custom` the stored custom ratio.
 ///
 /// ⚠ A ratio chip is lit by its ratio **or its inverse**, so 3:2 stays lit after a swap to 2:3
-/// and `Swap` shows which way it faces. `Custom` is lit by the stored ratio or its inverse
-/// **only when no preset matched** — a custom 3:2 lights 3:2, not both. Pure, so the rule is
-/// testable without a window.
+/// and `Swap` shows which way it faces. Pure, so the rule is testable without a window.
+///
+/// ⚠⚠ **One rule for all six chips, and NO tie-break between Custom and a preset** — the spec
+/// first said a custom ratio equal to a preset lights the preset *instead*, and that was a dead
+/// end found in use within the hour: the W:H fields draw only while Custom is lit, so a stored
+/// 6:4 (which is 3:2) could never be edited again — every tap on Custom locked to 3:2 and lit
+/// 3:2. Two chips lit says truthfully that two ratios agree, and the fields stay reachable.
 fn chip_state(chip: Chip, lock: Option<f32>, custom: f32) -> bool {
     let matches =
         |ratio: f32| lock.is_some_and(|cur| same_ratio(ratio, cur) || same_ratio(1.0 / ratio, cur));
     match chip {
         Chip::Free => lock.is_none(),
         Chip::Preset(ratio) => matches(ratio),
-        Chip::Custom => matches(custom) && !PRESETS.iter().any(|(_, p)| matches(*p)),
+        Chip::Custom => matches(custom),
     }
 }
 
@@ -790,14 +794,50 @@ mod tests {
     }
 
     #[test]
-    fn custom_is_lit_by_the_stored_ratio_unless_a_preset_already_matches() {
+    fn custom_is_lit_by_the_stored_ratio_even_when_a_preset_matches_too() {
         assert!(chip_state(Chip::Custom, Some(1.25), 1.25));
         assert!(chip_state(Chip::Custom, Some(0.8), 1.25), "its inverse too");
         assert!(!chip_state(Chip::Custom, Some(1.5), 1.25));
         assert!(!chip_state(Chip::Custom, None, 1.25));
-        // ⚠ The tie-break: a custom ratio equal to a preset lights the preset, not both.
-        assert!(!chip_state(Chip::Custom, Some(1.5), 1.5));
+        // ⚠⚠ NO tie-break, and this reverses the spec's first rule — found in use within the
+        // hour. A custom ratio equal to a preset (6:4 is 3:2) used to light the preset *instead*,
+        // and since the W:H fields draw only while Custom is lit, the custom ratio became
+        // uneditable for good: every tap on Custom locked to 3:2 and lit 3:2. Two chips lit says
+        // truthfully that two ratios agree, and the fields stay reachable.
+        assert!(chip_state(Chip::Custom, Some(1.5), 1.5));
         assert!(chip_state(Chip::Preset(1.5), Some(1.5), 1.5));
+    }
+
+    /// ⚠⚠ The report, verbatim: *"custom button worked the first time, but now by tipping on it
+    /// it goes to 3:2 all the time."* The settings file held `[6, 4]`.
+    #[test]
+    fn a_custom_ratio_equal_to_a_preset_stays_editable() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut aspect = None;
+        let mut custom = [6, 4];
+        click_in_panel_with("Custom", &mut s, false, &mut aspect, &mut custom);
+        assert!((aspect.unwrap() - 1.5).abs() < 1e-6);
+        let mut ed = Edited::default();
+        let values = test_ui::numeric_values(&ctx, |ui| {
+            show(
+                ui,
+                &mut s,
+                AspectLock {
+                    lock: &mut aspect,
+                    custom: &mut custom,
+                },
+                &mut CompositionGuide::Off,
+                false,
+                &mut ed,
+                &mut false,
+            );
+        });
+        let has = |v: f64| values.iter().any(|x| (x - v).abs() < 1e-9);
+        assert!(
+            has(6.0) && has(4.0),
+            "the W:H fields vanished, so 6:4 can never be edited again: {values:?}"
+        );
     }
 
     /// The image the harness opens is 80×40, aspect 2.0 — every crop below is on that.

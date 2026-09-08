@@ -84,8 +84,15 @@ settles on commit, so either is one Ctrl+Z (`ed.changed` on `changed()`, `ed.set
 **Which chip is lit** is a pure function, `chip_state(preset: Option<f32>, lock: Option<f32>)`,
 extracted from the inline match so it can be tested: a ratio chip is lit when the lock equals it
 **or its inverse** (so 3:2 stays lit after a swap to 2:3, with `Swap` showing which way it faces);
-`Free` when there is no lock; **`Custom` when the lock matches the stored ratio or its inverse and
-no preset chip matched** — a custom 3:2 lights 3:2, not both.
+`Free` when there is no lock; **`Custom` when the lock matches the stored ratio or its inverse.**
+
+⚠⚠ **CORRECTED AFTER USE (2026-09-08), reversing this section's first rule.** The spec first said
+*"Custom when … no preset chip matched — a custom 3:2 lights 3:2, not both."* That is a dead end:
+the W:H fields draw only while `Custom` is lit, so a stored ratio equal to a preset — the user's
+settings file held `[6, 4]`, which is 3:2 — could never be edited again; every tap on `Custom`
+locked to 3:2 and lit 3:2. Reported as *"custom button worked the first time, but now by tipping
+on it it goes to 3:2 all the time."* One rule for all six chips now, and two lit chips say
+truthfully that two ratios agree.
 
 The custom ratio persists the way `composition_guide` does from this same panel: `panel/mod.rs`
 snapshots it before drawing and calls `save_settings` on a change, never per frame.
@@ -119,8 +126,8 @@ behaviour, the presets, and `apply_drag`.
   1e-6 when both fit; a rect that would overhang shrinks **uniformly** (its transposed pixel ratio
   is preserved) and lands inside the frame; a rect near an edge is shifted, not resized; a
   non-finite aspect and a zero-area rect come back unchanged.
-- **`chip_state`**, pure: each of the five rules above, including the "custom equal to a preset
-  lights the preset" tie-break.
+- **`chip_state`**, pure: each rule above, including that a custom ratio equal to a preset lights
+  **both** — and a panel test reproducing the report, `a_custom_ratio_equal_to_a_preset_stays_editable`.
 - **`Settings`**: an older file loads with `[5, 4]`; a hand-edited `[0, 7]` repairs rather than
   divides by zero.
 - **Panel, headless** (the `click_in_panel` harness already there): `Custom` and `Swap` are drawn;
