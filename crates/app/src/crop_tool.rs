@@ -241,6 +241,47 @@ pub fn snap_to_aspect(norm_aspect: f32) -> CropRect {
     }
 }
 
+/// The crop turned between landscape and portrait: its pixel width and height exchanged, its
+/// centre kept, shrunk **uniformly** only if the turned rect would leave the frame, then
+/// shifted — never resized — back inside `[0, 1]`.
+///
+/// ⚠ In normalised units a `w × h` rect on an image of aspect `A` is `w·img_w × h·img_h`
+/// pixels, so the transposed rect is `h / A` wide and `w · A` tall. The uniform shrink is what
+/// keeps the transposed **pixel ratio** exact even when it had to fit, which is what keeps a
+/// swapped crop consistent with the inverted lock the panel sets beside it.
+///
+/// ⚠ Deliberately not `snap_to_aspect(1/a)`: that discards where the crop was, and the point
+/// of a swap is that the framing survives (spec §1). On a full-frame crop the two agree.
+///
+/// ⚠ A non-finite or non-positive `img_aspect`, or a zero-area rect, comes back unchanged —
+/// `apply_drag`'s rule: a bad input must not produce NaN.
+pub fn swap_orientation(r: CropRect, img_aspect: f32) -> CropRect {
+    if !img_aspect.is_finite() || img_aspect <= 0.0 {
+        return r;
+    }
+    let w = r.right - r.left;
+    let h = r.bottom - r.top;
+    if w <= 0.0 || h <= 0.0 {
+        return r;
+    }
+    let cx = (r.left + r.right) / 2.0;
+    let cy = (r.top + r.bottom) / 2.0;
+    let mut nw = h / img_aspect;
+    let mut nh = w * img_aspect;
+    let s = (1.0 / nw).min(1.0 / nh).min(1.0);
+    nw *= s;
+    nh *= s;
+    // Shift back inside the frame on either axis it overhangs; the size is already ≤ 1.
+    let left = (cx - nw / 2.0).clamp(0.0, 1.0 - nw);
+    let top = (cy - nh / 2.0).clamp(0.0, 1.0 - nh);
+    CropRect {
+        left,
+        top,
+        right: left + nw,
+        bottom: top + nh,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +450,123 @@ mod tests {
                     && out.bottom.is_finite(),
                 "aspect {a} produced {out:?}"
             );
+        }
+    }
+
+    fn close(a: CropRect, b: CropRect) -> bool {
+        (a.left - b.left).abs() < 1e-6
+            && (a.top - b.top).abs() < 1e-6
+            && (a.right - b.right).abs() < 1e-6
+            && (a.bottom - b.bottom).abs() < 1e-6
+    }
+
+    /// Pixel width / pixel height of a rect on an image of aspect `img_aspect`.
+    fn pixel_ratio(c: &CropRect, img_aspect: f32) -> f32 {
+        ratio(c) * img_aspect
+    }
+
+    #[test]
+    fn on_a_square_image_a_swap_exchanges_width_and_height() {
+        let out = swap_orientation(r(), 1.0);
+        // `r()` is square, so the swap is the identity here — the discriminating case follows.
+        assert!(close(out, r()), "{out:?}");
+        let wide = CropRect {
+            left: 0.1,
+            top: 0.3,
+            right: 0.7,
+            bottom: 0.5,
+        };
+        let out = swap_orientation(wide, 1.0);
+        assert!((out.right - out.left - 0.2).abs() < 1e-6, "{out:?}");
+        assert!((out.bottom - out.top - 0.6).abs() < 1e-6, "{out:?}");
+    }
+
+    #[test]
+    fn a_full_frame_crop_on_a_3_2_image_turns_into_the_centred_2_3() {
+        // ⚠ The one case where "transpose in place" and "re-snap" agree, and it pins the
+        // pixel-space meaning: a 3:2 frame turned is a 2:3 crop, not a 3:2 one drawn narrower.
+        let a = 1.5;
+        let out = swap_orientation(CropRect::default(), a);
+        assert!(close(out, snap_to_aspect((1.0 / a) / a)), "{out:?}");
+        assert!((pixel_ratio(&out, a) - 1.0 / a).abs() < 1e-5, "{out:?}");
+    }
+
+    #[test]
+    fn an_off_centre_rect_keeps_its_centre() {
+        let a = 1.5;
+        let c = CropRect {
+            left: 0.5,
+            top: 0.2,
+            right: 0.7,
+            bottom: 0.4,
+        };
+        let out = swap_orientation(c, a);
+        assert!(((out.left + out.right) - (c.left + c.right)).abs() < 1e-6, "{out:?}");
+        assert!(((out.top + out.bottom) - (c.top + c.bottom)).abs() < 1e-6, "{out:?}");
+        assert!((pixel_ratio(&out, a) * pixel_ratio(&c, a) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn swapping_twice_is_the_identity_when_both_fit() {
+        let a = 1.5;
+        // ⚠ Not a rect whose transposed shape equals its own — on a 3:2 image a 0.2 × 0.3
+        // rect turns into a 0.2 × 0.3 rect, and the test would pass with the swap deleted.
+        let c = CropRect {
+            left: 0.4,
+            top: 0.15,
+            right: 0.6,
+            bottom: 0.75,
+        };
+        let once = swap_orientation(c, a);
+        assert!(!close(once, c), "fixture check: the swap must change this rect");
+        let out = swap_orientation(once, a);
+        assert!(close(out, c), "{out:?} vs {c:?}");
+    }
+
+    #[test]
+    fn a_rect_that_would_overhang_shrinks_uniformly_and_fits() {
+        // A wide 3:2 crop filling the width: turned, it is taller than the frame and must shrink
+        // — keeping its transposed pixel ratio exactly, or it would no longer match a lock.
+        let a = 1.5;
+        let c = CropRect {
+            left: 0.0,
+            top: 0.2,
+            right: 1.0,
+            bottom: 0.8,
+        };
+        let out = swap_orientation(c, a);
+        assert!(inside_frame(&out), "{out:?}");
+        let want = pixel_ratio(&c, a).recip();
+        assert!((pixel_ratio(&out, a) - want).abs() < 1e-5, "{out:?}");
+        assert!(out.bottom - out.top > 0.99, "it should use the full height: {out:?}");
+    }
+
+    #[test]
+    fn a_rect_near_an_edge_is_shifted_not_resized() {
+        let a = 1.0;
+        let c = CropRect {
+            left: 0.7,
+            top: 0.0,
+            right: 1.0,
+            bottom: 0.1,
+        };
+        let out = swap_orientation(c, a);
+        assert!(inside_frame(&out), "{out:?}");
+        assert!((out.right - out.left - 0.1).abs() < 1e-6, "{out:?}");
+        assert!((out.bottom - out.top - 0.3).abs() < 1e-6, "{out:?}");
+    }
+
+    #[test]
+    fn a_bad_aspect_or_an_empty_rect_comes_back_unchanged() {
+        let empty = CropRect {
+            left: 0.5,
+            top: 0.2,
+            right: 0.5,
+            bottom: 0.4,
+        };
+        assert_eq!(swap_orientation(empty, 1.5), empty);
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(swap_orientation(r(), bad), r(), "aspect {bad}");
         }
     }
 }
