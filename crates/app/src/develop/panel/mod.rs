@@ -435,7 +435,12 @@ mod tests {
     fn the_sessions_baseline_reaches_the_auto_solve() {
         let ctx = crate::test_ui::ctx();
         let mut exposures = Vec::new();
-        for baseline in [None, Some(2.0)] {
+        // ⚠ `None` against a **negative** baseline. The pair was `None`/`Some(2.0)` until the
+        // 2026-09-08 retune of `MEDIAN_TARGET` to 0.20: the fixture's median then solves to
+        // −2.45 EV under the fallback baseline, and a +2 EV baseline aims below the −2.5 EV clamp,
+        // so both values sat on the clamp 0.05 apart and the test failed for the wrong reason.
+        // A −1 EV baseline raises the target instead, well inside the range.
+        for baseline in [None, Some(-1.0)] {
             let mut app = crate::test_app::for_test();
             crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
             {
