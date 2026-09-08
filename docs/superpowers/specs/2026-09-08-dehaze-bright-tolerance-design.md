@@ -1,6 +1,6 @@
 # Dehaze — an airlight tolerance for bright achromatic subjects — design
 
-**Status:** specced 2026-09-08. Branch `m7.6-dehaze-bright`. One of the two M7.6 gaps that were
+**Status:** implemented 2026-09-08, confirmed by use. Branch `m7.6-dehaze-bright`. ⚠ Two corrections made at plan time are marked in §5. One of the two M7.6 gaps that were
 genuinely open (the other is auto-mask for the brush).
 
 Dehaze reads a bright achromatic object — snow, a white wall, a white cat — as haze, because its
@@ -110,18 +110,28 @@ finding about K, not a reason to weaken the guard.
 
 ## 5. Tests — and the sabotage each catches
 
-- **`a_bright_object_near_the_airlight_is_left_alone`** — the artifact as a test. A hazy synthetic
-  scene with a large flat patch at **0.92 × A** (slightly darker than the airlight, the white-wall
-  case; a patch at exactly A is unchanged by the stage with or without the tolerance, since
-  `(A − A)/t + A = A`). At +100 the patch's mean luminance must stay within **2%** of its input.
-  The premise is asserted through a test-only entry point taking the tolerance:
-  `transmission_with(image, a, scale, tolerance)` — `transmission` delegates with the constant,
-  the `apply_with(halo_floor)` precedent — and at tolerance 0 the same patch must darken by more
-  than **10%**. Sabotage: the constant set to 0 fails the first half.
-- **`the_tolerance_is_continuous`** — transmission over a row of pixels whose distance from the
-  airlight ramps across both breakpoints, with the dark channel held constant: no two adjacent
-  pixels differ by more than a small epsilon. Sabotage: replacing `max(1.0)` with a hard branch
-  (`if dist < K { 1.0 } else { t }`) fails it.
+- **`a_bright_object_near_the_airlight_is_left_alone`** — the artifact as a test. ⚠⚠ **Corrected
+  three times at plan and execution time, each by a failing assertion.** This section first said a
+  flat patch at **0.92 × A**; (1) at 8% off the airlight the tolerance raises the transmission only
+  1.5× and the patch still darkens 43% by the model's own arithmetic, so the white-wall case is
+  pixels within ~1% of A; (2) a **flat** patch near A *becomes* the airlight estimate and is
+  untouched with or without the tolerance (`(Â − Â)/t + Â = Â`) — the falloff of a real wall is
+  what puts pixels below the estimate, so the fixture is a wall with a 3% falloff, hazed 10%
+  darker than the wall so the wall's top rows win the estimate as they do on the real frames; (3)
+  the guided refinement's reach is **twice** its radius (120 px), so a band 60 px below the wall's
+  top edge read a transmission of 0.17 rather than ~0.06 — the wall spans the full image height
+  and the band is inset 120 px. Measured: the band 1% below the top darkens **0.3%** with the
+  tolerance and **9.0%** without; the bounds are 2% and 5%, the second a measured 4.5× margin
+  rather than the 10% the arithmetic predicted. The premise goes through
+  `transmission_with(image, a, scale, tolerance)` and `DehazeStage::apply_with(image, tolerance)`,
+  the `apply_with(halo_floor)` precedent; ⚠ a parameterless `transmission` wrapper was dead code
+  (a `pub fn` in the private `stages` module with no caller) and was removed — the constant
+  enters at `apply`. Sabotage: the constant set to 0 fails the first half.
+- **`the_tolerance_is_continuous`** — ⚠ corrected at plan time from "a row of pixels": the rule is
+  extracted as the pure function `tolerant_transmission(t, dist, K)` and swept over `dist` across
+  both breakpoints with no image and no guided filter between the sabotage and the assertion; no
+  adjacent pair differs by more than 0.01. Sabotage: a hard branch (`if dist < K { 1.0 } else { t }`)
+  fails it with a jump of 0.7 at `dist = K`.
 - **`synthetic_haze_is_removed`**, **`negative_dehaze_is_depth_aware`** and
   **`a_clear_image_is_barely_changed`** stand unchanged and must pass — the second is the ceiling
   test, and §3 records why 0.2 would fail it.

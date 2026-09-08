@@ -287,6 +287,11 @@ Then re-measure the preview and prefix cost against the table in `CLAUDE.md`.
    colour-shifted. This is *the* classic dark-channel-prior artifact, inherent to the model
    rather than to this implementation. `OMEGA < 1` and the guided refinement soften it; a
    proper fix needs large-bright-region or sky detection and is its own feature.
+   ✅ **Softened 2026-09-08** by an airlight tolerance (`AIRLIGHT_TOLERANCE` 0.1): a pixel within
+   0.1 of the airlight in every channel is an object, not haze. The white-wall case is closed
+   (18.7% → 3.4% darkening at +100); cloudy skies and a bright object whose frame's airlight is
+   elsewhere remain — see `2026-09-08-dehaze-bright-tolerance-design.md`, which also records that
+   region detection was rejected because the catalogue holds no genuinely hazy frame to test it on.
 2. **Dragging Dehaze re-runs noise reduction** — ~29 ms at preview, ~141 ms for a native
    prefix. The cost accepted in exchange for needing no new architecture. Every other slider
    still hits the cache. A second cache checkpoint is already a standing perf item and would

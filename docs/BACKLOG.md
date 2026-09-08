@@ -32,7 +32,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
 | Fuse perspective into `GeometryStage` | **M7.3b** — ⬜ still open (2026-09-08) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
-| Auto-mask brush · dehaze bright subjects · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); auto-mask and dehaze ⬜ (2026-09-08) |
+| Auto-mask brush · ~~dehaze bright subjects~~ · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); dehaze bright subjects ✅ 2026-09-08; auto-mask ⬜ |
 | ~~Lens correction row batching~~ · sequential export · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); the other two ⬜ |
 | On-disk thumbnail cache | **M8.2** |
 | `main.rs` is too large | ✅ **W0, 2026-09-01** — 4,375 → 681 (917 as of 2026-09-08); `canvas.rs` 1,890 → 7 modules |
@@ -305,9 +305,13 @@ above. Only *anchoring* wants the forward map.
 - **Mask intersection and subtraction between masks.** `erase` works only *within* one brush; a
   radial cannot be cut out of a linear.
 - **Auto-mask / edge detection** for the brush.
-- **Dehaze over-corrects bright achromatic subjects** — snow, white walls, a white cat read as haze.
+- ~~**Dehaze over-corrects bright achromatic subjects** — snow, white walls, a white cat read as haze.
   The classic dark-channel-prior artifact, inherent to the model; a real fix needs large-bright-
-  region detection and is its own feature.
+  region detection and is its own feature.~~ ✅ **2026-09-08** — an airlight tolerance in
+  `transmission`, measured on 415 frames (spec `2026-09-08-dehaze-bright-tolerance-design.md`).
+  ⚠ Not region detection: the catalogue holds no genuinely hazy frame to check that against, and a
+  hazy sky is locally a white wall. Left open, as a limit rather than a bug: a bright object whose
+  frame's airlight is a *different* bright region (a wall behind a window, DSCF6327, 8.4% at +100).
 - ~~**Negative Texture is not edge-aware**, so it softens edges within its band. Deliberate — noise
   reduction already owns edge-aware smoothing and is upstream. A guided-filter base for the negative
   half is the follow-up, at the cost of the tool behaving differently either side of zero.~~
