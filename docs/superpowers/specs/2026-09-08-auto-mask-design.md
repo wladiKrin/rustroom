@@ -19,12 +19,46 @@ spec**; each names the experiment and what each outcome implies.
 
 | # | question | instrument | what it decides |
 |---|---|---|---|
-| **M1** | How far apart are the **reference's space** and the **comparison space**? | a probe rendering a real `.RAF`, dumping the Oklab of a chosen pixel as (a) `readout_bytes` decoded, (b) `MaskStage`'s incoming `base` | whether a reference sampled from the displayed frame can be compared against the pre-mask buffer at all — see §2 |
+| **M1** ✅ | How far apart are the **reference's space** and the **comparison space**? | `auto_mask_space_probe`, kept | **MEASURED 2026-09-08 — the L term is unusable and the chroma terms are fine. See §3.** |
 | **M2** | What does disabling `BrushCache` cost per render? | `bench_masked`, a new row: one auto-masked brush at fit and at a 1:1 region | whether the cache must be made auto-mask-aware, or the existing self-rasterising fallback is enough — see §6 |
 | **M3** | Does the mask **drift** when a global slider moves after painting? | paint an auto-masked stroke on a real photograph, then sweep exposure ±2 EV and measure coverage change | the question deferred in brainstorming: whether a stable pre-tail buffer is worth its plumbing — see §9 |
 
-⚠ **M1 is the one that can invalidate the design**, so it runs first and its result is a gate on
-Task 2 of the plan. M2 and M3 are tuning and scope.
+⚠ **M1 is the one that can invalidate the design**, so it ran first and its result gated the rest.
+
+### ⚠⚠ M1's result, and the two probe bugs found on the way to it
+
+Four X-T4 frames (DSCF6223, 6296, 6509, 6270), 1600 px, bucketed by displayed Oklab lightness.
+**With the camera rendering on — which is what the canvas opens every photo with:**
+
+| displayed L | mean ΔL | mean chroma distance |
+|---|---|---|
+| 0.0–0.1 | **−0.075 … −0.083** | 0.006–0.008 |
+| 0.2–0.3 | −0.015 … −0.001 | 0.013–0.040 |
+| 0.4–0.5 | +0.076 … +0.080 | 0.014–0.026 |
+| 0.6–0.7 | **+0.140 … +0.143** | 0.002–0.007 |
+| 0.8–0.9 | +0.071 … +0.119 | 0.003–0.013 |
+| **middle six buckets** | **+0.070 … +0.111** | **~0.010–0.020** |
+
+**ΔL is 7–10× the chroma distance, and its curve is nearly identical on all four frames** —
+negative in the deepest shadows, crossing zero near displayed L ≈ 0.28, peaking around +0.14 in
+the upper midtones. That shape is the display rendering's own S-curve, and its being
+**content-independent** is what makes this the table's second outcome rather than its third.
+
+⚠⚠ **TWO PROBE BUGS WERE FOUND BEFORE THIS NUMBER WAS BELIEVED, AND EITHER WOULD HAVE BEEN
+REPORTED AS A FINDING.**
+
+1. **A double encode.** The first probe applied `linear_to_srgb` to the tail's output — but
+   `OutputTransform::apply` **already encodes** (`space.encode`). That produced a flat **+0.24**
+   offset: a probe bug wearing exactly the shape of the result it was looking for.
+2. **⚠⚠ The wrong configuration, which is the more instructive one.** With the bug fixed the
+   offset came back at **0.0011 — quantization noise** — and that reads as "the two spaces agree,
+   ship it". It is measuring nothing: `Edits::default()` carries `rendering: None`, so that tail
+   holds **no display rendering at all**. The canvas opens every photo with
+   `Settings::default_rendering`, which is `Camera`. **A neutral fixture removed the very stage the
+   measurement was about.** The probe now reports both rows side by side so the distinction cannot
+   be lost again — the rendering-off row is the CLI's and the goldens' case and is genuinely ~0.
+
+M2 and M3 remain tuning and scope.
 
 ---
 
@@ -84,14 +118,25 @@ highlights are compressed hard. A systematic offset in L between reference and p
 **M1 measures that offset.** Three outcomes, decided in advance so the measurement cannot be
 rationalised after the fact:
 
-- **offset small across the tonal range** (say under ~0.02 in Oklab L over the middle two thirds):
-  ship as specced, record the residual as a caveat.
-- **offset large but monotonic**: compare on **chroma and hue only**, dropping L from the distance.
-  ⚠ This weakens the tool exactly where the M7.6 brief said it matters — a grey rock against a blue
-  sky is a *chroma* edge and would still work, but sky-against-brighter-sky would not.
-- **offset large and content-dependent**: the reference must be sampled from a buffer in the
-  pixel's own space, which means the render worker hands the canvas that buffer — the "exact and
-  live" option costed in brainstorming and declined. **Stop and report**, do not build it silently.
+- ~~offset small across the tonal range: ship as specced~~ — **not what happened.**
+- ✅ **offset large but systematic: compare on chroma and hue only, dropping L from the distance.**
+  **This is the outcome, and it is what ships.** ΔL of +0.10 against a tolerance ceiling of 0.35
+  would be a third of the whole range of the control, contributed by nothing but the S-curve.
+- ~~offset large and content-dependent: stop and report~~ — ruled out: the ΔL curve is the same on
+  all four frames, so it is the rendering's signature and not the picture's.
+
+**So the distance is `sqrt(Δa² + Δb²)`, and `AUTO_MASK_MAX_DELTA` is a chroma ceiling.**
+
+⚠ **The measured chroma mismatch is a floor under that constant.** Chroma distance reaches
+**0.040** in one bucket of DSCF6509 and sits around 0.010–0.020 generally, so a ceiling anywhere
+near 0.04 would be flipped by the space mismatch alone. Task 14's sweep must land comfortably
+above it; if a usable ceiling turns out to be *below* ~0.05, that is a reason to reopen this.
+
+⚠⚠ **The cost, stated plainly: a purely tonal edge cannot be detected.** Two pixels of the same
+hue and chroma differing only in lightness — a white wall against a grey one, a sky gradient — are
+now indistinguishable to the gate. **Both of the brief's own headline cases survive**, because
+each is a chroma edge: sky (blue, chromatic) against ridge (dark, near-neutral), and skin (orange)
+against hair (near-neutral). This is recorded as accepted caveat 8 in §10.
 
 ---
 
@@ -283,3 +328,6 @@ not to reintroduce the unkeyed map.
    pixel data there.
 6. **No auto-mask on the analytic masks or the range masks** — they are not painted.
 7. **M7.1c boolean mask operations and M7.3b remain next**, untouched.
+8. **⚠ A purely tonal edge is not detected** — the gate compares chroma and hue only, because M1
+   measured the lightness term as unusable. A white wall against a grey one is one region to this
+   tool. Forced by the measurement, not chosen.
