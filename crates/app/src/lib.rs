@@ -12,6 +12,7 @@ pub mod composition_guides;
 pub mod crop_tool;
 pub mod date_tree;
 pub mod decode_worker;
+pub mod description;
 pub mod edit_clipboard;
 pub mod edit_history;
 pub mod entries;
