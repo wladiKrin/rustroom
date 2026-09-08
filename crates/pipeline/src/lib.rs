@@ -604,11 +604,23 @@ fn is_identity(points: &[[f32; 2]]) -> bool {
     points.len() < 2 || points.iter().all(|p| (p[0] - p[1]).abs() < 1e-4)
 }
 
-/// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
+/// The tail in two halves, split exactly where the grading stage goes.
 ///
-/// ⚠ The extra parameter is additive with a delegating wrapper — the `Region` precedent, which
-/// gave that work zero call-site churn. The CLI, export and every golden go through the wrapper.
-pub fn build_pipeline_split_in_region_with_brush(
+/// ⚠ The split exists whether or not `ColorGradingStage` is active: Blending and Balance define
+/// the ranges regardless, so "before the grade" is a structural position — after HSL, before the
+/// masks loop — not a search for a stage name. The grade range view taps the buffer here.
+pub struct TailHalves {
+    /// Everything up to but excluding colour grading.
+    pub before_grade: Pipeline,
+    /// Colour grading (when active) and everything after it, ending with the output transform.
+    pub from_grade: Pipeline,
+}
+
+/// As [`build_pipeline_split_in_region_with_brush`], with the tail returned in two halves.
+///
+/// ⚠ The untapped builder is a wrapper over this one that concatenates the halves, so every
+/// existing caller — and every golden — is byte-identical by construction.
+pub fn build_pipeline_split_tapped(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
@@ -617,7 +629,7 @@ pub fn build_pipeline_split_in_region_with_brush(
     lens: Option<lens_profile::LensShot>,
     // What the *tail's* rendering needs that `Edits` cannot carry.
     profile: ProfileRendering<'_>,
-) -> (Pipeline, Pipeline) {
+) -> (Pipeline, TailHalves) {
     let ProfileRendering {
         curve: profile_curve,
         baseline_ev,
@@ -713,6 +725,9 @@ pub fn build_pipeline_split_in_region_with_brush(
     //
     // Per-pixel and position-independent, so it needs no `Region`, no `RenderScale` and no
     // kernel margin — and being in the tail, no `PrefixStepKey`.
+    //
+    // ⚠ The tap point. Everything pushed so far is the first half.
+    let before_grade = std::mem::take(&mut tail);
     if edits.color_grading.is_active() {
         tail.push(Box::new(ColorGradingStage::new(&edits.color_grading)));
     }
@@ -813,7 +828,36 @@ pub fn build_pipeline_split_in_region_with_brush(
 
     tail.push(Box::new(OutputTransform::new(space)));
 
-    (Pipeline::new(prefix), Pipeline::new(tail))
+    (
+        Pipeline::new(prefix),
+        TailHalves {
+            before_grade: Pipeline::new(before_grade),
+            from_grade: Pipeline::new(tail),
+        },
+    )
+}
+
+/// As [`build_pipeline_split_in_region`], with brush coverage the caller has already rasterized.
+///
+/// ⚠ The extra parameter is additive with a delegating wrapper — the `Region` precedent, which
+/// gave that work zero call-site churn. The CLI, export and every golden go through the wrapper.
+///
+/// ⚠ Itself a wrapper over [`build_pipeline_split_tapped`], concatenating the two halves — the
+/// same stages in the same order, so nothing here can move a pixel.
+pub fn build_pipeline_split_in_region_with_brush(
+    edits: &Edits,
+    scale: RenderScale,
+    region: Option<Region>,
+    brush: Option<&BrushCoverage>,
+    spec: RenderSpec,
+    lens: Option<lens_profile::LensShot>,
+    profile: ProfileRendering<'_>,
+) -> (Pipeline, Pipeline) {
+    let (prefix, halves) =
+        build_pipeline_split_tapped(edits, scale, region, brush, spec, lens, profile);
+    let mut tail = halves.before_grade.into_stages();
+    tail.extend(halves.from_grade.into_stages());
+    (prefix, Pipeline::new(tail))
 }
 
 /// The develop pipeline in two halves, for a render covering the whole frame.
@@ -1622,6 +1666,44 @@ mod tests {
                 expected
             );
         }
+    }
+
+    /// ⚠⚠ The tapped tail is the tail, cut in two at the grading stage — for a grade that is
+    /// active AND for one that is not, because Blending and Balance define the ranges whether or
+    /// not a wheel is turned, and the split must be structural rather than "find the stage
+    /// named color_grading". Sabotage: cutting one stage late fails the second assertion.
+    #[test]
+    fn the_tapped_tail_concatenates_to_the_tail_and_splits_at_the_grade() {
+        for edits in [Edits::default(), all_edits()] {
+            let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+            let (tapped_prefix, halves) = build_pipeline_split_tapped(
+                &edits,
+                RenderScale::FULL,
+                None,
+                None,
+                RenderSpec::default(),
+                None,
+                ProfileRendering::default(),
+            );
+            assert_eq!(tapped_prefix.stage_names(), prefix.stage_names());
+            let mut joined = halves.before_grade.stage_names();
+            joined.extend(halves.from_grade.stage_names());
+            assert_eq!(joined, tail.stage_names(), "the halves are not the tail");
+            assert!(
+                !halves.before_grade.stage_names().contains(&"color_grading"),
+                "the grade is in the first half"
+            );
+            if edits.color_grading.is_active() {
+                assert_eq!(
+                    halves.from_grade.stage_names().first(),
+                    Some(&"color_grading"),
+                    "an active grade must open the second half"
+                );
+            }
+        }
+        // The fixture must exercise both branches, or the `if` above is never taken.
+        assert!(all_edits().color_grading.is_active());
+        assert!(!Edits::default().color_grading.is_active());
     }
 
     #[test]
