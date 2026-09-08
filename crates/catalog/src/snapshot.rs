@@ -43,6 +43,16 @@ pub struct CaptureSnapshot {
     pub focal_len: Option<f64>,
 }
 
+/// One `photo_description` row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescriptionSnapshot {
+    pub file_name: String,
+    pub title: String,
+    pub caption: String,
+    pub copyright: String,
+    pub creator: String,
+}
+
 /// One `keywords` row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeywordSnapshot {
@@ -80,6 +90,7 @@ pub enum CatalogSnapshot {
         path: PathBuf,
         photos: Vec<PhotoSnapshot>,
         captures: Vec<CaptureSnapshot>,
+        descriptions: Vec<DescriptionSnapshot>,
         /// `(collection_id, photo_id, added)` — the photo id is remapped, the collection id is not.
         memberships: Vec<(i64, i64, i64)>,
         /// `(file_name, keyword_id)`; the folder id is remapped.

@@ -9,7 +9,9 @@
 //! folder would make "show me every 5-star frame this year" impossible across three shoots, which
 //! is the single thing a DAM exists for.
 
-use crate::snapshot::{CaptureSnapshot, CatalogSnapshot, KeywordSnapshot, PhotoSnapshot};
+use crate::snapshot::{
+    CaptureSnapshot, CatalogSnapshot, DescriptionSnapshot, KeywordSnapshot, PhotoSnapshot,
+};
 use crate::CatalogEntry;
 use core_image::Capture;
 use rusqlite::Connection;
@@ -772,6 +774,24 @@ impl Catalog {
         drop(st);
 
         let mut st = tx.prepare(
+            "SELECT file_name, title, caption, copyright, creator
+             FROM photo_description WHERE folder_id = ?1",
+        )?;
+        let descriptions: Vec<DescriptionSnapshot> = st
+            .query_map([id], |r| {
+                Ok(DescriptionSnapshot {
+                    file_name: r.get(0)?,
+                    title: r.get(1)?,
+                    caption: r.get(2)?,
+                    copyright: r.get(3)?,
+                    creator: r.get(4)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        drop(st);
+
+        let mut st = tx.prepare(
             "SELECT cp.collection_id, cp.photo_id, cp.added
              FROM collection_photos cp JOIN photos p ON p.id = cp.photo_id
              WHERE p.folder_id = ?1",
@@ -796,6 +816,7 @@ impl Catalog {
             path: PathBuf::from(path),
             photos,
             captures,
+            descriptions,
             memberships,
             keywords,
         })
@@ -1483,6 +1504,7 @@ impl Catalog {
                 path,
                 photos,
                 captures,
+                descriptions,
                 memberships,
                 keywords,
             } => {
@@ -1542,6 +1564,22 @@ impl Catalog {
                             c.shutter,
                             c.aperture,
                             c.focal_len,
+                        ],
+                    )?;
+                }
+
+                for d in descriptions {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO photo_description
+                             (folder_id, file_name, title, caption, copyright, creator)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            fid,
+                            d.file_name,
+                            d.title,
+                            d.caption,
+                            d.copyright,
+                            d.creator
                         ],
                     )?;
                 }
@@ -3289,6 +3327,31 @@ mod tests {
             .expect("the rating must come back");
         assert_eq!(m.flag, Flag::Pick);
         assert_eq!(m.label, 2);
+    }
+
+    #[test]
+    fn forgetting_a_folder_and_undoing_brings_back_its_descriptions() {
+        // ⚠ Same sentence as the marks test, one more table: a restore that dropped the
+        // captions would look like it had worked.
+        let (cat, dir) = with_two_photos();
+        let d = Description {
+            title: "Kept".into(),
+            caption: "through a forget and an undo".into(),
+            ..Description::default()
+        };
+        cat.set_description(&dir.join("a.RAF"), &d).unwrap();
+        let fid = cat.folders().unwrap()[0].id;
+
+        let snap = cat.forget_folder(fid).unwrap();
+        let left: i64 = cat
+            .conn
+            .query_row("SELECT count(*) FROM photo_description", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "orphaned description rows survived the forget");
+
+        cat.restore(&snap).unwrap();
+        assert_eq!(cat.description_of(&dir.join("a.RAF")).unwrap(), Some(d));
+        assert_eq!(cat.description_of(&dir.join("b.RAF")).unwrap(), None);
     }
 
     /// ⚠ A keyword takes its whole subtree, so the restore must bring the hierarchy back — not
