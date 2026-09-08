@@ -131,16 +131,14 @@ pub fn airlight(image: &ImageBuf) -> [f32; 3] {
     ]
 }
 
-/// The refined transmission map for `image`: how much of each pixel survived the haze.
-pub fn transmission(image: &ImageBuf, a: [f32; 3], scale: RenderScale) -> Vec<f32> {
-    transmission_with(image, a, scale, AIRLIGHT_TOLERANCE)
-}
-
-/// [`transmission`] with the airlight tolerance overridden.
+/// The refined transmission map for `image`: how much of each pixel survived the haze, with
+/// the airlight tolerance passed in.
 ///
-/// ⚠ Exists for the tests: "the object was left alone" is a comparison against the untreated
-/// stage, and a tolerance of 0 is exactly that. Production only ever calls it through
-/// [`transmission`], with [`AIRLIGHT_TOLERANCE`].
+/// ⚠ The tolerance is a parameter rather than read from the constant here so the tests can
+/// compare against the untreated stage (a tolerance of 0). Production reaches this only through
+/// `DehazeStage::apply`, which passes [`AIRLIGHT_TOLERANCE`]. ⚠ A parameterless wrapper was
+/// tried and was dead code: `stages` is a private module, so a `pub fn` with no caller fails
+/// `clippy -D warnings` — the trap this repo records for every such helper.
 pub(crate) fn transmission_with(
     image: &ImageBuf,
     a: [f32; 3],
