@@ -57,6 +57,7 @@ fn main() {
             copyright: "© 2026 Wladi — all rights reserved".into(),
             creator: "Wladi".into(),
             caption: "A test frame with an ampersand & an <angle> in it".into(),
+            ..ExportMetadata::default()
         },
         watermark: Watermark {
             text: "rustroom".into(),

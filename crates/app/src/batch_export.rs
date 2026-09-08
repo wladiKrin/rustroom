@@ -1466,6 +1466,11 @@ mod tests {
         // property, and a `Default` that stopped being inert would still satisfy the four
         // comparisons above.
         assert!(opts.metadata.copyright.is_empty() && opts.metadata.creator.is_empty());
+        assert_eq!(
+            opts.metadata.scope,
+            export::MetadataScope::All,
+            "an older preset writes all metadata, the M6.2 default"
+        );
         assert!(opts.watermark.text.is_empty(), "no watermark by default");
         // ⚠ And its *other* fields are not zero — `Watermark::default` is hand-written for
         // exactly that reason. A derived one would hand this options file a zero-height, fully
@@ -1486,6 +1491,7 @@ mod tests {
                 copyright: "© 2026".into(),
                 creator: "W".into(),
                 caption: "c".into(),
+                scope: export::MetadataScope::CopyrightOnly,
             },
             watermark: Watermark {
                 text: "rustroom".into(),

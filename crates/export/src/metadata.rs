@@ -34,20 +34,48 @@ use crate::{ExportError, ExportFormat};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Rights and description to write into every exported file.
+/// How much of what the catalog knows goes into the exported file.
+///
+/// ⚠ **`All` is the default, for existing presets too (user's call).** This is the one
+/// deliberate exception to the M6.1 seam's "defaults to do nothing" rule: an existing user's
+/// next export gains camera, exposure, keywords and rating — which is the point of the
+/// milestone, and what every other tool does by default. Recorded in spec §3.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MetadataScope {
+    /// Title, caption, rights, creator, rating, label, keywords and the capture facts.
+    #[default]
+    All,
+    /// Rights and creator only — for a client who should not see the shoot's keywords.
+    CopyrightOnly,
+}
+
+impl MetadataScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All metadata",
+            Self::CopyrightOnly => "Copyright only",
+        }
+    }
+}
+
+/// Rights and description to write into every exported file, and how much else goes with them.
 ///
 /// ⚠ Empty means "write nothing", not "write an empty string" — a blank copyright tag is worse
 /// than an absent one, because a reader cannot tell it from a deliberate assertion of no rights.
+///
+/// ⚠ Since M6.2 these three strings are **defaults**: a photo's own title, caption, copyright or
+/// creator (its catalog `Description`) wins over them — see [`FileMetadata::resolve`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportMetadata {
     pub copyright: String,
     pub creator: String,
     pub caption: String,
+    pub scope: MetadataScope,
 }
 
 impl ExportMetadata {
-    /// Whether there is anything at all to write.
+    /// Whether the three default strings are all blank.
     ///
     /// ⚠ Trimmed, so a field holding only spaces counts as absent. A tag whose whole content is
     /// whitespace is the blank-copyright problem in a costume.
@@ -55,6 +83,15 @@ impl ExportMetadata {
         self.copyright.trim().is_empty()
             && self.creator.trim().is_empty()
             && self.caption.trim().is_empty()
+    }
+
+    /// Whether the section holds anything other than its defaults — what the export dialog's
+    /// header dot shows.
+    ///
+    /// ⚠ Not "whether a packet will be written": under `All` one almost always is, and a dot
+    /// that is always on is as useless as one that is never on.
+    pub fn is_active(&self) -> bool {
+        !self.is_empty() || self.scope != MetadataScope::default()
     }
 }
 
@@ -373,7 +410,38 @@ mod tests {
             copyright: copyright.into(),
             creator: creator.into(),
             caption: caption.into(),
+            scope: MetadataScope::All,
         }
+    }
+
+    #[test]
+    fn the_scope_is_all_unless_changed_and_activity_follows_either() {
+        // ⚠ `All` is the default, for existing presets too (user's call, spec §3): an export
+        // gains camera, keywords and rating from now on. That is *not* hidden state, so the
+        // header dot must not show for it — `is_active` is "a field filled OR the scope
+        // changed", the rule `a_section_that_is_doing_something_says_so_in_its_header` guards.
+        let m = ExportMetadata::default();
+        assert_eq!(m.scope, MetadataScope::All);
+        assert!(!m.is_active(), "an untouched section must not claim activity");
+        let filled = ExportMetadata {
+            copyright: "(c)".into(),
+            ..ExportMetadata::default()
+        };
+        assert!(filled.is_active());
+        let narrowed = ExportMetadata {
+            scope: MetadataScope::CopyrightOnly,
+            ..ExportMetadata::default()
+        };
+        assert!(narrowed.is_active(), "a changed scope is state worth showing");
+    }
+
+    #[test]
+    fn a_preset_written_before_the_scope_existed_loads_as_all() {
+        // The exact JSON M6.1b wrote. Container-level `#[serde(default)]` carries the new field.
+        let json = r#"{"copyright":"(c) me","creator":"","caption":""}"#;
+        let m: ExportMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(m.scope, MetadataScope::All);
+        assert_eq!(m.copyright, "(c) me");
     }
 
     #[test]
