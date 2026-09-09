@@ -324,6 +324,7 @@ pub fn fake_decode() -> std::sync::Arc<Decoded> {
             region: None,
             hist: [[0; 256]; 3],
             max_dim: 8,
+            fit_size: (8.0, 4.0),
             grade_view: None,
         },
         source_scale: 1.0,

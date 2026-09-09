@@ -97,6 +97,7 @@ mod tests {
                 hist: [[0; 256]; 3],
                 region: None,
                 max_dim: 1,
+                fit_size: (1.0, 1.0),
                 grade_view: None,
             },
             source_scale: 1.0,

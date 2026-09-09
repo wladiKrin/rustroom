@@ -48,6 +48,20 @@ pub struct RenderedFrame {
     /// a fit render" — an inference that a cropped photo can make false, since a native rung
     /// times a small crop factor lands below the preview cap. This makes it a fact.
     pub max_dim: usize,
+    /// The post-geometry image size **at the fit cap**, in exact floats — what the canvas places
+    /// every overlay against.
+    ///
+    /// ⚠⚠ **Carried rather than derived by the caller, for the reason `max_dim` above is.** It was
+    /// computed in `shell.rs` as `frame_dims x fit_cap / max_dim`, and a frame's dimensions come
+    /// from `downscale_to`, which rounds — so the rounding was amplified by `rung / fit_cap` and
+    /// the placement depended on which rung last landed. Measured: 1068.000 at rungs 1600 and
+    /// 3200 against a true 1068.204 at 6246.
+    ///
+    /// ⚠ Deriving it in `shell.rs` from `Session::edits` instead would also be exact and would be
+    /// **worse**: it would describe a crop the frame on screen does not have until the next one
+    /// lands, so the texture would be misplaced for a frame or two after every crop change.
+    /// Travelling with the pixels it describes is what makes that unrepresentable.
+    pub fit_size: (f32, f32),
     /// The grade range view's plane — one byte per pixel, the selected range's weight — or
     /// `None` when the view is off.
     ///
@@ -526,6 +540,10 @@ fn pack(
         hist,
         region,
         max_dim,
+        // ⚠ A placeholder. `pack` knows neither the buffer nor the geometry; both callers
+        // overwrite this immediately. It is the frame's own size, so a caller that forgot would
+        // degrade to the pre-`fit_size` behaviour at the fit rung rather than to a zero.
+        fit_size: (width as f32, height as f32),
         grade_view: None,
     }
 }
@@ -1055,6 +1073,15 @@ fn render_cached(
     };
     let mut frame = pack(out, proofed, region, max_dim, display_space, visualize);
     frame.grade_view = plane;
+    // ⚠ `edits` here is already the **view** edits — `Session::view_edits` has run
+    // `preview_edits`, which is what resets the crop in geometry mode — so this is the geometry
+    // the render was actually asked for, which is what `fit_size` requires.
+    frame.fit_size = crate::view_region::fit_size(
+        buffer.width(),
+        buffer.height(),
+        crate::view_region::fit_cap(buffer_long, crate::view_region::PREVIEW_MAX_DIM),
+        &edits.geometry,
+    );
     (frame, ran)
 }
 
@@ -1079,7 +1106,7 @@ pub fn render_once(
         preview.width().max(preview.height()),
         source_scale,
     );
-    pack(
+    let mut frame = pack(
         pipeline::build_pipeline_with(edits, scale, resampler).run(preview),
         // ⚠ Never proofed. This is the before/after baseline and the reference the cached path is
         // tested against; a proof is a property of the *view* and would make the reference move
@@ -1089,7 +1116,17 @@ pub fn render_once(
         max_dim,
         display_space,
         None,
-    )
+    );
+    frame.fit_size = crate::view_region::fit_size(
+        buffer.width(),
+        buffer.height(),
+        crate::view_region::fit_cap(
+            buffer.width().max(buffer.height()),
+            crate::view_region::PREVIEW_MAX_DIM,
+        ),
+        &edits.geometry,
+    );
+    frame
 }
 
 /// The Visualize Spots view of a rendered frame: the edge view of its luminance, written back as
@@ -1244,6 +1281,46 @@ mod tests {
 
     fn varied() -> Arc<ImageBuf> {
         varied_sized(16)
+    }
+
+    /// A deliberately non-square fixture: 43 rows do not survive a halving cleanly, so
+    /// `downscale_to`'s rounding is observable between rungs. A square one could not see it.
+    fn oblong() -> Arc<ImageBuf> {
+        let mut img = ImageBuf::new(64, 43);
+        for (i, s) in img.data_mut().iter_mut().enumerate() {
+            *s = (i % 251) as f32 / 251.0;
+        }
+        Arc::new(img)
+    }
+
+    /// ⚠⚠ **The property the shipped code fails.** `fit_image_size` is what every overlay is
+    /// placed against, and it must not depend on which rung last landed. Rendering the same photo
+    /// at two rungs must report the same fit size.
+    ///
+    /// ⚠ Non-square on purpose. At rung 16 the 43 rows round to 11, and scaling that back up by
+    /// `fit_cap / max_dim` gives 44 against the true 43 — which is the bug, one rung down, in
+    /// miniature.
+    #[test]
+    fn the_fit_size_is_the_same_at_every_rung() {
+        let buf = oblong();
+        let at = |max_dim: usize| {
+            render_once(
+                &buf,
+                &Edits::default(),
+                max_dim,
+                1.0,
+                color::OutputSpace::Srgb,
+                pipeline::Resampler::default(),
+            )
+            .fit_size
+        };
+        let lo = at(16);
+        let hi = at(64);
+        assert!(
+            (lo.0 - hi.0).abs() < 1e-3 && (lo.1 - hi.1).abs() < 1e-3,
+            "the fit size was {lo:?} at one rung and {hi:?} at another — it is being derived \
+             from the rendered frame's rounded dimensions"
+        );
     }
 
     /// Every prefix stage active, so a resume point is observable at each depth.

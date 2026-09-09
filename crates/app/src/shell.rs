@@ -5,13 +5,12 @@
 
 use crate::{
     commands, develop, library, menu_bar, modals, multi, AppView, LibraryMode, RustroomApp,
-    PREVIEW_MAX_DIM,
 };
 use eframe::egui;
+use rustroom_app::format_filter;
 use rustroom_app::icons;
 use rustroom_app::menu::{self, Command};
 use rustroom_app::render_engine::RegionRect;
-use rustroom_app::{format_filter, view_region};
 
 impl eframe::App for RustroomApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -104,45 +103,29 @@ impl eframe::App for RustroomApp {
                     w: frame.width,
                     h: frame.height,
                 });
-                // A whole-image frame is by definition a fit-resolution render, and is the
-                // only thing that can tell us the post-geometry size — which changes with
-                // the crop and the straighten angle.
-                // A whole-image frame is the only thing that can tell us the post-geometry
-                // size, which changes with the crop and the straighten angle.
+                // ⚠⚠ **Read from the frame, not recomputed here.** This used to be
+                // `frame_dims x fit_cap / frame.max_dim`. A frame's dimensions come from
+                // `downscale_to`, which rounds, so that form amplified the rounding by
+                // `rung / fit_cap` and made the placement depend on which rung last landed —
+                // measured on an uncropped X-T4 frame at 1068.000 against a true 1068.204.
+                // `RenderedFrame::fit_size` is computed from the buffer and the view geometry, so
+                // it is exact and identical at every rung.
                 //
-                // ⚠ Scaled by the ratio of *caps*, not accepted only at the fit rung. Both are
-                // pre-geometry caps, so the crop factor cancels and this is exact: a frame is
-                // `max_dim x crop_factor` and the fit size is `fit_cap x crop_factor`. That
-                // generalisation is what lets a whole-image frame at a *higher* rung — which
-                // now happens whenever the window is larger than the fit texture — keep this
-                // fresh, where the old equality test would silently have rejected it.
+                // ⚠ It is carried on the frame rather than derived here from `s.edits`, which
+                // would also be exact and would be worse: it would describe a crop the frame on
+                // screen does not have until the next one lands, misplacing the texture for a
+                // frame or two after every crop change. Travelling with the pixels it describes
+                // is what makes that unrepresentable.
                 //
-                // It is still not derived from a rendered size feeding back: `fit_cap` and
-                // `frame.max_dim` are both caps, and neither comes from `fit_image_size`.
-                //
-                // ⚠⚠ **A REGION frame updates this too, and restricting it to whole-image frames
-                // was a real bug.** A region frame carries `full_w`/`full_h` — the post-geometry
-                // dimensions it was cut from — which is the *same quantity*, as the `rendered_long`
-                // line below already relies on. While every render happened to be whole-image at
-                // the fit rung the restriction was harmless; Guide Mode unpinned that rung, so a
-                // zoomed session could render nothing but regions and this would never refresh.
-                //
-                // ⚠ The symptom was precise and is worth keeping: entering geometry mode **with a
-                // crop applied** resets the crop for the preview, so the frame becomes larger —
-                // but with only region frames arriving, `fit_image_size` still described the
-                // *cropped* frame. `frame_rect` was therefore the wrong size and the guide overlay
-                // sat slightly off, correcting itself the moment you zoomed out far enough for a
-                // whole-image frame to land. Reported as the line moving a bit at full zoom and
-                // being right again when zoomed out.
-                let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
-                if frame.max_dim > 0 {
-                    let ratio = fit_cap as f32 / frame.max_dim as f32;
-                    let (fw, fh) = frame
-                        .region
-                        .map(|r| (r.full_w, r.full_h))
-                        .unwrap_or((frame.width, frame.height));
-                    s.fit_image_size = egui::vec2(fw as f32 * ratio, fh as f32 * ratio);
-                }
+                // ⚠ The finding that made the old code take region frames as well as whole-image
+                // ones still holds and is now structural: **every** frame carries this, so the
+                // distinction has stopped existing here. The symptom it fixed is worth keeping —
+                // entering geometry mode with a crop applied resets the crop for the preview, so
+                // the frame grows; with only region frames arriving, a whole-image-only rule left
+                // `fit_image_size` describing the *cropped* frame, `frame_rect` was the wrong size
+                // and the guide overlay sat slightly off, correcting itself only when you zoomed
+                // out far enough for a whole-image frame to land.
+                s.fit_image_size = egui::vec2(frame.fit_size.0, frame.fit_size.1);
                 // A region frame carries the full post-geometry dimensions it was cut from,
                 // so this is exact either way.
                 s.rendered_full = frame

@@ -13,6 +13,14 @@ pub use crate::render_engine::RegionRect;
 // `pipeline::tail_kernel_radius` the pipeline itself uses — one fact, read twice, because a second
 // derivation here would fail silently as a subtly wrong band at the edge of the visible area.
 
+/// The long edge a fit-resolution preview is capped to.
+///
+/// ⚠ Lives here, not in `main.rs`, because both the **lib** (`render_engine`, computing a
+/// frame's `fit_size`) and the **bin** read it. Two constants that must agree is the shape this
+/// project has been bitten by three times; the bin re-exports this one rather than declaring its
+/// own.
+pub const PREVIEW_MAX_DIM: usize = 1600;
+
 /// The closest the view can be zoomed out: fit, where the whole image is on screen.
 pub const MIN_ZOOM: f32 = 1.0;
 /// The furthest in. Beyond this the render ladder has no more rungs to climb.

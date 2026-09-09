@@ -84,7 +84,7 @@ mod undo;
 use decode::{decode_for_edit, full_res_worker};
 use modals::Modal;
 
-const PREVIEW_MAX_DIM: usize = 1600;
+pub(crate) use rustroom_app::view_region::PREVIEW_MAX_DIM;
 /// How long the selection must sit still before we commit to a decode. Holding an arrow key
 /// therefore starts zero decodes until you settle.
 const DECODE_DEBOUNCE: Duration = Duration::from_millis(180);
