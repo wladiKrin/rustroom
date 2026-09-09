@@ -363,13 +363,24 @@ pub fn rasterize_in(
                 if a <= 0.0 {
                     continue;
                 }
-                if stroke.erase {
-                    cov[idx] *= 1.0 - a;
+                // ⚠⚠ **The same two rules `MaskOp` offers BETWEEN masks, called from here so the
+                // two cannot drift.** `Subtract` is `c * (1 - a)` and `Add` is the standard
+                // "over" — a second pass adds a fraction of what is still uncovered, so repeated
+                // strokes approach full coverage without ever exceeding it.
+                //
+                // ⚠ Bit-identical to the two expressions this replaces (`c *= 1-a` and
+                // `c += (1-c)*a` are the same f32 operations in the same order), which is what
+                // the 60 byte-identical goldens prove rather than merely "still green".
+                //
+                // ⚠ This is the whole argument for the product algebra between masks:
+                // erase-within-a-brush and subtract-between-masks are now ONE rule, not two that
+                // happen to agree at the endpoints and diverge at every partial coverage.
+                let op = if stroke.erase {
+                    edit_model::MaskOp::Subtract
                 } else {
-                    // Standard "over": a second pass adds a fraction of what is still uncovered,
-                    // so repeated strokes approach full coverage without ever exceeding it.
-                    cov[idx] += (1.0 - cov[idx]) * a;
-                }
+                    edit_model::MaskOp::Add
+                };
+                cov[idx] = op.combine(cov[idx], a);
             }
         }
     }
