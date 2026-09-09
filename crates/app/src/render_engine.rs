@@ -755,125 +755,175 @@ impl PrefixCache {
 /// Returns the frame and **how many prefix stages actually ran**. The worker ignores the count;
 /// it exists because the correctness tests would all still pass with the cache deleted, so
 /// something has to assert that work is genuinely being skipped.
-/// What a cached set of brush coverage maps was built from.
+/// Where a coverage map is being built: the frame it spans, the slice of it wanted, and the rung.
+///
+/// ⚠ A params struct because `key`, `remember` and `get_or_build` all pass the same four values,
+/// and `remember` reached clippy's argument limit. That is a fair complaint and this project's
+/// standing answer to it is a struct, not an allowance — `FrameSpec`, `NameField`, `AspectLock`
+/// and `GradeUi` are the precedents.
+#[derive(Clone, Copy, PartialEq)]
+struct CoverageSpec {
+    fw: usize,
+    fh: usize,
+    region: Option<(usize, usize, usize, usize)>,
+    max_dim: usize,
+}
+
+/// What one mask's cached coverage was built from.
 #[derive(PartialEq)]
-struct BrushKey {
-    /// Every mask's brush **by position** — `None` for the analytic shapes.
-    ///
-    /// ⚠ All masks, not just the brushes, so the positional index into `BrushCoverage` cannot
-    /// drift when a mask is added, removed or changed kind.
-    brushes: Vec<Option<edit_model::Brush>>,
+struct MaskCoverageKey {
+    /// This mask's brush. `None` for an analytic shape, which is never cached here.
+    brush: Option<edit_model::Brush>,
     geometry: edit_model::Geometry,
     fw: usize,
     fh: usize,
     /// The rendered region as `(x0, y0, w, h)` in frame pixels, or `None` for the whole frame.
     ///
-    /// ⚠⚠ **In the key on purpose, and this is the OPPOSITE of [`PrefixCache`]'s rule.** That
-    /// rule — region out of the key, so panning never invalidates — is right for the prefix,
-    /// which runs whole-buffer and whose output *is* the frame. Copied to the brush it buys a
-    /// cache that survives a pan (invisible, since panning re-runs the whole tail regardless) and
-    /// costs a full-frame rasterization on every paint frame: 23.76 ms at 6246x4170, measured,
-    /// and reported in use as "very sluggish at 1:1". **Do not "unify" the two caches.**
+    /// ⚠⚠ **In the key on purpose, and this is the OPPOSITE of [`PrefixCache`]'s rule.** That rule
+    /// — region out of the key, so panning never invalidates — is right for the prefix, which runs
+    /// whole-buffer and whose output *is* the frame. Copied here it costs a full-frame
+    /// rasterization on every paint frame: measured at 21.62 ms against 12.32 clipped for a plain
+    /// brush, and **80.81 against 42.55** for a gating one.
+    ///
+    /// ⚠⚠ And for a **gating** brush a whole-frame map cannot be built during a region render at
+    /// all: the gate reads base pixels the region render never computes. Not merely uncached —
+    /// unknowable. **Do not "unify" the two caches.**
     ///
     /// ⚠ It also makes a clip mismatch unrepresentable: a map clipped to one region handed to a
     /// `MaskStage` rendering another would sample `outside` across the difference — a mask that
     /// fades out partway across the image rather than an error.
     region: Option<(usize, usize, usize, usize)>,
+    /// What produced the pixels this mask's gate compared against, or `None` for a brush that does
+    /// not gate.
+    ///
+    /// ⚠⚠ **`Edits` truncated to the masks BEFORE this one, plus the rung.** Sound because
+    /// everything upstream of this mask's base is in it: the prefix stages all live in `Edits`, so
+    /// does the entire global tail, and so does every earlier mask's shape *and* adjustments.
+    ///
+    /// ⚠⚠ **And the truncation is what makes the cache worth having** — dropping this mask drops
+    /// its own adjustments with it, so moving its exposure leaves the identity unchanged. That is
+    /// the case a mask exists for and the only thing this buys: a **global** slider genuinely
+    /// changes the base, and no cache can help it.
+    ///
+    /// ⚠ It fails toward a **miss**, [`PrefixKey`]'s rule. The dangerous direction is a stale hit:
+    /// coverage rendered positionally while the canvas tint shows it stopping at an edge, which is
+    /// the silent preview/export divergence this project has recorded more than any other.
+    base: Option<(Edits, usize)>,
 }
 
-/// Rasterized brush coverage, so an unrelated slider drag does not re-rasterize.
+/// Rasterized brush coverage, **per mask**, so an unrelated slider drag does not re-rasterize.
 ///
-/// ⚠ **The region is not in the key**, exactly as [`PrefixCache`]'s is not: rasterize whole-frame
-/// and sample the sub-rect, so panning never invalidates.
+/// ⚠⚠ **Per mask rather than per render, and the win depends on it.** One entry holding every
+/// mask's map would be invalidated by a change to any one of them — including mask 0's own
+/// adjustment invalidating mask 0's own coverage, which is exactly the case this exists to make
+/// free.
 ///
 /// ⚠ It misses on every frame *while painting*, and that is correct — the strokes really did
-/// change, so there is nothing to reuse. Its job is that dragging Exposure with a brush mask
-/// present does not re-rasterize the strokes on every frame of that drag.
+/// change, so there is nothing to reuse.
 #[derive(Default)]
 struct BrushCache {
-    entries: Vec<(BrushKey, Arc<pipeline::BrushCoverage>)>,
+    entries: Vec<(MaskCoverageKey, Arc<pipeline::brush::CoverageMap>)>,
 }
 
 impl BrushCache {
-    /// ⚠ Two, not one, and for the reason [`PrefixCache::FINALS_CAP`] is two: the frame dimensions
-    /// are in the key, so a single entry would be evicted on every zoom change and re-rasterized
-    /// coming back — reintroducing at the brush layer the cost that decision removed at the prefix
-    /// layer.
-    const CAP: usize = 2;
+    /// Two entries per mask, and the reason 2 is unchanged from [`PrefixCache::FINALS_CAP`]: two
+    /// rungs are live at once, so one entry per mask would be evicted on every zoom change and
+    /// rebuilt coming back.
+    ///
+    /// ⚠ A `CoverageMap` is 8-bit and **bbox-bounded**, so a stroke over a quarter of a 1.5 Mpx
+    /// region is ~390 KB. Four masks at two rungs is a few megabytes against the prefix cache's
+    /// 512 MB budget.
+    fn cap(masks: usize) -> usize {
+        2 * masks.max(1)
+    }
 
-    fn key(
+    /// The base identity for mask `i`, or `None` when this brush does not gate on the image.
+    fn base_id(
         edits: &Edits,
-        fw: usize,
-        fh: usize,
-        region: Option<(usize, usize, usize, usize)>,
-    ) -> BrushKey {
-        BrushKey {
-            brushes: edits
-                .masks
-                .iter()
-                .map(|m| match &m.mask {
-                    edit_model::Mask::Brush(b) => Some(b.clone()),
-                    _ => None,
-                })
-                .collect(),
+        i: usize,
+        brush: &edit_model::Brush,
+        max_dim: usize,
+    ) -> Option<(Edits, usize)> {
+        if !brush.needs_base() {
+            return None;
+        }
+        let mut upstream = edits.clone();
+        upstream.masks.truncate(i);
+        Some((upstream, max_dim))
+    }
+
+    fn key(edits: &Edits, i: usize, spec: CoverageSpec) -> MaskCoverageKey {
+        let brush = match edits.masks.get(i).map(|m| &m.mask) {
+            Some(edit_model::Mask::Brush(b)) => Some(b.clone()),
+            _ => None,
+        };
+        let base = brush
+            .as_ref()
+            .and_then(|b| Self::base_id(edits, i, b, spec.max_dim));
+        MaskCoverageKey {
+            brush,
             geometry: edits.geometry,
-            fw,
-            fh,
-            region,
+            fw: spec.fw,
+            fh: spec.fh,
+            region: spec.region,
+            base,
         }
     }
 
-    fn get_or_build(
+    /// Store coverage a stage reported for mask `i`.
+    fn remember(
         &mut self,
         edits: &Edits,
-        fw: usize,
-        fh: usize,
-        region: Option<(usize, usize, usize, usize)>,
-    ) -> Arc<pipeline::BrushCoverage> {
-        let key = Self::key(edits, fw, fh, region);
-        if let Some(i) = self.entries.iter().position(|(k, _)| *k == key) {
-            // Promote the hit, so the least recently used entry is the one evicted.
-            let hit = self.entries.remove(i);
-            let out = Arc::clone(&hit.1);
-            self.entries.insert(0, hit);
-            return out;
-        }
-        let maps = edits
-            .masks
-            .iter()
-            .map(|m| match &m.mask {
-                // ⚠⚠ **A brush that gates is deliberately NOT cached.** Its coverage depends on
-                // pixel values, and this cache's key covers `(strokes, geometry, frame dims,
-                // region)` — none of which changes when the image under the strokes does. Serving
-                // a prebuilt map would render it positionally while the canvas tint showed it
-                // stopping at an edge: a silent divergence between preview and export, which is
-                // the failure mode this project has recorded more than any other.
-                //
-                // Returning `None` routes it to `MaskStage::apply`'s own rasterizing path, which
-                // has the buffer in hand. ⚠ If the cost proves material, the answer is to widen
-                // the key with a cheap identity of the base buffer — never to reintroduce the
-                // unkeyed map.
-                edit_model::Mask::Brush(b) if b.needs_base() => None,
-                edit_model::Mask::Brush(b) => Some(Arc::new(pipeline::brush::rasterize_in(
-                    b,
-                    &edits.geometry,
-                    fw,
-                    fh,
-                    region,
-                    None,
-                ))),
+        spec: CoverageSpec,
+        i: usize,
+        map: Arc<pipeline::brush::CoverageMap>,
+    ) {
+        let key = Self::key(edits, i, spec);
+        self.entries.retain(|(k, _)| *k != key);
+        self.entries.insert(0, (key, map));
+        self.entries.truncate(Self::cap(edits.masks.len()));
+    }
+
+    fn get_or_build(&mut self, edits: &Edits, spec: CoverageSpec) -> Arc<pipeline::BrushCoverage> {
+        let mut maps = Vec::with_capacity(edits.masks.len());
+        for i in 0..edits.masks.len() {
+            let key = Self::key(edits, i, spec);
+            if let Some(pos) = self.entries.iter().position(|(k, _)| *k == key) {
+                // Promote the hit, so the least recently used entry is the one evicted.
+                let hit = self.entries.remove(pos);
+                maps.push(Some(Arc::clone(&hit.1)));
+                self.entries.insert(0, hit);
+                continue;
+            }
+            // ⚠⚠ **A gating brush is not built here, and must not be.** Its coverage depends on
+            // pixel values and this function has no image; building one positionally is what would
+            // render it as a plain stroke while the canvas tint showed it stopping at an edge.
+            // `MaskStage::apply` builds it where the buffer is and reports it back through
+            // `BrushCoverage::deposit`; `render_cached` stores it with `remember`.
+            let built = match edits.masks.get(i).map(|m| &m.mask) {
+                Some(edit_model::Mask::Brush(b)) if !b.needs_base() => {
+                    Some(Arc::new(pipeline::brush::rasterize_in(
+                        b,
+                        &edits.geometry,
+                        spec.fw,
+                        spec.fh,
+                        spec.region,
+                        None,
+                    )))
+                }
                 _ => None,
-            })
-            .collect();
-        // ⚠ No deposit slots yet — Task 3 of the coverage-cache plan replaces this whole
-        // function. An empty `built` is inert: `deposit` on a missing slot is ignored.
-        let built = Arc::new(pipeline::BrushCoverage {
+            };
+            if let Some(m) = &built {
+                self.entries.insert(0, (key, Arc::clone(m)));
+                self.entries.truncate(Self::cap(edits.masks.len()));
+            }
+            maps.push(built);
+        }
+        let n = maps.len();
+        Arc::new(pipeline::BrushCoverage {
             maps,
-            built: Vec::new(),
-        });
-        self.entries.insert(0, (key, Arc::clone(&built)));
-        self.entries.truncate(Self::CAP);
-        built
+            built: (0..n).map(|_| std::sync::Mutex::new(None)).collect(),
+        })
     }
 }
 
@@ -993,7 +1043,13 @@ fn render_cached(
     // larger than intended, and silently so, because the output would still be correct and merely
     // slow.
     let clip = rect.map(|r| (r.x, r.y, r.w, r.h));
-    let coverage = brush_cache.get_or_build(edits, pw, ph, clip);
+    let cov_spec = CoverageSpec {
+        fw: pw,
+        fh: ph,
+        region: clip,
+        max_dim,
+    };
+    let coverage = brush_cache.get_or_build(edits, cov_spec);
     let build_tail = |space| {
         let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
             edits,
@@ -1076,6 +1132,19 @@ fn render_cached(
         }
         None => (build_tail(color::OutputSpace::Srgb).run(input), None),
     };
+    // ⚠⚠ **Harvest what the stages built, after every tail has run.** A gating brush's coverage
+    // can only be rasterized where the image is, inside `MaskStage::apply`, so this is the only
+    // moment the cache can see it. One point covers all three paths — the proofed tail above, the
+    // grade-view split and the plain one — because they have all run by here.
+    //
+    // ⚠ `take_built` clears each slot, so a second harvest would find nothing: a path that
+    // deposits twice cannot store a map twice, and a path that is missed loses the win silently
+    // rather than caching something wrong. That is the safe direction of the two.
+    for i in 0..edits.masks.len() {
+        if let Some(map) = coverage.take_built(i) {
+            brush_cache.remember(edits, cov_spec, i, map);
+        }
+    }
     let mut frame = pack(out, proofed, region, max_dim, display_space, visualize);
     frame.grade_view = plane;
     // ⚠ `edits` here is already the **view** edits — `Session::view_edits` has run
@@ -1691,11 +1760,19 @@ mod tests {
     }
 
     #[test]
-    fn the_brush_cache_declines_a_brush_that_needs_the_image() {
-        // ⚠⚠ **What makes the dangerous state unrepresentable rather than documented.** A
-        // prebuilt map is rasterized without pixels, so an auto-masked brush served from this
-        // cache would render positionally while the canvas tint showed it stopping at an edge — a
-        // silent divergence between preview and export.
+    fn the_brush_cache_never_builds_a_brush_that_needs_the_image() {
+        // ⚠⚠ **What makes the dangerous state unrepresentable rather than documented.** A map
+        // built here is rasterized without pixels, so an auto-masked brush served from one would
+        // render positionally while the canvas tint showed it stopping at an edge — a silent
+        // divergence between preview and export.
+        //
+        // ⚠⚠ **This test was INVERTED rather than deleted, and it used to assert something
+        // stronger: that the cache *declines* a gating brush outright.** That was right while
+        // nothing could identify the base. The cache now stores one, keyed on what produced that
+        // base — but it still never **builds** one, because it has no image, and that is the half
+        // that keeps the dangerous state unrepresentable. An inversion that changes only the
+        // assertions leaves a name and a comment that lie, which is what happened once when the
+        // spot-removal render rule was inverted.
         let gating = |auto: bool| {
             let mut e = Edits::default();
             e.masks.push(edit_model::MaskedAdjustment {
@@ -1713,7 +1790,15 @@ mod tests {
             e
         };
         let mut cache = BrushCache::default();
-        let built = cache.get_or_build(&gating(true), 64, 64, None);
+        let built = cache.get_or_build(
+            &gating(true),
+            CoverageSpec {
+                fw: 64,
+                fh: 64,
+                region: None,
+                max_dim: 1600,
+            },
+        );
         assert!(
             built.maps[0].is_none(),
             "an auto-masked brush must not be prebuilt"
@@ -1721,7 +1806,15 @@ mod tests {
 
         // ⚠ The discriminating half: a plain brush must STILL be cached, or this would be a
         // performance regression wearing a correctness fix.
-        let built = cache.get_or_build(&gating(false), 64, 64, None);
+        let built = cache.get_or_build(
+            &gating(false),
+            CoverageSpec {
+                fw: 64,
+                fh: 64,
+                region: None,
+                max_dim: 1600,
+            },
+        );
         assert!(
             built.maps[0].is_some(),
             "a plain brush must still be cached"
@@ -2041,6 +2134,148 @@ mod tests {
         assert_eq!((got.width, got.height), (6, 6));
     }
 
+    /// An auto-masked brush mask, plus a global exposure, so the two can be moved independently.
+    fn auto_masked_edits(exposure: f32, mask_exposure: f32) -> Edits {
+        let mut m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush {
+                strokes: vec![edit_model::BrushStroke {
+                    points: vec![[0.5, 0.5]],
+                    radius: 0.3,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    auto_mask: true,
+                    tolerance: 35.0,
+                    ..Default::default()
+                }],
+                invert: false,
+            }),
+            adjustments: Default::default(),
+        };
+        m.adjustments.exposure = mask_exposure;
+        Edits {
+            exposure,
+            masks: vec![m],
+            ..Edits::default()
+        }
+    }
+
+    /// A coverage map distinguishable from a default one, so a hit can be told from a miss.
+    fn a_coverage_map() -> Arc<pipeline::brush::CoverageMap> {
+        Arc::new(pipeline::brush::CoverageMap {
+            outside: 42,
+            ..Default::default()
+        })
+    }
+
+    /// ⚠⚠ **The load-bearing pair, and neither half alone means anything.** A test of the miss
+    /// alone passes against a cache that never hits; a test of the hit alone passes against one
+    /// that never misses.
+    #[test]
+    fn the_gating_coverage_survives_the_masks_own_slider_and_not_a_global_one() {
+        let mut cache = BrushCache::default();
+        let base = auto_masked_edits(0.0, 0.0);
+        assert!(
+            cache
+                .get_or_build(
+                    &base,
+                    CoverageSpec {
+                        fw: 64,
+                        fh: 48,
+                        region: None,
+                        max_dim: 1600
+                    }
+                )
+                .get(0)
+                .is_none(),
+            "fixture check: a cold cache must prebuild nothing for a gating brush, or the \
+             assertions below are about the wrong thing"
+        );
+        cache.remember(
+            &base,
+            CoverageSpec {
+                fw: 64,
+                fh: 48,
+                region: None,
+                max_dim: 1600,
+            },
+            0,
+            a_coverage_map(),
+        );
+
+        // ⚠ The mask's OWN adjustment moves. Its base is the output after the masks BEFORE it, so
+        // this cannot change it — and that is the whole reason the key truncates.
+        let own = auto_masked_edits(0.0, 1.5);
+        assert!(
+            cache
+                .get_or_build(
+                    &own,
+                    CoverageSpec {
+                        fw: 64,
+                        fh: 48,
+                        region: None,
+                        max_dim: 1600
+                    }
+                )
+                .get(0)
+                .is_some(),
+            "moving the mask's own slider must not invalidate its coverage — that is the case a \
+             mask exists for, and the only thing this cache buys"
+        );
+
+        // ⚠ A GLOBAL adjustment moves. The masks loop runs after the entire global tail, so the
+        // base really did change.
+        let global = auto_masked_edits(1.5, 0.0);
+        assert!(
+            cache
+                .get_or_build(
+                    &global,
+                    CoverageSpec {
+                        fw: 64,
+                        fh: 48,
+                        region: None,
+                        max_dim: 1600
+                    }
+                )
+                .get(0)
+                .is_none(),
+            "a global slider changes the base, so serving the old coverage would render the mask \
+             against pixels it was never gated on"
+        );
+    }
+
+    /// ⚠ The rung is in the base identity: the base is a different image at a different resolution.
+    #[test]
+    fn the_gating_coverage_does_not_cross_rungs() {
+        let mut cache = BrushCache::default();
+        let e = auto_masked_edits(0.0, 0.0);
+        cache.remember(
+            &e,
+            CoverageSpec {
+                fw: 64,
+                fh: 48,
+                region: None,
+                max_dim: 1600,
+            },
+            0,
+            a_coverage_map(),
+        );
+        assert!(
+            cache
+                .get_or_build(
+                    &e,
+                    CoverageSpec {
+                        fw: 64,
+                        fh: 48,
+                        region: None,
+                        max_dim: 3200
+                    }
+                )
+                .get(0)
+                .is_none(),
+            "coverage built at one rung must not be served at another"
+        );
+    }
+
     #[test]
     fn every_cached_frame_matches_a_cold_render() {
         // The master test: caching must be invisible in the output. The sequence walks a pure
@@ -2230,6 +2465,22 @@ mod tests {
         }
     }
 
+    /// Whether two coverage sets share mask 0's **map**, which is what "did not re-rasterize"
+    /// means.
+    ///
+    /// ⚠⚠ **The observable moved and the old one silently stopped working.** These tests compared
+    /// the outer `Arc<BrushCoverage>`, which was one cached object per render. Entries are per
+    /// mask now and the set is assembled fresh each call, so outer identity is **never** equal —
+    /// the three `ptr_eq` assertions began failing and, worse, the two `!ptr_eq` ones began
+    /// passing **vacuously**. Only running them showed it.
+    fn same_map(a: &Arc<pipeline::BrushCoverage>, b: &Arc<pipeline::BrushCoverage>) -> bool {
+        match (a.get(0), b.get(0)) {
+            (Some(x), Some(y)) => Arc::ptr_eq(&x, &y),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     #[test]
     fn the_brush_cache_hits_and_keeps_both_zoom_levels() {
         // ⚠ Every other test in this file would pass with the brush cache deleted, because it is
@@ -2237,31 +2488,79 @@ mod tests {
         // only observable difference between a hit and a rebuild.
         let mut cache = BrushCache::default();
         let edits = brush_edits();
-        let a = cache.get_or_build(&edits, 200, 100, None);
-        let b = cache.get_or_build(&edits, 200, 100, None);
-        assert!(Arc::ptr_eq(&a, &b), "the second call must hit");
+        let a = cache.get_or_build(
+            &edits,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
+        let b = cache.get_or_build(
+            &edits,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
+        assert!(same_map(&a, &b), "the second call must hit");
 
-        let c = cache.get_or_build(&edits, 400, 200, None);
-        assert!(!Arc::ptr_eq(&a, &c), "different frame dims must miss");
+        let c = cache.get_or_build(
+            &edits,
+            CoverageSpec {
+                fw: 400,
+                fh: 200,
+                region: None,
+                max_dim: 1600,
+            },
+        );
+        assert!(!same_map(&a, &c), "different frame dims must miss");
 
         // ⚠ The assertion that pins CAP = 2 rather than 1. With a single entry the 400x200 build
         // would have evicted the 200x100 one, and this would rebuild — which is exactly the zoom
         // thrash the capacity exists to prevent.
-        let d = cache.get_or_build(&edits, 200, 100, None);
-        assert!(Arc::ptr_eq(&a, &d), "CAP=2 must keep both zoom levels warm");
+        let d = cache.get_or_build(
+            &edits,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
+        assert!(same_map(&a, &d), "CAP=2 must keep both zoom levels warm");
     }
 
     #[test]
     fn changing_a_stroke_misses_the_brush_cache() {
         // The other half: a hit must depend on the strokes, not merely on the dimensions.
         let mut cache = BrushCache::default();
-        let a = cache.get_or_build(&brush_edits(), 200, 100, None);
+        let a = cache.get_or_build(
+            &brush_edits(),
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
         let mut edited = brush_edits();
         if let edit_model::Mask::Brush(b) = &mut edited.masks[0].mask {
             b.strokes[0].points.push([0.8, 0.6]);
         }
-        let c = cache.get_or_build(&edited, 200, 100, None);
-        assert!(!Arc::ptr_eq(&a, &c), "an extra point must miss");
+        let c = cache.get_or_build(
+            &edited,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
+        assert!(!same_map(&a, &c), "an extra point must miss");
     }
 
     #[test]
@@ -2276,7 +2575,15 @@ mod tests {
         };
         edits.masks.insert(0, inactive);
         let mut cache = BrushCache::default();
-        let cov = cache.get_or_build(&edits, 200, 100, None);
+        let cov = cache.get_or_build(
+            &edits,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
         assert!(cov.get(0).is_none(), "slot 0 is the analytic mask");
         assert!(cov.get(1).is_some(), "slot 1 is the brush");
     }
@@ -2289,11 +2596,35 @@ mod tests {
         // 23.76 ms at 6246x4170, measured, and reported in use as "very sluggish at 1:1".
         let mut cache = BrushCache::default();
         let e = brush_edits();
-        let a = cache.get_or_build(&e, 200, 100, Some((0, 0, 50, 50)));
-        let b = cache.get_or_build(&e, 200, 100, Some((0, 0, 50, 50)));
-        assert!(Arc::ptr_eq(&a, &b), "the same region must hit");
-        let c = cache.get_or_build(&e, 200, 100, Some((20, 0, 50, 50)));
-        assert!(!Arc::ptr_eq(&a, &c), "a moved region must miss");
+        let a = cache.get_or_build(
+            &e,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: Some((0, 0, 50, 50)),
+                max_dim: 1600,
+            },
+        );
+        let b = cache.get_or_build(
+            &e,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: Some((0, 0, 50, 50)),
+                max_dim: 1600,
+            },
+        );
+        assert!(same_map(&a, &b), "the same region must hit");
+        let c = cache.get_or_build(
+            &e,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: Some((20, 0, 50, 50)),
+                max_dim: 1600,
+            },
+        );
+        assert!(!same_map(&a, &c), "a moved region must miss");
     }
 
     #[test]
@@ -2301,12 +2632,28 @@ mod tests {
         // The cache's remaining job, and the reason it exists at all: dragging an unrelated
         // slider with a brush mask present must not re-rasterize on every frame.
         let mut cache = BrushCache::default();
-        let a = cache.get_or_build(&brush_edits(), 200, 100, None);
+        let a = cache.get_or_build(
+            &brush_edits(),
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
         let mut louder = brush_edits();
         louder.exposure = 1.5;
-        let b = cache.get_or_build(&louder, 200, 100, None);
+        let b = cache.get_or_build(
+            &louder,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: None,
+                max_dim: 1600,
+            },
+        );
         assert!(
-            Arc::ptr_eq(&a, &b),
+            same_map(&a, &b),
             "a global slider does not touch the strokes and must hit"
         );
     }
@@ -2318,7 +2665,15 @@ mod tests {
         // *outside* the clip reads nothing.
         let mut cache = BrushCache::default();
         let e = brush_edits();
-        let cov = cache.get_or_build(&e, 200, 100, Some((0, 0, 40, 100)));
+        let cov = cache.get_or_build(
+            &e,
+            CoverageSpec {
+                fw: 200,
+                fh: 100,
+                region: Some((0, 0, 40, 100)),
+                max_dim: 1600,
+            },
+        );
         let map = cov.get(0).expect("the brush mask has a map");
         assert_eq!(map.at(120, 50), 0, "beyond the clip there is no coverage");
     }
