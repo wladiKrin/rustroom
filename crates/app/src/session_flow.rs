@@ -459,6 +459,7 @@ impl RustroomApp {
             // Corrected by the first frame that arrives; the placeholder only has to be
             // non-zero so the first fit calculation cannot divide by zero.
             fit_image_size: egui::vec2(1.0, 1.0),
+            rendered_full: (1, 1),
             rendered_long: 1.0,
             buffer_long,
             full_long,

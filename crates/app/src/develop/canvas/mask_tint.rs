@@ -41,6 +41,13 @@ struct TintCache {
     /// overlay placed from a stale rect rather than recomputed against the live `frame_rect` —
     /// reintroduced through a cache. Placement is derived every frame; only the texture is kept.
     drawn: Option<(egui::TextureHandle, [usize; 4], f32)>,
+    /// Which displayed frame the gate was computed against, as that buffer's own address.
+    ///
+    /// ⚠⚠ **An identity, never a screen rect.** M3.1c-B's sixth bug was a cached screen rect
+    /// surviving a pan, itself a regression of 3.1a's overlay drift: *cache the expensive thing,
+    /// never the placement.* A pointer changes when a new frame lands and does not change when the
+    /// view is panned, which is exactly the distinction wanted.
+    base: Option<*const u8>,
     /// Coverage outside the box — non-zero for an **inverted** brush, which covers the whole
     /// frame except what was painted.
     ///
@@ -61,11 +68,70 @@ thread_local! {
 /// Paint the brush's coverage as a translucent red tint.
 ///
 /// The texture is rebuilt only when the strokes, geometry or screen size change.
+/// The displayed frame, as the tint's gate needs to read it.
+///
+/// `bytes` is RGBA8 of `bw` x `bh` **rendered** pixels whose top-left sits at `origin` in the full
+/// rendered frame `full`.
+pub(super) struct TintFrame {
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub bw: usize,
+    pub bh: usize,
+    pub origin: (usize, usize),
+    pub full: (usize, usize),
+}
+
+/// Samples the displayed frame at **tint-grid** coordinates.
+///
+/// ⚠⚠ **Three scales are in play and conflating any two is a silent bug**: the tint's own capped
+/// grid (`tw` x `th`), the full rendered frame, and the readout buffer, which at zoom holds only
+/// the rendered *region* of it. The bridge is the frame fraction, which the tint grid and the
+/// rendered frame share by construction because both are proportional to `frame_rect`.
+///
+/// ⚠ **This is the displayed frame — post-mask, 8-bit, display-encoded — where the render's gate
+/// compares the pre-mask working-space buffer.** So the tint is an approximation of the render,
+/// not a preview of it. It is self-consistent, because *both* ends of its comparison come from
+/// this same buffer; the gap against the render is the accepted caveat, and it is why the tint is
+/// feedback rather than the photograph.
+struct TintBase<'a> {
+    f: &'a TintFrame,
+    tw: usize,
+    th: usize,
+}
+
+impl pipeline::brush::BasePixels for TintBase<'_> {
+    fn at(&self, x: usize, y: usize) -> [f32; 3] {
+        let (fw, fh) = self.f.full;
+        if self.tw == 0 || self.th == 0 || fw == 0 || fh == 0 || self.f.bw == 0 || self.f.bh == 0 {
+            return [0.0; 3];
+        }
+        // Tint grid -> frame fraction -> rendered pixel -> this buffer's own pixel.
+        let rx = (x as f32 + 0.5) / self.tw as f32 * fw as f32;
+        let ry = (y as f32 + 0.5) / self.th as f32 * fh as f32;
+        // ⚠ Clamped rather than answering black, for `BaseView`'s reason: a dab kept because its
+        // disc overlaps can have its centre just outside, and the nearest real pixel is far closer
+        // to the truth than black.
+        let px = (rx as isize - self.f.origin.0 as isize).clamp(0, self.f.bw as isize - 1) as usize;
+        let py = (ry as isize - self.f.origin.1 as isize).clamp(0, self.f.bh as isize - 1) as usize;
+        let i = (py * self.f.bw + px) * 4;
+        let Some(c) = self.f.bytes.get(i..i + 3) else {
+            return [0.0; 3];
+        };
+        // ⚠ Decoded into the working space's own primaries, because `BasePixels` promises linear
+        // ProPhoto — the rasterizer converts what it is given with `prophoto_to_oklab`.
+        color::srgb_to_prophoto([
+            color::srgb_to_linear(c[0] as f32 / 255.0),
+            color::srgb_to_linear(c[1] as f32 / 255.0),
+            color::srgb_to_linear(c[2] as f32 / 255.0),
+        ])
+    }
+}
+
 pub(super) fn paint_tint(
     painter: &egui::Painter,
     b: &edit_model::Brush,
     geometry: &edit_model::Geometry,
     frame_rect: egui::Rect,
+    base: Option<&TintFrame>,
 ) {
     let (w, h) = (frame_rect.width() as usize, frame_rect.height() as usize);
     if w == 0 || h == 0 {
@@ -92,11 +158,25 @@ pub(super) fn paint_tint(
     );
     TINT.with(|slot| {
         let mut slot = slot.borrow_mut();
-        let hit = slot
-            .as_ref()
-            .is_some_and(|c| c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b);
+        let base_id = base.map(|f| f.bytes.as_ptr());
+        let hit = slot.as_ref().is_some_and(|c| {
+            c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b && c.base == base_id
+        });
         if !hit {
-            let cov = pipeline::brush::rasterize(b, geometry, tw, th);
+            // ⚠ Gated only when this brush actually needs pixels *and* a frame has landed. With
+            // no base an auto-masked stroke tints positionally, which is the documented
+            // degradation and better than showing nothing while the first frame renders.
+            let view = base
+                .filter(|_| b.needs_base())
+                .map(|f| TintBase { f, tw, th });
+            let cov = pipeline::brush::rasterize_in(
+                b,
+                geometry,
+                tw,
+                th,
+                None,
+                view.as_ref().map(|v| v as &dyn pipeline::brush::BasePixels),
+            );
             let outside = cov.outside;
             let drawn = if cov.w == 0 || cov.h == 0 {
                 None
@@ -125,6 +205,7 @@ pub(super) fn paint_tint(
                 geometry: *geometry,
                 w,
                 h,
+                base: base_id,
                 drawn,
                 outside,
             });
@@ -192,4 +273,95 @@ pub(super) fn paint_tint(
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pipeline::brush::BasePixels;
+
+    /// A `bw` x 1 strip whose red channel is `i * 60`, so which pixel was read is unambiguous.
+    fn strip(bw: usize, origin: (usize, usize), full: (usize, usize)) -> TintFrame {
+        let mut bytes = Vec::new();
+        for i in 0..bw {
+            bytes.extend_from_slice(&[(i * 60) as u8, 0, 0, 255]);
+        }
+        TintFrame {
+            bytes: std::sync::Arc::new(bytes),
+            bw,
+            bh: 1,
+            origin,
+            full,
+        }
+    }
+
+    /// The red channel the sampler should have produced for buffer pixel `i`.
+    fn expected(i: usize) -> f32 {
+        color::srgb_to_prophoto([color::srgb_to_linear((i * 60) as f32 / 255.0), 0.0, 0.0])[0]
+    }
+
+    #[test]
+    fn the_tint_grid_maps_onto_the_rendered_frame() {
+        // ⚠⚠ The mapping is where a silent bug lives: three scales are in play — the tint's capped
+        // grid, the full rendered frame, and the buffer, which at zoom holds only a region of it.
+        // A wrong one still produces a plausible tint, just over the wrong pixels.
+        let f = strip(4, (0, 0), (4, 1));
+        let b = TintBase {
+            f: &f,
+            tw: 8,
+            th: 2,
+        };
+        // Eight tint columns over four frame pixels: two columns per pixel.
+        for (x, want) in [(0, 0), (1, 0), (2, 1), (3, 1), (6, 3), (7, 3)] {
+            assert!(
+                (b.at(x, 0)[0] - expected(want)).abs() < 1e-6,
+                "tint column {x} should read buffer pixel {want}, got {}",
+                b.at(x, 0)[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_region_buffers_origin_is_subtracted() {
+        // ⚠ The discriminating case. With an origin of (0, 0) a sampler that ignored it would pass
+        // the test above unchanged, and a region render is the common case at 1:1.
+        let f = strip(2, (2, 0), (4, 1));
+        let b = TintBase {
+            f: &f,
+            tw: 8,
+            th: 2,
+        };
+        // Tint column 4 sits at frame x 2.25, i.e. buffer pixel 0; column 6 at 3.25, pixel 1.
+        assert!((b.at(4, 0)[0] - expected(0)).abs() < 1e-6);
+        assert!((b.at(6, 0)[0] - expected(1)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn outside_the_rendered_region_clamps_rather_than_reading_black() {
+        // ⚠ `BaseView`'s reason: a dab is kept when its disc overlaps, so its centre can sit just
+        // outside the region. Black would give it an absurd reference and make it paint nothing;
+        // the nearest real pixel keeps the error small and local.
+        let f = strip(2, (2, 0), (4, 1));
+        let b = TintBase {
+            f: &f,
+            tw: 8,
+            th: 2,
+        };
+        assert!(
+            (b.at(0, 0)[0] - expected(0)).abs() < 1e-6,
+            "left of the region must clamp to its first pixel"
+        );
+    }
+
+    #[test]
+    fn a_degenerate_frame_is_survivable() {
+        // The buffer arrives from another thread; a mismatch must degrade, never panic.
+        let f = strip(0, (0, 0), (0, 0));
+        let b = TintBase {
+            f: &f,
+            tw: 0,
+            th: 0,
+        };
+        assert_eq!(b.at(3, 3), [0.0; 3]);
+    }
 }

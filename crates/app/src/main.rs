@@ -785,6 +785,13 @@ pub struct Session {
     /// rendered at. Placement must use this rather than the current mode's: while a frame
     /// from the other mode is still in flight the two differ, and using the current one drew
     /// the old texture far off-screen — a white flash when zooming out quickly.
+    /// The full post-geometry frame's size in **rendered** pixels — what a region was cut from,
+    /// or the frame's own dimensions when it arrived whole.
+    ///
+    /// ⚠ [`Self::rendered_long`] is derived from this at the single write site rather than being
+    /// read from the frame separately: two spellings of one fact that are computed independently
+    /// is the shape `render_max_dim` and `fit_image_size` were each fixed for.
+    rendered_full: (usize, usize),
     rendered_long: f32,
     /// The editing buffer's long edge — the top rung of the render ladder.
     buffer_long: usize,

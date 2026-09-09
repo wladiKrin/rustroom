@@ -145,11 +145,11 @@ impl eframe::App for RustroomApp {
                 }
                 // A region frame carries the full post-geometry dimensions it was cut from,
                 // so this is exact either way.
-                s.rendered_long = frame
+                s.rendered_full = frame
                     .region
-                    .map(|r| r.full_w.max(r.full_h))
-                    .unwrap_or(frame.width.max(frame.height))
-                    as f32;
+                    .map(|r| (r.full_w, r.full_h))
+                    .unwrap_or((frame.width, frame.height));
+                s.rendered_long = s.rendered_full.0.max(s.rendered_full.1) as f32;
                 // ⚠ The overlay may now describe this frame. The engine coalesces superseded
                 // requests, so the frame that lands is the newest one asked for.
                 s.shown_geo = s.pending_geo.get();

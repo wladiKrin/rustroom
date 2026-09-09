@@ -86,6 +86,19 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // ⚠ Hoisted with the others: read before `app.session` is borrowed mutably below.
     let app_brush_auto_mask = app.brush_auto_mask;
     let app_brush_tolerance = app.brush_tolerance;
+    // ⚠ An `Arc::clone`, not a copy of the bytes: the frame already holds this allocation, so it
+    // costs a refcount. Hoisted with the others, i.e. read before `app.session` is borrowed
+    // mutably below.
+    let app_tint_frame = app.session.as_ref().and_then(|s| {
+        let (bytes, bw, bh) = s.readout_bytes.as_ref()?;
+        Some(mask_overlay::TintFrame {
+            bytes: std::sync::Arc::clone(bytes),
+            bw: *bw,
+            bh: *bh,
+            origin: s.rendered_region.map_or((0, 0), |r| (r.x, r.y)),
+            full: s.rendered_full,
+        })
+    });
     // ⚠ Cleared here, once, and set again only by an actual hover over the image at the end of
     // this function — so every path that draws no image (a decode in flight, no texture yet, no
     // session) leaves it blank. A stale number left on screen after the pointer leaves is worse
@@ -342,6 +355,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     show_tint: app.show_mask_tint,
                                     auto_mask: app_brush_auto_mask,
                                     tolerance: app_brush_tolerance,
+                                    base: app_tint_frame.as_ref(),
                                 },
                                 tool,
                             );

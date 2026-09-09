@@ -229,6 +229,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         rendered_region: None,
         requested_region: None,
         fit_image_size: egui::vec2(w as f32, h as f32),
+        rendered_full: (w, h),
         rendered_long: w.max(h) as f32,
         buffer_long: w.max(h),
         full_long: w.max(h),

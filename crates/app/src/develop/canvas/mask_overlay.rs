@@ -15,7 +15,7 @@ use rustroom_app::tool::Tool;
 /// ⚠ A struct rather than four loose parameters: `draw_mask_overlay` already takes five, and a
 /// nine-argument function is where argument-order mistakes start.
 #[derive(Clone, Copy)]
-pub(super) struct BrushTool {
+pub(super) struct BrushTool<'a> {
     pub(super) size: f32,
     pub(super) hardness: f32,
     pub(super) flow: f32,
@@ -23,7 +23,20 @@ pub(super) struct BrushTool {
     pub(super) show_tint: bool,
     pub(super) auto_mask: bool,
     pub(super) tolerance: f32,
+    /// The displayed frame the tint's auto-mask gate reads, when one has landed.
+    ///
+    /// ⚠ A **borrow**, so `BrushTool` stays `Copy` — `TintFrame` holds an `Arc` and is not. It
+    /// lives here rather than as a ninth parameter because clippy's argument limit is a fair
+    /// complaint and this project's standing answer to it is a params struct, not an allowance:
+    /// `FrameSpec`, `NameField`, `AspectLock` and `GradeUi` are the precedents.
+    pub(super) base: Option<&'a TintFrame>,
 }
+
+/// The displayed frame the tint's auto-mask gate reads, when one has landed.
+///
+/// ⚠ Carried beside `BrushTool` rather than on it because it is not `Copy` — it holds an `Arc` —
+/// and `BrushTool` is passed by value to keep the overlay's argument list short.
+pub(super) type TintFrame = super::mask_tint::TintFrame;
 
 /// Draw the selected mask's handles and guide lines, and apply any drag.
 ///
@@ -44,7 +57,7 @@ pub(super) fn draw_mask_overlay(
     resp: &egui::Response,
     img_rect: egui::Rect,
     frame_rect: egui::Rect,
-    brush: BrushTool,
+    brush: BrushTool<'_>,
     tool: Tool,
 ) -> bool {
     let Some(i) = s.selected_mask else {
@@ -65,6 +78,7 @@ pub(super) fn draw_mask_overlay(
         img_rect,
         &s.edits.geometry,
         brush.show_tint,
+        brush.base,
     );
 
     let aspect = canvas_geom::frame_aspect(frame_rect);
@@ -237,6 +251,7 @@ fn paint_mask(
     clip: egui::Rect,
     geometry: &edit_model::Geometry,
     show_tint: bool,
+    base: Option<&TintFrame>,
 ) {
     let to_screen = |p: [f32; 2]| {
         egui::pos2(
@@ -299,7 +314,7 @@ fn paint_mask(
             // ⚠ There are no handles — a stroke is not a shape with grab points, the same
             // observation that makes `mask_tool::hit_test` return `None` for a brush.
             if show_tint {
-                paint_tint(painter, b, geometry, frame_rect);
+                paint_tint(painter, b, geometry, frame_rect, base);
             }
         }
         // ⚠⚠ **A selected luminance range draws NOTHING, and that is a decision rather than an
