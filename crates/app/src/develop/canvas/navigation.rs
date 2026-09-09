@@ -42,6 +42,35 @@ pub(super) fn tool_drag_started(resp: &egui::Response) -> bool {
 /// plain flag, so the `&&` short-circuits and never locks *unless something is being dragged*.
 /// Caught by `the_configured_drag_button_pans`; it would otherwise have panicked in production
 /// on the first middle-drag.
+/// Whether the configured pan button is currently held.
+///
+/// ⚠⚠ **A predicate on the INPUT, not on a `Response`**, which is what lets the interactive
+/// rung's gate consult it before any widget has been allocated. [`pan_delta`] answers the same
+/// question from a `Response` because it also needs the delta; the two must never disagree about
+/// which button pans, which is why they sit next to each other.
+///
+/// ⚠ Reading only the `InputState` is also what makes it safe to call **inside** `ctx.input(..)`.
+/// `pan_delta` may not take the lock because `Response::dragged_by` takes it again internally;
+/// nothing here touches a `Response`.
+///
+/// ⚠ `text_focused` is threaded through for the same reason `pan_delta` takes it: without it a
+/// space typed into the Save-preset field would read as an armed pan.
+pub(crate) fn pan_button_down(
+    input: &egui::InputState,
+    binding: PanDrag,
+    text_focused: bool,
+) -> bool {
+    match binding {
+        PanDrag::Middle => input.pointer.button_down(egui::PointerButton::Middle),
+        PanDrag::Secondary => input.pointer.button_down(egui::PointerButton::Secondary),
+        PanDrag::SpaceLeft => {
+            !text_focused
+                && input.key_down(egui::Key::Space)
+                && input.pointer.button_down(egui::PointerButton::Primary)
+        }
+    }
+}
+
 pub(crate) fn pan_delta(
     resp: &egui::Response,
     scroll: egui::Vec2,
@@ -76,6 +105,64 @@ pub(crate) fn pan_delta(
 mod tests {
     use super::*;
     use rustroom_app::view_region;
+
+    /// Whether `pan_button_down` fires for `button` under `binding`, with that button held.
+    fn pan_down_for(binding: PanDrag, button: egui::PointerButton) -> bool {
+        let ctx = egui::Context::default();
+        let mut out = false;
+        let pos = egui::pos2(100.0, 100.0);
+        for pass in 0..2 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            input.events.push(egui::Event::PointerMoved(pos));
+            if pass == 0 {
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+            }
+            let c = ctx.clone();
+            let _ = ctx.run_ui(input, |_ui| {
+                if pass == 1 {
+                    out = c.input(|i| pan_button_down(i, binding, false));
+                }
+            });
+        }
+        out
+    }
+
+    /// ⚠ The predicate must agree with [`pan_delta`] about which button pans, or the interactive
+    /// rung would exempt a gesture that is not a pan — or fail to exempt one that is.
+    #[test]
+    fn the_pan_predicate_matches_the_binding() {
+        assert!(pan_down_for(PanDrag::Middle, egui::PointerButton::Middle));
+        assert!(!pan_down_for(PanDrag::Middle, egui::PointerButton::Primary));
+        assert!(pan_down_for(
+            PanDrag::Secondary,
+            egui::PointerButton::Secondary
+        ));
+        assert!(!pan_down_for(
+            PanDrag::Secondary,
+            egui::PointerButton::Middle
+        ));
+    }
+
+    /// ⚠ Space+left pans only while the space key is held — the rule `pan_delta` already follows,
+    /// so an ordinary primary drag on the canvas is a tool gesture and not a pan.
+    #[test]
+    fn space_left_needs_the_space_key() {
+        assert!(!pan_down_for(
+            PanDrag::SpaceLeft,
+            egui::PointerButton::Primary
+        ));
+    }
 
     /// Drive a real allocated rect through a press-and-move gesture with `button`, and report
     /// what `tool_drag` said on the final pass.
