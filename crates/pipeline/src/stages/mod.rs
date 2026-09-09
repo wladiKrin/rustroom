@@ -10,6 +10,7 @@ pub mod hue_table;
 pub mod lens_correction;
 pub mod local_contrast;
 pub mod mask;
+mod mask_coverage;
 pub mod noise_reduction;
 pub mod output_transform;
 pub mod perspective;
