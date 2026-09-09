@@ -1015,6 +1015,106 @@ fn golden_mask_brush_erase() {
     );
 }
 
+/// One auto-masked dab over the hue sweep, lifting exposure.
+///
+/// ⚠ The hue sweep is the right chart for this and the primaries chart is not: the gate carves a
+/// band around the hue under the dab's own centre, so a *gradient* produces a smooth falloff with
+/// many distinct values, where four flat bands would give a step and pin far fewer samples.
+fn auto_mask_edits() -> Edits {
+    Edits {
+        masks: vec![edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush {
+                strokes: vec![edit_model::BrushStroke {
+                    // A single dab at the centre, wide enough that its disc spans hues the gate
+                    // must refuse as well as the ones it must accept.
+                    points: vec![[0.5, 0.5]],
+                    radius: 0.45,
+                    hardness: 40.0,
+                    flow: 100.0,
+                    erase: false,
+                    auto_mask: true,
+                    tolerance: 30.0,
+                }],
+                invert: false,
+            }),
+            adjustments: edit_model::LocalAdjustments {
+                // ⚠ 0.55 EV for `mask_brush_exposure`'s measured reason: the sweep is authored at
+                // value 0.8, so a larger lift would pin samples at 255 and the reference could no
+                // longer discriminate the gate's peak from any greater coverage.
+                exposure: 0.55,
+                ..Default::default()
+            },
+        }],
+        ..Edits::default()
+    }
+}
+
+#[test]
+fn the_auto_masked_lift_is_confined_to_a_band_around_the_centres_hue() {
+    // ⚠⚠ The shape assertion, and what `golden_mask_brush_auto` cannot give on its own: a
+    // reference records *an* image, and by eye this chart's own hue sweep dominates it, so
+    // "the lift landed in the right place" is not something looking at the PNG can settle.
+    //
+    // The dab spans nearly the whole width (radius 0.45), so a gate that never fired would lift
+    // essentially every column. Confinement to a band is the property, and it is measured here
+    // rather than trusted.
+    let gated = auto_mask_edits();
+    let neutral = Edits::default();
+    let a = to_rgb8(&build_pipeline(&gated, RenderScale::FULL).run(hue_sweep_chart()));
+    let b = to_rgb8(&build_pipeline(&neutral, RenderScale::FULL).run(hue_sweep_chart()));
+
+    let row = 8usize;
+    let lifted: Vec<usize> = (0..W)
+        .filter(|x| {
+            let i = (row * W + x) * 3;
+            (0..3).any(|c| a[i + c] != b[i + c])
+        })
+        .collect();
+
+    assert!(!lifted.is_empty(), "nothing was lifted at all");
+    let (lo, hi) = (lifted[0], *lifted.last().unwrap());
+    assert!(
+        hi - lo + 1 < W,
+        "the lift spans the whole width ({lo}..={hi}) - the gate is not confining it"
+    );
+    // The dab is centred at x = W/2, so the band must contain it.
+    assert!(
+        lo <= W / 2 && hi >= W / 2,
+        "the band {lo}..={hi} does not contain the dab's own centre"
+    );
+    // ⚠ And it must be genuinely narrower than the disc, not merely one pixel short of it.
+    assert!(
+        hi - lo + 1 < W * 3 / 4,
+        "the band {lo}..={hi} is barely narrower than the disc"
+    );
+}
+
+#[test]
+fn golden_mask_brush_auto() {
+    check_golden_with("mask_brush_auto", &auto_mask_edits(), hue_sweep_chart());
+}
+
+#[test]
+fn an_auto_masked_dab_really_refuses_part_of_its_own_disc() {
+    // ⚠⚠ **A golden alone cannot prove the gate fires**, and this is the W5 creative-LUT lesson
+    // applied: a gate that never ran would produce a reference identical to the ungated render,
+    // and `golden_mask_brush_auto` would then pass against it forever. Rendering the same dab
+    // both ways is what discriminates.
+    let gated = auto_mask_edits();
+    let mut plain = auto_mask_edits();
+    if let edit_model::Mask::Brush(b) = &mut plain.masks[0].mask {
+        b.strokes[0].auto_mask = false;
+    }
+    let a = to_rgb8(&build_pipeline(&gated, RenderScale::FULL).run(hue_sweep_chart()));
+    let b = to_rgb8(&build_pipeline(&plain, RenderScale::FULL).run(hue_sweep_chart()));
+    let moved = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+    assert!(
+        moved > a.len() / 20,
+        "auto-mask changed only {moved} of {} samples - the gate is not firing",
+        a.len()
+    );
+}
+
 #[test]
 fn golden_mask_brush_flow_buildup() {
     // ⚠ **This case exists because the other two could not witness the flow change.** When dabs
