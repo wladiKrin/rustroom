@@ -2,7 +2,7 @@
 //! the memoised coverage tint.
 
 use super::mask_tint::paint_tint;
-use super::navigation::{tool_drag, tool_drag_started};
+use super::navigation::{erase_drag, erase_drag_started, tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
 use eframe::egui;
@@ -30,6 +30,12 @@ pub(super) struct BrushTool<'a> {
     /// complaint and this project's standing answer to it is a params struct, not an allowance:
     /// `FrameSpec`, `NameField`, `AspectLock` and `GradeUi` are the precedents.
     pub(super) base: Option<&'a TintFrame>,
+    /// The configured pan binding, so a right-drag erase can defer to it.
+    ///
+    /// ⚠ Carried rather than read here: `PanDrag` is a `Settings` value and this module has no
+    /// access to the app, and the erase gesture must agree with `pan_delta` about which button
+    /// pans — two answers to that is how the two would drift.
+    pub(super) pan_drag: rustroom_app::settings::PanDrag,
 }
 
 /// The displayed frame the tint's auto-mask gate reads, when one has landed.
@@ -95,7 +101,16 @@ pub(super) fn draw_mask_overlay(
             );
             let radius = (brush.size / map.radius_scale.max(1e-6)).max(1e-4);
             let src = map.inverse_point(p.x - frame_rect.left(), p.y - frame_rect.top());
-            if tool_drag_started(resp) {
+            // ⚠⚠ **Holding the secondary button erases for the duration of the gesture.** Baked
+            // into the stroke at its start, exactly as `radius`, `hardness`, `flow` and
+            // `auto_mask` are — so a stroke keeps what it was drawn with and the next one is an
+            // ordinary paint again, which is what "only while doing the gesture" means.
+            //
+            // ⚠ XOR, not an override: with the Erase checkbox already ticked, holding the button
+            // paints. That is what makes it a *modifier* rather than a second erase control, and
+            // it gives a way to add back a slip without reaching for the panel.
+            let erasing = brush.erase != erase_drag(resp, brush.pan_drag);
+            if tool_drag_started(resp) || erase_drag_started(resp, brush.pan_drag) {
                 if let Some(edit_model::Mask::Brush(b)) =
                     s.edits.masks.get_mut(i).map(|m| &mut m.mask)
                 {
@@ -104,7 +119,7 @@ pub(super) fn draw_mask_overlay(
                         radius,
                         hardness: brush.hardness,
                         flow: brush.flow,
-                        erase: brush.erase,
+                        erase: erasing,
                         // ⚠ Baked here, at the moment the stroke begins, exactly as `radius`,
                         // `hardness`, `flow` and `erase` are: a stroke keeps what the tool was set
                         // to when it was painted, and toggling the checkbox afterwards changes
@@ -126,7 +141,7 @@ pub(super) fn draw_mask_overlay(
                     // correctly (20-52 points) at `max_dim 6246`: the model was right and the
                     // render was stale. Reported as "the initial dot is still there".
                 }
-            } else if tool_drag(resp) {
+            } else if tool_drag(resp) || erase_drag(resp, brush.pan_drag) {
                 // ⚠ `else if`, not a second `if`: both predicates are true on the frame a drag
                 // begins, and without the `else` that frame would record its first point twice.
                 if let Some(edit_model::Mask::Brush(b)) =
@@ -395,6 +410,63 @@ mod tests {
             adjustments: Default::default(),
         });
         s.selected_mask = Some(0);
+    }
+
+    /// ⚠⚠ **The carrier for the right-drag erase.** `erase_drag`'s own test proves the predicate;
+    /// nothing else proves it reaches the stroke. That is the W5 shape — a feature can be fully
+    /// tested and never wired up.
+    ///
+    /// ⚠ Both directions, because a test of the erasing case alone would pass against a version
+    /// that erased on *every* drag.
+    #[test]
+    fn holding_the_secondary_button_paints_an_erasing_stroke() {
+        for (button, want_erase) in [
+            (egui::PointerButton::Secondary, true),
+            (egui::PointerButton::Primary, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = crate::test_app::for_test();
+            crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+            with_selected_brush(&mut app);
+            let centre = canvas_centre(&mut app, &ctx);
+            let _ = super::super::test_support::drag_through_with(
+                &mut app,
+                &ctx,
+                centre,
+                centre + egui::vec2(20.0, 8.0),
+                button,
+            );
+            assert_eq!(
+                painted_stroke(&app).erase,
+                want_erase,
+                "a {button:?} drag painted erase={} when it should be {want_erase}",
+                painted_stroke(&app).erase
+            );
+        }
+    }
+
+    /// ⚠ XOR, not an override: with the Erase checkbox already ticked, holding the button paints.
+    /// That is what makes it a modifier rather than a second erase control, and it gives a way to
+    /// add back a slip without reaching for the panel.
+    #[test]
+    fn the_secondary_button_inverts_the_erase_setting_rather_than_forcing_it() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_brush(&mut app);
+        app.brush_erase = true;
+        let centre = canvas_centre(&mut app, &ctx);
+        let _ = super::super::test_support::drag_through_with(
+            &mut app,
+            &ctx,
+            centre,
+            centre + egui::vec2(20.0, 8.0),
+            egui::PointerButton::Secondary,
+        );
+        assert!(
+            !painted_stroke(&app).erase,
+            "with Erase already on, holding the button must paint rather than erase harder"
+        );
     }
 
     /// ⚠⚠ **Sampled on the release frame itself.** A later frame issues a request of its own

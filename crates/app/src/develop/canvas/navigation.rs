@@ -22,6 +22,26 @@ pub(super) fn tool_drag_started(resp: &egui::Response) -> bool {
     resp.drag_started_by(egui::PointerButton::Primary)
 }
 
+/// Whether a **secondary-button** drag should be treated as a brush stroke that erases.
+///
+/// ⚠⚠ **The pan binding wins.** `PanDrag::Secondary` is a selectable binding, and it is an
+/// explicit choice where this is a convenience — so with right-drag set to pan, this returns
+/// `false` and the gesture is simply unavailable. That is the same precedence [`tool_drag`]
+/// already applies by refusing middle and secondary drags outright, so the pan gesture cannot
+/// drag crop rectangles and mask handles as it passes over them.
+///
+/// ⚠ Held only for the gesture: the caller bakes the erase flag into the stroke at
+/// `drag_started`, exactly as `radius`, `hardness`, `flow` and `auto_mask` are baked, so a stroke
+/// keeps what it was drawn with and the next one is an ordinary paint again.
+pub(super) fn erase_drag(resp: &egui::Response, binding: PanDrag) -> bool {
+    binding != PanDrag::Secondary && resp.dragged_by(egui::PointerButton::Secondary)
+}
+
+/// Whether an erasing secondary drag has just begun. Same gating, same reason.
+pub(super) fn erase_drag_started(resp: &egui::Response, binding: PanDrag) -> bool {
+    binding != PanDrag::Secondary && resp.drag_started_by(egui::PointerButton::Secondary)
+}
+
 /// Every source of panning, folded into one screen-space delta.
 ///
 /// ⚠ **Scroll always pans and is not configurable.** It is the universal route — a two-finger
@@ -136,6 +156,52 @@ mod tests {
             });
         }
         out
+    }
+
+    /// Whether `erase_drag` fires for a secondary drag under `binding`.
+    fn erase_drag_for(binding: PanDrag) -> bool {
+        let ctx = egui::Context::default();
+        let mut out = false;
+        let start = egui::pos2(100.0, 100.0);
+        for pass in 0..4 {
+            let pos = start + egui::vec2(40.0, 40.0) * (pass as f32 - 1.0).max(0.0);
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            input.events.push(egui::Event::PointerMoved(pos));
+            if pass == 1 {
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+            }
+            let _ = ctx.run_ui(input, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+                let resp = ui.allocate_rect(rect, egui::Sense::drag());
+                if pass == 3 {
+                    out = erase_drag(&resp, binding);
+                }
+            });
+        }
+        out
+    }
+
+    /// ⚠⚠ **The pan binding wins.** Right-drag erasing is a convenience; a pan binding is an
+    /// explicit choice, and letting both fire would pan the photograph while erasing into it.
+    #[test]
+    fn a_right_drag_erases_unless_right_drag_is_the_pan_binding() {
+        assert!(erase_drag_for(PanDrag::Middle));
+        assert!(erase_drag_for(PanDrag::SpaceLeft));
+        assert!(
+            !erase_drag_for(PanDrag::Secondary),
+            "right-drag is bound to panning, so it must not also erase"
+        );
     }
 
     /// ⚠ The predicate must agree with [`pan_delta`] about which button pans, or the interactive

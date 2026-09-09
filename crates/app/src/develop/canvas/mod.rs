@@ -495,6 +495,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     auto_mask: app_brush_auto_mask,
                                     tolerance: app_brush_tolerance,
                                     base: app_tint_frame.as_ref(),
+                                    pan_drag: app_pan_drag,
                                 },
                                 tool,
                             );
