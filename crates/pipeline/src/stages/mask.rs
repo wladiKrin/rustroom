@@ -47,7 +47,7 @@ impl MaskStage {
             scale,
             None,
             geometry,
-            None,
+            &[],
             color::wb::Illuminant::default(),
             // ⚠ No deposit: this convenience is for synthetic buffers and tests, which cache
             // nothing. Production goes through `new_in_region`.
@@ -65,7 +65,7 @@ impl MaskStage {
         scale: RenderScale,
         region: Option<Region>,
         geometry: &Geometry,
-        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+        prebuilt: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
         baseline: color::wb::Illuminant,
         deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
     ) -> Self {
@@ -91,7 +91,7 @@ impl MaskStage {
         masked: &MaskedAdjustment,
         scale: RenderScale,
         geometry: &Geometry,
-        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+        prebuilt: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
     ) -> Self {
         Self {
             composite: Self::composite(masked, geometry, prebuilt),
@@ -113,21 +113,23 @@ impl MaskStage {
     /// impossible, defeated one layer up. Adding a variant is a compile error here.
     /// The whole composite: the base shape, then each refinement with the op that folds it on.
     ///
-    /// ⚠ `prebuilt` belongs to the **base** only. A refinement's brush rasterizes inside `apply`
-    /// like any uncached one; widening the prebuilt side to a slice is the coverage cache's own
-    /// change, and until it lands a refinement brush simply misses — which fails toward a miss,
-    /// `PrefixKey`'s rule and the safe direction of the two.
+    /// ⚠ `prebuilt` is indexed **per component**, 0 being the base, so a refinement's brush is
+    /// served from the cache exactly as the base's is. A short or empty slice simply means
+    /// nothing was prebuilt, which fails toward rasterizing here — `PrefixKey`'s rule, and the
+    /// safe direction of the two.
     fn composite(
         masked: &MaskedAdjustment,
         geometry: &Geometry,
-        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+        prebuilt: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
     ) -> Composite {
+        let at = |j: usize| prebuilt.get(j).cloned().flatten();
         Composite {
-            base: Self::source_for(&masked.mask, geometry, prebuilt),
+            base: Self::source_for(&masked.mask, geometry, at(0)),
             refine: masked
                 .refine
                 .iter()
-                .map(|r| (r.op, Self::source_for(&r.mask, geometry, None)))
+                .enumerate()
+                .map(|(k, r)| (r.op, Self::source_for(&r.mask, geometry, at(k + 1))))
                 .collect(),
         }
     }
@@ -254,14 +256,12 @@ impl PipelineStage for MaskStage {
                 // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
                 // coverage-cache spec's §4.0.
                 //
-                // ⚠ Only the **base** deposits until `BrushCoverage` is indexed per component: a
-                // refinement's map has no slot to land in yet, and depositing it under the base's
-                // index would file one shape's coverage against another's key — a stale hit, which
-                // is the one direction this cache must never fail in.
+                // ⚠ `(i, j)` — the mask's position in `edits.masks` and the component's position
+                // within it — so a deposited map lands under the key `render_engine` computed for
+                // *that shape*. Filing a refinement's coverage under the base's index would be a
+                // stale hit, which renders positionally while the tint shows the gate working.
                 if let Some((sink, i)) = &self.deposit {
-                    if j == 0 {
-                        sink.deposit(*i, std::sync::Arc::clone(&built));
-                    }
+                    sink.deposit(*i, j, std::sync::Arc::clone(&built));
                 }
                 Some(built)
             }
@@ -428,19 +428,19 @@ mod tests {
                 ..Default::default()
             },
         };
-        let coverage = std::sync::Arc::new(crate::BrushCoverage::with_slots(1));
+        let coverage = std::sync::Arc::new(crate::BrushCoverage::with_slots(&[1]));
         let stage = MaskStage::new_in_region(
             &masked,
             RenderScale::new(1.0),
             None,
             &Geometry::default(),
-            None,
+            &[],
             color::wb::Illuminant::default(),
             Some((std::sync::Arc::clone(&coverage), 0)),
         );
         let _ = stage.apply(flat(32, 24));
         assert!(
-            coverage.take_built(0).is_some(),
+            coverage.take_built(0, 0).is_some(),
             "the stage built a coverage map and did not report it, so nothing can cache it"
         );
     }
@@ -603,7 +603,7 @@ mod tests {
             RenderScale::FULL,
             Some(region),
             &Geometry::default(),
-            None,
+            &[],
             color::wb::Illuminant::default(),
             None,
         )
@@ -697,7 +697,7 @@ mod tests {
             RenderScale::FULL,
             Some(region),
             &Geometry::default(),
-            None,
+            &[],
             color::wb::Illuminant::default(),
             None,
         )
@@ -890,7 +890,7 @@ mod tests {
             RenderScale::FULL,
             Some(region),
             &Geometry::default(),
-            None,
+            &[],
             color::wb::Illuminant::default(),
             None,
         )
@@ -938,7 +938,7 @@ mod tests {
             &masked,
             RenderScale::FULL,
             &edit_model::Geometry::default(),
-            None,
+            &[],
         )
         .apply(src.clone());
 

@@ -6,14 +6,20 @@ use edit_model::Edits;
 
 pub mod brush;
 
-/// Pre-rasterized coverage for a photo's brush masks, indexed by **position in `Edits::masks`**.
+/// Pre-rasterized coverage for a photo's brush masks, indexed by **`[mask][component]`** —
+/// position in `Edits::masks`, then position within that mask's composite, component 0 being its
+/// base shape.
 ///
 /// ⚠ Optional and additive, following the `Region` precedent: [`build_pipeline`] and
 /// [`build_pipeline_split`] delegate with `None`, so the CLI, export and every golden compile
 /// untouched.
 #[derive(Default)]
 pub struct BrushCoverage {
-    pub maps: Vec<Option<std::sync::Arc<brush::CoverageMap>>>,
+    /// ⚠ Nested because a composite can hold a brush in **any** component. Flattening with a
+    /// prefix sum was the alternative and was rejected: the sum would have to be recomputed
+    /// identically by the stage and by the cache, and two derivations of one index is precisely
+    /// how a sparse-versus-dense bug enters — this codebase has had four.
+    pub maps: Vec<Vec<Option<std::sync::Arc<brush::CoverageMap>>>>,
     /// Where a stage reports coverage it had to build itself.
     ///
     /// ⚠⚠ **The read side is what a caller supplies; this is what a stage gives back.** A brush
@@ -23,40 +29,52 @@ pub struct BrushCoverage {
     ///
     /// ⚠ `Mutex` rather than `RefCell`: this crosses into stages that must stay `Sync`. It is
     /// uncontended — `apply` runs sequentially, once per mask per tail.
-    pub built: Vec<std::sync::Mutex<Option<std::sync::Arc<brush::CoverageMap>>>>,
+    pub built: Vec<Vec<std::sync::Mutex<Option<std::sync::Arc<brush::CoverageMap>>>>>,
 }
 
 impl BrushCoverage {
-    pub fn get(&self, i: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
-        self.maps.get(i).and_then(|m| m.clone())
+    pub fn get(&self, i: usize, j: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
+        self.maps.get(i)?.get(j).and_then(|m| m.clone())
     }
 
-    /// A coverage set with `n` empty deposit slots and nothing prebuilt.
-    pub fn with_slots(n: usize) -> Self {
+    /// This mask's whole component row, or an empty slice when it has none.
+    pub fn row(&self, i: usize) -> &[Option<std::sync::Arc<brush::CoverageMap>>] {
+        self.maps.get(i).map_or(&[], |r| r.as_slice())
+    }
+
+    /// A coverage set with one empty deposit slot per component. `counts[i]` is mask `i`'s
+    /// component count — `1 + refine.len()`.
+    pub fn with_slots(counts: &[usize]) -> Self {
         Self {
-            maps: vec![None; n],
-            built: (0..n).map(|_| std::sync::Mutex::new(None)).collect(),
+            maps: counts.iter().map(|&n| vec![None; n]).collect(),
+            built: counts
+                .iter()
+                .map(|&n| (0..n).map(|_| std::sync::Mutex::new(None)).collect())
+                .collect(),
         }
     }
 
-    /// Report coverage built at position `i`. Out of range is ignored.
+    /// Report coverage built at component `j` of mask `i`. Out of range is ignored.
     ///
     /// ⚠ Ignored rather than panicking: the mask list can change between this set being made and a
     /// stage running, and a render is not worth aborting over a slot that no longer exists.
-    pub fn deposit(&self, i: usize, map: std::sync::Arc<brush::CoverageMap>) {
-        if let Some(slot) = self.built.get(i) {
+    pub fn deposit(&self, i: usize, j: usize, map: std::sync::Arc<brush::CoverageMap>) {
+        if let Some(slot) = self.built.get(i).and_then(|r| r.get(j)) {
             if let Ok(mut g) = slot.lock() {
                 *g = Some(map);
             }
         }
     }
 
-    /// Take what was reported at position `i`, clearing the slot.
+    /// Take what was reported at component `j` of mask `i`, clearing the slot.
     ///
     /// ⚠ Clearing is what stops a map surviving into a render it does not describe — the caller
     /// stores it under a key computed for *this* render.
-    pub fn take_built(&self, i: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
-        self.built.get(i).and_then(|s| s.lock().ok()?.take())
+    pub fn take_built(&self, i: usize, j: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
+        self.built
+            .get(i)?
+            .get(j)
+            .and_then(|s| s.lock().ok()?.take())
     }
 }
 pub mod auto_tone;
@@ -344,7 +362,7 @@ pub fn build_prefix_steps(
             // `region: None` that is the whole frame at exactly the right size. **It costs
             // nothing per frame because this whole step is cached**: the rasterization happens
             // when the mask's shape or its capture sliders change, not on every render.
-            stage: Box::new(MaskStage::new_capture(&p, scale, &edits.geometry, None)),
+            stage: Box::new(MaskStage::new_capture(&p, scale, &edits.geometry, &[])),
         });
     }
 
@@ -798,7 +816,9 @@ pub fn build_pipeline_split_tapped(
                 scale,
                 region,
                 &edits.geometry,
-                brush.and_then(|b| b.get(i)),
+                // ⚠ The mask's whole component row, index 0 being its base. `i` is still the
+                // position in `edits.masks`, never a counter over *active* masks.
+                brush.map_or(&[][..], |b| b.row(i)),
                 baseline,
                 // ⚠ `i` is the position in `edits.masks`, the same index the comment above
                 // insists on — so a deposited map lands under the key `render_engine` computed
@@ -1054,13 +1074,31 @@ mod tests {
     /// the key, has to be able to see what it built. See the coverage-cache spec's §4.0.
     #[test]
     fn a_deposited_map_can_be_taken_back_out() {
-        let c = BrushCoverage::with_slots(3);
-        assert!(c.take_built(1).is_none(), "nothing deposited yet");
-        c.deposit(1, a_map());
-        assert!(c.take_built(1).is_some(), "the deposit must be readable");
+        let c = BrushCoverage::with_slots(&[1, 3]);
+        assert!(c.take_built(1, 2).is_none(), "nothing deposited yet");
+        c.deposit(1, 2, a_map());
+        assert!(c.take_built(1, 2).is_some(), "the deposit must be readable");
         assert!(
-            c.take_built(1).is_none(),
+            c.take_built(1, 2).is_none(),
             "taking it must clear the slot, so a stale map cannot be read twice"
+        );
+    }
+
+    /// ⚠⚠ A composite's components must not see each other's coverage. Filing a refinement's map
+    /// under its base's index is a **stale hit** — the shape renders positionally while the tint
+    /// shows the gate working — and that is the one direction this cache must never fail in.
+    #[test]
+    fn a_deposit_lands_under_its_own_component() {
+        let c = BrushCoverage::with_slots(&[1, 3]);
+        c.deposit(1, 2, a_map());
+        assert!(
+            c.take_built(1, 1).is_none(),
+            "a sibling component must not see it"
+        );
+        assert!(c.take_built(0, 0).is_none(), "another mask must not see it");
+        assert!(
+            c.take_built(1, 2).is_some(),
+            "and it is still where it was put"
         );
     }
 
@@ -1068,21 +1106,32 @@ mod tests {
     /// this set being made and a stage running, exactly as `suppressed_spot`'s index can.
     #[test]
     fn depositing_out_of_range_is_ignored() {
-        let c = BrushCoverage::with_slots(1);
-        c.deposit(7, a_map());
-        assert!(c.take_built(7).is_none());
+        let c = BrushCoverage::with_slots(&[1]);
+        c.deposit(7, 0, a_map());
+        c.deposit(0, 9, a_map());
+        assert!(c.take_built(0, 0).is_none());
     }
 
-    /// ⚠ The read side is untouched, and that is what keeps every existing caller working.
+    /// ⚠ The read side reads by `(mask, component)` now, and `row` is what the masks loop hands
+    /// a stage — one lookup rather than a per-component fetch it would have to index correctly.
     #[test]
-    fn the_prebuilt_side_still_reads_by_position() {
+    fn the_prebuilt_side_reads_by_mask_and_component() {
         let c = BrushCoverage {
-            maps: vec![None, Some(a_map())],
+            maps: vec![vec![None], vec![None, Some(a_map())]],
             built: Vec::new(),
         };
-        assert!(c.get(0).is_none());
-        assert!(c.get(1).is_some());
-        assert!(c.get(9).is_none(), "past the end is None, never a panic");
+        assert!(c.get(0, 0).is_none());
+        assert!(c.get(1, 1).is_some());
+        assert!(
+            c.get(1, 0).is_none(),
+            "the base of a composite is its own slot"
+        );
+        assert!(c.get(9, 0).is_none(), "past the end is None, never a panic");
+        assert_eq!(c.row(1).len(), 2);
+        assert!(
+            c.row(9).is_empty(),
+            "a mask with no row hands back an empty slice"
+        );
     }
 
     /// ⚠⚠ `Rendering::None` must insert **no stage at all**, not a curve that happens to be the
