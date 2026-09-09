@@ -201,7 +201,9 @@ pub(super) fn draw_mask_overlay(
                 );
             }
         }
-        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+        // ⚠ The history push stays UNGUARDED. A stroke is still an edit and must still be
+        // undoable; only the render is skipped.
+        request_unless_suppressed(s, tool, i);
         s.history.push(s.edits.clone());
         return true;
     }
@@ -225,9 +227,26 @@ pub(super) fn draw_mask_overlay(
     // happened to request a frame. Unlike `draw_crop_overlay`, which needs no request because
     // `preview_edits` strips the crop in geometry mode and the overlay *is* the feedback.
     if moved {
-        s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
+        request_unless_suppressed(s, tool, i);
     }
     false
+}
+
+/// Ask for a render unless this mask is being held out of the view.
+///
+/// ⚠⚠ **This is what makes painting free.** With the mask suppressed the view edits are
+/// unchanged, so a request would re-render a byte-identical picture — on the motion site that is
+/// every drag frame, measured at ~16.6 ms at 1:1. Skipping it is also what keeps the rung from
+/// changing: the canvas drops a rung for a live gesture, and a gesture that asks for nothing
+/// leaves the rung where it was.
+///
+/// ⚠ One helper rather than the same condition written at both call sites: the motion render and
+/// the release render must agree about this, and two copies is how they would stop.
+fn request_unless_suppressed(s: &Session, tool: Tool, mask: usize) {
+    if s.suppressed_mask == Some(mask) {
+        return;
+    }
+    s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
 }
 
 /// Points used to approximate a mask ellipse. egui has no ellipse primitive, so it is drawn as
@@ -376,6 +395,38 @@ mod tests {
             adjustments: Default::default(),
         });
         s.selected_mask = Some(0);
+    }
+
+    /// ⚠⚠ **Sampled on the release frame itself.** A later frame issues a request of its own
+    /// once `Edits` has changed, so a count taken afterwards rises either way and this passes
+    /// with the guard deleted — the exact failure `a_drag_that_misses_every_handle` records for
+    /// its sibling.
+    #[test]
+    fn a_stroke_on_a_suppressed_mask_asks_for_no_render() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_brush(&mut app);
+        app.show_mask_tint = true;
+        app.session.as_mut().unwrap().suppressed_mask = Some(0);
+
+        let before = app.session.as_ref().unwrap().engine.requests_issued();
+        let centre = canvas_centre(&mut app, &ctx);
+        let _ = drag_through(&mut app, &ctx, centre, centre + egui::vec2(20.0, 8.0));
+        let after = app.session.as_ref().unwrap().engine.requests_issued();
+
+        assert_eq!(
+            before,
+            after,
+            "a stroke on a suppressed mask issued {} render(s); with the mask held out of the \
+             view the picture cannot change, so the rung must never be disturbed",
+            after - before
+        );
+        assert!(
+            app.session.as_ref().unwrap().history.can_undo(),
+            "the release must still have committed one undo step — a stroke is an edit even \
+             when nothing needed rendering"
+        );
     }
 
     fn painted_stroke(app: &RustroomApp) -> edit_model::BrushStroke {
