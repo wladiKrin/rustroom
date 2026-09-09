@@ -53,6 +53,19 @@ static DEBUG_PLACE: std::sync::LazyLock<bool> =
 /// sharp?" — a question the render itself answers, so the render answered it, the gate flipped,
 /// and it counted that as interaction. Nothing here can be affected by what a render produces.
 ///
+/// ⚠⚠ **Panning keeps the exemption on a MEASUREMENT, not a preference.** `bench_pan_rung`
+/// (kept) prices a region tail with the prefix cached — which is the whole per-frame cost of a
+/// pan, since panning changes no edits — at the reporter's zoom on an X-T4:
+///
+/// | rung | region | tail |
+/// |---|---|---|
+/// | 3200 | 488x277, 0.14 Mpx | **1.48 ms** |
+/// | 6246 | 953x541, 0.52 Mpx | **6.02 ms** |
+///
+/// So the drop buys **4.5 ms** — a full-rung pan frame is 6 ms, about 166 fps — and costs a 2x
+/// blur across the whole view. That is the opposite of the fitted whole-image case the
+/// interactive rung was designed against, where the same drop was worth 98 ms.
+///
 /// ⚠ A slider drag must still drop, and that is the half confirmed by use: 137.9 ms to 40.0 ms,
 /// 7.2 to 25 fps. Every non-canvas request site renders at `render_max_dim()`, i.e. whatever rung
 /// the canvas last set, so a rule that merely stopped the canvas requesting would disable the
