@@ -21,6 +21,8 @@ pub(super) struct BrushTool {
     pub(super) flow: f32,
     pub(super) erase: bool,
     pub(super) show_tint: bool,
+    pub(super) auto_mask: bool,
+    pub(super) tolerance: f32,
 }
 
 /// Draw the selected mask's handles and guide lines, and apply any drag.
@@ -89,8 +91,16 @@ pub(super) fn draw_mask_overlay(
                         hardness: brush.hardness,
                         flow: brush.flow,
                         erase: brush.erase,
-                        // Filled in when the Auto Mask controls land.
-                        ..Default::default()
+                        // ⚠ Baked here, at the moment the stroke begins, exactly as `radius`,
+                        // `hardness`, `flow` and `erase` are: a stroke keeps what the tool was set
+                        // to when it was painted, and toggling the checkbox afterwards changes
+                        // only the next one.
+                        //
+                        // ⚠ **No reference colour is recorded.** It is read at render time from
+                        // the pixel under each dab's own centre, which is what keeps both ends of
+                        // the comparison in one colour space — see `brush::auto_mask_gate`.
+                        auto_mask: brush.auto_mask,
+                        tolerance: brush.tolerance,
                     });
                     // ⚠⚠ **Deliberately does NOT set `moved`.** Requesting a render here starts a
                     // full-resolution render of a ONE-POINT stroke you are about to extend. At
@@ -342,6 +352,67 @@ mod tests {
         });
         s.selected_mask = Some(0);
     }
+    /// A session with an empty brush mask selected and the Masks tool active.
+    fn with_selected_brush(app: &mut RustroomApp) {
+        app.tool = rustroom_app::tool::Tool::Masks;
+        let s = app.session.as_mut().unwrap();
+        s.edits.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush::default()),
+            adjustments: Default::default(),
+        });
+        s.selected_mask = Some(0);
+    }
+
+    fn painted_stroke(app: &RustroomApp) -> edit_model::BrushStroke {
+        let s = app.session.as_ref().unwrap();
+        let edit_model::Mask::Brush(b) = &s.edits.masks[0].mask else {
+            panic!("expected a brush mask");
+        };
+        b.strokes.last().expect("a stroke was painted").clone()
+    }
+
+    #[test]
+    fn painting_with_auto_mask_on_bakes_it_into_the_stroke() {
+        // ⚠⚠ **The carrier test, and the W5 creative-LUT lesson applied.** Every pipeline and
+        // golden test for this feature would pass against a build where the checkbox reached
+        // nothing at all — which is exactly how creative LUTs shipped green and 100%
+        // non-functional. This drives the real gesture and reads what it wrote.
+        //
+        // ⚠ A headless `RawInput` drag lifecycle, which this file's own record says would have
+        // caught three of M3.1c-B's six canvas bugs.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_brush(&mut app);
+        app.brush_auto_mask = true;
+        app.brush_tolerance = 40.0;
+
+        let centre = canvas_centre(&mut app, &ctx);
+        drag_through(&mut app, &ctx, centre, centre + egui::vec2(20.0, 0.0));
+
+        let stroke = painted_stroke(&app);
+        assert!(stroke.auto_mask, "the checkbox never reached the stroke");
+        assert_eq!(
+            stroke.tolerance, 40.0,
+            "the slider never reached the stroke"
+        );
+    }
+
+    #[test]
+    fn painting_with_auto_mask_off_leaves_the_stroke_plain() {
+        // ⚠ The discriminating half: a gesture that hardcoded `true` would pass the test above.
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_brush(&mut app);
+        app.brush_auto_mask = false;
+
+        let centre = canvas_centre(&mut app, &ctx);
+        drag_through(&mut app, &ctx, centre, centre + egui::vec2(20.0, 0.0));
+
+        assert!(!painted_stroke(&app).auto_mask);
+    }
+
     #[test]
     fn dragging_a_mask_handle_asks_for_a_render() {
         // ⚠⚠ The regression guard for a bug that shipped: `draw_mask_overlay` mutated `Edits` but

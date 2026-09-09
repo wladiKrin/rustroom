@@ -83,6 +83,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     let app_brush_size = app.brush_size;
     let app_brush_hardness = app.brush_hardness;
     let app_brush_erase = app.brush_erase;
+    // ⚠ Hoisted with the others: read before `app.session` is borrowed mutably below.
+    let app_brush_auto_mask = app.brush_auto_mask;
+    let app_brush_tolerance = app.brush_tolerance;
     // ⚠ Cleared here, once, and set again only by an actual hover over the image at the end of
     // this function — so every path that draws no image (a decode in flight, no texture yet, no
     // session) leaves it blank. A stale number left on screen after the pointer leaves is worse
@@ -337,6 +340,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     flow: app.brush_flow,
                                     erase: app_brush_erase,
                                     show_tint: app.show_mask_tint,
+                                    auto_mask: app_brush_auto_mask,
+                                    tolerance: app_brush_tolerance,
                                 },
                                 tool,
                             );

@@ -130,6 +130,8 @@ pub fn for_test() -> RustroomApp {
         brush_hardness: 50.0,
         brush_flow: 100.0,
         brush_erase: false,
+        brush_auto_mask: false,
+        brush_tolerance: 35.0,
         show_mask_tint: true,
         show_spots: true,
         hsl_channel: Default::default(),

@@ -23,6 +23,8 @@ pub struct BrushTool<'a> {
     pub flow: &'a mut f32,
     pub erase: &'a mut bool,
     pub show_tint: &'a mut bool,
+    pub auto_mask: &'a mut bool,
+    pub tolerance: &'a mut f32,
 }
 
 /// Draw the Masks tool's controls.
@@ -196,10 +198,19 @@ pub fn show(
                 ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow");
                 ui.checkbox(&mut *brush.erase, "Erase");
                 ui.checkbox(&mut *brush.show_tint, "Show mask");
+                ui.checkbox(&mut *brush.auto_mask, "Auto mask");
+                // ⚠ `add_enabled_ui`, not a hidden control: greying it keeps the value while Auto
+                // mask is off, so toggling back does not silently reset the tolerance — the rule
+                // the export dialog's quality slider already follows for a lossless format.
+                ui.add_enabled_ui(*brush.auto_mask, |ui| {
+                    ed.slider(ui, &mut *brush.tolerance, 0.0..=100.0, "Tolerance");
+                });
                 theme::hint(
                     ui,
                     "Drag to paint. Hardness shapes the edge; Flow is \
-                     strength, and repeated passes build up.",
+                     strength, and repeated passes build up. Auto mask paints \
+                     only what matches the pixel under the brush centre, and \
+                     applies to new strokes.",
                 );
             }
             ui.separator();
@@ -256,6 +267,8 @@ mod tests {
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
         let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
+        let mut auto_mask = false;
+        let mut tolerance = 35.0f32;
         test_ui::click(&ctx, label, |ui| {
             ed = Edited::default();
             show(
@@ -269,6 +282,8 @@ mod tests {
                     flow: &mut flow,
                     erase: &mut erase,
                     show_tint: &mut tint,
+                    auto_mask: &mut auto_mask,
+                    tolerance: &mut tolerance,
                 },
                 &mut ed,
             );
@@ -373,6 +388,8 @@ mod tests {
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
         let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
+        let mut auto_mask = false;
+        let mut tolerance = 35.0f32;
         let mut body = |ui: &mut egui::Ui, ed: &mut Edited| {
             show(
                 ui,
@@ -385,6 +402,8 @@ mod tests {
                     flow: &mut flow,
                     erase: &mut erase,
                     show_tint: &mut tint,
+                    auto_mask: &mut auto_mask,
+                    tolerance: &mut tolerance,
                 },
                 ed,
             );
@@ -433,6 +452,8 @@ mod tests {
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
         let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
+        let mut auto_mask = false;
+        let mut tolerance = 35.0f32;
         test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let mut ed = Edited::default();
             show(
@@ -446,6 +467,8 @@ mod tests {
                     flow: &mut flow,
                     erase: &mut erase,
                     show_tint: &mut tint,
+                    auto_mask: &mut auto_mask,
+                    tolerance: &mut tolerance,
                 },
                 &mut ed,
             );

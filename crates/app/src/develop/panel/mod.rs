@@ -246,6 +246,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 flow: &mut app.brush_flow,
                                 erase: &mut app.brush_erase,
                                 show_tint: &mut app.show_mask_tint,
+                                auto_mask: &mut app.brush_auto_mask,
+                                tolerance: &mut app.brush_tolerance,
                             },
                             &mut ed,
                         ),

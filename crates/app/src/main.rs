@@ -318,6 +318,13 @@ struct RustroomApp {
     brush_flow: f32,
     /// Whether the next stroke subtracts.
     brush_erase: bool,
+    /// Paint only pixels similar to the one under the brush centre — Lightroom's Auto Mask.
+    ///
+    /// ⚠ A **tool** setting, not an edit: it is baked into each stroke as that stroke is painted,
+    /// so changing it later affects only the next one. `brush_size`/`brush_flow`'s rule.
+    brush_auto_mask: bool,
+    /// How close counts, 0..=100.
+    brush_tolerance: f32,
     /// Whether to tint the selected brush mask's coverage on the canvas.
     show_mask_tint: bool,
     /// Whether the Retouch tool draws its patch outlines.
@@ -577,6 +584,8 @@ impl RustroomApp {
             brush_hardness: 50.0,
             brush_flow: 100.0,
             brush_erase: false,
+            brush_auto_mask: false,
+            brush_tolerance: 35.0,
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
             show_mask_tint: true,
