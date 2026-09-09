@@ -28,7 +28,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | Soft-proofing · gamut mapping / rendering intents | ✅ **M6.4 soft proofing shipped 2026-09-04**, confirmed by use; gamut mapping and rendering intents are *not* in it and stay deferred. `specs/2026-09-04-soft-proofing-design.md`. |
 | EXIF/IPTC metadata editing | ✅ **M6.2, 2026-09-08** — edited in the catalog, embedded at export, in the sidecar |
 | Export filename templating · output/print sharpening | ✅ **M6.1a** / ✅ **M6.1d**, both 2026-09-01 |
-| Mask intersection and subtraction | **M7.1c** — ⬜ still open (2026-09-08), the one M7.1 slice not built |
+| Mask intersection and subtraction | **M7.1c** — ⬜ **the NEXT ACTION as of 2026-09-09**, and the one M7.1 slice not built |
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
 | Fuse perspective into `GeometryStage` | **M7.3b** — ⬜ still open (2026-09-08) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
@@ -304,7 +304,7 @@ above. Only *anchoring* wants the forward map.
 
 - **Mask intersection and subtraction between masks.** `erase` works only *within* one brush; a
   radial cannot be cut out of a linear.
-- **Auto-mask / edge detection** for the brush.
+- ~~**Auto-mask / edge detection** for the brush.~~ ✅ **2026-09-09, and M7.6 closes with it** — the last M7.6 gap; a dab paints only pixels similar to the one under its centre, gated in Oklab at render time. ⚠ Its coverage is **cached** since 2026-09-09, keyed on what produced the base — see the entry below.
 - ~~**Dehaze over-corrects bright achromatic subjects** — snow, white walls, a white cat read as haze.
   The classic dark-channel-prior artifact, inherent to the model; a real fix needs large-bright-
   region detection and is its own feature.~~ ✅ **2026-09-08** — an airlight tolerance in
@@ -481,6 +481,16 @@ was not pursued.
   not. Helps every frame, global drags included; needs no cache and no invalidation rule.
 - **Cache the coverage** — removes all 14.09 ms, but only while the base holds still (see
   correction 1), and costs a full-frame buffer per mask plus that invalidation key.
+  ⚠⚠ **This option now has a worked precedent: the auto-mask coverage cache, 2026-09-09**
+  (`specs/2026-09-09-auto-mask-coverage-cache-design.md`). It answers the invalidation key this
+  entry leaves open — **`Edits` truncated to the masks *before* this one, plus the rung** — which
+  is sound because everything upstream of the base is in it, and whose truncation is what makes it
+  worth having: dropping this mask drops its own adjustments, so moving its slider does not
+  invalidate. ⚠ It also settled the structural half that applies here identically: the cache can
+  never **build** the coverage, because only `MaskStage::apply` holds the image, so the stage
+  reports what it built through `BrushCoverage`'s write side and the app keys and stores it.
+  ⚠ And it confirms correction 1's consequence in use: a **global** slider drag is not helped and
+  cannot be.
 
 ⚠ **Stopped here deliberately (user's call, 2026-09-07): the measurement was the point.** 14 ms on a
 ~35 ms frame is real but no longer urgent now the interactive rung has taken the reported drag from
