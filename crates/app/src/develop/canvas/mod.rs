@@ -29,6 +29,11 @@ use rustroom_app::view_region;
 use spot_overlay::{draw_spot_overlay, sampler_for};
 use straighten_overlay::draw_straighten_overlay;
 
+/// Whether `RUSTROOM_DEBUG_PLACE` is set. Read once: the placement log runs per frame, where
+/// the render engine's equivalent runs per render.
+static DEBUG_PLACE: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("RUSTROOM_DEBUG_PLACE").is_some());
+
 /// Draw the image canvas.
 ///
 /// Returns whether a photo edit settled into a new history entry — the crop overlay is the one
@@ -263,6 +268,38 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // above derives from, so the two agree by construction.
                     let frame_rect =
                         canvas_geom::frame_rect(ui.max_rect().center(), s.pan, full, pk, pscale);
+
+                    // ⚠ Env-gated instrumentation, the `RUSTROOM_DEBUG_BRUSH` precedent: this
+                    // file's own record says reasoning about placement has been wrong twice, and
+                    // one print settled each of them in a run. `RUSTROOM_DEBUG_PLACE=1` logs every
+                    // input the placement is derived from, so a rung transition can be read off a
+                    // pair of consecutive lines rather than argued about.
+                    if *DEBUG_PLACE {
+                        let r = s.rendered_region;
+                        eprintln!(
+                            "place rung={max_dim} native={native} fit_cap={fit_cap} \
+                             full=({:.3},{:.3}) fit={fit:.6} zoom={:.4} pan=({:.2},{:.2}) \
+                             place_long={place_long:.1} pk={pk:.6} pscale={pscale:.6} \
+                             tex=({},{}) region={:?} img_min=({:.2},{:.2}) \
+                             frame_min=({:.2},{:.2}) frame_size=({:.2},{:.2}) avail=({:.1},{:.1})",
+                            full.x,
+                            full.y,
+                            s.zoom,
+                            s.pan.x,
+                            s.pan.y,
+                            shown.size()[0],
+                            shown.size()[1],
+                            r.map(|r| (r.x, r.y, r.w, r.h)),
+                            img_rect.min.x,
+                            img_rect.min.y,
+                            frame_rect.min.x,
+                            frame_rect.min.y,
+                            frame_rect.width(),
+                            frame_rect.height(),
+                            avail.x,
+                            avail.y,
+                        );
+                    }
 
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
                     egui::Image::new(shown).paint_at(ui, resp.rect);
