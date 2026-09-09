@@ -789,6 +789,133 @@ fn golden_mask_linear_exposure() {
     );
 }
 
+/// One composite: a left-to-right gradient carrying a measured exposure lift, with a radial
+/// composited onto it by `op`.
+///
+/// ⚠⚠ **+0.45 EV, SWEPT rather than chosen**, and the sweep is the point: a clipped reference
+/// cannot tell full coverage from any larger value, and clipping is invisible when you look at the
+/// PNG. Measured over the three ops, with the chart's own 24 inherently-clipped samples as the
+/// floor:
+///
+/// | EV | Add | Subtract | Intersect |
+/// |---|---|---|---|
+/// | 0.55 | **64** | **48** | 24 |
+/// | **0.45** | **24** | **24** | **24** |
+/// | 0.35 | 24 | 24 | 24 |
+///
+/// 0.45 is the largest lift that adds **no** clipping of its own, so it is the strongest effect
+/// still fully discriminating. ⚠ `Add` is the binding case, because it *widens* coverage.
+///
+/// ⚠ The gradient runs right-to-left so full coverage lands on the ramp's **dark** end. Left to
+/// right put the strongest lift where the chart is already near 1.0 and clipped 434 samples.
+fn composite_case(op: edit_model::MaskOp) -> Edits {
+    Edits {
+        masks: vec![edit_model::MaskedAdjustment {
+            // ⚠ Right-to-left, so full coverage lands on the ramp's **dark** end. Left-to-right
+            // puts the strongest lift exactly where the chart is already near 1.0, and `Add`
+            // widens coverage — measured, that clipped 434 samples at +0.55 EV before a single
+            // reference was written.
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                from: [1.0, 0.0],
+                to: [0.0, 0.0],
+                invert: false,
+            }),
+            refine: vec![edit_model::Refinement {
+                op,
+                mask: edit_model::Mask::Radial(edit_model::RadialGradient {
+                    center: [0.5, 0.5],
+                    radius: [0.3, 0.5],
+                    feather: 40.0,
+                    invert: false,
+                }),
+            }],
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 0.45,
+                ..Default::default()
+            },
+        }],
+        ..Edits::default()
+    }
+}
+
+/// ⚠ A radial **cut out of** a gradient — `docs/BACKLOG.md`'s one-line statement of the whole gap.
+#[test]
+fn golden_mask_subtract() {
+    check_golden(
+        "mask_subtract",
+        &composite_case(edit_model::MaskOp::Subtract),
+    );
+}
+
+/// ⚠ The gradient kept only where the radial also reaches.
+#[test]
+fn golden_mask_intersect() {
+    check_golden(
+        "mask_intersect",
+        &composite_case(edit_model::MaskOp::Intersect),
+    );
+}
+
+/// ⚠ The union, which is the op two separate masks cannot express: where they overlap the
+/// adjustment applies **once**, not twice.
+#[test]
+fn golden_mask_add() {
+    check_golden("mask_add", &composite_case(edit_model::MaskOp::Add));
+}
+
+/// ⚠⚠ **Three plausible PNGs prove nothing.** A composite that silently ignored its refinements
+/// would render all three identically to a plain masked gradient, and every golden above would
+/// pass against it forever. This is what makes the references mean something: each op must differ
+/// from the other two *and* from the base mask alone.
+#[test]
+fn the_three_composite_goldens_differ_from_one_another_and_from_the_base() {
+    let render = |e: &Edits| to_rgb8(&build_pipeline(e, RenderScale::FULL).run(chart()));
+    let sub = render(&composite_case(edit_model::MaskOp::Subtract));
+    let int = render(&composite_case(edit_model::MaskOp::Intersect));
+    let add = render(&composite_case(edit_model::MaskOp::Add));
+
+    let mut base = composite_case(edit_model::MaskOp::Add);
+    base.masks[0].refine.clear();
+    let plain = render(&base);
+
+    assert_ne!(sub, int, "subtract and intersect must differ");
+    assert_ne!(sub, add, "subtract and add must differ");
+    assert_ne!(int, add, "intersect and add must differ");
+    assert_ne!(sub, plain, "a subtracted radial must change the picture");
+    assert_ne!(int, plain, "an intersected radial must change the picture");
+    assert_ne!(add, plain, "an added radial must change the picture");
+}
+
+/// ⚠⚠ **Measured, not eyeballed.** A clipped reference cannot tell full coverage from any larger
+/// value, which is exactly how M3.1b's exposure golden lost its discriminating power — and
+/// clipping is invisible when you look at the PNG.
+#[test]
+fn the_composite_goldens_discriminate() {
+    // ⚠⚠ The floor is the **neutral chart's own** clipping, not zero: `chart()`'s ramp reaches
+    // 1.0, so 24 samples are pinned before any mask exists. Asserting zero would be asserting
+    // something false about correct code — the trap this project has hit four times — so what is
+    // asserted is that the composite adds none of its own.
+    let clipped = |px: &[u8]| px.iter().filter(|&&v| v == 255).count();
+    let neutral = to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(chart()));
+    let floor = clipped(&neutral);
+
+    for op in edit_model::MaskOp::ALL {
+        let px = to_rgb8(&build_pipeline(&composite_case(op), RenderScale::FULL).run(chart()));
+        let distinct: std::collections::HashSet<u8> = px.iter().copied().collect();
+        assert_eq!(
+            clipped(&px),
+            floor,
+            "{op:?} clipped {} samples against the chart's own {floor}",
+            clipped(&px)
+        );
+        assert!(
+            distinct.len() >= 100,
+            "{op:?}: only {} distinct values, so the reference discriminates little",
+            distinct.len()
+        );
+    }
+}
+
 #[test]
 fn golden_mask_linear_inverted_saturation() {
     // A different payload, inverted and diagonal, so the reference covers more than one stage
