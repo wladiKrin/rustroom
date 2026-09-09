@@ -196,7 +196,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // the size it comes out at. Geometry crops after the downscale, so the
                     // two differ on any cropped photo — and feeding the rendered size back
                     // in compounds the crop every frame. See `view_region::fit_cap`.
-                    let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM);
+                    // ⚠ Through `Session::fit_cap`, not derived again here — its doc carries
+                    // the rule, and a second derivation is how the two come to disagree.
+                    let fit_cap = s.fit_cap();
                     // Geometry mode pins the fit rung: the crop overlay is drawn against the
                     // whole image and placed by the fit-mode maths.
                     //

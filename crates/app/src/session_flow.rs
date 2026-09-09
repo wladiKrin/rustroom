@@ -565,12 +565,25 @@ impl RustroomApp {
                     // re-request against the new resolution.
                     s.rendered_region = None;
                     s.requested_region = None;
-                    s.render_rung = s.fit_cap();
-                    // ⚠ Ask for a frame explicitly. At the fit rung the canvas would otherwise
-                    // see an unchanged rung and a covered region and request nothing at all —
-                    // leaving the old buffer's texture on screen, so the upgrade would be
-                    // invisible until something else happened to trigger a render.
-                    s.request(s.view_edits(tool), s.fit_cap(), None);
+                    // ⚠ Ask for a frame explicitly. The canvas would otherwise see an unchanged
+                    // rung and a covered region and request nothing at all — leaving the old
+                    // buffer's texture on screen, so the upgrade would be invisible until
+                    // something else happened to trigger a render.
+                    //
+                    // ⚠⚠ **At the CURRENT rung, not the fit cap.** Only the resolution was wrong:
+                    // at 7.72x zoom `fit_cap` is an 8.9x magnified blur, and it was measured held
+                    // for 18 frames on every photo — four times the softening `Faster` gives.
+                    //
+                    // ⚠ `s.render_rung` is no longer reset to the fit cap either. It existed to
+                    // make the canvas re-request, which clearing the region rects above already
+                    // achieves, and it would make this request ask for the fit cap by another
+                    // route.
+                    //
+                    // ⚠ The region stays `None`: `rendered_region` and `requested_region` were
+                    // just cleared, because region rects are in *rendered* pixels and those
+                    // coordinates change with the buffer, so no region describes anything yet.
+                    // The canvas re-derives one on its next frame.
+                    s.request(s.view_edits(tool), s.render_rung, None);
                     // ⚠ Only worth saying where it is visible. A full-resolution decode can
                     // finish while the user is browsing the Library, where the message means
                     // nothing and merely displaces something that does.
@@ -692,6 +705,56 @@ fn handover_profile(
 mod tests {
     use super::*;
     use crate::{test_app, test_ui};
+
+    /// ⚠⚠ **The handover must not throw a zoomed view back to fit resolution.** The explicit
+    /// request is necessary — without it the canvas sees an unchanged rung and a covered region
+    /// and asks for nothing, so the upgrade is invisible. Only the resolution was wrong: at 7.72x
+    /// zoom `fit_cap` is an 8.9x magnified blur, measured held for 18 frames on every photo.
+    #[test]
+    fn the_handover_requests_at_the_current_rung() {
+        let dir = crate::test_app::TestDir::new("handoverrung");
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 8, 4);
+        let photo = dir.0.join("a.RAF");
+        {
+            let s = app.session.as_mut().expect("session");
+            s.path = photo.clone();
+            // A zoomed session, sitting on a rung above the fit cap.
+            s.buffer_long = 3200;
+            s.render_rung = 3200;
+            // ⚠ Load-bearing, and omitting it made this test pass against the unfixed code: the
+            // fixture opens with `buffer_is_full_res: true`, so the poll loop below breaks on its
+            // first pump and the handover never runs. The fixture check then asserts a flag that
+            // was already true and proves nothing. The sibling handover test resets it for the
+            // same reason.
+            s.buffer_is_full_res = false;
+        }
+
+        let seq = app.full_decoder.request(photo.clone(), 16);
+        app.full_pending = Some((photo.clone(), seq));
+
+        // ⚠ Deadline rather than an unbounded wait: a regression must fail, never hang CI.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            app.pump_full_res(&ctx);
+            if app.session.as_ref().is_some_and(|s| s.buffer_is_full_res) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let s = app.session.as_ref().expect("session");
+        assert!(
+            s.buffer_is_full_res,
+            "fixture check: the handover never ran, so this test proves nothing"
+        );
+        assert_ne!(
+            s.render_rung,
+            s.fit_cap(),
+            "the handover reset the view to fit resolution — at zoom that is an 8.9x blur"
+        );
+    }
 
     /// A mask carrying one exposure value, so the tests below can tell masks apart by what they
     /// do rather than by position alone.

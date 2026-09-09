@@ -5,7 +5,7 @@
 //! menu item and its shortcut drifting apart, which is exactly what happened with the old Copy
 //! button and Ctrl+C before they were made to share a code path.
 
-use crate::{modals::Modal, AppView, LibraryMode, RustroomApp, PREVIEW_MAX_DIM};
+use crate::{modals::Modal, AppView, LibraryMode, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::menu::Command;
@@ -90,7 +90,10 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
                 // has always meant. `fit_image_size` is measured at the fit cap, so the buffer
                 // is `buffer_long / fit_cap` times larger; dividing by the canvas's fit scale
                 // turns that into a zoom factor.
-                let fit_cap = view_region::fit_cap(s.buffer_long, PREVIEW_MAX_DIM) as f32;
+                // ⚠ Through `Session::fit_cap`, not derived again here. Its own doc carries the
+                // rule that every whole-image request must use it rather than `PREVIEW_MAX_DIM`,
+                // and a second derivation is how the two come to disagree.
+                let fit_cap = s.fit_cap() as f32;
                 if fit_cap > 0.0 && s.fit_scale > 0.0 {
                     let target = (s.buffer_long as f32 / fit_cap) / s.fit_scale;
                     // ⚠ Through `zoom_step` from 1.0 rather than a separate clamp helper, so
