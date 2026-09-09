@@ -151,6 +151,18 @@ impl Session {
                 e.spots.remove(i);
             }
         }
+        // ⚠⚠ **Mask isolation.** While a mask's tint is shown, that mask's adjustments leave the
+        // view, so painting changes no pixels and needs no render — which is what keeps the rung
+        // from changing mid-stroke. Every other mask and every global edit still render.
+        //
+        // ⚠ Removed rather than neutralised, `suppressed_spot`'s reasoning: a mask contributes to
+        // the picture only through its adjustments, so the two are the same thing and removal
+        // cannot be half-done.
+        if let Some(i) = self.suppressed_mask {
+            if i < e.masks.len() {
+                e.masks.remove(i);
+            }
+        }
         e
     }
 }
@@ -447,6 +459,7 @@ impl RustroomApp {
             selected_mask: None,
             selected_spot: None,
             suppressed_spot: None,
+            suppressed_mask: None,
             spot_drag: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
@@ -679,6 +692,58 @@ fn handover_profile(
 mod tests {
     use super::*;
     use crate::{test_app, test_ui};
+
+    /// A mask carrying one exposure value, so the tests below can tell masks apart by what they
+    /// do rather than by position alone.
+    fn masked_exposure(ev: f32) -> edit_model::MaskedAdjustment {
+        let mut m = edit_model::MaskedAdjustment::default();
+        m.adjustments.exposure = ev;
+        m
+    }
+
+    /// ⚠ The rule: the suppressed mask leaves the view and **nothing else does**. A test that
+    /// only checked the count would pass against a version that dropped the wrong one.
+    #[test]
+    fn the_suppressed_mask_leaves_the_view_and_nothing_else_does() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        s.edits.masks = vec![
+            masked_exposure(0.5),
+            masked_exposure(1.5),
+            masked_exposure(2.5),
+        ];
+        s.suppressed_mask = Some(1);
+        let e = s.view_edits(rustroom_app::tool::Tool::Masks);
+        assert_eq!(e.masks.len(), 2, "exactly one mask must have been dropped");
+        let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
+        assert_eq!(left, vec![0.5, 2.5], "the wrong mask was dropped: {left:?}");
+    }
+
+    #[test]
+    fn no_suppression_leaves_every_mask_in_the_view() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        s.edits.masks = vec![masked_exposure(0.5), masked_exposure(1.5)];
+        s.suppressed_mask = None;
+        assert_eq!(s.view_edits(rustroom_app::tool::Tool::Masks).masks.len(), 2);
+    }
+
+    /// An index past the end is ignored rather than panicking — the mask list can shrink under a
+    /// stale suppression between one frame and the next, exactly as the spot list can.
+    #[test]
+    fn a_stale_mask_suppression_index_is_ignored() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        s.edits.masks = vec![masked_exposure(0.5)];
+        s.suppressed_mask = Some(7);
+        assert_eq!(s.view_edits(rustroom_app::tool::Tool::Masks).masks.len(), 1);
+    }
 
     /// ⚠⚠ **The call-site half, and it is the half that matters.** The sibling test pins
     /// `handover_profile`'s rule; sabotaging the **call site** back to `decoded.profile.clone()`

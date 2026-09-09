@@ -73,6 +73,20 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         rail::show(ui, &mut picked);
     }
     app.select_tool(picked);
+    // ⚠⚠ **The one derivation site for mask isolation.** Recomputed unconditionally every frame
+    // from the same three facts that decide whether the tint is drawn, so the suppression and the
+    // tint cannot disagree and no second owner can appear. See `Session::suppressed_mask`.
+    //
+    // ⚠ Placed before both panels: each requests renders through `view_edits`, and a value
+    // written after them would be one frame stale exactly where it matters.
+    let suppressed = if app.tool == rustroom_app::tool::Tool::Masks && app.show_mask_tint {
+        app.session.as_ref().and_then(|s| s.selected_mask)
+    } else {
+        None
+    };
+    if let Some(s) = app.session.as_mut() {
+        s.suppressed_mask = suppressed;
+    }
     photo_edited |= panel::show(app, ui);
     if app.show_filmstrip && app.library.is_some() {
         filmstrip::show(app, ui, ctx);
@@ -182,6 +196,73 @@ fn icon_text(glyph: char) -> egui::RichText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drive the real `develop::body` and report what `suppressed_mask` came out as.
+    fn suppression_under(
+        tool: rustroom_app::tool::Tool,
+        show_tint: bool,
+        selected: Option<usize>,
+    ) -> Option<usize> {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.tool = tool;
+        app.show_mask_tint = show_tint;
+        {
+            let s = app.session.as_mut().expect("session");
+            s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
+            s.selected_mask = selected;
+        }
+        let c = ctx.clone();
+        // ⚠ A 1400 pt screen, not 700. `test_ui::screen`'s own doc records that a widget laid out
+        // past the bottom of the rect is simply outside the window and reads as "the control did
+        // nothing"; the mask panel already grew past 700 once.
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 1400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| body(&mut app, ui, &c),
+        );
+        app.session.as_ref().expect("session").suppressed_mask
+    }
+
+    /// ⚠⚠ **The carrier.** The three facts reaching `Session::suppressed_mask` through the real
+    /// `body`, which is the hop nothing else proves — every `view_edits` test would pass against
+    /// a version where nobody ever writes the field. That is exactly how creative LUTs shipped
+    /// fully tested and 100% non-functional.
+    #[test]
+    fn the_shown_tint_suppresses_the_selected_mask() {
+        assert_eq!(
+            suppression_under(rustroom_app::tool::Tool::Masks, true, Some(0)),
+            Some(0)
+        );
+    }
+
+    /// Each of the three facts is load-bearing on its own. A test that only checked the positive
+    /// case would pass against a version that suppressed unconditionally — which would hide a
+    /// mask's effect in the Edit panel, where no tint is drawn to explain it.
+    #[test]
+    fn nothing_is_suppressed_without_all_three_facts() {
+        assert_eq!(
+            suppression_under(rustroom_app::tool::Tool::Edit, true, Some(0)),
+            None,
+            "the Edit panel draws no tint, so nothing may be hidden there"
+        );
+        assert_eq!(
+            suppression_under(rustroom_app::tool::Tool::Masks, false, Some(0)),
+            None,
+            "with the tint off the mask's effect is the only feedback there is"
+        );
+        assert_eq!(
+            suppression_under(rustroom_app::tool::Tool::Masks, true, None),
+            None,
+            "no mask is selected, so there is nothing to suppress"
+        );
+    }
 
     #[test]
     fn every_toolbar_glyph_is_renderable() {

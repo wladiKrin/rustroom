@@ -740,6 +740,19 @@ pub struct Session {
     /// it ends. `SpotRemovalStage` is in the prefix, so each costs a whole-buffer noise-reduction
     /// and dehaze pass — which is exactly why the per-frame version was reported as laggy.
     suppressed_spot: Option<usize>,
+    /// The mask whose adjustments are held out of the view while its tint is shown.
+    ///
+    /// ⚠ **View state, never `Edits`** — `suppressed_spot`'s standing, applied in the same place
+    /// and for the same reason. The sidecar, a preset, a paste, a sync, an export and the CLI
+    /// never see it.
+    ///
+    /// ⚠⚠ **One derivation site, never a set/clear pair.** It is recomputed unconditionally each
+    /// frame in `develop::body` from the same three facts that decide whether the tint is drawn.
+    /// The spot-removal flicker bug was two owners of one suppression — the panel released what
+    /// the canvas had suppressed — and the rule that came out of it was "an owner may release
+    /// only what it suppressed". A single unconditional derivation cannot acquire a second owner,
+    /// and cannot disagree with what is on screen.
+    suppressed_mask: Option<usize>,
     /// What the retouch gesture is doing, across frames.
     ///
     /// ⚠⚠ **On the session, not a local in `canvas::show`** — `active_mask_handle`'s home, for a
