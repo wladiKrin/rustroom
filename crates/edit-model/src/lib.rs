@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod mask_ops;
+pub use mask_ops::{MaskOp, Refinement};
+
 /// White balance as an absolute instrument: the illuminant declared for the scene.
 ///
 /// ⚠⚠ `kelvin: None` is **the file's own baseline** — the as-shot temperature for a RAW, D65 for a
