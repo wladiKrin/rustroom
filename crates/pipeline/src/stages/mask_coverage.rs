@@ -83,3 +83,311 @@ pub(super) fn hue_chroma(rgb: [f32; 3]) -> (f32, f32) {
     let [_, a, b] = color::oklab::prophoto_to_oklab(rgb);
     (b.atan2(a).to_degrees(), a.hypot(b))
 }
+
+/// Per-pixel facts a pixel-dependent component reads, computed **at most once per pixel** and
+/// shared by every component that wants them.
+///
+/// ⚠⚠ **Three colour-range components must cost ONE Oklab round trip, not three.**
+/// `docs/BACKLOG.md`'s decomposition puts that round trip at 42% of a range mask's coverage cost,
+/// so a per-component conversion would make a composite's cost linear in a component count that
+/// ought to be nearly free — and it would be **invisible**, because the pixels come out
+/// bit-identical either way and it merely costs more. That is why the counter below exists.
+///
+/// ⚠ Constructed per pixel and dropped there: two `Option`s on the stack, and different pixels
+/// have different values, so there is nothing to share across them.
+#[derive(Default)]
+pub(super) struct BaseFacts {
+    lightness: Option<f32>,
+    hue_chroma: Option<(f32, f32)>,
+}
+
+// How many Oklab conversions this thread's evaluator has performed.
+//
+// ⚠ **Thread-local, not a global counter.** libtest runs tests in parallel threads, so a shared
+// `AtomicUsize` would let two tests using it race — and a racing guard is either flaky or
+// vacuous, which is worse than none.
+//
+// ⚠ A counter rather than a timing: a benchmark cannot fail a build, and the sharing this guards
+// is otherwise unobservable.
+//
+// ⚠ Line comments rather than `///`: a doc comment on a macro invocation is `unused_doc_comments`,
+// which `-D warnings` rejects.
+#[cfg(test)]
+thread_local! {
+    static CONVERSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reset this thread's conversion count.
+#[cfg(test)]
+pub(super) fn conversions_reset() {
+    CONVERSIONS.with(|c| c.set(0));
+}
+
+/// Read this thread's conversion count.
+#[cfg(test)]
+pub(super) fn conversions() -> usize {
+    CONVERSIONS.with(|c| c.get())
+}
+
+impl BaseFacts {
+    fn lightness(&mut self, rgb: [f32; 3]) -> f32 {
+        *self.lightness.get_or_insert_with(|| lightness(rgb))
+    }
+
+    fn hue_chroma(&mut self, rgb: [f32; 3]) -> (f32, f32) {
+        *self.hue_chroma.get_or_insert_with(|| {
+            #[cfg(test)]
+            CONVERSIONS.with(|c| c.set(c.get() + 1));
+            hue_chroma(rgb)
+        })
+    }
+}
+
+/// Where one pixel sits, and the rasterized maps a painted component reads.
+pub(super) struct PixelCtx<'a> {
+    /// Position in the **frame's** normalised coordinates.
+    pub(super) u: f32,
+    pub(super) v: f32,
+    pub(super) aspect: f32,
+    /// Frame pixel coordinates, for indexing a coverage map.
+    ///
+    /// ⚠ FRAME coordinates, never the region-relative ones — the note `MaskStage::apply` already
+    /// carries, because coverage is defined over the frame and a region-relative index would slide
+    /// the mask as you pan.
+    pub(super) fx: usize,
+    pub(super) fy: usize,
+    /// One entry per component, index 0 being the base. `None` where the component is not painted,
+    /// or where its map could not be built.
+    pub(super) maps: &'a [Option<std::sync::Arc<crate::brush::CoverageMap>>],
+}
+
+/// A mask's coverage: a base shape plus the refinements folded onto it.
+///
+/// ⚠ Resolved **once at construction**, exactly as the single [`CoverageSource`] was, so `apply`
+/// still matches outside the pixel loop.
+pub(super) struct Composite {
+    pub(super) base: CoverageSource,
+    pub(super) refine: Vec<(edit_model::MaskOp, CoverageSource)>,
+}
+
+impl Composite {
+    /// Coverage of one component, in `0.0..=1.0`.
+    ///
+    /// ⚠⚠ `base_px` is the pixel **before this mask's own adjustment**, for every component. A
+    /// mask keyed on its own output chases its effect — lifting the shadows moves them out of the
+    /// band that selected them — and every component reading the *same* base is what stops there
+    /// being a second rule to keep in step.
+    fn source_at(
+        src: &CoverageSource,
+        j: usize,
+        cx: &PixelCtx<'_>,
+        base_px: [f32; 3],
+        facts: &mut BaseFacts,
+    ) -> f32 {
+        match src {
+            CoverageSource::Analytic(m) => {
+                m.analytic_coverage(cx.u, cx.v, cx.aspect).unwrap_or(0.0)
+            }
+            CoverageSource::Range(r) => r.coverage(facts.lightness(base_px)),
+            CoverageSource::Colour(r) => {
+                let (hue, chroma) = facts.hue_chroma(base_px);
+                r.coverage_at(hue, chroma)
+            }
+            CoverageSource::Painted { .. } => match cx.maps.get(j).and_then(|m| m.as_ref()) {
+                Some(cov) => cov.at(cx.fx, cx.fy) as f32 / 255.0,
+                None => 0.0,
+            },
+        }
+    }
+
+    /// The composite's coverage at one pixel: the base, then each refinement folded on **in list
+    /// order**.
+    pub(super) fn at(&self, cx: &PixelCtx<'_>, base_px: [f32; 3], facts: &mut BaseFacts) -> f32 {
+        let mut a = Self::source_at(&self.base, 0, cx, base_px, facts).clamp(0.0, 1.0);
+        for (j, (op, src)) in self.refine.iter().enumerate() {
+            let b = Self::source_at(src, j + 1, cx, base_px, facts).clamp(0.0, 1.0);
+            a = op.combine(a, b);
+        }
+        a.clamp(0.0, 1.0)
+    }
+
+    /// Whether an inert base map is enough to skip this mask entirely.
+    ///
+    /// ⚠⚠ **An inert base does NOT make an inert composite.** `Subtract` and `Intersect` preserve
+    /// zero (`0·(1−b)` and `0·b`); `Add` does not (`0 + 1·b = b`), and there the added component is
+    /// the whole mask. Short-circuiting on the base alone would make an added component vanish
+    /// whenever the base happened to be an unpainted brush — **silently**, because the render is
+    /// then simply the unmasked photograph rather than anything that looks like an error.
+    pub(super) fn base_inert_is_enough(&self) -> bool {
+        !self
+            .refine
+            .iter()
+            .any(|(op, _)| matches!(op, edit_model::MaskOp::Add))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit_model::{ColourRange, LinearGradient, LuminanceRange, Mask, MaskOp};
+
+    fn analytic(m: Mask) -> CoverageSource {
+        CoverageSource::Analytic(m)
+    }
+
+    /// A gradient covering `0.0` at the left edge and `1.0` at the right.
+    fn ramp() -> CoverageSource {
+        analytic(Mask::Linear(LinearGradient {
+            from: [0.0, 0.0],
+            to: [1.0, 0.0],
+            invert: false,
+        }))
+    }
+
+    /// A gradient that is already at full coverage everywhere in the frame.
+    fn everything() -> CoverageSource {
+        analytic(Mask::Linear(LinearGradient {
+            from: [-1.0, 0.0],
+            to: [-0.5, 0.0],
+            invert: false,
+        }))
+    }
+
+    /// A context for a composite with no painted component.
+    fn ctx(u: f32, v: f32) -> PixelCtx<'static> {
+        PixelCtx {
+            u,
+            v,
+            aspect: 1.0,
+            fx: 0,
+            fy: 0,
+            maps: &[],
+        }
+    }
+
+    fn coverage(c: &Composite, px: [f32; 3]) -> f32 {
+        c.at(&ctx(0.5, 0.5), px, &mut BaseFacts::default())
+    }
+
+    #[test]
+    fn a_composite_with_no_refinements_is_its_base() {
+        let c = Composite {
+            base: ramp(),
+            refine: Vec::new(),
+        };
+        let got = coverage(&c, [0.5; 3]);
+        assert!((got - 0.5).abs() < 1e-4, "got {got}");
+    }
+
+    #[test]
+    fn a_subtracted_component_cuts_out_of_the_base() {
+        let c = Composite {
+            base: everything(),
+            refine: vec![(MaskOp::Subtract, ramp())],
+        };
+        let got = coverage(&c, [0.5; 3]);
+        assert!(
+            (got - 0.5).abs() < 1e-4,
+            "1.0 minus 0.5 coverage is 0.5, got {got}"
+        );
+    }
+
+    #[test]
+    fn an_intersected_component_is_the_product() {
+        let c = Composite {
+            base: ramp(),
+            refine: vec![(MaskOp::Intersect, ramp())],
+        };
+        let got = coverage(&c, [0.5; 3]);
+        assert!((got - 0.25).abs() < 1e-4, "0.5 * 0.5 is 0.25, got {got}");
+    }
+
+    #[test]
+    fn three_colour_components_cost_one_oklab_round_trip() {
+        // ⚠⚠ **The only test that can see the sharing.** A per-component round trip renders
+        // bit-identically and merely costs three times as much, so nothing else in the suite
+        // distinguishes them — not a golden, not a pixel comparison, not a region invariant.
+        let colour = || CoverageSource::Colour(ColourRange::default());
+        let c = Composite {
+            base: colour(),
+            refine: vec![(MaskOp::Add, colour()), (MaskOp::Add, colour())],
+        };
+        conversions_reset();
+        let _ = coverage(&c, [0.3, 0.4, 0.5]);
+        assert_eq!(
+            conversions(),
+            1,
+            "three colour components must share one conversion"
+        );
+    }
+
+    #[test]
+    fn a_composite_of_only_analytic_shapes_converts_nothing() {
+        // ⚠ The other half: the facts are computed **lazily**, so a composite that never asks for
+        // a pixel pays nothing at all. A version that computed them up front would pass the test
+        // above and fail this one.
+        let c = Composite {
+            base: ramp(),
+            refine: vec![(MaskOp::Intersect, ramp())],
+        };
+        conversions_reset();
+        let _ = coverage(&c, [0.3, 0.4, 0.5]);
+        assert_eq!(conversions(), 0);
+    }
+
+    #[test]
+    fn a_luminance_component_reads_the_base_pixel() {
+        let c = Composite {
+            base: CoverageSource::Range(LuminanceRange::default()),
+            refine: Vec::new(),
+        };
+        let dark = coverage(&c, [0.01; 3]);
+        let bright = coverage(&c, [0.9; 3]);
+        assert!(
+            dark > bright,
+            "the default range is the darker half: {dark} vs {bright}"
+        );
+    }
+
+    #[test]
+    fn an_inert_base_is_only_enough_without_an_add() {
+        // ⚠⚠ The `is_inert` hazard as a unit test. `MaskStage` carries the end-to-end one; this
+        // pins the rule itself, whose sabotage is dropping the `Add` clause.
+        let c = |op| Composite {
+            base: ramp(),
+            refine: vec![(op, ramp())],
+        };
+        assert!(c(MaskOp::Subtract).base_inert_is_enough());
+        assert!(c(MaskOp::Intersect).base_inert_is_enough());
+        assert!(
+            !c(MaskOp::Add).base_inert_is_enough(),
+            "an added component is the whole mask when the base covers nothing"
+        );
+        assert!(
+            Composite {
+                base: ramp(),
+                refine: Vec::new()
+            }
+            .base_inert_is_enough(),
+            "with no refinement at all the old fast path must still apply"
+        );
+    }
+
+    #[test]
+    fn the_fold_follows_list_order() {
+        // ⚠ Order is observable, so the same two components in the other order must differ.
+        let a = Composite {
+            base: everything(),
+            refine: vec![(MaskOp::Subtract, ramp()), (MaskOp::Add, ramp())],
+        };
+        let b = Composite {
+            base: everything(),
+            refine: vec![(MaskOp::Add, ramp()), (MaskOp::Subtract, ramp())],
+        };
+        let (x, y) = (coverage(&a, [0.5; 3]), coverage(&b, [0.5; 3]));
+        assert!(
+            (x - y).abs() > 0.1,
+            "the two orders must differ: {x} vs {y}"
+        );
+    }
+}

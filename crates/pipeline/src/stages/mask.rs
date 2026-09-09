@@ -9,14 +9,15 @@ use crate::{adjustment_stages, PipelineStage, Region, RenderScale};
 use core_image::ImageBuf;
 use edit_model::{Geometry, MaskedAdjustment};
 
-use super::mask_coverage::{hue_chroma, lightness, CoverageSource};
+use super::mask_coverage::{BaseFacts, Composite, CoverageSource, PixelCtx};
 
 pub struct MaskStage {
     // ⚠ The `MaskedAdjustment` itself is deliberately not retained. Everything needed is
     // extracted at construction — the coverage source and the sub-stage list — and keeping a copy
     // as well was dead weight that `-D warnings` caught the moment the coverage lookup stopped
     // going through it.
-    source: CoverageSource,
+    /// The mask's coverage: its base shape plus every refinement, resolved once at construction.
+    composite: Composite,
     stages: Vec<Box<dyn PipelineStage>>,
     region: Option<Region>,
     /// Where to report coverage this stage had to build, and at which position.
@@ -69,7 +70,7 @@ impl MaskStage {
         deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
     ) -> Self {
         Self {
-            source: Self::coverage_source(masked, geometry, prebuilt),
+            composite: Self::composite(masked, geometry, prebuilt),
             stages: adjustment_stages(&masked.adjustments, baseline, scale),
             region,
             deposit,
@@ -93,7 +94,7 @@ impl MaskStage {
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
     ) -> Self {
         Self {
-            source: Self::coverage_source(masked, geometry, prebuilt),
+            composite: Self::composite(masked, geometry, prebuilt),
             stages: crate::capture_stages(&masked.adjustments, scale),
             region: None,
             // ⚠ The capture half runs in the **prefix**, which always renders whole-buffer and is
@@ -110,12 +111,34 @@ impl MaskStage {
     /// `None` would fall through to `unwrap_or(0.0)` and produce a mask covering **nothing**,
     /// silently. That is precisely the failure `analytic_coverage`'s `Option` exists to make
     /// impossible, defeated one layer up. Adding a variant is a compile error here.
-    fn coverage_source(
+    /// The whole composite: the base shape, then each refinement with the op that folds it on.
+    ///
+    /// ⚠ `prebuilt` belongs to the **base** only. A refinement's brush rasterizes inside `apply`
+    /// like any uncached one; widening the prebuilt side to a slice is the coverage cache's own
+    /// change, and until it lands a refinement brush simply misses — which fails toward a miss,
+    /// `PrefixKey`'s rule and the safe direction of the two.
+    fn composite(
         masked: &MaskedAdjustment,
         geometry: &Geometry,
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
+    ) -> Composite {
+        Composite {
+            base: Self::source_for(&masked.mask, geometry, prebuilt),
+            refine: masked
+                .refine
+                .iter()
+                .map(|r| (r.op, Self::source_for(&r.mask, geometry, None)))
+                .collect(),
+        }
+    }
+
+    /// How one shape's coverage is obtained.
+    fn source_for(
+        mask: &edit_model::Mask,
+        geometry: &Geometry,
+        prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
     ) -> CoverageSource {
-        match &masked.mask {
+        match mask {
             edit_model::Mask::Brush(b) => CoverageSource::Painted {
                 brush: b.clone(),
                 geometry: *geometry,
@@ -183,7 +206,9 @@ impl PipelineStage for MaskStage {
         // ⚠ Whole-frame, never region-sized. Coverage is defined over the frame, so a
         // region-sized raster would move under panning — the same class of bug the mask overlay
         // hit in 3.1a.
-        let coverage = match &self.source {
+        // ⚠ One entry per component, index 0 being the base. An analytic or range component
+        // rasterizes nothing and answers from inside the loop; only a painted one has a map.
+        let build_map = |src: &CoverageSource, j: usize| match src {
             // ⚠ Neither of these rasterizes anything: one answers from the position, the other
             // from the pixel, both inside the loop below.
             CoverageSource::Analytic(_) | CoverageSource::Range(_) | CoverageSource::Colour(_) => {
@@ -225,18 +250,45 @@ impl PipelineStage for MaskStage {
                 // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
                 // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
                 // coverage-cache spec's §4.0.
+                // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
+                // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
+                // coverage-cache spec's §4.0.
+                //
+                // ⚠ Only the **base** deposits until `BrushCoverage` is indexed per component: a
+                // refinement's map has no slot to land in yet, and depositing it under the base's
+                // index would file one shape's coverage against another's key — a stale hit, which
+                // is the one direction this cache must never fail in.
                 if let Some((sink, i)) = &self.deposit {
-                    sink.deposit(*i, std::sync::Arc::clone(&built));
+                    if j == 0 {
+                        sink.deposit(*i, std::sync::Arc::clone(&built));
+                    }
                 }
                 Some(built)
             }
         };
+        let mut maps: Vec<Option<std::sync::Arc<crate::brush::CoverageMap>>> =
+            Vec::with_capacity(1 + self.composite.refine.len());
+        maps.push(build_map(&self.composite.base, 0));
+        for (j, (_, src)) in self.composite.refine.iter().enumerate() {
+            maps.push(build_map(src, j + 1));
+        }
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
         // every test still pass. An empty coverage map reads 0 everywhere, and blending at
         // coverage 0 is bit-exactly the identity, so the output is already right without this.
         // What it saves is a full-image clone plus a full run of every sub-stage, which for an
         // unpainted brush is the entire cost of the stage.
-        if coverage.as_ref().is_some_and(|c| c.is_inert()) {
+        //
+        // ⚠⚠ **And it stops being merely an optimisation once an `Add` refinement exists.** An
+        // inert base stays inert under `Subtract` and `Intersect` and does NOT under `Add`, where
+        // the added component is the whole mask. `an_added_component_survives_an_inert_base` is
+        // what fails when the `Add` clause is dropped, and nothing else in the suite can see it —
+        // the render would simply be the unmasked photograph.
+        if self.composite.base_inert_is_enough()
+            && maps
+                .first()
+                .and_then(|m| m.as_ref())
+                .is_some_and(|c| c.is_inert())
+        {
             return image;
         }
 
@@ -255,28 +307,24 @@ impl PipelineStage for MaskStage {
             // Pixel position in the *frame's* normalised coordinates.
             let u = (x0 + x) as f32 / fw as f32;
             let v = (y0 + y) as f32 / fh as f32;
-            let c = match (&self.source, &coverage) {
-                (CoverageSource::Analytic(m), _) => {
-                    m.analytic_coverage(u, v, aspect).unwrap_or(0.0)
-                }
-                // ⚠ `base`, never `adjusted`. A mask keyed on its own output chases its effect:
-                // lifting the shadows moves them out of the band that selected them.
-                (CoverageSource::Range(r), _) => r.coverage(lightness(base)),
-                // ⚠ `base` here too, and the failure it avoids is the sharper of the two: a
-                // saturation or white-balance move inside the mask shifts the pixel's own hue, so
-                // a colour range keyed on its own output would slide the selection out from under
-                // the correction as it applied.
-                (CoverageSource::Colour(r), _) => {
-                    let (hue, chroma) = hue_chroma(base);
-                    r.coverage_at(hue, chroma)
-                }
-                // ⚠ Indexed by FRAME pixel, not by the region-relative `(x, y)`.
-                (CoverageSource::Painted { .. }, Some(cov)) => {
-                    cov.at(x0 + x, y0 + y) as f32 / 255.0
-                }
-                (CoverageSource::Painted { .. }, None) => 0.0,
-            }
-            .clamp(0.0, 1.0);
+            // ⚠ `base`, never `adjusted`, for every component. A mask keyed on its own output
+            // chases its effect: lifting the shadows moves them out of the band that selected
+            // them, and a saturation or white-balance move shifts the very hue a colour range
+            // measured. Every component reading the *same* base is what leaves no second rule to
+            // keep in step.
+            //
+            // ⚠ `BaseFacts` is per pixel and dropped here — two `Option`s on the stack. It is
+            // what makes three colour components cost one Oklab round trip rather than three.
+            let mut facts = BaseFacts::default();
+            let cx = PixelCtx {
+                u,
+                v,
+                aspect,
+                fx: x0 + x,
+                fy: y0 + y,
+                maps: &maps,
+            };
+            let c = self.composite.at(&cx, base, &mut facts);
             let adj = adjusted.pixel(x, y);
             [
                 base[0] + (adj[0] - base[0]) * c,
@@ -290,6 +338,9 @@ impl PipelineStage for MaskStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // ⚠ In the test module, not at the top: production reads these through `Composite`
+    // now, so a module-level import would be unused in a non-test build.
+    use super::super::mask_coverage::{hue_chroma, lightness};
     use edit_model::{LinearGradient, LocalAdjustments, Mask};
 
     #[test]
@@ -435,6 +486,84 @@ mod tests {
             (right - 1.0).abs() < 2e-2,
             "right edge should be near +1 EV: {right}"
         );
+    }
+
+    #[test]
+    fn a_subtracted_radial_is_cut_out_of_a_linear() {
+        // A +1 EV lift under a left-to-right gradient, with a radial subtracted from the right
+        // half. At the right edge the gradient is at full coverage, so the cut-out is the only
+        // thing that can leave the pixel alone.
+        let mut m = masked([0.0, 0.0], [1.0, 0.0]);
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: Mask::Radial(edit_model::RadialGradient {
+                center: [0.95, 0.5],
+                radius: [0.3, 1.0],
+                feather: 0.0,
+                invert: false,
+            }),
+        });
+        let img = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(flat(64, 16));
+        let inside = img.pixel(63, 8)[0];
+        let outside = img.pixel(40, 8)[0];
+        assert!(
+            (inside - 0.5).abs() < 1e-4,
+            "inside the subtracted radial the pixel must be untouched: {inside}"
+        );
+        assert!(
+            outside > 0.55,
+            "outside it the gradient must still lift: {outside}"
+        );
+    }
+
+    #[test]
+    fn an_added_component_survives_an_inert_base() {
+        // ⚠⚠ **The `is_inert` hazard, as a test.** The base is an unpainted brush — inert, so the
+        // old fast path returns the image untouched — and the refinement is an added gradient.
+        // Short-circuiting on the base alone makes the added component vanish **silently**: the
+        // result is simply the unmasked photograph, which looks like nothing rather than an error.
+        let mut m = MaskedAdjustment {
+            mask: Mask::Brush(edit_model::Brush::default()),
+            ..Default::default()
+        };
+        m.adjustments.exposure = 1.0;
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Add,
+            mask: Mask::Linear(LinearGradient {
+                from: [-1.0, 0.0],
+                to: [-0.5, 0.0],
+                invert: false,
+            }),
+        });
+        let img = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(flat(16, 8));
+        let got = img.pixel(8, 4)[0];
+        assert!(
+            got > 0.9,
+            "an added component must render over an inert base: {got}"
+        );
+    }
+
+    #[test]
+    fn a_subtracted_component_over_an_inert_base_still_short_circuits() {
+        // The other half, and what keeps the fast path honest: with no `Add`, an inert base
+        // really is inert, so the output must be byte-identical.
+        let mut m = MaskedAdjustment {
+            mask: Mask::Brush(edit_model::Brush::default()),
+            ..Default::default()
+        };
+        m.adjustments.exposure = 1.0;
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: Mask::Linear(LinearGradient {
+                from: [-1.0, 0.0],
+                to: [-0.5, 0.0],
+                invert: false,
+            }),
+        });
+        let before = flat(16, 8);
+        let after =
+            MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(before.clone());
+        assert_eq!(after, before);
     }
 
     #[test]
@@ -622,7 +751,7 @@ mod tests {
     /// The lightness the stage itself would compute for a rendered row — the same rule, so the
     /// tests below cannot drift from the implementation's idea of where a band sits.
     fn row_lightness(img: &ImageBuf, y: usize) -> f32 {
-        super::lightness(img.pixel(0, y))
+        lightness(img.pixel(0, y))
     }
 
     #[test]
