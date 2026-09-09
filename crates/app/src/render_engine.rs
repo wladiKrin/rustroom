@@ -2283,11 +2283,36 @@ mod tests {
         // an NR change (resumes after geometry), a geometry change (resumes at the seed), and
         // returns to earlier states so a stale checkpoint would show up.
         let buf = varied();
-        let a = full_prefix();
+        // ⚠⚠ **An auto-masked brush is in the sequence, and it is what makes a stale base
+        // visible.** Every other test of the coverage key asserts on *presence*; a key that admits
+        // a stale base produces a map that is present and **wrong**, and only comparing pixels
+        // against a cold render can see that. `b` below moves a **global** slider, which really
+        // does change this mask's base — so the return leg is where a stale hit would show.
+        let a = Edits {
+            masks: vec![edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::Brush(edit_model::Brush {
+                    strokes: vec![edit_model::BrushStroke {
+                        points: vec![[0.5, 0.5]],
+                        radius: 0.35,
+                        hardness: 100.0,
+                        flow: 100.0,
+                        auto_mask: true,
+                        tolerance: 35.0,
+                        ..Default::default()
+                    }],
+                    invert: false,
+                }),
+                adjustments: edit_model::LocalAdjustments {
+                    exposure: 1.0,
+                    ..Default::default()
+                },
+            }],
+            ..full_prefix()
+        };
         let b = Edits {
             exposure: -1.0,
             ..a.clone()
-        }; // tail only
+        }; // tail only — and it changes the mask's base
         let c = Edits {
             dehaze: edit_model::Dehaze { amount: 85.0 },
             ..a.clone()
