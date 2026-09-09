@@ -127,6 +127,44 @@ pub fn fit_cap(buffer_long: usize, preview_max: usize) -> usize {
     buffer_long.min(preview_max)
 }
 
+/// The post-geometry image size **at the fit cap**, in exact floats.
+///
+/// ⚠⚠ **This is what `Session::fit_image_size` means, and deriving it from a rendered frame is
+/// what made that value depend on which rung last landed.** A frame's dimensions come from
+/// [`core_image::ImageBuf::downscale_to`], which rounds; scaling them back up by
+/// `fit_cap / max_dim` multiplies that rounding by `rung / fit_cap`. Measured on an uncropped
+/// X-T4 frame, the height read 1068.000 at rungs 1600 and 3200 against a true 1068.204 at 6246.
+/// Computed here from the buffer and the geometry there is no rounding to amplify, and the result
+/// is identical at every rung by construction.
+///
+/// ⚠ `geometry` must be the **view** geometry — what the render was asked for — not
+/// `Session::edits.geometry`. Geometry mode resets the crop for the preview, so the two differ
+/// exactly when the crop overlay is on screen and depending on it.
+///
+/// ⚠ The orientation is applied before the crop, matching `GeometryStage`: a quarter turn
+/// transposes the frame and the crop fractions then apply to the turned one.
+pub fn fit_size(
+    buffer_w: usize,
+    buffer_h: usize,
+    fit_cap: usize,
+    geometry: &edit_model::Geometry,
+) -> (f32, f32) {
+    let long = buffer_w.max(buffer_h).max(1) as f32;
+    let ratio = fit_cap.max(1) as f32 / long;
+    let (mut w, mut h) = (buffer_w as f32 * ratio, buffer_h as f32 * ratio);
+    if geometry.orientation.transposes() {
+        std::mem::swap(&mut w, &mut h);
+    }
+    let c = geometry.crop;
+    // ⚠ Floored at one pixel rather than trusted: every consumer divides by this, and a zero
+    // buffer or a degenerate crop would otherwise produce an infinity that `clamp` cannot repair
+    // — the NaN trap `crop_tool` already documents.
+    (
+        (w * (c.right - c.left)).max(1.0),
+        (h * (c.bottom - c.top)).max(1.0),
+    )
+}
+
 /// The sub-rect of an `image_w` x `image_h` image visible in a viewport of `avail_w` x
 /// `avail_h` screen pixels, drawn at `scale` screen pixels per image pixel and panned by
 /// `pan_x`/`pan_y` screen pixels.
@@ -552,5 +590,69 @@ mod tests {
     fn a_cursor_on_the_anchor_needs_no_shift() {
         let shift = zoom_anchor_shift((100.0, 200.0), (100.0, 200.0), 1.0, 4.0);
         assert_eq!(shift, (0.0, 0.0));
+    }
+
+    #[test]
+    fn the_fit_size_is_the_buffer_scaled_to_the_cap() {
+        // An uncropped X-T4 frame: 6246x4170 capped at 1600.
+        let g = edit_model::Geometry::default();
+        let (w, h) = fit_size(6246, 4170, 1600, &g);
+        assert!((w - 1600.0).abs() < 1e-3, "width {w}");
+        // ⚠ The value the shipped code gets *wrong*: 4170 * 1600 / 6246 = 1068.204, where
+        // deriving it from a rounded 2136-row frame at rung 3200 gives exactly 1068.0.
+        assert!((h - 1068.2036).abs() < 1e-3, "height {h}");
+    }
+
+    #[test]
+    fn the_fit_size_follows_the_crop() {
+        let g = edit_model::Geometry {
+            crop: edit_model::CropRect {
+                left: 0.25,
+                top: 0.0,
+                right: 0.75,
+                bottom: 0.5,
+            },
+            ..edit_model::Geometry::default()
+        };
+        let (w, h) = fit_size(6246, 4170, 1600, &g);
+        assert!((w - 800.0).abs() < 1e-3, "width {w}");
+        assert!((h - 534.1018).abs() < 1e-3, "height {h}");
+    }
+
+    /// ⚠⚠ A quarter turn **transposes**, and forgetting it is invisible on a square fixture and
+    /// on any test that only checks the long edge. `GeometryStage` applies the orientation before
+    /// the crop, so the crop fractions apply to the *turned* frame.
+    #[test]
+    fn a_quarter_turn_transposes_the_fit_size() {
+        let g = edit_model::Geometry {
+            orientation: edit_model::Orientation {
+                rotate: edit_model::Quarter::Cw90,
+                mirror: false,
+            },
+            ..edit_model::Geometry::default()
+        };
+        let (w, h) = fit_size(6246, 4170, 1600, &g);
+        assert!((w - 1068.2036).abs() < 1e-3, "width {w}");
+        assert!((h - 1600.0).abs() < 1e-3, "height {h}");
+        // A half turn does not transpose, which is what stops "any rotation swaps" passing.
+        let g2 = edit_model::Geometry {
+            orientation: edit_model::Orientation {
+                rotate: edit_model::Quarter::Cw180,
+                mirror: false,
+            },
+            ..edit_model::Geometry::default()
+        };
+        let (w2, h2) = fit_size(6246, 4170, 1600, &g2);
+        assert!((w2 - 1600.0).abs() < 1e-3, "width {w2}");
+        assert!((h2 - 1068.2036).abs() < 1e-3, "height {h2}");
+    }
+
+    /// A degenerate buffer must not produce a zero or a NaN: every consumer divides by this.
+    #[test]
+    fn a_degenerate_buffer_still_yields_a_usable_size() {
+        let g = edit_model::Geometry::default();
+        let (w, h) = fit_size(0, 0, 1600, &g);
+        assert!(w >= 1.0 && h >= 1.0, "{w}x{h}");
+        assert!(w.is_finite() && h.is_finite(), "{w}x{h}");
     }
 }

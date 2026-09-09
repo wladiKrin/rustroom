@@ -139,6 +139,15 @@ impl Orientation {
         self == Orientation::default()
     }
 
+    /// Whether this orientation swaps the frame's width and height.
+    ///
+    /// ⚠ The mirror does not transpose — it reflects — so only the odd quarter turns do. A
+    /// predicate that answered "any non-identity orientation" would be right on a square fixture
+    /// and wrong on every photograph.
+    pub fn transposes(self) -> bool {
+        matches!(self.rotate, Quarter::Cw90 | Quarter::Cw270)
+    }
+
     pub fn rotate_cw(&mut self) {
         self.rotate = Quarter::from_turns(self.rotate.turns() + 1);
     }
