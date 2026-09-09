@@ -91,6 +91,22 @@ fn brush() -> Mask {
     })
 }
 
+/// The same stroke with Auto Mask on.
+///
+/// ⚠⚠ It differs from [`brush`] in **exactly one thing**, so the two rows subtract to the gate's
+/// own cost. ⚠ That is *not* the cost of `BrushCache` declining a gating brush: both loops here
+/// build their pipelines with no prebuilt coverage, so neither can see the cache at all. The
+/// refusal's price is the [`brush`] row itself, which an auto-masked brush pays on every render
+/// in addition to this.
+fn auto_brush() -> Mask {
+    let Mask::Brush(mut b) = brush() else {
+        unreachable!()
+    };
+    b.strokes[0].auto_mask = true;
+    b.strokes[0].tolerance = 40.0;
+    Mask::Brush(b)
+}
+
 fn clarity() -> LocalAdjustments {
     LocalAdjustments {
         local_contrast: LocalContrast {
@@ -259,6 +275,15 @@ fn main() {
         (
             "1 masked exposure (brush) ⚠uncached",
             masked(1, brush, exposure),
+        ),
+        // ⚠⚠ **Read this against the row above, which is the same stroke ungated.** The
+        // difference is the gate's own cost — the box's Oklab conversion plus a distance and a
+        // smoothstep per dab per covered pixel — and NOT the cost of `BrushCache` declining it,
+        // which neither loop here can see because both are uncached by construction. ⚠ An
+        // auto-masked brush pays the row above *as well*, since its cache really is declined.
+        (
+            "1 masked exposure (brush, auto-masked)",
+            masked(1, auto_brush, exposure),
         ),
         ("1 masked clarity  (gradient)", masked(1, gradient, clarity)),
         ("3 masked clarity  (gradient)", masked(3, gradient, clarity)),

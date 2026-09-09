@@ -336,16 +336,22 @@ pub fn rasterize_in(
                     // rendered region — an auto-masked dab paints positionally. Documented
                     // degradation, not an error; `Brush::needs_base` plus `BrushCache`'s refusal
                     // are what stop the *render* ever taking that path.
+                    let slot = &mut layer[(y - y0) * w + (x - x0)];
+                    // ⚠⚠ **Short-circuit before the gate, and it is sound rather than an
+                    // approximation.** Dabs within a stroke combine with `max`, and the gate can
+                    // only ever *reduce* an alpha — so a dab whose positional alpha already loses
+                    // the `max` cannot change this pixel however its gate resolves. Worth having
+                    // because dabs are laid `SPACING` (a quarter radius) apart and overlap
+                    // heavily, so most of them lose.
+                    if a <= *slot {
+                        continue;
+                    }
                     let a = match (&d.gate, &base_lab) {
                         (Some((r, ceil)), Some(lab)) => {
                             a * auto_mask_gate(lab[(y - y0) * w + (x - x0)], *r, *ceil)
                         }
                         _ => a,
                     };
-                    if a <= 0.0 {
-                        continue;
-                    }
-                    let slot = &mut layer[(y - y0) * w + (x - x0)];
                     *slot = slot.max(a);
                 }
             }

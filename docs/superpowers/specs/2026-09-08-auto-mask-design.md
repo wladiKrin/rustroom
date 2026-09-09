@@ -20,7 +20,7 @@ spec**; each names the experiment and what each outcome implies.
 | # | question | instrument | what it decides |
 |---|---|---|---|
 | **M1** ✅ | How far apart are the **reference's space** and the **comparison space**? | `auto_mask_space_probe`, kept | **MEASURED 2026-09-08 — the L term is unusable and the chroma terms are fine. See §3.** |
-| **M2** | What does disabling `BrushCache` cost per render? | `bench_masked`, a new row: one auto-masked brush at fit and at a 1:1 region | whether the cache must be made auto-mask-aware, or the existing self-rasterising fallback is enough — see §6 |
+| **M2** ✅ | What does an auto-masked brush cost per render? | `bench_masked`, a row beside the existing uncached brush | **MEASURED 2026-09-09 — ~+45 to +56 ms at fit for the gate, on top of ~+15 for the rasterisation the cache refusal makes unavoidable. See below.** |
 | **M3** | Does the mask **drift** when a global slider moves after painting? | paint an auto-masked stroke on a real photograph, then sweep exposure ±2 EV and measure coverage change | the question deferred in brainstorming: whether a stable pre-tail buffer is worth its plumbing — see §9 |
 
 ⚠ **M1 is the one that can invalidate the design**, so it ran first and its result gated the rest.
@@ -58,7 +58,38 @@ REPORTED AS A FINDING.**
    measurement was about.** The probe now reports both rows side by side so the distinction cannot
    be lost again — the rendering-off row is the CLI's and the goldens' case and is genuinely ~0.
 
-M2 and M3 remain tuning and scope.
+### ⚠⚠ M2's result, and the question it turned out NOT to answer
+
+X-T4, 1600 px fit, `bench_masked`. ⚠ **The question as originally written — "what does disabling
+`BrushCache` cost?" — is not answerable with this instrument, and saying so is the finding.** Both
+of that bench's loops build their pipelines with **no prebuilt coverage**, so neither can see the
+cache at all; its existing brush row already carries a ⚠ saying exactly that. What the new row
+measures against it is the **gate's own cost**.
+
+| | fit | vs neutral |
+|---|---|---|
+| neutral | 13–19 ms | — |
+| 1 masked exposure, gradient | 18.4 ms | +3.6 |
+| 1 masked exposure, brush (uncached) | 22–29 ms | **+14 to +18** |
+| **1 masked exposure, brush, auto-masked** | **60–78 ms** | **+53 to +64** |
+
+⚠⚠ **So in the running app an auto-masked brush costs roughly +50 ms on EVERY render, not only
+while painting** — because `BrushCache` declines it, so it pays the rasterisation (~+15) *and* the
+gate (~+45) on every frame, where a plain brush pays neither after the first. A fit render goes
+from about 18 ms to about 65: **54 fps to 15**. That is worse than masked HSL's +33 ms, which the
+M7.2 GUI round reported as *"a bit slow, but still usable"*, so expect this to be noticed.
+
+⚠ The remedy, if the GUI round says it matters, is the one `BrushCache`'s own comment names:
+**widen its key with a cheap identity of the base buffer** so the map survives an unrelated slider
+drag. Reintroducing the unkeyed map is not the remedy.
+
+⚠ A sound short-circuit is in place — a dab whose positional alpha already loses the per-stroke
+`max` cannot change the result however its gate resolves, so the gate is skipped for it. Measured
+**+43.8 against +49.6 on a hard-edged brush** and **inside noise on a maximally soft one**; kept
+because it is sound and cannot hurt, and recorded at its measured worth rather than as a win. Same
+honesty the `hypot` → `sqrt` change carries in `CLAUDE.md`.
+
+M3 remains open.
 
 ---
 
