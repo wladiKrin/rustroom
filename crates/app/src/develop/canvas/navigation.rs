@@ -4,7 +4,7 @@
 //! keeping them beside their (large) harnesses keeps the orchestrator readable.
 
 use eframe::egui;
-use rustroom_app::settings::PanDrag;
+use rustroom_app::settings::{DragButton, EraseDrag, PanDrag};
 
 /// Whether a drag belongs to the active tool — the crop rectangle, a mask handle, and later
 /// the brush.
@@ -22,24 +22,33 @@ pub(super) fn tool_drag_started(resp: &egui::Response) -> bool {
     resp.drag_started_by(egui::PointerButton::Primary)
 }
 
-/// Whether a **secondary-button** drag should be treated as a brush stroke that erases.
+/// The `egui` button an erase binding resolves to, or `None` when the gesture is unavailable.
 ///
-/// ⚠⚠ **The pan binding wins.** `PanDrag::Secondary` is a selectable binding, and it is an
-/// explicit choice where this is a convenience — so with right-drag set to pan, this returns
-/// `false` and the gesture is simply unavailable. That is the same precedence [`tool_drag`]
-/// already applies by refusing middle and secondary drags outright, so the pan gesture cannot
-/// drag crop rectangles and mask handles as it passes over them.
+/// ⚠ The mapping lives here rather than in `settings`, which has no `egui` dependency by rule —
+/// that separation is what keeps `EraseDrag::button`'s "the pan binding wins" rule testable
+/// without a window.
+fn erase_button(erase: EraseDrag, pan: PanDrag) -> Option<egui::PointerButton> {
+    erase.button(pan).map(|b| match b {
+        DragButton::Secondary => egui::PointerButton::Secondary,
+        DragButton::Middle => egui::PointerButton::Middle,
+    })
+}
+
+/// Whether a drag on the configured erase button is in progress.
+///
+/// ⚠⚠ **The pan binding wins, and [`EraseDrag::button`] is where that is decided** — once, so a
+/// build in which one button both pans and erases is unrepresentable rather than merely tested.
 ///
 /// ⚠ Held only for the gesture: the caller bakes the erase flag into the stroke at
 /// `drag_started`, exactly as `radius`, `hardness`, `flow` and `auto_mask` are baked, so a stroke
 /// keeps what it was drawn with and the next one is an ordinary paint again.
-pub(super) fn erase_drag(resp: &egui::Response, binding: PanDrag) -> bool {
-    binding != PanDrag::Secondary && resp.dragged_by(egui::PointerButton::Secondary)
+pub(super) fn erase_drag(resp: &egui::Response, erase: EraseDrag, pan: PanDrag) -> bool {
+    erase_button(erase, pan).is_some_and(|b| resp.dragged_by(b))
 }
 
-/// Whether an erasing secondary drag has just begun. Same gating, same reason.
-pub(super) fn erase_drag_started(resp: &egui::Response, binding: PanDrag) -> bool {
-    binding != PanDrag::Secondary && resp.drag_started_by(egui::PointerButton::Secondary)
+/// Whether an erasing drag has just begun. Same gating, same reason.
+pub(super) fn erase_drag_started(resp: &egui::Response, erase: EraseDrag, pan: PanDrag) -> bool {
+    erase_button(erase, pan).is_some_and(|b| resp.drag_started_by(b))
 }
 
 /// Every source of panning, folded into one screen-space delta.
@@ -158,8 +167,8 @@ mod tests {
         out
     }
 
-    /// Whether `erase_drag` fires for a secondary drag under `binding`.
-    fn erase_drag_for(binding: PanDrag) -> bool {
+    /// Whether `erase_drag` fires for a secondary drag, under a pan binding and an erase binding.
+    fn erase_drag_for(pan: PanDrag, erase: EraseDrag) -> bool {
         let ctx = egui::Context::default();
         let mut out = false;
         let start = egui::pos2(100.0, 100.0);
@@ -185,7 +194,7 @@ mod tests {
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
                 let resp = ui.allocate_rect(rect, egui::Sense::drag());
                 if pass == 3 {
-                    out = erase_drag(&resp, binding);
+                    out = erase_drag(&resp, erase, pan);
                 }
             });
         }
@@ -196,11 +205,26 @@ mod tests {
     /// explicit choice, and letting both fire would pan the photograph while erasing into it.
     #[test]
     fn a_right_drag_erases_unless_right_drag_is_the_pan_binding() {
-        assert!(erase_drag_for(PanDrag::Middle));
-        assert!(erase_drag_for(PanDrag::SpaceLeft));
+        assert!(erase_drag_for(PanDrag::Middle, EraseDrag::Secondary));
+        assert!(erase_drag_for(PanDrag::SpaceLeft, EraseDrag::Secondary));
         assert!(
-            !erase_drag_for(PanDrag::Secondary),
+            !erase_drag_for(PanDrag::Secondary, EraseDrag::Secondary),
             "right-drag is bound to panning, so it must not also erase"
+        );
+    }
+
+    /// ⚠ The setting reaches the gesture. `EraseDrag::button`'s own test proves the rule; this is
+    /// the hop that proves the canvas asks the right button — the W5 shape, where a fully tested
+    /// rule reached nothing.
+    #[test]
+    fn the_erase_binding_chooses_which_button_erases() {
+        assert!(
+            !erase_drag_for(PanDrag::Middle, EraseDrag::Off),
+            "switched off, no button may erase"
+        );
+        assert!(
+            !erase_drag_for(PanDrag::SpaceLeft, EraseDrag::Middle),
+            "bound to the middle button, a right-drag must not erase"
         );
     }
 

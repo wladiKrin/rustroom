@@ -117,6 +117,78 @@ impl PanDrag {
     }
 }
 
+/// Which held mouse button makes a brush stroke erase, for the duration of the gesture.
+///
+/// ⚠⚠ **The pan binding always wins.** [`PanDrag`] is a deliberate choice about how to move around
+/// the photograph, where this is a convenience — so a button bound to panning is never also an
+/// erase, and the gesture is simply unavailable rather than both firing. That is the precedence
+/// `tool_drag` already applies by refusing middle and secondary drags outright, so the pan gesture
+/// cannot drag crop rectangles and mask handles as it passes over them.
+///
+/// ⚠ `Off` earns its place: an accidental right-drag erases part of a mask, and someone who finds
+/// that destructive needs a way to turn it off that is not "bind panning to the same button",
+/// which is exactly the kind of accident a setting should prevent rather than require.
+///
+/// ⚠ A closed enum, not a keybinding system — [`PanDrag`]'s reasoning, for its reason. A modifier
+/// key was considered and left out: it would need its own keyboard-focus gating, which
+/// [`PanDrag::SpaceLeft`] already documents as a trap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum EraseDrag {
+    /// Right-button drag. The default: nothing else on the canvas uses secondary click.
+    #[default]
+    Secondary,
+    /// Middle-button drag. ⚠ Unavailable on an Apple Magic Mouse, which has no middle button.
+    Middle,
+    /// No erase gesture at all; the Erase checkbox is the only route.
+    Off,
+}
+
+/// A mouse button, named here so this module needs no `egui` dependency.
+///
+/// ⚠ `crates/app/src/lib.rs` has no egui by rule — that separation is what keeps these types
+/// testable without a window. The bin maps these onto `egui::PointerButton`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragButton {
+    Secondary,
+    Middle,
+}
+
+impl EraseDrag {
+    /// Every variant, for the settings dropdown and for table-driven tests.
+    pub const ALL: [EraseDrag; 3] = [EraseDrag::Secondary, EraseDrag::Middle, EraseDrag::Off];
+
+    /// How to describe this binding in the UI.
+    ///
+    /// ⚠ Named rather than spelled out at the call site, so a hint cannot go stale the moment the
+    /// setting changes — [`PanDrag::label`]'s reason.
+    pub fn label(self) -> &'static str {
+        match self {
+            EraseDrag::Secondary => "right-drag",
+            EraseDrag::Middle => "middle-drag",
+            EraseDrag::Off => "off",
+        }
+    }
+
+    /// The button this binds to, or `None` when the gesture is off **or when panning has already
+    /// claimed that button**.
+    ///
+    /// ⚠⚠ One function decides both, so "the pan binding wins" is written once. Two places
+    /// deciding it is how a build appears in which a right-drag both pans and erases.
+    pub fn button(self, pan: PanDrag) -> Option<DragButton> {
+        let want = match self {
+            EraseDrag::Secondary => DragButton::Secondary,
+            EraseDrag::Middle => DragButton::Middle,
+            EraseDrag::Off => return None,
+        };
+        let taken = match pan {
+            PanDrag::Middle => Some(DragButton::Middle),
+            PanDrag::Secondary => Some(DragButton::Secondary),
+            PanDrag::SpaceLeft => None,
+        };
+        (Some(want) != taken).then_some(want)
+    }
+}
+
 /// How much resolution a live gesture may trade for responsiveness.
 ///
 /// ⚠⚠ **`Full` is zero rungs dropped, and that is the whole reason this is a setting rather than
@@ -240,6 +312,10 @@ pub struct Settings {
     pub accent: Accent,
     /// Which drag gesture pans the canvas. Scroll and two-finger swipe always pan.
     pub pan_drag: PanDrag,
+    /// Which held mouse button makes a brush stroke erase for the duration of the gesture.
+    ///
+    /// ⚠ Whichever button [`Self::pan_drag`] uses always wins; see [`EraseDrag::button`].
+    pub erase_drag: EraseDrag,
     /// Turn lens corrections on for photos that have no sidecar yet.
     ///
     /// ⚠ A **preference**, not an op-list default. `Edits::default()` stays strictly neutral so
@@ -608,6 +684,7 @@ impl Default for Settings {
             theme: ThemeChoice::default(),
             accent: Accent::default(),
             pan_drag: PanDrag::default(),
+            erase_drag: EraseDrag::default(),
             auto_lens_correction: true,
             default_rendering: edit_model::Rendering::Camera,
             library_sort: catalog::SortOrder::default(),
@@ -859,6 +936,61 @@ mod tests {
         };
         store.save(&s).unwrap();
         assert_eq!(store.load().export.format, export::ExportFormat::Tiff16);
+    }
+
+    /// ⚠⚠ **The pan binding always wins, decided in one place.** Two places deciding it is how a
+    /// build appears in which a right-drag both pans the photograph and erases into it.
+    #[test]
+    fn the_pan_binding_takes_the_button_from_the_erase_gesture() {
+        assert_eq!(
+            EraseDrag::Secondary.button(PanDrag::Middle),
+            Some(DragButton::Secondary)
+        );
+        assert_eq!(
+            EraseDrag::Secondary.button(PanDrag::SpaceLeft),
+            Some(DragButton::Secondary)
+        );
+        assert_eq!(
+            EraseDrag::Secondary.button(PanDrag::Secondary),
+            None,
+            "right-drag is bound to panning, so it must not also erase"
+        );
+        assert_eq!(
+            EraseDrag::Middle.button(PanDrag::Middle),
+            None,
+            "middle-drag is bound to panning, so it must not also erase"
+        );
+        assert_eq!(
+            EraseDrag::Middle.button(PanDrag::Secondary),
+            Some(DragButton::Middle)
+        );
+    }
+
+    /// ⚠ `Off` is off under every pan binding — a test of the conflict alone would pass against a
+    /// version that only ever disabled the gesture by collision.
+    #[test]
+    fn the_erase_gesture_can_be_switched_off_outright() {
+        for pan in PanDrag::ALL {
+            assert_eq!(EraseDrag::Off.button(pan), None, "with pan {pan:?}");
+        }
+    }
+
+    /// ⚠⚠ **`SettingsStore::load` is infallible**, so a field that fails to parse silently reverts
+    /// **every** setting to its default — not just this one. A settings file written before this
+    /// field existed must still load.
+    #[test]
+    fn a_settings_file_from_before_the_erase_binding_still_loads() {
+        let json = r#"{"pan_drag":"Secondary","theme":"Light"}"#;
+        let s: Settings = serde_json::from_str(json).expect("an older settings file must load");
+        assert_eq!(s.pan_drag, PanDrag::Secondary, "the stored value survived");
+        assert_eq!(
+            s.erase_drag,
+            EraseDrag::default(),
+            "the absent field takes the struct's default"
+        );
+        // ⚠ And with right-drag panning, the default erase binding is correctly unavailable
+        // rather than fighting it — the interaction, not just the two values.
+        assert_eq!(s.erase_drag.button(s.pan_drag), None);
     }
 
     #[test]
@@ -1136,6 +1268,7 @@ mod tests {
             // A non-default value on purpose: it proves the field is actually persisted
             // rather than being re-defaulted on load.
             pan_drag: PanDrag::Secondary,
+            erase_drag: EraseDrag::Middle,
             // Both non-default, for the same reason: a field re-defaulted on load would look
             // like it round-tripped.
             library_sort: catalog::SortOrder::ModifiedDesc,

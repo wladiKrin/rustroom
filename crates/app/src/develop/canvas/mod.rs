@@ -95,6 +95,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
+    // ⚠ Same reason as `app_pan_drag`: copied out before `app.session` is borrowed mutably.
+    let app_erase_drag = app.settings.erase_drag;
     // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
     // mutable borrow.
     // ⚠ Same reason as `app_pan_drag`: copied out before `match &mut app.session` takes its
@@ -502,6 +504,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     tolerance: app_brush_tolerance,
                                     base: app_tint_frame.as_ref(),
                                     pan_drag: app_pan_drag,
+                                    erase_drag: app_erase_drag,
                                 },
                                 tool,
                             );

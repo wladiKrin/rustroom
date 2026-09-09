@@ -36,6 +36,8 @@ pub(super) struct BrushTool<'a> {
     /// access to the app, and the erase gesture must agree with `pan_delta` about which button
     /// pans — two answers to that is how the two would drift.
     pub(super) pan_drag: rustroom_app::settings::PanDrag,
+    /// Which held button erases, if any. ⚠ The pan binding wins; see `EraseDrag::button`.
+    pub(super) erase_drag: rustroom_app::settings::EraseDrag,
 }
 
 /// The displayed frame the tint's auto-mask gate reads, when one has landed.
@@ -109,8 +111,9 @@ pub(super) fn draw_mask_overlay(
             // ⚠ XOR, not an override: with the Erase checkbox already ticked, holding the button
             // paints. That is what makes it a *modifier* rather than a second erase control, and
             // it gives a way to add back a slip without reaching for the panel.
-            let erasing = brush.erase != erase_drag(resp, brush.pan_drag);
-            if tool_drag_started(resp) || erase_drag_started(resp, brush.pan_drag) {
+            let erasing = brush.erase != erase_drag(resp, brush.erase_drag, brush.pan_drag);
+            if tool_drag_started(resp) || erase_drag_started(resp, brush.erase_drag, brush.pan_drag)
+            {
                 if let Some(edit_model::Mask::Brush(b)) =
                     s.edits.masks.get_mut(i).map(|m| &mut m.mask)
                 {
@@ -141,7 +144,7 @@ pub(super) fn draw_mask_overlay(
                     // correctly (20-52 points) at `max_dim 6246`: the model was right and the
                     // render was stale. Reported as "the initial dot is still there".
                 }
-            } else if tool_drag(resp) || erase_drag(resp, brush.pan_drag) {
+            } else if tool_drag(resp) || erase_drag(resp, brush.erase_drag, brush.pan_drag) {
                 // ⚠ `else if`, not a second `if`: both predicates are true on the frame a drag
                 // begins, and without the `else` that frame would record its first point twice.
                 if let Some(edit_model::Mask::Brush(b)) =

@@ -4,7 +4,7 @@ use super::dialog;
 use crate::decode::view_quality_hint;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::settings::{Accent, DragQuality, PanDrag, ThemeChoice};
+use rustroom_app::settings::{Accent, DragQuality, EraseDrag, PanDrag, ThemeChoice};
 
 /// The Settings window: preferences that survive a restart.
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
@@ -18,6 +18,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
     let mut pan_drag = app.settings.pan_drag;
+    let mut erase_drag = app.settings.erase_drag;
     let mut drag_quality = app.settings.drag_quality;
     let mut display_space = app.settings.display_space;
     // Copied out before the closure borrows `app`.
@@ -218,6 +219,36 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.separator();
 
             ui.horizontal(|ui| {
+                ui.label("Erase with");
+                egui::ComboBox::from_id_salt("erase_drag_pick")
+                    .selected_text(erase_drag.label())
+                    .show_ui(ui, |ui| {
+                        for b in EraseDrag::ALL {
+                            ui.selectable_value(&mut erase_drag, b, b.label());
+                        }
+                    });
+            });
+            // ⚠ The hint names the *configured* pan binding rather than saying "right-drag"
+            // literally, or it becomes a lie the moment that setting changes — `PanDrag::label`'s
+            // reason, and the same trap the toolbar hint was fixed for.
+            theme::hint(
+                ui,
+                &if erase_drag.button(pan_drag).is_none() && erase_drag != EraseDrag::Off {
+                    format!(
+                        "Unavailable: {} is already bound to panning, which always wins. \
+                         Pick another button, or change what pans.",
+                        erase_drag.label()
+                    )
+                } else {
+                    "Hold this button while painting a brush mask to erase instead, for the \
+                     duration of the stroke. With Erase already ticked it paints."
+                        .to_string()
+                },
+            );
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
                 ui.label("Preview while dragging");
                 egui::ComboBox::from_id_salt("drag_quality_pick")
                     .selected_text(drag_quality.label())
@@ -296,6 +327,12 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     // rewritten on every frame the dialog is open.
     if pan_drag != app.settings.pan_drag {
         app.settings.pan_drag = pan_drag;
+        app.save_settings();
+    }
+    // ⚠ A change guard like its neighbours: the canvas reads `settings.erase_drag` afresh every
+    // frame, so this has no side effect beyond keeping the file from being rewritten each frame.
+    if erase_drag != app.settings.erase_drag {
+        app.settings.erase_drag = erase_drag;
         app.save_settings();
     }
     // ⚠ A change guard like its neighbours, and for `pan_drag`'s weaker reason: this has no side
