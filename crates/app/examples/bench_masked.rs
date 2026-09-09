@@ -196,6 +196,64 @@ fn haze() -> LocalAdjustments {
     }
 }
 
+/// One mask whose base is a gradient, with `n` refinements of one kind composited onto it.
+///
+/// ⚠⚠ **The row this milestone exists to price.** Read every composite row against
+/// `1 masked exposure (gradient)`, which is the same adjustment over the same pixels with no
+/// refinement at all — the gap *is* the per-component cost, and nothing else here answers it.
+///
+/// ⚠ `Add` throughout, so coverage widens rather than narrowing: a `Subtract` row would shrink the
+/// area the sub-stages blend into and confound the component's cost with a smaller effect.
+///
+/// ⚠⚠ **MEASURED (X-T4 DSCF6223, 3123x2085 buffer, release, best of 5), and it overturned the
+/// design's own prediction in two places.** Against `1 masked exposure (gradient)`:
+///
+/// | extra component | fit @1600 | region 1400x900 |
+/// |---|---|---|
+/// | + 1 radial | +3.7 ms | +2.2 ms |
+/// | + 1 luminance | **+7.1 ms** | +4.7 ms |
+/// | + 1 colour | +16.5 ms | +13.6 ms |
+/// | + 3 colour | +32.1 ms | +20.1 ms |
+/// | + 1 brush (uncached) | +12.5 ms | +13.5 ms |
+///
+/// **(1) "A luminance component is free once the base facts are shared" was FALSE.** The base here
+/// is a *gradient*, which computes no lightness at all — so the luminance component is the
+/// **first** consumer and has nothing to share with. Sharing pays from the *second*
+/// pixel-dependent component onward, never on the first. "Shared" is not "free".
+///
+/// **(2) "Three colour components cost one Oklab round trip" is TRUE and the inference from it was
+/// wrong.** The conversion counter proves exactly one conversion; the cost still climbs +16.5 →
+/// +32.1, i.e. ~+7.8 ms per extra component. So `ColourRange::coverage_at` — the band weighting,
+/// the smoothstep, the chroma gate — is the dominant per-component cost, not the conversion.
+/// `docs/BACKLOG.md` puts the round trip at 42% of *one* range mask's coverage; shared across
+/// three, the remaining 58% x 3 dominates.
+///
+/// ⚠ What the sharing is actually worth, **measured by disabling the memo** rather than modelled:
+///
+/// | `+ 3 colour` | with sharing | without | saving |
+/// |---|---|---|---|
+/// | fit | 50.2 ms | 65.2 ms | **15.0 ms (23%)** |
+/// | region | 30.7 ms | 45.3 ms | **14.6 ms (32%)** |
+///
+/// and `+ 1 colour` measures 34.6 against 35.0 — identical within noise, which is exactly what a
+/// memo with nothing to share must do, and is what confirms the mechanism rather than a
+/// coincidence.
+fn composite(n: usize, refine: fn() -> Mask, adj: fn() -> LocalAdjustments) -> Edits {
+    Edits {
+        masks: vec![MaskedAdjustment {
+            mask: gradient(),
+            refine: (0..n)
+                .map(|_| edit_model::Refinement {
+                    op: edit_model::MaskOp::Add,
+                    mask: refine(),
+                })
+                .collect(),
+            adjustments: adj(),
+        }],
+        ..Edits::default()
+    }
+}
+
 fn masked(n: usize, mask: fn() -> Mask, adj: fn() -> LocalAdjustments) -> Edits {
     Edits {
         masks: (0..n)
@@ -315,6 +373,31 @@ fn main() {
         (
             "1 masked HSL      (small radial)",
             masked(1, radial, hsl_adjust),
+        ),
+        // ⚠⚠ **M7.1c: what one more component costs.** Against `1 masked exposure (gradient)`.
+        // The prediction being checked, written before any of this was measured: an analytic
+        // component is a few flops; a luminance component is free once the base facts are shared;
+        // three colour components cost ONE Oklab round trip rather than three; a brush component
+        // costs one more rasterisation.
+        (
+            "  + 1 radial       (composite)",
+            composite(1, radial, exposure),
+        ),
+        (
+            "  + 1 luminance    (composite)",
+            composite(1, lum_range, exposure),
+        ),
+        (
+            "  + 1 colour       (composite)",
+            composite(1, colour_range, exposure),
+        ),
+        (
+            "  + 3 colour       (composite)",
+            composite(3, colour_range, exposure),
+        ),
+        (
+            "  + 1 brush ⚠uncached (composite)",
+            composite(1, brush, exposure),
         ),
     ];
 
