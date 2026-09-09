@@ -10,6 +10,7 @@ use crate::{filmstrip, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 use rustroom_app::icons;
+use rustroom_app::view_region;
 
 /// The toolbar icons' point size.
 ///
@@ -100,11 +101,29 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if let Some(s) = app.session.as_mut() {
         if s.suppressed_mask != suppressed {
             s.suppressed_mask = suppressed;
-            s.request(
-                s.view_edits(tool_for_request),
-                s.render_max_dim(),
-                s.requested_region,
-            );
+            // ⚠⚠ **One rung lower first, so the switch is seen at once and sharpens after.** A
+            // full-quality render of this is 95-300 ms on a large window — measured, with a
+            // single mask roughly doubling it — and that is felt as a delay between the click and
+            // the picture. Reported as switching modes "not being great".
+            //
+            // ⚠ It needs no settle timer and no new state: setting `render_rung` to the dropped
+            // value makes the canvas's own `max_dim != s.render_rung` disjunction request full
+            // quality on the very next frame. The same mechanism the interactive rung uses, and
+            // the reason that one has no timer either.
+            //
+            // ⚠⚠ **This is the 2026-08-13 progressive-fit feature, deliberately, and the reason
+            // it was removed does not apply.** That one was deleted because "the user could not
+            // see it on or off" — it traded a 1.44x residual nobody noticed. Here the trade is a
+            // 95-300 ms wait against a 2x-softer frame for one or two frames, and the wait is
+            // what was reported. ⚠ It also cannot oscillate the way that one did: the gate is a
+            // change in `suppressed_mask`, which no render can affect.
+            let soft = view_region::rung_below(s.render_rung, s.fit_cap(), s.buffer_long, 1);
+            s.render_rung = soft;
+            // ⚠ The baton: without it the canvas, which runs after the panels, would see the rung
+            // change on this very frame and ask for full quality straight away — superseding the
+            // soft render before it could be shown. See `Session::soft_next`.
+            s.soft_next = true;
+            s.request(s.view_edits(tool_for_request), soft, s.requested_region);
         }
     }
     app.select_tool(picked);
@@ -307,6 +326,51 @@ mod tests {
             after_reqs > before_reqs,
             "lifting the suppression changed the picture and asked for no render, so the mask's \
              edits stay invisible until something unrelated forces a frame"
+        );
+    }
+
+    /// ⚠⚠ **The toggle renders one rung lower first, then full quality.** A full-quality render
+    /// of this is 95-300 ms on a large window, felt as a delay between the click and the picture.
+    ///
+    /// ⚠ Both halves, and neither alone would do: asserting only the drop would pass against a
+    /// version that never sharpened again, and asserting only the recovery would pass against one
+    /// that never dropped and simply took the full 300 ms.
+    #[test]
+    fn a_suppression_change_renders_soft_first_and_sharpens_on_the_next_frame() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.tool = rustroom_app::tool::Tool::Masks;
+        app.show_mask_tint = true;
+        {
+            let s = app.session.as_mut().expect("session");
+            s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
+            s.selected_mask = Some(0);
+            // A ladder with somewhere to drop to: the fixture's own buffer gives one rung, where
+            // `rung_below` returns the rung unchanged and this test could see nothing.
+            s.buffer_long = 3200;
+        }
+        let _ = frame(&mut app, &ctx);
+        let _ = frame(&mut app, &ctx);
+        let settled = app.session.as_ref().expect("session").render_rung;
+        assert_eq!(
+            settled, 3200,
+            "fixture check: the view must settle on a rung with one below it, or a drop is \
+             unrepresentable and this test proves nothing"
+        );
+
+        app.show_mask_tint = false;
+        let (_, _) = frame(&mut app, &ctx);
+        assert_eq!(
+            app.session.as_ref().expect("session").render_rung,
+            1600,
+            "the toggle must render a rung lower first, so the switch is seen at once"
+        );
+        let (_, _) = frame(&mut app, &ctx);
+        assert_eq!(
+            app.session.as_ref().expect("session").render_rung,
+            3200,
+            "full quality must come back on the very next frame, with no settle timer"
         );
     }
 

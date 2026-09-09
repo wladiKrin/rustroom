@@ -753,6 +753,16 @@ pub struct Session {
     /// only what it suppressed". A single unconditional derivation cannot acquire a second owner,
     /// and cannot disagree with what is on screen.
     suppressed_mask: Option<usize>,
+    /// Set for exactly one frame after a suppression change, so the canvas lets the deliberately
+    /// softer render stand instead of sharpening it away on the same frame.
+    ///
+    /// ⚠⚠ **A baton passed across one frame, not a second owner of a fact.** `develop::body` runs
+    /// the panels before the canvas, so without it the canvas sees `max_dim != s.render_rung` in
+    /// the very frame the drop was made and requests full quality immediately — the soft render
+    /// is superseded before it can be shown, and the toggle takes the full 95-300 ms after all.
+    /// That is not the spot-removal shape: nothing else decides this, and it is consumed by the
+    /// one reader.
+    soft_next: bool,
     /// The last **whole-image** texture, kept as a backdrop under a region render, with the
     /// `fit_size` it was rendered at.
     ///

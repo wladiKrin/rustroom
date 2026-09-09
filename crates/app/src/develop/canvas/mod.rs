@@ -308,7 +308,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // ⚠ A change of *rung* must re-request even when the region is
                     // unchanged — otherwise moving between rungs, or an upgraded buffer
                     // arriving, would leave the old texture on screen.
-                    if (!covered && s.requested_region != want) || max_dim != s.render_rung {
+                    // ⚠ Consumed here, and only here: one frame in which a deliberately softer
+                    // render is left alone. The next frame sees the rung still changed and asks
+                    // for full quality, which is what makes the sharpening need no timer.
+                    let soft_frame = std::mem::take(&mut s.soft_next);
+                    if (!covered && s.requested_region != want)
+                        || (max_dim != s.render_rung && !soft_frame)
+                    {
                         s.requested_region = want;
                         s.render_rung = max_dim;
                         s.request(shown_edits, max_dim, want);

@@ -490,6 +490,7 @@ impl RustroomApp {
             selected_spot: None,
             suppressed_spot: None,
             suppressed_mask: None,
+            soft_next: false,
             backdrop: None,
             spot_drag: Default::default(),
             active_mask_handle: None,
