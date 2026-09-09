@@ -403,6 +403,7 @@ mod tests {
                 }],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.5,
                 ..Default::default()
@@ -445,6 +446,7 @@ mod tests {
                 }],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.0,
                 ..Default::default()
@@ -483,6 +485,7 @@ mod tests {
                 to,
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.0,
                 ..Default::default()
@@ -580,6 +583,7 @@ mod tests {
                 }],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.0,
                 ..Default::default()
@@ -682,6 +686,7 @@ mod tests {
     fn ranged(r: edit_model::LuminanceRange) -> MaskedAdjustment {
         MaskedAdjustment {
             mask: Mask::Luminance(r),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.0,
                 ..Default::default()
@@ -869,6 +874,7 @@ mod tests {
                 feather: 0.0,
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 dehaze: edit_model::Dehaze { amount: 90.0 },
                 ..Default::default()
@@ -977,6 +983,7 @@ mod tests {
                 min_chroma: 0.02,
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.0,
                 ..Default::default()
@@ -1028,6 +1035,7 @@ mod tests {
                 min_chroma: 0.02,
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 saturation: -100.0,
                 ..Default::default()
@@ -1053,6 +1061,7 @@ mod tests {
         // The refactor must not disturb the two existing shapes.
         let m = MaskedAdjustment {
             mask: Mask::Radial(edit_model::RadialGradient::default()),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: 1.0,
                 ..Default::default()

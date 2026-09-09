@@ -1073,6 +1073,7 @@ mod tests {
         e.geometry.crop.left = 0.25;
         e.masks.push(edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Brush(edit_model::Brush::default()),
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments::default(),
         });
         e.merge_from(&edit_model::Edits::default(), edit_groups());

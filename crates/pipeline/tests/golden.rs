@@ -778,6 +778,7 @@ fn golden_mask_linear_exposure() {
                     to: [1.0, 0.0],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 1.0,
                     ..Default::default()
@@ -801,6 +802,7 @@ fn golden_mask_linear_inverted_saturation() {
                     to: [0.8, 1.0],
                     invert: true,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     saturation: -100.0,
                     exposure: -0.5,
@@ -835,6 +837,7 @@ fn golden_mask_radial_exposure() {
                     feather: 50.0,
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.55,
                     ..Default::default()
@@ -862,6 +865,7 @@ fn golden_mask_radial_inverted_saturation() {
                     feather: 25.0,
                     invert: true,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     saturation: -100.0,
                     exposure: -0.5,
@@ -888,6 +892,7 @@ fn masked_clarity_edits() -> Edits {
                 to: [0.9, 0.5],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments {
                 local_contrast: LocalContrast {
                     texture: 0.0,
@@ -965,6 +970,7 @@ fn golden_mask_brush_exposure() {
                     }],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.55,
                     ..Default::default()
@@ -1004,6 +1010,7 @@ fn golden_mask_brush_erase() {
                     ],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     saturation: -100.0,
                     exposure: -0.5,
@@ -1037,6 +1044,7 @@ fn auto_mask_edits() -> Edits {
                 }],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments {
                 // ⚠ 0.55 EV for `mask_brush_exposure`'s measured reason: the sweep is authored at
                 // value 0.8, so a larger lift would pin samples at 255 and the reference could no
@@ -1141,6 +1149,7 @@ fn golden_mask_brush_flow_buildup() {
                     strokes: vec![pass(0.1, 0.5), pass(0.2, 0.6), pass(0.3, 0.5)],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.55,
                     ..Default::default()
@@ -1202,6 +1211,7 @@ fn luminance_mask_cases() -> Vec<(&'static str, Edits)> {
     let masked = |r: edit_model::LuminanceRange, a: edit_model::LocalAdjustments| Edits {
         masks: vec![edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Luminance(r),
+            refine: Vec::new(),
             adjustments: a,
         }],
         ..Edits::default()
@@ -1838,6 +1848,7 @@ fn colour_mask_cases() -> Vec<(&'static str, Edits)> {
                     min_chroma: 0.02,
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.55,
                     ..Default::default()
@@ -1957,6 +1968,7 @@ fn golden_mask_curve() {
                     to: [1.0, 0.0],
                     invert: true,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     tone_curve: edit_model::ToneCurve {
                         points: vec![[0.0, 0.0], [0.4, 0.62], [1.0, 1.0]],
@@ -1983,6 +1995,7 @@ fn golden_mask_grade() {
                     to: [0.9, 1.0],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     color_grading: edit_model::ColorGrading {
                         shadows: edit_model::GradeWheel {
@@ -2023,6 +2036,7 @@ fn golden_mask_nr() {
                     to: [1.0, 0.0],
                     invert: true,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 60.0,
@@ -2053,6 +2067,7 @@ fn golden_mask_dehaze() {
                     to: [1.0, 0.0],
                     invert: true,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     dehaze: edit_model::Dehaze { amount: 70.0 },
                     ..Default::default()
@@ -2082,6 +2097,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         to: [1.0, 0.0],
                         invert: true,
                     }),
+                    refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments {
                         noise_reduction: edit_model::NoiseReduction {
                             luminance: 60.0,
@@ -2104,6 +2120,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         to: [1.0, 0.0],
                         invert: true,
                     }),
+                    refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments {
                         dehaze: edit_model::Dehaze { amount: 70.0 },
                         ..Default::default()

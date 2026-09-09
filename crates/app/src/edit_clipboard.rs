@@ -154,6 +154,13 @@ mod tests {
                     to: [1.0, 1.0],
                     invert: false,
                 }),
+                // ⚠ Non-empty on purpose: this payload fixture exists to prove every part of an
+                // `Edits` survives the clipboard envelope, and an empty list would prove nothing
+                // about the half a composite lives in.
+                refine: vec![edit_model::Refinement {
+                    op: edit_model::MaskOp::Subtract,
+                    mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+                }],
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.75,
                     ..Default::default()

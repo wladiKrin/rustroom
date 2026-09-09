@@ -400,6 +400,7 @@ mod tests {
                 to: [0.5, 0.9],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: Default::default(),
         });
         s.selected_mask = Some(0);
@@ -410,6 +411,7 @@ mod tests {
         let s = app.session.as_mut().unwrap();
         s.edits.masks.push(edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Brush(edit_model::Brush::default()),
+            refine: Vec::new(),
             adjustments: Default::default(),
         });
         s.selected_mask = Some(0);

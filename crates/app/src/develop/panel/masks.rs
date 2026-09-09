@@ -91,6 +91,7 @@ pub fn show(
     if let Some(mask) = added {
         s.edits.masks.push(edit_model::MaskedAdjustment {
             mask,
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments::default(),
         });
         s.selected_mask = Some(s.edits.masks.len() - 1);

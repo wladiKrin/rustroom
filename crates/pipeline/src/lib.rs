@@ -562,6 +562,14 @@ fn capture_stages(
 fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdjustment {
     edit_model::MaskedAdjustment {
         mask: m.mask.clone(),
+        // ⚠⚠ **The refinements are part of the SHAPE, so they belong in the key.** Left out, a
+        // subtracted or intersected component would change what the masked noise reduction and
+        // dehaze cover while the cached prefix checkpoint stayed valid — a stale picture at
+        // native zoom with nothing on screen to announce it.
+        //
+        // ⚠ The compiler forced this decision rather than leaving it to be remembered: this is a
+        // struct literal with no `..`, so the new field was an `E0063` right here.
+        refine: m.refine.clone(),
         adjustments: edit_model::LocalAdjustments {
             noise_reduction: m.adjustments.noise_reduction,
             dehaze: m.adjustments.dehaze,
@@ -1398,6 +1406,14 @@ mod tests {
                     to: [1.0, 1.0],
                     invert: false,
                 }),
+                // ⚠⚠ Non-empty **on purpose**, for exactly the reason the comment below gives
+                // about `LocalAdjustments`: a fixture that names exhaustiveness must actually
+                // exercise the field. An empty list here would let a composite travel untested
+                // through every consumer this fixture exists to check.
+                refine: vec![edit_model::Refinement {
+                    op: edit_model::MaskOp::Subtract,
+                    mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+                }],
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.75,
                     // ⚠⚠ Set by hand, because this fixture **does not fail to compile** when
@@ -1854,6 +1870,7 @@ mod tests {
         let base = Edits {
             masks: vec![edit_model::MaskedAdjustment {
                 mask: edit_model::Mask::default(),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 30.0,
@@ -1897,6 +1914,21 @@ mod tests {
             key(&base),
             key(&moved),
             "the mask's SHAPE decides which pixels are denoised, so it belongs in the key"
+        );
+
+        // ⚠⚠ A refinement is part of the shape too, and it is the direction the other four
+        // cannot see: it is neither a capture correction nor a tail adjustment, so a
+        // `capture_projection` that dropped it would leave every assertion above passing while a
+        // subtracted component silently kept a stale masked denoise on screen.
+        let mut refined = base.clone();
+        refined.masks[0].refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+        });
+        assert_ne!(
+            key(&base),
+            key(&refined),
+            "a refinement changes which pixels are denoised, so it belongs in the key"
         );
     }
 
@@ -2088,6 +2120,7 @@ mod tests {
     fn two_masked_clarities_reach_further_than_one() {
         let masked = |clarity: f32| edit_model::MaskedAdjustment {
             mask: edit_model::Mask::default(),
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments {
                 local_contrast: edit_model::LocalContrast {
                     texture: 0.0,
@@ -2303,6 +2336,7 @@ mod tests {
     fn masked_capture_corrections_run_in_the_prefix_after_the_global_pair() {
         let masked = |amount: f32| edit_model::MaskedAdjustment {
             mask: edit_model::Mask::default(),
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments {
                 dehaze: edit_model::Dehaze { amount },
                 ..Default::default()
@@ -2338,6 +2372,7 @@ mod tests {
         let edits = Edits {
             masks: vec![edit_model::MaskedAdjustment {
                 mask: edit_model::Mask::default(),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.8,
                     ..Default::default()
@@ -2741,6 +2776,7 @@ mod tests {
                     to: [1.0, 1.0],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 0.75,
                     ..Default::default()

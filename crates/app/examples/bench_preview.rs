@@ -57,6 +57,7 @@ fn main() {
                         }],
                         invert: false,
                     }),
+                    refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments {
                         exposure: 0.5,
                         ..Default::default()

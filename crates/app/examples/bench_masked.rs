@@ -201,6 +201,7 @@ fn masked(n: usize, mask: fn() -> Mask, adj: fn() -> LocalAdjustments) -> Edits 
         masks: (0..n)
             .map(|_| MaskedAdjustment {
                 mask: mask(),
+                refine: Vec::new(),
                 adjustments: adj(),
             })
             .collect(),

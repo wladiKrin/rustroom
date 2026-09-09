@@ -1390,7 +1390,22 @@ impl LocalAdjustments {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct MaskedAdjustment {
+    /// The composite's **base** — the first shape, before any refinement.
     pub mask: Mask,
+    /// Shapes composited onto `mask`, folded **left to right** by [`MaskOp`].
+    ///
+    /// ⚠⚠ **A list, not a recursive [`Mask`] variant.** Keeping `Mask` flat is what leaves
+    /// [`Mask::analytic_coverage`]'s exhaustive match, [`Mask::label`], [`Mask::invert_mut`] and
+    /// every sidecar on disk untouched; the cost is that a composite cannot contain a composite,
+    /// which is the nesting the recursive variant would have bought.
+    ///
+    /// ⚠ Order is **observable** — subtract-then-intersect is not intersect-then-subtract — so
+    /// the panel appends rather than inserting.
+    ///
+    /// ⚠ `skip_serializing_if`: an empty list is **absent** from the sidecar, never `[]`, so a
+    /// mask that has never been refined writes the bytes it always did. `lens_correction`'s rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refine: Vec<Refinement>,
     pub adjustments: LocalAdjustments,
 }
 
@@ -2764,6 +2779,14 @@ mod tests {
                     to: [1.0, 1.0],
                     invert: false,
                 }),
+                // ⚠⚠ Non-empty **on purpose**, and for the reason the comment below already
+                // gives about `LocalAdjustments`: a fixture that names exhaustiveness must
+                // actually exercise the field, or a composite would travel untested through
+                // every consumer this fixture exists to check.
+                refine: vec![Refinement {
+                    op: MaskOp::Subtract,
+                    mask: Mask::Radial(RadialGradient::default()),
+                }],
                 adjustments: LocalAdjustments {
                     exposure: 0.75,
                     // ⚠⚠ Set by hand, because this fixture **does not fail to compile** when
@@ -2978,6 +3001,29 @@ mod tests {
     }
 
     #[test]
+    fn a_mask_with_no_refinements_writes_the_bytes_it_always_did() {
+        // ⚠⚠ The `skip_serializing_if` guard, and the reason it is there: a photo that has never
+        // used a composite must write the same sidecar it wrote yesterday. `lens_correction`'s
+        // rule, applied to a `Vec` rather than an `Option`.
+        let m = MaskedAdjustment {
+            mask: Mask::Linear(LinearGradient::default()),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(
+            !s.contains("refine"),
+            "an empty refinement list must be absent, never `[]`: {s}"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_from_before_refinements_loads_with_none() {
+        let json = r#"{"mask":{"Linear":{"from":[0.0,0.0],"to":[0.0,1.0],"invert":false}}}"#;
+        let m: MaskedAdjustment = serde_json::from_str(json).unwrap();
+        assert!(m.refine.is_empty());
+    }
+
+    #[test]
     fn a_masked_adjustment_round_trips_through_json() {
         let e = Edits {
             masks: vec![MaskedAdjustment {
@@ -2986,6 +3032,12 @@ mod tests {
                     to: [0.8, 0.9],
                     invert: true,
                 }),
+                // ⚠ A composite, so the round trip covers the refinements rather than defaulting
+                // them away — the half of the sidecar a new field is most likely to be lost in.
+                refine: vec![Refinement {
+                    op: MaskOp::Intersect,
+                    mask: Mask::Luminance(LuminanceRange::default()),
+                }],
                 adjustments: LocalAdjustments {
                     exposure: -1.5,
                     ..Default::default()

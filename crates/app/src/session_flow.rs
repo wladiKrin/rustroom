@@ -962,6 +962,7 @@ mod tests {
         for _ in 0..3 {
             s.edits.masks.push(edit_model::MaskedAdjustment {
                 mask: edit_model::Mask::default(),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     local_contrast: edit_model::LocalContrast {
                         texture: 0.0,

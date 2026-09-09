@@ -168,6 +168,7 @@ fn main() {
     let real = MaskStage::new(
         &MaskedAdjustment {
             mask: Mask::Colour(colour),
+            refine: Vec::new(),
             adjustments: LocalAdjustments {
                 exposure: EXPOSURE,
                 ..Default::default()

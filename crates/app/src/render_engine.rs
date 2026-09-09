@@ -1785,6 +1785,7 @@ mod tests {
                     }],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: Default::default(),
             });
             e
@@ -1869,6 +1870,7 @@ mod tests {
                         to: [0.9, 0.8],
                         invert: false,
                     }),
+                    refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments {
                         exposure: 0.6,
                         // ⚠⚠ **Masked spatial belongs in this edit set, and its absence would be
@@ -1932,6 +1934,7 @@ mod tests {
                         }],
                         invert: false,
                     }),
+                    refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments {
                         exposure: 0.5,
                         ..Default::default()
@@ -2149,6 +2152,7 @@ mod tests {
                 }],
                 invert: false,
             }),
+            refine: Vec::new(),
             adjustments: Default::default(),
         };
         m.adjustments.exposure = mask_exposure;
@@ -2302,6 +2306,7 @@ mod tests {
                     }],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 1.0,
                     ..Default::default()
@@ -2481,6 +2486,7 @@ mod tests {
                     }],
                     invert: false,
                 }),
+                refine: Vec::new(),
                 adjustments: edit_model::LocalAdjustments {
                     exposure: 1.0,
                     ..Default::default()
@@ -2596,6 +2602,7 @@ mod tests {
         let mut edits = brush_edits();
         let inactive = edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
+            refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments::default(),
         };
         edits.masks.insert(0, inactive);
