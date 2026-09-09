@@ -62,119 +62,124 @@ M2 and M3 remain tuning and scope.
 
 ---
 
-## 2. ⚠⚠ THE FINDING THAT DECIDES THE ARCHITECTURE: A RENDER-TIME REFERENCE IS THE DEHAZE AIRLIGHT AGAIN
+## 2. ⚠⚠ THE ARGUMENT THIS SECTION ORIGINALLY MADE WAS WRONG, AND ITS OWN SABOTAGE IS WHAT SHOWED THAT
 
-Per-dab references (the user's choice) can be obtained two ways, and only one of them survives a
-region render.
+**Retracted 2026-09-09, during implementation.** This section claimed that sampling each dab's
+reference at render time was `dehaze::airlight` in a new place — that a dab panned off-region would
+have no reference, so coverage would depend on the viewport and
+`a_region_render_matches_the_whole_render_cropped` would break. **That was the load-bearing
+justification for the whole design, and it does not hold.**
 
-**B — sample at render time.** Store nothing; each dab reads its reference out of the base buffer
-at its own centre when the pipeline runs. Reference and pixel are then in the same space *by
-construction*, which is attractive.
+**The sabotage was attempted three times and passed every time.** Not a fixture fault in the end;
+the mechanism explains it:
 
-⚠⚠ **And it fails for exactly the reason masked dehaze was blocked for two milestones.**
-`MaskStage::apply` runs on **the buffer it is handed**, which under a region render is the
-*region*. A dab whose centre has been panned off-screen has no reference to read, so its coverage
-would be computed differently — or not at all — depending on where the viewport happens to be.
-**That is "the photograph changes as you pan"**, the same failure `dehaze::airlight` has, arriving
-in a new place. It would also break `a_region_render_matches_the_whole_render_cropped`, which is
-this repo's strongest single guard.
+1. A dab whose disc misses the clip is **dropped**, so it contributes nothing either way.
+2. A dab kept with its centre *outside* the clip lies within **one radius** of the boundary — a
+   narrow band, not the whole mask.
+3. ⚠⚠ **Within a stroke, dabs combine with `max`, and they are spaced `SPACING` — a quarter
+   radius — apart.** So essentially every pixel in that band is *also* covered at full alpha by
+   dabs whose centres are inside the region and whose references are right. The few wrong ones are
+   washed out.
 
-⚠ Dehaze's answer was to move into the **prefix**, which always runs whole-buffer. That escape is
-**not available here**: brush coverage is resolved in `MaskStage`, in the tail, and moving the
-masks loop into the prefix is a different and much larger milestone.
+Two of the other reasons given for baking evaporated in the building as well. **`BrushCache` had
+to be disabled for a gating brush either way**, because the gate reads pixels per-pixel whatever
+the reference's origin — so it was never an argument between the two designs.
 
-**A — bake the reference into the stroke.** Each point stores the colour sampled under the brush at
-the moment it was laid down; it travels in `Edits`. **A reference that travels in the op-list is
-available under any region, in the CLI, and in export, because it is not sampled at render time at
-all.** The region invariant is untouched.
+⚠⚠ **And the sting: baking is what forced §3's compromise.** A stored reference lives in the
+*displayed* space while the pixels are in the working space, which is exactly why the lightness
+term measured unusable and the gate was briefly chroma-only and blind to tonal edges. **Reading
+both ends from one buffer removes the disagreement rather than working around it**, and needs no
+`refs` in the model, no sampling in the gesture, and no `sample_reference` — less code and a
+strictly more capable tool.
 
-**A ships.** ⚠ Its cost is that the sampled reference and the compared pixel are in *different
-spaces* — §3 — and that cost is measurable where B's is structural.
+**So the reference is read at render time, from the pixel under each dab's own centre** (user's
+call, 2026-09-09, after this retraction was reported).
+
+### What it costs, pinned rather than hoped
+
+⚠ A dab whose centre lies outside the rendered region has no pixel there. `BaseView` **clamps to
+the nearest edge pixel** rather than answering black, so the error is small and local instead of
+absurd. The residual is bounded by `an_auto_masked_clipped_raster_agrees_away_from_the_clip_edge`,
+which asserts exact agreement outside a one-radius band and deliberately promises nothing inside
+it. ✅ The **master region invariant passes** with an auto-masked brush under this design — checked,
+not assumed.
+
+⚠ The reference is *the colour that is there now*, so the mask re-evaluates as upstream edits move
+the pixels. That is Lightroom's own semantic, and the opposite of the baked design's "the colour
+you painted against". It is the one property baking genuinely had, and it was given up knowingly.
 
 ---
 
-## 3. The comparison space, and the one thing M1 must settle
+## 3. The comparison space — and the measurement that now argues AGAINST storing a reference
 
-The working space is **linear ProPhoto**. The two ends of the comparison sit at different points in
-the chain:
+Both ends of the comparison are read from **the same buffer**: the pixel at this position, and the
+pixel under the dab's own centre, both linear ProPhoto, both converted with
+`color::oklab::prophoto_to_oklab`. There is no space mismatch to reason about, so the gate uses the
+**full Oklab distance including lightness** — which is what lets it see a purely tonal edge.
 
-- the **pixel**: `MaskStage`'s incoming buffer — the global tail's output for a tail mask, i.e.
-  *before* the display rendering S-curve, the creative LUT and the output transform;
-- the **reference**: sampled at paint time from `RustroomApp.readout_bytes` (`main.rs:873`, an
-  `Arc<Vec<u8>>` plus dims, already retained for the colour readout at no extra memory), which is
-  the **displayed** frame — *after* all three.
+⚠⚠ **M1 is still the reason this is right, it has simply changed sides.** It measured the
+disagreement between the displayed frame (where a stored reference would come from) and
+`MaskStage`'s input (where the pixels come from):
 
-Both convert into **Oklab**, which is absolute, so the comparison itself is well defined:
-`prophoto_to_oklab` for the pixel, `srgb_to_linear` then `linear_srgb_to_oklab` for the reference.
-⚠ Storing the reference as **display-referred sRGB 0..1** is the `LuminanceRange` precedent — that
-type stores `linear_to_srgb(luminance(rgb)) * 100` and does the conversion at the single call site
-in `pipeline::stages::mask`, keeping `edit-model` free of a `color` dependency. Same division here.
+| displayed L | mean ΔL | mean chroma distance |
+|---|---|---|
+| 0.0–0.1 | **−0.075 … −0.083** | 0.006–0.008 |
+| 0.4–0.5 | +0.076 … +0.080 | 0.014–0.026 |
+| 0.6–0.7 | **+0.140 … +0.143** | 0.002–0.007 |
+| **middle six buckets** | **+0.070 … +0.111** | **~0.010–0.020** |
 
-⚠⚠ **But Oklab being absolute does not make the two ends comparable, because the S-curve has moved
-one of them.** A scene value near mid-grey renders close to where it started; shadows and
-highlights are compressed hard. A systematic offset in L between reference and pixel biases a
-*threshold*, which is what the tolerance is.
+ΔL is 7–10× the chroma distance and its curve is nearly identical on all four frames — the display
+rendering's S-curve, not the picture. **A stored reference would therefore have had to ignore
+lightness**, and the tool would have been blind to a white wall against a grey one.
+`auto_mask_space_probe` is kept, and `auto_mask_gate`'s doc points at it so nobody reintroduces a
+stored reference without re-reading it.
 
-**M1 measures that offset.** Three outcomes, decided in advance so the measurement cannot be
-rationalised after the fact:
+⚠⚠ **TWO PROBE BUGS WERE FOUND BEFORE THAT NUMBER WAS BELIEVED, AND EITHER WOULD HAVE BEEN
+REPORTED AS A FINDING.**
 
-- ~~offset small across the tonal range: ship as specced~~ — **not what happened.**
-- ✅ **offset large but systematic: compare on chroma and hue only, dropping L from the distance.**
-  **This is the outcome, and it is what ships.** ΔL of +0.10 against a tolerance ceiling of 0.35
-  would be a third of the whole range of the control, contributed by nothing but the S-curve.
-- ~~offset large and content-dependent: stop and report~~ — ruled out: the ΔL curve is the same on
-  all four frames, so it is the rendering's signature and not the picture's.
-
-**So the distance is `sqrt(Δa² + Δb²)`, and `AUTO_MASK_MAX_DELTA` is a chroma ceiling.**
-
-⚠ **The measured chroma mismatch is a floor under that constant.** Chroma distance reaches
-**0.040** in one bucket of DSCF6509 and sits around 0.010–0.020 generally, so a ceiling anywhere
-near 0.04 would be flipped by the space mismatch alone. Task 14's sweep must land comfortably
-above it; if a usable ceiling turns out to be *below* ~0.05, that is a reason to reopen this.
-
-⚠⚠ **The cost, stated plainly: a purely tonal edge cannot be detected.** Two pixels of the same
-hue and chroma differing only in lightness — a white wall against a grey one, a sky gradient — are
-now indistinguishable to the gate. **Both of the brief's own headline cases survive**, because
-each is a chroma edge: sky (blue, chromatic) against ridge (dark, near-neutral), and skin (orange)
-against hair (near-neutral). This is recorded as accepted caveat 8 in §10.
+1. **A double encode.** The first probe applied `linear_to_srgb` to the tail's output — but
+   `OutputTransform::apply` **already encodes**. That produced a flat **+0.24**: a probe bug
+   wearing exactly the shape of the result it was looking for.
+2. **⚠⚠ The wrong configuration, which is the more instructive one.** With that fixed the offset
+   came back at **0.0011 — quantization noise** — which reads as "the two spaces agree, ship it".
+   It was measuring nothing: `Edits::default()` carries `rendering: None`, so that tail holds **no
+   display rendering at all**, while the canvas opens every photo with `Camera`. **A neutral
+   fixture had removed the very stage the measurement was about.** The probe reports both rows
+   side by side now.
 
 ---
 
 ## 4. Model — `edit-model`
 
-`BrushStroke` gains three fields, joining `radius`/`hardness`/`flow`/`erase` as things baked at
+`BrushStroke` gains **two** fields, joining `radius`/`hardness`/`flow`/`erase` as things baked at
 paint time:
 
 ```rust
-/// Paint only pixels close to the colour under the brush centre. Baked at paint time.
+/// Paint only the pixels close to the colour under the brush centre. Baked at paint time.
 pub auto_mask: bool,
 /// How close counts, 0..=100. Larger selects more.
 pub tolerance: f32,
-/// One reference colour per point, parallel to `points`. **Display-referred sRGB 0..1.**
-///
-/// ⚠ Empty unless `auto_mask` — a non-auto stroke stores nothing, so no existing sidecar grows.
-/// ⚠ Parallel to `points` rather than a field on a point struct: `points: Vec<[f32; 2]>` is the
-/// serialized shape and changing it would churn every sidecar for a field most strokes lack.
-pub refs: Vec<[f32; 3]>,
 ```
 
-⚠ `BrushStroke::Default` is **hand-written already** and absorbs the three, so every sidecar
-written before today loads unchanged and all 59 goldens stay byte-identical. That byte-identity is
-the acceptance criterion for Task 1, not a nicety — the same proof `flow` needed.
+⚠ **No reference colour is stored** — see §2. An earlier draft of this spec added
+`refs: Vec<[f32; 3]>` parallel to `points`; it was removed when the argument for it was retracted,
+which also removed the model's only alignment hazard and kept sidecars smaller.
 
-⚠ **`refs` and `points` must not be allowed to disagree in length.** The rasteriser takes
-`refs.get(i)` and treats a missing entry as "not auto-masked for this dab", which degrades to plain
-positional coverage rather than panicking on a hand-edited sidecar — the forgiving posture every
-loader here takes. A test pins that a truncated `refs` is survivable.
+⚠ `BrushStroke::Default` is **hand-written already** and absorbs both, so every existing sidecar
+and all 59 goldens are untouched. That byte-identity is the acceptance criterion, not a nicety —
+the same proof `flow` needed. ⚠ Sabotage-verified: a *field-level* `#[serde(default)]` fails the
+guard with `left: 0.0, right: 35.0`, which is the trap `write_xmp` and `snapshot_strip_height` both
+document.
 
 ⚠ **No `EditGroups` change.** A `BrushStroke` lives inside a `Mask` inside `Edits.masks`, which
-travels whole under `MASKS_GROUP` — M7.2 recorded that `merge_from` destructures `Edits`, not
-`LocalAdjustments`, and the same holds a level deeper. ⚠ **The three exhaustive fixtures
-(`pipeline::all_edits`, `edit_model::all_nonneutral`, `edit_clipboard`'s payload) must still be
-checked by hand**: M7.2's sharpest process finding was that *a construct that names exhaustiveness
-does not deliver it through a nested struct* — those three build their brushes with
-`..Default::default()`, so three fields whose whole purpose is to be non-neutral would land
-untested, silently.
+travels whole under `MASKS_GROUP`. ⚠⚠ **And the three exhaustive fixtures do NOT apply here, which
+is a correction to this spec's own earlier claim**: `pipeline::all_edits`,
+`edit_model::all_nonneutral` and `edit_clipboard`'s payload all build their masks as `Mask::Linear`
+or `Mask::default()` — **none contains a `Mask::Brush`** — and these are not `Edits` fields anyway.
+M7.2's finding applied because *its* fields were on `LocalAdjustments`, which those fixtures
+construct directly. Coverage went into `a_brush_round_trips_through_json` instead.
+
+`Brush::needs_base()` is true when any stroke is auto-masked; §6 is what it is for.
 
 ---
 
@@ -328,6 +333,13 @@ not to reintroduce the unkeyed map.
    pixel data there.
 6. **No auto-mask on the analytic masks or the range masks** — they are not painted.
 7. **M7.1c boolean mask operations and M7.3b remain next**, untouched.
-8. **⚠ A purely tonal edge is not detected** — the gate compares chroma and hue only, because M1
-   measured the lightness term as unusable. A white wall against a grey one is one region to this
-   tool. Forced by the measurement, not chosen.
+8. ~~A purely tonal edge is not detected~~ — **no longer a caveat.** It was one only while the
+   reference was stored; reading both ends from one buffer restores the lightness term, and
+   `the_gate_sees_a_purely_tonal_edge` pins it.
+9. **⚠ Within one dab radius of a rendered region's edge, coverage is approximate** — a dab whose
+   centre falls outside the region references a clamped edge pixel. Bounded by
+   `an_auto_masked_clipped_raster_agrees_away_from_the_clip_edge`, and washed out in practice by
+   `max`-combining over densely spaced dabs; the master region invariant passes.
+10. **⚠ The mask re-evaluates against current pixels**, so a large upstream change moves what it
+    selects. Lightroom's own semantic, and the property the retracted baked design would have had
+    instead.

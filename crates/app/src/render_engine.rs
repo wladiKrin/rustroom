@@ -1614,7 +1614,7 @@ mod tests {
         // prebuilt map is rasterized without pixels, so an auto-masked brush served from this
         // cache would render positionally while the canvas tint showed it stopping at an edge — a
         // silent divergence between preview and export.
-        let gating = |auto: bool, refs: Vec<[f32; 3]>| {
+        let gating = |auto: bool| {
             let mut e = Edits::default();
             e.masks.push(edit_model::MaskedAdjustment {
                 mask: edit_model::Mask::Brush(edit_model::Brush {
@@ -1622,7 +1622,6 @@ mod tests {
                         points: vec![[0.3, 0.3], [0.7, 0.7]],
                         radius: 0.2,
                         auto_mask: auto,
-                        refs,
                         ..Default::default()
                     }],
                     invert: false,
@@ -1632,7 +1631,7 @@ mod tests {
             e
         };
         let mut cache = BrushCache::default();
-        let built = cache.get_or_build(&gating(true, vec![[0.3, 0.4, 0.5]]), 64, 64, None);
+        let built = cache.get_or_build(&gating(true), 64, 64, None);
         assert!(
             built.maps[0].is_none(),
             "an auto-masked brush must not be prebuilt"
@@ -1640,7 +1639,7 @@ mod tests {
 
         // ⚠ The discriminating half: a plain brush must STILL be cached, or this would be a
         // performance regression wearing a correctness fix.
-        let built = cache.get_or_build(&gating(false, vec![]), 64, 64, None);
+        let built = cache.get_or_build(&gating(false), 64, 64, None);
         assert!(
             built.maps[0].is_some(),
             "a plain brush must still be cached"
@@ -1688,46 +1687,82 @@ mod tests {
             // ⚠ A mask joins the master invariant because that test validates the region
             // maths, the vignette correction *and* the prefix cache at once — so this is what
             // proves masks survive the cached render path, not just a bare stage call.
-            masks: vec![edit_model::MaskedAdjustment {
-                mask: edit_model::Mask::Linear(edit_model::LinearGradient {
-                    from: [0.1, 0.1],
-                    to: [0.9, 0.8],
-                    invert: false,
-                }),
-                adjustments: edit_model::LocalAdjustments {
-                    exposure: 0.6,
-                    // ⚠⚠ **Masked spatial belongs in this edit set, and its absence would be
-                    // silent.** This test has already been insufficient in exactly that way
-                    // once: when sharpening landed it kept passing because its edits carried
-                    // none, so the weakened invariant it exists to cover went unexercised. A
-                    // masked clarity reaches 120 px on its own, *on top of* the global reach,
-                    // because masks chain — so if `tail_kernel_radius` ever stopped counting
-                    // them the inset below would be too small and this comparison would fail
-                    // at the edges, which is precisely the bug it should catch.
-                    local_contrast: edit_model::LocalContrast {
-                        texture: 0.0,
-                        clarity: 70.0,
-                    },
-                    // ⚠⚠ **The capture corrections belong in this edit set, and their absence
-                    // would be silent.** They run in the *prefix*, whole-buffer, and that is the
-                    // entire reason for their placement: dehaze estimates its airlight from the
-                    // brightest 0.1% of the buffer it is handed, so if it ever ran on the
-                    // visible region instead, the same pixel would render differently depending
-                    // on where the viewport happened to be — and this comparison is what catches
-                    // it. There is no other test that can.
-                    //
-                    // ⚠ They contribute **nothing** to `inset` below, because neither is in the
-                    // tail. If this ever fails at the edges, the placement is wrong — do not
-                    // widen the inset.
-                    noise_reduction: edit_model::NoiseReduction {
-                        luminance: 40.0,
-                        color: 30.0,
+            masks: vec![
+                edit_model::MaskedAdjustment {
+                    mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                        from: [0.1, 0.1],
+                        to: [0.9, 0.8],
+                        invert: false,
+                    }),
+                    adjustments: edit_model::LocalAdjustments {
+                        exposure: 0.6,
+                        // ⚠⚠ **Masked spatial belongs in this edit set, and its absence would be
+                        // silent.** This test has already been insufficient in exactly that way
+                        // once: when sharpening landed it kept passing because its edits carried
+                        // none, so the weakened invariant it exists to cover went unexercised. A
+                        // masked clarity reaches 120 px on its own, *on top of* the global reach,
+                        // because masks chain — so if `tail_kernel_radius` ever stopped counting
+                        // them the inset below would be too small and this comparison would fail
+                        // at the edges, which is precisely the bug it should catch.
+                        local_contrast: edit_model::LocalContrast {
+                            texture: 0.0,
+                            clarity: 70.0,
+                        },
+                        // ⚠⚠ **The capture corrections belong in this edit set, and their absence
+                        // would be silent.** They run in the *prefix*, whole-buffer, and that is the
+                        // entire reason for their placement: dehaze estimates its airlight from the
+                        // brightest 0.1% of the buffer it is handed, so if it ever ran on the
+                        // visible region instead, the same pixel would render differently depending
+                        // on where the viewport happened to be — and this comparison is what catches
+                        // it. There is no other test that can.
+                        //
+                        // ⚠ They contribute **nothing** to `inset` below, because neither is in the
+                        // tail. If this ever fails at the edges, the placement is wrong — do not
+                        // widen the inset.
+                        noise_reduction: edit_model::NoiseReduction {
+                            luminance: 40.0,
+                            color: 30.0,
+                            ..Default::default()
+                        },
+                        dehaze: edit_model::Dehaze { amount: 45.0 },
                         ..Default::default()
                     },
-                    dehaze: edit_model::Dehaze { amount: 45.0 },
-                    ..Default::default()
                 },
-            }],
+                // ⚠⚠ **AN AUTO-MASKED BRUSH BELONGS IN THIS EDIT SET, AND THIS IS THE GUARD ON THE
+                // WHOLE AUTO-MASK DESIGN.** Its coverage depends on PIXEL VALUES as well as position,
+                // which is what made a render-time reference untenable: a dab whose centre has been
+                // panned off-region would have no reference to read, so its coverage — and therefore
+                // the photograph — would depend on where the viewport happens to be. That is
+                // `dehaze::airlight`'s failure arriving in a new place, and dehaze's escape (move to
+                // the prefix) is not available, because brush coverage is resolved in the tail.
+                //
+                // A reference **baked into the stroke** travels in `Edits`, so it is available under
+                // any region, in the CLI and in export alike. This comparison is what asserts that.
+                // ⚠ Sabotage-verified: reading the reference from the base at the dab's own centre
+                // fails this test.
+                //
+                // ⚠ It contributes **nothing** to `inset` below — a brush reads no neighbours, so it
+                // adds no kernel reach. If this ever fails at the edges, something about the
+                // reference's availability has changed; do not widen the inset.
+                edit_model::MaskedAdjustment {
+                    mask: edit_model::Mask::Brush(edit_model::Brush {
+                        strokes: vec![edit_model::BrushStroke {
+                            points: vec![[0.2, 0.3], [0.8, 0.7]],
+                            radius: 0.2,
+                            hardness: 60.0,
+                            flow: 100.0,
+                            erase: false,
+                            auto_mask: true,
+                            tolerance: 45.0,
+                        }],
+                        invert: false,
+                    }),
+                    adjustments: edit_model::LocalAdjustments {
+                        exposure: 0.5,
+                        ..Default::default()
+                    },
+                },
+            ],
             ..Edits::default()
         };
 

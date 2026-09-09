@@ -161,25 +161,24 @@ pub fn rasterize_in(
         let hard = (s.hardness / 100.0).clamp(0.0, 1.0);
         let pts: Vec<(f32, f32)> = s.points.iter().map(|p| map.point(*p)).collect();
         let Some(first) = pts.first() else { continue };
-        // ⚠ Converted once per point, never per pixel. `refs` is display-referred sRGB, so it
-        // decodes through the sRGB transfer and the sRGB primaries; a base pixel is linear
-        // ProPhoto. Both land in Oklab, which is absolute — see the design doc's §3.
+        // ⚠⚠ **Each dab's reference is the pixel under its own centre, read here rather than
+        // stored.** Both ends of the comparison then come from one buffer in one colour space,
+        // which is what lets the gate use lightness as well as chroma — see `auto_mask_gate`.
         //
-        // ⚠ `refs.get(i)` rather than indexing: a `refs` shorter than `points` is survivable by
-        // design, since sidecars are hand-editable and a dropped sample while painting produces
-        // exactly that shape. A dab with no reference paints positionally.
+        // ⚠ Read once per dab, never per pixel: a dab covers hundreds of pixels and they all
+        // compare against this one value.
+        //
+        // ⚠ With no base — the CLI, or the tint before a frame has landed — a dab carries no gate
+        // and paints positionally. `Brush::needs_base` plus `BrushCache`'s refusal are what stop
+        // the *render* ever taking that path.
         let ceiling = auto_mask_ceiling(s.tolerance);
-        let gate_of = |i: usize| -> Option<([f32; 3], f32)> {
+        let gate_at = |x: f32, y: f32| -> Option<([f32; 3], f32)> {
             if !s.auto_mask {
                 return None;
             }
-            s.refs.get(i).map(|c| {
+            base.map(|b| {
                 (
-                    color::linear_srgb_to_oklab([
-                        color::srgb_to_linear(c[0]),
-                        color::srgb_to_linear(c[1]),
-                        color::srgb_to_linear(c[2]),
-                    ]),
+                    color::oklab::prophoto_to_oklab(b.at(x.max(0.0) as usize, y.max(0.0) as usize)),
                     ceiling,
                 )
             })
@@ -209,10 +208,10 @@ pub fn rasterize_in(
                 y: first.1,
                 r,
                 hard,
-                gate: gate_of(0),
+                gate: gate_at(first.0, first.1),
             });
         }
-        for (seg, pair) in pts.windows(2).enumerate() {
+        for pair in pts.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
             let len = (dx * dx + dy * dy).sqrt();
@@ -222,16 +221,12 @@ pub fn rasterize_in(
                 let t = i as f32 / n as f32;
                 let (px, py) = (a.0 + dx * t, a.1 + dy * t);
                 if keep(px, py) {
-                    // ⚠ The NEARER endpoint's reference, never a blend of the two. Interpolating
-                    // two colours across a ridge invents a reference that matches neither side —
-                    // exactly the edge this tool exists to stop at.
-                    let src = if t < 0.5 { seg } else { seg + 1 };
                     dabs.push(Dab {
                         x: px,
                         y: py,
                         r,
                         hard,
-                        gate: gate_of(src),
+                        gate: gate_at(px, py),
                     });
                 }
             }
@@ -405,10 +400,9 @@ const AUTO_MASK_MIN_DELTA: f32 = 0.01;
 /// vignette needed three revisions before its feel was right and the colour range mask's constants
 /// survived first contact; neither outcome is predictable from a spec.
 ///
-/// ⚠⚠ **It has a measured floor.** The reference is sampled from the displayed frame and compared
-/// against the pre-display buffer, and `auto_mask_space_probe` measures the chroma disagreement
-/// between those two spaces at up to **0.040** on a real frame. A ceiling near that would be
-/// flipped by the space mismatch alone, so this must stay comfortably above it.
+/// ⚠ It has **no** space-mismatch floor to clear, because both ends of the comparison now come
+/// from one buffer. The earlier stored-reference design did, and that is what forced it to ignore
+/// lightness.
 const AUTO_MASK_MAX_DELTA: f32 = 0.35;
 /// The fraction of the ceiling at which the gate starts falling off.
 ///
@@ -426,19 +420,21 @@ pub fn auto_mask_ceiling(tolerance: f32) -> f32 {
 
 /// How much of a dab's coverage survives at a pixel, given that dab's reference colour.
 ///
-/// Both arguments are **Oklab**. ⚠⚠ **The lightness term is deliberately ignored, and that is a
-/// measurement rather than a simplification.** The reference is sampled from the *displayed* frame
-/// — after the display rendering's S-curve — while the pixel comes from `MaskStage`'s input,
-/// before it. `auto_mask_space_probe` measured the resulting lightness disagreement at a mean of
-/// **+0.07 to +0.11** across four frames, 7-10x the chroma disagreement, with the same curve on
-/// every frame: it is the S-curve's signature, not the picture's. Against a ceiling of 0.35 that
-/// would be a third of the control's whole range contributed by nothing at all.
+/// Both arguments are **Oklab**, and both are read from the **same buffer** — the pixel at this
+/// position and the pixel under the dab's own centre. That is what lets the full distance be used,
+/// lightness included, so a purely tonal edge is detected as well as a chromatic one.
 ///
-/// ⚠ The cost, stated so it is not later found as a bug: **a purely tonal edge is invisible to
-/// this gate.** A white wall against a grey one is one region. Both of the feature's headline
-/// cases survive because each is a chroma edge — sky against ridge, skin against hair.
+/// ⚠⚠ **An earlier design stored the reference in the stroke and had to drop the lightness term.**
+/// A stored reference is sampled from the *displayed* frame while the pixels come from
+/// `MaskStage`'s input, before the display rendering; `auto_mask_space_probe` measured that
+/// lightness disagreement at a mean of **+0.07 to +0.11** across four frames, 7-10x the chroma
+/// disagreement. Reading both ends from one buffer removes the disagreement rather than working
+/// around it. ⚠ Do not reintroduce a stored reference without re-reading that measurement.
 pub fn auto_mask_gate(pixel: [f32; 3], reference: [f32; 3], ceiling: f32) -> f32 {
-    let d = ((pixel[1] - reference[1]).powi(2) + (pixel[2] - reference[2]).powi(2)).sqrt();
+    let d = ((pixel[0] - reference[0]).powi(2)
+        + (pixel[1] - reference[1]).powi(2)
+        + (pixel[2] - reference[2]).powi(2))
+    .sqrt();
     let lo = ceiling * (1.0 - AUTO_MASK_SOFT);
     if d <= lo {
         return 1.0;
@@ -563,151 +559,135 @@ mod tests {
     const LEFT: [f32; 3] = [0.05, 0.20, 0.05];
     const RIGHT: [f32; 3] = [0.60, 0.15, 0.50];
 
-    /// The reference the canvas would have sampled on the left half: display-referred sRGB.
-    fn left_reference() -> [f32; 3] {
-        [
-            color::linear_to_srgb(color::prophoto_to_srgb(LEFT)[0]).clamp(0.0, 1.0),
-            color::linear_to_srgb(color::prophoto_to_srgb(LEFT)[1]).clamp(0.0, 1.0),
-            color::linear_to_srgb(color::prophoto_to_srgb(LEFT)[2]).clamp(0.0, 1.0),
-        ]
-    }
-
-    #[test]
-    fn an_auto_masked_stroke_stops_at_a_colour_edge() {
-        let base = SplitBase {
-            split_x: 40,
+    fn split_at(x: usize) -> SplitBase {
+        SplitBase {
+            split_x: x,
             left: LEFT,
             right: RIGHT,
-        };
-        let r = left_reference();
-        let m = brush(vec![BrushStroke {
-            points: vec![[0.1, 0.5], [0.9, 0.5]],
-            radius: 0.3,
+        }
+    }
+
+    /// One auto-masked dab, centred at `cx` in frame pixels of an 80-wide frame.
+    fn auto_dot(cx: f32, radius: f32, tolerance: f32) -> Brush {
+        brush(vec![BrushStroke {
+            points: vec![[cx / 80.0, 0.5]],
+            radius,
             hardness: 100.0,
             flow: 100.0,
             erase: false,
             auto_mask: true,
-            tolerance: 30.0,
-            refs: vec![r, r],
-        }]);
-        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
-        assert!(
-            cov.at(10, 10) > 200,
-            "the matching side must be painted: {}",
-            cov.at(10, 10)
-        );
-        assert_eq!(cov.at(70, 10), 0, "the far colour must not be painted");
+            tolerance,
+        }])
     }
 
     #[test]
-    fn the_same_stroke_without_auto_mask_crosses_the_edge() {
+    fn a_dab_paints_only_what_matches_its_own_centre() {
+        // ⚠⚠ This is the shape of the feature, and it is not "a stroke stops at an edge". A dab
+        // paints the pixels similar to the pixel under **its own centre**, so a wide dab sitting
+        // on the sky does not paint the ridge inside its radius. Dragging a stroke *across* the
+        // ridge legitimately paints both sides, because each dab re-references what is under it —
+        // which is what Lightroom's Auto Mask does too.
+        let base = split_at(40);
+        // Centred on the left colour, radius wide enough to reach well past the split.
+        let cov = rasterize_in(
+            &auto_dot(20.0, 0.35, 30.0),
+            &Geometry::default(),
+            80,
+            20,
+            None,
+            Some(&base),
+        );
+        assert!(
+            cov.at(20, 10) > 200,
+            "the centre's own colour must be painted: {}",
+            cov.at(20, 10)
+        );
+        assert_eq!(
+            cov.at(45, 10),
+            0,
+            "the far colour inside the same disc must not be"
+        );
+    }
+
+    #[test]
+    fn the_same_dab_without_auto_mask_covers_its_whole_disc() {
         // ⚠ The discriminating half. A test asserting only that the far side is empty would pass
         // against a rasterizer that painted nothing at all.
-        let base = SplitBase {
-            split_x: 40,
-            left: LEFT,
-            right: RIGHT,
-        };
-        let m = brush(vec![BrushStroke {
-            points: vec![[0.1, 0.5], [0.9, 0.5]],
-            radius: 0.3,
-            hardness: 100.0,
-            flow: 100.0,
-            erase: false,
-            ..Default::default()
-        }]);
-        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+        let base = split_at(40);
+        let mut b = auto_dot(20.0, 0.35, 30.0);
+        b.strokes[0].auto_mask = false;
+        let cov = rasterize_in(&b, &Geometry::default(), 80, 20, None, Some(&base));
         assert!(
-            cov.at(70, 10) > 200,
-            "a plain stroke must cross: {}",
-            cov.at(70, 10)
+            cov.at(45, 10) > 200,
+            "a plain dab must cover its whole disc: {}",
+            cov.at(45, 10)
         );
     }
 
     #[test]
-    fn each_dab_gates_against_its_own_reference() {
-        // ⚠⚠ The test that discriminates the whole per-dab design, and the one the fixtures above
-        // cannot: they give every point the same reference, so a rasterizer that used only the
-        // FIRST reference for the whole stroke would pass all of them. Here the stroke starts on
-        // the left colour and ends on the right one, referencing each in turn — so both halves
-        // must paint. With one reference for the stroke, whichever half it came from would be the
-        // only one covered.
-        let base = SplitBase {
-            split_x: 40,
-            left: LEFT,
-            right: RIGHT,
-        };
-        let enc = |c: [f32; 3]| {
-            let s = color::prophoto_to_srgb(c);
-            [
-                color::linear_to_srgb(s[0]).clamp(0.0, 1.0),
-                color::linear_to_srgb(s[1]).clamp(0.0, 1.0),
-                color::linear_to_srgb(s[2]).clamp(0.0, 1.0),
-            ]
-        };
-        let m = brush(vec![BrushStroke {
-            points: vec![[0.1, 0.5], [0.9, 0.5]],
-            radius: 0.3,
+    fn each_dab_references_its_own_centre_rather_than_the_strokes_first() {
+        // ⚠⚠ The test that discriminates the per-dab design. A rasterizer that took one reference
+        // for the whole stroke — the first dab's — would paint the left half and refuse the
+        // right. Both halves must paint, because each dab references what is under itself.
+        let base = split_at(40);
+        let b = brush(vec![BrushStroke {
+            points: vec![[0.15, 0.5], [0.85, 0.5]],
+            radius: 0.08,
             hardness: 100.0,
             flow: 100.0,
             erase: false,
             auto_mask: true,
             tolerance: 30.0,
-            refs: vec![enc(LEFT), enc(RIGHT)],
         }]);
-        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+        let cov = rasterize_in(&b, &Geometry::default(), 80, 20, None, Some(&base));
         assert!(
-            cov.at(10, 10) > 200,
-            "the left half references LEFT and must paint: {}",
-            cov.at(10, 10)
+            cov.at(15, 10) > 200,
+            "the left half must paint: {}",
+            cov.at(15, 10)
         );
         assert!(
-            cov.at(70, 10) > 200,
-            "the right half references RIGHT and must paint too: {}",
-            cov.at(70, 10)
+            cov.at(65, 10) > 200,
+            "the right half must paint too: {}",
+            cov.at(65, 10)
         );
+    }
+
+    #[test]
+    fn the_gate_sees_a_purely_tonal_edge() {
+        // ⚠⚠ The capability the stored-reference design could not have had. Both ends of the
+        // comparison come from one buffer, so lightness is usable and two neutrals of different
+        // brightness are two regions — a white wall against a grey one.
+        let base = SplitBase {
+            split_x: 40,
+            left: [0.05, 0.05, 0.05],
+            right: [0.75, 0.75, 0.75],
+        };
+        let cov = rasterize_in(
+            &auto_dot(20.0, 0.35, 30.0),
+            &Geometry::default(),
+            80,
+            20,
+            None,
+            Some(&base),
+        );
+        assert!(cov.at(20, 10) > 200, "the dark side must paint");
+        assert_eq!(cov.at(45, 10), 0, "the bright side must not");
     }
 
     #[test]
     fn an_auto_masked_stroke_with_no_base_paints_positionally() {
         // ⚠ Documented degradation, not an error. `MaskStage` always supplies a base for a brush
         // that needs one — `Brush::needs_base` plus `BrushCache`'s refusal make that so — and the
-        // tint may legitimately have no pixels outside the rendered region.
-        let r = left_reference();
-        let m = brush(vec![BrushStroke {
-            points: vec![[0.1, 0.5], [0.9, 0.5]],
-            radius: 0.3,
-            hardness: 100.0,
-            flow: 100.0,
-            erase: false,
-            auto_mask: true,
-            tolerance: 30.0,
-            refs: vec![r, r],
-        }]);
-        let cov = rasterize_in(&m, &Geometry::default(), 80, 20, None, None);
-        assert!(cov.at(70, 10) > 200);
-    }
-
-    #[test]
-    fn a_truncated_refs_list_is_survivable() {
-        // Sidecars are hand-editable and a dropped sample while painting produces this shape, so
-        // it must degrade rather than panic.
-        let base = SplitBase {
-            split_x: 40,
-            left: LEFT,
-            right: RIGHT,
-        };
-        let m = brush(vec![BrushStroke {
-            points: vec![[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]],
-            radius: 0.3,
-            hardness: 100.0,
-            flow: 100.0,
-            erase: false,
-            auto_mask: true,
-            tolerance: 30.0,
-            refs: vec![left_reference()],
-        }]);
-        let _ = rasterize_in(&m, &Geometry::default(), 80, 20, None, Some(&base));
+        // tint may legitimately have none before a frame has landed.
+        let cov = rasterize_in(
+            &auto_dot(20.0, 0.35, 30.0),
+            &Geometry::default(),
+            80,
+            20,
+            None,
+            None,
+        );
+        assert!(cov.at(45, 10) > 200);
     }
 
     #[test]
@@ -726,16 +706,17 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_ignores_lightness() {
-        // ⚠⚠ The property M1 forced, and the one most likely to be "fixed" by a later reader who
-        // sees a three-component Oklab value and a two-component distance. The reference is
-        // sampled from the displayed frame and the pixel from before the display rendering, so
-        // the lightness terms are systematically 7-10x further apart than the chroma terms.
+    fn the_gate_uses_lightness_as_well_as_chroma() {
+        // ⚠⚠ The property the stored-reference design could not have had, and the one most likely
+        // to be dropped by a later reader who remembers the earlier chroma-only version. Both ends
+        // of the comparison come from one buffer, so two neutrals of different brightness are two
+        // regions — which is what makes a white wall against a grey one detectable.
         let r = [0.2, 0.05, 0.05];
-        let same_colour_much_brighter = [0.9, 0.05, 0.05];
+        let same_hue_much_brighter = [0.9, 0.05, 0.05];
         assert_eq!(
-            auto_mask_gate(same_colour_much_brighter, r, auto_mask_ceiling(35.0)),
-            1.0
+            auto_mask_gate(same_hue_much_brighter, r, auto_mask_ceiling(35.0)),
+            0.0,
+            "a large lightness difference must close the gate"
         );
     }
 
@@ -1177,6 +1158,42 @@ mod tests {
         let part = rasterize_in(&b, &g, 80, 40, Some(clip), None);
         for y in clip.1..clip.1 + clip.3 {
             for x in clip.0..clip.0 + clip.2 {
+                assert_eq!(part.at(x, y), whole.at(x, y), "at frame ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn an_auto_masked_clipped_raster_agrees_away_from_the_clip_edge() {
+        // ⚠⚠ **This is the ACCEPTED COST of reading the reference at render time, pinned so its
+        // extent is a number rather than a hope.** A dab is kept when its *disc* overlaps the
+        // clip, so its centre may lie up to one radius outside it — and under a region render the
+        // base has no pixels there. Those dabs therefore reference a clamped edge pixel instead of
+        // the true one, and the clipped raster can differ from the whole-frame one **within one
+        // radius of the clip boundary**. Beyond that band they must agree exactly.
+        //
+        // ⚠ In practice the band is far quieter than this bound suggests, because within a stroke
+        // dabs combine with `max` and are spaced `SPACING` (a quarter radius) apart, so almost
+        // every pixel in the band is also covered at full alpha by a dab whose centre *is* inside
+        // the region. That is measured, not assumed: it is why three separate attempts to make
+        // the master region invariant fail under this design all passed.
+        let b = brush(vec![BrushStroke {
+            points: vec![[0.05, 0.5], [0.95, 0.5]],
+            radius: 0.15,
+            hardness: 60.0,
+            flow: 100.0,
+            erase: false,
+            auto_mask: true,
+            tolerance: 45.0,
+        }]);
+        let g = Geometry::default();
+        let clip = (30usize, 12usize, 20usize, 16usize);
+        let whole = rasterize_in(&b, &g, 80, 40, None, Some(&split_at(40)));
+        let part = rasterize_in(&b, &g, 80, 40, Some(clip), Some(&split_at(40)));
+        // One radius in frame pixels, the width of the band this cannot promise.
+        let band = (0.15f32 * 80.0).ceil() as usize;
+        for y in clip.1..clip.1 + clip.3 {
+            for x in clip.0 + band..clip.0 + clip.2 - band {
                 assert_eq!(part.at(x, y), whole.at(x, y), "at frame ({x}, {y})");
             }
         }

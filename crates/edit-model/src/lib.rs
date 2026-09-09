@@ -891,28 +891,21 @@ pub struct BrushStroke {
     pub erase: bool,
     /// Paint only the pixels close to the colour under the brush centre — Lightroom's Auto Mask.
     ///
-    /// ⚠ **Baked at paint time**, like `radius`/`hardness`/`flow`/`erase` beside it: a stroke keeps
-    /// whatever the tool was set to when it was painted, and toggling the control later changes
-    /// only what the *next* stroke does.
+    /// ⚠ **The flag is baked at paint time**, like `radius`/`hardness`/`flow`/`erase` beside it: a
+    /// stroke keeps whatever the tool was set to when it was painted, and toggling the control
+    /// later changes only what the *next* stroke does.
+    ///
+    /// ⚠⚠ **The reference COLOUR is not stored, and that is deliberate.** It is read at render
+    /// time from the pixel under each dab's own centre, so both ends of the comparison come from
+    /// one buffer in one colour space. An earlier design baked the colour into the stroke and was
+    /// abandoned: it put the reference in the *displayed* space while the pixels are in the
+    /// working space, and `auto_mask_space_probe` measured that lightness disagreement at a mean
+    /// of +0.07..+0.11 — which would have forced the gate to ignore lightness and go blind to any
+    /// purely tonal edge. ⚠ The region-invariance argument originally given for baking did not
+    /// survive its own sabotage; see the design doc's §2.
     pub auto_mask: bool,
     /// How close counts, 0..=100. Larger selects more.
     pub tolerance: f32,
-    /// One reference colour per point, parallel to `points`. **Display-referred sRGB 0..1.**
-    ///
-    /// ⚠ **Empty unless `auto_mask`**, so a stroke that does not gate adds nothing to any sidecar.
-    ///
-    /// ⚠ Parallel to `points` rather than a field on a point struct: `points: Vec<[f32; 2]>` is
-    /// the serialized shape, and changing it would churn every existing sidecar for a field most
-    /// strokes do not have.
-    ///
-    /// ⚠ **Display-referred, not working-space**, and the conversion lives at the single call site
-    /// in `pipeline::brush` — the rule [`LuminanceRange`] already follows, and what keeps
-    /// `edit-model` free of a `color` dependency.
-    ///
-    /// ⚠ A `refs` shorter than `points` is **survivable, not a panic**: the rasterizer reads
-    /// `refs.get(i)` and a missing entry paints positionally. Sidecars are hand-editable, and a
-    /// dropped sample while painting produces exactly this shape.
-    pub refs: Vec<[f32; 3]>,
 }
 
 impl Default for BrushStroke {
@@ -925,7 +918,6 @@ impl Default for BrushStroke {
             erase: false,
             auto_mask: false,
             tolerance: 35.0,
-            refs: Vec::new(),
         }
     }
 }
@@ -950,13 +942,8 @@ impl Brush {
     /// which routes such a brush to `MaskStage`'s own rasterizing path, where the buffer is in
     /// hand.
     ///
-    /// ⚠ It requires **both** the flag and at least one reference. A stroke with no references
-    /// cannot gate, and letting it cost the whole brush its coverage cache would be a real
-    /// slowdown for no effect.
     pub fn needs_base(&self) -> bool {
-        self.strokes
-            .iter()
-            .any(|s| s.auto_mask && !s.refs.is_empty())
+        self.strokes.iter().any(|s| s.auto_mask)
     }
 }
 
@@ -1752,7 +1739,6 @@ mod tests {
         let s: BrushStroke = serde_json::from_str(json).unwrap();
         assert!(!s.auto_mask, "an old stroke must not become auto-masked");
         assert_eq!(s.tolerance, BrushStroke::default().tolerance);
-        assert!(s.refs.is_empty());
         assert_eq!(
             s.points,
             vec![[0.1, 0.5]],
@@ -1761,27 +1747,23 @@ mod tests {
     }
 
     #[test]
-    fn a_brush_needs_a_base_only_when_a_stroke_can_actually_gate() {
-        // ⚠ The discriminating case is the middle one: a `needs_base` that read only `auto_mask`
-        // would pass a test that set both, and would then cost every such brush its coverage
-        // cache for a stroke that cannot gate at all.
-        let brush = |auto: bool, refs: Vec<[f32; 3]>| Brush {
+    fn a_brush_needs_a_base_only_when_a_stroke_gates() {
+        // ⚠ Both directions. A `needs_base` stuck at `true` would cost every brush its coverage
+        // cache; one stuck at `false` would serve a gating brush a positional map, which is the
+        // silent preview/export divergence `BrushCache` declines in order to prevent.
+        let brush = |auto: bool| Brush {
             strokes: vec![BrushStroke {
                 points: vec![[0.5, 0.5]],
                 auto_mask: auto,
-                refs,
                 ..Default::default()
             }],
             invert: false,
         };
-        assert!(brush(true, vec![[0.2, 0.4, 0.6]]).needs_base());
+        assert!(brush(true).needs_base());
+        assert!(!brush(false).needs_base(), "auto_mask off means no gate");
         assert!(
-            !brush(true, vec![]).needs_base(),
-            "no references means nothing to gate against"
-        );
-        assert!(
-            !brush(false, vec![[0.2, 0.4, 0.6]]).needs_base(),
-            "auto_mask off means no gate"
+            !Brush::default().needs_base(),
+            "an empty brush needs nothing"
         );
     }
 
@@ -3306,7 +3288,6 @@ mod tests {
                     erase: false,
                     auto_mask: true,
                     tolerance: 42.0,
-                    refs: vec![[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
                 },
                 BrushStroke {
                     points: vec![[0.5, 0.5]],
