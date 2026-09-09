@@ -64,6 +64,33 @@ region-free cache would need, and it is 1.9× the clipped cost for a build that 
 
 ## 4. The design
 
+### 4.0 ⚠⚠ CORRECTED AT PLAN TIME: the cache cannot BUILD a gating brush's coverage
+
+**This section replaces an assumption §4 was written on.** `BrushCache` lives in `render_engine`
+and is handed `(edits, fw, fh, clip)` — **it has no base buffer**. A gating brush's coverage is
+built inside `MaskStage::apply` (`stages/mask.rs:265`), the only place that holds the image, and
+`render_cached` cannot interpose there: the masks loop is inside the tail it runs as one unit.
+
+So the cache can never build this coverage. It can only **store one the stage built**.
+
+**The channel:** `BrushCoverage` — already a positional `Vec<Option<Arc<CoverageMap>>>` passed into
+the tail — gains a write side, `built: Vec<Mutex<Option<Arc<CoverageMap>>>>`, and a `deposit(i, map)`.
+`MaskStage` writes what it rasterised; `render_cached` reads the deposits after the run and stores
+them under the key below.
+
+⚠ **The lookup stays in `app`, where the key lives.** The stage does no lookup and holds no cache:
+it receives a `prebuilt` map when one is available — through the parameter that **already exists**
+— and otherwise builds and reports. That keeps stages free of cache logic and keeps "what
+identifies a base" in one place, beside `PrefixKey`.
+
+⚠ `Mutex` rather than `RefCell` because `BrushCoverage` crosses into stages that must stay `Sync`.
+It is uncontended: `apply` runs sequentially, once per mask per tail.
+
+⚠ Two alternatives were rejected. **A `CoverageStore` trait handed to `MaskStage`** puts cache
+lookup inside a stage and makes `pipeline` carry a trait it needs for nothing else. **Splitting the
+tail at every mask boundary**, as `build_pipeline_split_tapped` does for the grade view, keeps
+stages pure but needs one tap per mask and multiplies with the proof path's second tail.
+
 ### 4.1 Per-mask entries, not one entry per render
 
 ⚠⚠ **This is the restructure the win depends on.** `BrushCache` currently stores one
