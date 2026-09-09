@@ -94,6 +94,19 @@ pub struct MaskStage {
     source: CoverageSource,
     stages: Vec<Box<dyn PipelineStage>>,
     region: Option<Region>,
+    /// Where to report coverage this stage had to build, and at which position.
+    ///
+    /// ⚠⚠ **Reported, never looked up.** This stage holds no cache and consults none: what
+    /// identifies a base lives beside `PrefixKey`, in `render_engine`. A gating brush can only be
+    /// rasterized where the image is, which is here — so without this the app could never keep the
+    /// map it wants to cache. See the coverage-cache spec's §4.0.
+    ///
+    /// ⚠ `None` for every caller that hands a prebuilt map or does not cache — the CLI, the export
+    /// path and all 60 goldens. Nothing about the rendered pixels depends on it.
+    ///
+    /// ⚠ An `Arc`, not a borrow: the stage outlives the builder's scope, so a lifetime here would
+    /// infect the whole stage list.
+    deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
 }
 
 impl MaskStage {
@@ -110,6 +123,9 @@ impl MaskStage {
             geometry,
             None,
             color::wb::Illuminant::default(),
+            // ⚠ No deposit: this convenience is for synthetic buffers and tests, which cache
+            // nothing. Production goes through `new_in_region`.
+            None,
         )
     }
 
@@ -125,11 +141,13 @@ impl MaskStage {
         geometry: &Geometry,
         prebuilt: Option<std::sync::Arc<crate::brush::CoverageMap>>,
         baseline: color::wb::Illuminant,
+        deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
     ) -> Self {
         Self {
             source: Self::coverage_source(masked, geometry, prebuilt),
             stages: adjustment_stages(&masked.adjustments, baseline, scale),
             region,
+            deposit,
         }
     }
 
@@ -153,6 +171,10 @@ impl MaskStage {
             source: Self::coverage_source(masked, geometry, prebuilt),
             stages: crate::capture_stages(&masked.adjustments, scale),
             region: None,
+            // ⚠ The capture half runs in the **prefix**, which always renders whole-buffer and is
+            // cached by `PrefixCache` at a coarser grain. There is nothing for a coverage cache to
+            // add here, and a deposit would report a whole-frame map under a region's key.
+            deposit: None,
         }
     }
 
@@ -267,14 +289,21 @@ impl PipelineStage for MaskStage {
                     x0,
                     y0,
                 };
-                Some(std::sync::Arc::new(crate::brush::rasterize_in(
+                let built = std::sync::Arc::new(crate::brush::rasterize_in(
                     brush,
                     geometry,
                     fw,
                     fh,
                     clip,
                     Some(&view),
-                )))
+                ));
+                // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
+                // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
+                // coverage-cache spec's §4.0.
+                if let Some((sink, i)) = &self.deposit {
+                    sink.deposit(*i, std::sync::Arc::clone(&built));
+                }
+                Some(built)
             }
         };
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
@@ -392,6 +421,52 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The carrier.** `BrushCoverage`'s own test proves the channel; nothing proves the stage
+    /// uses it. That is the W5 shape — creative LUTs shipped with the maths fully tested and
+    /// nothing carrying the data to it.
+    ///
+    /// ⚠ An **auto-masked** brush specifically: a plain one is prebuilt by `render_engine` and
+    /// never reaches this path, so a fixture using one would pass against a stage that deposits
+    /// nothing.
+    #[test]
+    fn an_auto_masked_brush_reports_the_coverage_it_builds() {
+        use edit_model::{Brush, BrushStroke};
+
+        let masked = MaskedAdjustment {
+            mask: Mask::Brush(Brush {
+                strokes: vec![BrushStroke {
+                    points: vec![[0.5, 0.5]],
+                    radius: 0.3,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    auto_mask: true,
+                    tolerance: 35.0,
+                    ..Default::default()
+                }],
+                invert: false,
+            }),
+            adjustments: LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+        };
+        let coverage = std::sync::Arc::new(crate::BrushCoverage::with_slots(1));
+        let stage = MaskStage::new_in_region(
+            &masked,
+            RenderScale::new(1.0),
+            None,
+            &Geometry::default(),
+            None,
+            color::wb::Illuminant::default(),
+            Some((std::sync::Arc::clone(&coverage), 0)),
+        );
+        let _ = stage.apply(flat(32, 24));
+        assert!(
+            coverage.take_built(0).is_some(),
+            "the stage built a coverage map and did not report it, so nothing can cache it"
+        );
+    }
+
     /// A flat mid-grey image.
     fn flat(w: usize, h: usize) -> ImageBuf {
         let mut img = ImageBuf::new(w, h);
@@ -473,6 +548,7 @@ mod tests {
             &Geometry::default(),
             None,
             color::wb::Illuminant::default(),
+            None,
         )
         .apply(flat(rw, rh));
 
@@ -565,6 +641,7 @@ mod tests {
             &Geometry::default(),
             None,
             color::wb::Illuminant::default(),
+            None,
         )
         .apply(flat(20, 20));
         for y in 0..20 {
@@ -756,6 +833,7 @@ mod tests {
             &Geometry::default(),
             None,
             color::wb::Illuminant::default(),
+            None,
         )
         .apply(ramp(32, 64).crop(8, 20, 16, 24));
         for y in 0..24 {

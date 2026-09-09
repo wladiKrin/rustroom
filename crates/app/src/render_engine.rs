@@ -865,7 +865,12 @@ impl BrushCache {
                 _ => None,
             })
             .collect();
-        let built = Arc::new(pipeline::BrushCoverage { maps });
+        // ⚠ No deposit slots yet — Task 3 of the coverage-cache plan replaces this whole
+        // function. An empty `built` is inert: `deposit` on a missing slot is ignored.
+        let built = Arc::new(pipeline::BrushCoverage {
+            maps,
+            built: Vec::new(),
+        });
         self.entries.insert(0, (key, Arc::clone(&built)));
         self.entries.truncate(Self::CAP);
         built

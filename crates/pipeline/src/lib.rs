@@ -14,11 +14,49 @@ pub mod brush;
 #[derive(Default)]
 pub struct BrushCoverage {
     pub maps: Vec<Option<std::sync::Arc<brush::CoverageMap>>>,
+    /// Where a stage reports coverage it had to build itself.
+    ///
+    /// ⚠⚠ **The read side is what a caller supplies; this is what a stage gives back.** A brush
+    /// that gates on the image can only be rasterized where the image is — inside
+    /// `MaskStage::apply` — so `render_engine`, which owns the cache key, would otherwise never
+    /// see the map it wants to keep. See the coverage-cache spec's §4.0.
+    ///
+    /// ⚠ `Mutex` rather than `RefCell`: this crosses into stages that must stay `Sync`. It is
+    /// uncontended — `apply` runs sequentially, once per mask per tail.
+    pub built: Vec<std::sync::Mutex<Option<std::sync::Arc<brush::CoverageMap>>>>,
 }
 
 impl BrushCoverage {
     pub fn get(&self, i: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
         self.maps.get(i).and_then(|m| m.clone())
+    }
+
+    /// A coverage set with `n` empty deposit slots and nothing prebuilt.
+    pub fn with_slots(n: usize) -> Self {
+        Self {
+            maps: vec![None; n],
+            built: (0..n).map(|_| std::sync::Mutex::new(None)).collect(),
+        }
+    }
+
+    /// Report coverage built at position `i`. Out of range is ignored.
+    ///
+    /// ⚠ Ignored rather than panicking: the mask list can change between this set being made and a
+    /// stage running, and a render is not worth aborting over a slot that no longer exists.
+    pub fn deposit(&self, i: usize, map: std::sync::Arc<brush::CoverageMap>) {
+        if let Some(slot) = self.built.get(i) {
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(map);
+            }
+        }
+    }
+
+    /// Take what was reported at position `i`, clearing the slot.
+    ///
+    /// ⚠ Clearing is what stops a map surviving into a render it does not describe — the caller
+    /// stores it under a key computed for *this* render.
+    pub fn take_built(&self, i: usize) -> Option<std::sync::Arc<brush::CoverageMap>> {
+        self.built.get(i).and_then(|s| s.lock().ok()?.take())
     }
 }
 pub mod auto_tone;
@@ -624,7 +662,10 @@ pub fn build_pipeline_split_tapped(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
-    brush: Option<&BrushCoverage>,
+    // ⚠ An `&Arc`, not an `&BrushCoverage`: the masks loop hands each stage a clone so it can
+    // **report** the coverage it had to build. `get` still works through the deref, so no caller
+    // changes. See the coverage-cache spec's §4.0.
+    brush: Option<&std::sync::Arc<BrushCoverage>>,
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
     // What the *tail's* rendering needs that `Edits` cannot carry.
@@ -751,6 +792,12 @@ pub fn build_pipeline_split_tapped(
                 &edits.geometry,
                 brush.and_then(|b| b.get(i)),
                 baseline,
+                // ⚠ `i` is the position in `edits.masks`, the same index the comment above
+                // insists on — so a deposited map lands under the key `render_engine` computed
+                // for *this* mask. A counter over active masks would file one mask's coverage
+                // against another's key: a stale hit, which renders positionally while the tint
+                // shows the gate working.
+                brush.map(|b| (std::sync::Arc::clone(b), i)),
             )));
         }
     }
@@ -848,7 +895,10 @@ pub fn build_pipeline_split_in_region_with_brush(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
-    brush: Option<&BrushCoverage>,
+    // ⚠ An `&Arc`, not an `&BrushCoverage`: the masks loop hands each stage a clone so it can
+    // **report** the coverage it had to build. `get` still works through the deref, so no caller
+    // changes. See the coverage-cache spec's §4.0.
+    brush: Option<&std::sync::Arc<BrushCoverage>>,
     spec: RenderSpec,
     lens: Option<lens_profile::LensShot>,
     profile: ProfileRendering<'_>,
@@ -981,6 +1031,51 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    use super::BrushCoverage;
+
+    fn a_map() -> std::sync::Arc<crate::brush::CoverageMap> {
+        std::sync::Arc::new(crate::brush::CoverageMap {
+            outside: 42,
+            ..Default::default()
+        })
+    }
+
+    /// ⚠⚠ The write side exists because `MaskStage` is the only thing holding the image, so it is
+    /// the only thing that can build a gating brush's coverage — and `render_engine`, which owns
+    /// the key, has to be able to see what it built. See the coverage-cache spec's §4.0.
+    #[test]
+    fn a_deposited_map_can_be_taken_back_out() {
+        let c = BrushCoverage::with_slots(3);
+        assert!(c.take_built(1).is_none(), "nothing deposited yet");
+        c.deposit(1, a_map());
+        assert!(c.take_built(1).is_some(), "the deposit must be readable");
+        assert!(
+            c.take_built(1).is_none(),
+            "taking it must clear the slot, so a stale map cannot be read twice"
+        );
+    }
+
+    /// ⚠ An index past the end is ignored rather than panicking: the mask list can change between
+    /// this set being made and a stage running, exactly as `suppressed_spot`'s index can.
+    #[test]
+    fn depositing_out_of_range_is_ignored() {
+        let c = BrushCoverage::with_slots(1);
+        c.deposit(7, a_map());
+        assert!(c.take_built(7).is_none());
+    }
+
+    /// ⚠ The read side is untouched, and that is what keeps every existing caller working.
+    #[test]
+    fn the_prebuilt_side_still_reads_by_position() {
+        let c = BrushCoverage {
+            maps: vec![None, Some(a_map())],
+            built: Vec::new(),
+        };
+        assert!(c.get(0).is_none());
+        assert!(c.get(1).is_some());
+        assert!(c.get(9).is_none(), "past the end is None, never a panic");
+    }
 
     /// ⚠⚠ `Rendering::None` must insert **no stage at all**, not a curve that happens to be the
     /// identity. Bit-exactness is the rule the entire golden harness rests on.
