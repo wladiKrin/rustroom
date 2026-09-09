@@ -263,29 +263,46 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     // exactly the two-facts-that-disagree failure — and a silent one, showing as
                     // a subtly wrong band at the edge of the visible area.
                     let shown_edits = s.view_edits(tool);
-                    let want = if native {
-                        let vis = view_region::visible_rect(
+                    let (vis, want) = if native {
+                        let v = view_region::visible_rect(
                             iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
                         );
-                        if view_region::covers_whole_image(vis, iw, ih) {
-                            None
+                        if view_region::covers_whole_image(v, iw, ih) {
+                            (None, None)
                         } else {
-                            Some(view_region::with_margin(
-                                vis,
+                            let margined = view_region::with_margin(
+                                v,
                                 iw,
                                 ih,
                                 // ⚠ Derived per render, not a constant: masks chain, so N masked
                                 // clarities reach N x 120 px and no fixed number covers an
                                 // unbounded stack. See `Session::render_margin`.
                                 s.render_margin(&shown_edits, max_dim),
-                            ))
+                            );
+                            (Some(v), Some(margined))
                         }
                     } else {
-                        None
+                        (None, None)
                     };
-                    let covered = match (want, s.rendered_region) {
+                    // ⚠⚠ **Against the VISIBLE rect, never the margined one — and comparing the
+                    // margined one meant the margin had never worked.** `with_margin`'s own doc
+                    // says why it exists: "small pans reuse the existing texture instead of
+                    // re-rendering". But `want` and `rendered_region` are both `visible + 2 ×
+                    // margin`, so they are the same size, and one rectangle contains another of
+                    // equal size only when they are identical — **any pan at all made this
+                    // false**. The margin made every render bigger and reduced the re-render rate
+                    // by nothing.
+                    //
+                    // ⚠ Measured, not reasoned: `RUSTROOM_DEBUG_RENDER` over one pan showed **81
+                    // consecutive renders, one per frame**, their regions drifting by a pixel at a
+                    // time, 21 ms each. Reported as panning being smooth but "very sluggish".
+                    //
+                    // ⚠ Asking whether what is rendered still covers what is on screen is also
+                    // the only question that means anything here: the margin is headroom, not part
+                    // of the requirement.
+                    let covered = match (vis, s.rendered_region) {
                         (None, None) => true,
-                        (Some(w), Some(r)) => view_region::contains(r, w),
+                        (Some(v), Some(r)) => view_region::contains(r, v),
                         _ => false,
                     };
                     // ⚠ A change of *rung* must re-request even when the region is
@@ -872,6 +889,15 @@ mod tests {
     /// ⚠ It settles with **idle** frames rather than a warm-up drag. A warm-up that dragged would
     /// already have dropped the rung under the sabotage, leaving the measured drag with no rung
     /// change to make and the test blind again for a second reason.
+    ///
+    /// ⚠⚠ **This guards the RUNG rule and not the coverage rule, and saying so is the point.** It
+    /// seeds `rendered_region` as the whole image, which contains the margined rect as well as the
+    /// visible one — so restoring the old `contains(r, want)` comparison leaves it **green**. That
+    /// was verified by sabotage, not assumed. The canvas harness structurally cannot see it: a
+    /// margin of 256 rendered pixels needs an image far larger than any fixture that can reach a
+    /// native rung, since `tier_max_dim` needs `fit * zoom > 1` and zoom caps at 8.
+    /// `view_region::a_small_pan_stays_inside_the_margin_but_not_inside_a_margined_rect` is what
+    /// guards the coverage rule, and it carries its own fixture check.
     #[test]
     fn a_pan_inside_the_margin_asks_for_nothing_and_leaves_the_rung_alone() {
         let ctx = egui::Context::default();

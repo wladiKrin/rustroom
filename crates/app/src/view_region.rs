@@ -608,6 +608,42 @@ mod tests {
         assert_eq!(shift, (0.0, 0.0));
     }
 
+    /// ⚠⚠ **Why the coverage test must ask about the VISIBLE rect, not the margined one.**
+    /// `with_margin` exists so "small pans reuse the existing texture instead of re-rendering" —
+    /// and comparing the margined rect against the rendered region defeats it completely: both
+    /// are `visible + 2 × margin`, so they are the same size, and one rectangle contains another
+    /// of equal size only when they are identical. Any pan at all made it false.
+    ///
+    /// ⚠ Measured before it was believed: `RUSTROOM_DEBUG_RENDER` over one pan showed **81
+    /// consecutive renders, one per frame**, regions drifting a pixel at a time, 21 ms each.
+    #[test]
+    fn a_small_pan_stays_inside_the_margin_but_not_inside_a_margined_rect() {
+        let (iw, ih, m) = (6000usize, 4000usize, 256usize);
+        let before = RegionRect {
+            x: 2000,
+            y: 1200,
+            w: 950,
+            h: 540,
+        };
+        // The region a render at `before` would have produced.
+        let rendered = with_margin(before, iw, ih, m);
+        // The same view, panned by 40 rendered pixels — far inside the 256 px margin.
+        let after = RegionRect {
+            x: before.x + 40,
+            ..before
+        };
+
+        assert!(
+            contains(rendered, after),
+            "a 40 px pan left the rendered region, so the margin buys nothing"
+        );
+        assert!(
+            !contains(rendered, with_margin(after, iw, ih, m)),
+            "fixture check: comparing the MARGINED rect is what made every pan re-render, and \
+             this test proves nothing unless that comparison really does fail here"
+        );
+    }
+
     #[test]
     fn the_fit_size_is_the_buffer_scaled_to_the_cap() {
         // An uncropped X-T4 frame: 6246x4170 capped at 1600.
