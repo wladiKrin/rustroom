@@ -124,6 +124,64 @@ fn main() {
             (rw * rh) as f64 / 1e6
         );
     }
+    // ⚠⚠ **The margin sweep: what a bigger margin costs, and how far it lets you pan before the
+    // region has to be re-rendered.** `with_margin` expands the visible rect on every side, so the
+    // area grows as `(w + 2m)(h + 2m)` while the pan distance it buys grows only as `m`. The
+    // question is where that stops being worth it.
+    let rung = buffer_long;
+    let scale = RenderScale::new(rung as f32 / buffer_long as f32);
+    let k = rung as f32 / FIT_CAP as f32;
+    let px_per_rendered = FIT * ZOOM / k;
+    let src = core_image::ImageBuf::clone(&buf).downscale_to(rung);
+    let (pw, ph) = (src.width(), src.height());
+    let (prefix, _) = pipeline::build_pipeline_split_in_region_with_brush(
+        &edits,
+        scale,
+        None,
+        None,
+        pipeline::RenderSpec::default(),
+        lens.clone(),
+        pipeline::ProfileRendering::default(),
+    );
+    let mid = prefix.run(src);
+    let vw = ((AVAIL.0 / px_per_rendered).ceil() as usize).min(pw);
+    let vh = ((AVAIL.1 / px_per_rendered).ceil() as usize).min(ph);
+    println!("\nmargin sweep at rung {rung} (visible {vw}x{vh} rendered px):");
+    println!(
+        "{:>8}{:>14}{:>12}{:>14}{:>16}",
+        "margin", "region", "Mpx", "tail ms", "pan before re-render"
+    );
+    for m in [0usize, 64, 128, 256, 512, 1024] {
+        let rw = (vw + 2 * m).min(pw);
+        let rh = (vh + 2 * m).min(ph);
+        let (x0, y0) = ((pw - rw) / 2, (ph - rh) / 2);
+        let region = pipeline::Region {
+            full_w: pw,
+            full_h: ph,
+            x0,
+            y0,
+        };
+        let cropped = mid.crop(x0, y0, rw, rh);
+        let (_, ms) = best_of(3, || {
+            let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+                &edits,
+                scale,
+                Some(region),
+                None,
+                pipeline::RenderSpec::default(),
+                lens.clone(),
+                pipeline::ProfileRendering::default(),
+            );
+            tail.run(cropped.clone())
+        });
+        println!(
+            "{m:>8}{:>14}{:>12.2}{ms:>14.2}{:>13.0} pt",
+            format!("{rw}x{rh}"),
+            (rw * rh) as f64 / 1e6,
+            m as f32 * px_per_rendered
+        );
+    }
+
     println!(
         "\nPanning changes no edits, so this tail is the whole per-frame cost. If the two rows\n\
          are within a few ms, the rung drop buys nothing while panning and costs a 2x blur."

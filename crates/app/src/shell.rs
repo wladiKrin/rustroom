@@ -86,6 +86,12 @@ impl eframe::App for RustroomApp {
                     &frame.rgba,
                 );
                 s.texture = Some(ctx.load_texture("preview", img, egui::TextureOptions::LINEAR));
+                // ⚠ A whole-image frame is kept as the backdrop a region render is painted over.
+                // ⚠ `Some(..)` only — a region frame must NOT replace it, or the backdrop would
+                // become the very slice it exists to surround and the black would come back.
+                if frame.region.is_none() {
+                    s.backdrop = s.texture.clone().map(|t| (t, frame.fit_size));
+                }
                 // ⚠ The grade range view's plane becomes a texture in the same place the frame
                 // does, so the two can never describe different frames — and a frame that
                 // arrives without a plane (box unticked, Global, a tool switch) drops the

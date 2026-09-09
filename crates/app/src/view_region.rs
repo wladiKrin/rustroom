@@ -12,6 +12,14 @@ pub use crate::render_engine::RegionRect;
 // constant covers it. The margin is derived per render by `Session::render_margin`, from the same
 // `pipeline::tail_kernel_radius` the pipeline itself uses — one fact, read twice, because a second
 // derivation here would fail silently as a subtly wrong band at the edge of the visible area.
+//
+// ⚠ `Session::PAN_MARGIN` is **not** that constant coming back, and the difference is the whole
+// point: it is a `max` **floor** for pan comfort, never a replacement for the derivation. The
+// margin is still `max(derived reach, floor)`, so it can only ever be larger than the reach — the
+// failure above needs a margin *smaller* than the reach, which a floor cannot produce. ⚠ It does
+// make the derivation invisible for ordinary edits, since one masked clarity's ~120 px sits under
+// it; `the_render_margin_follows_the_edits_it_will_render` uses three chained masks so it can
+// still see the derived term being removed.
 
 /// The long edge a fit-resolution preview is capped to.
 ///

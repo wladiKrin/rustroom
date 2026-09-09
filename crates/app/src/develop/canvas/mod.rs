@@ -368,6 +368,25 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                     }
 
                     let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
+                    // ⚠⚠ **The backdrop, painted at `frame_rect` UNDER the region texture.** A
+                    // region render covers only `img_rect`; everything outside it used to be
+                    // unpainted, so panning revealed black rectangles that snapped to image when
+                    // the next region landed. The last whole-image texture covers the entire
+                    // frame, so a revealed edge is a soft but correct picture that snaps sharp.
+                    //
+                    // ⚠ Only while a region is on screen. With a whole-image frame the two would
+                    // coincide exactly and the backdrop would be a wasted draw of the same pixels.
+                    //
+                    // ⚠ Only when its `fit_size` still matches: a crop or an orientation change
+                    // moves the frame, and a backdrop from before it would be stretched across
+                    // the new one at the wrong scale — visible, because it spans the whole rect.
+                    if place_region.is_some() {
+                        if let Some((tex, size)) = &s.backdrop {
+                            if (size.0 - full.x).abs() < 0.5 && (size.1 - full.y).abs() < 0.5 {
+                                egui::Image::new(tex).paint_at(ui, frame_rect);
+                            }
+                        }
+                    }
                     egui::Image::new(shown).paint_at(ui, resp.rect);
                     // ⚠ The grade range view, over the photograph and under every tool overlay.
                     // `resp.rect` is `img_rect` — the rendered slice — and this texture covers
@@ -750,6 +769,93 @@ mod tests {
         // A canvas gesture on a suppressed mask is view-only; nothing else here is.
         let view_only = suppressed.is_some();
         super::rungs_to_drop(dragging, 1, view_only)
+    }
+
+    /// ⚠⚠ **Reported in use: panning at 1:1 showed black rectangles at the edges that snapped to
+    /// image as each new region landed** — "very stuttery", "very unpleasant". A region render
+    /// paints only `img_rect`; outside it nothing was painted at all.
+    ///
+    /// ⚠ The backdrop is drawn **only** while a region is on screen. With a whole-image frame the
+    /// two rects coincide and it would be a wasted draw of the same pixels — so a test that only
+    /// counted "is there a backdrop" would pass against a version that always painted one.
+    #[test]
+    fn a_region_render_paints_a_backdrop_under_it_and_a_whole_image_one_does_not() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let tex = app
+            .session
+            .as_ref()
+            .expect("session")
+            .texture
+            .clone()
+            .expect("fixture check: the session must have a texture to use as a backdrop");
+        {
+            let s = app.session.as_mut().expect("session");
+            s.backdrop = Some((tex, (s.fit_image_size.x, s.fit_image_size.y)));
+        }
+        let whole = textured_rects(&mut app, &ctx);
+
+        {
+            let s = app.session.as_mut().expect("session");
+            s.zoom = 2.0;
+            s.rendered_long = 80.0;
+            s.rendered_region = Some(crate::RegionRect {
+                x: 3,
+                y: 2,
+                w: 40,
+                h: 20,
+            });
+        }
+        let region = textured_rects(&mut app, &ctx);
+        assert_eq!(
+            region,
+            whole + 1,
+            "a region render must paint the backdrop under it and a whole-image one must not; \
+             whole={whole} region={region}"
+        );
+    }
+
+    /// ⚠ A backdrop from a different framing is dropped rather than stretched. A crop or an
+    /// orientation change moves the frame, and this is painted across the *whole* frame rect — so
+    /// a stale one is visibly wrong, not subtly.
+    #[test]
+    fn a_backdrop_from_a_different_framing_is_not_painted() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let tex = app
+            .session
+            .as_ref()
+            .expect("session")
+            .texture
+            .clone()
+            .expect("fixture check: the session must have a texture");
+        {
+            let s = app.session.as_mut().expect("session");
+            s.zoom = 2.0;
+            s.rendered_long = 80.0;
+            s.rendered_region = Some(crate::RegionRect {
+                x: 3,
+                y: 2,
+                w: 40,
+                h: 20,
+            });
+            s.backdrop = Some((tex.clone(), (s.fit_image_size.x, s.fit_image_size.y)));
+        }
+        let matching = textured_rects(&mut app, &ctx);
+        {
+            let s = app.session.as_mut().expect("session");
+            // As a crop would leave it: the same texture, a framing that no longer applies.
+            s.backdrop = Some((tex, (s.fit_image_size.x * 0.6, s.fit_image_size.y * 0.6)));
+        }
+        let stale = textured_rects(&mut app, &ctx);
+        assert_eq!(
+            stale,
+            matching - 1,
+            "a backdrop whose framing no longer matches must not be painted; \
+             matching={matching} stale={stale}"
+        );
     }
 
     /// ⚠⚠ **The defect, as a test.** The request condition ends in

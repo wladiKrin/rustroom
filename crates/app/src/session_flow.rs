@@ -34,6 +34,31 @@ pub(crate) fn before_edits(edits: &Edits) -> Edits {
     }
 }
 
+/// How far past the visible area to render, in **rendered** pixels, so a pan does not
+/// immediately leave what has been rendered.
+///
+/// ⚠⚠ **Measured, not chosen.** `bench_pan_rung` (kept) sweeps it at the native rung on an X-T4,
+/// with the prefix cached — which is the whole per-frame cost of a pan, since panning changes no
+/// edits:
+///
+/// | margin | region | tail | pan before a re-render |
+/// |---|---|---|---|
+/// | 0 | 953x541 | 7.3 ms | 0 pt |
+/// | 64 | 1081x669 | 9.3 ms | 146 pt |
+/// | **256** | **1465x1053** | **23.5 ms** | **583 pt** |
+/// | 512 | 1977x1565 | 36.7 ms | 1165 pt |
+/// | 1024 | 3001x2589 | 97.2 ms | 2330 pt |
+///
+/// ⚠ **The area grows as `(w + 2m)(h + 2m)` while the distance it buys grows only as `m`**, so
+/// this cannot simply be raised until panning is free — 1024 costs 97 ms for four times the
+/// travel of 256. 256 buys about a quarter of a 2167 pt canvas.
+///
+/// ⚠ **It is paid by every render at this rung, not only by pans.** That is affordable because a
+/// slider drag drops a rung, where the same margin in rendered pixels covers four times the
+/// screen area and costs about a quarter; the full-rung figure is paid on settle and on crossing
+/// a pan boundary, not per frame.
+const PAN_MARGIN: usize = 256;
+
 impl Session {
     /// The working resolution for a re-render driven from a panel rather than the canvas.
     ///
@@ -75,7 +100,12 @@ impl Session {
     /// ever drops adjustments, never adds — but reserving the truth is cheaper than reserving a
     /// bound.
     pub(crate) fn render_margin(&self, edits: &Edits, max_dim: usize) -> usize {
-        pipeline::tail_kernel_radius(edits, self.render_scale(max_dim))
+        // ⚠⚠ **Two jobs, and the `max` is what keeps them from trading against each other.** The
+        // kernel radius is a **correctness** floor: render less than the tail reads and the edge
+        // of the visible area is a subtly wrong band with nothing to error. `PAN_MARGIN` is a
+        // **comfort** term on top, so an ordinary pan does not leave the rendered region and see
+        // the backdrop. Reducing the first to afford the second would be silently wrong.
+        pipeline::tail_kernel_radius(edits, self.render_scale(max_dim)).max(PAN_MARGIN)
     }
 
     /// **and** resets this rung, so the two cannot drift apart there either.
@@ -460,6 +490,7 @@ impl RustroomApp {
             selected_spot: None,
             suppressed_spot: None,
             suppressed_mask: None,
+            backdrop: None,
             spot_drag: Default::default(),
             active_mask_handle: None,
             guides: Vec::new(),
@@ -921,16 +952,24 @@ mod tests {
         let rung = s.buffer_long;
 
         let plain = s.render_margin(&s.edits.clone(), rung);
-        s.edits.masks.push(edit_model::MaskedAdjustment {
-            mask: edit_model::Mask::default(),
-            adjustments: edit_model::LocalAdjustments {
-                local_contrast: edit_model::LocalContrast {
-                    texture: 0.0,
-                    clarity: 100.0,
+        // ⚠⚠ **Three masked clarities, not one, and `PAN_MARGIN` is why.** The margin is
+        // `max(kernel reach, PAN_MARGIN)`, so a single masked clarity's ~120 px reach sits under
+        // the 256 px floor and this read `256 vs 256` — the guard could no longer see the
+        // property it exists to guard. Masks **chain**, so three reach ~360 and clear it. The
+        // floor never lowers the margin, so correctness was never at risk; what was at risk was
+        // this test's ability to notice the derivation being removed.
+        for _ in 0..3 {
+            s.edits.masks.push(edit_model::MaskedAdjustment {
+                mask: edit_model::Mask::default(),
+                adjustments: edit_model::LocalAdjustments {
+                    local_contrast: edit_model::LocalContrast {
+                        texture: 0.0,
+                        clarity: 100.0,
+                    },
+                    ..Default::default()
                 },
-                ..Default::default()
-            },
-        });
+            });
+        }
         let masked = s.render_margin(&s.edits.clone(), rung);
 
         assert!(

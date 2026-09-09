@@ -753,6 +753,23 @@ pub struct Session {
     /// only what it suppressed". A single unconditional derivation cannot acquire a second owner,
     /// and cannot disagree with what is on screen.
     suppressed_mask: Option<usize>,
+    /// The last **whole-image** texture, kept as a backdrop under a region render, with the
+    /// `fit_size` it was rendered at.
+    ///
+    /// ⚠⚠ **This is what stops the edges of a pan being BLACK.** A region render paints only
+    /// `img_rect`; everything outside it was simply not painted, so revealing new area while
+    /// panning showed black rectangles that snapped to image when the next region landed.
+    /// Reported as making panning at 1:1 "very stuttery" and "very unpleasant".
+    ///
+    /// ⚠ The alternative — render the whole image at the native rung — was **measured and
+    /// rejected**: 26 Mpx against a region's 0.5, about 300 ms per render, and paid on every
+    /// slider move as well as every pan. This costs one texture and one `paint_at`, and no
+    /// rendering at all.
+    ///
+    /// ⚠ Keyed on the `fit_size` it was rendered at, and dropped when that no longer matches.
+    /// A crop or an orientation change moves the frame, and a backdrop from before it would be
+    /// painted at the wrong scale — visibly, since it is drawn across the whole frame rect.
+    backdrop: Option<(egui::TextureHandle, (f32, f32))>,
     /// What the retouch gesture is doing, across frames.
     ///
     /// ⚠⚠ **On the session, not a local in `canvas::show`** — `active_mask_handle`'s home, for a

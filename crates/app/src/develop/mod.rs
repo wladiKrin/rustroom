@@ -72,21 +72,42 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if app.session.is_some() {
         rail::show(ui, &mut picked);
     }
-    app.select_tool(picked);
-    // ⚠⚠ **The one derivation site for mask isolation.** Recomputed unconditionally every frame
-    // from the same three facts that decide whether the tint is drawn, so the suppression and the
-    // tint cannot disagree and no second owner can appear. See `Session::suppressed_mask`.
+    // ⚠⚠ **The one derivation site for mask isolation, and it runs BEFORE `select_tool`.**
+    // Recomputed every frame from the same three facts that decide whether the tint is drawn, so
+    // the suppression and the tint cannot disagree and no second owner can appear. See
+    // `Session::suppressed_mask`.
     //
-    // ⚠ Placed before both panels: each requests renders through `view_edits`, and a value
-    // written after them would be one frame stale exactly where it matters.
-    let suppressed = if app.tool == rustroom_app::tool::Tool::Masks && app.show_mask_tint {
+    // ⚠⚠ **Keyed on `picked`, not `app.tool`, and placed above `select_tool` — because
+    // `select_tool` owns the re-render for a tool change and would otherwise request with the
+    // suppression of the tool being LEFT.** Reported in use, both directions at once: leaving
+    // Masks rendered without the mask's edits, so they appeared only when something else forced a
+    // frame; arriving at Masks rendered *with* them, so they sat under the tint until the same.
+    // One ordering, two symptoms.
+    //
+    // ⚠ Also before both panels: each requests renders through `view_edits`, and a value written
+    // after them would be one frame stale exactly where it matters.
+    let suppressed = if picked == rustroom_app::tool::Tool::Masks && app.show_mask_tint {
         app.session.as_ref().and_then(|s| s.selected_mask)
     } else {
         None
     };
+    // ⚠⚠ **A change guard that ASKS FOR A RENDER, which the first version did not.** The
+    // suppression decides what `view_edits` returns, so a change to it changes the picture — and
+    // nothing else necessarily asks. `select_tool` covers a tool change; ticking "Show mask" and
+    // selecting a different mask change it with no tool change at all, and those went unrendered
+    // until some unrelated edit happened to request a frame.
+    let tool_for_request = picked;
     if let Some(s) = app.session.as_mut() {
-        s.suppressed_mask = suppressed;
+        if s.suppressed_mask != suppressed {
+            s.suppressed_mask = suppressed;
+            s.request(
+                s.view_edits(tool_for_request),
+                s.render_max_dim(),
+                s.requested_region,
+            );
+        }
     }
+    app.select_tool(picked);
     photo_edited |= panel::show(app, ui);
     if app.show_filmstrip && app.library.is_some() {
         filmstrip::show(app, ui, ctx);
@@ -228,6 +249,65 @@ mod tests {
             |ui| body(&mut app, ui, &c),
         );
         app.session.as_ref().expect("session").suppressed_mask
+    }
+
+    /// Run one real `body` frame and report `(suppressed_mask, renders issued)`.
+    fn frame(app: &mut crate::RustroomApp, ctx: &egui::Context) -> (Option<usize>, usize) {
+        let c = ctx.clone();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 1400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| body(app, ui, &c),
+        );
+        let s = app.session.as_ref().expect("session");
+        (s.suppressed_mask, s.engine.requests_issued())
+    }
+
+    /// ⚠⚠ **Reported in use, both directions at once.** Leaving the Masks tool rendered *without*
+    /// the mask's edits and arriving at it rendered *with* them, each correcting itself only when
+    /// something unrelated forced a frame. Two symptoms, one cause: the suppression was stored and
+    /// updated after `select_tool`, which owns the re-render for a tool change — so every tool
+    /// change requested with the suppression of the tool being left. It is derived above
+    /// `select_tool` now, from `picked`.
+    ///
+    /// ⚠ The second half is the change guard. Ticking "Show mask" or selecting a different mask
+    /// changes what `view_edits` returns with **no tool change at all**, so nothing asked for a
+    /// render and the screen kept the old answer.
+    #[test]
+    fn a_change_of_suppression_asks_for_a_render() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.tool = rustroom_app::tool::Tool::Masks;
+        app.show_mask_tint = true;
+        {
+            let s = app.session.as_mut().expect("session");
+            s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
+            s.selected_mask = Some(0);
+        }
+        // Settle: the suppression is established and whatever renders it wants are issued.
+        let _ = frame(&mut app, &ctx);
+        let (before_mask, before_reqs) = frame(&mut app, &ctx);
+        assert_eq!(
+            before_mask,
+            Some(0),
+            "fixture check: the mask must be suppressed before the toggle, or this proves nothing"
+        );
+
+        // Untick "Show mask" — no tool change, so `select_tool` will not fire.
+        app.show_mask_tint = false;
+        let (after_mask, after_reqs) = frame(&mut app, &ctx);
+        assert_eq!(after_mask, None, "the suppression must have been lifted");
+        assert!(
+            after_reqs > before_reqs,
+            "lifting the suppression changed the picture and asked for no render, so the mask's \
+             edits stay invisible until something unrelated forces a frame"
+        );
     }
 
     /// ⚠⚠ **The carrier.** The three facts reaching `Session::suppressed_mask` through the real

@@ -220,6 +220,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         selected_spot: None,
         suppressed_spot: None,
         suppressed_mask: None,
+        backdrop: None,
         spot_drag: Default::default(),
         guides: Vec::new(),
         active_guide: None,
