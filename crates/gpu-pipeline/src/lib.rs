@@ -7,6 +7,7 @@
 //!
 //! ⚠ Nothing in the app uses this crate. See the spec's §8 for why that is deliberate.
 
+mod accelerate;
 mod chain;
 mod context;
 mod equivalence;
@@ -14,6 +15,7 @@ mod exposure;
 mod hsl;
 mod image;
 
+pub use accelerate::accelerate;
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
 pub use equivalence::{compare, Divergence};
