@@ -100,7 +100,7 @@ pub(super) fn draw_mask_overlay(
     // top of it. Drawn from inside `paint_mask`'s per-shape match it would be painted once per
     // brush component and double-blend wherever two overlapped — which is the same mistake the
     // inverted brush's surround already cost this project once.
-    if brush.show_tint && super::mask_tint::tintable(m) {
+    if brush.show_tint {
         paint_tint(&painter, m, &s.edits.geometry, frame_rect, brush.base);
     }
     for (k, other) in std::iter::once(&m.mask)

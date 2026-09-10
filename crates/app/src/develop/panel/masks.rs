@@ -171,17 +171,22 @@ pub fn show(
         // ⚠⚠ **The shape controls edit the SELECTED COMPONENT, not always the base.** Read
         // through `component_index`, which clamps — so a stale index shows the base rather than
         // leaving these sliders on one shape while the canvas's handles drag another.
-        // ⚠⚠ **A property of the MASK, not of the brush.** It sat in the brush block, so a
-        // composite of a radial and a luminance range had no way to show what it covered — and the
-        // tint is exactly what a composite needs, because its handles cannot say what the coverage
-        // is. Drawn only where there is something to tint, so a lone gradient is unchanged.
-        if s.edits
-            .masks
-            .get(i)
-            .is_some_and(crate::develop::canvas::mask_tint::tintable)
-        {
-            ui.checkbox(&mut *brush.show_tint, "Show mask");
-        }
+        // ⚠⚠ **A property of the MASK, not of the brush, and drawn for EVERY kind.** It sat in
+        // the brush block, which had two consequences and the second was a real bug: a composite
+        // of a radial and a luminance range had no way to show what it covered, **and** — because
+        // `develop::body` suppresses whatever mask is selected while this is ticked, whatever kind
+        // it is — selecting a radial held its own adjustments out of the view with no reachable
+        // control to turn that off. Reported in use as *"a single radial mask does not show any
+        // edits when moving a slider"*, which is `CLAUDE.md`'s own accepted caveat (1) of mask
+        // isolation arriving exactly as it predicted.
+        //
+        // ⚠ The rule is now one sentence with no exceptions: the checkbox is drawn for every
+        // selected mask, and the suppression and the tint are two faces of it.
+        ui.checkbox(&mut *brush.show_tint, "Show mask")
+            .on_hover_text(
+                "Tints where this mask reaches, and takes its own adjustments out of the \
+                 view so you can see what you are covering. Untick it to judge the effect.",
+            );
         let j = s.component_index();
         if let Some(m) = s.edits.masks.get_mut(i) {
             let Some(shape) = super::mask_components::component_mut(m, j) else {

@@ -130,16 +130,6 @@ impl pipeline::brush::BasePixels for TintBase<'_> {
     }
 }
 
-/// Whether this mask has anything worth tinting.
-///
-/// ⚠⚠ **A composite always does; a lone shape only if it is a brush.** That is deliberately a
-/// strict superset of what shipped: a single gradient or radial keeps drawing handles and no
-/// tint, because its handles already say where it reaches — but once shapes are composited,
-/// the handles *cannot* say what the coverage is, which is the whole reason this feature exists.
-pub(crate) fn tintable(m: &edit_model::MaskedAdjustment) -> bool {
-    !m.refine.is_empty() || matches!(m.mask, edit_model::Mask::Brush(_))
-}
-
 /// Whether the composite needs the displayed frame to be evaluated.
 fn needs_base(m: &edit_model::MaskedAdjustment) -> bool {
     std::iter::once(&m.mask)
@@ -180,14 +170,15 @@ fn coverage(
     // the two lifetimes tied, which is more ceremony than the one call site is worth.
     let as_base: Option<&dyn pipeline::brush::BasePixels> =
         view.map(|v| v as &dyn pipeline::brush::BasePixels);
+    // ⚠ The fast path is a **lone brush** specifically, not "no refinements": it is the one case
+    // whose coverage is already bbox-bounded, which is what keeps the commonest tint costing what
+    // it always did. Every other shape — including a lone gradient, radial or range — goes through
+    // the plane below, because an analytic or pixel-dependent component covers an area no stroke
+    // bbox bounds.
     if m.refine.is_empty() {
-        return match &m.mask {
-            edit_model::Mask::Brush(b) => {
-                pipeline::brush::rasterize_in(b, geometry, tw, th, None, as_base)
-            }
-            // ⚠ `tintable` keeps us out of here, but a total function is better than a promise.
-            _ => pipeline::brush::CoverageMap::default(),
-        };
+        if let edit_model::Mask::Brush(b) = &m.mask {
+            return pipeline::brush::rasterize_in(b, geometry, tw, th, None, as_base);
+        }
     }
 
     // One rasterization per painted component, indexed alongside the shapes.
@@ -547,6 +538,17 @@ mod tests {
         coverage(m, &edit_model::Geometry::default(), tw, th, None)
     }
 
+    /// As [`plane`], with a displayed frame for the pixel-dependent kinds to read.
+    fn plane_with_base(
+        m: &edit_model::MaskedAdjustment,
+        tw: usize,
+        th: usize,
+    ) -> pipeline::brush::CoverageMap {
+        let f = strip(8, (0, 0), (8, 1));
+        let view = TintBase { f: &f, tw, th };
+        coverage(m, &edit_model::Geometry::default(), tw, th, Some(&view))
+    }
+
     /// ⚠⚠ **The tint covers every component, not just the base.** A version that tinted the base
     /// alone renders a plausible red wash and would pass any "is there a tint?" check — so this
     /// asserts the *subtracted* region specifically, against the same point with no refinement.
@@ -619,23 +621,74 @@ mod tests {
         );
     }
 
-    /// ⚠ Both halves: a rule that never tints and one that always tints are equally wrong.
+    /// ⚠⚠ **Every mask kind tints, and the rule has no exceptions any more.** It used to be
+    /// "a composite, or a lone brush" — reported in use, because `develop::body` suppresses
+    /// whatever mask is selected while the tint is on **whatever kind it is**, so a lone radial
+    /// held its own adjustments out of the view with no reachable control to untick. A tint that
+    /// is drawn for exactly the masks that are suppressed is one rule rather than two that can
+    /// disagree.
+    ///
+    /// ⚠ A lone brush is still the one *fast path* — see `coverage` — but that is about the box,
+    /// not about whether anything is drawn.
     #[test]
-    fn only_a_composite_or_a_brush_is_tintable() {
-        let mut plain = everything();
-        assert!(
-            !tintable(&plain),
-            "a lone gradient keeps handles and no tint"
-        );
-        plain.refine.push(edit_model::Refinement {
-            op: edit_model::MaskOp::Add,
-            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
-        });
-        assert!(tintable(&plain), "a composite always tints");
-        let brush = edit_model::MaskedAdjustment {
-            mask: edit_model::Mask::Brush(edit_model::Brush::default()),
+    fn every_mask_kind_produces_a_plane() {
+        let kinds: Vec<(&str, edit_model::Mask)> = vec![
+            (
+                "linear",
+                edit_model::Mask::Linear(edit_model::LinearGradient {
+                    from: [0.0, 0.0],
+                    to: [1.0, 0.0],
+                    invert: false,
+                }),
+            ),
+            (
+                "radial",
+                edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+            ),
+            (
+                "luminance",
+                edit_model::Mask::Luminance(edit_model::LuminanceRange::default()),
+            ),
+            (
+                "colour",
+                edit_model::Mask::Colour(edit_model::ColourRange::default()),
+            ),
+        ];
+        for (name, mask) in kinds {
+            let m = edit_model::MaskedAdjustment {
+                mask,
+                ..Default::default()
+            };
+            // ⚠ With a base, because a range kind reads the photograph — see the test below
+            // for what it does without one.
+            let cov = plane_with_base(&m, 48, 48);
+            assert_eq!(
+                (cov.w, cov.h),
+                (48, 48),
+                "{name}: a lone shape spans the whole grid"
+            );
+            assert!(
+                cov.data.iter().any(|&a| a > 0),
+                "{name}: the plane covers nothing at all"
+            );
+        }
+    }
+
+    /// ⚠⚠ **A colour range with no displayed frame tints NOTHING, and that is correct rather than
+    /// a gap.** Its coverage is a function of the photograph's own hue; with no frame the sample
+    /// reads black, whose chroma is zero, and the chroma gate — which exists precisely so a
+    /// near-neutral pixel is not selected on noise — zeroes it. Inventing a hue instead would be
+    /// the silent-mask failure `analytic_coverage`'s `Option` exists to prevent.
+    ///
+    /// ⚠ The same documented degradation an auto-masked brush already has when it tints before
+    /// the first frame lands, which is why this is pinned rather than "fixed".
+    #[test]
+    fn a_range_mask_with_no_frame_tints_nothing() {
+        let m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Colour(edit_model::ColourRange::default()),
             ..Default::default()
         };
-        assert!(tintable(&brush), "a lone brush tints, as it always did");
+        let cov = plane(&m, 32, 32);
+        assert!(cov.data.iter().all(|&a| a == 0));
     }
 }
