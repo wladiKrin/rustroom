@@ -1,6 +1,6 @@
 //! Exposure as a compute shader — the first stage across the seam.
 
-use crate::GpuContext;
+use crate::{GpuContext, GpuImage};
 use core_image::ImageBuf;
 use pipeline::PipelineStage;
 use std::sync::Arc;
@@ -61,55 +61,22 @@ impl GpuExposureStage {
         }
     }
 
-    /// `apply`, with the GPU attempt injected.
+    /// Build this stage's compute pipeline and bind group against `img`.
     ///
-    /// ⚠⚠ **This split exists so the fallback is testable.** Without it the CPU path could only be
-    /// reached by unplugging a GPU, which is not a test.
-    pub fn apply_with(
+    /// ⚠ Built per encode rather than cached. The bind group references the chain's buffer, which
+    /// differs per image, so a cached one would be a handle to the wrong memory — the class of bug
+    /// that renders a previous photograph.
+    fn pipeline_and_bind(
         &self,
-        image: ImageBuf,
-        run: impl Fn(&GpuContext, &ImageBuf) -> Option<Vec<f32>>,
-    ) -> ImageBuf {
-        let (w, h) = (image.width(), image.height());
-        match run(&self.ctx, &image) {
-            Some(data) => ImageBuf::from_vec(w, h, data),
-            None => self.cpu.apply(image),
-        }
-    }
-
-    /// Run the shader, or `None` on any GPU failure at all.
-    fn run(&self, ctx: &GpuContext, image: &ImageBuf) -> Option<Vec<f32>> {
-        let src = image.data();
-        let pixels = u32::try_from(image.width() * image.height()).ok()?;
-        if pixels == 0 {
-            return None;
-        }
-        let bytes = std::mem::size_of_val(src) as u64;
+        ctx: &GpuContext,
+        img: &GpuImage,
+        params: &[u32; 4],
+    ) -> (wgpu::ComputePipeline, wgpu::BindGroup) {
         let device = &ctx.device;
-
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("exposure"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
-        let storage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("exposure-data"),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("exposure-readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let total_groups = pixels.div_ceil(WORKGROUP);
-        let row_groups = total_groups.min(MAX_GROUPS_PER_DIM);
-        let col_groups = total_groups.div_ceil(row_groups);
-        let params: [u32; 4] = [self.factor.to_bits(), pixels, row_groups, 0];
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("exposure-params"),
             size: 16,
@@ -117,10 +84,7 @@ impl GpuExposureStage {
             mapped_at_creation: false,
         });
         ctx.queue
-            .write_buffer(&uniform, 0, bytemuck::cast_slice(&params));
-        ctx.queue
-            .write_buffer(&storage, 0, bytemuck::cast_slice(src));
-
+            .write_buffer(&uniform, 0, bytemuck::cast_slice(params));
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("exposure-layout"),
             entries: &[
@@ -152,7 +116,7 @@ impl GpuExposureStage {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: storage.as_entire_binding(),
+                    resource: img.buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -175,32 +139,41 @@ impl GpuExposureStage {
             compilation_options: Default::default(),
             cache: None,
         });
+        (compute, bind)
+    }
 
-        let mut enc = device.create_command_encoder(&Default::default());
-        {
-            let mut pass = enc.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&compute);
-            pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(row_groups, col_groups, 1);
+    /// A fresh instance with the same parameters.
+    ///
+    /// ⚠ A `Box<dyn GpuStage>` needs ownership, and this stage is cheap to rebuild — an `f32`, a
+    /// CPU stage and an `Arc`.
+    fn clone_stage(&self) -> Self {
+        Self {
+            factor: self.factor,
+            cpu: pipeline::ExposureStage::new(self.factor.log2()),
+            ctx: self.ctx.clone(),
         }
-        enc.copy_buffer_to_buffer(&storage, 0, &readback, 0, bytes);
-        ctx.queue.submit(Some(enc.finish()));
+    }
+}
 
-        let slice = readback.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        // ⚠ `wgpu` 29's `PollType::Wait` is a struct variant; `None` waits for the most recent
-        // submission.
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        rx.recv().ok()?.ok()?;
-        let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
-        readback.unmap();
-        Some(out)
+impl crate::GpuStage for GpuExposureStage {
+    fn name(&self) -> &'static str {
+        "exposure"
+    }
+
+    fn encode(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, img: &GpuImage) {
+        let pixels = img.pixels();
+        let total_groups = pixels.div_ceil(WORKGROUP);
+        let row_groups = total_groups.min(MAX_GROUPS_PER_DIM);
+        let col_groups = total_groups.div_ceil(row_groups);
+        let params: [u32; 4] = [self.factor.to_bits(), pixels, row_groups, 0];
+        let (compute, bind) = self.pipeline_and_bind(ctx, img, &params);
+        pass.set_pipeline(&compute);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.dispatch_workgroups(row_groups, col_groups, 1);
+    }
+
+    fn cpu(&self) -> &dyn PipelineStage {
+        &self.cpu
     }
 }
 
@@ -211,8 +184,10 @@ impl PipelineStage for GpuExposureStage {
         "exposure"
     }
 
+    /// ⚠⚠ A **one-stage chain**, so there is exactly one upload/download implementation rather
+    /// than two that can drift. The fallback and the transfer both live in `GpuChain`.
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        self.apply_with(image, |ctx, img| self.run(ctx, img))
+        crate::GpuChain::new(self.ctx.clone(), vec![Box::new(self.clone_stage())]).apply(image)
     }
 }
 
@@ -362,24 +337,6 @@ mod tests {
         let cpu = pipeline::ExposureStage::new(-0.5).apply(img.clone());
         let gpu = GpuExposureStage::new(-0.5, ctx).apply(img);
         assert_same(&gpu, &cpu, "a large frame must dispatch correctly");
-    }
-
-    #[test]
-    fn a_gpu_failure_falls_back_to_the_cpu_result() {
-        // ⚠⚠ `apply` returns `ImageBuf`, not `Result` — the trait has no failure channel — so a
-        // GPU error MUST degrade silently. The assertion is that the output equals the CPU stage's
-        // EXACTLY: asserting merely that it is non-empty would pass against a fallback that
-        // returned the input unchanged.
-        let Some(ctx) = ctx() else { return };
-        let img = awkward(16, 12);
-        let cpu = pipeline::ExposureStage::new(2.0).apply(img.clone());
-        let stage = GpuExposureStage::new(2.0, ctx);
-        let out = stage.apply_with(img, |_, _| None);
-        assert_eq!(
-            out.data(),
-            cpu.data(),
-            "the fallback must be the CPU stage's own answer"
-        );
     }
 
     #[test]
