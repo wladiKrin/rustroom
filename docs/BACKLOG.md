@@ -380,6 +380,35 @@ above. Only *anchoring* wants the forward map.
   that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
   with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
   perspective's own cache checkpoint, so every crop drag would re-run the resample.
+
+  ⚠⚠ **AND THE LARGEST DANGER WAS NOT IN THIS ENTRY UNTIL NOW (recorded 2026-09-10, from reading
+  the chain rather than measuring): FUSION MOVES EVERY BRUSH STROKE AND EVERY SPOT ON ANY PHOTO
+  THAT USES PERSPECTIVE.** Both are anchored in *pre-geometry source coordinates* — which is
+  `GeometryStage`'s **input**, the exact buffer fusion deletes. Today that space is post-lens,
+  post-perspective; fused, "pre-geometry" would mean **pre-perspective**, so the same stored
+  numbers point at different pixels. This file already records the related caveat *"toggling
+  perspective after painting shifts brush strokes"* — but that is a user action, where this would
+  be a **silent change of meaning for sidecars already on disk**. ⚠ Verify it before committing to
+  the milestone; it is read from the code, not measured.
+
+  ⚠ **`SpotRemovalStage` sits in the middle of the chain and is a pixel edit, not a coordinate
+  map**, so the two ends cannot simply be concatenated around it. Fusion forces spots to move to
+  *before* perspective, which is what causes the anchoring problem above.
+
+  ⚠ **When the saving actually lands, which is narrower and wider than it looks.** `GeometryStage`
+  resamples **only when `angle_rad != 0`** (orientation is a lossless permutation, crop is a
+  slice), and `PerspectiveStage` skips a neutral homography — so the double pass needs *both*
+  live. That sounds like a corner case and is not: **M7.4's guided solve writes the straighten
+  angle itself**, since roll falls out of the vanishing-point solve for free. Anyone using Guide
+  Mode gets both set, so for the only audience perspective correction has, the double resample is
+  the normal case. On a RAW it is a **third** pass, because lens correction is on by default.
+
+  ⚠⚠ **The bigger prize, and why this entry may be the wrong shape.** Lens displacement, the
+  homography and the rotation are all *coordinate maps*, and `app::spot_source::sampler_for`
+  already composes their inverses to sample one pixel. The general version is **one resample for
+  the whole geometric chain — three passes to one**, worth far more than this entry's three to
+  two. `SpotRemovalStage` in the middle is what blocks it, and the anchoring danger gets sharper
+  rather than softer.
 - ~~**Colour grading does not reach masks.**~~ ✅ **Shipped 2026-09-05** (Part A of "the rest of the stages inside a mask"). ~~Still open: no visual feedback of the grading range boundaries on canvas or histogram.~~ ✅ **2026-09-08** — the grade range view (`grade_view.rs`): a "Show range" checkbox tints the photograph where the selected range reaches, read from a tap at the grading stage's *input* — the histogram and the packed pixels both sit past the display S-curve, so neither could have shown it honestly. Spec `2026-09-08-grade-range-view-design.md`.
 
 ---
