@@ -269,8 +269,14 @@ pub struct Settings {
     /// and the same photo legitimately goes out as web-JPEG-fast and archive-TIFF-best.
     /// Inferring one would make the view's decode cost depend on distant state.
     ///
-    /// Defaults to `Fast`, which is what `DecodeOptions::linear_scene()` already hardcodes, so
-    /// nobody who ignores this setting sees any change.
+    /// Defaults to [`Demosaic::default()`], the one place that value lives.
+    ///
+    /// ⚠⚠ **That default moved `Fast` → `Better` at M8.4 (2026-09-10), which makes opening a
+    /// photo ~2.4× slower and is a deliberate trade.** `Fast` was validated on hair-strand
+    /// separation, and X-Trans demosaic does not fail on hair — it fails on foliage, where
+    /// `Fast` smears thin twigs and mushes a distant treeline. ⚠ **Anyone whose settings file
+    /// already holds `"Fast"` keeps it**, since a stored value beats a changed default; that is
+    /// the trap recorded under the panel-section work, and here it is the safe direction.
     pub view_demosaic: Demosaic,
     /// Which kernel the three resampling stages read pixels with — straighten, perspective and
     /// lens correction.
@@ -1345,8 +1351,8 @@ mod tests {
         assert!(!loaded.confirm_export_preset_delete);
         assert_eq!(
             loaded.view_demosaic,
-            raw_decode::Demosaic::Fast,
-            "and the new one must default to what linear_scene() already hardcoded"
+            raw_decode::Demosaic::default(),
+            "and the new one must be fillable from the one place the default lives"
         );
     }
 

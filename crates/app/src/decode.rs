@@ -125,17 +125,28 @@ pub(crate) fn resolve_lens(m: &raw_decode::RawMetadata) -> LensFacts {
 /// full-resolution decode is eager, so a slower tier is paid on every photo you stop on,
 /// not once per export.
 ///
-/// Derived from the measured end-to-end decodes — 1.25 / 2.89 / 6.9 / 11.42 s — recorded in
-/// `docs/superpowers/specs/2026-08-11-demosaic-backend-design.md`.
+/// Derived from the measured end-to-end decodes — ~1.4 / 2.9 / 7.5 / 10.9 s on an X-T4,
+/// recorded in `docs/superpowers/specs/2026-09-10-demosaic-decision.md` (and consistent with
+/// the original 1.25 / 2.89 / 6.9 / 11.42 in the M8.4 predecessor spec).
+///
+/// ⚠ The ratios are against **the default**, not against a named tier. They were written
+/// against `Fast` when `Fast` was the default, so moving the default at M8.4 would have left
+/// every one of them quietly describing the wrong baseline.
 ///
 /// Lives here rather than on `raw_decode::Demosaic` because a cost measured on one camera is
 /// presentation, not a property of the algorithm; `raw-decode` exposes the neutral facts.
 pub(crate) fn view_quality_hint(tier: raw_decode::Demosaic) -> &'static str {
     match tier {
-        raw_decode::Demosaic::Fastest => "about 0.4× the decode time of Fast",
-        raw_decode::Demosaic::Fast => "the default",
-        raw_decode::Demosaic::Better => "about 2.4× the decode time of Fast",
-        raw_decode::Demosaic::Best => "about 4× the decode time of Fast",
+        raw_decode::Demosaic::Fastest => "about 0.2× the decode time of the default",
+        raw_decode::Demosaic::Fast => {
+            "about 0.4× the decode time of the default — \
+             but it smears fine foliage; see M8.4"
+        }
+        raw_decode::Demosaic::Better => "the default",
+        raw_decode::Demosaic::Best => {
+            "about 1.45× the decode time of the default, \
+             and indistinguishable from it at 4×"
+        }
     }
 }
 

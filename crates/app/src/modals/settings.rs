@@ -170,8 +170,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                 "RAW only, and separate from the export setting. Sets the demosaic used \
              for the zoomed view. A slower tier costs that much extra on every photo \
              you stop on, not just on export — the full-resolution decode starts on \
-             its own. The measured difference is small, which is why the default is \
-             Fast. Changing this re-decodes the open photo.",
+             its own. The default is Better: Fast is 2.4x quicker but visibly smears \
+             fine foliage, and Best is indistinguishable from Better at 4x. \
+             Changing this re-decodes the open photo.",
             );
 
             ui.separator();

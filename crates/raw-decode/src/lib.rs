@@ -117,11 +117,23 @@ pub fn extract_thumbnail(path: &Path) -> Result<Thumbnail, DecodeError> {
 pub enum Demosaic {
     /// libraw `user_qual` 0 — bilinear on Bayer.
     Fastest,
-    /// libraw `user_qual` 1 — VNG on Bayer. The default: 3.9x faster end-to-end than `Best`,
-    /// and visibly better than `Fastest`.
-    #[default]
+    /// libraw `user_qual` 1 — VNG on Bayer. 3.9x faster end-to-end than `Best`.
+    ///
+    /// ⚠⚠ **Was the default until M8.4, and it was chosen on the wrong content** — hair-strand
+    /// separation on a kitten frame, and X-Trans demosaic does not fail on hair. Measured on
+    /// foliage it loses real structure: a thin twig that `Better` resolves as a line comes back
+    /// as a smeared blob, and a distant treeline goes to mush.
     Fast,
-    /// libraw `user_qual` 2 — PPG on Bayer.
+    /// libraw `user_qual` 2 — PPG on Bayer. **The default since M8.4.**
+    ///
+    /// ⚠ Chosen on a measurement, not a preference. Against `Best` on four foliage frames it
+    /// differs by 0.22–0.30 of an 8-bit level on the detail under test and **0.08–0.32 on a flat
+    /// control region beside it** — a difference that lives only where detail lives, which is the
+    /// signature of a real demosaic difference. `Fast` differs by 1.1–2.5 levels on the *flat*
+    /// regions too, i.e. it renders the whole image differently rather than merely losing detail.
+    /// At 4× magnification `Better` and `Best` are indistinguishable, for 1.45× less time.
+    /// See `docs/superpowers/specs/2026-09-10-demosaic-decision.md`.
+    #[default]
     Better,
     /// libraw `user_qual` 3 — AHD on Bayer. ⚠ On X-Trans this is where the scale tops out:
     /// `user_qual` 4 and above are identical to it.
@@ -173,6 +185,12 @@ pub struct DecodeOptions {
     pub half_size: bool,
     /// Demosaic quality. ⚠ Inert when `half_size` is true — libraw skips demosaic entirely
     /// for a half-size decode, so the editing preview cannot show this setting.
+    ///
+    /// ⚠ Every constructor below seeds it from [`Demosaic::default()`] rather than naming a
+    /// tier. They used to hardcode `Fast`, which put the default in four places at once — so
+    /// when M8.4 moved it, three of them would have kept saying the old thing while still
+    /// reading as "the default". The class of disagreement `render_max_dim` and
+    /// `Session::geometry_mode` were each fixed for by deriving rather than storing twice.
     pub demosaic: Demosaic,
     /// Apply the camera → working-space matrix ourselves rather than letting libraw do it.
     ///
@@ -197,7 +215,7 @@ impl DecodeOptions {
             linear: true,
             no_auto_bright: true,
             half_size: false,
-            demosaic: Demosaic::Fast,
+            demosaic: Demosaic::default(),
             camera_native: true,
             camera_profile: None,
         }
@@ -210,7 +228,7 @@ impl DecodeOptions {
             linear: false,
             no_auto_bright: false,
             half_size: false,
-            demosaic: Demosaic::Fast,
+            demosaic: Demosaic::default(),
             // ⚠ Deliberately libraw's own conversion. This is a debug dump, not an export path,
             // and it wants a baked sRGB image rather than the pipeline's working space.
             camera_native: false,
@@ -225,7 +243,7 @@ impl DecodeOptions {
             linear: true,
             no_auto_bright: true,
             half_size: true,
-            demosaic: Demosaic::Fast,
+            demosaic: Demosaic::default(),
             camera_native: true,
             camera_profile: None,
         }
@@ -299,12 +317,17 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_fast_not_libraws_own_default() {
-        // libraw's own default is 3 (AHD), which is what we inherited by never setting it —
-        // ~10.6 s of a ~11.4 s decode. `Fast` is 2.0 s and visibly better than bilinear.
-        assert_eq!(Demosaic::default(), Demosaic::Fast);
-        assert_eq!(DecodeOptions::linear_scene().demosaic, Demosaic::Fast);
-        assert_eq!(DecodeOptions::preview().demosaic, Demosaic::Fast);
+    fn the_default_is_better_and_every_constructor_takes_it() {
+        // ⚠ Two assertions doing two different jobs, and the pair is what keeps either of them
+        // meaningful. The first pins the *value*, which is a decision (M8.4: `Fast` loses real
+        // foliage structure, `Better` is indistinguishable from `Best` at 4×); the rest pin the
+        // *wiring*, so a constructor cannot go back to naming a tier and drift from it. Written
+        // against `Demosaic::default()` rather than a literal on purpose — a second literal is
+        // exactly what this change removed.
+        assert_eq!(Demosaic::default(), Demosaic::Better);
+        assert_eq!(DecodeOptions::linear_scene().demosaic, Demosaic::default());
+        assert_eq!(DecodeOptions::preview().demosaic, Demosaic::default());
+        assert_eq!(DecodeOptions::display().demosaic, Demosaic::default());
     }
 
     #[test]

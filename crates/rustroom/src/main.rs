@@ -43,7 +43,7 @@ enum Command {
         quality: Option<u8>,
         /// Demosaic quality: fastest, fast, better, best. Higher is slower — roughly 1.2 s
         /// to 11 s per photo on a 26 Mpx RAW.
-        #[arg(long, default_value = "fast")]
+        #[arg(long, default_value = "better")]
         demosaic: String,
         /// Output colour space: srgb, p3, adobergb, prophoto. Omitted = srgb.
         #[arg(long)]
