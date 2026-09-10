@@ -116,6 +116,67 @@ fn main() {
         );
     }
 
+    // ⚠⚠ **What merging is WORTH, priced directly rather than by subtraction.** The rows above
+    // say what the feature delivers; this says what the *merge* delivers, by running the same two
+    // stages as two chains — the shape `accelerate` produced before M8.3c, when it built one chain
+    // per stage. Subtracting the split row from the merged one would confound the merge with the
+    // colour grade's own cost, which is the arithmetic this project has been misled by before.
+    let edits = sharpened(hsl_edits());
+    let one = || {
+        gpu_pipeline::accelerate(
+            pipeline::build_pipeline_split(&edits, scale).1,
+            &edits,
+            scale,
+            ctx,
+        )
+    };
+    let two = || {
+        // One chain per replaceable stage, everything else untouched — M8.3b's behaviour.
+        let stages = pipeline::build_pipeline_split(&edits, scale)
+            .1
+            .into_stages();
+        let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
+        for s in stages {
+            match s.name() {
+                "hsl" => out.push(Box::new(gpu_pipeline::GpuChain::new(
+                    ctx.clone(),
+                    vec![Box::new(gpu_pipeline::GpuHslStage::new(&edits.hsl, ctx))],
+                ))),
+                "sharpening" => out.push(Box::new(gpu_pipeline::GpuChain::new(
+                    ctx.clone(),
+                    vec![Box::new(gpu_pipeline::GpuSharpenStage::new(
+                        &edits.sharpening,
+                        scale,
+                        ctx,
+                    ))],
+                ))),
+                _ => out.push(s),
+            }
+        }
+        Pipeline::new(out)
+    };
+    println!("── what the MERGE is worth: hsl + sharpening, one chain against two");
+    let (mut b1, mut b2) = (f64::MAX, f64::MAX);
+    for r in 0..5 {
+        let p = one();
+        let t = Instant::now();
+        let _ = p.run(img.clone());
+        let m = ms(t);
+        let p = two();
+        let t = Instant::now();
+        let _ = p.run(img.clone());
+        let s = ms(t);
+        println!("  {r:>5}   merged {m:8.2} ms   split {s:8.2} ms");
+        if r > 0 {
+            b1 = b1.min(m);
+            b2 = b2.min(s);
+        }
+    }
+    println!(
+        "  best of 4 (warm): merged {b1:.2} ms, split {b2:.2} ms — the merge saves {:.2} ms\n",
+        b2 - b1
+    );
+
     println!(
         "⚠ A speed-up below 1.00x is a finding, not a rounding error: it says the round trip\n\
          ⚠ costs more than the stages saved, and the default should stay off."
