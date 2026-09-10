@@ -10,7 +10,9 @@
 mod context;
 mod equivalence;
 mod exposure;
+mod image;
 
 pub use context::{shared, GpuContext};
 pub use equivalence::{compare, Divergence};
 pub use exposure::GpuExposureStage;
+pub use image::GpuImage;
