@@ -28,7 +28,10 @@ const TINT_MAX_DIM: usize = 1400;
 /// around" reported in use. The benchmark could not have found it: it timed one stroke once,
 /// while the real cost scales with stroke count and is paid continuously.
 struct TintCache {
-    brush: edit_model::Brush,
+    /// The composite's **shape** — its base and every refinement. ⚠ Not the adjustments: the tint
+    /// shows where a mask reaches, and moving its exposure does not move that.
+    mask: edit_model::Mask,
+    refine: Vec<edit_model::Refinement>,
     geometry: edit_model::Geometry,
     w: usize,
     h: usize,
@@ -126,9 +129,138 @@ impl pipeline::brush::BasePixels for TintBase<'_> {
     }
 }
 
+/// Whether this mask has anything worth tinting.
+///
+/// ⚠⚠ **A composite always does; a lone shape only if it is a brush.** That is deliberately a
+/// strict superset of what shipped: a single gradient or radial keeps drawing handles and no
+/// tint, because its handles already say where it reaches — but once shapes are composited,
+/// the handles *cannot* say what the coverage is, which is the whole reason this feature exists.
+pub(crate) fn tintable(m: &edit_model::MaskedAdjustment) -> bool {
+    !m.refine.is_empty() || matches!(m.mask, edit_model::Mask::Brush(_))
+}
+
+/// Whether the composite needs the displayed frame to be evaluated.
+fn needs_base(m: &edit_model::MaskedAdjustment) -> bool {
+    std::iter::once(&m.mask)
+        .chain(m.refine.iter().map(|r| &r.mask))
+        .any(|k| match k {
+            edit_model::Mask::Brush(b) => b.needs_base(),
+            // ⚠⚠ **A range component reads the photograph, so it needs the frame.** This is the
+            // half `paint_mask`'s old comment refused to draw at all, and mask isolation is what
+            // makes it honest: while the tint is shown, `suppressed_mask` holds THIS mask's
+            // adjustments out of the view, so the displayed frame is this mask's own base rather
+            // than its output. The mask can no longer be shown selecting the tones it just moved.
+            //
+            // ⚠ Two residual error terms remain and are not papered over: the frame is 8-bit sRGB
+            // **after the display rendering and the creative LUT**, where the render reads linear
+            // working-space pixels; and **later masks' adjustments are still in it**, where this
+            // mask's true base is masks 0..i-1 only. Doing it exactly needs coverage against the
+            // pre-mask buffer, which lives on the render worker — a real feature, and a different
+            // one.
+            edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => true,
+            _ => false,
+        })
+}
+
+/// The composite's coverage on the tint grid.
+///
+/// ⚠⚠ **A lone brush takes the path it always did, byte for byte** — one `rasterize_in`, keeping
+/// its bbox, which is what makes the common case cost what it used to. Only a composite pays for
+/// a full-grid plane, and only a composite needs one: an analytic component covers an arbitrary
+/// area that no stroke bbox bounds.
+fn coverage(
+    m: &edit_model::MaskedAdjustment,
+    geometry: &edit_model::Geometry,
+    tw: usize,
+    th: usize,
+    view: Option<&TintBase<'_>>,
+) -> pipeline::brush::CoverageMap {
+    // ⚠ A plain binding rather than a closure: a closure taking and returning a reference needs
+    // the two lifetimes tied, which is more ceremony than the one call site is worth.
+    let as_base: Option<&dyn pipeline::brush::BasePixels> =
+        view.map(|v| v as &dyn pipeline::brush::BasePixels);
+    if m.refine.is_empty() {
+        return match &m.mask {
+            edit_model::Mask::Brush(b) => {
+                pipeline::brush::rasterize_in(b, geometry, tw, th, None, as_base)
+            }
+            // ⚠ `tintable` keeps us out of here, but a total function is better than a promise.
+            _ => pipeline::brush::CoverageMap::default(),
+        };
+    }
+
+    // One rasterization per painted component, indexed alongside the shapes.
+    let shapes: Vec<&edit_model::Mask> = std::iter::once(&m.mask)
+        .chain(m.refine.iter().map(|r| &r.mask))
+        .collect();
+    let maps: Vec<Option<pipeline::brush::CoverageMap>> = shapes
+        .iter()
+        .map(|k| match k {
+            edit_model::Mask::Brush(b) => Some(pipeline::brush::rasterize_in(
+                b, geometry, tw, th, None, as_base,
+            )),
+            _ => None,
+        })
+        .collect();
+
+    // ⚠ The frame's aspect, not the tint grid's — they agree by construction, since the grid is
+    // proportional to `frame_rect`, and saying which one is meant is what stops the next reader
+    // reaching for the wrong rectangle.
+    let aspect = tw as f32 / th.max(1) as f32;
+    let mut data = vec![0u8; tw * th];
+    for y in 0..th {
+        for x in 0..tw {
+            let (u, v) = ((x as f32 + 0.5) / tw as f32, (y as f32 + 0.5) / th as f32);
+            // ⚠ Read once per pixel and shared by every range component, the rule
+            // `mask_coverage::BaseFacts` follows in the render for the reason measured there:
+            // three colour components must cost one Oklab conversion, not three.
+            let mut px: Option<[f32; 3]> = None;
+            let mut facts = |view: Option<&TintBase<'_>>| -> [f32; 3] {
+                *px.get_or_insert_with(|| {
+                    view.map_or([0.0; 3], |b| pipeline::brush::BasePixels::at(b, x, y))
+                })
+            };
+            let at = |k: &edit_model::Mask,
+                      j: usize,
+                      facts: &mut dyn FnMut(Option<&TintBase<'_>>) -> [f32; 3]|
+             -> f32 {
+                match k {
+                    edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_) => {
+                        k.analytic_coverage(u, v, aspect).unwrap_or(0.0)
+                    }
+                    edit_model::Mask::Brush(_) => {
+                        maps[j].as_ref().map_or(0.0, |c| c.at(x, y) as f32 / 255.0)
+                    }
+                    edit_model::Mask::Luminance(r) => r.coverage(pipeline::lightness(facts(view))),
+                    edit_model::Mask::Colour(r) => {
+                        let (hue, chroma) = pipeline::hue_chroma(facts(view));
+                        r.coverage_at(hue, chroma)
+                    }
+                }
+            };
+            let mut a = at(shapes[0], 0, &mut facts).clamp(0.0, 1.0);
+            for (j, r) in m.refine.iter().enumerate() {
+                let b = at(&r.mask, j + 1, &mut facts).clamp(0.0, 1.0);
+                a = r.op.combine(a, b);
+            }
+            data[y * tw + x] = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+    pipeline::brush::CoverageMap {
+        x0: 0,
+        y0: 0,
+        w: tw,
+        h: th,
+        data,
+        // ⚠ Zero: the plane spans the whole grid, so there is no "outside" for an inversion to
+        // leak into — every component's own `invert` is already folded into `data`.
+        outside: 0,
+    }
+}
+
 pub(super) fn paint_tint(
     painter: &egui::Painter,
-    b: &edit_model::Brush,
+    m: &edit_model::MaskedAdjustment,
     geometry: &edit_model::Geometry,
     frame_rect: egui::Rect,
     base: Option<&TintFrame>,
@@ -160,23 +292,21 @@ pub(super) fn paint_tint(
         let mut slot = slot.borrow_mut();
         let base_id = base.map(|f| f.bytes.as_ptr());
         let hit = slot.as_ref().is_some_and(|c| {
-            c.w == w && c.h == h && c.geometry == *geometry && c.brush == *b && c.base == base_id
+            c.w == w
+                && c.h == h
+                && c.geometry == *geometry
+                && c.mask == m.mask
+                && c.refine == m.refine
+                && c.base == base_id
         });
         if !hit {
             // ⚠ Gated only when this brush actually needs pixels *and* a frame has landed. With
             // no base an auto-masked stroke tints positionally, which is the documented
             // degradation and better than showing nothing while the first frame renders.
             let view = base
-                .filter(|_| b.needs_base())
+                .filter(|_| needs_base(m))
                 .map(|f| TintBase { f, tw, th });
-            let cov = pipeline::brush::rasterize_in(
-                b,
-                geometry,
-                tw,
-                th,
-                None,
-                view.as_ref().map(|v| v as &dyn pipeline::brush::BasePixels),
-            );
+            let cov = coverage(m, geometry, tw, th, view.as_ref());
             let outside = cov.outside;
             let drawn = if cov.w == 0 || cov.h == 0 {
                 None
@@ -201,7 +331,8 @@ pub(super) fn paint_tint(
                 Some((tex, [cov.x0, cov.y0, cov.w, cov.h], scale))
             };
             *slot = Some(TintCache {
-                brush: b.clone(),
+                mask: m.mask.clone(),
+                refine: m.refine.clone(),
                 geometry: *geometry,
                 w,
                 h,
@@ -363,5 +494,118 @@ mod tests {
             th: 0,
         };
         assert_eq!(b.at(3, 3), [0.0; 3]);
+    }
+
+    /// A mask whose base covers the whole grid, so a refinement is the only thing that can change
+    /// the tint.
+    fn everything() -> edit_model::MaskedAdjustment {
+        edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                from: [-1.0, 0.0],
+                to: [-0.5, 0.0],
+                invert: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn plane(
+        m: &edit_model::MaskedAdjustment,
+        tw: usize,
+        th: usize,
+    ) -> pipeline::brush::CoverageMap {
+        coverage(m, &edit_model::Geometry::default(), tw, th, None)
+    }
+
+    /// ⚠⚠ **The tint covers every component, not just the base.** A version that tinted the base
+    /// alone renders a plausible red wash and would pass any "is there a tint?" check — so this
+    /// asserts the *subtracted* region specifically, against the same point with no refinement.
+    #[test]
+    fn a_subtracted_component_cuts_the_tint() {
+        // ⚠ Self-contained: a lone gradient is not tintable, so there is no single-shape baseline
+        // to compare against — the two probes are inside and outside the cut-out of one composite.
+        let (tw, th) = (64, 64);
+        let mut m = everything();
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient {
+                center: [0.5, 0.5],
+                radius: [0.3, 0.3],
+                feather: 0.0,
+                invert: false,
+            }),
+        });
+        let cov = plane(&m, tw, th);
+        let (inside, outside) = (cov.at(tw / 2, th / 2), cov.at(1, 1));
+        assert!(
+            outside > 200,
+            "fixture: the base must cover the corner, got {outside}"
+        );
+        assert!(
+            inside < 40,
+            "the subtracted radial must cut the tint: inside {inside}, outside {outside}"
+        );
+    }
+
+    /// ⚠ The composite plane spans the whole grid, so `outside` must be zero — an inversion is
+    /// already folded into the data, and a non-zero outside would paint a second full-frame wash
+    /// over it. That surround is what the inverted brush needed and what a composite must not have.
+    #[test]
+    fn a_composite_plane_has_no_surround() {
+        let mut m = everything();
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+        });
+        let cov = plane(&m, 32, 32);
+        assert_eq!(cov.outside, 0);
+        assert_eq!((cov.x0, cov.y0, cov.w, cov.h), (0, 0, 32, 32));
+    }
+
+    /// ⚠⚠ **A lone brush must take the path it always did.** The composite plane is a full grid;
+    /// the single-brush path keeps its bounding box, which is what makes the common case cost
+    /// what it used to. Asserting the box is *smaller than the grid* is what distinguishes them.
+    #[test]
+    fn a_lone_brush_keeps_its_bounding_box() {
+        let m = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush {
+                strokes: vec![edit_model::BrushStroke {
+                    points: vec![[0.5, 0.5]],
+                    radius: 0.05,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    ..Default::default()
+                }],
+                invert: false,
+            }),
+            ..Default::default()
+        };
+        let cov = plane(&m, 128, 128);
+        assert!(
+            cov.w < 128 && cov.h < 128,
+            "a lone brush must stay bbox-bounded, got {}x{}",
+            cov.w,
+            cov.h
+        );
+    }
+
+    /// ⚠ Both halves: a rule that never tints and one that always tints are equally wrong.
+    #[test]
+    fn only_a_composite_or_a_brush_is_tintable() {
+        let mut plain = everything();
+        assert!(
+            !tintable(&plain),
+            "a lone gradient keeps handles and no tint"
+        );
+        plain.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Add,
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+        });
+        assert!(tintable(&plain), "a composite always tints");
+        let brush = edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Brush(edit_model::Brush::default()),
+            ..Default::default()
+        };
+        assert!(tintable(&brush), "a lone brush tints, as it always did");
     }
 }

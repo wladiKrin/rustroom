@@ -6,6 +6,16 @@ use edit_model::Edits;
 
 pub mod brush;
 
+/// The two pixel measurements a mask's coverage is taken on, for a caller that must agree with it.
+///
+/// ⚠⚠ **Re-exported by name rather than by opening `stages`**, the rule the hue LUT already
+/// follows: `pub mod stages` would make every stage public API for the sake of two functions.
+///
+/// ⚠ The canvas tint needs exactly these. A second lightness or hue convention there would be
+/// invisible per widget and disagree with the render everywhere — the failure `color::luminance`
+/// exists to prevent for the pipeline itself.
+pub use stages::mask_coverage::{hue_chroma, lightness};
+
 /// Pre-rasterized coverage for a photo's brush masks, indexed by **`[mask][component]`** —
 /// position in `Edits::masks`, then position within that mask's composite, component 0 being its
 /// base shape.

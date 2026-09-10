@@ -96,22 +96,19 @@ pub(super) fn draw_mask_overlay(
     // ⚠ `show_tint: false` here: the tint belongs to the **composite** and is drawn once, by the
     // selected component's pass below, not once per shape.
     let painter = ui.painter_at(img_rect);
+    // ⚠⚠ **Once, for the whole composite, and BEFORE the outlines** so the marks stay legible on
+    // top of it. Drawn from inside `paint_mask`'s per-shape match it would be painted once per
+    // brush component and double-blend wherever two overlapped — which is the same mistake the
+    // inverted brush's surround already cost this project once.
+    if brush.show_tint && super::mask_tint::tintable(m) {
+        paint_tint(&painter, m, &s.edits.geometry, frame_rect, brush.base);
+    }
     for (k, other) in std::iter::once(&m.mask)
         .chain(m.refine.iter().map(|r| &r.mask))
         .enumerate()
     {
         if k != j {
-            paint_mask(
-                &painter,
-                other,
-                frame_rect,
-                img_rect,
-                &s.edits.geometry,
-                false,
-                None,
-                DIMMED,
-                false,
-            );
+            paint_mask(&painter, other, frame_rect, img_rect, DIMMED, false);
         }
     }
 
@@ -120,9 +117,6 @@ pub(super) fn draw_mask_overlay(
         &mask,
         frame_rect,
         img_rect,
-        &s.edits.geometry,
-        brush.show_tint,
-        brush.base,
         egui::Stroke::new(1.5, egui::Color32::WHITE),
         true,
     );
@@ -342,15 +336,11 @@ const ELLIPSE_SEGMENTS: usize = 64;
 /// ⚠ `frame_rect` places everything; `clip` only bounds what is drawn. They differ once a
 /// region render is on, and using `clip` for placement is the bug that made the overlay drift
 /// with the view while panning at high zoom.
-#[allow(clippy::too_many_arguments)]
 fn paint_mask(
     painter: &egui::Painter,
     mask: &edit_model::Mask,
     frame_rect: egui::Rect,
     clip: egui::Rect,
-    geometry: &edit_model::Geometry,
-    show_tint: bool,
-    base: Option<&TintFrame>,
     stroke: egui::Stroke,
     handles: bool,
 ) {
@@ -414,34 +404,40 @@ fn paint_mask(
                 }
             }
         }
-        edit_model::Mask::Brush(b) => {
+        edit_model::Mask::Brush(_) => {
             // ⚠ There are no handles — a stroke is not a shape with grab points, the same
             // observation that makes `mask_tool::hit_test` return `None` for a brush.
-            if show_tint {
-                paint_tint(painter, b, geometry, frame_rect, base);
-            }
+            //
+            // ⚠⚠ **And the tint is no longer drawn here.** It belongs to the whole composite, not
+            // to one of its shapes, so `draw_mask_overlay` draws it once. Drawn from inside this
+            // per-shape match it would be painted once per brush component and double-blended
+            // wherever two overlapped.
         }
-        // ⚠⚠ **A selected luminance range draws NOTHING, and that is a decision rather than an
-        // omission.** It is not a shape: it has no position, no handles and no boundary anywhere
-        // on the canvas, so there is no annotation to place. Its feedback is the two sliders in
-        // the panel and the rendered image itself.
+        // ⚠⚠ **A luminance or colour range draws no HANDLES, and that is unchanged: it is not a
+        // shape.** It has no position and no boundary anywhere on the canvas, so there is no
+        // annotation to place. Its feedback is the sliders in the panel and the rendered image.
         //
-        // ⚠ A coverage tint was considered and rejected as **actively misleading**, not merely
-        // expensive. The tint machinery (`mask_tint`) rasterizes from a brush's *strokes*, which
-        // are geometry the canvas holds; a range mask's coverage is a function of the photograph's
-        // own pixels, and the only pixels the canvas has are the **rendered texture — which
-        // already has this mask's adjustment applied**. Tinting from those would show the mask
-        // selecting the tones it has just moved, i.e. exactly the "mask chasing its own effect"
-        // failure that `CoverageSource::Range` keys on `base` to avoid, made visible and wrong.
+        // ⚠⚠ **CORRECTED IN PLACE (M7.1c): the refusal to TINT one no longer holds.** This
+        // comment used to reject a coverage tint as *actively misleading*, and the argument was
+        // exact at the time — *"the only pixels the canvas has are the rendered texture, which
+        // already has this mask's adjustment applied"*, so tinting from them would show the mask
+        // selecting the tones it had just moved, the "mask chasing its own effect" failure
+        // `CoverageSource::Range` keys on `base` to avoid.
         //
-        // Doing it honestly needs coverage computed against the *pre-mask* buffer, which lives on
-        // the render worker — a real feature, and a different one.
-        // ⚠⚠ **A selected colour range draws nothing either, and the reasoning above transfers
-        // unchanged.** It has no position, so there is nothing to annotate; and a coverage tint
-        // would be misleading for exactly the same reason, one step worse — the rendered texture
-        // already carries this mask's adjustment, and a mask that carries a saturation or
-        // white-balance move has changed the very hues its tint would be measured from. Doing it
-        // honestly needs coverage against the pre-mask buffer, which lives on the render worker.
+        // **Mask isolation removed that premise.** While the tint is shown, `suppressed_mask`
+        // holds *this mask's* adjustments out of the view — the two are derived from the same
+        // three facts in `develop::body` — so the displayed frame **is** this mask's own base.
+        //
+        // ⚠ Two residual error terms remain, and they are named rather than glossed: the frame is
+        // 8-bit sRGB **after the display rendering and the creative LUT**, where the render reads
+        // linear working-space pixels; and **later masks' adjustments are still in it**, where
+        // this mask's true base is masks `0..i-1` only. So the tint approximates the render rather
+        // than previewing it — which is what `TintBase` already documents for the auto-mask gate,
+        // now inherited by two more variants. Doing it exactly still needs coverage against the
+        // pre-mask buffer, which lives on the render worker: a real feature, and a different one.
+        //
+        // ⚠ And the tint is not drawn from here in any case — see `draw_mask_overlay`, which
+        // draws it once for the whole composite.
         edit_model::Mask::Luminance(_) | edit_model::Mask::Colour(_) => {}
     }
 }

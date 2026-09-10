@@ -62,7 +62,7 @@ pub(super) enum CoverageSource {
 /// ⚠ `linear_to_srgb` clamps its input to `[0, 1]`, which is exactly the *index* clamp a range
 /// mask wants and never touches the pixel itself: a specular highlight still selects at the top of
 /// the scale while keeping every bit of its headroom for the adjustment that follows.
-pub(super) fn lightness(rgb: [f32; 3]) -> f32 {
+pub fn lightness(rgb: [f32; 3]) -> f32 {
     color::linear_to_srgb(color::luminance(rgb)) * 100.0
 }
 
@@ -79,7 +79,7 @@ pub(super) fn lightness(rgb: [f32; 3]) -> f32 {
 ///
 /// ⚠ Chroma is **not** clamped and must not be: it is the gate's own input, and a wide-gamut
 /// colour legitimately reads above anything sRGB can express.
-pub(super) fn hue_chroma(rgb: [f32; 3]) -> (f32, f32) {
+pub fn hue_chroma(rgb: [f32; 3]) -> (f32, f32) {
     let [_, a, b] = color::oklab::prophoto_to_oklab(rgb);
     (b.atan2(a).to_degrees(), a.hypot(b))
 }

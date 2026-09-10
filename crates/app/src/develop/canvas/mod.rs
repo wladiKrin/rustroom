@@ -10,7 +10,7 @@ mod crop_overlay;
 mod guide_overlay;
 mod loupe;
 mod mask_overlay;
-mod mask_tint;
+pub(crate) mod mask_tint;
 pub(crate) mod navigation;
 pub(crate) mod spot_overlay;
 mod straighten_overlay;

@@ -171,6 +171,17 @@ pub fn show(
         // ⚠⚠ **The shape controls edit the SELECTED COMPONENT, not always the base.** Read
         // through `component_index`, which clamps — so a stale index shows the base rather than
         // leaving these sliders on one shape while the canvas's handles drag another.
+        // ⚠⚠ **A property of the MASK, not of the brush.** It sat in the brush block, so a
+        // composite of a radial and a luminance range had no way to show what it covered — and the
+        // tint is exactly what a composite needs, because its handles cannot say what the coverage
+        // is. Drawn only where there is something to tint, so a lone gradient is unchanged.
+        if s.edits
+            .masks
+            .get(i)
+            .is_some_and(crate::develop::canvas::mask_tint::tintable)
+        {
+            ui.checkbox(&mut *brush.show_tint, "Show mask");
+        }
         let j = s.component_index();
         if let Some(m) = s.edits.masks.get_mut(i) {
             let Some(shape) = super::mask_components::component_mut(m, j) else {
@@ -248,7 +259,6 @@ pub fn show(
                 ed.slider(ui, &mut *brush.hardness, 0.0..=100.0, "Hardness");
                 ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow");
                 ui.checkbox(&mut *brush.erase, "Erase");
-                ui.checkbox(&mut *brush.show_tint, "Show mask");
                 ui.checkbox(&mut *brush.auto_mask, "Auto mask");
                 // ⚠ `add_enabled_ui`, not a hidden control: greying it keeps the value while Auto
                 // mask is off, so toggling back does not silently reset the tolerance — the rule
