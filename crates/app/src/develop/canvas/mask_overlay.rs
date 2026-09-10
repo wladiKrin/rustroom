@@ -4,6 +4,7 @@
 use super::mask_tint::paint_tint;
 use super::navigation::{erase_drag, erase_drag_started, tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
+use crate::develop::panel::mask_components;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::brush_tool;
@@ -74,19 +75,56 @@ pub(super) fn draw_mask_overlay(
     let Some(m) = s.edits.masks.get(i) else {
         return false;
     };
-    let mask = m.mask.clone();
+    // ⚠⚠ **The selected component owns the gesture.** `mask_tool::hit_test` and `apply_drag` are
+    // unchanged — the canvas simply hands them a different `Mask` — which is what keeps 3.1b's
+    // flat `Handle` decision intact rather than re-litigating it for a tree.
+    //
+    // ⚠ Through `component_index`, the panel's own read rule, so the handles and the sliders
+    // cannot disagree about which shape is selected.
+    let j = s.component_index();
+    let Some(mask) = mask_components::component(m, j).cloned() else {
+        return false;
+    };
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
         return false;
     }
 
+    // ⚠ The other components draw as dimmed outlines with no handles, so you can see what you are
+    // cutting against without a second set of grab points stacked on the first — which is the
+    // thing the "every component draggable" alternative could not avoid.
+    //
+    // ⚠ `show_tint: false` here: the tint belongs to the **composite** and is drawn once, by the
+    // selected component's pass below, not once per shape.
+    let painter = ui.painter_at(img_rect);
+    for (k, other) in std::iter::once(&m.mask)
+        .chain(m.refine.iter().map(|r| &r.mask))
+        .enumerate()
+    {
+        if k != j {
+            paint_mask(
+                &painter,
+                other,
+                frame_rect,
+                img_rect,
+                &s.edits.geometry,
+                false,
+                None,
+                DIMMED,
+                false,
+            );
+        }
+    }
+
     paint_mask(
-        &ui.painter_at(img_rect),
+        &painter,
         &mask,
         frame_rect,
         img_rect,
         &s.edits.geometry,
         brush.show_tint,
         brush.base,
+        egui::Stroke::new(1.5, egui::Color32::WHITE),
+        true,
     );
 
     let aspect = canvas_geom::frame_aspect(frame_rect);
@@ -114,8 +152,11 @@ pub(super) fn draw_mask_overlay(
             let erasing = brush.erase != erase_drag(resp, brush.erase_drag, brush.pan_drag);
             if tool_drag_started(resp) || erase_drag_started(resp, brush.erase_drag, brush.pan_drag)
             {
-                if let Some(edit_model::Mask::Brush(b)) =
-                    s.edits.masks.get_mut(i).map(|m| &mut m.mask)
+                if let Some(edit_model::Mask::Brush(b)) = s
+                    .edits
+                    .masks
+                    .get_mut(i)
+                    .and_then(|m| mask_components::component_mut(m, j))
                 {
                     b.strokes.push(edit_model::BrushStroke {
                         points: vec![src],
@@ -147,8 +188,11 @@ pub(super) fn draw_mask_overlay(
             } else if tool_drag(resp) || erase_drag(resp, brush.erase_drag, brush.pan_drag) {
                 // ⚠ `else if`, not a second `if`: both predicates are true on the frame a drag
                 // begins, and without the `else` that frame would record its first point twice.
-                if let Some(edit_model::Mask::Brush(b)) =
-                    s.edits.masks.get_mut(i).map(|m| &mut m.mask)
+                if let Some(edit_model::Mask::Brush(b)) = s
+                    .edits
+                    .masks
+                    .get_mut(i)
+                    .and_then(|m| mask_components::component_mut(m, j))
                 {
                     if let Some(stroke) = b.strokes.last_mut() {
                         let keep = stroke
@@ -184,7 +228,9 @@ pub(super) fn draw_mask_overlay(
                     let dx = d.x / frame_rect.width();
                     let dy = d.y / frame_rect.height();
                     if let Some(m) = s.edits.masks.get_mut(i) {
-                        mask_tool::apply_drag(&mut m.mask, h, dx, dy);
+                        if let Some(shape) = mask_components::component_mut(m, j) {
+                            mask_tool::apply_drag(shape, h, dx, dy);
+                        }
                         moved = true;
                     }
                 }
@@ -209,7 +255,12 @@ pub(super) fn draw_mask_overlay(
         // a print when the code reads correctly and the behaviour disagrees — the fit-view
         // investigation went four rounds on reasoning before one `eprintln` reframed it.
         if std::env::var("RUSTROOM_DEBUG_BRUSH").is_ok() {
-            if let Some(edit_model::Mask::Brush(b)) = s.edits.masks.get(i).map(|m| &m.mask) {
+            if let Some(edit_model::Mask::Brush(b)) = s
+                .edits
+                .masks
+                .get(i)
+                .and_then(|m| mask_components::component(m, j))
+            {
                 eprintln!(
                     "brush: drag_stopped, {} strokes, last has {} points, max_dim {}, region {:?}",
                     b.strokes.len(),
@@ -267,6 +318,16 @@ fn request_unless_suppressed(s: &Session, tool: Tool, mask: usize) {
     s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
 }
 
+/// How a component that is **not** selected is drawn: a faint outline, no handles.
+///
+/// ⚠ Faint rather than a different hue: the overlay's white is deliberately not the theme accent
+/// (the accent is user-switchable and one of its settings has no colour at all), so distinguishing
+/// selected from unselected by *weight* keeps that decision intact.
+const DIMMED: egui::Stroke = egui::Stroke {
+    width: 1.0,
+    color: egui::Color32::from_rgba_premultiplied(90, 90, 90, 90),
+};
+
 /// Points used to approximate a mask ellipse. egui has no ellipse primitive, so it is drawn as
 /// a closed polyline; 64 is smooth at any zoom this canvas reaches.
 const ELLIPSE_SEGMENTS: usize = 64;
@@ -281,6 +342,7 @@ const ELLIPSE_SEGMENTS: usize = 64;
 /// ⚠ `frame_rect` places everything; `clip` only bounds what is drawn. They differ once a
 /// region render is on, and using `clip` for placement is the bug that made the overlay drift
 /// with the view while panning at high zoom.
+#[allow(clippy::too_many_arguments)]
 fn paint_mask(
     painter: &egui::Painter,
     mask: &edit_model::Mask,
@@ -289,6 +351,8 @@ fn paint_mask(
     geometry: &edit_model::Geometry,
     show_tint: bool,
     base: Option<&TintFrame>,
+    stroke: egui::Stroke,
+    handles: bool,
 ) {
     let to_screen = |p: [f32; 2]| {
         egui::pos2(
@@ -296,8 +360,6 @@ fn paint_mask(
             frame_rect.top() + p[1] * frame_rect.height(),
         )
     };
-    let stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
-
     match mask {
         edit_model::Mask::Linear(g) => {
             let (a, b) = (to_screen(g.from), to_screen(g.to));
@@ -315,12 +377,14 @@ fn paint_mask(
                 for end in [a, b] {
                     painter.line_segment(
                         [end - perp * reach, end + perp * reach],
-                        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(120)),
+                        egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.5)),
                     );
                 }
             }
-            for end in [a, b] {
-                painter.circle_filled(end, 5.0, egui::Color32::WHITE);
+            if handles {
+                for end in [a, b] {
+                    painter.circle_filled(end, 5.0, stroke.color);
+                }
             }
         }
         edit_model::Mask::Radial(r) => {
@@ -336,6 +400,7 @@ fn paint_mask(
             painter.add(egui::Shape::closed_line(points, stroke));
             // Centre plus the four edge handles, in the order `mask_tool::hit_test_radial`
             // tests them.
+            let draw_handles = handles;
             let handles = [
                 r.center,
                 [r.center[0] - r.radius[0], r.center[1]],
@@ -343,8 +408,10 @@ fn paint_mask(
                 [r.center[0], r.center[1] - r.radius[1]],
                 [r.center[0], r.center[1] + r.radius[1]],
             ];
-            for h in handles {
-                painter.circle_filled(to_screen(h), 5.0, egui::Color32::WHITE);
+            if draw_handles {
+                for h in handles {
+                    painter.circle_filled(to_screen(h), 5.0, stroke.color);
+                }
             }
         }
         edit_model::Mask::Brush(b) => {
@@ -415,6 +482,68 @@ mod tests {
             adjustments: Default::default(),
         });
         s.selected_mask = Some(0);
+    }
+
+    /// A composite: a linear base plus a radial refinement centred at the frame centre, with the
+    /// **refinement** selected.
+    ///
+    /// ⚠ The base's endpoints are deliberately away from the centre, so a drag at the centre can
+    /// only be grabbing the radial. A fixture whose two shapes overlapped at the probe point
+    /// would pass whichever one the code moved.
+    fn with_selected_refinement(app: &mut RustroomApp) {
+        app.tool = rustroom_app::tool::Tool::Masks;
+        let s = app.session.as_mut().unwrap();
+        s.edits.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+                from: [0.05, 0.05],
+                to: [0.15, 0.15],
+                invert: false,
+            }),
+            refine: vec![edit_model::Refinement {
+                op: edit_model::MaskOp::Subtract,
+                mask: edit_model::Mask::Radial(edit_model::RadialGradient {
+                    center: [0.5, 0.5],
+                    radius: [0.25, 0.25],
+                    feather: 50.0,
+                    invert: false,
+                }),
+            }],
+            adjustments: Default::default(),
+        });
+        s.selected_mask = Some(0);
+        s.selected_component = 1;
+    }
+
+    /// ⚠⚠ **THE CANVAS CARRIER, and the panel's equivalent is why it exists.** Sabotaging the
+    /// panel's `component_mut` to always resolve the base left every panel test passing, because
+    /// nothing covered the routing. The canvas has the identical hazard on the side this
+    /// project's record says its defects actually live, so it gets the identical guard.
+    ///
+    /// ⚠ It asserts the refinement moved **and** the base did not. A test that only checked
+    /// "something changed" would pass against a version that dragged the base.
+    #[test]
+    fn a_drag_moves_the_selected_component_not_the_base() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        with_selected_refinement(&mut app);
+        let base_before = app.session.as_ref().unwrap().edits.masks[0].mask.clone();
+        let refined_before = app.session.as_ref().unwrap().edits.masks[0].refine[0]
+            .mask
+            .clone();
+
+        let centre = canvas_centre(&mut app, &ctx);
+        let _ = drag_through(&mut app, &ctx, centre, centre + egui::vec2(25.0, 10.0));
+
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(
+            s.edits.masks[0].mask, base_before,
+            "the base must not move while a refinement is selected"
+        );
+        assert_ne!(
+            s.edits.masks[0].refine[0].mask, refined_before,
+            "the drag never reached the selected component"
+        );
     }
 
     /// ⚠⚠ **The carrier for the right-drag erase.** `erase_drag`'s own test proves the predicate;

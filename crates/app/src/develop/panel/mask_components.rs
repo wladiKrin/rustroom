@@ -16,8 +16,16 @@ use rustroom_app::mask_tool;
 /// the class of disagreement `render_max_dim`, `fit_image_size` and `Session::geometry_mode` were
 /// each fixed for by deriving rather than storing twice.
 ///
-/// ⚠ The shared-borrow twin the canvas needs lands **with its caller**: a `pub fn` with no
-/// production caller in a *binary* crate is dead code under `-D warnings`.
+/// ⚠ The shared-borrow twin landed **with its caller**, the canvas: a `pub fn` with no production
+/// caller in a *binary* crate is dead code under `-D warnings`.
+pub fn component(m: &edit_model::MaskedAdjustment, j: usize) -> Option<&edit_model::Mask> {
+    match j.checked_sub(1) {
+        None => Some(&m.mask),
+        Some(k) => m.refine.get(k).map(|r| &r.mask),
+    }
+}
+
+/// The mutable twin. ⚠ Both exist because the canvas reads and the panel writes.
 pub fn component_mut(
     m: &mut edit_model::MaskedAdjustment,
     j: usize,
