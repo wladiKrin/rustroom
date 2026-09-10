@@ -50,6 +50,7 @@ pub mod sync;
 pub mod thumb_cache;
 pub mod thumb_key;
 pub mod thumb_loader;
+pub mod thumb_store;
 pub mod thumb_window;
 pub mod tile_layout;
 pub mod tone_curve_tool;
