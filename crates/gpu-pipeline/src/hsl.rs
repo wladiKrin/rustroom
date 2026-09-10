@@ -118,7 +118,15 @@ impl GpuStage for GpuHslStage {
         "hsl"
     }
 
-    fn encode(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, img: &GpuImage) {
+    fn encode(
+        &self,
+        ctx: &GpuContext,
+        pass: &mut wgpu::ComputePass,
+        img: &GpuImage,
+        // ⚠ In-place and per-pixel, so it needs none — the default `scratch_planes`
+        // of 0 already says so and the chain lends it an empty slice.
+        _scratch: &[wgpu::Buffer],
+    ) {
         let device = &ctx.device;
         let pixels = img.pixels();
         let total_groups = pixels.div_ceil(WORKGROUP);

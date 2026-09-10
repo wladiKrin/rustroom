@@ -160,7 +160,15 @@ impl crate::GpuStage for GpuExposureStage {
         "exposure"
     }
 
-    fn encode(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, img: &GpuImage) {
+    fn encode(
+        &self,
+        ctx: &GpuContext,
+        pass: &mut wgpu::ComputePass,
+        img: &GpuImage,
+        // ⚠ In-place and per-pixel, so it needs none — the default `scratch_planes`
+        // of 0 already says so and the chain lends it an empty slice.
+        _scratch: &[wgpu::Buffer],
+    ) {
         let pixels = img.pixels();
         let total_groups = pixels.div_ceil(WORKGROUP);
         let row_groups = total_groups.min(MAX_GROUPS_PER_DIM);

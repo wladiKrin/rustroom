@@ -14,8 +14,25 @@ use std::sync::Arc;
 pub trait GpuStage: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// How many single-channel scratch planes this stage needs.
+    ///
+    /// ⚠ Defaults to **0**, so every stage written before M8.3c keeps working untouched.
+    fn scratch_planes(&self) -> usize {
+        0
+    }
+
     /// Record this stage's dispatch. The image is bound at group 0, binding 0.
-    fn encode(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, img: &GpuImage);
+    ///
+    /// ⚠ `scratch` holds exactly [`GpuStage::scratch_planes`] buffers — a slice rather than a
+    /// count and an index, so a stage cannot reach past what it asked for. They are **transient**:
+    /// the chain lends the same planes to every stage, so nothing written here survives the call.
+    fn encode(
+        &self,
+        ctx: &GpuContext,
+        pass: &mut wgpu::ComputePass,
+        img: &GpuImage,
+        scratch: &[wgpu::Buffer],
+    );
 
     /// The CPU stage this one replaces.
     ///
@@ -60,6 +77,18 @@ impl GpuChain {
             self.uploads.load(Ordering::Relaxed),
             self.downloads.load(Ordering::Relaxed),
         )
+    }
+
+    /// The widest scratch request among this chain's stages.
+    ///
+    /// ⚠⚠ The **max**, not the sum — the planes are transient within a stage, so stages share
+    /// them. Summing would double the memory for nothing.
+    pub fn scratch_needed(&self) -> usize {
+        self.stages
+            .iter()
+            .map(|s| s.scratch_planes())
+            .max()
+            .unwrap_or(0)
     }
 
     pub fn len(&self) -> usize {
@@ -118,10 +147,14 @@ impl GpuChain {
         // in-pass barrier, moving `begin_compute_pass` inside the loop costs nothing and the
         // buffer still stays resident. Recorded because a sabotage that does not fail is a finding
         // about the code, not a formality.
+        //
+        // ⚠ Scratch is allocated **once for the whole chain, and only when something asks** — so
+        // an HSL-only chain allocates nothing and costs exactly what it did in M8.3b.
+        let scratch = GpuImage::scratch(ctx, image.width(), image.height(), self.scratch_needed());
         {
             let mut pass = enc.begin_compute_pass(&Default::default());
             for s in &self.stages {
-                s.encode(ctx, &mut pass, &img);
+                s.encode(ctx, &mut pass, &img, &scratch);
             }
         }
 
@@ -266,6 +299,84 @@ mod tests {
             cpu.data(),
             "one exposure is exactly representable on both"
         );
+    }
+
+    /// A stage that asks for scratch and checks what the chain lends it.
+    ///
+    /// ⚠ It carries a `noop` only because `cpu()` must return something — a `GpuStage` cannot be
+    /// written without a twin, which is the point of that method.
+    struct NeedsScratch {
+        n: usize,
+        noop: pipeline::ExposureStage,
+    }
+
+    impl NeedsScratch {
+        fn new(n: usize) -> Self {
+            Self {
+                n,
+                noop: pipeline::ExposureStage::new(0.0),
+            }
+        }
+    }
+
+    impl GpuStage for NeedsScratch {
+        fn name(&self) -> &'static str {
+            "needs_scratch"
+        }
+        fn scratch_planes(&self) -> usize {
+            self.n
+        }
+        fn encode(
+            &self,
+            _ctx: &GpuContext,
+            _pass: &mut wgpu::ComputePass,
+            _img: &GpuImage,
+            scratch: &[wgpu::Buffer],
+        ) {
+            assert_eq!(
+                scratch.len(),
+                self.n,
+                "the chain must lend exactly what was asked for"
+            );
+        }
+        fn cpu(&self) -> &dyn PipelineStage {
+            &self.noop
+        }
+    }
+
+    #[test]
+    fn a_chain_allocates_the_widest_scratch_request_once() {
+        // ⚠⚠ The **max**, not the sum: the planes are transient WITHIN a stage, so two stages
+        // asking for two each can share the same two. Summing would double the memory for
+        // nothing, and a test asserting only "at least two" could not tell the two apart.
+        let Some(ctx) = ctx() else { return };
+        let chain = GpuChain::new(
+            ctx,
+            vec![
+                Box::new(NeedsScratch::new(1)),
+                Box::new(NeedsScratch::new(3)),
+            ],
+        );
+        assert_eq!(chain.scratch_needed(), 3);
+    }
+
+    #[test]
+    fn a_chain_of_in_place_stages_allocates_no_scratch() {
+        // ⚠ So an HSL-only chain costs exactly what it did in M8.3b. Without this, allocating
+        // unconditionally would pass every other test while wasting ~26 MB on every render.
+        let Some(ctx) = ctx() else { return };
+        let chain = GpuChain::new(ctx.clone(), vec![Box::new(GpuExposureStage::new(1.0, ctx))]);
+        assert_eq!(chain.scratch_needed(), 0);
+    }
+
+    #[test]
+    fn a_stage_receives_the_planes_it_asked_for() {
+        // ⚠ The carrier for the two above: `scratch_needed` can be right while `run` lends the
+        // wrong slice, and only a stage that looks at what it was handed can see that.
+        let Some(ctx) = ctx() else { return };
+        let chain = GpuChain::new(ctx, vec![Box::new(NeedsScratch::new(2))]);
+        let _ = chain.apply(ramp(16, 12));
+        assert_eq!(chain.transfer_counts(), (1, 1), "the chain really ran");
     }
 
     #[test]
