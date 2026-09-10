@@ -38,8 +38,10 @@ thiserror = { workspace = true }
 dirs = { workspace = true }
 chrono = "0.4.45"
 rayon.workspace = true
-
-[dev-dependencies]
+# ⚠ Was a dev-dependency until M8.2. `thumb_store` encodes the cache payload as JPEG, which is
+# production code, so it moved up. No new crate enters the tree: `image` is already a dependency
+# of `export`, `image-decode` and `raw-decode`, and a regular dependency is available to the
+# tests and examples that previously relied on the dev entry.
 image = { workspace = true }
 
 # ⚠ macOS only, on purpose: muda's Linux backend needs GTK, which eframe/winit does not

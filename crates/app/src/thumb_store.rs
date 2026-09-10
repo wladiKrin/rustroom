@@ -93,6 +93,175 @@ impl Identity {
     }
 }
 
+/// The magic at the start of every entry.
+const MAGIC: &[u8; 4] = b"RTHM";
+
+/// The on-disk format version.
+///
+/// ⚠ Bump this whenever the header or the payload encoding changes. An entry with the wrong
+/// version is a **miss**, so a bump invalidates cleanly instead of reinterpreting old bytes as
+/// the new format — which is the failure a bare `.jpg` on disk could not protect against.
+const VERSION: u16 = 1;
+
+/// JPEG quality for the payload.
+///
+/// ⚠ Measured, not chosen by taste: q90 stores a 512 px thumbnail in **61.3 KB**, which is
+/// 49.7 MB for an 830-photo folder, against PNG's 267 MB and raw RGBA's 552.8 MB. It is a
+/// tunable — the number is here so a future change is made against data.
+const QUALITY: u8 = 90;
+
+/// A directory of cached extracted previews.
+///
+/// ⚠ Holds a `PathBuf` and nothing else, which is what makes it `Send + Sync` for free — six
+/// loader workers share one. There is no in-process index to lock: **the filesystem is the
+/// index**. Two workers never race on one entry because `ThumbLoader`'s in-flight set already
+/// prevents the same path being fetched twice.
+#[derive(Debug, Clone)]
+pub struct ThumbStore {
+    dir: PathBuf,
+}
+
+impl ThumbStore {
+    /// The directory is injected so tests run against a temp dir and never touch the real home
+    /// directory — the `PresetStore` and `SettingsStore` pattern.
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    /// `<platform config dir>/rustroom/thumbs/`.
+    ///
+    /// ⚠ That is **not** `~/.config` everywhere — `dirs::config_dir()` follows each platform's own
+    /// convention: `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` on Linux,
+    /// `%APPDATA%` on Windows. Falls back to a relative path, which keeps this infallible.
+    pub fn user_default() -> Self {
+        Self::new(
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("rustroom")
+                .join("thumbs"),
+        )
+    }
+
+    /// Where this store keeps its files, for the Settings readout.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The cached preview for `id`, or `None` for any reason at all.
+    ///
+    /// ⚠ Every failure — missing, unreadable, wrong magic, wrong version, wrong identity,
+    /// truncated, undecodable — is a **miss**. Nothing here may surface an error: a thumbnail
+    /// cache that can stop a folder opening is worse than no cache.
+    pub fn get(&self, id: &Identity) -> Option<Thumbnail> {
+        let bytes = std::fs::read(self.dir.join(id.file_name())).ok()?;
+        let (w, h, jpeg) = decode_header(&bytes, id)?;
+        let img = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()?;
+        let rgba = img.to_rgba8();
+        // ⚠ The header is the authority on dimensions, so a payload that disagrees with it is a
+        // miss rather than a thumbnail of an unexpected size reaching the grid.
+        if rgba.width() as usize != w || rgba.height() as usize != h {
+            return None;
+        }
+        Some(Thumbnail {
+            width: w,
+            height: h,
+            rgba: rgba.into_raw(),
+        })
+    }
+
+    /// Cache `thumb` under `id`, best-effort.
+    ///
+    /// ⚠ Silent on failure by design — the caller already has the thumbnail, and a full disk must
+    /// not become an error in the grid.
+    pub fn put(&self, id: &Identity, thumb: &Thumbnail) {
+        if std::fs::create_dir_all(&self.dir).is_err() {
+            return;
+        }
+        let Some(bytes) = encode_entry(id, thumb) else {
+            return;
+        };
+        // ⚠⚠ Write then rename, never write in place. A crash or a full disk mid-write would
+        // otherwise leave a truncated entry that decodes to garbage rather than failing cleanly.
+        // `rename` within one directory is atomic and replaces an existing file on every platform
+        // this targets.
+        let tmp = self.dir.join(format!("{}.tmp", id.file_name()));
+        if std::fs::write(&tmp, &bytes).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        if std::fs::rename(&tmp, self.dir.join(id.file_name())).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// Parse an entry's header, returning its dimensions and the JPEG payload.
+///
+/// ⚠ Every length is checked before it is used. The input is a file on disk that anything could
+/// have written, so an out-of-bounds slice here is a panic in a background worker.
+fn decode_header<'a>(bytes: &'a [u8], want: &Identity) -> Option<(usize, usize, &'a [u8])> {
+    let mut p = 0usize;
+    let take = |p: &mut usize, n: usize| -> Option<&'a [u8]> {
+        let s = bytes.get(*p..p.checked_add(n)?)?;
+        *p += n;
+        Some(s)
+    };
+    if take(&mut p, 4)? != MAGIC {
+        return None;
+    }
+    if u16::from_le_bytes(take(&mut p, 2)?.try_into().ok()?) != VERSION {
+        return None;
+    }
+    let w = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+    let h = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+    let mtime_ns = i64::from_le_bytes(take(&mut p, 8)?.try_into().ok()?);
+    let size = u64::from_le_bytes(take(&mut p, 8)?.try_into().ok()?);
+    let path_len = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+    let path = std::str::from_utf8(take(&mut p, path_len)?).ok()?;
+    // ⚠⚠ The identity check is what turns a hash collision into a miss rather than someone
+    // else's photograph in the grid.
+    if mtime_ns != want.mtime_ns || size != want.size || path != want.path.to_string_lossy() {
+        return None;
+    }
+    Some((w, h, bytes.get(p..)?))
+}
+
+/// Serialize one entry: header, then JPEG q90 bytes.
+fn encode_entry(id: &Identity, thumb: &Thumbnail) -> Option<Vec<u8>> {
+    // ⚠ JPEG carries no alpha, so the payload is RGB and the alpha is reconstructed as opaque on
+    // read. Sound because an extracted preview is always opaque — `bench_thumb_cache` asserts
+    // that over a real folder rather than assuming it.
+    let rgb: Vec<u8> = thumb
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, QUALITY)
+        .encode(
+            &rgb,
+            u32::try_from(thumb.width).ok()?,
+            u32::try_from(thumb.height).ok()?,
+            image::ExtendedColorType::Rgb8,
+        )
+        .ok()?;
+
+    let path = id.path.to_string_lossy();
+    let mut out = Vec::with_capacity(jpeg.len() + path.len() + 34);
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&u32::try_from(thumb.width).ok()?.to_le_bytes());
+    out.extend_from_slice(&u32::try_from(thumb.height).ok()?.to_le_bytes());
+    out.extend_from_slice(&id.mtime_ns.to_le_bytes());
+    out.extend_from_slice(&id.size.to_le_bytes());
+    out.extend_from_slice(&u32::try_from(path.len()).ok()?.to_le_bytes());
+    out.extend_from_slice(path.as_bytes());
+    out.extend_from_slice(&jpeg);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,10 +292,22 @@ mod tests {
         // thumbnail forever after the file was edited outside Rustroom — and a test that varied
         // only one field could not tell that apart from a correct implementation.
         let base = ident("/photos/a.RAF", 100, 200);
-        assert_ne!(base.file_name(), ident("/photos/b.RAF", 100, 200).file_name());
-        assert_ne!(base.file_name(), ident("/photos/a.RAF", 101, 200).file_name());
-        assert_ne!(base.file_name(), ident("/photos/a.RAF", 100, 201).file_name());
-        assert_eq!(base.file_name(), ident("/photos/a.RAF", 100, 200).file_name());
+        assert_ne!(
+            base.file_name(),
+            ident("/photos/b.RAF", 100, 200).file_name()
+        );
+        assert_ne!(
+            base.file_name(),
+            ident("/photos/a.RAF", 101, 200).file_name()
+        );
+        assert_ne!(
+            base.file_name(),
+            ident("/photos/a.RAF", 100, 201).file_name()
+        );
+        assert_eq!(
+            base.file_name(),
+            ident("/photos/a.RAF", 100, 200).file_name()
+        );
     }
 
     #[test]
@@ -148,5 +329,183 @@ mod tests {
             !n.contains(std::path::MAIN_SEPARATOR),
             "the directory must stay flat, got {n:?}"
         );
+    }
+
+    /// A temp directory that cleans itself up, the `PresetStore` pattern.
+    ///
+    /// ⚠ Uniqueness is **structural** — process id plus a counter — not taken from the clock.
+    /// `cargo test` runs in parallel, and two fixtures built in the same tick have collided in
+    /// this repo before, with one test deleting a directory another was reading.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static N: AtomicU64 = AtomicU64::new(0);
+            let p = std::env::temp_dir().join(format!(
+                "rustroom_thumbs_{tag}_{}_{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+
+        fn store(&self) -> ThumbStore {
+            ThumbStore::new(self.0.clone())
+        }
+
+        fn entries(&self) -> Vec<String> {
+            let mut v: Vec<String> = std::fs::read_dir(&self.0)
+                .map(|d| {
+                    d.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            v.sort();
+            v
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A thumbnail with structure, so a transposed or truncated payload is visible.
+    fn thumb(w: usize, h: usize) -> Thumbnail {
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.extend_from_slice(&[
+                    (x * 255 / w.max(1)) as u8,
+                    (y * 255 / h.max(1)) as u8,
+                    128,
+                    255,
+                ]);
+            }
+        }
+        Thumbnail {
+            width: w,
+            height: h,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn a_thumbnail_round_trips_through_the_store() {
+        let dir = TempDir::new("roundtrip");
+        let store = dir.store();
+        let id = ident("/photos/a.RAF", 100, 200);
+        let src = thumb(64, 48);
+
+        assert!(store.get(&id).is_none(), "nothing cached yet");
+        store.put(&id, &src);
+
+        let got = store.get(&id).expect("the entry must come back");
+        assert_eq!((got.width, got.height), (64, 48), "dimensions are exact");
+        assert_eq!(got.rgba.len(), src.rgba.len());
+        // ⚠ A tolerance, not equality: the payload is JPEG, which is lossy. Tight enough that a
+        // transposed or wrong-channel payload still fails.
+        let worst = got
+            .rgba
+            .iter()
+            .zip(&src.rgba)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= 12,
+            "worst channel difference {worst} is too large for q90"
+        );
+        // Every thumbnail is opaque; the alpha is reconstructed on read.
+        assert!(got.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn a_changed_mtime_or_size_is_a_miss() {
+        // ⚠ Both, because they are two independent ways a file changes and a test covering one
+        // cannot see the other going unhashed.
+        let dir = TempDir::new("changed");
+        let store = dir.store();
+        store.put(&ident("/photos/a.RAF", 100, 200), &thumb(16, 16));
+        assert!(store.get(&ident("/photos/a.RAF", 101, 200)).is_none());
+        assert!(store.get(&ident("/photos/a.RAF", 100, 201)).is_none());
+        assert!(store.get(&ident("/photos/a.RAF", 100, 200)).is_some());
+    }
+
+    #[test]
+    fn an_identity_mismatch_under_the_right_name_is_a_miss_not_wrong_pixels() {
+        // ⚠⚠ THE POINT OF THE HEADER. An FNV collision is ~3e-10 over 100k entries, but the
+        // failure it would otherwise produce is **someone else's photograph in your grid**, which
+        // is worth five lines to make unrepresentable. Simulated by writing one identity's entry
+        // under another's file name.
+        let dir = TempDir::new("collide");
+        let store = dir.store();
+        let a = ident("/photos/a.RAF", 1, 1);
+        let b = ident("/photos/b.RAF", 2, 2);
+        store.put(&a, &thumb(16, 16));
+        let bytes = std::fs::read(dir.0.join(a.file_name())).unwrap();
+        std::fs::write(dir.0.join(b.file_name()), bytes).unwrap();
+        assert!(
+            store.get(&b).is_none(),
+            "a collision must miss, never mis-serve"
+        );
+    }
+
+    #[test]
+    fn a_wrong_version_is_a_miss_not_a_misread() {
+        let dir = TempDir::new("version");
+        let store = dir.store();
+        let id = ident("/photos/a.RAF", 1, 1);
+        store.put(&id, &thumb(16, 16));
+        let p = dir.0.join(id.file_name());
+        let mut bytes = std::fs::read(&p).unwrap();
+        bytes[4] = bytes[4].wrapping_add(1); // the version field
+        std::fs::write(&p, bytes).unwrap();
+        assert!(store.get(&id).is_none());
+    }
+
+    #[test]
+    fn a_truncated_or_garbage_entry_is_a_miss_not_a_panic() {
+        let dir = TempDir::new("garbage");
+        let store = dir.store();
+        let id = ident("/photos/a.RAF", 1, 1);
+        store.put(&id, &thumb(16, 16));
+        let p = dir.0.join(id.file_name());
+        let bytes = std::fs::read(&p).unwrap();
+        for cut in [0usize, 3, 8, bytes.len() / 2] {
+            std::fs::write(&p, &bytes[..cut]).unwrap();
+            assert!(store.get(&id).is_none(), "truncated to {cut} must miss");
+        }
+        std::fs::write(&p, b"not a cache entry at all").unwrap();
+        assert!(store.get(&id).is_none());
+    }
+
+    #[test]
+    fn a_successful_write_leaves_no_temporary_behind() {
+        // ⚠ The write is atomic — a temp file then a rename — or a crash mid-write leaves a
+        // truncated JPEG that decodes to garbage. This asserts the temp does not survive.
+        let dir = TempDir::new("atomic");
+        let store = dir.store();
+        let id = ident("/photos/a.RAF", 1, 1);
+        store.put(&id, &thumb(16, 16));
+        assert_eq!(dir.entries(), vec![id.file_name()]);
+    }
+
+    #[test]
+    fn a_store_whose_directory_cannot_be_made_degrades_to_doing_nothing() {
+        // ⚠ Rooted at a path that is a FILE, so `create_dir_all` must fail. Every failure here
+        // has to degrade to "extract it", never to an error the user sees.
+        let dir = TempDir::new("unwritable");
+        let f = dir.0.join("a-file");
+        std::fs::write(&f, b"x").unwrap();
+        let store = ThumbStore::new(f.join("thumbs"));
+        let id = ident("/photos/a.RAF", 1, 1);
+        store.put(&id, &thumb(16, 16));
+        assert!(store.get(&id).is_none());
     }
 }

@@ -115,14 +115,26 @@ fn main() {
 
     println!("\n{raws} RAW + {others} other, long edge at most {biggest} px");
     println!("\n── per thumbnail, mean ────────────────────────────────");
-    println!("  extract (what a cache removes)  {:8.1} ms", extract_ms / k);
+    println!(
+        "  extract (what a cache removes)  {:8.1} ms",
+        extract_ms / k
+    );
     if raws > 0 {
-        println!("    of which RAW                  {:8.1} ms", raw_ms / raws as f64);
+        println!(
+            "    of which RAW                  {:8.1} ms",
+            raw_ms / raws as f64
+        );
     }
     if others > 0 {
-        println!("    of which JPEG/PNG/TIFF        {:8.1} ms", other_ms / others as f64);
+        println!(
+            "    of which JPEG/PNG/TIFF        {:8.1} ms",
+            other_ms / others as f64
+        );
     }
-    println!("  raw RGBA in memory              {:8.1} KB", px_bytes as f64 / k / 1024.0);
+    println!(
+        "  raw RGBA in memory              {:8.1} KB",
+        px_bytes as f64 / k / 1024.0
+    );
     println!("\n── candidate on-disk formats ──────────────────────────");
     println!(
         "  JPEG q90   {:7.1} KB   write {:6.2} ms   read {:6.2} ms",
@@ -143,7 +155,10 @@ fn main() {
 
     println!("\n── extrapolated to this folder's {total} entries ──────────");
     let per = extract_ms / k;
-    println!("  cold open, 6 workers   ~{:6.1} s", per * total as f64 / 6.0 / 1000.0);
+    println!(
+        "  cold open, 6 workers   ~{:6.1} s",
+        per * total as f64 / 6.0 / 1000.0
+    );
     for (name, bytes, read) in [
         ("JPEG q90", jpeg_bytes as f64 / k, dec_jpeg_ms / k),
         ("PNG", png_bytes as f64 / k, dec_png_ms / k),
