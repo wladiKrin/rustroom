@@ -75,12 +75,57 @@ pub fn worker_count() -> usize {
 /// in the grid** — the headroom is gone before the pipeline sees it. Shadows compress the same
 /// way, and the thumbnail shows the camera's rendering plus your edits rather than Rustroom's own
 /// render.
-fn load_thumbnail(req: &ThumbRequest, resampler: pipeline::Resampler) -> Option<Thumbnail> {
-    let path = req.id.path.as_path();
-    let thumb = if catalog::is_raw(path) {
-        raw_decode::extract_thumbnail(path).ok()?
+fn load_thumbnail(
+    req: &ThumbRequest,
+    resampler: pipeline::Resampler,
+    store: Option<&crate::thumb_store::ThumbStore>,
+) -> Option<Thumbnail> {
+    load_with(req, resampler, store, &extract_preview)
+}
+
+/// Pull the source's own preview out of it, with no cache in sight.
+///
+/// ⚠ Split out so the carrier test can count how many times it runs. That count is the only
+/// observable that distinguishes "the cache works" from "the cache is never consulted".
+fn extract_preview(path: &std::path::Path) -> Option<Thumbnail> {
+    if catalog::is_raw(path) {
+        raw_decode::extract_thumbnail(path).ok()
     } else {
-        image_decode::thumbnail(path).ok()?
+        image_decode::thumbnail(path).ok()
+    }
+}
+
+/// `load_thumbnail` with the extraction injected.
+///
+/// ⚠⚠ **The store caches the EXTRACTED PREVIEW, before the render — never the finished
+/// thumbnail.** Extraction is ~191 ms and the render is ~5 ms, so a store keyed on edits would be
+/// useless for the case that matters most while editing (a changed edit) and would leave a file
+/// behind for every edit state a photo has ever had. `ThumbCache` in memory is the level that is
+/// keyed on edits; this one is keyed on the file.
+///
+/// ⚠ `Identity::of` stats the file. A source with no readable metadata is simply not cached,
+/// which degrades to today's behaviour rather than to an error.
+fn load_with(
+    req: &ThumbRequest,
+    resampler: pipeline::Resampler,
+    store: Option<&crate::thumb_store::ThumbStore>,
+    extract: &dyn Fn(&std::path::Path) -> Option<Thumbnail>,
+) -> Option<Thumbnail> {
+    let path = req.id.path.as_path();
+    let id = store.and_then(|_| crate::thumb_store::Identity::of(path));
+    let cached = match (store, &id) {
+        (Some(s), Some(i)) => s.get(i),
+        _ => None,
+    };
+    let thumb = match cached {
+        Some(t) => t,
+        None => {
+            let t = extract(path)?;
+            if let (Some(s), Some(i)) = (store, &id) {
+                s.put(i, &t);
+            }
+            t
+        }
     };
     if req.edits == Edits::default() {
         // ⚠ Neutral edits are the common case on a first folder open; skip the round trip rather
@@ -180,6 +225,7 @@ impl ThumbLoader {
         display_space: color::OutputSpace,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
+        let store = crate::thumb_store::ThumbStore::user_default();
         Self::with_loader(
             // ⚠⚠ Thumbnails always use the **default** resampler, deliberately, and do not follow
             // `Settings.resampler` (user's call, 2026-09-01). Honouring it was tried first and is
@@ -187,7 +233,11 @@ impl ThumbLoader {
             // the setting would rebuild the loader and drop the whole folder's thumbnail cache —
             // ~41 ms × N, about 34 s on an 830-photo folder. The setting is about what you judge
             // at 1:1, which is where it can be seen.
-            Arc::new(move |r: &ThumbRequest| load_thumbnail(r, pipeline::Resampler::default())),
+            // ⚠ The store is captured here rather than passed to `ThumbLoader::new`, which keeps
+            // that signature — and therefore its four call sites — untouched.
+            Arc::new(move |r: &ThumbRequest| {
+                load_thumbnail(r, pipeline::Resampler::default(), Some(&store))
+            }),
             worker_count(),
             display_space,
             on_progress,
@@ -336,7 +386,7 @@ mod tests {
     /// `load_thumbnail` with the shipping kernel — the tests using it are about edits reaching
     /// the pixels, not about which kernel read them.
     fn load_thumbnail_default(req: &ThumbRequest) -> Option<Thumbnail> {
-        load_thumbnail(req, pipeline::Resampler::default())
+        load_thumbnail(req, pipeline::Resampler::default(), None)
     }
 
     /// Collect results until `want` of them have arrived or the deadline passes.
@@ -880,5 +930,142 @@ mod tests {
             "a negligible edit changed mean saturation from {before:.4} to {after:.4} — the \
              thumbnail is not being converted into the pipeline's ProPhoto working space"
         );
+    }
+
+    /// ⚠⚠ THE CARRIER. Everything in `thumb_store`'s own tests can pass while `load_thumbnail`
+    /// never calls it — which is exactly how creative LUTs shipped with four passing pipeline
+    /// tests and were 100% non-functional. This counts the **extractions**, the only observable
+    /// that tells "the cache works" apart from "the cache is never asked".
+    ///
+    /// ⚠ It needs a real file on disk, because `Identity::of` stats it. A synthetic path has no
+    /// mtime, so it would be uncacheable and the test would pass for the wrong reason.
+    #[test]
+    fn a_second_load_reads_the_store_instead_of_extracting_again() {
+        let dir = carrier_dir("carrier");
+        let photo = dir.join("a.png");
+        image::RgbImage::from_fn(8, 6, |x, y| image::Rgb([x as u8 * 8, y as u8 * 8, 90]))
+            .save(&photo)
+            .unwrap();
+
+        let store = crate::thumb_store::ThumbStore::new(dir.join("thumbs"));
+        let n = AtomicUsize::new(0);
+        let extract = |p: &std::path::Path| {
+            n.fetch_add(1, Ordering::Relaxed);
+            image_decode::thumbnail(p).ok()
+        };
+        let req = ThumbRequest {
+            id: PhotoId::original(photo),
+            edits: Edits::default(),
+        };
+
+        let first = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract);
+        assert!(first.is_some(), "the first load must produce a thumbnail");
+        assert_eq!(n.load(Ordering::Relaxed), 1, "the first load extracts");
+
+        let second = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract);
+        assert!(second.is_some(), "the second load must produce a thumbnail");
+        assert_eq!(
+            n.load(Ordering::Relaxed),
+            1,
+            "the SECOND load must come from the store, not from a second extraction"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⚠ The other half: with no store the behaviour is exactly what it was before this feature.
+    /// Without this, a `load_with` that ignored its `None` and always cached would pass above.
+    #[test]
+    fn with_no_store_every_load_extracts() {
+        let dir = carrier_dir("nostore");
+        let photo = dir.join("a.png");
+        image::RgbImage::from_fn(8, 6, |x, y| image::Rgb([x as u8, y as u8, 7]))
+            .save(&photo)
+            .unwrap();
+
+        let n = AtomicUsize::new(0);
+        let extract = |p: &std::path::Path| {
+            n.fetch_add(1, Ordering::Relaxed);
+            image_decode::thumbnail(p).ok()
+        };
+        let req = ThumbRequest {
+            id: PhotoId::original(photo),
+            edits: Edits::default(),
+        };
+        let _ = load_with(&req, pipeline::Resampler::default(), None, &extract);
+        let _ = load_with(&req, pipeline::Resampler::default(), None, &extract);
+        assert_eq!(n.load(Ordering::Relaxed), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⚠⚠ And the half that makes the cache SAFE rather than merely fast: a file edited outside
+    /// Rustroom must re-extract. Without it the grid would show yesterday's picture forever, and
+    /// no test above could see that — they all reuse one unchanged file.
+    #[test]
+    fn a_file_changed_on_disk_is_extracted_again() {
+        let dir = carrier_dir("changed");
+        let photo = dir.join("a.png");
+        let store = crate::thumb_store::ThumbStore::new(dir.join("thumbs"));
+        let n = AtomicUsize::new(0);
+        let extract = |p: &std::path::Path| {
+            n.fetch_add(1, Ordering::Relaxed);
+            image_decode::thumbnail(p).ok()
+        };
+        let req = ThumbRequest {
+            id: PhotoId::original(photo.clone()),
+            edits: Edits::default(),
+        };
+
+        image::RgbImage::from_fn(8, 6, |_, _| image::Rgb([10, 20, 30]))
+            .save(&photo)
+            .unwrap();
+        let _ = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract);
+        assert_eq!(n.load(Ordering::Relaxed), 1);
+
+        // ⚠ A different SIZE as well as a different time, so the test cannot pass merely because
+        // this machine's filesystem happens to have fine mtime resolution.
+        image::RgbImage::from_fn(24, 18, |x, y| image::Rgb([x as u8, y as u8, 200]))
+            .save(&photo)
+            .unwrap();
+        let got = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract)
+            .expect("the changed file must still produce a thumbnail");
+        assert_eq!(
+            n.load(Ordering::Relaxed),
+            2,
+            "a file changed on disk must be extracted again, not served stale"
+        );
+        // ⚠ On the CONTENT, not the dimensions. `image_decode::thumbnail` normalises every
+        // source to a 512 px long edge, so both pictures come back 512x384 and a size assertion
+        // is wrong about correct code — it passed against a stale thumbnail. The old image is
+        // flat blue 30, the new one flat blue 200, which nothing but a fresh extraction gives.
+        let mean_blue = got
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[2] as u32)
+            .sum::<u32>()
+            / (got.rgba.len() / 4) as u32;
+        assert!(
+            mean_blue > 150,
+            "expected the NEW picture (blue ~200), got mean blue {mean_blue}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A scratch directory for the carrier tests, unique by process id and line.
+    fn carrier_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::AtomicU64;
+        static N: AtomicU64 = AtomicU64::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "rustroom_carrier_{tag}_{}_{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
     }
 }
