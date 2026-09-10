@@ -5,6 +5,7 @@
 //! self-contained concern — `mask_overlay` only ever calls `paint_tint`.
 
 use eframe::egui;
+use rayon::prelude::*;
 
 /// The largest edge the tint's coverage is rasterized at, whatever the zoom.
 ///
@@ -206,23 +207,49 @@ fn coverage(
     // ⚠ The frame's aspect, not the tint grid's — they agree by construction, since the grid is
     // proportional to `frame_rect`, and saying which one is meant is what stops the next reader
     // reaching for the wrong rectangle.
+    // ⚠ The frame's aspect, not the tint grid's — they agree by construction, since the grid is
+    // proportional to `frame_rect`, and saying which one is meant is what stops the next reader
+    // reaching for the wrong rectangle.
     let aspect = tw as f32 / th.max(1) as f32;
     let mut data = vec![0u8; tw * th];
-    for y in 0..th {
-        for x in 0..tw {
+    // ⚠⚠ **Rayon over ROWS, and the sequential version was a DEFECT rather than a caveat.** The
+    // memo does not save the case that hurts: dragging a component's slider changes the shape
+    // every frame, so it misses every frame. Measured at 1400x930, best of 5:
+    //
+    // | composite | sequential | parallel |
+    // |---|---|---|
+    // | + 1 radial | 13.0 ms | **3.6 ms** |
+    // | + 1 luminance | 28.1 ms | **7.8 ms** |
+    // | + 1 colour | **62.1 ms** | **14.1 ms** |
+    // | + 3 colour | **99.6 ms** | **20.9 ms** |
+    //
+    // 62 ms/frame is worse than the ~36 ms once reported in use as "responsive with the mask
+    // hidden, sluggish with it shown". The pipeline's own equivalent has always been parallel
+    // (`map_pixels_xy`); this was the only place doing the same arithmetic serially.
+    // `grade_view::coverage` is the precedent in this crate, down to the `par_chunks_mut(w)`.
+    //
+    // ⚠ Three colour components cost 20.9 ms against one at 14.1 — about +3.4 ms each rather than
+    // +14 — which is the per-pixel sharing below doing the same job it does in the render.
+    //
+    // ⚠ The projection this replaced was **5x optimistic**, derived from the render's own
+    // per-component numbers without noticing they were measured on a parallel loop. Sixth cost
+    // estimate in this area corrected by measuring.
+    //
+    // ⚠ A row carries no state between pixels, so the result is bit-identical to the sequential
+    // form — which is what lets the tint tests stand as the check on this.
+    data.par_chunks_mut(tw).enumerate().for_each(|(y, row)| {
+        for (x, slot) in row.iter_mut().enumerate() {
             let (u, v) = ((x as f32 + 0.5) / tw as f32, (y as f32 + 0.5) / th as f32);
             // ⚠ Read once per pixel and shared by every range component, the rule
             // `mask_coverage::BaseFacts` follows in the render for the reason measured there:
             // three colour components must cost one Oklab conversion, not three.
-            let mut px: Option<[f32; 3]> = None;
-            let mut facts = |view: Option<&TintBase<'_>>| -> [f32; 3] {
-                *px.get_or_insert_with(|| {
-                    view.map_or([0.0; 3], |b| pipeline::brush::BasePixels::at(b, x, y))
-                })
-            };
+            let mut light: Option<f32> = None;
+            let mut hc: Option<(f32, f32)> = None;
+            let sample = || view.map_or([0.0; 3], |b| pipeline::brush::BasePixels::at(b, x, y));
             let at = |k: &edit_model::Mask,
                       j: usize,
-                      facts: &mut dyn FnMut(Option<&TintBase<'_>>) -> [f32; 3]|
+                      light: &mut Option<f32>,
+                      hc: &mut Option<(f32, f32)>|
              -> f32 {
                 match k {
                     edit_model::Mask::Linear(_) | edit_model::Mask::Radial(_) => {
@@ -231,21 +258,24 @@ fn coverage(
                     edit_model::Mask::Brush(_) => {
                         maps[j].as_ref().map_or(0.0, |c| c.at(x, y) as f32 / 255.0)
                     }
-                    edit_model::Mask::Luminance(r) => r.coverage(pipeline::lightness(facts(view))),
+                    edit_model::Mask::Luminance(r) => {
+                        r.coverage(*light.get_or_insert_with(|| pipeline::lightness(sample())))
+                    }
                     edit_model::Mask::Colour(r) => {
-                        let (hue, chroma) = pipeline::hue_chroma(facts(view));
+                        let (hue, chroma) =
+                            *hc.get_or_insert_with(|| pipeline::hue_chroma(sample()));
                         r.coverage_at(hue, chroma)
                     }
                 }
             };
-            let mut a = at(shapes[0], 0, &mut facts).clamp(0.0, 1.0);
+            let mut a = at(shapes[0], 0, &mut light, &mut hc).clamp(0.0, 1.0);
             for (j, r) in m.refine.iter().enumerate() {
-                let b = at(&r.mask, j + 1, &mut facts).clamp(0.0, 1.0);
+                let b = at(&r.mask, j + 1, &mut light, &mut hc).clamp(0.0, 1.0);
                 a = r.op.combine(a, b);
             }
-            data[y * tw + x] = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
+            *slot = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
-    }
+    });
     pipeline::brush::CoverageMap {
         x0: 0,
         y0: 0,
