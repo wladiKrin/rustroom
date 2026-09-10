@@ -1938,6 +1938,7 @@ name = "gpu-pipeline"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "color 0.1.0",
  "core-image",
  "pipeline",
  "pollster",

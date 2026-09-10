@@ -12,4 +12,5 @@ mod equivalence;
 mod exposure;
 
 pub use context::{shared, GpuContext};
+pub use equivalence::{compare, Divergence};
 pub use exposure::GpuExposureStage;

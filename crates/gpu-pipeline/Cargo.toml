@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 core-image = { path = "../core-image" }
 pipeline = { path = "../pipeline" }
+color = { path = "../color" }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
