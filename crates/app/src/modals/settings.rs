@@ -14,7 +14,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut camera_rendering = app.settings.default_rendering == edit_model::Rendering::Camera;
     let mut auto_lens = app.settings.auto_lens_correction;
     let mut tier = app.settings.view_demosaic;
-    let mut gpu_hsl = app.settings.gpu_hsl;
+    let mut gpu_tail = app.settings.gpu_tail;
     let mut resampler = app.settings.resampler;
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
@@ -179,15 +179,17 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("HSL");
-                ui.checkbox(&mut gpu_hsl, "Use the GPU");
+                ui.label("Rendering");
+                ui.checkbox(&mut gpu_tail, "Use the GPU");
             });
             theme::hint(
                 ui,
-                "Runs the global HSL sliders on the graphics card. Off by default: \
-             the CPU is the reference, and the two agree to about a hundredth of an \
-             8-bit level, so the picture should not change. ⚠ Does not apply to HSL \
-             inside a mask.",
+                "Runs the HSL and sharpening stages on the graphics card. Off by \
+             default: the CPU is the reference, and the two agree to about a \
+             hundredth of an 8-bit level, so the picture should not change. \
+             ⚠ Does not apply inside a mask, an active colour grade splits the run \
+             so the saving is smaller, and the first render after switching it on \
+             spends about a sixth of a second compiling shaders.",
             );
 
             ui.separator();
@@ -354,8 +356,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
     // re-renders — the `apply_view_demosaic` rule.
-    if gpu_hsl != app.settings.gpu_hsl {
-        app.apply_gpu_hsl(gpu_hsl);
+    if gpu_tail != app.settings.gpu_tail {
+        app.apply_gpu_tail(gpu_tail);
     }
     // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
     // rebuilds the thumbnail loader and re-renders. Unguarded it would reload the whole folder's

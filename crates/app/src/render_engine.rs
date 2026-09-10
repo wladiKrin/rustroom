@@ -142,7 +142,7 @@ pub struct FrameSpec {
     /// stage, so the prefix computes the same thing either way and every cached checkpoint stays
     /// valid — putting it in the key would invalidate the prefix for a change that cannot affect
     /// it.
-    pub gpu_hsl: bool,
+    pub gpu_tail: bool,
     /// The Visualize Spots threshold, or `None` when the view is off.
     ///
     /// ⚠⚠ Applied in `pack`, *after* the pipeline — **never as a pipeline stage**, and the reason
@@ -196,7 +196,7 @@ impl FrameSpec {
             // ⚠ The CPU path is the reference, so a test fixture takes it unless it says
             // otherwise. A GPU-by-default fixture would make every unrelated test depend on an
             // adapter being present.
-            gpu_hsl: false,
+            gpu_tail: false,
             visualize: None,
             soft_proof: None,
             grade_view: None,
@@ -1004,7 +1004,7 @@ fn render_cached(
         region,
         display_space,
         resampler,
-        gpu_hsl,
+        gpu_tail,
         visualize,
         soft_proof,
         grade_view,
@@ -1137,12 +1137,12 @@ fn render_cached(
         // ⚠ `shared()` returning `None` silently keeps the CPU path: a machine with no adapter
         // must not fail to render.
         //
-        // ⚠⚠ **`if` rather than `match (gpu_hsl, shared())`, and this was a real bug rather than
+        // ⚠⚠ **`if` rather than `match (gpu_tail, shared())`, and this was a real bug rather than
         // style.** A tuple scrutinee evaluates **both** elements before matching, so `shared()`
         // ran even with the setting OFF — acquiring an adapter on the render worker, which costs
         // ~42 s in a debug build. Three render tests began reporting "no frame produced" after a
         // one-second wait. With the setting off nothing GPU-related may be touched at all.
-        if gpu_hsl {
+        if gpu_tail {
             match gpu_pipeline::shared() {
                 Some(ctx) => gpu_pipeline::accelerate(tail, edits, scale, ctx),
                 None => tail,
@@ -1380,7 +1380,7 @@ mod tests {
                     region: None,
                     display_space: color::OutputSpace::Srgb,
                     resampler: k,
-                    gpu_hsl: false,
+                    gpu_tail: false,
                     visualize: None,
                     soft_proof: None,
                     grade_view: None,
@@ -2083,7 +2083,7 @@ mod tests {
                 region: Some(RegionRect { x, y, w, h }),
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
-                gpu_hsl: false,
+                gpu_tail: false,
                 visualize: None,
                 soft_proof: None,
                 grade_view: None,
@@ -2205,7 +2205,7 @@ mod tests {
                 }),
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
-                gpu_hsl: false,
+                gpu_tail: false,
                 visualize: None,
                 soft_proof: None,
                 grade_view: None,
@@ -3104,7 +3104,7 @@ mod tests {
                 region: None,
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
-                gpu_hsl: false,
+                gpu_tail: false,
                 visualize,
                 soft_proof,
                 grade_view: None,
@@ -3347,7 +3347,7 @@ mod tests {
             region: None,
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
-            gpu_hsl: false,
+            gpu_tail: false,
             visualize: None,
             soft_proof: None,
             grade_view: None,
@@ -3428,7 +3428,7 @@ mod tests {
                 region,
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
-                gpu_hsl: false,
+                gpu_tail: false,
                 visualize: None,
                 soft_proof: None,
                 grade_view,

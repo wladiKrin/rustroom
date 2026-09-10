@@ -1,0 +1,123 @@
+//! What does a **merged** GPU run actually save?
+//!
+//! ⚠⚠ **Sharpening alone is break-even against the round trip; the win is the RUN** — `hsl` and
+//! `sharpening` sharing one transfer. So this measures three configurations rather than one
+//! stage, and the third row is the one nobody predicted: an active colour grade sits between them
+//! and **splits the run into two chains**, so the same edits pay two round trips.
+//!
+//! ⚠ The spec deliberately predicts no number. M8.2's spec had to be corrected for quoting a
+//! projection as an achieved figure, and M8.3b's own "single stage is net-negative" was true of
+//! exposure and false generally.
+//!
+//! `cargo run --release -p gpu-pipeline --example gpu_run_bench [width] [height]`
+
+use edit_model::{Edits, HslBand, Sharpening};
+use pipeline::{Pipeline, PipelineStage, RenderScale};
+use std::time::Instant;
+
+fn ms(t: Instant) -> f64 {
+    t.elapsed().as_secs_f64() * 1000.0
+}
+
+fn hsl_edits() -> Edits {
+    let mut e = Edits::default();
+    for (i, b) in e.hsl.bands.iter_mut().enumerate() {
+        *b = HslBand {
+            hue: (i as f32 * 13.0) % 70.0 - 35.0,
+            saturation: (i as f32 * 21.0) % 90.0 - 45.0,
+            luminance: (i as f32 * 9.0) % 40.0 - 20.0,
+        };
+    }
+    e
+}
+
+fn sharpened(mut e: Edits) -> Edits {
+    e.sharpening = Sharpening {
+        amount: 70.0,
+        radius: 1.5,
+        detail: 50.0,
+        masking: 40.0,
+    };
+    e
+}
+
+fn main() {
+    let mut a = std::env::args().skip(1);
+    let w: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(1600);
+    let h: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(1068);
+    let Some(ctx) = gpu_pipeline::shared() else {
+        println!("no usable GPU adapter — the CPU path is what would run");
+        return;
+    };
+    println!("adapter: {} ({})", ctx.adapter_name(), ctx.backend());
+
+    let n = w * h * 3;
+    let img = core_image::ImageBuf::from_vec(
+        w,
+        h,
+        (0..n).map(|i| (i % 719) as f32 / 719.0 * 1.2).collect(),
+    );
+    println!(
+        "buffer {w}x{h}x3 f32 = {:.1} MB\n",
+        (n * 4) as f64 / 1048576.0
+    );
+
+    let scale = RenderScale::new(1.0);
+    let mut graded = sharpened(hsl_edits());
+    graded.color_grading.shadows.saturation = 30.0;
+    graded.color_grading.shadows.hue = 250.0;
+
+    let cases: [(&str, Edits); 3] = [
+        ("hsl only (M8.3b's case)", hsl_edits()),
+        ("hsl + sharpening (one chain)", sharpened(hsl_edits())),
+        ("hsl + grade + sharpening (split)", graded),
+    ];
+
+    for (label, edits) in cases {
+        let tail = || pipeline::build_pipeline_split(&edits, scale).1;
+        let chains = gpu_pipeline::accelerate(tail(), &edits, scale, ctx)
+            .stage_names()
+            .iter()
+            .filter(|s| **s == "gpu_chain")
+            .count();
+        println!("── {label} — {chains} chain(s)");
+
+        // ⚠⚠ **Round 0 is not the steady state.** The first encode compiles the shaders, which a
+        // user pays once on the first render after enabling the toggle. Reported rather than
+        // warmed away, because it is real and they will feel it.
+        println!("  round        cpu         gpu     speed-up");
+        let mut best = (f64::MAX, f64::MAX);
+        let mut last: Option<(core_image::ImageBuf, core_image::ImageBuf)> = None;
+        for r in 0..5 {
+            let t = Instant::now();
+            let cpu = tail().run(img.clone());
+            let c = ms(t);
+            let g_tail: Pipeline = gpu_pipeline::accelerate(tail(), &edits, scale, ctx);
+            let t = Instant::now();
+            let gpu = g_tail.run(img.clone());
+            let g = ms(t);
+            println!("  {r:>5}   {c:8.2} ms  {g:8.2} ms   {:6.2}x", c / g);
+            if r > 0 {
+                best = (best.0.min(c), best.1.min(g));
+            }
+            last = Some((cpu, gpu));
+        }
+        let (cpu, gpu) = last.expect("five rounds ran");
+        let d = gpu_pipeline::compare(&cpu, &gpu);
+        println!(
+            "  best of 4 (warm): cpu {:.2} ms, gpu {:.2} ms — {:.2}x",
+            best.0,
+            best.1,
+            best.0 / best.1
+        );
+        println!(
+            "  divergence: worst {:.5} levels over {} of {} samples\n",
+            d.worst_levels, d.differing, d.total
+        );
+    }
+
+    println!(
+        "⚠ A speed-up below 1.00x is a finding, not a rounding error: it says the round trip\n\
+         ⚠ costs more than the stages saved, and the default should stay off."
+    );
+}

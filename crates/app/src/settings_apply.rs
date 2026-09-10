@@ -88,7 +88,7 @@ impl RustroomApp {
     /// Adopt a new GPU-HSL setting, persist it, and re-render the open photo.
     ///
     /// ⚠ Written on the session first, then a render requested — `Session::request` is the funnel
-    /// every render goes through and it reads `s.gpu_hsl`. A toggle whose effect only appeared
+    /// every render goes through and it reads `s.gpu_tail`. A toggle whose effect only appeared
     /// after some unrelated edit would read as broken, which is the failure the display-profile
     /// work already shipped once.
     ///
@@ -96,12 +96,12 @@ impl RustroomApp {
     /// `apply_display_space`. HSL runs identically on both paths to within ~0.01 of an 8-bit
     /// level, so a cached frame is not stale in any sense a user could see — and dropping the
     /// folder's thumbnails for that would be pure cost.
-    pub(crate) fn apply_gpu_hsl(&mut self, gpu_hsl: bool) {
-        self.settings.gpu_hsl = gpu_hsl;
+    pub(crate) fn apply_gpu_tail(&mut self, gpu_tail: bool) {
+        self.settings.gpu_tail = gpu_tail;
         self.save_settings();
         let tool = self.tool;
         if let Some(s) = self.session.as_mut() {
-            s.gpu_hsl = gpu_hsl;
+            s.gpu_tail = gpu_tail;
             let edits = s.view_edits(tool);
             let (max_dim, region) = (s.render_max_dim(), s.requested_region);
             s.request(edits, max_dim, region);

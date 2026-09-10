@@ -278,21 +278,31 @@ pub struct Settings {
     /// already holds `"Fast"` keeps it**, since a stored value beats a changed default; that is
     /// the trap recorded under the panel-section work, and here it is the safe direction.
     pub view_demosaic: Demosaic,
-    /// Run the **global** HSL stage on the GPU.
+    /// Run the GPU-capable stages of the **global** tail on the graphics card.
     ///
-    /// ⚠⚠ **Defaults to `false`, deliberately.** This is the first GPU code any user would run;
-    /// the CPU path is the oracle, and a wrong default would make a rendering difference look like
-    /// a Rustroom bug rather than a setting. The two agree to ~0.01 of an 8-bit level.
+    /// ⚠⚠ **Renamed from `gpu_hsl` at M8.3c, and the `alias` is a MIGRATION rather than
+    /// decoration.** `Settings` carries a container-level `#[serde(default)]`, so without it an
+    /// existing file holding `"gpu_hsl": true` would silently fall back to `false` — the user's
+    /// choice discarded with nothing to notice it. The `EditGroups::effects` → `vignette` rename
+    /// set that precedent and its alias test exists because the same trap was live there.
     ///
-    /// ⚠ **Global HSL only.** A mask's own HSL lives inside `MaskStage`, which
+    /// ⚠ The old name governed more than HSL as soon as sharpening joined it, and a setting that
+    /// silently covers more than it claims is what the `Effects` edit group and the "Reset crop"
+    /// hover text were each corrected for.
+    ///
+    /// ⚠⚠ **Defaults to `false`, deliberately.** The CPU path is the oracle, and a wrong default
+    /// would make a rendering difference look like a Rustroom bug rather than a setting. The two
+    /// agree to ~0.01 of an 8-bit level.
+    ///
+    /// ⚠ **The global tail only.** A mask's own stages live inside `MaskStage`, which
     /// `gpu_pipeline::accelerate` cannot reach — and masked HSL is the case reported in use as
     /// slow.
     ///
     /// ⚠ A **field-level** `#[serde(default)]` is safe here because `bool`'s default and the
     /// intended default are the same `false` — unlike `auto_advance`, where they differed and a
     /// field-level attribute would have shipped the feature disabled for everyone.
-    #[serde(default)]
-    pub gpu_hsl: bool,
+    #[serde(default, alias = "gpu_hsl")]
+    pub gpu_tail: bool,
     /// Which kernel the three resampling stages read pixels with — straighten, perspective and
     /// lens correction.
     ///
@@ -699,7 +709,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
-            gpu_hsl: false,
+            gpu_tail: false,
             resampler: Resampler::default(),
             camera_profiles: std::collections::BTreeMap::new(),
             display_space: color::OutputSpace::default(),
@@ -1016,6 +1026,26 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_file_holding_gpu_hsl_still_turns_the_gpu_on() {
+        // ⚠⚠ **Renaming a serialised field is a MIGRATION, not a rename.** `Settings` carries a
+        // container-level `#[serde(default)]`, so without `alias = "gpu_hsl"` an existing file
+        // holding `"gpu_hsl": true` would silently fall back to `false` — the user's choice
+        // discarded with nothing to notice it. The `EditGroups::effects` → `vignette` rename set
+        // this precedent, and its alias test exists because the same trap was live there.
+        let f = TempFile::new("gpu_hsl_alias");
+        std::fs::write(&f.0, r#"{"gpu_hsl": true}"#).unwrap();
+        assert!(
+            SettingsStore::new(f.0.clone()).load().gpu_tail,
+            "an old gpu_hsl must carry over to gpu_tail"
+        );
+        // ⚠ And the new name must work too — an alias that REPLACED the field name rather than
+        // adding to it would pass the assertion above and break every current file.
+        let g = TempFile::new("gpu_tail_name");
+        std::fs::write(&g.0, r#"{"gpu_tail": true}"#).unwrap();
+        assert!(SettingsStore::new(g.0.clone()).load().gpu_tail);
+    }
+
+    #[test]
     fn a_settings_file_from_before_the_export_format_still_loads() {
         // The forgiving-load property `ExportOptions::default()` exists for.
         let f = TempFile::new("format_old");
@@ -1281,7 +1311,7 @@ mod tests {
             // exhaustive is what makes a new `Settings` field a compile error here, forcing
             // a decision about whether the round trip should carry it.
             view_demosaic: Demosaic::Better,
-            gpu_hsl: false,
+            gpu_tail: false,
             // Non-default, so a field re-defaulted on load cannot pass this round trip.
             resampler: Resampler::Lanczos3,
             display_space: color::OutputSpace::DisplayP3,

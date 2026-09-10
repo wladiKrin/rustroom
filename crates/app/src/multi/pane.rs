@@ -144,7 +144,7 @@ impl Pane {
                     // Survey are for choosing between frames, and a pane renders once per rung
                     // rather than per slider drag — so there is no interactivity to buy, and the
                     // CPU path is the oracle.
-                    gpu_hsl: false,
+                    gpu_tail: false,
                     visualize: None,
                     // ⚠ Compare and Survey are for choosing between frames, not for judging
                     // output colour. A proof is a Develop view mode and lives on `Session`,

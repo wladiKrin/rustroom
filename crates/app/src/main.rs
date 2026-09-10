@@ -892,9 +892,9 @@ pub struct Session {
     /// Run the **global** HSL stage on the GPU, copied from `Settings` when the session opens.
     ///
     /// ⚠ Held here for `resampler`'s reason directly above: `Session::request` is the one funnel
-    /// every render goes through and it cannot reach `RustroomApp`. `apply_gpu_hsl` writes it on
+    /// every render goes through and it cannot reach `RustroomApp`. `apply_gpu_tail` writes it on
     /// the open session so a change takes effect without reopening the photo.
-    gpu_hsl: bool,
+    gpu_tail: bool,
     /// The Visualize Spots threshold, or `None` when the view is off.
     ///
     /// ⚠ On `Session`, not `RustroomApp`, for the reason `display_space` gives: `Session::request`
