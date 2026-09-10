@@ -178,6 +178,33 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.separator();
 
             ui.horizontal(|ui| {
+                ui.label("Thumbnail cache");
+                // ⚠ Read once, on the first frame the dialog is open. `get_or_insert_with` is
+                // what makes that "once" rather than "every frame" — walking the directory sixty
+                // times a second is the `apply_view_demosaic` mistake in another costume.
+                let store = rustroom_app::thumb_store::ThumbStore::user_default();
+                let bytes = *app
+                    .thumb_cache_bytes
+                    .get_or_insert_with(|| store.size_bytes());
+                ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
+                // ⚠ No confirmation, deliberately. This destroys nothing the app cannot rebuild
+                // — the distinction that already separates deleting a collection from forgetting
+                // a folder, which does take ratings and keywords with it.
+                if ui.button("Clear").clicked() {
+                    store.clear();
+                    app.thumb_cache_bytes = Some(0);
+                }
+            });
+            theme::hint(
+                ui,
+                "Previews already extracted from your photos, so a folder you have \
+             opened before fills in at once instead of re-reading every file. \
+             Clearing costs nothing but the time to build it again.",
+            );
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
                 ui.label("Resampling");
                 egui::ComboBox::from_id_salt("resampler_pick")
                     .selected_text(resampler.label())
@@ -354,6 +381,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     if close {
         app.modal = Modal::None;
+        // ⚠ Cleared on close so the next open re-reads the size rather than showing a stale one
+        // — in particular after a Clear, or after a folder has been browsed in between.
+        app.thumb_cache_bytes = None;
     }
 }
 

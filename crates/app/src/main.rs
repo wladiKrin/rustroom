@@ -492,6 +492,13 @@ struct RustroomApp {
     /// preference is standing where a search string is about the question being asked now.
     filter: rustroom_app::library_filter::LibraryFilter,
     modal: Modal,
+    /// The thumbnail cache's size in bytes, read **once** when the Settings dialog opens.
+    ///
+    /// ⚠ `None` means "not yet read". Computing it walks the cache directory, and a dialog body
+    /// runs sixty times a second — the `apply_view_demosaic` rule, cited more than a dozen times
+    /// in CLAUDE.md. Cleared when the dialog closes, so the next open re-reads it rather than
+    /// showing a stale figure.
+    thumb_cache_bytes: Option<u64>,
     /// One chronological order over photo edits *and* preset deletions, so Ctrl+Z walks
     /// back through both. The payloads stay where they are — photo snapshots in
     /// `Session::history`, deleted presets in the trash — and this only records which of
@@ -631,6 +638,7 @@ impl RustroomApp {
             settings,
             catalog,
             modal: Modal::None,
+            thumb_cache_bytes: None,
             actions: ActionLog::default(),
             // ⚠ Empty until a photo opens: the looks directory is scanned once per photo in
             // `session_flow`, never at startup and never per frame.

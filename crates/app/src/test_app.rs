@@ -170,6 +170,7 @@ pub fn for_test() -> RustroomApp {
         // ⚠ In memory, so tests never touch the user's real catalog.
         catalog: catalog::db::Catalog::open_in_memory().ok(),
         modal: Modal::None,
+        thumb_cache_bytes: None,
         actions: ActionLog::default(),
         // ⚠ Empty, and deliberately not pointed at the real looks directory: a test that found
         // the developer's own `.cube` files would pass or fail depending on whose machine it ran

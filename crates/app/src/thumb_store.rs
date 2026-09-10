@@ -193,6 +193,41 @@ impl ThumbStore {
             let _ = std::fs::remove_file(&tmp);
         }
     }
+    /// Total bytes on disk.
+    ///
+    /// ⚠ Walks the directory, so it must be called when the Settings dialog **opens** and never
+    /// in a dialog body — a body runs sixty times a second, which is the `apply_view_demosaic`
+    /// mistake in another costume. An absent directory is `0`, not an error.
+    pub fn size_bytes(&self) -> u64 {
+        let Ok(d) = std::fs::read_dir(&self.dir) else {
+            return 0;
+        };
+        d.flatten()
+            .filter_map(|e| e.metadata().ok())
+            .filter(|m| m.is_file())
+            .map(|m| m.len())
+            .sum()
+    }
+
+    /// Delete every entry.
+    ///
+    /// ⚠ Removes the **files**, not the directory, so the store keeps working afterwards rather
+    /// than needing to be recreated. Best-effort: an entry that cannot be removed is skipped, and
+    /// the worst outcome is that it is still there.
+    ///
+    /// ⚠ Deliberately **not** confirmed at the call site. This destroys nothing the app cannot
+    /// rebuild — the distinction that already separates deleting a collection from forgetting a
+    /// folder.
+    pub fn clear(&self) {
+        let Ok(d) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        for e in d.flatten() {
+            if e.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
 }
 
 /// Parse an entry's header, returning its dimensions and the JPEG payload.
@@ -507,5 +542,31 @@ mod tests {
         let id = ident("/photos/a.RAF", 1, 1);
         store.put(&id, &thumb(16, 16));
         assert!(store.get(&id).is_none());
+    }
+
+    #[test]
+    fn the_size_counts_every_entry_and_clearing_empties_it() {
+        let dir = TempDir::new("size");
+        let store = dir.store();
+        assert_eq!(
+            store.size_bytes(),
+            0,
+            "an absent directory is zero, not an error"
+        );
+
+        store.put(&ident("/photos/a.RAF", 1, 1), &thumb(32, 32));
+        store.put(&ident("/photos/b.RAF", 2, 2), &thumb(32, 32));
+        let two = store.size_bytes();
+        assert!(two > 0, "two entries must have a size");
+
+        store.put(&ident("/photos/c.RAF", 3, 3), &thumb(32, 32));
+        assert!(store.size_bytes() > two, "a third entry must grow it");
+
+        store.clear();
+        assert_eq!(store.size_bytes(), 0);
+        assert!(dir.entries().is_empty(), "clearing removes the files");
+        // ⚠ And the store still works afterwards, rather than being left in a broken state.
+        store.put(&ident("/photos/a.RAF", 1, 1), &thumb(16, 16));
+        assert!(store.get(&ident("/photos/a.RAF", 1, 1)).is_some());
     }
 }
