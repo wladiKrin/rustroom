@@ -28,7 +28,8 @@ still carries the reasoning that matters — read the entry, then build it under
 | Soft-proofing · gamut mapping / rendering intents | ✅ **M6.4 soft proofing shipped 2026-09-04**, confirmed by use; gamut mapping and rendering intents are *not* in it and stay deferred. `specs/2026-09-04-soft-proofing-design.md`. |
 | EXIF/IPTC metadata editing | ✅ **M6.2, 2026-09-08** — edited in the catalog, embedded at export, in the sidecar |
 | Export filename templating · output/print sharpening | ✅ **M6.1a** / ✅ **M6.1d**, both 2026-09-01 |
-| Mask intersection and subtraction | **M7.1c** — ⬜ **the NEXT ACTION as of 2026-09-09**, and the one M7.1 slice not built |
+| Mask intersection and subtraction | ✅ **M7.1c, 2026-09-10** — confirmed by use; Add / Subtract / Intersect between masks, and **M7.1 is complete** |
+| Reorder a mask's components | ⬜ **wanted (user's call, 2026-09-10)** — order is observable, and the list is append-only today |
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
 | Fuse perspective into `GeometryStage` | **M7.3b** — ⬜ still open (2026-09-08) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
@@ -302,8 +303,27 @@ is exactly what a search needs — given a point in stage-input space, `perspect
 the raw buffer with post-lens coordinates, which would have been wrong by the whole displacement
 above. Only *anchoring* wants the forward map.
 
-- **Mask intersection and subtraction between masks.** `erase` works only *within* one brush; a
-  radial cannot be cut out of a linear.
+- ~~**Mask intersection and subtraction between masks.** `erase` works only *within* one brush; a
+  radial cannot be cut out of a linear.~~ ✅ **M7.1c, 2026-09-10**, confirmed by use. A mask carries
+  `refine: Vec<Refinement>` — shapes composited onto its base with **Add / Subtract / Intersect**,
+  folded left to right. ⚠ The algebra is **the brush's own**: `Add` is `raster.rs`'s across-strokes
+  paint step and `Subtract` is its `erase`, and the raster calls `MaskOp::combine` now, so the two
+  cannot drift. `min`/`max` were rejected because they agree with those rules only at 0 and 1.
+
+- **Reorder a mask's components** (recorded 2026-09-10, **wanted** — user's call: *"the reordering
+  is something we should do at some point"*). Components are **append-only, delete-any** today, and
+  **order is observable**: the fold runs left to right, so subtract-then-intersect is not
+  intersect-then-subtract. ⚠ The gesture is already solved — `panel_order::{drop_index, moved}` is
+  the drag-to-reorder logic the Library panel's sections use, pure and tested, including a
+  permutation property over every from/to pair. The work is a second call site plus deciding
+  whether a reorder is one undo step. ⚠ Cheap, and **not** blocked on a design question, which is
+  what distinguishes it from most of this file.
+
+- **Composites are one level deep.** A refinement is a *shape*, never another composite, so
+  `radial ∩ (brush ∪ gradient)` is not expressible. Deliberate — it is the nesting the rejected
+  recursive `Mask::Combine` variant would have bought, at the cost of a tree in the panel and a
+  path rather than an integer for every hit-test, drag and coverage-cache index. Revisit only with
+  a real photograph that needs it.
 - ~~**Auto-mask / edge detection** for the brush.~~ ✅ **2026-09-09, and M7.6 closes with it** — the last M7.6 gap; a dab paints only pixels similar to the one under its centre, gated in Oklab at render time. ⚠ Its coverage is **cached** since 2026-09-09, keyed on what produced the base — see the entry below.
 - ~~**Dehaze over-corrects bright achromatic subjects** — snow, white walls, a white cat read as haze.
   The classic dark-channel-prior artifact, inherent to the model; a real fix needs large-bright-
@@ -352,7 +372,11 @@ above. Only *anchoring* wants the forward map.
 
 - **Fuse perspective into `GeometryStage`** (recorded 2026-08-31). One resample instead of two when
   straighten and perspective are both active. ⚠ **Measured at ~20%** of acutance — real, but
-  secondary to the interpolator question above, which is why that one comes first. ⚠ The cost is
+  secondary to the interpolator question above, which is why that one came first. ⚠⚠ **And that one
+  is DONE: M7.3a shipped 2026-09-01**, so the 48%-of-a-single-pass win is already taken and this
+  ~20% is what is actually left. Do not read the entry above as still-open work — it is struck
+  through for a reason, and `CLAUDE.md`'s own warning applies: verify a backlog item against what
+  shipped before proposing it, since several were closed under another name. ⚠ The cost is
   that `FrameMap` must then invert a **homography** rather than a rotation, and its agreement test
   with `GeometryStage` is exactly what caught the rotation sign error in M3.1c-A. It also loses
   perspective's own cache checkpoint, so every crop drag would re-run the resample.
