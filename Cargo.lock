@@ -1934,6 +1934,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-pipeline"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "core-image",
+ "pipeline",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "gtk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

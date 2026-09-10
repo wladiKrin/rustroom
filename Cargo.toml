@@ -6,6 +6,7 @@ members = [
     "crates/color",
     "crates/edit-model",
     "crates/pipeline",
+    "crates/gpu-pipeline",
     "crates/export",
     "crates/rustroom",
     "crates/app",
@@ -35,4 +36,9 @@ egui = "0.35"
 rfd = "0.17"
 rayon = "1"
 lcms2 = "6"
+# ⚠ Already in the tree via eframe — declared here so `gpu-pipeline` pins the same versions the
+# app's own renderer uses. Two wgpu versions in one process is not a situation to discover later.
+wgpu = "29"
+pollster = "0.4"
+bytemuck = "1"
 quick-xml = "0.41"
