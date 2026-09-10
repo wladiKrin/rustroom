@@ -1131,8 +1131,8 @@ fn render_cached(
             // baseline while a profile that declares its own sat unused.
             profile,
         );
-        // ⚠⚠ The tail only. HSL is a tail stage, and accelerating the prefix would make
-        // `PrefixKey` describe two different computations under one key.
+        // ⚠⚠ The tail only. Every accelerated stage is a tail stage, and accelerating the prefix
+        // would make `PrefixKey` describe two different computations under one key.
         //
         // ⚠ `shared()` returning `None` silently keeps the CPU path: a machine with no adapter
         // must not fail to render.
@@ -1144,7 +1144,7 @@ fn render_cached(
         // one-second wait. With the setting off nothing GPU-related may be touched at all.
         if gpu_hsl {
             match gpu_pipeline::shared() {
-                Some(ctx) => gpu_pipeline::accelerate(tail, edits, ctx),
+                Some(ctx) => gpu_pipeline::accelerate(tail, edits, scale, ctx),
                 None => tail,
             }
         } else {

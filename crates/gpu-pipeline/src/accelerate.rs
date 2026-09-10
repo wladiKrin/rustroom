@@ -1,46 +1,85 @@
-//! Swapping CPU stages for GPU ones in a built pipeline.
+//! Swapping runs of CPU stages for GPU chains in a built pipeline.
 
-use crate::{GpuChain, GpuContext, GpuHslStage, GpuStage};
+use crate::{GpuChain, GpuContext, GpuHslStage, GpuSharpenStage, GpuStage};
 use edit_model::Edits;
-use pipeline::Pipeline;
+use pipeline::{Pipeline, PipelineStage, RenderScale};
 use std::sync::Arc;
 
-/// The name of the one stage this can replace.
+/// Builds one GPU stage from the edits the tail was built from.
 ///
-/// ⚠⚠ **Name-matching is stringly-typed and that is the cost of needing no change to
-/// `pipeline`.** A `dyn PipelineStage` exposes only `name()` and `apply()`, so the parameters
-/// needed to build a GPU equivalent are gone — but they do not have to be recovered from the
-/// stage, because the caller still holds the `Edits`.
-///
-/// ⚠ It does **not** scale to a dozen stages. When several are accelerated, the right answer is a
-/// `StageAccelerator` hook that `pipeline` calls at construction; it loses today only because
-/// `RenderSpec` is `Copy + PartialEq` and an `Arc<dyn Trait>` is neither.
-const HSL: &str = "hsl";
+/// ⚠ It takes the [`RenderScale`] as well as the [`Edits`], because `SharpenStage`'s sigma is in
+/// **full-resolution pixels** and only the scale says what that is at this rung. `GpuHslStage`
+/// ignores it; a signature that omitted it would make the sharpen entry unwritable.
+type Builder = fn(&Edits, RenderScale, &Arc<GpuContext>) -> Box<dyn GpuStage>;
 
-/// Replace GPU-capable stages in `tail` with their GPU twins.
+/// The stages this can replace, by the name `PipelineStage::name` reports.
 ///
-/// ⚠ Only the **global** tail. A mask's own HSL lives inside `MaskStage`, which this sees as one
-/// opaque stage — so masked HSL is not accelerated, and that is the case reported in use as slow.
-pub fn accelerate(tail: Pipeline, edits: &Edits, ctx: &Arc<GpuContext>) -> Pipeline {
-    Pipeline::new(
-        tail.into_stages()
-            .into_iter()
-            .map(|s| {
-                if s.name() == HSL {
-                    let gpu: Box<dyn GpuStage> = Box::new(GpuHslStage::new(&edits.hsl, ctx));
-                    Box::new(GpuChain::new(ctx.clone(), vec![gpu])) as _
-                } else {
-                    s
-                }
-            })
-            .collect(),
-    )
+/// ⚠⚠ **Still name-matching, and still stringly-typed.** M8.3b recorded that this does not scale
+/// to a dozen stages and that the right answer then is a `StageAccelerator` hook `pipeline` calls
+/// at construction. A table is the smaller step that stops an if-chain growing; it is **not** the
+/// fix. ⚠ The hook still loses for the reason it did in M8.3b: `RenderSpec` is `Copy + PartialEq`
+/// and an `Arc<dyn Trait>` is neither.
+///
+/// ⚠ Every name here must occur **at most once** in a tail, which is what makes the lookup sound.
+/// A mask's own stages live inside `MaskStage`, which the tail sees as one opaque stage — asserted
+/// by `the_replaceable_names_occur_at_most_once_in_a_tail`.
+const REPLACEABLE: &[(&str, Builder)] = &[
+    ("hsl", |e, _, ctx| Box::new(GpuHslStage::new(&e.hsl, ctx))),
+    ("sharpening", |e, scale, ctx| {
+        Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx))
+    }),
+];
+
+/// Replace runs of GPU-capable stages in `tail` with chains.
+///
+/// ⚠⚠ **Consecutive stages share ONE chain, and therefore one round trip.** That is the point:
+/// sharpening alone is break-even against the transfer, and only the run is worth having.
+///
+/// ⚠ A regrouping, never a reordering — a stage this cannot replace **ends the current run** and
+/// keeps its position. An implementation that merged every replaceable stage regardless of
+/// position would run the intervening CPU stage's work in the wrong order, which looks like a
+/// plausible photograph rather than an error.
+///
+/// ⚠ Only the **global** tail. A mask's own stages are inside `MaskStage`, so masked HSL is still
+/// not accelerated — the case reported in use as slow, and M8.3d's.
+pub fn accelerate(
+    tail: Pipeline,
+    edits: &Edits,
+    scale: RenderScale,
+    ctx: &Arc<GpuContext>,
+) -> Pipeline {
+    let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
+    let mut run: Vec<Box<dyn GpuStage>> = Vec::new();
+    for s in tail.into_stages() {
+        match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
+            Some((_, build)) => run.push(build(edits, scale, ctx)),
+            None => {
+                flush(&mut run, &mut out, ctx);
+                out.push(s);
+            }
+        }
+    }
+    flush(&mut run, &mut out, ctx);
+    Pipeline::new(out)
+}
+
+/// Turn any pending run into a chain.
+fn flush(
+    run: &mut Vec<Box<dyn GpuStage>>,
+    out: &mut Vec<Box<dyn PipelineStage>>,
+    ctx: &Arc<GpuContext>,
+) {
+    if !run.is_empty() {
+        out.push(Box::new(GpuChain::new(ctx.clone(), std::mem::take(run))));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edit_model::HslBand;
+    use edit_model::{HslBand, Sharpening};
+
+    const SCALE: RenderScale = RenderScale::FULL;
 
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {
@@ -62,41 +101,141 @@ mod tests {
         e
     }
 
+    fn with_sharpening(mut e: Edits) -> Edits {
+        e.sharpening = Sharpening {
+            amount: 60.0,
+            ..Default::default()
+        };
+        e
+    }
+
+    fn tail_of(e: &Edits) -> Pipeline {
+        pipeline::build_pipeline_split(e, SCALE).1
+    }
+
+    fn chains(names: &[&str]) -> usize {
+        names.iter().filter(|n| **n == "gpu_chain").count()
+    }
+
     #[test]
-    fn the_tail_contains_at_most_one_stage_named_hsl() {
+    fn the_replaceable_names_occur_at_most_once_in_a_tail() {
         // ⚠⚠ This is what makes name-matching sound, and it is a real property rather than an
-        // assumption: a mask's own HSL lives INSIDE MaskStage, which the tail sees as a single
-        // stage named "mask". A future refactor that flattened masks into the tail would break
-        // this silently, so it is asserted **with a masked HSL present**.
-        let mut e = with_hsl();
+        // assumption: a mask's own HSL and sharpening live INSIDE MaskStage, which the tail sees
+        // as a single stage named "mask". A future refactor that flattened masks into the tail
+        // would break this silently, so it is asserted **with a masked HSL present**.
+        //
+        // ⚠ Over the whole table rather than over "hsl" alone: a guard that enumerates one entry
+        // stops guarding the moment the table grows, which is the sharpest finding the masked-grade
+        // milestone left behind.
+        let mut e = with_sharpening(with_hsl());
         e.masks = vec![edit_model::MaskedAdjustment {
             mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
             refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments {
                 hsl: with_hsl().hsl,
+                sharpening: Sharpening {
+                    amount: 40.0,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         }];
-        let (_, tail) = pipeline::build_pipeline_split(&e, pipeline::RenderScale::new(1.0));
-        let n = tail.stage_names().iter().filter(|x| **x == HSL).count();
-        assert_eq!(n, 1, "got {:?}", tail.stage_names());
+        let names = tail_of(&e).stage_names();
+        for (n, _) in REPLACEABLE {
+            assert!(
+                names.iter().filter(|x| *x == n).count() <= 1,
+                "{n} occurs more than once in {names:?}"
+            );
+        }
     }
 
     #[test]
-    fn accelerating_replaces_the_hsl_stage_and_nothing_else() {
+    fn consecutive_gpu_stages_merge_into_one_chain() {
+        // With colour grading neutral, `hsl` and `sharpening` are adjacent in the tail — which is
+        // the whole reason this slice ported sharpening rather than colour grading.
+        let Some(ctx) = ctx() else { return };
+        let e = with_sharpening(with_hsl());
+        let tail = tail_of(&e);
+        let before = tail.stage_names();
+        assert!(
+            before.windows(2).any(|w| w == ["hsl", "sharpening"]),
+            "fixture check: hsl and sharpening must be adjacent, got {before:?}"
+        );
+        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        assert_eq!(
+            chains(&after),
+            1,
+            "two adjacent GPU stages must become ONE chain, got {after:?}"
+        );
+        assert_eq!(
+            after.len(),
+            before.len() - 1,
+            "the pair collapses to one stage, got {after:?}"
+        );
+    }
+
+    #[test]
+    fn a_cpu_stage_between_two_gpu_stages_produces_two_chains() {
+        // ⚠⚠ **The half that makes the test above mean something.** An implementation that merged
+        // every replaceable stage regardless of position would pass it — and would run the CPU
+        // stage's work in the wrong order, producing a plausible photograph rather than an error.
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_sharpening(with_hsl());
+        e.color_grading.shadows.saturation = 30.0;
+        let tail = tail_of(&e);
+        let before = tail.stage_names();
+        assert!(
+            before.contains(&"color_grading"),
+            "fixture check: the grade must sit between them, got {before:?}"
+        );
+        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        assert_eq!(
+            chains(&after),
+            2,
+            "a CPU stage between them must split the run, got {after:?}"
+        );
+    }
+
+    #[test]
+    fn merging_preserves_order() {
+        // ⚠ A regrouping, never a reordering. The non-replaceable stage must keep its position
+        // relative to the chains around it.
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_sharpening(with_hsl());
+        e.color_grading.shadows.saturation = 30.0;
+        let after = accelerate(tail_of(&e), &e, SCALE, &ctx).stage_names();
+        let grade = after
+            .iter()
+            .position(|n| *n == "color_grading")
+            .expect("the grade is kept");
+        let at: Vec<usize> = after
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n == "gpu_chain")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(at.len(), 2, "{after:?}");
+        assert!(
+            at[0] < grade && grade < at[1],
+            "the grade must stay between the two chains, got {after:?}"
+        );
+    }
+
+    #[test]
+    fn accelerating_replaces_only_the_replaceable_stages() {
         let Some(ctx) = ctx() else { return };
         let e = with_hsl();
-        let (_, tail) = pipeline::build_pipeline_split(&e, pipeline::RenderScale::new(1.0));
+        let tail = tail_of(&e);
         let before = tail.stage_names();
-        let after = accelerate(tail, &e, &ctx).stage_names();
+        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
         assert_eq!(
             before.len(),
             after.len(),
             "no stage may be added or dropped"
         );
         for (b, a) in before.iter().zip(&after) {
-            if *b == HSL {
-                assert_eq!(*a, "gpu_chain", "the hsl stage must become a chain");
+            if REPLACEABLE.iter().any(|(n, _)| n == b) {
+                assert_eq!(*a, "gpu_chain", "{b} must become a chain");
             } else {
                 assert_eq!(b, a, "every other stage must be untouched");
             }
@@ -104,39 +243,60 @@ mod tests {
     }
 
     #[test]
-    fn a_tail_with_no_hsl_is_returned_unchanged() {
-        // ⚠ The other half. Without it, a substitution that replaced the FIRST stage rather than
-        // the named one would still pass the test above.
+    fn a_tail_with_nothing_replaceable_is_returned_unchanged() {
+        // ⚠ The other half. Without it, a substitution that replaced the FIRST stage rather than a
+        // named one would still pass the test above.
         let Some(ctx) = ctx() else { return };
         let e = Edits {
             exposure: 0.5,
             ..Edits::default()
         };
-        let (_, tail) = pipeline::build_pipeline_split(&e, pipeline::RenderScale::new(1.0));
+        let tail = tail_of(&e);
         let before = tail.stage_names();
         assert!(
-            !before.contains(&HSL),
-            "fixture check: this tail has no hsl"
+            !before
+                .iter()
+                .any(|b| REPLACEABLE.iter().any(|(n, _)| n == b)),
+            "fixture check: nothing here is replaceable, got {before:?}"
         );
-        assert_eq!(accelerate(tail, &e, &ctx).stage_names(), before);
+        assert_eq!(accelerate(tail, &e, SCALE, &ctx).stage_names(), before);
     }
 
-    #[test]
-    fn an_accelerated_tail_renders_the_same_picture() {
-        // ⚠⚠ The carrier: everything above can pass while the substituted stage computes
-        // nonsense. This runs both tails over the same buffer and compares the pixels.
-        let Some(ctx) = ctx() else { return };
-        let e = with_hsl();
-        let scale = pipeline::RenderScale::new(1.0);
-        let img = core_image::ImageBuf::from_vec(
+    fn ramp() -> core_image::ImageBuf {
+        core_image::ImageBuf::from_vec(
             64,
             48,
             (0..64 * 48 * 3).map(|i| (i % 601) as f32 / 601.0).collect(),
+        )
+    }
+
+    #[test]
+    fn a_merged_tail_renders_the_same_picture() {
+        // ⚠⚠ The carrier: everything above can pass while the substituted stages compute
+        // nonsense, or while merging silently reorders. This runs both tails over the same buffer.
+        let Some(ctx) = ctx() else { return };
+        let e = with_sharpening(with_hsl());
+        let cpu = tail_of(&e).run(ramp());
+        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.01,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
         );
-        let (_, cpu_tail) = pipeline::build_pipeline_split(&e, scale);
-        let (_, gpu_tail) = pipeline::build_pipeline_split(&e, scale);
-        let cpu = cpu_tail.run(img.clone());
-        let gpu = accelerate(gpu_tail, &e, &ctx).run(img);
+    }
+
+    #[test]
+    fn a_split_run_renders_the_same_picture_as_the_cpu() {
+        // ⚠ The split path needs its own carrier: two chains with a CPU stage between them is a
+        // different execution than one chain, and a reordering bug lives exactly there.
+        let Some(ctx) = ctx() else { return };
+        let mut e = with_sharpening(with_hsl());
+        e.color_grading.shadows.saturation = 30.0;
+        let cpu = tail_of(&e).run(ramp());
+        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
         let d = crate::compare(&cpu, &gpu);
         assert!(
             d.worst_levels < 0.01,
