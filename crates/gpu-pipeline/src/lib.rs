@@ -11,10 +11,12 @@ mod chain;
 mod context;
 mod equivalence;
 mod exposure;
+mod hsl;
 mod image;
 
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
 pub use equivalence::{compare, Divergence};
 pub use exposure::GpuExposureStage;
+pub use hsl::GpuHslStage;
 pub use image::GpuImage;

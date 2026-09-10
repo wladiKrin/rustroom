@@ -63,6 +63,16 @@ impl HslStage {
     }
 }
 
+impl HslStage {
+    /// The hue table this stage samples.
+    ///
+    /// ⚠ Exposed so a GPU twin uploads the **same** table rather than rebuilding it — two
+    /// constructions of one table is how the two would come to disagree about band blending.
+    pub fn table(&self) -> &HueTable {
+        &self.table
+    }
+}
+
 impl PipelineStage for HslStage {
     fn name(&self) -> &'static str {
         "hsl"

@@ -121,6 +121,15 @@ impl HueTable {
         Self { entries }
     }
 
+    /// The raw entries, for a consumer that uploads them.
+    ///
+    /// ⚠ Read-only and by reference. `gpu-pipeline` uploads this table as a storage buffer so the
+    /// **band logic never enters the shader** — the eight bands and their smoothstep blending are
+    /// already collapsed here, on the CPU, once per stage.
+    pub fn entries(&self) -> &[[f32; 3]] {
+        &self.entries
+    }
+
     /// Linear interpolation between the two bracketing entries.
     ///
     /// ⚠ The `% n` on the second index is load-bearing and wrong only in the final cell: without
