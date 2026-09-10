@@ -36,6 +36,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | Auto-mask brush · ~~dehaze bright subjects~~ · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); dehaze bright subjects ✅ 2026-09-08; auto-mask ⬜ |
 | ~~Lens correction row batching~~ · sequential export · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); the other two ⬜ |
 | On-disk thumbnail cache | **M8.2** |
+| Replace libraw's demosaic | ✅ **M8.4, 2026-09-10 — decided OUT of scope**, and the default tier moved `Fast` → `Better` instead. `Better` sits within 0.22–0.30 of an 8-bit level of `Best` on foliage and is indistinguishable from it at 4×, so a Markesteijn/AMaZE-class reimplementation buys nothing measurable. ⚠ Costs ~2.9 s → ~7.5 s per photo opened. `specs/2026-09-10-demosaic-decision.md` |
 | `main.rs` is too large | ✅ **W0, 2026-09-01** — 4,375 → 681 (917 as of 2026-09-08); `canvas.rs` 1,890 → 7 modules |
 | The in-window menu bar has never been run | **M9.2** |
 | Immich integration | **M9.1** |
