@@ -14,6 +14,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut camera_rendering = app.settings.default_rendering == edit_model::Rendering::Camera;
     let mut auto_lens = app.settings.auto_lens_correction;
     let mut tier = app.settings.view_demosaic;
+    let mut gpu_hsl = app.settings.gpu_hsl;
     let mut resampler = app.settings.resampler;
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
@@ -178,6 +179,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.separator();
 
             ui.horizontal(|ui| {
+                ui.label("HSL");
+                ui.checkbox(&mut gpu_hsl, "Use the GPU");
+            });
+            theme::hint(
+                ui,
+                "Runs the global HSL sliders on the graphics card. Off by default: \
+             the CPU is the reference, and the two agree to about a hundredth of an \
+             8-bit level, so the picture should not change. ⚠ Does not apply to HSL \
+             inside a mask.",
+            );
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
                 ui.label("Thumbnail cache");
                 // ⚠ Read once, on the first frame the dialog is open. `get_or_insert_with` is
                 // what makes that "once" rather than "every frame" — walking the directory sixty
@@ -336,6 +351,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     }
     if tier != app.settings.view_demosaic {
         app.apply_view_demosaic(tier, ctx);
+    }
+    // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
+    // re-renders — the `apply_view_demosaic` rule.
+    if gpu_hsl != app.settings.gpu_hsl {
+        app.apply_gpu_hsl(gpu_hsl);
     }
     // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
     // rebuilds the thumbnail loader and re-renders. Unguarded it would reload the whole folder's

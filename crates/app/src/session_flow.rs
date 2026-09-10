@@ -139,6 +139,7 @@ impl Session {
                 region,
                 display_space: self.display_space,
                 resampler: self.resampler,
+                gpu_hsl: self.gpu_hsl,
                 visualize: self.visualize,
                 // ⚠ Built here rather than stored assembled, so "warn against nothing" is not
                 // representable: the flag only reaches the render when a space is being proofed
@@ -450,6 +451,7 @@ impl RustroomApp {
                     .settings
                     .effective_display_space(self.os_manages_colour),
                 resampler: self.settings.resampler,
+                gpu_hsl: self.settings.gpu_hsl,
                 visualize: None,
                 // ⚠ The proof is per session and a session is per photo, so a photo always opens
                 // unproofed — matching the field's initialiser below rather than reaching for a
@@ -466,6 +468,7 @@ impl RustroomApp {
                 .settings
                 .effective_display_space(self.os_manages_colour),
             resampler: self.settings.resampler,
+            gpu_hsl: self.settings.gpu_hsl,
             visualize: None,
             show_grade_range: false,
             grade_view: None,

@@ -270,6 +270,7 @@ dependencies = [
  "eframe",
  "egui",
  "export",
+ "gpu-pipeline",
  "image",
  "image-decode",
  "lens-profile",

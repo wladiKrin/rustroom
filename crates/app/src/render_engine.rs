@@ -132,6 +132,17 @@ pub struct FrameSpec {
     /// the next render with no engine rebuild — and because the three resampling
     /// `PrefixStepKey`s carry it, a stale checkpoint is an ordinary cache miss.
     pub resampler: pipeline::Resampler,
+    /// Run the **global** HSL stage on the GPU.
+    ///
+    /// ⚠ Per **request**, for `resampler`'s reason directly above: a global setting the user can
+    /// change with a photo open, so a toggle takes effect on the next render with no engine
+    /// rebuild.
+    ///
+    /// ⚠⚠ Unlike the resampler it is in **no** `PrefixStepKey`, and must not be. HSL is a *tail*
+    /// stage, so the prefix computes the same thing either way and every cached checkpoint stays
+    /// valid — putting it in the key would invalidate the prefix for a change that cannot affect
+    /// it.
+    pub gpu_hsl: bool,
     /// The Visualize Spots threshold, or `None` when the view is off.
     ///
     /// ⚠⚠ Applied in `pack`, *after* the pipeline — **never as a pipeline stage**, and the reason
@@ -182,6 +193,10 @@ impl FrameSpec {
             region: None,
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
+            // ⚠ The CPU path is the reference, so a test fixture takes it unless it says
+            // otherwise. A GPU-by-default fixture would make every unrelated test depend on an
+            // adapter being present.
+            gpu_hsl: false,
             visualize: None,
             soft_proof: None,
             grade_view: None,
@@ -989,6 +1004,7 @@ fn render_cached(
         region,
         display_space,
         resampler,
+        gpu_hsl,
         visualize,
         soft_proof,
         grade_view,
@@ -1115,7 +1131,25 @@ fn render_cached(
             // baseline while a profile that declares its own sat unused.
             profile,
         );
-        tail
+        // ⚠⚠ The tail only. HSL is a tail stage, and accelerating the prefix would make
+        // `PrefixKey` describe two different computations under one key.
+        //
+        // ⚠ `shared()` returning `None` silently keeps the CPU path: a machine with no adapter
+        // must not fail to render.
+        //
+        // ⚠⚠ **`if` rather than `match (gpu_hsl, shared())`, and this was a real bug rather than
+        // style.** A tuple scrutinee evaluates **both** elements before matching, so `shared()`
+        // ran even with the setting OFF — acquiring an adapter on the render worker, which costs
+        // ~42 s in a debug build. Three render tests began reporting "no frame produced" after a
+        // one-second wait. With the setting off nothing GPU-related may be touched at all.
+        if gpu_hsl {
+            match gpu_pipeline::shared() {
+                Some(ctx) => gpu_pipeline::accelerate(tail, edits, ctx),
+                None => tail,
+            }
+        } else {
+            tail
+        }
     };
 
     // ⚠⚠ **While proofing the tail runs TWICE, and that was MEASURED into existence rather than
@@ -1346,6 +1380,7 @@ mod tests {
                     region: None,
                     display_space: color::OutputSpace::Srgb,
                     resampler: k,
+                    gpu_hsl: false,
                     visualize: None,
                     soft_proof: None,
                     grade_view: None,
@@ -2048,6 +2083,7 @@ mod tests {
                 region: Some(RegionRect { x, y, w, h }),
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
+                gpu_hsl: false,
                 visualize: None,
                 soft_proof: None,
                 grade_view: None,
@@ -2169,6 +2205,7 @@ mod tests {
                 }),
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
+                gpu_hsl: false,
                 visualize: None,
                 soft_proof: None,
                 grade_view: None,
@@ -3067,6 +3104,7 @@ mod tests {
                 region: None,
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
+                gpu_hsl: false,
                 visualize,
                 soft_proof,
                 grade_view: None,
@@ -3309,6 +3347,7 @@ mod tests {
             region: None,
             display_space: color::OutputSpace::Srgb,
             resampler: pipeline::Resampler::default(),
+            gpu_hsl: false,
             visualize: None,
             soft_proof: None,
             grade_view: None,
@@ -3389,6 +3428,7 @@ mod tests {
                 region,
                 display_space: color::OutputSpace::Srgb,
                 resampler: pipeline::Resampler::default(),
+                gpu_hsl: false,
                 visualize: None,
                 soft_proof: None,
                 grade_view,

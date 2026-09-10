@@ -85,6 +85,29 @@ impl RustroomApp {
     /// ⚠ Thumbnails are a different matter: they are rendered **at load** and cached by
     /// `(PhotoId, edits)`, which cannot see this change — so the loader is rebuilt and the cache
     /// dropped, exactly as `apply_display_space` does and for the same reason.
+    /// Adopt a new GPU-HSL setting, persist it, and re-render the open photo.
+    ///
+    /// ⚠ Written on the session first, then a render requested — `Session::request` is the funnel
+    /// every render goes through and it reads `s.gpu_hsl`. A toggle whose effect only appeared
+    /// after some unrelated edit would read as broken, which is the failure the display-profile
+    /// work already shipped once.
+    ///
+    /// ⚠⚠ The thumbnail loader is **not** rebuilt and no cache is dropped, unlike
+    /// `apply_display_space`. HSL runs identically on both paths to within ~0.01 of an 8-bit
+    /// level, so a cached frame is not stale in any sense a user could see — and dropping the
+    /// folder's thumbnails for that would be pure cost.
+    pub(crate) fn apply_gpu_hsl(&mut self, gpu_hsl: bool) {
+        self.settings.gpu_hsl = gpu_hsl;
+        self.save_settings();
+        let tool = self.tool;
+        if let Some(s) = self.session.as_mut() {
+            s.gpu_hsl = gpu_hsl;
+            let edits = s.view_edits(tool);
+            let (max_dim, region) = (s.render_max_dim(), s.requested_region);
+            s.request(edits, max_dim, region);
+        }
+    }
+
     pub(crate) fn apply_resampler(&mut self, resampler: pipeline::Resampler) {
         self.settings.resampler = resampler;
         self.save_settings();

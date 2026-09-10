@@ -278,6 +278,21 @@ pub struct Settings {
     /// already holds `"Fast"` keeps it**, since a stored value beats a changed default; that is
     /// the trap recorded under the panel-section work, and here it is the safe direction.
     pub view_demosaic: Demosaic,
+    /// Run the **global** HSL stage on the GPU.
+    ///
+    /// ⚠⚠ **Defaults to `false`, deliberately.** This is the first GPU code any user would run;
+    /// the CPU path is the oracle, and a wrong default would make a rendering difference look like
+    /// a Rustroom bug rather than a setting. The two agree to ~0.01 of an 8-bit level.
+    ///
+    /// ⚠ **Global HSL only.** A mask's own HSL lives inside `MaskStage`, which
+    /// `gpu_pipeline::accelerate` cannot reach — and masked HSL is the case reported in use as
+    /// slow.
+    ///
+    /// ⚠ A **field-level** `#[serde(default)]` is safe here because `bool`'s default and the
+    /// intended default are the same `false` — unlike `auto_advance`, where they differed and a
+    /// field-level attribute would have shipped the feature disabled for everyone.
+    #[serde(default)]
+    pub gpu_hsl: bool,
     /// Which kernel the three resampling stages read pixels with — straighten, perspective and
     /// lens correction.
     ///
@@ -684,6 +699,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
+            gpu_hsl: false,
             resampler: Resampler::default(),
             camera_profiles: std::collections::BTreeMap::new(),
             display_space: color::OutputSpace::default(),
@@ -1265,6 +1281,7 @@ mod tests {
             // exhaustive is what makes a new `Settings` field a compile error here, forcing
             // a decision about whether the round trip should carry it.
             view_demosaic: Demosaic::Better,
+            gpu_hsl: false,
             // Non-default, so a field re-defaulted on load cannot pass this round trip.
             resampler: Resampler::Lanczos3,
             display_space: color::OutputSpace::DisplayP3,
