@@ -170,4 +170,49 @@ fn main() {
             read * total as f64 / 6.0 / 1000.0
         );
     }
+
+    // ── 3. the achieved figure: the real store, cold then warm ─────────────────────────
+    //
+    // ⚠ Against a temp directory, never the user's own cache — a probe that populated the real
+    // one would make its own second run meaningless, and would silently change what the app does
+    // next time it opens that folder.
+    let tmp = std::env::temp_dir().join(format!("rustroom_bench_thumbs_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let store = rustroom_app::thumb_store::ThumbStore::new(tmp.clone());
+
+    println!(
+        "\n── the real store, over the same {} entries ───────────",
+        sample.len()
+    );
+    for round in ["cold", "warm"] {
+        let t = Instant::now();
+        let mut hit = 0usize;
+        for e in &sample {
+            let p = e.path.as_path();
+            let Some(id) = rustroom_app::thumb_store::Identity::of(p) else {
+                continue;
+            };
+            if store.get(&id).is_some() {
+                hit += 1;
+            } else if let Some(th) = if catalog::is_raw(p) {
+                raw_decode::extract_thumbnail(p).ok()
+            } else {
+                image_decode::thumbnail(p).ok()
+            } {
+                store.put(&id, &th);
+            }
+        }
+        let took = ms(t);
+        println!(
+            "  {round:>4}: {took:9.1} ms total, {:7.2} ms each, {hit} of {} from cache",
+            took / sample.len() as f64,
+            sample.len()
+        );
+    }
+    println!(
+        "  cache holds {:.1} MB for {} entries",
+        store.size_bytes() as f64 / 1048576.0,
+        sample.len()
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
 }
