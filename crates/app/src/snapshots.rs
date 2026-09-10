@@ -65,6 +65,8 @@ impl RustroomApp {
         // one is harmless today — but a mask added later would land at that index and appear
         // selected without anyone having selected it. A photo switch clears it for this reason.
         s.selected_mask = None;
+        // ⚠ Same reason, one level down: a restored mask has a different component list.
+        s.selected_component = 0;
         // ⚠ Same reason as `selected_mask`: a restored state has a different spot list, so a
         // stale index would leave a spot selected that nobody selected.
         s.selected_spot = None;

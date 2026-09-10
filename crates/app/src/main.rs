@@ -353,6 +353,12 @@ struct RustroomApp {
     /// ⚠ Its own field rather than sharing `grade_range`: switching to a mask would otherwise
     /// silently change which wheel the global panel shows when you switch back.
     mask_grade_range: develop::panel::color_wheel::GradeRange,
+    /// Whether the next mask-kind button creates a mask or refines the selected one.
+    ///
+    /// ⚠ Tool state on the app rather than on the mask, the rule the brush settings already
+    /// follow: it applies to the **next** thing added, exactly as a brush size applies to the
+    /// next stroke.
+    mask_add_mode: Option<edit_model::MaskOp>,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
@@ -593,6 +599,7 @@ impl RustroomApp {
             hsl_channel: Default::default(),
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),
+            mask_add_mode: None,
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),
@@ -714,6 +721,16 @@ pub struct Session {
     /// appear in a preset — `Edits` is the file format, and a selection is not part of the
     /// photograph's description. `Session` is per-photo, so this resets on a switch for free.
     selected_mask: Option<usize>,
+    /// Which **component** of the selected mask the shape controls and the canvas handles act on.
+    /// `0` is the mask's base shape; `j > 0` is the `j-1`th refinement.
+    ///
+    /// ⚠ **View state, never `Edits`** — `selected_mask`'s rule, for its reason.
+    ///
+    /// ⚠ Read through [`Session::component_index`], never directly: that clamps against the
+    /// selected mask's real component count, so a site that forgets to reset this degrades to
+    /// "the base is selected" rather than leaving the panel's sliders on one shape and the
+    /// canvas's handles on another.
+    selected_component: usize,
     /// Which retouch spot is selected, if any.
     ///
     /// ⚠ **View state, never `Edits`** — `selected_mask`'s rule, for its reason: a selection is

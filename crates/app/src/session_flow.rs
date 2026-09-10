@@ -195,6 +195,23 @@ impl Session {
         }
         e
     }
+
+    /// Which component of the selected mask the panel and the canvas act on, **clamped**.
+    ///
+    /// ⚠⚠ **One read rule, so a stale index cannot make the panel and the canvas disagree.**
+    /// `selected_component` is reset when a different mask is picked and clamped when a component
+    /// is deleted, but the mask list can also shrink under it — `Remove all masks`, a snapshot
+    /// restore, a paste, a sync — and a site that forgets degrades to *the base is selected*
+    /// rather than to the sliders editing one shape while the handles drag another.
+    ///
+    /// ⚠ `0` whenever nothing is selected: the base always exists, so there is no empty state.
+    pub(crate) fn component_index(&self) -> usize {
+        let Some(i) = self.selected_mask else {
+            return 0;
+        };
+        let n = self.edits.masks.get(i).map_or(0, |m| m.refine.len());
+        self.selected_component.min(n)
+    }
 }
 
 impl RustroomApp {
@@ -487,6 +504,7 @@ impl RustroomApp {
             show_before: false,
             active_handle: None,
             selected_mask: None,
+            selected_component: 0,
             selected_spot: None,
             suppressed_spot: None,
             suppressed_mask: None,
@@ -814,6 +832,50 @@ mod tests {
         assert_eq!(e.masks.len(), 2, "exactly one mask must have been dropped");
         let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
         assert_eq!(left, vec![0.5, 2.5], "the wrong mask was dropped: {left:?}");
+    }
+
+    /// ⚠⚠ **The read rule for the selected component.** `selected_component` is reset when a
+    /// different mask is picked and clamped when a component is deleted — but the mask list can
+    /// also shrink under it (Remove all masks, a snapshot restore, a paste, a sync). Clamping at
+    /// the *read* is what makes a site that forgets degrade to "the base is selected" rather than
+    /// to the panel editing one shape while the canvas drags another.
+    #[test]
+    fn the_component_index_is_clamped_to_the_masks_own_components() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        let mut m = masked_exposure(0.5);
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Subtract,
+            mask: edit_model::Mask::default(),
+        });
+        s.edits.masks = vec![m];
+        s.selected_mask = Some(0);
+
+        s.selected_component = 1;
+        assert_eq!(s.component_index(), 1, "a real component is returned as-is");
+
+        s.selected_component = 7;
+        assert_eq!(
+            s.component_index(),
+            1,
+            "past the end clamps to the last component"
+        );
+
+        s.edits.masks[0].refine.clear();
+        assert_eq!(
+            s.component_index(),
+            0,
+            "a shrunken list falls back to the base"
+        );
+
+        s.selected_mask = None;
+        assert_eq!(
+            s.component_index(),
+            0,
+            "with no mask selected the answer is the base"
+        );
     }
 
     #[test]

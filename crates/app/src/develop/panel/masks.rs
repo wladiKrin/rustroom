@@ -31,14 +31,32 @@ pub struct BrushTool<'a> {
 ///
 /// ⚠ No `CollapsingHeader` of its own — the panel supplies the heading. A header inside a
 /// header is a nesting level this rework exists to remove.
+/// The panel state a mask's controls need that lives on `RustroomApp` rather than on the mask.
+///
+/// ⚠ Three `&mut` to **disjoint** fields, which is what makes this legal where a closure capturing
+/// `app` would be `E0499` — the reasoning `BrushTool` already carries. It also keeps `show` under
+/// clippy's argument limit, which is a fair complaint this project answers with a params struct
+/// rather than an allowance: `FrameSpec`, `NameField`, `AspectLock` and `GradeUi` are precedents.
+pub struct MaskUi<'a> {
+    pub hsl: &'a mut super::adjustments::HslChannel,
+    pub grade: &'a mut super::color_wheel::GradeRange,
+    /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
+    pub add_mode: &'a mut Option<edit_model::MaskOp>,
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     s: &mut Session,
-    mask_hsl: &mut super::adjustments::HslChannel,
-    mask_grade: &mut super::color_wheel::GradeRange,
+    ui_state: MaskUi<'_>,
     brush: BrushTool<'_>,
     ed: &mut Edited,
 ) {
+    let MaskUi {
+        hsl: mask_hsl,
+        grade: mask_grade,
+        add_mode,
+    } = ui_state;
+    super::mask_components::chips(ui, s, add_mode);
     // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
     // nothing and keeps the later mutable borrows disjoint.
     let baseline = s.wb_baseline;
@@ -89,12 +107,31 @@ pub fn show(
         }
     });
     if let Some(mask) = added {
-        s.edits.masks.push(edit_model::MaskedAdjustment {
-            mask,
-            refine: Vec::new(),
-            adjustments: edit_model::LocalAdjustments::default(),
-        });
-        s.selected_mask = Some(s.edits.masks.len() - 1);
+        match (*add_mode, s.selected_mask) {
+            // ⚠ A refinement only where there is something to refine. The chips are disabled
+            // without a selection, so this arm is the belt to that braces — and it fails toward
+            // "add a mask", which is recoverable in one click, rather than toward dropping the
+            // click entirely.
+            (Some(op), Some(i)) if i < s.edits.masks.len() => {
+                s.edits.masks[i]
+                    .refine
+                    .push(edit_model::Refinement { op, mask });
+                // ⚠ The new shape becomes the one you edit, or the sliders below would still be
+                // pointing at whatever was selected before it was added.
+                s.selected_component = s.edits.masks[i].refine.len();
+            }
+            _ => {
+                s.edits.masks.push(edit_model::MaskedAdjustment {
+                    mask,
+                    refine: Vec::new(),
+                    adjustments: edit_model::LocalAdjustments::default(),
+                });
+                s.selected_mask = Some(s.edits.masks.len() - 1);
+                s.selected_component = 0;
+            }
+        }
+        // ⚠ Any in-flight handle was hit-tested against a different shape.
+        s.active_mask_handle = None;
         ed.discrete();
     }
 
@@ -110,6 +147,11 @@ pub fn show(
             let name = format!("{} {}", s.edits.masks[i].mask.label(), i + 1);
             if ui.selectable_label(picked, name).clicked() {
                 s.selected_mask = if picked { None } else { Some(i) };
+                // ⚠ Back to the base: a component index means nothing against a different mask,
+                // and landing on another mask's third shape is not something anyone asked for.
+                s.selected_component = 0;
+                // ⚠ The handle was hit-tested against the shape being left.
+                s.active_mask_handle = None;
             }
         });
     }
@@ -125,7 +167,15 @@ pub fn show(
     }
 
     if let Some(i) = s.selected_mask {
+        super::mask_components::rows(ui, s, i, ed);
+        // ⚠⚠ **The shape controls edit the SELECTED COMPONENT, not always the base.** Read
+        // through `component_index`, which clamps — so a stale index shows the base rather than
+        // leaving these sliders on one shape while the canvas's handles drag another.
+        let j = s.component_index();
         if let Some(m) = s.edits.masks.get_mut(i) {
+            let Some(shape) = super::mask_components::component_mut(m, j) else {
+                return;
+            };
             ui.separator();
             // Shape properties, kept apart from the adjustments below:
             // these describe the mask, not what it carries.
@@ -135,13 +185,13 @@ pub fn show(
             // endpoints past each other; not survivable for a radial,
             // where the subject vignette — darken everything except the
             // ellipse — depends on it and no drag substitutes.
-            if ui.checkbox(m.mask.invert_mut(), "Invert").changed() {
+            if ui.checkbox(shape.invert_mut(), "Invert").changed() {
                 ed.discrete();
             }
-            if let edit_model::Mask::Radial(r) = &mut m.mask {
+            if let edit_model::Mask::Radial(r) = shape {
                 ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
             }
-            if let edit_model::Mask::Luminance(r) = &mut m.mask {
+            if let edit_model::Mask::Luminance(r) = shape {
                 // ⚠⚠ **These sliders are the whole of this mask's interaction — there is nothing
                 // on the canvas.** A range mask is not a shape: it has no position, so no handle
                 // and no boundary can be drawn for it. See `mask_overlay::paint_mask` for why a
@@ -158,7 +208,7 @@ pub fn show(
                      soft shoulder either side.",
                 );
             }
-            if let edit_model::Mask::Colour(r) = &mut m.mask {
+            if let edit_model::Mask::Colour(r) = shape {
                 // ⚠⚠ **These sliders are the whole of this mask's interaction — there is nothing
                 // on the canvas**, for the luminance range's reason and one more: a colour range
                 // has no position at all, so no handle and no boundary can be drawn for it.
@@ -189,7 +239,7 @@ pub fn show(
                      no reliable hue, only sensor noise.",
                 );
             }
-            if matches!(m.mask, edit_model::Mask::Brush(_)) {
+            if matches!(shape, edit_model::Mask::Brush(_)) {
                 // ⚠ Brush settings live on the app, not on the mask: they are
                 // the *tool's* state and apply to the next stroke, exactly as
                 // a brush size does in any editor. Each stroke records its own
@@ -244,6 +294,7 @@ pub fn show(
         // ⚠ Both must be cleared, for the reason `selection_after_delete` exists: the canvas
         // overlay returns early on a stale selection, which would leave a dead handle set.
         s.selected_mask = None;
+        s.selected_component = 0;
         s.active_mask_handle = None;
         ed.discrete();
     }
@@ -260,6 +311,19 @@ mod tests {
     /// own buttons tests the harness; this project already has two such tests (`cell_widths`,
     /// `grid_columns`) and they are documented as pinning a *rule*, not a call site.
     fn click_in_panel(label: &str, s: &mut Session) -> Edited {
+        click_in_panel_with_mode(label, s, None)
+    }
+
+    /// As [`click_in_panel`], with the mode chips set to `mode`.
+    ///
+    /// ⚠ A separate entry point rather than a parameter on the original, so every pre-existing
+    /// test keeps its exact call and their passing is evidence the routing moved no behaviour for
+    /// an un-refined mask.
+    fn click_in_panel_with_mode(
+        label: &str,
+        s: &mut Session,
+        mut mode: Option<edit_model::MaskOp>,
+    ) -> Edited {
         let ctx = test_ui::ctx();
         let mut ed = Edited::default();
         let (mut size, mut hardness, mut flow) = (40.0_f32, 50.0_f32, 100.0_f32);
@@ -275,8 +339,11 @@ mod tests {
             show(
                 ui,
                 s,
-                &mut channel,
-                &mut grade,
+                MaskUi {
+                    hsl: &mut channel,
+                    grade: &mut grade,
+                    add_mode: &mut mode,
+                },
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -297,6 +364,98 @@ mod tests {
         let mut app = crate::test_app::for_test();
         crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
         app.session.take().unwrap()
+    }
+
+    #[test]
+    fn a_kind_button_adds_a_mask_in_new_mode_and_a_component_otherwise() {
+        // ⚠⚠ **Both halves, and the pair is what makes this mean anything.** A version that
+        // always appended a component would pass a "does Subtract refine?" test on its own, and a
+        // version that always added a mask would pass the New-mode half.
+        //
+        // ⚠ Two independent sessions: `Session` holds a render engine and is not `Clone`.
+        let mut new_mode = session();
+        click_in_panel("Add graduated filter", &mut new_mode);
+        assert_eq!(new_mode.edits.masks.len(), 1, "fixture: one mask to refine");
+        click_in_panel_with_mode("Add radial filter", &mut new_mode, None);
+        assert_eq!(new_mode.edits.masks.len(), 2, "New mask mode adds a mask");
+        assert!(new_mode.edits.masks[1].refine.is_empty());
+
+        let mut refining = session();
+        click_in_panel("Add graduated filter", &mut refining);
+        click_in_panel_with_mode(
+            "Add radial filter",
+            &mut refining,
+            Some(edit_model::MaskOp::Subtract),
+        );
+        assert_eq!(refining.edits.masks.len(), 1, "a refinement adds no mask");
+        assert_eq!(refining.edits.masks[0].refine.len(), 1);
+        assert_eq!(
+            refining.edits.masks[0].refine[0].op,
+            edit_model::MaskOp::Subtract,
+            "the chip's op is what the refinement carries"
+        );
+        assert_eq!(
+            refining.selected_component, 1,
+            "the new shape becomes the one the sliders edit"
+        );
+    }
+
+    #[test]
+    fn a_refinement_needs_a_selected_mask() {
+        // ⚠ The belt to the disabled chips' braces: with nothing selected the click must still do
+        // something recoverable — add a mask — rather than being silently dropped.
+        let mut s = session();
+        s.selected_mask = None;
+        click_in_panel_with_mode(
+            "Add radial filter",
+            &mut s,
+            Some(edit_model::MaskOp::Subtract),
+        );
+        assert_eq!(
+            s.edits.masks.len(),
+            1,
+            "the click added a mask rather than vanishing"
+        );
+        assert!(s.edits.masks[0].refine.is_empty());
+    }
+
+    /// ⚠⚠ **THE CARRIER, and the sabotage step is what proved it was missing.** Forcing
+    /// `mask_components::component_mut` to always resolve the base left **all 129 panel tests
+    /// passing** — the shape controls' routing had no coverage at all, and a version that
+    /// silently edited the base while the list showed a refinement selected would have shipped.
+    ///
+    /// ⚠ It asserts on the **refinement's own feather** and on the base being untouched. A test
+    /// that only checked "something changed" would pass against exactly that bug.
+    #[test]
+    fn the_shape_controls_edit_the_selected_component_not_the_base() {
+        let mut s = session();
+        click_in_panel("Add radial filter", &mut s);
+        click_in_panel_with_mode(
+            "Add radial filter",
+            &mut s,
+            Some(edit_model::MaskOp::Subtract),
+        );
+        assert_eq!(
+            s.selected_component, 1,
+            "fixture: the refinement is selected"
+        );
+
+        let base_before = s.edits.masks[0].mask.clone();
+        drag_in_panel("Feather", &mut s);
+
+        let refined = &s.edits.masks[0].refine[0].mask;
+        let (edit_model::Mask::Radial(a), edit_model::Mask::Radial(b)) = (&base_before, refined)
+        else {
+            panic!("fixture: both shapes must be radials");
+        };
+        assert_ne!(
+            a.feather, b.feather,
+            "dragging Feather never reached the selected component"
+        );
+        assert_eq!(
+            s.edits.masks[0].mask, base_before,
+            "the base must not have moved"
+        );
     }
 
     #[test]
@@ -389,14 +548,20 @@ mod tests {
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
         let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
+        // ⚠ A local, like `channel` and `grade`: a test must not be able to assert
+        // about the app's own add mode.
+        let mut mode: Option<edit_model::MaskOp> = None;
         let mut auto_mask = false;
         let mut tolerance = 35.0f32;
         let mut body = |ui: &mut egui::Ui, ed: &mut Edited| {
             show(
                 ui,
                 s,
-                &mut channel,
-                &mut grade,
+                MaskUi {
+                    hsl: &mut channel,
+                    grade: &mut grade,
+                    add_mode: &mut mode,
+                },
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,
@@ -453,6 +618,9 @@ mod tests {
         let mut channel = crate::develop::panel::adjustments::HslChannel::default();
         // ⚠ A local for the same reason, covering the mask's own selected grading wheel.
         let mut grade = crate::develop::panel::color_wheel::GradeRange::default();
+        // ⚠ A local, like `channel` and `grade`: a test must not be able to assert
+        // about the app's own add mode.
+        let mut mode: Option<edit_model::MaskOp> = None;
         let mut auto_mask = false;
         let mut tolerance = 35.0f32;
         test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
@@ -460,8 +628,11 @@ mod tests {
             show(
                 ui,
                 s,
-                &mut channel,
-                &mut grade,
+                MaskUi {
+                    hsl: &mut channel,
+                    grade: &mut grade,
+                    add_mode: &mut mode,
+                },
                 BrushTool {
                     size: &mut size,
                     hardness: &mut hardness,

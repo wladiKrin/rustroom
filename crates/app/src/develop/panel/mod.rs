@@ -6,6 +6,7 @@ pub mod geometry;
 pub mod hsl_bands;
 pub mod look;
 pub mod mask_adjust;
+pub mod mask_components;
 pub mod masks;
 pub mod presets;
 pub mod retouch;
@@ -238,8 +239,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         Tool::Masks => masks::show(
                             ui,
                             s,
-                            &mut app.mask_hsl_channel,
-                            &mut app.mask_grade_range,
+                            masks::MaskUi {
+                                hsl: &mut app.mask_hsl_channel,
+                                grade: &mut app.mask_grade_range,
+                                add_mode: &mut app.mask_add_mode,
+                            },
                             masks::BrushTool {
                                 size: &mut app.brush_size,
                                 hardness: &mut app.brush_hardness,

@@ -198,9 +198,73 @@ pub fn selection_after_delete(
     }
 }
 
+/// Which component is selected after the one at `removed` is deleted, given `before` components.
+///
+/// ⚠⚠ **Never returns "nothing selected", unlike [`selection_after_delete`].** Component 0 is the
+/// mask's base shape and always exists — deleting *it* is deleting the mask, which is the mask
+/// row's own button — so there is no empty state to fall into and every answer is a valid index.
+///
+/// ⚠ Steps **back** rather than forward when the selected component is the one removed, which is
+/// `selection_after_delete`'s rule for its reason: silently selecting a *later* component would
+/// leave the next drag editing a shape nobody chose.
+pub fn component_after_delete(selected: usize, removed: usize, before: usize) -> usize {
+    let after = before.saturating_sub(1);
+    let next = if removed < selected || (removed == selected && selected > 0) {
+        selected - 1
+    } else {
+        selected
+    };
+    next.min(after.saturating_sub(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleting_a_component_clamps_the_selection() {
+        // Three components — a base and two refinements.
+        assert_eq!(
+            component_after_delete(2, 1, 3),
+            1,
+            "a deletion before it shifts the selection down onto the same shape"
+        );
+        assert_eq!(
+            component_after_delete(1, 2, 3),
+            1,
+            "a deletion after it leaves the selection alone"
+        );
+        assert_eq!(
+            component_after_delete(2, 2, 3),
+            1,
+            "deleting the selected component steps BACK, never forward"
+        );
+    }
+
+    #[test]
+    fn the_base_is_always_a_valid_selection() {
+        // ⚠ Component 0 cannot be deleted — that is the mask row's `×` — so the clamp can only
+        // ever return an index that exists, and 0 always does.
+        assert_eq!(component_after_delete(0, 1, 2), 0);
+        assert_eq!(component_after_delete(1, 1, 2), 0);
+    }
+
+    #[test]
+    fn a_selection_past_the_end_is_pulled_back_inside() {
+        // The list can shrink under a stale index — `Remove all masks`, a snapshot restore, a
+        // paste. Every answer must still address a component that exists.
+        for before in 1..6usize {
+            for removed in 0..before {
+                for selected in 0..before + 3 {
+                    let got = component_after_delete(selected, removed, before);
+                    assert!(
+                        got < before.max(1),
+                        "selected={selected} removed={removed} before={before} -> {got}"
+                    );
+                }
+            }
+        }
+    }
 
     /// A gradient running left to right across the middle of a square frame.
     fn horizontal_gradient() -> LinearGradient {
