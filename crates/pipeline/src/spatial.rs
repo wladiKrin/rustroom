@@ -111,7 +111,11 @@ pub fn kernel_radius(sigma: f32) -> usize {
 }
 
 /// Normalized Gaussian weights of length `2·kernel_radius(sigma) + 1`, index 0 at `-r`.
-fn gaussian_kernel(sigma: f32) -> Vec<f32> {
+///
+/// ⚠⚠ **`pub` so a GPU twin uploads THESE weights rather than recomputing them.** Two
+/// implementations of a Gaussian is how the two come to disagree about a sigma nobody re-derives —
+/// the rule `HueTable::entries` already follows for the hue table, and for the same reason.
+pub fn gaussian_kernel(sigma: f32) -> Vec<f32> {
     let r = kernel_radius(sigma) as isize;
     let denom = 2.0 * sigma * sigma;
     let mut k: Vec<f32> = (-r..=r)

@@ -261,6 +261,12 @@ scratch_planes defaults to 0, so every existing stage is untouched."
 
 ## Task 2: Run-merging and the substitution table
 
+> ⚠⚠ **EXECUTED AFTER TASK 3, and the plan had the order wrong.** These tests need **two adjacent
+> replaceable stages**, and until `GpuSharpenStage` exists the only replaceable stage is `hsl` —
+> of which a tail contains exactly one, asserted by M8.3b's own
+> `the_tail_contains_at_most_one_stage_named_hsl`. So run-merging is untestable before the second
+> stage exists. Task 3 depends on nothing but Task 1's scratch planes and was done first.
+
 **Files:**
 - Modify: `crates/gpu-pipeline/src/accelerate.rs`
 

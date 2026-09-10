@@ -14,6 +14,7 @@ mod equivalence;
 mod exposure;
 mod hsl;
 mod image;
+mod sharpen;
 
 pub use accelerate::accelerate;
 pub use chain::{GpuChain, GpuStage};
@@ -22,3 +23,4 @@ pub use equivalence::{compare, Divergence};
 pub use exposure::GpuExposureStage;
 pub use hsl::GpuHslStage;
 pub use image::GpuImage;
+pub use sharpen::GpuSharpenStage;
