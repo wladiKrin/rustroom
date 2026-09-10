@@ -1,13 +1,19 @@
-# M8.3b — residency and substitution
+# M8.3b — a resident GPU chain, and HSL across it
 
 **Date:** 2026-09-10
 **Status:** design approved, not yet implemented.
-**Done when:** a chain of N GPU stages costs **one** round trip rather than N, proven by counting
-uploads rather than by timing.
 
-⚠⚠ **Like M8.3a, this slice has NO visible effect in the app** (user's call, 2026-09-10, choosing
-"infrastructure only" over a scope that included two expensive stages and a Settings toggle). It
-ports no new stage and wires nothing in. Launching Rustroom after it will show exactly nothing.
+**Done when**, both halves:
+1. A chain of N GPU stages costs **one** round trip rather than N, proven by **counting uploads**
+   rather than by timing.
+2. `HslStage` runs on the GPU behind a Settings toggle, matching the CPU stage within **0.01 of an
+   8-bit level**, and the saving is measured by a probe rather than predicted here.
+
+⚠ **The scope was widened after the first draft** (user's call, 2026-09-10). It was
+"infrastructure only" — no new stage, nothing visible — and became infrastructure **plus HSL plus
+the substitution mechanism plus app wiring**. The earlier reasoning that made HSL look risky was
+retired by §1's measurements, which is why the wider scope is now the cheaper bet rather than the
+braver one.
 
 ---
 
@@ -145,27 +151,86 @@ gives a wrong product rather than a plausible image.
 still keeps the buffer resident and still avoids N round trips, so the design survives. The spec
 records that fallback so it is not rediscovered under pressure.
 
-## 5. Substitution is deliberately deferred (user's call)
+## 5. Substitution, and why it needs no change to `pipeline`
 
-**Choosing GPU stages from `Edits` is not in this slice**, and the reason is structural rather
-than a matter of effort.
+Substitution **cannot** walk a finished `Pipeline` and swap stages by inspecting them: a
+`dyn PipelineStage` exposes only `name()` and `apply()`, so the parameters needed to build a GPU
+equivalent are gone. But it does not have to inspect them — it can **rebuild from `Edits`**, which
+the caller already holds:
 
-Substitution cannot walk a finished `Pipeline` and swap stages: a `dyn PipelineStage` exposes only
-`name()` and `apply()`, so **the parameters needed to build a GPU equivalent are gone**. It has to
-happen at construction, and that leaves two options, both bad today:
+```rust
+// gpu-pipeline
+pub fn accelerate(tail: Pipeline, edits: &Edits, ctx: &Arc<GpuContext>) -> Pipeline
+```
 
-1. **`pipeline` learns about the GPU** — wrong dependency direction, and it would put `wgpu` into
-   the CLI, `export` and the 63 goldens, which §4 of M8.3a's spec exists to prevent.
-2. **`gpu-pipeline` duplicates the tail's ordering logic** — two orderings that can disagree,
-   which is the failure `render_max_dim`, `fit_image_size` and `Session::geometry_mode` were each
-   fixed for by deriving rather than storing twice.
+It takes the built tail, replaces the stage named `hsl` with `GpuHslStage::new(&edits.hsl, ctx)`,
+and returns the rest untouched. `Pipeline::into_stages` and `Pipeline::new` already exist, so this
+needs **zero changes to `pipeline`** and the dependency direction is preserved: `gpu-pipeline`
+depends on `pipeline`, never the reverse.
 
-So this slice delivers `GpuChain` as the **vehicle** for substitution and defers *choosing* to the
-slice that has stages worth choosing. ⚠ When that slice comes, the question to answer first is
-which of the two options above to take — and neither is obviously right, so it deserves its own
-design rather than being decided in passing.
+⚠⚠ **It is name-matching, which is stringly-typed, and that is the cost.** Two guards, both tests
+rather than comments: the tail must contain **at most one** stage named `hsl`, and accelerating a
+tail with no HSL must return it unchanged. The first holds because a mask's own HSL lives *inside*
+`MaskStage`, which appears in the tail as a single stage named `mask` — a real property, and
+exactly the kind a future refactor breaks silently.
 
-## 6. Testing
+### The alternatives, and why they lost
+
+1. **A `StageAccelerator` trait threaded through `RenderSpec`** — `pipeline` would define a hook
+   with no GPU types, which is a legitimate design and is probably right once *many* stages are
+   accelerated. It loses today because `RenderSpec` is `Copy + PartialEq`, and an
+   `Arc<dyn StageAccelerator>` is neither; making it non-`Copy` churns every builder and every
+   call site for one stage's benefit.
+2. **`gpu-pipeline` builds its own tail** — two orderings of the same chain that can disagree, the
+   failure `render_max_dim`, `fit_image_size` and `Session::geometry_mode` were each fixed for.
+
+⚠ **When several stages are accelerated, revisit option 1.** Name-matching does not scale to a
+dozen stages, and this spec would rather say so now than have it discovered as technical debt.
+
+## 6. `GpuHslStage`
+
+The most expensive stage in the tail — **+22 ms at fit** against a 12.7 ms neutral render, and the
+one reported in use as *"a bit slow, but still usable"* at 1:1. That is why it is the stage worth
+porting first, and §1's third finding is why porting it alone is worth doing at all.
+
+⚠⚠ **The band logic never enters the shader.** `HueTable::build` already collapses eight bands and
+their smoothstep blending into a 1024-entry table of `(Δhue, Δsaturation, Δluminance)` — 12 KB —
+built **once per stage on the CPU** and uploaded as a storage buffer. So the shader does only:
+ProPhoto→Oklab, chroma, `atan2` for the hue, a linearly-interpolated table lookup, the smoothstep
+chroma fade, the small-angle rotation, Oklab→ProPhoto, and a clamp at zero.
+
+⚠ The rotation uses the **same identity the CPU stage does** — `cos(hue)` and `sin(hue)` are
+already in hand as `a/chroma` and `b/chroma`, so the chroma cancels and the rotation costs two
+small-angle polynomials rather than two transcendental calls. Reimplementing it as a naive
+`atan2`-then-`cos` round trip would be a *different* stage wearing the same name, and would drift
+from the CPU one the moment either is tuned.
+
+⚠ **Equivalence is a tolerance, not exactness** — unlike exposure. §1 measured this exact maths at
+**0.0006 of an 8-bit level**, so the test asserts **below 0.01 levels**, which is ~16× headroom
+over the measurement and still ~100× tighter than anything visible. ⚠ A loose tolerance here would
+defeat the harness's whole purpose; if it ever has to be widened, that is a finding to investigate
+rather than a number to adjust.
+
+⚠ **The chroma early-out is a `return` on the CPU and a branch in the shader.** Below `EPS` the
+CPU stage returns the pixel untouched; the shader must do the same rather than computing a
+near-zero adjustment, or neutral pixels would pick up hue noise — the exact failure `CHROMA_FADE`
+exists to prevent.
+
+## 7. The app
+
+A **Settings** checkbox, *Use the GPU for HSL*, defaulting **off**.
+
+⚠ Off by default because this is the first GPU code any user would run, the CPU path is the oracle,
+and a wrong default would make a rendering difference look like a Rustroom bug rather than a
+setting. ⚠ Changing it re-renders, the way `apply_view_demosaic` does — a toggle whose effect only
+appears after some unrelated edit reads as broken.
+
+⚠ The accelerator is applied **between building the tail and running it**, in `render_engine`,
+which is the one place that already holds both the `Edits` and the tail. ⚠ It must **not** be
+applied to the prefix: HSL is a tail stage, and a prefix whose stages varied with a GPU setting
+would make `PrefixKey` describe two different computations under one key.
+
+## 8. Testing
 
 1. ⚠⚠ **Three chained exposures equal one combined exposure** — the barrier test above, and the
    single most important assertion in this slice.
@@ -184,26 +249,42 @@ design rather than being decided in passing.
 6. **The persistent staging buffer is reused**, asserted by pointer identity across two `apply`
    calls: allocating per call would silently give back the 2.1×.
 
+7. **`GpuHslStage` matches the CPU stage within 0.01 of an 8-bit level**, over a fixture spanning
+   dark to above-white and including **near-neutral pixels** — which is where the chroma early-out
+   and the fade live, and where a naive port goes wrong invisibly.
+8. **A neutral pixel is returned untouched**, asserted exactly rather than within the tolerance:
+   the early-out is a branch, so it either fires or it does not.
+9. **The tail contains at most one stage named `hsl`**, which is what makes name-matching sound.
+10. **Accelerating a tail with no HSL returns it unchanged** — the other half, without which a
+    substitution that replaced the wrong stage would still pass test 9.
+
 **Sabotage list**, each of which must fail a *named* test: split the chain into one pass per
 dispatch *and* remove the barrier (test 1); upload per stage (test 2); allocate a fresh staging
-buffer per `apply` (test 6); make the fallback return the input (test 5).
+buffer per `apply` (test 6); make the fallback return the input (test 5); drop the chroma early-out
+from the shader (test 8); make `accelerate` replace the first stage rather than the named one
+(test 10).
 
 ⚠ **The GPU tests skip without an adapter and print loudly**, as M8.3a's do — CI is Linux and may
 have none. The cost recorded there still applies: **~42 s in a debug build against ~0.1 s in
 release**, one-time per process. Iterate with `cargo test --release -p gpu-pipeline`.
 
-## 7. What this deliberately does not do
+## 9. What this deliberately does not do
 
-1. ⚠⚠ **Nothing in the app uses it** — no Settings toggle, no substitution from `Edits`, nothing
-   renders on the GPU. **Launching Rustroom after this shows no change at all**, exactly as after
-   M8.3a. This was chosen explicitly over a scope that included two expensive stages and a
-   toggle.
-2. **No new stage is ported.** `GpuExposureStage` is the only one, refactored rather than added
-   to.
+1. ⚠⚠ **Masked HSL is NOT accelerated, and that is the sharpest limit here.** A mask builds its own
+   sub-pipeline *inside* `MaskStage`, which the tail sees as one opaque stage, so `accelerate`
+   cannot reach it. **That is precisely the case reported in use as slow** — *"masked HSL at 1:1 is
+   a bit slow, but still usable"* — so this slice speeds up the global slider and leaves the
+   complaint standing. Reaching inside `MaskStage` is its own design problem and belongs with
+   M8.3d.
+2. **Only HSL.** The other ten per-pixel stages wait for the next slice, where they are cheap once
+   residency exists — and where the substitution mechanism will need rethinking (§5).
 3. **No ping-pong buffer**, so spatial stages cannot join until M8.3c adds one.
 4. **No zero-copy** — measured as unreachable; one memcpy into mapped memory is the floor.
-5. **Nothing helps export**, still ~93% demosaic inside libraw and upstream of every stage `wgpu`
+5. **Off by default**, so nobody gets a rendering change they did not ask for.
+6. **Nothing helps export**, still ~93% demosaic inside libraw and upstream of every stage `wgpu`
    would ever port.
-6. ⚠ **The 2.1× upload improvement is not a 2.1× render improvement.** It is 2 ms of a round trip
-   that only matters once many stages share it, and with one stage in existence there is nothing
-   yet to share it between.
+7. ⚠ **The win is smaller than "HSL costs 22 ms" suggests.** A GPU chain of one stage still pays
+   the full round trip — measured at ~6 ms with `write_buffer`, less with the persistent staging
+   buffer — so the expected saving is a fraction of 22 ms, not all of it. **The honest figure is
+   whatever the probe reports after implementation**, and the plan's last task measures it rather
+   than this spec predicting it.
