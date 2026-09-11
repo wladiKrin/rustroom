@@ -83,11 +83,31 @@ const REPLACEABLE: &[(&str, Builder)] = &[
 /// What one round trip costs, in the same units as [`GpuStage::cpu_cost`] — milliseconds per 6.8
 /// megapixels, measured by `gpu-pipeline`'s `probe_rt` on an Apple M2.
 ///
-/// ⚠⚠ **The comparison is scale-free, which is why this is one number and not one per rung.**
-/// Both sides are linear in pixel count — the transfer moves `w*h*12` bytes, a per-pixel stage
-/// does `w*h` work — so the ratio does not depend on resolution. Measured rather than assumed:
-/// 4x the pixels gave 3.9x the round trip, 8.71 -> 34.03 ms.
-const TRANSFER_COST: f32 = 34.0;
+/// ⚠⚠ **THE MEASUREMENT, AND WHY IT MOVED (M8.3h).** This was **34.0** from M8.3e until M8.3h,
+/// and two later milestones made the round trip cheaper *without re-measuring it*: **M8.3f**'s
+/// resource cache recovered 9.46 ms per render, and **M8.3g**'s 8-bit readback took the download
+/// from 13.20 ms to 4.78. Re-measured at 3200x2136: **26.80 ms**, rounded here to 27.0. For two
+/// milestones the gate was refusing runs that would have paid, using a number that had stopped
+/// describing reality.
+///
+/// ⚠⚠ **THIS IS THE FLOAT ROUND TRIP, DELIBERATELY, THOUGH THE CASE IT UNLOCKS TAKES THE BYTE
+/// PATH.** The byte round trip measures **21.02 ms** and is *not* used, because a lone
+/// `display_rendering` run (25.7 ms) can occur — `CreativeLookStage` sits between it and
+/// `output_transform`, so a creative look makes it a run of its own — and **that run is not
+/// trailing, so it can never take the byte path**. A byte-valued threshold would accept it and
+/// pay the float price for less work. One conservative constant refuses it by construction, with
+/// no second rule to keep in step. Revisit only when a ported stage's cost lands between 21 and
+/// 27.
+///
+/// ⚠⚠ **STANDING RULE: anything that changes the upload, the dispatch count or the download must
+/// re-run `probe_rt` and update this.** That is how it went stale, and it is recorded as a rule
+/// rather than a test on purpose — a timing assertion cannot fail a build honestly, and this
+/// project already records that a benchmark is not a test.
+///
+/// ⚠ **The comparison is scale-free, which is why this is one number and not one per rung.** Both
+/// sides are linear in pixel count, and both paths measure it: float 7.23 -> 26.80 ms and byte
+/// 5.22 -> 21.02 ms across a 4.0x pixel ratio.
+const TRANSFER_COST: f32 = 27.0;
 
 /// A stage that could be replaced, beside the CPU stage it would replace.
 ///
@@ -250,8 +270,25 @@ mod tests {
             ..Edits::default()
         };
         let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
+        // ⚠⚠ **`output_transform` is filtered out, and M8.3h is what forced that.** Until then
+        // this test read the whole tail `["exposure", "output_transform"]` — one run of 29.9 ms
+        // — and passed because the *pair* was under a 34.0 ms bar. So it never measured exposure
+        // **alone**, which is what it is named for, and it was passing for the wrong reason.
+        // With the bar at 27.0 the pair chains and exposure is genuinely alone only when the
+        // tail is hand-built. The name is true for the first time.
+        let stages: Vec<Box<dyn PipelineStage>> = tail
+            .into_stages()
+            .into_iter()
+            .filter(|s| s.name() != "output_transform")
+            .collect();
+        assert_eq!(
+            stages.len(),
+            1,
+            "fixture check: exposure must really be alone, got {:?}",
+            stages.iter().map(|s| s.name()).collect::<Vec<_>>()
+        );
         let names: Vec<_> = accel(
-            tail,
+            Pipeline::new(stages),
             &e,
             SCALE,
             ProfileRendering::default(),
@@ -265,6 +302,67 @@ mod tests {
         assert!(
             names.contains(&"exposure"),
             "expected the CPU exposure stage, got {names:?}"
+        );
+    }
+
+    /// ⚠⚠ **Built from the stages' OWN `cpu_cost`, never from literals.** A test asserting
+    /// `worth_a_chain(&[28.6])` writes the same number twice and passes against any pair that
+    /// happens to agree — it guards nothing at all. Reading the cost off the real stage means
+    /// that if a cost is ever re-measured, this still describes the truth rather than a stale
+    /// pair of digits.
+    ///
+    /// ⚠⚠ The `display_rendering` half is not symmetry, it is the argument for a **single
+    /// conservative constant**. `CreativeLookStage` sits between `display_rendering` and
+    /// `output_transform`, so with a creative look active `display_rendering` is a run of its
+    /// own — and that run is **not trailing**, so it can never take M8.3g's byte path. A
+    /// byte-valued threshold (21.0) would accept it and then pay the float price of 26.8 for
+    /// 25.7 ms of work. One constant refuses it by construction.
+    #[test]
+    fn a_lone_output_transform_chains_and_a_lone_display_rendering_does_not() {
+        let Some(ctx) = ctx() else { return };
+        let ot = GpuOutputTransformStage::new(RenderSpec::default().space, &ctx);
+        let dr = GpuDisplayRenderingStage::new(None, None, &ctx);
+        assert!(
+            worth_a_chain(&[ot.cpu_cost()]),
+            "a lone trailing output_transform ({} ms) must clear the gate — it is the \
+             colorimetric frame and the trailing run of every masked photo",
+            ot.cpu_cost()
+        );
+        assert!(
+            !worth_a_chain(&[dr.cpu_cost()]),
+            "a lone display_rendering ({} ms) must NOT clear the gate: it is never trailing, so \
+             it cannot take the byte path, and accepting it would pay the float price for less \
+             work",
+            dr.cpu_cost()
+        );
+    }
+
+    /// ⚠⚠ **The test that would have caught the staleness as a BEHAVIOUR rather than as a
+    /// number.** A colorimetric frame's whole tail is `["output_transform"]`, and from M8.3e
+    /// until M8.3h it built **zero chains** — the gate refusing 28.6 ms of work against a 34.0 ms
+    /// threshold that M8.3f and M8.3g had already invalidated. Nothing in the suite could see
+    /// that, because every other test asserts on what a chain *contains* rather than on whether
+    /// one exists at all.
+    #[test]
+    fn a_colorimetric_tail_builds_a_chain() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits::default();
+        let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
+        assert_eq!(
+            tail.stage_names(),
+            vec!["output_transform"],
+            "fixture check: a colorimetric tail is exactly one stage, and this test means \
+             nothing if that ever stops being true"
+        );
+        let (rest, chain) = split(tail, &e, &ctx);
+        assert!(
+            chain.is_some(),
+            "the lone output_transform must now be a chain"
+        );
+        assert!(
+            rest.stage_names().is_empty(),
+            "and nothing must be left on the CPU, got {:?}",
+            rest.stage_names()
         );
     }
 
@@ -382,15 +480,38 @@ mod tests {
 
     /// ⚠ A run the cost gate refused is not a chain at all — the byte path must not appear out of
     /// a tail that was left entirely on the CPU.
+    ///
+    /// ⚠⚠ **The fixture is hand-built, and M8.3h is what forced that.** This used a colorimetric
+    /// `Edits::default()`, whose tail is `["output_transform"]` — refused at 34.0 and **chained
+    /// at 27.0**, because that stage alone is 28.6 ms. Since `output_transform` ends every tail
+    /// and now always clears the bar on its own, **a trailing run can no longer be refused
+    /// through any real `Edits`**, so the property is reachable only by construction. Same shape
+    /// as `a_chain_not_ending_in_the_output_transform_is_not_handed_back` just above, and the
+    /// same reason M8.3e had to rebuild four tests: a premise about one stage's cost was
+    /// load-bearing without being stated.
     #[test]
     fn a_tail_the_cost_gate_refused_hands_nothing_back() {
         let Some(ctx) = ctx() else { return };
-        let e = Edits::default();
-        let (rest, chain) = split(tail_of(&e), &e, &ctx);
+        let e = Edits {
+            exposure: 0.45,
+            ..Edits::default()
+        };
+        let stages: Vec<Box<dyn PipelineStage>> = tail_of(&e)
+            .into_stages()
+            .into_iter()
+            .filter(|s| s.name() != "output_transform")
+            .collect();
+        let cheap = GpuExposureStage::new(0.45, ctx.clone());
+        assert!(
+            !worth_a_chain(&[cheap.cpu_cost()]),
+            "fixture check: this run ({} ms) must be under the bar, or the test proves nothing",
+            cheap.cpu_cost()
+        );
+        let (rest, chain) = split(Pipeline::new(stages), &e, &ctx);
         assert!(chain.is_none());
         assert!(
-            rest.stage_names().contains(&"output_transform"),
-            "the CPU output transform must survive, got {:?}",
+            rest.stage_names().contains(&"exposure"),
+            "the CPU stage must survive, got {:?}",
             rest.stage_names()
         );
     }
@@ -694,22 +815,36 @@ mod tests {
     #[test]
     fn a_tail_too_cheap_to_be_worth_a_chain_is_returned_unchanged() {
         let Some(ctx) = ctx() else { return };
+        // ⚠ Exposure (replaceable, 1.3 ms) beside the vignette (not replaceable), so there is a
+        // real run for the gate to refuse rather than nothing to decide about.
         let e = Edits {
+            exposure: 0.45,
             vignette: edit_model::Vignette {
                 amount: -40.0,
                 ..Default::default()
             },
             ..Edits::default()
         };
-        let tail = tail_of(&e);
+        // ⚠⚠ **`output_transform` is filtered out, and the hardcoded `28.6` that used to stand
+        // in for its cost is gone with it.** That literal is exactly how this fixture check went
+        // stale: it asserted `!worth_a_chain(&[28.6])`, which was true at 34.0 and false at
+        // 27.0, so the guard fired on M8.3h rather than the assertion — the guard working, and
+        // also the reason a cost must be read off the stage rather than written twice.
+        let stages: Vec<Box<dyn PipelineStage>> = tail_of(&e)
+            .into_stages()
+            .into_iter()
+            .filter(|s| s.name() != "output_transform")
+            .collect();
+        let tail = Pipeline::new(stages);
         let before = tail.stage_names();
-        // ⚠ The fixture check, in its new form: there IS something replaceable here, and the run
-        // it forms is under the bar. Without this the test could pass on a tail that happened to
-        // contain nothing replaceable and would be testing the old thing again.
-        let costs: Vec<f32> = vec![28.6];
+        // ⚠ The fixture check: there IS something replaceable here, and the run it forms is under
+        // the bar. Without this the test could pass on a tail that happened to contain nothing
+        // replaceable, which would make "returned unchanged" true for the wrong reason.
+        let cheap = GpuExposureStage::new(0.45, ctx.clone());
         assert!(
-            before.contains(&"output_transform") && !worth_a_chain(&costs),
-            "fixture check: got {before:?}"
+            before.contains(&"exposure") && !worth_a_chain(&[cheap.cpu_cost()]),
+            "fixture check: got {before:?} at {} ms",
+            cheap.cpu_cost()
         );
         assert!(before.len() >= 2, "fixture check: got {before:?}");
         assert_eq!(
