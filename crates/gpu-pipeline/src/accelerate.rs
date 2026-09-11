@@ -264,17 +264,42 @@ mod tests {
         );
     }
 
+    /// A ramp reaching **1.2x white**, unlike [`ramp`].
+    ///
+    /// ⚠⚠ **Added because the ordinary fixture could not see the regime the bench measures.**
+    /// `ramp()` never exceeds 1.0, and on it the three-stage chain diverges by 0.00106 levels —
+    /// while `gpu_run_bench`, whose ramp reaches 1.2, measured **0.01153** on the same chain. A
+    /// carrier that only ever sees in-gamut values is not testing the composition at all.
+    fn scene_ramp() -> core_image::ImageBuf {
+        core_image::ImageBuf::from_vec(
+            64,
+            48,
+            (0..64 * 48 * 3)
+                .map(|i| (i % 719) as f32 / 719.0 * 1.2)
+                .collect(),
+        )
+    }
+
     #[test]
     fn a_three_stage_run_renders_the_same_picture() {
         // ⚠ The carrier. The shape test above passes against a chain of three stages that compute
         // nonsense, or that run in the wrong order.
+        //
+        // ⚠⚠ **The bound is 0.02, not the 0.01 every single-stage test uses, and that is a
+        // MEASURED property of composition rather than a loosened number.** Three transcendental
+        // stages each under 0.01 do not compose to under 0.01: hsl alone measures 0.00104,
+        // sharpening 0.00905, and the three together 0.01153 on a scene-referred ramp. The
+        // per-stage bound is what catches a wrong stage; this one catches a wrong *chain*, and
+        // asserting 0.01 here would mean a passing test only for as long as the fixture stayed
+        // easy. ⚠ 0.02 is still ~50x below one 8-bit level — if it ever has to be widened
+        // *again*, that is a finding to investigate rather than a number to adjust.
         let Some(ctx) = ctx() else { return };
         let e = graded(with_sharpening(with_hsl()));
-        let cpu = tail_of(&e).run(ramp());
-        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
+        let cpu = tail_of(&e).run(scene_ramp());
+        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(scene_ramp());
         let d = crate::compare(&cpu, &gpu);
         assert!(
-            d.worst_levels < 0.01,
+            d.worst_levels < 0.02,
             "worst {} levels over {} of {} samples",
             d.worst_levels,
             d.differing,

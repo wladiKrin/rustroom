@@ -1,9 +1,12 @@
 //! What does a **merged** GPU run actually save?
 //!
-//! ⚠⚠ **Sharpening alone is break-even against the round trip; the win is the RUN** — `hsl` and
-//! `sharpening` sharing one transfer. So this measures three configurations rather than one
-//! stage, and the third row is the one nobody predicted: an active colour grade sits between them
-//! and **splits the run into two chains**, so the same edits pay two round trips.
+//! ⚠⚠ **Sharpening alone is break-even against the round trip; the win is the RUN** — stages
+//! sharing one transfer. So this measures three configurations rather than one stage.
+//!
+//! ⚠ The third row is the one that moved: at M8.3c an active colour grade sat between `hsl` and
+//! `sharpening`, **split the run into two chains**, and took the win from 1.52x to **1.04x**.
+//! M8.3d accelerated the grade, so it is now **one chain of three** — the printed `chains` count
+//! is what shows that half.
 //!
 //! ⚠ The spec deliberately predicts no number. M8.2's spec had to be corrected for quoting a
 //! projection as an achieved figure, and M8.3b's own "single stage is net-negative" was true of
@@ -70,7 +73,7 @@ fn main() {
     let cases: [(&str, Edits); 3] = [
         ("hsl only (M8.3b's case)", hsl_edits()),
         ("hsl + sharpening (one chain)", sharpened(hsl_edits())),
-        ("hsl + grade + sharpening (split)", graded),
+        ("hsl + grade + sharpening (one chain)", graded),
     ];
 
     for (label, edits) in cases {
