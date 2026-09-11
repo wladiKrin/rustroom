@@ -80,19 +80,20 @@ pub(crate) struct Dispatch<'a> {
 }
 
 impl Dispatch<'_> {
-    /// The pixel count and row-group count the shader needs in its uniform.
+    /// The 2-D workgroup split: `(row_groups, col_groups)`.
     ///
-    /// ⚠ Every caller writes these two words first, so they are computed here rather than in four
-    /// places that could disagree about the 2-D split.
-    pub fn grid(pixels: u32) -> (u32, u32, u32) {
+    /// ⚠ Computed here rather than in five places that could disagree about it — and `row_groups`
+    /// is **also** what every shader needs in its uniform to recover the pixel index, so a caller
+    /// that split it differently from the dispatch would read the wrong pixel.
+    pub fn grid(pixels: u32) -> (u32, u32) {
         let total = pixels.div_ceil(WORKGROUP);
         let row_groups = total.min(MAX_GROUPS_PER_DIM);
-        (row_groups, total.div_ceil(row_groups), row_groups)
+        (row_groups, total.div_ceil(row_groups))
     }
 
     pub fn encode(self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, img: &GpuImage) {
         let device = &ctx.device;
-        let (row_groups, col_groups, _) = Self::grid(img.pixels());
+        let (row_groups, col_groups) = Self::grid(img.pixels());
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(self.label),
@@ -197,7 +198,7 @@ In `crates/gpu-pipeline/src/lib.rs`, add `mod dispatch;` beside `mod chain;`.
 In `grading.rs`, replace the body of `encode` (everything after computing `params`) with:
 
 ```rust
-        let (_, _, row_groups) = crate::dispatch::Dispatch::grid(img.pixels());
+        let (row_groups, _) = crate::dispatch::Dispatch::grid(img.pixels());
         let mut params = [0u8; 16];
         params[0..4].copy_from_slice(&img.pixels().to_le_bytes());
         params[4..8].copy_from_slice(&row_groups.to_le_bytes());
@@ -573,15 +574,125 @@ the code" trap this repo records repeatedly.
 
 - [ ] **Step 5: Write the GPU stage's failing tests**
 
-Create `crates/gpu-pipeline/src/tone_regions.rs` with a test module modelled on `grading.rs`'s:
-the equivalence test over `spread()`, `the_stage_really_moves_the_tones_rather_than_copying`, and
+Create `crates/gpu-pipeline/src/tone_regions.rs` with this test module:
 
 ```rust
-    /// ⚠⚠ A luminance above 1.0 must not be dragged back — the index is clamped, never the value.
-    /// Scene-referred highlights are routine and this is the identical trap `ProfileHueSatMap`'s
-    /// `v` and the grade's `lab.x` are each documented for.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_image::ImageBuf;
+    use edit_model::Edits;
+
+    fn ctx() -> Option<Arc<GpuContext>> {
+        match crate::shared() {
+            Some(c) => Some(c.clone()),
+            None => {
+                eprintln!("SKIPPED: no GPU adapter on this machine");
+                None
+            }
+        }
+    }
+
+    fn edits() -> Edits {
+        Edits {
+            highlights: -60.0,
+            shadows: 45.0,
+            whites: 70.0,
+            blacks: -35.0,
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠⚠ Spans dark, mid, **above white** and **negative**, plus a neutral — the regions where a
+    /// wrong clamp hides and an in-gamut ramp cannot see it.
+    fn spread() -> Vec<f32> {
+        vec![
+            0.02, 0.03, 0.05, 0.18, 0.18, 0.18, 0.80, 0.20, 0.35, 1.60, 1.20, 0.90, -0.50, 0.02,
+            0.03, 0.35, 0.62, 0.28,
+        ]
+    }
+
+    fn chained(ctx: &Arc<GpuContext>, e: &Edits, img: ImageBuf) -> ImageBuf {
+        crate::GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuToneRegionsStage::new(e, ctx))],
+        )
+        .apply(img)
+    }
+
+    fn cpu_of(e: &Edits) -> pipeline::ToneRegionsStage {
+        pipeline::ToneRegionsStage::new(e.highlights, e.shadows, e.whites, e.blacks)
+    }
+
+    /// ⚠ The band is wider than the transcendental stages' 0.01 because this stage's table does
+    /// not exist on the CPU, so the table error is real and is bounded by
+    /// `the_gain_table_resolves_the_curve` at a tenth of a level. ⚠⚠ If it has to be widened
+    /// further that is a finding to investigate, never a number to adjust.
     #[test]
-    fn a_luminance_above_one_keeps_its_headroom() { /* as grading.rs's, with a bright fixture */ }
+    fn the_gpu_tone_regions_match_the_cpu_within_a_tenth_of_a_level() {
+        let Some(ctx) = ctx() else { return };
+        let e = edits();
+        let img = ImageBuf::from_vec(6, 1, spread());
+        let cpu = cpu_of(&e).apply(img.clone());
+        let gpu = chained(&ctx, &e, img);
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.1,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
+    /// ⚠⚠ Every equivalence test above passes against a GPU **and** CPU stage that both do
+    /// nothing, because they compare the two against each other. This says the fixture is one
+    /// the stage actually moves — and the goldens cannot see this crate at all.
+    #[test]
+    fn the_stage_really_moves_the_tones_rather_than_copying() {
+        let Some(ctx) = ctx() else { return };
+        let img = ImageBuf::from_vec(6, 1, spread());
+        let out = chained(&ctx, &edits(), img.clone());
+        let d = crate::compare(&img, &out);
+        assert!(
+            d.worst_levels > 5.0,
+            "the fixture must be one the tone regions change; moved only {} levels",
+            d.worst_levels
+        );
+    }
+
+    /// ⚠⚠ A luminance above the table's top must take the last entry, not be dragged back — the
+    /// **index** is clamped, never the value. Scene-referred highlights are routine, and this is
+    /// the identical trap `ProfileHueSatMap`'s `v` and the grade's `lab.x` are each documented
+    /// for. ⚠ On an in-gamut fixture it is invisible, and the result is still a plausible picture.
+    #[test]
+    fn a_luminance_above_the_tables_top_keeps_its_headroom() {
+        let Some(ctx) = ctx() else { return };
+        let e = edits();
+        let img = ImageBuf::from_vec(2, 1, vec![6.0, 5.5, 5.0, 0.4, 0.4, 0.4]);
+        let cpu = cpu_of(&e).apply(img.clone());
+        let gpu = chained(&ctx, &e, img);
+        let d = crate::compare(&cpu, &gpu);
+        assert!(d.worst_levels < 0.1, "worst {} levels", d.worst_levels);
+        // ⚠ The fixture check: the bright pixel must still BE bright, or this would pass against
+        // two implementations that both crushed it.
+        assert!(
+            gpu.data()[0] > 3.0,
+            "the highlight was crushed to {}",
+            gpu.data()[0]
+        );
+    }
+
+    #[test]
+    fn it_asks_for_no_scratch_planes() {
+        let Some(ctx) = ctx() else { return };
+        let chain = crate::GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuToneRegionsStage::new(&edits(), &ctx))],
+        );
+        assert_eq!(chain.scratch_needed(), 0);
+    }
+}
 ```
 
 - [ ] **Step 6: Run them and watch them fail**
@@ -651,7 +762,7 @@ impl GpuStage for GpuToneRegionsStage {
         18.0
     }
     fn encode(&self, ctx: &GpuContext, pass: &mut wgpu::ComputePass, img: &GpuImage, _: &[wgpu::Buffer]) {
-        let (_, _, row_groups) = crate::dispatch::Dispatch::grid(img.pixels());
+        let (row_groups, _) = crate::dispatch::Dispatch::grid(img.pixels());
         let mut params = [0u8; 32];
         params[0..4].copy_from_slice(&img.pixels().to_le_bytes());
         params[4..8].copy_from_slice(&row_groups.to_le_bytes());
@@ -722,16 +833,77 @@ git add -A && git commit -m "feat: the tone regions as a compute shader, from th
 
 - [ ] **Step 2: Write the failing tests**
 
-In a new `crates/gpu-pipeline/src/display_rendering.rs` test module, on `grading.rs`'s model:
-the equivalence test over `spread()`; `the_stage_really_renders_rather_than_copying`; and
+In a new `crates/gpu-pipeline/src/display_rendering.rs` test module (`ctx()` and `spread()` as in
+Task 4 — copy them, they are four lines and a shared helper crate is not worth a module):
 
 ```rust
-    /// ⚠⚠ **The one tonal stage that deliberately does NOT preserve hue.** Curving the three
-    /// channels independently is where a camera rendering's shadow saturation comes from. A
-    /// shader that "fixed" that by curving luminance and scaling RGB would be a different stage
-    /// wearing the same name, and every equivalence test would still pass on a neutral fixture.
+    fn cpu_of() -> pipeline::DisplayRenderingStage {
+        pipeline::DisplayRenderingStage::new(None, None)
+    }
+
+    fn chained(ctx: &Arc<GpuContext>, img: ImageBuf) -> ImageBuf {
+        crate::GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuDisplayRenderingStage::new(None, None, ctx))],
+        )
+        .apply(img)
+    }
+
     #[test]
-    fn a_saturated_pixel_shifts_hue_exactly_as_the_cpu_does() { /* coloured fixture, not grey */ }
+    fn the_gpu_rendering_matches_the_cpu_within_a_tenth_of_a_level() {
+        let Some(ctx) = ctx() else { return };
+        let img = ImageBuf::from_vec(6, 1, spread());
+        let cpu = cpu_of().apply(img.clone());
+        let gpu = chained(&ctx, img);
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.1,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
+    #[test]
+    fn the_stage_really_renders_rather_than_copying() {
+        let Some(ctx) = ctx() else { return };
+        let img = ImageBuf::from_vec(6, 1, spread());
+        let out = chained(&ctx, img.clone());
+        let d = crate::compare(&img, &out);
+        assert!(
+            d.worst_levels > 20.0,
+            "the rendering must move the fixture; moved only {} levels",
+            d.worst_levels
+        );
+    }
+
+    /// ⚠⚠ **The one tonal stage that deliberately does NOT preserve hue.** Curving the three
+    /// channels independently is where a camera rendering's shadow saturation and its roll toward
+    /// white come from. A shader that "fixed" that by curving luminance and scaling RGB would be
+    /// a different stage wearing the same name — ⚠ and every other test here would still pass,
+    /// because `spread()`'s neutral and near-neutral samples cannot see it.
+    #[test]
+    fn a_saturated_pixel_shifts_hue_exactly_as_the_cpu_does() {
+        let Some(ctx) = ctx() else { return };
+        // A deep saturated red in shadow: the region where a per-channel curve and a
+        // luminance-preserving one disagree most.
+        let img = ImageBuf::from_vec(1, 1, vec![0.22, 0.02, 0.015]);
+        let cpu = cpu_of().apply(img.clone());
+        let gpu = chained(&ctx, img.clone());
+        let d = crate::compare(&cpu, &gpu);
+        assert!(d.worst_levels < 0.1, "worst {} levels", d.worst_levels);
+        // ⚠ The fixture check: the two implementations must have something to disagree about.
+        // A ratio preserved exactly would mean the CPU stage is hue-preserving after all, and
+        // this test would be asserting nothing.
+        let (i, o) = (img.data(), gpu.data());
+        let before = i[0] / i[1];
+        let after = o[0] / o[1];
+        assert!(
+            (before - after).abs() > 0.5,
+            "the channel ratio must move: {before} -> {after}"
+        );
+    }
 ```
 
 - [ ] **Step 3: Run them and watch them fail**
@@ -789,21 +961,94 @@ git add -A && git commit -m "feat: the display rendering as a compute shader"
 - [ ] **Step 1: Write the failing tests**
 
 ```rust
+    use color::OutputSpace;
+
+    fn chained(ctx: &Arc<GpuContext>, space: OutputSpace, img: ImageBuf) -> ImageBuf {
+        crate::GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuOutputTransformStage::new(space, ctx))],
+        )
+        .apply(img)
+    }
+
     /// ⚠⚠ **WGSL's `pow` returns NaN for a negative base, and out-of-gamut colour reaches this
     /// stage with negative components BY DESIGN** — that is the point of a wide working space.
     /// The CPU's `encode` clamps to [0,1] first, so the shader must clamp first too. ⚠ An
-    /// in-gamut fixture cannot see this: after the matrix, every component is already positive.
+    /// in-gamut fixture cannot see this, because after the matrix every component is already
+    /// positive — which is exactly how it would ship.
     #[test]
     fn an_out_of_gamut_colour_does_not_become_nan() {
-        // A saturated ProPhoto green, which lands outside sRGB with a negative red.
+        let Some(ctx) = ctx() else { return };
+        // A saturated ProPhoto green: outside sRGB, so the matrix gives it a negative red.
         let img = ImageBuf::from_vec(1, 1, vec![0.05, 0.9, 0.08]);
-        // ... assert every output sample is finite, AND matches the CPU.
+        // ⚠ The fixture check first: if this is not actually out of gamut the test proves
+        // nothing, and which colours fall outside sRGB is not obvious by eye.
+        let lin = OutputSpace::Srgb.from_working([0.05, 0.9, 0.08]);
+        assert!(
+            lin.iter().any(|c| *c < 0.0),
+            "fixture must be out of gamut, got {lin:?}"
+        );
+        let gpu = chained(&ctx, OutputSpace::Srgb, img.clone());
+        assert!(
+            gpu.data().iter().all(|v| v.is_finite()),
+            "out-of-gamut colour must stay finite, got {:?}",
+            gpu.data()
+        );
+        // ⚠ Finite alone would pass against a shader that zeroed everything.
+        let cpu = pipeline::OutputTransform::new(OutputSpace::Srgb).apply(img);
+        let d = crate::compare(&cpu, &gpu);
+        assert!(d.worst_levels < 0.1, "worst {} levels", d.worst_levels);
     }
 
-    /// ⚠ All four spaces, because three transfer curves and four matrices are four chances to
-    /// wire the wrong one — and ProPhoto's matrix must be exactly the identity.
+    /// ⚠ All four spaces: three transfer curves and four matrices are seven chances to wire the
+    /// wrong one, and ProPhoto's matrix must be exactly the identity.
+    ///
+    /// ⚠⚠ The fixture is **coloured**, not a grey ramp. A neutral survives every one of the four
+    /// matrices nearly unchanged, so a test that used one would pass with any two of them swapped
+    /// — the same blindness that let a row swap through the P3 matrix in the display-profile work.
     #[test]
-    fn every_output_space_matches_the_cpu() { /* loop OutputSpace::ALL plus ProPhoto */ }
+    fn every_output_space_matches_the_cpu() {
+        let Some(ctx) = ctx() else { return };
+        for space in [
+            OutputSpace::Srgb,
+            OutputSpace::DisplayP3,
+            OutputSpace::AdobeRgb,
+            OutputSpace::ProPhoto,
+        ] {
+            let img = ImageBuf::from_vec(6, 1, spread());
+            let cpu = pipeline::OutputTransform::new(space).apply(img.clone());
+            let gpu = chained(&ctx, space, img);
+            let d = crate::compare(&cpu, &gpu);
+            assert!(
+                d.worst_levels < 0.1,
+                "{space:?}: worst {} levels over {} of {} samples",
+                d.worst_levels,
+                d.differing,
+                d.total
+            );
+        }
+    }
+
+    /// ⚠ And the spaces must not all agree, or the loop above would pass with one matrix wired
+    /// four times.
+    #[test]
+    fn the_four_spaces_differ_from_one_another() {
+        let Some(ctx) = ctx() else { return };
+        let img = ImageBuf::from_vec(6, 1, spread());
+        let srgb = chained(&ctx, OutputSpace::Srgb, img.clone());
+        for other in [
+            OutputSpace::DisplayP3,
+            OutputSpace::AdobeRgb,
+            OutputSpace::ProPhoto,
+        ] {
+            let d = crate::compare(&srgb, &chained(&ctx, other, img.clone()));
+            assert!(
+                d.worst_levels > 1.0,
+                "{other:?} renders the same as sRGB; moved {} levels",
+                d.worst_levels
+            );
+        }
+    }
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
