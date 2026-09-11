@@ -71,26 +71,49 @@ const MIN_RADIUS_PX: f32 = 0.5;
 /// is still required to answer rather than panic.
 /// Rows handed to one rayon task when a stroke is splatted.
 ///
-/// ⚠ Swept rather than chosen — see M8.3i's record for the table.
-const CHUNK_ROWS: usize = 16;
+/// ⚠⚠ **Swept, and the answer INVERTS the 8-bit pack's finding.** There, per-item rayon measured
+/// *slower than not threading at all* and the fix was coarse blocks. Here the opposite holds —
+/// median `dabs_ms` on the real 36-stroke brush at 1510x2019, three runs each:
+///
+/// | rows/task | 1 | 2 | **4** | 8 | 16 | 64 | 256 |
+/// |---|---|---|---|---|---|---|---|
+/// | ms | 55.6 | 55.5 | **56.4** | 56.4 | 57.8 | 70.4 | 121.3 |
+///
+/// The cause is **load imbalance, not dispatch**: rows differ enormously in how many dabs touch
+/// them and how wide those dabs are, so a 256-row task can hold a large share of the stroke while
+/// every other thread waits. A task here is one row of up to 1510 px against the pack's four
+/// bytes, so dispatch is negligible and work-stealing is what matters.
+///
+/// ⚠ 1–8 is a plateau; 4 sits mid-plateau and amortises the per-task `scratch` allocation four
+/// ways rather than allocating one per row.
+const CHUNK_ROWS: usize = 4;
 
 /// Below this many pixels a stroke is splatted sequentially.
 ///
 /// ⚠ The canvas tint rasterises on every drag frame and every test uses a tiny fixture, where
-/// rayon's dispatch would dominate — the 8-bit pack's lesson, where the obvious parallel spelling
-/// measured *slower than not threading at all*. Swept rather than chosen.
+/// rayon's dispatch would dominate. **Swept rather than chosen** — `pipeline`'s lib suite, which
+/// is overwhelmingly small rasterisations, three runs each:
+///
+/// | floor | 0 | 16 Ki | **64 Ki** | 256 Ki | never parallel |
+/// |---|---|---|---|---|---|
+/// | s | 0.86–0.98 | 1.13–1.55 | **0.74–0.79** | 0.72–0.83 | 0.70–0.79 |
+///
+/// So a floor of 0 really does cost ~0.15 s of small work, and everything from 64 Ki upward is
+/// indistinguishable from never parallelising at all. 64 Ki is the **smallest** value at that
+/// plateau, which is what keeps the parallel path reachable for the largest possible share of
+/// real strokes. ⚠ The 16 Ki row is noise — it should sit between 0 and 64 Ki and does not.
 const SEQUENTIAL_FLOOR_PX: usize = 64 * 1024;
 
-/// How many strokes have taken the **parallel** splat, on this thread.
-///
-/// ⚠⚠ An explicit event counter, because the two branches produce identical pixels by design and
-/// nothing in the output can distinguish them — the same reason `Ran { bytes }` and the Oklab
-/// conversion counter exist. **A counter, not a flag**: a flag describing the current state
-/// cannot see its own absence. **Thread-local**, because libtest runs tests in parallel and a
-/// shared counter would read someone else's rasterisation.
-///
-/// ⚠ Incremented on the *calling* thread, outside the rayon closure — inside it, the increment
-/// would land on a worker's thread-local and the test would never see it.
+// How many strokes have taken the **parallel** splat, on this thread.
+//
+// ⚠⚠ An explicit event counter, because the two branches produce identical pixels by design and
+// nothing in the output can distinguish them — the same reason `Ran { bytes }` and the Oklab
+// conversion counter exist. **A counter, not a flag**: a flag describing the current state
+// cannot see its own absence. **Thread-local**, because libtest runs tests in parallel and a
+// shared counter would read someone else's rasterisation.
+//
+// ⚠ Incremented on the *calling* thread, outside the rayon closure — inside it, the increment
+// would land on a worker's thread-local and the test would never see it.
 #[cfg(test)]
 thread_local! {
     pub(crate) static PARALLEL_STROKES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
