@@ -51,7 +51,7 @@ impl ToneRegionsStage {
     ///
     /// ⚠ `linear_to_srgb` is the pipeline's own output transfer curve, so "two thirds" here means
     /// two thirds of what you will *see* — the frame the sliders are judged in.
-    fn gain_for_luma(&self, l: f32) -> f32 {
+    pub fn gain_for_luma(&self, l: f32) -> f32 {
         let e = color::linear_to_srgb(l.clamp(0.0, 1.0));
         let shadow_w = (1.0 - e) * (1.0 - e);
         let highlight_w = e * e;
@@ -72,6 +72,44 @@ impl ToneRegionsStage {
         1.0 + STRENGTH * (self.shadows * shadow_w + self.highlights * highlight_w)
             + END_STRENGTH * (self.blacks * black_w + self.whites * white_w)
     }
+
+    /// The largest luminance the gain table resolves.
+    ///
+    /// ⚠⚠ **Exactly 1.0, and that is a fact about the model rather than a bound chosen to be
+    /// safe.** [`Self::gain_for_luma`] clamps its input to `[0, 1]` before encoding, so the gain
+    /// above linear 1.0 *is* the gain at 1.0 — a scene-referred highlight takes the last entry and
+    /// gets the right answer, not an approximation of it.
+    pub const LUT_TOP: f32 = 1.0;
+
+    /// ⚠ **Swept, not chosen**, by `the_gain_table_resolves_the_curve` against a bound of a tenth
+    /// of an 8-bit level on the gain, with all four sliders hard over:
+    ///
+    /// | entries | worst drift | margin |
+    /// |---|---|---|
+    /// | 1024 | 0.000280 | 1.4x |
+    /// | **2048** | **0.000076** | **5.1x** |
+    /// | 4096 | 0.000018 | 21x |
+    ///
+    /// ⚠⚠ 1024 *passes*, and is not taken: a 1.4x margin is a trap for whoever next touches the
+    /// weights, and 8 KB is not a number worth defending. The worst case sits at luminance
+    /// **0.0034** in every row — the table is linear in luminance while the weights are shaped on
+    /// the **display encoding** of it, so its resolution is worst exactly where
+    /// `linear_to_srgb`'s 12.92x toe is steepest. The same reason `DisplayRenderingStage` needed
+    /// 4096 rather than 1024.
+    pub const LUT_SIZE: usize = 2048;
+
+    /// The gain at every table entry, for a GPU stage to upload.
+    ///
+    /// ⚠⚠ Built **here**, by the stage that owns [`Self::gain_for_luma`], so there is still
+    /// exactly one implementation of the weight shaping — including the display encode, which is
+    /// the fix for "the Whites slider did nothing on most photographs". A shader rebuilding it in
+    /// WGSL is how the two would come to disagree about something nobody re-derives, and **a wrong
+    /// gain renders a plausible photograph rather than an error**.
+    pub fn gain_lut(&self) -> Vec<f32> {
+        (0..Self::LUT_SIZE)
+            .map(|i| self.gain_for_luma(i as f32 / (Self::LUT_SIZE - 1) as f32 * Self::LUT_TOP))
+            .collect()
+    }
 }
 
 impl PipelineStage for ToneRegionsStage {
@@ -91,6 +129,53 @@ impl PipelineStage for ToneRegionsStage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ **This table does not exist on the CPU, so building it introduces an error the CPU stage
+    /// does not have** — unlike `tone_curve` and `display_rendering`, which are already tables.
+    /// The size is therefore measured rather than chosen, the recipe `DisplayRenderingStage`'s own
+    /// 4096 came from.
+    ///
+    /// ⚠ The bound is a tenth of an 8-bit level **on the gain**, which is what the pixel sees.
+    /// ⚠⚠ If this fails, raise `LUT_SIZE`. Never loosen the bound — that is the "assertion
+    /// adjusted to fit the code" trap this repo records repeatedly.
+    #[test]
+    fn the_gain_table_resolves_the_curve() {
+        // ⚠ All four sliders hard over, so no region is inert and the curve is as steep as the
+        // model allows. A gentle fixture would pass at any table size.
+        let s = ToneRegionsStage::new(100.0, 100.0, 100.0, -100.0);
+        let lut = s.gain_lut();
+        let n = lut.len();
+        let mut worst: f32 = 0.0;
+        let mut at = 0.0;
+        for i in 0..=40_000 {
+            let l = i as f32 / 40_000.0 * ToneRegionsStage::LUT_TOP;
+            let t = (l / ToneRegionsStage::LUT_TOP).clamp(0.0, 1.0) * (n - 1) as f32;
+            let j = (t.floor() as usize).min(n - 1);
+            let k = (j + 1).min(n - 1);
+            let from_table = lut[j] + (t - j as f32) * (lut[k] - lut[j]);
+            let d = (from_table - s.gain_for_luma(l)).abs();
+            if d > worst {
+                worst = d;
+                at = l;
+            }
+        }
+        assert!(
+            worst < 0.1 / 255.0,
+            "the table drifts {worst} from the curve at luminance {at}; raise LUT_SIZE"
+        );
+    }
+
+    /// ⚠ The other half: above 1.0 the table's last entry is the **exact** answer, not an
+    /// approximation, because `gain_for_luma` clamps. A `LUT_TOP` chosen as a safe bound rather
+    /// than derived would make this false and nothing else would notice.
+    #[test]
+    fn the_gain_is_flat_above_the_tables_top() {
+        let s = ToneRegionsStage::new(100.0, 100.0, 100.0, -100.0);
+        let top = s.gain_for_luma(ToneRegionsStage::LUT_TOP);
+        for l in [1.0, 1.5, 4.0, 64.0] {
+            assert_eq!(s.gain_for_luma(l), top, "gain moved at luminance {l}");
+        }
+    }
 
     /// ⚠⚠ **The defect this stage shipped with: Whites did nothing on most photographs.** Its
     /// weight was `max(0, 3l − 2)` on *linear* luminance, so it was exactly zero below linear

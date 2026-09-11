@@ -1,7 +1,8 @@
 //! Swapping runs of CPU stages for GPU chains in a built pipeline.
 
 use crate::{
-    GpuChain, GpuContext, GpuExposureStage, GpuGradingStage, GpuHslStage, GpuSharpenStage, GpuStage,
+    GpuChain, GpuContext, GpuExposureStage, GpuGradingStage, GpuHslStage, GpuSharpenStage,
+    GpuStage, GpuToneRegionsStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, RenderScale};
@@ -30,6 +31,9 @@ type Builder = fn(&Edits, RenderScale, &Arc<GpuContext>) -> Box<dyn GpuStage>;
 const REPLACEABLE: &[(&str, Builder)] = &[
     ("exposure", |e, _, ctx| {
         Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
+    }),
+    ("tone_regions", |e, _, ctx| {
+        Box::new(GpuToneRegionsStage::new(e, ctx))
     }),
     ("hsl", |e, _, ctx| Box::new(GpuHslStage::new(&e.hsl, ctx))),
     ("color_grading", |e, _, ctx| {

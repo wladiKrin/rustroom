@@ -16,8 +16,10 @@ mod exposure;
 mod grading;
 mod hsl;
 mod image;
+mod luma_wgsl;
 mod oklab_wgsl;
 mod sharpen;
+mod tone_regions;
 
 pub use accelerate::accelerate;
 pub use chain::{GpuChain, GpuStage};
@@ -28,3 +30,4 @@ pub use grading::GpuGradingStage;
 pub use hsl::GpuHslStage;
 pub use image::GpuImage;
 pub use sharpen::GpuSharpenStage;
+pub use tone_regions::GpuToneRegionsStage;
