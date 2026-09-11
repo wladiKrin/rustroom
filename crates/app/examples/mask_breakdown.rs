@@ -44,7 +44,9 @@ fn brush() -> Mask {
     })
 }
 fn auto_brush() -> Mask {
-    let Mask::Brush(mut b) = brush() else { unreachable!() };
+    let Mask::Brush(mut b) = brush() else {
+        unreachable!()
+    };
     b.strokes[0].auto_mask = true;
     Mask::Brush(b)
 }
@@ -113,14 +115,35 @@ fn main() {
 
     let cases: Vec<(&str, Edits)> = vec![
         ("neutral", Edits::default()),
-        ("1 masked exposure (gradient)", masked(1, gradient, exposure)),
-        ("1 masked HSL      (gradient)", masked(1, gradient, hsl_adjust)),
-        ("3 masked HSL      (gradient)", masked(3, gradient, hsl_adjust)),
+        (
+            "1 masked exposure (gradient)",
+            masked(1, gradient, exposure),
+        ),
+        (
+            "1 masked HSL      (gradient)",
+            masked(1, gradient, hsl_adjust),
+        ),
+        (
+            "3 masked HSL      (gradient)",
+            masked(3, gradient, hsl_adjust),
+        ),
         ("1 masked heavy    (gradient)", masked(1, gradient, heavy)),
-        ("1 masked exposure (small radial)", masked(1, radial, exposure)),
-        ("1 masked exposure (colour range)", masked(1, colour_range, exposure)),
-        ("1 masked exposure (brush) uncached", masked(1, brush, exposure)),
-        ("1 masked exposure (auto brush)", masked(1, auto_brush, exposure)),
+        (
+            "1 masked exposure (small radial)",
+            masked(1, radial, exposure),
+        ),
+        (
+            "1 masked exposure (colour range)",
+            masked(1, colour_range, exposure),
+        ),
+        (
+            "1 masked exposure (brush) uncached",
+            masked(1, brush, exposure),
+        ),
+        (
+            "1 masked exposure (auto brush)",
+            masked(1, auto_brush, exposure),
+        ),
     ];
 
     // ⚠ The real sidecar, if one sits beside the RAW. This catalogue has exactly one photo
@@ -179,7 +202,11 @@ fn main() {
                 pipeline::Resampler::default(),
             )
         });
-        println!("\n{ms:8.1} ms  ({:+6.1})  REAL SIDECAR, {} mask(s)", ms - ms0, e.masks.len());
+        println!(
+            "\n{ms:8.1} ms  ({:+6.1})  REAL SIDECAR, {} mask(s)",
+            ms - ms0,
+            e.masks.len()
+        );
         println!("{ms0:8.1} ms  (  +0.0)  the same sidecar with its masks removed");
     }
 }
