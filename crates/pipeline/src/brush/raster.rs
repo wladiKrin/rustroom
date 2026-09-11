@@ -271,6 +271,7 @@ pub fn rasterize_in(
     // Dabs are laid a quarter of a radius apart (`SPACING`) and overlap heavily, so a lazy
     // per-dab conversion would convert the same pixel a dozen times over. Built only when
     // something actually gates, so a plain brush pays nothing at all.
+    let t_lab = std::time::Instant::now();
     let base_lab: Option<Vec<[f32; 3]>> = match base {
         Some(b)
             if strokes
@@ -289,6 +290,8 @@ pub fn rasterize_in(
         _ => None,
     };
 
+    let d_lab = t_lab.elapsed();
+    let t_dabs = std::time::Instant::now();
     let mut cov = vec![0.0f32; w * h];
     // ⚠ One scratch buffer, reused per stroke. Within a stroke the dabs combine with `max` so a
     // slow drag is not darker than a fast one; the stroke's result is then composited into `cov`,
@@ -395,6 +398,21 @@ pub fn rasterize_in(
             (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
         })
         .collect();
+
+    let d_dabs = t_dabs.elapsed();
+    // ⚠ Kept permanently. The split it reports — Oklab conversion against dab compositing — is
+    // what decides whether a future change should attack the gate or the splat.
+    if std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
+        eprintln!(
+            "RASTER box={}x{} strokes={} dabs={} lab={:.2} dabs_ms={:.2}",
+            w,
+            h,
+            strokes.len(),
+            strokes.iter().map(|s| s.dabs.len()).sum::<usize>(),
+            d_lab.as_secs_f64() * 1e3,
+            d_dabs.as_secs_f64() * 1e3,
+        );
+    }
 
     CoverageMap {
         x0,

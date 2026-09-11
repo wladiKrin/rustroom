@@ -266,12 +266,14 @@ impl PipelineStage for MaskStage {
                 Some(built)
             }
         };
+        let t_cov = std::time::Instant::now();
         let mut maps: Vec<Option<std::sync::Arc<crate::brush::CoverageMap>>> =
             Vec::with_capacity(1 + self.composite.refine.len());
         maps.push(build_map(&self.composite.base, 0));
         for (j, (_, src)) in self.composite.refine.iter().enumerate() {
             maps.push(build_map(src, j + 1));
         }
+        let d_cov = t_cov.elapsed();
         // ⚠ An **optimisation, not a correctness guard** — verified by deleting it and watching
         // every test still pass. An empty coverage map reads 0 everywhere, and blending at
         // coverage 0 is bit-exactly the identity, so the output is already right without this.
@@ -295,15 +297,20 @@ impl PipelineStage for MaskStage {
         // Run the sub-stages on a copy. The clone is the price of reusing every stage
         // unchanged; a bounding-box optimisation is deferred to 3.1b/c, where masks are small
         // enough for it to pay.
+        let t_clone = std::time::Instant::now();
         let mut adjusted = image.clone();
+        let d_clone = t_clone.elapsed();
+        let t_sub = std::time::Instant::now();
         for stage in &self.stages {
             adjusted = stage.apply(adjusted);
         }
+        let d_sub = t_sub.elapsed();
+        let t_blend = std::time::Instant::now();
 
         // ⚠ `map_pixels_xy` rather than a hand-written loop: it is rayon-parallel over rows
         // and is the idiom `VignetteStage` already uses for position-dependent work. The
         // closure captures `&adjusted`, which is `Sync` because `ImageBuf` is a `Vec<f32>`.
-        image.map_pixels_xy(|x, y, base| {
+        let out = image.map_pixels_xy(|x, y, base| {
             // Pixel position in the *frame's* normalised coordinates.
             let u = (x0 + x) as f32 / fw as f32;
             let v = (y0 + y) as f32 / fh as f32;
@@ -331,7 +338,26 @@ impl PipelineStage for MaskStage {
                 base[1] + (adj[1] - base[1]) * c,
                 base[2] + (adj[2] - base[2]) * c,
             ]
-        })
+        });
+        let d_blend = t_blend.elapsed();
+        // ⚠⚠ Kept permanently, the `RUSTROOM_DEBUG_BRUSH` / `RUSTROOM_DEBUG_RENDER` precedent.
+        // This split is what reframed M8.3i: it showed that a mask has NO dominant phase — HSL
+        // is 84% sub-stages, a colour range 91% blend, an auto-masked brush 97% coverage — so
+        // "port the mask loop" is not one thing. Rebuilding it by hand is the alternative.
+        if std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
+            eprintln!(
+                "MASK {}x{} stages={} cov={:.2} clone={:.2} sub={:.2} blend={:.2} total={:.2}",
+                w,
+                h,
+                self.stages.len(),
+                d_cov.as_secs_f64() * 1e3,
+                d_clone.as_secs_f64() * 1e3,
+                d_sub.as_secs_f64() * 1e3,
+                d_blend.as_secs_f64() * 1e3,
+                (d_cov + d_clone + d_sub + d_blend).as_secs_f64() * 1e3,
+            );
+        }
+        out
     }
 }
 
