@@ -421,4 +421,104 @@ mod tests {
             .apply(pipeline::ExposureStage::new(1.0).apply(img.clone()));
         assert_eq!(chain.cpu_fallback(img).data(), want.data());
     }
+
+    #[test]
+    fn a_second_run_of_the_same_chain_compiles_nothing() {
+        // ⚠⚠ The carrier. `cache.rs`'s own tests prove the cache caches; this proves the
+        // production path **consults** it — the W5 lesson, where a milestone's maths was fully
+        // tested and nothing proved the data ever reached it.
+        //
+        // ⚠ Asserted as a **delta around the second run** rather than an absolute count, because
+        // the cache is process-wide and `cargo test` runs in parallel: another test using this
+        // same shader would hit rather than miss, so the delta is 0 either way, while an absolute
+        // count would depend on who got there first.
+        let Some(ctx) = ctx() else { return };
+        let chain = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(1.0, ctx.clone()))],
+        );
+        let img = ramp(64, 64);
+        let _ = chain.apply(img.clone());
+        let before = ctx.cache.misses_for(crate::exposure::SHADER);
+        assert!(
+            before > 0,
+            "fixture check: the first run compiled nothing, so this test proves nothing"
+        );
+        let _ = chain.apply(img);
+        assert_eq!(
+            ctx.cache.misses_for(crate::exposure::SHADER),
+            before,
+            "the second run of an identical chain recompiled its shader"
+        );
+    }
+
+    #[test]
+    fn two_renders_with_different_exposures_do_not_share_a_uniform() {
+        // ⚠⚠ The most likely real bug in a caching change, and no equivalence test can see it: a
+        // cached **uniform** would give the second render the first render's exposure. Both runs
+        // use the identical shader text, so the program cache is hit in both — which is precisely
+        // the condition under which a wrongly-cached uniform would go unnoticed.
+        let Some(ctx) = ctx() else { return };
+        let img = ramp(64, 64);
+        let up = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(1.0, ctx.clone()))],
+        )
+        .apply(img.clone());
+        let down = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(-1.0, ctx.clone()))],
+        )
+        .apply(img.clone());
+
+        for (i, ((s, u), d)) in img
+            .data()
+            .iter()
+            .zip(up.data())
+            .zip(down.data())
+            .enumerate()
+        {
+            assert_eq!(*u, s * 2.0, "sample {i} did not double");
+            assert_eq!(
+                *d,
+                s * 0.5,
+                "sample {i} took the previous render's exposure"
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_render_after_a_large_one_is_still_correct() {
+        // ⚠⚠ The guard on the pooled staging buffer. Once a big render has allocated a large
+        // buffer, a small render reuses it — and both the mapped slice and the copy out of it
+        // must be given the **image's** bytes rather than the buffer's size. Getting that wrong
+        // is not a slow render, it is reading 82 MB out of a 20 MB image.
+        //
+        // ⚠ It also asserts the GPU path actually ran: a chain that fell back to the CPU would
+        // produce the same pixels and prove nothing about the buffer.
+        let Some(ctx) = ctx() else { return };
+        let big = ramp(256, 256);
+        let _ = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(1.0, ctx.clone()))],
+        )
+        .apply(big);
+
+        let small = ramp(32, 16);
+        let chain = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(1.0, ctx.clone()))],
+        );
+        let out = chain.apply(small.clone());
+        assert_eq!(
+            chain.transfer_counts(),
+            (1, 1),
+            "fixture check: the chain fell back to the CPU, so this proves nothing about the buffer"
+        );
+        assert_eq!(out.width(), 32);
+        assert_eq!(out.height(), 16);
+        for (i, (s, o)) in small.data().iter().zip(out.data()).enumerate() {
+            assert_eq!(*o, s * 2.0, "sample {i} is wrong after a larger render");
+        }
+    }
 }

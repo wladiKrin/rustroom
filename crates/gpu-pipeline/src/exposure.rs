@@ -5,23 +5,12 @@ use core_image::ImageBuf;
 use pipeline::PipelineStage;
 use std::sync::Arc;
 
-/// Threads per workgroup. 64 is a common sweet spot; the arithmetic below does not depend on it.
-const WORKGROUP: u32 = 64;
-
-/// The per-dimension workgroup limit every `wgpu` backend guarantees.
-///
-/// ⚠⚠ **This is why the dispatch is 2D.** A naive per-float 1D dispatch at the fit rung needs
-/// `1600 × 1068 × 3 / 64 = 80,100` groups and **fails validation already** — hit by hand while
-/// probing. Per pixel it is 26,700, which fits, but a 26 Mpx native rung needs 407,000. So 2D is
-/// required from the start rather than retrofitted.
-const MAX_GROUPS_PER_DIM: u32 = 65535;
-
 /// One multiply per channel. The gain arrives as a uniform.
 ///
 /// ⚠ **No `exp2` in the shader**, deliberately: `2^ev` is computed CPU-side, so the GPU does
 /// arithmetic that is exactly representable and the result is bit-identical to the CPU stage.
 /// That is what makes a divergence here mean "plumbing bug" rather than "float drift".
-const SHADER: &str = r#"
+pub(crate) const SHADER: &str = r#"
 struct Params {
     gain: f32,
     pixels: u32,
@@ -61,87 +50,6 @@ impl GpuExposureStage {
         }
     }
 
-    /// Build this stage's compute pipeline and bind group against `img`.
-    ///
-    /// ⚠ Built per encode rather than cached. The bind group references the chain's buffer, which
-    /// differs per image, so a cached one would be a handle to the wrong memory — the class of bug
-    /// that renders a previous photograph.
-    fn pipeline_and_bind(
-        &self,
-        ctx: &GpuContext,
-        img: &GpuImage,
-        params: &[u32; 4],
-    ) -> (wgpu::ComputePipeline, wgpu::BindGroup) {
-        let device = &ctx.device;
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("exposure"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("exposure-params"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        ctx.queue
-            .write_buffer(&uniform, 0, bytemuck::cast_slice(params));
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("exposure-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("exposure-bind"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: img.buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
-        // ⚠ `wgpu` 29: `bind_group_layouts` is `&[Option<&BindGroupLayout>]`, and the old
-        // `push_constant_ranges` field is now `immediate_size`.
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("exposure-pipeline-layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let compute = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("exposure-pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        (compute, bind)
-    }
-
     /// A fresh instance with the same parameters.
     ///
     /// ⚠ A `Box<dyn GpuStage>` needs ownership, and this stage is cheap to rebuild — an `f32`, a
@@ -175,15 +83,20 @@ impl crate::GpuStage for GpuExposureStage {
         // of 0 already says so and the chain lends it an empty slice.
         _scratch: &[wgpu::Buffer],
     ) {
-        let pixels = img.pixels();
-        let total_groups = pixels.div_ceil(WORKGROUP);
-        let row_groups = total_groups.min(MAX_GROUPS_PER_DIM);
-        let col_groups = total_groups.div_ceil(row_groups);
-        let params: [u32; 4] = [self.factor.to_bits(), pixels, row_groups, 0];
-        let (compute, bind) = self.pipeline_and_bind(ctx, img, &params);
-        pass.set_pipeline(&compute);
-        pass.set_bind_group(0, &bind, &[]);
-        pass.dispatch_workgroups(row_groups, col_groups, 1);
+        // ⚠⚠ A `Dispatch` client only since M8.3f. It was written at M8.3a, **before** `Dispatch`
+        // existed, and M8.3e made it replaceable without folding it in — so it carried its own
+        // ~90-line copy of the layout/bind/pipeline dance and was the one per-pixel stage the
+        // shared path did not cover. Measured by subtraction at 3200x2136, that copy was ~0.6 ms
+        // of the 1.17 ms per-render encode cost: half of it, for one stage of four.
+        let (row_groups, _) = crate::dispatch::Dispatch::grid(img.pixels());
+        let params: [u32; 4] = [self.factor.to_bits(), img.pixels(), row_groups, 0];
+        crate::dispatch::Dispatch {
+            label: "exposure",
+            shader: SHADER.to_string(),
+            params: bytemuck::cast_slice(&params).to_vec(),
+            storages: &[],
+        }
+        .encode(ctx, pass, img);
     }
 
     fn cpu(&self) -> &dyn PipelineStage {
