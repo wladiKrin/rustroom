@@ -303,21 +303,41 @@ pub fn rasterize_in(
     // per-dab conversion would convert the same pixel a dozen times over. Built only when
     // something actually gates, so a plain brush pays nothing at all.
     let t_lab = std::time::Instant::now();
-    let base_lab: Option<Vec<[f32; 3]>> = match base {
-        Some(b)
-            if strokes
-                .iter()
-                .flat_map(|s| s.dabs.iter())
-                .any(|d| d.gate.is_some()) =>
+    // ⚠ Only the rows a gating dab can read are converted. `base_lab` is still indexed over the
+    // WHOLE box — rows outside the gating span are simply never written and never read — so the
+    // `(y - y0) * w + (x - x0)` arithmetic in the dab loop is unchanged.
+    //
+    // ⚠ Rows only, not columns: a per-row `x` span would make the fill ragged while the *index*
+    // stayed whole-box, which is more arithmetic for a smaller saving.
+    let gating_rows: Option<(usize, usize)> = {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for d in strokes
+            .iter()
+            .filter(|s| s.dabs.iter().any(|d| d.gate.is_some()))
+            .flat_map(|s| s.dabs.iter())
         {
+            lo = lo.min(d.y - d.r);
+            hi = hi.max(d.y + d.r);
+        }
+        if lo > hi {
+            None
+        } else {
+            let a = (lo.floor().clamp(y0 as f32, y1 as f32) as usize).max(y0);
+            let b = (((hi.ceil().clamp(0.0, y1 as f32) as usize) + 1).min(y1)).max(a);
+            (b > a).then_some((a, b))
+        }
+    };
+    let base_lab: Option<Vec<[f32; 3]>> = match (base, gating_rows) {
+        (Some(b), Some((gy0, gy1))) => {
             // ⚠ Rayon over rows, the shape `map_pixels_xy` and the 8-bit pack already use. Each
             // element is a pure function of one base pixel and the order is unchanged, so this is
             // bit-identical by construction rather than by tolerance.
             let mut v = vec![[0.0f32; 3]; w * h];
-            v.par_chunks_exact_mut(w)
+            v[(gy0 - y0) * w..(gy1 - y0) * w]
+                .par_chunks_exact_mut(w)
                 .enumerate()
                 .for_each(|(row, out)| {
-                    let y = y0 + row;
+                    let y = gy0 + row;
                     for (i, slot) in out.iter_mut().enumerate() {
                         *slot = color::oklab::prophoto_to_oklab(b.at(x0 + i, y));
                     }
@@ -478,11 +498,12 @@ pub fn rasterize_in(
     // what decides whether a future change should attack the gate or the splat.
     if std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
         eprintln!(
-            "RASTER box={}x{} strokes={} dabs={} lab={:.2} dabs_ms={:.2}",
+            "RASTER box={}x{} strokes={} dabs={} gate_rows={} lab={:.2} dabs_ms={:.2}",
             w,
             h,
             strokes.len(),
             strokes.iter().map(|s| s.dabs.len()).sum::<usize>(),
+            gating_rows.map_or(0, |(a, b)| b - a),
             d_lab.as_secs_f64() * 1e3,
             d_dabs.as_secs_f64() * 1e3,
         );
