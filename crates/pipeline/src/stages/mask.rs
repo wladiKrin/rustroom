@@ -12,10 +12,9 @@ use edit_model::{Geometry, MaskedAdjustment};
 use super::mask_coverage::{BaseFacts, Composite, CoverageSource, PixelCtx};
 
 pub struct MaskStage {
-    // ⚠ The `MaskedAdjustment` itself is deliberately not retained. Everything needed is
-    // extracted at construction — the coverage source and the sub-stage list — and keeping a copy
-    // as well was dead weight that `-D warnings` caught the moment the coverage lookup stopped
-    // going through it.
+    // ⚠ The `MaskedAdjustment` is still not retained whole: the coverage source and the sub-stage
+    // list are extracted at construction, and only the `LocalAdjustments` the sub-stages were
+    // built from is kept beside them — see `adjustments` below, and why.
     /// The mask's coverage: its base shape plus every refinement, resolved once at construction.
     composite: Composite,
     stages: Vec<Box<dyn PipelineStage>>,
@@ -33,6 +32,19 @@ pub struct MaskStage {
     /// ⚠ An `Arc`, not a borrow: the stage outlives the builder's scope, so a lifetime here would
     /// infect the whole stage list.
     deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
+    /// The adjustments [`Self::stages`] was built from, kept so
+    /// [`PipelineStage::accelerate_inner`] can hand them to an accelerator.
+    ///
+    /// ⚠⚠ **This field was deliberately dropped once and is deliberately back.** The old comment
+    /// said everything needed was extracted at construction — true until a GPU builder needed the
+    /// *parameters* a CPU stage does not expose. A `Box<dyn PipelineStage>` reports only `name`
+    /// and `apply`, so the only alternative was downcasting every stage in the workspace.
+    adjustments: edit_model::LocalAdjustments,
+    /// The rung these sub-stages were built for.
+    ///
+    /// ⚠ `GpuSharpenStage`'s sigma is in **full-resolution** pixels and only the scale says what
+    /// that is here, so an accelerator without it cannot build the sharpen row at all.
+    scale: RenderScale,
 }
 
 impl MaskStage {
@@ -74,6 +86,8 @@ impl MaskStage {
             stages: adjustment_stages(&masked.adjustments, baseline, scale),
             region,
             deposit,
+            adjustments: masked.adjustments.clone(),
+            scale,
         }
     }
 
@@ -101,6 +115,13 @@ impl MaskStage {
             // cached by `PrefixCache` at a coarser grain. There is nothing for a coverage cache to
             // add here, and a deposit would report a whole-frame map under a region's key.
             deposit: None,
+            // ⚠⚠ **Filled here too, and the capture half is not an oversight.** `accelerate` is
+            // only ever called on the *tail*, so this stage's hook is never invoked — and if it
+            // ever were, `capture_stages` builds noise reduction and dehaze, neither of which is
+            // in `REPLACEABLE`, so the list would come back unchanged. Safe by construction in
+            // both directions, which beats safe by one caller remembering.
+            adjustments: masked.adjustments.clone(),
+            scale,
         }
     }
 
@@ -187,6 +208,15 @@ impl crate::brush::BasePixels for BaseView<'_> {
 impl PipelineStage for MaskStage {
     fn name(&self) -> &'static str {
         "mask"
+    }
+
+    fn accelerate_inner(&mut self, f: &crate::SubStageAccelerator<'_>) {
+        let taken = std::mem::take(&mut self.stages);
+        self.stages = f(taken, &self.adjustments, self.scale);
+    }
+
+    fn sub_stage_names(&self) -> Vec<&'static str> {
+        self.stages.iter().map(|s| s.name()).collect()
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
@@ -1156,5 +1186,76 @@ mod tests {
             (out.pixel(1, 1)[0] - 0.5).abs() < 1e-6,
             "the corner is outside"
         );
+    }
+
+    /// ⚠⚠ **The recursion-depth assumption, as a property rather than a comment.** `accelerate`
+    /// offers a mask's sub-stages to an accelerator and passes a **no-op** one to the inner call,
+    /// which is sound only because a mask's sub-stages can never themselves contain a mask.
+    ///
+    /// That is structural rather than a convention: [`crate::adjustment_stages`] is exhaustive
+    /// over `LocalAdjustments`, which has **no `masks` field**, so there is nothing for it to
+    /// build one from. Asserted here so a future `LocalAdjustments::masks` is caught by a test
+    /// rather than by an infinite recursion at render time.
+    #[test]
+    fn a_masks_sub_stages_never_contain_a_mask() {
+        let mut m = masked([0.0, 0.0], [1.0, 1.0]);
+        m.adjustments.hsl.bands[0].saturation = 40.0;
+        m.adjustments.sharpening = edit_model::Sharpening {
+            amount: 60.0,
+            ..Default::default()
+        };
+        let stage = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        let names = stage.sub_stage_names();
+        assert!(
+            !names.is_empty(),
+            "fixture check: the mask must carry sub-stages, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"mask"),
+            "a mask's sub-stages must never contain a mask, got {names:?}"
+        );
+    }
+
+    /// ⚠ The hook must actually replace the list, or every equivalence test in `gpu-pipeline`
+    /// passes against a no-op. This drives it with a transformer that **empties** the list, which
+    /// no real accelerator would do — the point is that what it returns is what the stage keeps.
+    #[test]
+    fn accelerate_inner_replaces_the_sub_stage_list() {
+        let m = masked([0.0, 0.0], [1.0, 1.0]);
+        let mut stage = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        assert_eq!(
+            stage.sub_stage_names(),
+            vec!["exposure"],
+            "fixture check: one sub-stage before the hook"
+        );
+        // ⚠ The return type is annotated: a bare `Vec::new()` would leave the element type to be
+        // inferred from the later unsize coercion to `&dyn Fn`, which does not flow backwards.
+        let drop_everything = |_: Vec<Box<dyn PipelineStage>>,
+                               _: &LocalAdjustments,
+                               _: RenderScale|
+         -> Vec<Box<dyn PipelineStage>> { Vec::new() };
+        stage.accelerate_inner(&drop_everything);
+        assert!(
+            stage.sub_stage_names().is_empty(),
+            "the hook must keep what the accelerator returned, got {:?}",
+            stage.sub_stage_names()
+        );
+    }
+
+    /// ⚠ The adjustments handed to the accelerator must be the mask's own, never the global
+    /// `Edits` — that is the whole "plausible photograph" failure this seam exists to avoid.
+    /// Captured through the hook so the test sees exactly what `gpu-pipeline` will.
+    #[test]
+    fn accelerate_inner_hands_out_the_masks_own_adjustments() {
+        let mut m = masked([0.0, 0.0], [1.0, 1.0]);
+        m.adjustments.exposure = -1.25;
+        let mut stage = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        let seen = std::cell::Cell::new(f32::NAN);
+        let capture = |s: Vec<Box<dyn PipelineStage>>, a: &LocalAdjustments, _: RenderScale| {
+            seen.set(a.exposure);
+            s
+        };
+        stage.accelerate_inner(&capture);
+        assert_eq!(seen.get(), -1.25);
     }
 }

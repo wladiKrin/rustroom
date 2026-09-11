@@ -164,7 +164,50 @@ impl RenderScale {
 pub trait PipelineStage: Send + Sync {
     fn name(&self) -> &'static str;
     fn apply(&self, image: ImageBuf) -> ImageBuf;
+
+    /// Offer this stage's inner sub-stages for acceleration. Default: this stage has none.
+    ///
+    /// ⚠⚠ **`&mut self`, not `self: Box<Self>`.** `gpu_pipeline::accelerate` already owns each
+    /// box from [`Pipeline::into_stages`], so the stage can `mem::take` its list, hand it over
+    /// and put the result back — no cloning, no reconstruction. A `Box<Self>` receiver is
+    /// object-safe but **cannot carry a default body**: returning `self` as
+    /// `Box<dyn PipelineStage>` needs an unsize coercion, hence `Self: Sized`, which is exactly
+    /// the bound that makes a method undispatchable on `dyn`.
+    ///
+    /// ⚠ The accelerator is handed the [`edit_model::LocalAdjustments`] the sub-stages were built
+    /// from, because a GPU stage is built from *parameters* and a `dyn PipelineStage` cannot be
+    /// asked for its own. Reading the **global** `Edits` instead is the failure this signature
+    /// exists to prevent, and it would render a plausible photograph rather than an error.
+    fn accelerate_inner(&mut self, _f: &SubStageAccelerator<'_>) {}
+
+    /// The names of this stage's inner sub-stages, in run order. Default: none.
+    ///
+    /// ⚠⚠ **The only way to see what [`PipelineStage::accelerate_inner`] did without comparing
+    /// pixels** — and pixels cannot see it, because an accelerated mask and a CPU one render the
+    /// same picture by design. Every equivalence test would therefore pass against a hook that
+    /// never fired, which is precisely how creative LUTs (W5) shipped fully tested and 100%
+    /// non-functional.
+    ///
+    /// ⚠ M8.3g rejected a trait method for the byte-path question on the grounds that it leaks an
+    /// **output-encoding** concern into a seam deliberately free of them. This one reports
+    /// **composition**, which the trait already exposes a mutator for one method above; a trait
+    /// you can change and cannot observe is worse than one carrying two views of one fact.
+    fn sub_stage_names(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 }
+
+/// Transform a stage's inner sub-stage list, given the adjustments it was built from.
+///
+/// ⚠ The alias carries a lifetime because the closure `gpu-pipeline` supplies **borrows**: it
+/// holds the outer `ProfileRendering<'_>` and a `&Arc<GpuContext>`. A `'static` alias would force
+/// those to be owned, and `ProfileRendering` is a borrow by construction.
+pub type SubStageAccelerator<'a> = dyn Fn(
+        Vec<Box<dyn PipelineStage>>,
+        &edit_model::LocalAdjustments,
+        RenderScale,
+    ) -> Vec<Box<dyn PipelineStage>>
+    + 'a;
 
 /// An ordered pipeline of stages.
 pub struct Pipeline {
