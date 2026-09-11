@@ -233,6 +233,19 @@ impl Pipeline {
         self.stages.iter().map(|s| s.name()).collect()
     }
 
+    /// The sub-stage names of the first stage with this name, if there is one.
+    ///
+    /// ⚠ [`Pipeline::stage_names`] reports the top level only, and a `Box<dyn PipelineStage>`
+    /// cannot be downcast — so without this a test can see *that* a pipeline contains a mask and
+    /// nothing at all about what the mask contains, which is exactly where M8.3j's work happens.
+    /// `None` means no stage of that name; an empty `Vec` means one carrying no sub-stages.
+    pub fn sub_stage_names_of(&self, name: &str) -> Option<Vec<&'static str>> {
+        self.stages
+            .iter()
+            .find(|s| s.name() == name)
+            .map(|s| s.sub_stage_names())
+    }
+
     /// Consume the pipeline, yielding its stages — lets `build_pipeline` concatenate the two
     /// halves of [`build_pipeline_split`].
     pub fn into_stages(self) -> Vec<Box<dyn PipelineStage>> {

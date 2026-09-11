@@ -116,6 +116,56 @@ const REPLACEABLE: &[(&str, Builder)] = &[
 /// ~7.2-7.3 ms and the byte one ~5.1-5.2, against a 4.0x pixel ratio.
 const TRANSFER_COST: f32 = 27.0;
 
+/// Project a mask's [`edit_model::LocalAdjustments`] onto the [`Edits`] the [`REPLACEABLE`]
+/// builders read.
+///
+/// ⚠⚠ **Written as an exhaustive destructuring on purpose: adding a field to `LocalAdjustments`
+/// is a COMPILE ERROR here.** The alternative — `a.exposure`, `a.hsl`, … field by field — leaves a
+/// new adjustment silently rendering as its default inside every mask, which is a plausible
+/// photograph rather than an error. That is `MaskStage::source_for`'s rule (*"exhaustive on
+/// purpose — a catch-all here is a trap"*) applied to the projection.
+///
+/// ⚠ The eight carried fields are exactly the ones a `REPLACEABLE` builder reads. The eight
+/// ignored ones have **no GPU stage**: white balance, contrast, the tone curve, local contrast and
+/// saturation are M8.3e plan 2's; noise reduction and dehaze run in the **prefix** and are never in
+/// a mask's tail sub-stage list at all.
+///
+/// ⚠ `display_rendering` and `output_transform` are the two builders not built from `Edits`, and
+/// neither can occur in a mask's sub-stage list — `adjustment_stages` does not place them.
+fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
+    let edit_model::LocalAdjustments {
+        // carried — a GPU builder reads each of these
+        exposure,
+        highlights,
+        shadows,
+        whites,
+        blacks,
+        hsl,
+        color_grading,
+        sharpening,
+        // deliberately not carried — no GPU stage exists for them
+        noise_reduction: _,
+        dehaze: _,
+        white_balance: _,
+        contrast: _,
+        tone_curve: _,
+        saturation: _,
+        vibrance: _,
+        local_contrast: _,
+    } = a;
+    Edits {
+        exposure: *exposure,
+        highlights: *highlights,
+        shadows: *shadows,
+        whites: *whites,
+        blacks: *blacks,
+        hsl: *hsl,
+        color_grading: *color_grading,
+        sharpening: *sharpening,
+        ..Edits::default()
+    }
+}
+
 /// A stage that could be replaced, beside the CPU stage it would replace.
 ///
 /// ⚠ Both halves travel together because `flush` may decide against the chain, and
@@ -141,8 +191,13 @@ fn worth_a_chain(costs: &[f32]) -> bool {
 /// position would run the intervening CPU stage's work in the wrong order, which looks like a
 /// plausible photograph rather than an error.
 ///
-/// ⚠ Only the **global** tail. A mask's own stages are inside `MaskStage`, so masked HSL is still
-/// not accelerated — the case reported in use as slow, and M8.3d's.
+/// ⚠ Only the **tail**, never the prefix — accelerating the prefix would make `PrefixKey` describe
+/// two different computations under one key.
+///
+/// ⚠⚠ **Since M8.3j it also recurses ONE level into a stage that carries sub-stages** — in
+/// practice `MaskStage`, which the tail still sees as one opaque stage named `"mask"`. That is
+/// what makes masked HSL reachable at all; before it, the case reported in use as slow was the one
+/// thing the whole GPU tail could not touch.
 pub fn accelerate(
     tail: Pipeline,
     edits: &Edits,
@@ -151,12 +206,61 @@ pub fn accelerate(
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
 ) -> (Pipeline, Option<GpuChain>) {
+    // ⚠⚠ **Depth one, and it is structural rather than a bolted-on limit.** The accelerator handed
+    // to the outer walk recurses into a mask; the walk it starts is handed **no** accelerator. That
+    // is sound because `adjustment_stages` is exhaustive over `LocalAdjustments`, which has no
+    // `masks` field — a mask's sub-stages can never contain a mask. Pinned by
+    // `a_masks_sub_stages_never_contain_a_mask` over in `pipeline`.
+    let inner = |stages: Vec<Box<dyn PipelineStage>>,
+                 a: &edit_model::LocalAdjustments,
+                 sub_scale: RenderScale| {
+        let e = sub_edits(a);
+        // ⚠ `rejoin`, because a mask wants one plain list. The inner walk can never return a
+        // trailing chain anyway: `output_transform` is not something `adjustment_stages` places,
+        // so the byte path is unreachable here **by construction** and a mask always pays the
+        // float round trip that `TRANSFER_COST` describes.
+        let (p, c) = walk(Pipeline::new(stages), &e, sub_scale, profile, spec, ctx, None);
+        rejoin(p, c).into_stages()
+    };
+    // ⚠ The cast is explicit: an unsize coercion from `&{closure}` to `&dyn Fn` inside a `Some(..)`
+    // is not guaranteed to be inferred through the wrapper.
+    walk(
+        tail,
+        edits,
+        scale,
+        profile,
+        spec,
+        ctx,
+        Some(&inner as &pipeline::SubStageAccelerator<'_>),
+    )
+}
+
+/// One pass of run detection over a stage list.
+///
+/// ⚠ `inner` is `Some` for the outer walk and **`None` for the recursive one** — see
+/// [`accelerate`], where the depth-one argument is written out.
+#[allow(clippy::too_many_arguments)]
+fn walk(
+    tail: Pipeline,
+    edits: &Edits,
+    scale: RenderScale,
+    profile: ProfileRendering<'_>,
+    spec: RenderSpec,
+    ctx: &Arc<GpuContext>,
+    inner: Option<&pipeline::SubStageAccelerator<'_>>,
+) -> (Pipeline, Option<GpuChain>) {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
     // ⚠⚠ **Both halves.** A run that turns out not to be worth the transfer has to be put back,
     // and `GpuStage::cpu()` hands out a *borrow* that cannot be pushed into `out` — so the
     // original travels beside the GPU stage and `flush` chooses between them.
     let mut run: Vec<Candidate> = Vec::new();
-    for s in tail.into_stages() {
+    for mut s in tail.into_stages() {
+        // ⚠ Offered to **every** stage this walk sees, before the lookup. A replaceable stage has
+        // no inner list and inherits the empty default, so one rule covers both arms rather than
+        // one arm carrying an exception nobody would think to check.
+        if let Some(f) = inner {
+            s.accelerate_inner(f);
+        }
         match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
             Some((_, build)) => run.push((build(edits, scale, profile, spec, ctx), s)),
             None => {
@@ -574,8 +678,178 @@ mod tests {
         e
     }
 
+    /// ⚠⚠ **The projection must carry every field a GPU builder reads, and forgetting one renders
+    /// a plausible photograph rather than an error.** So this sets all eight to values nothing else
+    /// in the suite uses and reads each back — a test naming "the projection" while checking only
+    /// `exposure` would be blind to the other seven.
+    #[test]
+    fn the_projection_carries_every_field_a_gpu_builder_reads() {
+        let a = edit_model::LocalAdjustments {
+            exposure: -1.25,
+            highlights: -33.0,
+            shadows: 44.0,
+            whites: 22.0,
+            blacks: -11.0,
+            hsl: with_hsl().hsl,
+            color_grading: graded(Edits::default()).color_grading,
+            sharpening: Sharpening {
+                amount: 63.0,
+                radius: 1.7,
+                detail: 44.0,
+                masking: 21.0,
+            },
+            ..Default::default()
+        };
+        let e = sub_edits(&a);
+        assert_eq!(e.exposure, -1.25);
+        assert_eq!(e.highlights, -33.0);
+        assert_eq!(e.shadows, 44.0);
+        assert_eq!(e.whites, 22.0);
+        assert_eq!(e.blacks, -11.0);
+        assert_eq!(e.hsl, a.hsl);
+        assert_eq!(e.color_grading, a.color_grading);
+        assert_eq!(e.sharpening, a.sharpening);
+    }
+
+    /// ⚠ The projection must carry **nothing else**. A field that leaked in would be a global
+    /// value applied inside a mask — same class of bug, opposite direction.
+    #[test]
+    fn the_projection_carries_nothing_a_gpu_builder_does_not_read() {
+        let a = edit_model::LocalAdjustments {
+            contrast: 40.0,
+            saturation: 35.0,
+            vibrance: 30.0,
+            ..Default::default()
+        };
+        let e = sub_edits(&a);
+        let d = Edits::default();
+        assert_eq!(e.contrast, d.contrast);
+        assert_eq!(e.saturation, d.saturation);
+        assert_eq!(e.vibrance, d.vibrance);
+        assert_eq!(e.masks.len(), 0, "a projection must never carry masks");
+    }
+
     fn tail_of(e: &Edits) -> Pipeline {
         pipeline::build_pipeline_split(e, SCALE).1
+    }
+
+    /// A mask carrying exactly what it is handed, under a full-frame linear gradient.
+    fn mask_carrying(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
+        edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
+            refine: Vec::new(),
+            adjustments: a,
+        }
+    }
+
+    /// The sub-stage names of the first `mask` stage in a pipeline.
+    fn mask_sub_stages(p: &Pipeline) -> Vec<&'static str> {
+        p.sub_stage_names_of("mask")
+            .expect("fixture check: the pipeline must contain a mask stage")
+    }
+
+    /// ⚠⚠ **The carrier: a mask's sub-stages really do become a chain.** Every equivalence test in
+    /// this file compares an accelerated render against a CPU one, and a hook that never fired
+    /// makes the two trivially identical — so something has to assert the chain was **built**. That
+    /// is the W5 failure mode (creative LUTs shipped fully tested and 100% dead) as a test.
+    #[test]
+    fn a_masked_hsl_becomes_a_chain_inside_the_mask() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = Edits::default();
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            hsl: with_hsl().hsl,
+            ..Default::default()
+        })];
+        let before = mask_sub_stages(&tail_of(&e));
+        assert_eq!(
+            before,
+            vec!["hsl"],
+            "fixture check: the mask must carry exactly hsl before acceleration"
+        );
+        let after = mask_sub_stages(&accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        ));
+        assert_eq!(
+            after,
+            vec!["gpu_chain"],
+            "the mask's hsl must have become a chain"
+        );
+    }
+
+    /// ⚠⚠ **The gate reaches the right verdict INSIDE a mask, and this is the case the catalogue
+    /// actually has.** Its one masked photograph carries `exposure: -3.6` and nothing else — 1.3 ms
+    /// of work against a 27.0 ms transfer — so it must be **refused**. A milestone that accelerated
+    /// it would make that photograph slower.
+    #[test]
+    fn a_mask_carrying_only_exposure_is_not_worth_a_chain() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = Edits::default();
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            exposure: -3.6,
+            ..Default::default()
+        })];
+        let after = mask_sub_stages(&accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        ));
+        assert_eq!(
+            after,
+            vec!["exposure"],
+            "exposure alone must stay on the CPU inside a mask"
+        );
+    }
+
+    /// ⚠⚠ **Accelerating the tail must not reach into the PREFIX**, or `PrefixKey` would describe
+    /// two different computations under one key. The mask below carries both halves — noise
+    /// reduction runs in the prefix, HSL in the tail — so one `Edits` exercises both, and the two
+    /// assertions are the two directions of one property.
+    #[test]
+    fn accelerating_the_tail_leaves_the_prefixs_mask_alone() {
+        let Some(ctx) = ctx() else { return };
+        let mut e = Edits::default();
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            hsl: with_hsl().hsl,
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 40.0,
+                color: 40.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        })];
+        let (prefix, tail) = pipeline::build_pipeline_split(&e, SCALE);
+        assert!(
+            prefix.sub_stage_names_of("mask").is_some(),
+            "fixture check: the prefix must carry a capture mask"
+        );
+        let accelerated = accel(
+            tail,
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        assert_eq!(
+            mask_sub_stages(&accelerated),
+            vec!["gpu_chain"],
+            "the tail's mask must be accelerated"
+        );
+        assert!(
+            !prefix
+                .sub_stage_names_of("mask")
+                .unwrap()
+                .contains(&"gpu_chain"),
+            "the prefix's mask must be untouched"
+        );
     }
 
     fn chains(names: &[&str]) -> usize {
