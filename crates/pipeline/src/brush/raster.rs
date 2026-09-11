@@ -504,6 +504,411 @@ fn dab_alpha(d: f32, r: f32, hard: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A base whose left half and right half differ in Oklab, so an auto-mask gate genuinely
+    /// discriminates rather than passing everything.
+    struct HalfBase;
+    impl BasePixels for HalfBase {
+        fn at(&self, x: usize, _y: usize) -> [f32; 3] {
+            if x < 40 {
+                [0.05, 0.20, 0.05]
+            } else {
+                [0.60, 0.15, 0.50]
+            }
+        }
+    }
+
+    /// The fixture the bit-identity test rasterises.
+    ///
+    /// ⚠⚠ Every property here is load-bearing and a weaker fixture cannot see the bug it guards:
+    /// **overlapping dabs** (so the running max and its short-circuit matter), an **erase**
+    /// stroke (so `MaskOp::Subtract` and stroke order matter), an **auto-masked** stroke crossing
+    /// the base's split (so the gate is reached and differs per dab), a **one-row** stroke (the
+    /// degenerate chunk), and flow below 100 (so the cross-stroke composite is not saturating).
+    fn gather_fixture() -> Brush {
+        let along = |y: f32, x0: f32, x1: f32, n: usize| -> Vec<[f32; 2]> {
+            (0..n)
+                .map(|i| [x0 + (x1 - x0) * i as f32 / (n - 1) as f32, y])
+                .collect()
+        };
+        Brush {
+            strokes: vec![
+                BrushStroke {
+                    points: along(0.35, 0.15, 0.85, 12),
+                    radius: 0.09,
+                    hardness: 40.0,
+                    flow: 70.0,
+                    ..Default::default()
+                },
+                BrushStroke {
+                    points: along(0.42, 0.20, 0.80, 9),
+                    radius: 0.07,
+                    hardness: 65.0,
+                    flow: 55.0,
+                    ..Default::default()
+                },
+                BrushStroke {
+                    points: along(0.38, 0.30, 0.70, 7),
+                    radius: 0.05,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    erase: true,
+                    ..Default::default()
+                },
+                BrushStroke {
+                    points: along(0.60, 0.10, 0.90, 14),
+                    radius: 0.08,
+                    hardness: 50.0,
+                    flow: 80.0,
+                    auto_mask: true,
+                    tolerance: 30.0,
+                    ..Default::default()
+                },
+                BrushStroke {
+                    points: vec![[0.50, 0.90]],
+                    radius: 0.006,
+                    hardness: 100.0,
+                    flow: 100.0,
+                    ..Default::default()
+                },
+            ],
+            invert: false,
+        }
+    }
+
+    #[test]
+    fn the_rasterizer_is_bit_identical_to_its_reference() {
+        // ⚠⚠ **`rasterize_in_reference` is a VERBATIM COPY of today's `rasterize_in`, living in
+        // the test module and deliberately NOT shared with production.** A "reference" that
+        // delegated to the function under test would compare it against itself and pass forever —
+        // the vacuous shape this project records more often than any other. It is the rule
+        // `downscale_to`'s and the 8-bit pack's parallelisations each followed.
+        let b = gather_fixture();
+        let g = Geometry::default();
+        let want = rasterize_in_reference(&b, &g, 80, 60, None, Some(&HalfBase));
+        let got = rasterize_in(&b, &g, 80, 60, None, Some(&HalfBase));
+        let read = |m: &CoverageMap| -> Vec<u8> {
+            (0..60)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .map(|(x, y)| m.at(x, y))
+                .collect()
+        };
+        let (want, got) = (read(&want), read(&got));
+        assert!(
+            got.iter().any(|&v| v > 0) && got.contains(&0),
+            "fixture check: the brush must both cover and not cover, or this test is vacuous"
+        );
+        assert!(
+            got.iter().any(|&v| v > 0 && v < 255),
+            "fixture check: some coverage must be partial, or the gate and the max are untested"
+        );
+        assert_eq!(
+            want, got,
+            "the rasterizer must be bit-identical to its reference"
+        );
+    }
+
+    /// A verbatim copy of `rasterize_in` as it stood before M8.3i parallelised it: sequential
+    /// Oklab conversion, and a per-stroke three-pass scatter into a reused `layer`.
+    ///
+    /// ⚠⚠ **Deliberately duplicated rather than shared.** Its whole value is being an
+    /// independent witness: a reference that called `rasterize_in` could not see a change to
+    /// `rasterize_in`. It is frozen — when the shipped function changes, this one must NOT be
+    /// updated to match; if the two disagree, that is the finding.
+    ///
+    /// ⚠ It will drift out of resemblance over time, which is expected and is the cost of the
+    /// guarantee. Delete it only when the parallel implementation has been shipped long enough
+    /// that the goldens are the accepted oracle.
+    #[allow(clippy::too_many_arguments)]
+    fn rasterize_in_reference(
+        brush: &Brush,
+        geometry: &Geometry,
+        frame_w: usize,
+        frame_h: usize,
+        clip: Option<(usize, usize, usize, usize)>,
+        base: Option<&dyn BasePixels>,
+    ) -> CoverageMap {
+        // ⚠ An inverted brush with no strokes covers everything, not nothing.
+        let outside = if brush.invert { 255 } else { 0 };
+        if brush.strokes.is_empty() || frame_w == 0 || frame_h == 0 {
+            return CoverageMap {
+                outside,
+                ..Default::default()
+            };
+        }
+        // The clip in frame pixels, clamped to the frame. `None` is the whole frame.
+        let (cx0, cy0, cx1, cy1) = match clip {
+            Some((x, y, w, h)) => (
+                x.min(frame_w),
+                y.min(frame_h),
+                (x + w).min(frame_w),
+                (y + h).min(frame_h),
+            ),
+            None => (0, 0, frame_w, frame_h),
+        };
+        if cx1 <= cx0 || cy1 <= cy0 {
+            return CoverageMap {
+                outside,
+                ..Default::default()
+            };
+        }
+        let map = FrameMap::new(geometry, frame_w, frame_h);
+
+        // Every dab in frame pixels, grouped by stroke, so the bounding box is known before anything
+        // is allocated.
+        let mut strokes: Vec<Stroke> = Vec::new();
+        for s in &brush.strokes {
+            let r = (s.radius * map.radius_scale).max(MIN_RADIUS_PX);
+            let hard = (s.hardness / 100.0).clamp(0.0, 1.0);
+            let pts: Vec<(f32, f32)> = s.points.iter().map(|p| map.point(*p)).collect();
+            let Some(first) = pts.first() else { continue };
+            // ⚠⚠ **Each dab's reference is the pixel under its own centre, read here rather than
+            // stored.** Both ends of the comparison then come from one buffer in one colour space,
+            // which is what lets the gate use lightness as well as chroma — see `auto_mask_gate`.
+            //
+            // ⚠ Read once per dab, never per pixel: a dab covers hundreds of pixels and they all
+            // compare against this one value.
+            //
+            // ⚠ With no base — the CLI, or the tint before a frame has landed — a dab carries no gate
+            // and paints positionally. `Brush::needs_base` plus `BrushCache`'s refusal are what stop
+            // the *render* ever taking that path.
+            let ceiling = auto_mask_ceiling(s.tolerance);
+            let gate_at = |x: f32, y: f32| -> Option<([f32; 3], f32)> {
+                if !s.auto_mask {
+                    return None;
+                }
+                base.map(|b| {
+                    (
+                        color::oklab::prophoto_to_oklab(
+                            b.at(x.max(0.0) as usize, y.max(0.0) as usize),
+                        ),
+                        ceiling,
+                    )
+                })
+            };
+            // ⚠ A single point still paints one dab: a click without a drag is one point, so the
+            // interpolation below must not be the only thing that emits dabs.
+            // A dab entirely outside the clip cannot affect any pixel inside it, so it is dropped
+            // before it can widen the bounding box or cost a buffer. This is where the saving comes
+            // from on a long stroke that runs off-screen — the common case at 1:1.
+            //
+            // ⚠ **An optimisation, not a correctness guard** — verified by replacing this with
+            // `|_, _| true` and watching every test still pass. The bounding box is clamped to the
+            // clip regardless, so an out-of-clip dab would contribute nothing to the output anyway;
+            // what the skip saves is the box being widened to the stroke's full extent and both f32
+            // buffers being sized for it. `a_dab_entirely_outside_the_clip_contributes_nothing`
+            // therefore guards the *output*, not this branch.
+            let keep = |x: f32, y: f32| {
+                !(x + r < cx0 as f32
+                    || x - r >= cx1 as f32
+                    || y + r < cy0 as f32
+                    || y - r >= cy1 as f32)
+            };
+            let mut dabs: Vec<Dab> = Vec::new();
+            if keep(first.0, first.1) {
+                dabs.push(Dab {
+                    x: first.0,
+                    y: first.1,
+                    r,
+                    hard,
+                    gate: gate_at(first.0, first.1),
+                });
+            }
+            for pair in pts.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let len = (dx * dx + dy * dy).sqrt();
+                let step = (r * SPACING).max(0.5);
+                let n = ((len / step).ceil() as usize).max(1);
+                for i in 1..=n {
+                    let t = i as f32 / n as f32;
+                    let (px, py) = (a.0 + dx * t, a.1 + dy * t);
+                    if keep(px, py) {
+                        dabs.push(Dab {
+                            x: px,
+                            y: py,
+                            r,
+                            hard,
+                            gate: gate_at(px, py),
+                        });
+                    }
+                }
+            }
+            strokes.push(Stroke {
+                dabs,
+                flow: (s.flow / 100.0).clamp(0.0, 1.0),
+                erase: s.erase,
+            });
+        }
+        if strokes.iter().all(|s| s.dabs.is_empty()) {
+            return CoverageMap {
+                outside,
+                ..Default::default()
+            };
+        }
+
+        // Bounding box, clipped to the frame.
+        let (mut lx, mut ly, mut hx, mut hy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for d in strokes.iter().flat_map(|s| s.dabs.iter()) {
+            lx = lx.min(d.x - d.r);
+            ly = ly.min(d.y - d.r);
+            hx = hx.max(d.x + d.r);
+            hy = hy.max(d.y + d.r);
+        }
+        // ⚠ Clamped to the CLIP, not the frame. That single change is most of this feature: the box,
+        // and therefore both f32 buffers below, shrink from the stroke's full extent to its visible
+        // part.
+        let x0 = lx.floor().clamp(cx0 as f32, cx1 as f32) as usize;
+        let y0 = ly.floor().clamp(cy0 as f32, cy1 as f32) as usize;
+        let x1 = ((hx.ceil().clamp(cx0 as f32, cx1 as f32) as usize) + 1).min(cx1);
+        let y1 = ((hy.ceil().clamp(cy0 as f32, cy1 as f32) as usize) + 1).min(cy1);
+        if x1 <= x0 || y1 <= y0 {
+            return CoverageMap {
+                outside,
+                ..Default::default()
+            };
+        }
+        let (w, h) = (x1 - x0, y1 - y0);
+
+        // ⚠ One Oklab conversion per pixel of the box, eagerly, rather than one per pixel *per dab*.
+        // Dabs are laid a quarter of a radius apart (`SPACING`) and overlap heavily, so a lazy
+        // per-dab conversion would convert the same pixel a dozen times over. Built only when
+        // something actually gates, so a plain brush pays nothing at all.
+        let base_lab: Option<Vec<[f32; 3]>> = match base {
+            Some(b)
+                if strokes
+                    .iter()
+                    .flat_map(|s| s.dabs.iter())
+                    .any(|d| d.gate.is_some()) =>
+            {
+                let mut v = Vec::with_capacity(w * h);
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        v.push(color::oklab::prophoto_to_oklab(b.at(x, y)));
+                    }
+                }
+                Some(v)
+            }
+            _ => None,
+        };
+
+        let mut cov = vec![0.0f32; w * h];
+        // ⚠ One scratch buffer, reused per stroke. Within a stroke the dabs combine with `max` so a
+        // slow drag is not darker than a fast one; the stroke's result is then composited into `cov`,
+        // so a second pass over the same place *does* build up. That two-level rule is what flow
+        // needs and what a single flattened `max` could never express.
+        let mut layer = vec![0.0f32; w * h];
+        for stroke in &strokes {
+            if stroke.dabs.is_empty() || stroke.flow <= 0.0 {
+                continue;
+            }
+            // Only the sub-rect this stroke touches has to be cleared and composited.
+            let (mut slx, mut sly, mut shx, mut shy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for d in &stroke.dabs {
+                slx = slx.min(d.x - d.r);
+                sly = sly.min(d.y - d.r);
+                shx = shx.max(d.x + d.r);
+                shy = shy.max(d.y + d.r);
+            }
+            let sx0 = (slx.floor().clamp(x0 as f32, x1 as f32) as usize).max(x0);
+            let sy0 = (sly.floor().clamp(y0 as f32, y1 as f32) as usize).max(y0);
+            let sx1 = (((shx.ceil().clamp(0.0, x1 as f32) as usize) + 1).min(x1)).max(sx0);
+            let sy1 = (((shy.ceil().clamp(0.0, y1 as f32) as usize) + 1).min(y1)).max(sy0);
+            for y in sy0..sy1 {
+                for x in sx0..sx1 {
+                    layer[(y - y0) * w + (x - x0)] = 0.0;
+                }
+            }
+            for d in &stroke.dabs {
+                let dx0 = (d.x - d.r).floor().clamp(sx0 as f32, sx1 as f32) as usize;
+                let dy0 = (d.y - d.r).floor().clamp(sy0 as f32, sy1 as f32) as usize;
+                let dx1 = (((d.x + d.r).ceil().clamp(0.0, sx1 as f32) as usize) + 1).min(sx1);
+                let dy1 = (((d.y + d.r).ceil().clamp(0.0, sy1 as f32) as usize) + 1).min(sy1);
+                for y in dy0..dy1 {
+                    for x in dx0..dx1 {
+                        let dist = (((x as f32 + 0.5) - d.x).powi(2)
+                            + ((y as f32 + 0.5) - d.y).powi(2))
+                        .sqrt();
+                        let a = dab_alpha(dist, d.r, d.hard);
+                        // ⚠⚠ The gate multiplies the dab's alpha **before** the per-stroke `max`
+                        // below, and that is what per-dab references force: two dabs on opposite
+                        // sides of a ridge carry different references, so a gate applied after the
+                        // `max` could only ever honour one of them.
+                        //
+                        // ⚠ With no base — the CLI before this landed, or the tint outside the
+                        // rendered region — an auto-masked dab paints positionally. Documented
+                        // degradation, not an error; `Brush::needs_base` plus `BrushCache`'s refusal
+                        // are what stop the *render* ever taking that path.
+                        let slot = &mut layer[(y - y0) * w + (x - x0)];
+                        // ⚠⚠ **Short-circuit before the gate, and it is sound rather than an
+                        // approximation.** Dabs within a stroke combine with `max`, and the gate can
+                        // only ever *reduce* an alpha — so a dab whose positional alpha already loses
+                        // the `max` cannot change this pixel however its gate resolves. Worth having
+                        // because dabs are laid `SPACING` (a quarter radius) apart and overlap
+                        // heavily, so most of them lose.
+                        if a <= *slot {
+                            continue;
+                        }
+                        let a = match (&d.gate, &base_lab) {
+                            (Some((r, ceil)), Some(lab)) => {
+                                a * auto_mask_gate(lab[(y - y0) * w + (x - x0)], *r, *ceil)
+                            }
+                            _ => a,
+                        };
+                        *slot = slot.max(a);
+                    }
+                }
+            }
+            for y in sy0..sy1 {
+                for x in sx0..sx1 {
+                    let idx = (y - y0) * w + (x - x0);
+                    let a = layer[idx] * stroke.flow;
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    // ⚠⚠ **The same two rules `MaskOp` offers BETWEEN masks, called from here so the
+                    // two cannot drift.** `Subtract` is `c * (1 - a)` and `Add` is the standard
+                    // "over" — a second pass adds a fraction of what is still uncovered, so repeated
+                    // strokes approach full coverage without ever exceeding it.
+                    //
+                    // ⚠ Bit-identical to the two expressions this replaces (`c *= 1-a` and
+                    // `c += (1-c)*a` are the same f32 operations in the same order), which is what
+                    // the 60 byte-identical goldens prove rather than merely "still green".
+                    //
+                    // ⚠ This is the whole argument for the product algebra between masks:
+                    // erase-within-a-brush and subtract-between-masks are now ONE rule, not two that
+                    // happen to agree at the endpoints and diverge at every partial coverage.
+                    let op = if stroke.erase {
+                        edit_model::MaskOp::Subtract
+                    } else {
+                        edit_model::MaskOp::Add
+                    };
+                    cov[idx] = op.combine(cov[idx], a);
+                }
+            }
+        }
+
+        let invert = brush.invert;
+        let data = cov
+            .iter()
+            .map(|c| {
+                let c = if invert { 1.0 - *c } else { *c };
+                // ⚠ NaN reaches 0 through the cast, not the clamp: `f32::clamp` propagates NaN while
+                // Rust's float-to-int casts saturate. The same note `ImageBuf::quantize` carries.
+                (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+            })
+            .collect();
+
+        CoverageMap {
+            x0,
+            y0,
+            w,
+            h,
+            data,
+            outside,
+        }
+    }
+
     use edit_model::{BrushStroke, CropRect};
 
     fn dot(x: f32, y: f32, radius: f32, hardness: f32, erase: bool) -> BrushStroke {
