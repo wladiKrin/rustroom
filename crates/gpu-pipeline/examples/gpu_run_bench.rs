@@ -70,7 +70,31 @@ fn main() {
     graded.color_grading.shadows.saturation = 30.0;
     graded.color_grading.shadows.hue = 250.0;
 
-    let cases: [(&str, Edits); 3] = [
+    // ⚠⚠ **The case M8.3e exists for, and it is the one an ordinary photograph runs.** Exposure,
+    // the tone regions and the camera rendering — active on 57%, 50% and **100%** of this
+    // catalogue's 40 sidecars, against hsl's 0%. Every stage in it is per-pixel and they are
+    // contiguous, because `build_pipeline_split` pushes a stage only when `is_active()`, so the
+    // eleven this user never touches are not obstacles in the middle of the tail: they are absent.
+    let mut typical = Edits {
+        exposure: 0.45,
+        whites: 25.0,
+        blacks: -20.0,
+        ..Edits::default()
+    };
+    typical.rendering = Some(edit_model::Rendering::Camera);
+
+    // ⚠ The case the cost gate deliberately declines: `output_transform` alone, 28.6 ms of work
+    // against a 34 ms transfer. It must report **no chain at all**, and a speed-up of ~1.00x
+    // because nothing was accelerated — not a number below 1.00x, which would mean the gate
+    // failed to fire.
+    let colorimetric = Edits::default();
+
+    let cases: [(&str, Edits); 5] = [
+        ("TYPICAL: exposure + tone regions + rendering", typical),
+        (
+            "unedited, colorimetric (the gate should decline)",
+            colorimetric,
+        ),
         ("hsl only (M8.3b's case)", hsl_edits()),
         ("hsl + sharpening (one chain)", sharpened(hsl_edits())),
         ("hsl + grade + sharpening (one chain)", graded),

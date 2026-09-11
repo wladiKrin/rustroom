@@ -126,17 +126,32 @@ fn main() {
     // invented.** Dehaze is active on 100% of them, exposure on 57%, blacks 55%, whites 50% —
     // and the three accelerated stages on 5%, 2.5% and 2.5%. A bench that only measures the
     // stages we ported measures a photograph nobody here edits.
-    let typical = Edits {
+    let mut typical = Edits {
         exposure: 0.45,
         whites: 25.0,
         blacks: -20.0,
         dehaze: edit_model::Dehaze { amount: 35.0 },
         ..Edits::default()
     };
+    // ⚠⚠ **The camera rendering, which this case was missing and which changes what it measures.**
+    // `Edits::default()` leaves `rendering` *undecided*, and undecided applies as OFF — but a
+    // fresh photo is seeded `Some(Camera)` by `Settings::default_rendering`, and it is active on
+    // **100% of this catalogue's 40 sidecars**. Without it this row measured a tail with no
+    // display rendering in it: exactly the stage M8.3e exists for.
+    typical.rendering = Some(edit_model::Rendering::Camera);
 
-    let cases: [(&str, &Edits); 4] = [
+    // ⚠ And the neutral row gets it too, for the same reason: "neutral" for this user means an
+    // unedited photo *with* the camera rendering, not a colorimetric one. The colorimetric case is
+    // the one the cost gate deliberately leaves on the CPU, and it is named separately below.
+    let neutral_rendered = Edits {
+        rendering: Some(edit_model::Rendering::Camera),
+        ..Edits::default()
+    };
+
+    let cases: [(&str, &Edits); 5] = [
         ("TYPICAL of this catalogue", &typical),
-        ("neutral (no GPU stage at all)", &Edits::default()),
+        ("unedited, camera rendering", &neutral_rendered),
+        ("unedited, colorimetric", &Edits::default()),
         ("hsl only", &hsl_only),
         ("hsl + grade + sharpening", &three),
     ];
