@@ -130,6 +130,19 @@ impl ColorGradingStage {
             a[2] + (b[2] - a[2]) * f,
         ]
     }
+
+    /// The `(da, db, dl)` table, one entry per lightness step.
+    ///
+    /// ⚠⚠ **Exposed so a GPU twin uploads THIS table rather than rebuilding it.** Two
+    /// constructions of one table is how they come to disagree about Blending and Balance — and
+    /// nothing in the rendered image would announce it, because both answers are plausible
+    /// photographs. The rule `HueTable::entries` already follows, for the same reason.
+    ///
+    /// ⚠ A caller reproducing the lookup must clamp the **index**, never the value — see the
+    /// headroom warning on [`Self::grade_at`].
+    pub fn lut(&self) -> &[[f32; 3]] {
+        &self.lut
+    }
 }
 
 impl PipelineStage for ColorGradingStage {
