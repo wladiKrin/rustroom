@@ -217,7 +217,10 @@ git commit -m "probe: RUSTROOM_DEBUG_MASK decomposes a mask into coverage, clone
 what validates the reference before it is used to guard a change — the rule `downscale_to`'s and
 the 8-bit pack's parallelisations each followed.
 
-- [ ] **Step 1: Write the reference and the test**
+- [ ] **Step 1: Write the fixture and the test**
+
+⚠ This step does not compile on its own — it calls `rasterize_in_reference`, which Step 2 creates.
+The two land in one commit.
 
 Append to the `#[cfg(test)] mod tests` block in `crates/pipeline/src/brush/raster.rs`:
 
@@ -293,51 +296,65 @@ Append to the `#[cfg(test)] mod tests` block in `crates/pipeline/src/brush/raste
         }
     }
 
-    /// ⚠⚠ A **sequential reference written inline and deliberately NOT shared with production** —
-    /// a reference that called the code under test could not witness a change to it. This is the
-    /// rule `downscale_to`'s and the 8-bit pack's parallelisations each followed.
-    ///
-    /// It reproduces today's three-pass shape exactly: clear the stroke's sub-rect of one reused
-    /// `layer`, splat every dab with the short-circuit, then composite the sub-rect into `cov`.
-    fn reference_coverage(
-        brush: &Brush,
-        geometry: &Geometry,
-        frame_w: usize,
-        frame_h: usize,
-        base: &(dyn BasePixels + Sync),
-    ) -> Vec<u8> {
-        let map = rasterize_in(brush, geometry, frame_w, frame_h, None, Some(base));
-        // The reference is the *map read back over the whole frame*, which is what any consumer
-        // sees and is independent of how the box happens to be placed.
-        (0..frame_h)
-            .flat_map(|y| (0..frame_w).map(move |x| (x, y)))
-            .map(|(x, y)| map.at(x, y))
-            .collect()
-    }
-
     #[test]
     fn the_rasterizer_is_bit_identical_to_its_reference() {
-        // ⚠ Written against the SEQUENTIAL implementation first: it must pass before the
-        // parallelisation lands, which is what proves the reference describes today's behaviour
-        // rather than tomorrow's.
+        // ⚠⚠ **`rasterize_in_reference` is a VERBATIM COPY of today's `rasterize_in`, living in
+        // the test module and deliberately NOT shared with production.** A "reference" that
+        // delegated to the function under test would compare it against itself and pass forever —
+        // the vacuous shape this project records more often than any other. It is the rule
+        // `downscale_to`'s and the 8-bit pack's parallelisations each followed.
         let b = gather_fixture();
         let g = Geometry::default();
-        let a = reference_coverage(&b, &g, 80, 60, &HalfBase);
-        let c = rasterize_in(&b, &g, 80, 60, None, Some(&HalfBase));
-        let live: Vec<u8> = (0..60)
-            .flat_map(|y| (0..80).map(move |x| (x, y)))
-            .map(|(x, y)| c.at(x, y))
-            .collect();
-        assert_eq!(a.len(), live.len(), "fixture check: both cover the whole frame");
+        let want = rasterize_in_reference(&b, &g, 80, 60, None, Some(&HalfBase));
+        let got = rasterize_in(&b, &g, 80, 60, None, Some(&HalfBase));
+        let read = |m: &CoverageMap| -> Vec<u8> {
+            (0..60)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .map(|(x, y)| m.at(x, y))
+                .collect()
+        };
+        let (want, got) = (read(&want), read(&got));
         assert!(
-            live.iter().any(|&v| v > 0) && live.iter().any(|&v| v == 0),
+            got.iter().any(|&v| v > 0) && got.iter().any(|&v| v == 0),
             "fixture check: the brush must both cover and not cover, or this test is vacuous"
         );
-        assert_eq!(a, live, "the rasterizer must be bit-identical to its reference");
+        assert!(
+            got.iter().any(|&v| v > 0 && v < 255),
+            "fixture check: some coverage must be partial, or the gate and the max are untested"
+        );
+        assert_eq!(want, got, "the rasterizer must be bit-identical to its reference");
     }
 ```
 
-- [ ] **Step 2: Run it and watch it pass against the unchanged code**
+- [ ] **Step 2: Create the reference as a verbatim copy**
+
+⚠ Do this by copying, not by retyping — the reference's value is that it is *exactly* today's
+code.
+
+1. Copy the whole of `pub fn rasterize_in(..) -> CoverageMap { .. }` into the `#[cfg(test)] mod
+   tests` block.
+2. Rename the copy to `rasterize_in_reference` and drop its `pub`.
+3. Delete the two `RUSTROOM_DEBUG_MASK` timer blocks and their `let t_lab` / `let d_lab` /
+   `let t_dabs` / `let d_dabs` bindings from the copy — instrumentation is not behaviour, and
+   leaving it would print twice per call.
+4. Put this doc comment on it:
+
+```rust
+    /// A verbatim copy of `rasterize_in` as it stood before M8.3i parallelised it: sequential
+    /// Oklab conversion, and a per-stroke three-pass scatter into a reused `layer`.
+    ///
+    /// ⚠⚠ **Deliberately duplicated rather than shared.** Its whole value is being an
+    /// independent witness: a reference that called `rasterize_in` could not see a change to
+    /// `rasterize_in`. It is frozen — when the shipped function changes, this one must NOT be
+    /// updated to match; if the two disagree, that is the finding.
+    ///
+    /// ⚠ It will drift out of resemblance over time, which is expected and is the cost of the
+    /// guarantee. Delete it only when the parallel implementation has been shipped long enough
+    /// that the goldens are the accepted oracle.
+    #[allow(clippy::too_many_arguments)]
+
+
+- [ ] **Step 3: Run it and watch it pass against the unchanged code**
 
 ```bash
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/libraw/lib/pkgconfig:/opt/homebrew/opt/little-cms2/lib/pkgconfig:$PKG_CONFIG_PATH"
@@ -348,23 +365,26 @@ echo "TEST=$?"; grep -E "test result|passed" /tmp/rr-m83i-t2-$$.log
 Expected: `TEST=0` and **`1 passed`**. ⚠ Read the passed-count, not the word `ok` — a filter that
 matches nothing prints `0 passed; N filtered out` and reads as green.
 
-- [ ] **Step 3: Sabotage the fixture to prove it discriminates**
+- [ ] **Step 4: Sabotage to prove it discriminates**
 
 Copy first: `cp crates/pipeline/src/brush/raster.rs /tmp/rr-m83i-raster-t2.bak`
 
-In `reference_coverage`, change the inner call's `Some(base)` to `None` (so the reference ignores
-the gate while the live call honours it). Re-run Step 2. Expected: **`1 failed`** naming
-`the_rasterizer_is_bit_identical_to_its_reference`. If it passes, the fixture's gating stroke does
-not cross the base's split — widen it and repeat.
+In `rasterize_in_reference`, change its dab loop's `*slot = slot.max(a);` to `*slot = a;` (a wrong
+combine that a weak fixture would not notice). Re-run Step 3. Expected: **`1 failed`** naming
+`the_rasterizer_is_bit_identical_to_its_reference`.
+
+⚠ If it passes, the fixture has no overlapping dabs where the later one loses — strengthen
+`gather_fixture` and repeat before continuing, because that is exactly the property Task 4's
+gather must preserve.
 
 Restore: `cp /tmp/rr-m83i-raster-t2.bak crates/pipeline/src/brush/raster.rs` and confirm
 `git diff --stat` shows only the intended addition.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add crates/pipeline/src/brush/raster.rs
-git commit -m "test: a sequential reference pins the rasterizer's output bit for bit"
+git commit -m "test: a frozen sequential copy pins the rasterizer's output bit for bit"
 ```
 
 ---
@@ -603,8 +623,8 @@ Expected: `TEST=0`, every `test result: ok`, **including all 63 goldens and ever
 `brush::raster` test with its assertions unchanged** — that is the acceptance criterion, not
 "still green".
 
-⚠ If `the_rasterizer_is_bit_identical_to_its_reference` fails, do **not** relax it. The reference
-is the shipped behaviour. The likely causes, in order: dabs visited out of stroke order; the
+⚠ If `the_rasterizer_is_bit_identical_to_its_reference` fails, do **not** relax it and do **not**
+edit `rasterize_in_reference` to match. That copy is frozen and is the shipped behaviour. The likely causes, in order: dabs visited out of stroke order; the
 short-circuit moved after the gate; `scratch` not cleared per row; `cov_row` indexed by `x - sx0`
 instead of `x - x0`.
 
