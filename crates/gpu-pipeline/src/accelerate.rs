@@ -1,6 +1,8 @@
 //! Swapping runs of CPU stages for GPU chains in a built pipeline.
 
-use crate::{GpuChain, GpuContext, GpuGradingStage, GpuHslStage, GpuSharpenStage, GpuStage};
+use crate::{
+    GpuChain, GpuContext, GpuExposureStage, GpuGradingStage, GpuHslStage, GpuSharpenStage, GpuStage,
+};
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, RenderScale};
 use std::sync::Arc;
@@ -23,7 +25,12 @@ type Builder = fn(&Edits, RenderScale, &Arc<GpuContext>) -> Box<dyn GpuStage>;
 /// ⚠ Every name here must occur **at most once** in a tail, which is what makes the lookup sound.
 /// A mask's own stages live inside `MaskStage`, which the tail sees as one opaque stage — asserted
 /// by `the_replaceable_names_occur_at_most_once_in_a_tail`.
+/// ⚠ Kept in **tail order**. The order does not affect the lookup, but a table that reads in
+/// pipeline order is one a reader can check against `build_pipeline_split_in_region` by eye.
 const REPLACEABLE: &[(&str, Builder)] = &[
+    ("exposure", |e, _, ctx| {
+        Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
+    }),
     ("hsl", |e, _, ctx| Box::new(GpuHslStage::new(&e.hsl, ctx))),
     ("color_grading", |e, _, ctx| {
         Box::new(GpuGradingStage::new(&e.color_grading, ctx))
@@ -144,6 +151,31 @@ mod tests {
     #[test]
     fn an_empty_run_is_not_a_chain() {
         assert!(!worth_a_chain(&[]));
+    }
+
+    /// ⚠⚠ Exposure alone must **not** become a chain — 1.3 ms of work against a 34 ms transfer.
+    ///
+    /// ⚠ Written *before* the `REPLACEABLE` row, when it passes for the trivial reason that
+    /// exposure is not yet replaceable at all. That is the point: it pins the behaviour first, so
+    /// that once the row lands the test is passing because of the **gate** rather than because of
+    /// an absence. A test written afterwards could not tell those two apart.
+    #[test]
+    fn exposure_alone_is_not_worth_a_chain() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits {
+            exposure: 0.45,
+            ..Edits::default()
+        };
+        let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
+        let names: Vec<_> = accelerate(tail, &e, SCALE, &ctx)
+            .into_stages()
+            .iter()
+            .map(|s| s.name())
+            .collect();
+        assert!(
+            names.contains(&"exposure"),
+            "expected the CPU exposure stage, got {names:?}"
+        );
     }
 
     fn ctx() -> Option<Arc<GpuContext>> {
@@ -395,8 +427,15 @@ mod tests {
         // ⚠ The other half. Without it, a substitution that replaced the FIRST stage rather than a
         // named one would still pass the test above.
         let Some(ctx) = ctx() else { return };
+        // ⚠⚠ The fixture was `exposure` until M8.3e made exposure replaceable, and the fixture
+        // check below is what said so — loudly, rather than letting this test quietly stop
+        // testing anything. ⚠ It has to be re-chosen again the moment the vignette or the
+        // creative look is ported, and the check is what will say when.
         let e = Edits {
-            exposure: 0.5,
+            vignette: edit_model::Vignette {
+                amount: -40.0,
+                ..Default::default()
+            },
             ..Edits::default()
         };
         let tail = tail_of(&e);
@@ -407,6 +446,8 @@ mod tests {
                 .any(|b| REPLACEABLE.iter().any(|(n, _)| n == b)),
             "fixture check: nothing here is replaceable, got {before:?}"
         );
+        // ⚠ And it must not be empty, or "unchanged" would be vacuously true.
+        assert!(before.len() >= 2, "fixture check: got {before:?}");
         assert_eq!(accelerate(tail, &e, SCALE, &ctx).stage_names(), before);
     }
 
