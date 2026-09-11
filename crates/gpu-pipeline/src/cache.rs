@@ -78,6 +78,13 @@ impl GpuCache {
         entry_points: &[&'static str],
     ) -> (wgpu::BindGroupLayout, Vec<wgpu::ComputePipeline>) {
         let mut map = Self::lock(&self.programs);
+        // ⚠⚠ **Carried across a re-insert rather than set to 1, and a sabotage is what found
+        // that.** With `misses: 1` written afresh each time, a cache that compiled on *every*
+        // call still reported 1 — so `a_second_run_of_the_same_chain_compiles_nothing` passed
+        // against a cache that did nothing at all. Counting compilations rather than describing
+        // the current entry is what makes the observable able to see its own absence.
+        #[cfg(test)]
+        let misses = map.get(shader).map_or(0, |p: &Program| p.misses) + 1;
         if !map.contains_key(shader) {
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some(label),
@@ -100,7 +107,7 @@ impl GpuCache {
                     module,
                     pipelines: HashMap::new(),
                     #[cfg(test)]
-                    misses: 1,
+                    misses,
                 },
             );
         }
@@ -341,6 +348,23 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         };
         let cache = GpuCache::default();
         let d = &ctx.device;
+
+        // ⚠⚠ **The pool must be SEEDED first, and leaving that out is what made the first
+        // version of this test pass against the very bug it names.** With nothing ever put back,
+        // both takes find an empty pool and allocate, so the take-from-pool branch — the one a
+        // buffer-sharing bug lives in — is never reached. A fixture has to contain the thing a
+        // wrong implementation would be attracted to.
+        let seed = cache
+            .take_staging(d, 4096)
+            .expect("a buffer to seed the pool with");
+        seed.unmap();
+        cache.put_staging(seed);
+        assert_eq!(
+            cache.allocations(),
+            1,
+            "fixture check: the pool holds one buffer"
+        );
+
         let a = cache
             .take_staging(d, 4096)
             .expect("the first render's buffer");

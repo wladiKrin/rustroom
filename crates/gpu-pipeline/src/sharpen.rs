@@ -257,10 +257,58 @@ impl GpuStage for GpuSharpenStage {
             .replace("HALO_KNEE", &format!("{HALO_KNEE:?}"))
             .replace("LUMA_EPS", &format!("{LUMA_EPS:?}"))
             .replace("GAIN_MAX", &format!("{GAIN_MAX:?}"));
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("sharpen"),
-            source: wgpu::ShaderSource::Wgsl(src.into()),
-        });
+        // ⚠ The mask passes sit between `difference` and `apply_gain` because `apply_gain` reads
+        // the mask and `magnitude` reads the difference — the order is the data dependency, not a
+        // convention.
+        let names: Vec<&'static str> = if self.masking {
+            PASSES[..4]
+                .iter()
+                .chain(MASK_PASSES.iter())
+                .chain(PASSES[4..].iter())
+                .copied()
+                .collect()
+        } else {
+            PASSES.to_vec()
+        };
+
+        let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let rw = wgpu::BufferBindingType::Storage { read_only: false };
+        let ro = wgpu::BufferBindingType::Storage { read_only: true };
+
+        // ⚠⚠ One lookup for the module, the layout and **all eight** pipelines. Sharpen creates
+        // more pipeline objects per encode than every other stage put together, so it is the
+        // largest single beneficiary of the program cache even though it is not a `Dispatch`
+        // client — it encodes eight dispatches over shared scratch planes, which is a different
+        // shape wearing a similar name.
+        //
+        // ⚠ The masking and non-masking cases ask for different entry-point lists against the
+        // **same** shader text, which the cache handles: the entry is shared and the three mask
+        // pipelines are compiled the first time masking is on.
+        let (layout, pipelines) = ctx.cache.program(
+            device,
+            "sharpen",
+            &src,
+            &[
+                entry(0, rw),
+                entry(1, wgpu::BufferBindingType::Uniform),
+                entry(2, ro),
+                entry(3, ro),
+                entry(4, rw),
+                entry(5, rw),
+                entry(6, rw),
+                entry(7, rw),
+            ],
+            &names,
+        );
 
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sharpen-params"),
@@ -284,31 +332,6 @@ impl GpuStage for GpuSharpenStage {
         let kern = upload(&self.kernel, "sharpen-kernel");
         let mkern = upload(&self.mask_kernel, "sharpen-mask-kernel");
 
-        let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let rw = wgpu::BufferBindingType::Storage { read_only: false };
-        let ro = wgpu::BufferBindingType::Storage { read_only: true };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sharpen-layout"),
-            entries: &[
-                entry(0, rw),
-                entry(1, wgpu::BufferBindingType::Uniform),
-                entry(2, ro),
-                entry(3, ro),
-                entry(4, rw),
-                entry(5, rw),
-                entry(6, rw),
-                entry(7, rw),
-            ],
-        });
         // ⚠ Written out rather than built by a helper closure: a closure returning a
         // `BindGroupEntry` cannot express that its borrow outlives its own call, and the compiler
         // says so.
@@ -335,35 +358,8 @@ impl GpuStage for GpuSharpenStage {
             layout: &layout,
             entries: &entries,
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sharpen-pipeline-layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-
-        // ⚠ The mask passes sit between `difference` and `apply_gain` because `apply_gain` reads
-        // the mask and `magnitude` reads the difference — the order is the data dependency, not a
-        // convention.
-        let names: Vec<&str> = if self.masking {
-            PASSES[..4]
-                .iter()
-                .chain(MASK_PASSES.iter())
-                .chain(PASSES[4..].iter())
-                .copied()
-                .collect()
-        } else {
-            PASSES.to_vec()
-        };
-        for name in names {
-            let compute = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("sharpen-pipeline"),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some(name),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-            pass.set_pipeline(&compute);
+        for compute in &pipelines {
+            pass.set_pipeline(compute);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(row_groups, col_groups, 1);
         }
