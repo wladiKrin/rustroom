@@ -12,6 +12,9 @@
 pub struct GpuContext {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
+    /// ⚠ The wgpu objects that outlive a render. Here rather than on `GpuChain` because
+    /// `accelerate` rebuilds every chain and stage per render — see `cache.rs`.
+    pub(crate) cache: crate::cache::GpuCache,
     adapter_name: String,
     backend: String,
 }
@@ -43,6 +46,7 @@ impl GpuContext {
         Some(Self {
             device,
             queue,
+            cache: Default::default(),
             adapter_name: info.name,
             backend: format!("{:?}", info.backend),
         })

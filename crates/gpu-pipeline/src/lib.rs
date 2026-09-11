@@ -8,6 +8,7 @@
 //! ⚠ Nothing in the app uses this crate. See the spec's §8 for why that is deliberate.
 
 mod accelerate;
+mod cache;
 mod chain;
 mod context;
 mod dispatch;

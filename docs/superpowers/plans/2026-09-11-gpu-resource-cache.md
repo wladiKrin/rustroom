@@ -89,7 +89,27 @@ worth it, but not once per edit.
 
 ---
 
-## Task 1: `GpuCache`, and `Dispatch` uses it
+## ⚠⚠ Two corrections found by executing this plan, recorded in place
+
+1. **Task 4 had to merge into Task 1.** The plan applied the dead-code rule to `program` and not to
+   `staging`, which has no production caller until Task 4 — so `-D warnings` rejected the lib with
+   *"method `staging` is never used"* and *"fields `staging` and `allocations` are never read"*.
+   The rule was right and under-applied. `chain.rs`'s staging change now lands in Task 1, and
+   **Task 4 below is struck through**.
+   ⚠ The `misses` field needed `#[cfg(test)]` on the field itself: it is read only from
+   `#[cfg(test)]` code, so it is dead in the lib target **for ever**, not merely until Task 4.
+
+2. **⚠⚠ One staging buffer was WRONG, and the parallel test suite found it as 28 failures.**
+   `Buffer is already mapped`, plus wrong pixels in `a_subnormal_result_is_flushed_to_zero_on_the_gpu`.
+   The cache is process-wide while rendering is not — Compare gives each pane its own
+   `RenderEngine` on its own thread and the full-resolution worker is a third, so two renders took
+   the same buffer and trampled each other. **This would have been a real corruption bug in
+   Compare, not a test artefact.** The single slot is now a `Vec` pool with `take_staging` /
+   `put_staging`, capped at `MAX_STAGING = 4`, returned only after `poll(Wait)` confirms the
+   submission finished. `two_renders_in_flight_never_share_a_buffer` is the regression guard.
+   ⚠ "Grow, never shrink" is unchanged: a buffer too small for the render asking is dropped.
+
+## Task 1: `GpuCache`, `Dispatch` and the pooled staging buffer
 
 **Files:**
 - Create: `crates/gpu-pipeline/src/cache.rs`
@@ -800,7 +820,7 @@ EOF
 
 ---
 
-## Task 4: the cached staging buffer
+## ~~Task 4: the cached staging buffer~~ — MERGED INTO TASK 1, see the corrections above
 
 **Files:**
 - Modify: `crates/gpu-pipeline/src/chain.rs`

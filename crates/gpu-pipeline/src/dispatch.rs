@@ -48,10 +48,36 @@ impl Dispatch<'_> {
         let device = &ctx.device;
         let (row_groups, col_groups) = Self::grid(img.pixels());
 
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(self.label),
-            source: wgpu::ShaderSource::Wgsl(self.shader.into()),
-        });
+        let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let mut layout_entries = vec![
+            entry(0, wgpu::BufferBindingType::Storage { read_only: false }),
+            entry(1, wgpu::BufferBindingType::Uniform),
+        ];
+        for i in 0..self.storages.len() as u32 {
+            layout_entries.push(entry(
+                2 + i,
+                wgpu::BufferBindingType::Storage { read_only: true },
+            ));
+        }
+
+        // ⚠⚠ The module, the layout and the pipeline come from the cache; the uniform, the
+        // storages and the bind group do **not**. Measured at 3200x2136: the three cached objects
+        // are the ~0.1-0.15 ms per stage that this removes, while the uniform and the LUTs cost
+        // 0.01-0.03 ms and carry **this render's edits**, so caching them would add an
+        // invalidation risk whose failure mode is a wrong picture rather than a slow one.
+        let (layout, pipelines) =
+            ctx.cache
+                .program(device, self.label, &self.shader, &layout_entries, &["main"]);
+
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(self.label),
             size: self.params.len() as u64,
@@ -77,31 +103,6 @@ impl Dispatch<'_> {
             })
             .collect();
 
-        let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let mut layout_entries = vec![
-            entry(0, wgpu::BufferBindingType::Storage { read_only: false }),
-            entry(1, wgpu::BufferBindingType::Uniform),
-        ];
-        for i in 0..buffers.len() as u32 {
-            layout_entries.push(entry(
-                2 + i,
-                wgpu::BufferBindingType::Storage { read_only: true },
-            ));
-        }
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(self.label),
-            entries: &layout_entries,
-        });
-
         let mut bind_entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -124,20 +125,7 @@ impl Dispatch<'_> {
             entries: &bind_entries,
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(self.label),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let compute = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(self.label),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        pass.set_pipeline(&compute);
+        pass.set_pipeline(&pipelines[0]);
         pass.set_bind_group(0, &bind, &[]);
         pass.dispatch_workgroups(row_groups, col_groups, 1);
     }

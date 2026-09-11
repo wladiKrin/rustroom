@@ -132,14 +132,18 @@ impl GpuChain {
         // ⚠ A `MAP_WRITE` staging buffer rather than `queue.write_buffer`: measured 1.86 ms
         // against 3.90 for 19.6 MB, a 2.1x difference. The memcpy into mapped memory is the
         // floor (0.8-0.9 ms) and wgpu exposes no way around it.
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("chain-staging"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
-        });
+        // ⚠⚠ **Cached, and this is the largest single saving in M8.3f.** Measured at 3200x2136:
+        // creating this buffer fresh costs **7.2 ms per render**, while the 82 MB image buffer
+        // costs 0.05 ms and the 82 MB readback buffer 0.02 — same size, same device. It is
+        // `mapped_at_creation: true` that is expensive, not the allocation, and reuse replaces it
+        // with a `map_async` measured at **0.00-0.01 ms**.
+        //
+        // ⚠ `slice(..bytes)` rather than `slice(..)`: the cached buffer may be **larger** than
+        // this render needs, and the copy below is likewise given `bytes`. That is what makes a
+        // grown buffer serving a smaller render correct by construction.
+        let staging = ctx.cache.take_staging(device, bytes)?;
         staging
-            .slice(..)
+            .slice(..bytes)
             .get_mapped_range_mut()
             .copy_from_slice(bytemuck::cast_slice(image.data()));
         staging.unmap();
@@ -193,6 +197,11 @@ impl GpuChain {
         let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);
+        // ⚠ Returned only **here**, after `poll(Wait)` has confirmed the submission finished —
+        // the GPU reads this buffer during the submit, so handing it back any earlier would let
+        // the next render map a buffer still being read. On the `?` paths above it is simply
+        // dropped and the next render allocates; that is rare and costs one allocation.
+        ctx.cache.put_staging(staging);
         Some(out)
     }
 }
