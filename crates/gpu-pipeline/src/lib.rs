@@ -14,6 +14,7 @@ mod equivalence;
 mod exposure;
 mod hsl;
 mod image;
+mod oklab_wgsl;
 mod sharpen;
 
 pub use accelerate::accelerate;

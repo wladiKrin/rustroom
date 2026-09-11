@@ -15,11 +15,8 @@ const MAX_GROUPS_PER_DIM: u32 = 65535;
 const CHROMA_EPS: f32 = 1e-6;
 const CHROMA_FADE: f32 = 0.02;
 
-/// ⚠⚠ **`sign(x) * pow(abs(x), 1/3)`, never `pow(x, 1/3)`.** WGSL's `pow` returns NaN for a
-/// negative base, and the CPU uses `cbrt` **specifically because it is sign-preserving** — a wide
-/// working space produces scene-referred negatives routinely, and `color::oklab` says so at the
-/// call site. A naive port turns every such pixel into NaN, which then propagates through the
-/// output matrix and paints holes.
+/// ⚠ The Oklab conversions come from `oklab_wgsl::OKLAB_WGSL`, shared with the grading shader —
+/// including the `cbrt_signed` trap, which is documented there.
 const SHADER: &str = r#"
 struct Params {
     pixels: u32,
@@ -35,8 +32,6 @@ struct Params {
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read> table: array<f32>;
 
-fn cbrt_signed(x: f32) -> f32 { return sign(x) * pow(abs(x), 0.3333333333); }
-
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let pixel = id.y * (params.row_groups * 64u) + id.x;
@@ -44,14 +39,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = pixel * 3u;
     let r = data[p]; let g = data[p + 1u]; let bl = data[p + 2u];
 
-    // ProPhoto -> Oklab, the same fused matrix as color::prophoto_to_oklab.
-    let lc = 0.7153451038*r + 0.3527967327*g - 0.0682510308*bl;
-    let mc = 0.2744153967*r + 0.6678313229*g + 0.0577801949*bl;
-    let sc = 0.1098335093*r + 0.1862950046*g + 0.7043511321*bl;
-    let l_ = cbrt_signed(lc); let m_ = cbrt_signed(mc); let s_ = cbrt_signed(sc);
-    let bigL = 0.2104542553*l_ + 0.7936177850*m_ - 0.0040720468*s_;
-    let A = 1.9779984951*l_ - 2.4285922050*m_ + 0.4505937099*s_;
-    let B = 0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_;
+    // ⚠ The shared prelude, so this shader and the grading one cannot disagree about the
+    // matrices. See `oklab_wgsl::OKLAB_WGSL`.
+    let lab = prophoto_to_oklab(r, g, bl);
+    let bigL = lab.x; let A = lab.y; let B = lab.z;
 
     let chroma = sqrt(A*A + B*B);
     // ⚠ The early-out is a BRANCH, matching the CPU's `return rgb`. Computing a near-zero
@@ -86,14 +77,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let A2 = k * (A * cd - B * sd);
     let B2 = k * (A * sd + B * cd);
 
-    // Oklab -> ProPhoto.
-    let li = L2 + 0.3963377774*A2 + 0.2158037573*B2;
-    let mi = L2 - 0.1055613458*A2 - 0.0638541728*B2;
-    let si = L2 - 0.0894841775*A2 - 1.2914855480*B2;
-    let l3 = li*li*li; let m3 = mi*mi*mi; let s3 = si*si*si;
-    data[p]      = max(1.7386588588*l3 - 0.9880931444*m3 + 0.2495310446*s3, 0.0);
-    data[p + 1u] = max(-0.7071491793*l3 + 1.9343303974*m3 - 0.2272015198*s3, 0.0);
-    data[p + 2u] = max(-0.0840839768*l3 - 0.3575352425*m3 + 1.4409285251*s3, 0.0);
+    let out = oklab_to_prophoto(L2, A2, B2);
+    data[p]      = max(out.x, 0.0);
+    data[p + 1u] = max(out.y, 0.0);
+    data[p + 2u] = max(out.z, 0.0);
 }
 "#;
 
@@ -147,7 +134,9 @@ impl GpuStage for GpuHslStage {
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hsl"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!("{}{}", crate::oklab_wgsl::OKLAB_WGSL, SHADER).into(),
+            ),
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hsl-params"),
