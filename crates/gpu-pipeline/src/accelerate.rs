@@ -366,6 +366,39 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **A colorimetric frame now takes a GPU path it has never taken, so it must still be
+    /// the CPU's picture.** The pieces are covered — `output_transform`'s own equivalence test,
+    /// and M8.3g's byte-against-float frame test — but nothing covered the *combination*, which
+    /// is exactly what M8.3h newly creates. A chain that rendered a plausible-but-different
+    /// neutral photograph would pass every other test in this file.
+    ///
+    /// ⚠ The bound is the **per-stage** one (0.01 of an 8-bit level), not the three-stage chain's
+    /// 0.02: this is a one-stage chain, and the looser bound exists for accumulation across
+    /// several transcendental stages that is not happening here.
+    #[test]
+    fn a_colorimetric_frame_renders_the_same_picture_on_the_gpu() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits::default();
+        let cpu = tail_of(&e).run(scene_ramp());
+        let gpu = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .run(scene_ramp());
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.01,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {
             Some(c) => Some(c.clone()),
