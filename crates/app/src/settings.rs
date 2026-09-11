@@ -286,6 +286,9 @@ pub struct Settings {
     /// choice discarded with nothing to notice it. The `EditGroups::effects` → `vignette` rename
     /// set that precedent and its alias test exists because the same trap was live there.
     ///
+    /// ⚠ As of M8.3d the accelerated set is **HSL, colour grading and sharpening** — three
+    /// consecutive tail stages, so they form one chain and one round trip.
+    ///
     /// ⚠ The old name governed more than HSL as soon as sharpening joined it, and a setting that
     /// silently covers more than it claims is what the `Effects` edit group and the "Reset crop"
     /// hover text were each corrected for.

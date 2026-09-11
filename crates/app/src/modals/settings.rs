@@ -184,12 +184,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             });
             theme::hint(
                 ui,
-                "Runs the HSL and sharpening stages on the graphics card. Off by \
-             default: the CPU is the reference, and the two agree to about a \
-             hundredth of an 8-bit level, so the picture should not change. \
-             ⚠ Does not apply inside a mask, an active colour grade splits the run \
-             so the saving is smaller, and the first render after switching it on \
-             spends about a sixth of a second compiling shaders.",
+                "Runs the HSL, colour grading and sharpening stages on the graphics \
+             card. Off by default: the CPU is the reference, and the two agree to \
+             about a hundredth of an 8-bit level, so the picture should not change. \
+             ⚠ Does not apply inside a mask, and the first render after switching it \
+             on spends about a sixth of a second compiling shaders.",
             );
 
             ui.separator();
