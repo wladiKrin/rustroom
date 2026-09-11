@@ -53,6 +53,23 @@ fn sharp() -> Sharpening {
     }
 }
 
+/// A mask carrying exactly what it is handed, under a full-frame linear gradient.
+///
+/// ⚠ A gradient rather than a brush on purpose: M8.3i's decomposition puts a gradient's coverage
+/// at **0.00 ms**, so these rows measure the sub-stages and nothing else. A brush would bury the
+/// effect under coverage rasterisation, which is the column M8.3i already attacked.
+fn masked(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
+    edit_model::MaskedAdjustment {
+        mask: edit_model::Mask::Linear(edit_model::LinearGradient {
+            from: [0.5, 0.0],
+            to: [0.5, 1.0],
+            invert: false,
+        }),
+        refine: Vec::new(),
+        adjustments: a,
+    }
+}
+
 /// One render through the engine, waited for. Returns the wall time of the whole frame.
 ///
 /// ⚠ The engine coalesces, so a request must be **polled to completion** before the next is
@@ -148,12 +165,48 @@ fn main() {
         ..Edits::default()
     };
 
-    let cases: [(&str, &Edits); 5] = [
+    // ⚠⚠ **The case M8.3j exists for.** Masked HSL is the one reported in use as slow, and
+    // M8.3i's decomposition put its sub-stages at 68.8 ms of an 82 ms mask — the largest single
+    // number left in Phase 8.
+    let masked_hsl = Edits {
+        masks: vec![masked(edit_model::LocalAdjustments {
+            hsl: hsl(),
+            ..Default::default()
+        })],
+        ..Edits::default()
+    };
+    let masked_hsl_x3 = Edits {
+        masks: (0..3)
+            .map(|_| {
+                masked(edit_model::LocalAdjustments {
+                    hsl: hsl(),
+                    ..Default::default()
+                })
+            })
+            .collect(),
+        ..Edits::default()
+    };
+    // ⚠⚠ **The control, and the honest headline: this is what the catalogue's ONE masked
+    // photograph carries.** 1.3 ms of sub-stage work against a 27.0 ms transfer, so the cost gate
+    // must refuse it and this row must NOT move. A row that got faster here would mean the gate
+    // was reaching the wrong verdict inside a mask.
+    let masked_exposure = Edits {
+        masks: vec![masked(edit_model::LocalAdjustments {
+            exposure: -3.6,
+            ..Default::default()
+        })],
+        ..Edits::default()
+    };
+
+    let cases: [(&str, &Edits); 8] = [
         ("TYPICAL of this catalogue", &typical),
         ("unedited, camera rendering", &neutral_rendered),
         ("unedited, colorimetric", &Edits::default()),
         ("hsl only", &hsl_only),
         ("hsl + grade + sharpening", &three),
+        ("1 masked HSL (gradient)", &masked_hsl),
+        ("3 masked HSL (gradient)", &masked_hsl_x3),
+        ("1 masked exposure — the control", &masked_exposure),
     ];
 
     // ⚠⚠ Two rungs, because they are different questions. **1600 is the fit texture**; **3200 is
