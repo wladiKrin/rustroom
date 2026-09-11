@@ -510,6 +510,62 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The guard on the projection, and the only thing that can see a mis-mapped field.**
+    /// Every one of the eight projected fields is non-default here, so a projection that forgot
+    /// `whites` — or carried the *global* value instead of the mask's — renders a different
+    /// photograph. A fixture setting only `hsl` would be blind to seven of the eight.
+    ///
+    /// ⚠ The fixture check matters as much as the assertion: an accelerated mask and a CPU one
+    /// agree trivially if the mask covers nothing, so the masked render is first shown to differ
+    /// from the unmasked one.
+    #[test]
+    fn a_mask_carrying_every_ported_stage_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let adjustments = edit_model::LocalAdjustments {
+            exposure: 0.6,
+            highlights: -30.0,
+            shadows: 35.0,
+            whites: 18.0,
+            blacks: -14.0,
+            hsl: with_hsl().hsl,
+            color_grading: graded(Edits::default()).color_grading,
+            sharpening: Sharpening {
+                amount: 55.0,
+                radius: 1.2,
+                detail: 50.0,
+                masking: 0.0,
+            },
+            ..Default::default()
+        };
+        let mut e = Edits::default();
+        e.masks = vec![mask_carrying(adjustments)];
+
+        let unmasked = tail_of(&Edits::default()).run(scene_ramp());
+        let cpu = tail_of(&e).run(scene_ramp());
+        assert!(
+            !crate::compare(&unmasked, &cpu).is_exact(),
+            "fixture check: the mask must actually change the picture"
+        );
+
+        let gpu = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .run(scene_ramp());
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.02,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {
             Some(c) => Some(c.clone()),
