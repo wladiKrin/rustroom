@@ -69,6 +69,33 @@ const MIN_RADIUS_PX: f32 = 0.5;
 ///
 /// ⚠ Must be **total**. The rasterizer only ever asks inside its own clip, but an implementation
 /// is still required to answer rather than panic.
+/// Rows handed to one rayon task when a stroke is splatted.
+///
+/// ⚠ Swept rather than chosen — see M8.3i's record for the table.
+const CHUNK_ROWS: usize = 16;
+
+/// Below this many pixels a stroke is splatted sequentially.
+///
+/// ⚠ The canvas tint rasterises on every drag frame and every test uses a tiny fixture, where
+/// rayon's dispatch would dominate — the 8-bit pack's lesson, where the obvious parallel spelling
+/// measured *slower than not threading at all*. Swept rather than chosen.
+const SEQUENTIAL_FLOOR_PX: usize = 64 * 1024;
+
+/// How many strokes have taken the **parallel** splat, on this thread.
+///
+/// ⚠⚠ An explicit event counter, because the two branches produce identical pixels by design and
+/// nothing in the output can distinguish them — the same reason `Ran { bytes }` and the Oklab
+/// conversion counter exist. **A counter, not a flag**: a flag describing the current state
+/// cannot see its own absence. **Thread-local**, because libtest runs tests in parallel and a
+/// shared counter would read someone else's rasterisation.
+///
+/// ⚠ Incremented on the *calling* thread, outside the rayon closure — inside it, the increment
+/// would land on a worker's thread-local and the test would never see it.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PARALLEL_STROKES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// ⚠ `Sync` is a supertrait because `rasterize_in` reads the base from several rayon threads at
 /// once when it builds `base_lab`. Every implementor here already holds only shared references,
 /// so this costs nothing; the compiler names any future one that does not.
@@ -303,16 +330,11 @@ pub fn rasterize_in(
     let d_lab = t_lab.elapsed();
     let t_dabs = std::time::Instant::now();
     let mut cov = vec![0.0f32; w * h];
-    // ⚠ One scratch buffer, reused per stroke. Within a stroke the dabs combine with `max` so a
-    // slow drag is not darker than a fast one; the stroke's result is then composited into `cov`,
-    // so a second pass over the same place *does* build up. That two-level rule is what flow
-    // needs and what a single flattened `max` could never express.
-    let mut layer = vec![0.0f32; w * h];
     for stroke in &strokes {
         if stroke.dabs.is_empty() || stroke.flow <= 0.0 {
             continue;
         }
-        // Only the sub-rect this stroke touches has to be cleared and composited.
+        // Only the sub-rect this stroke touches is visited.
         let (mut slx, mut sly, mut shx, mut shy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for d in &stroke.dabs {
             slx = slx.min(d.x - d.r);
@@ -324,41 +346,70 @@ pub fn rasterize_in(
         let sy0 = (sly.floor().clamp(y0 as f32, y1 as f32) as usize).max(y0);
         let sx1 = (((shx.ceil().clamp(0.0, x1 as f32) as usize) + 1).min(x1)).max(sx0);
         let sy1 = (((shy.ceil().clamp(0.0, y1 as f32) as usize) + 1).min(y1)).max(sy0);
-        for y in sy0..sy1 {
-            for x in sx0..sx1 {
-                layer[(y - y0) * w + (x - x0)] = 0.0;
-            }
+        if sx1 <= sx0 || sy1 <= sy0 {
+            continue;
         }
-        for d in &stroke.dabs {
-            let dx0 = (d.x - d.r).floor().clamp(sx0 as f32, sx1 as f32) as usize;
-            let dy0 = (d.y - d.r).floor().clamp(sy0 as f32, sy1 as f32) as usize;
-            let dx1 = (((d.x + d.r).ceil().clamp(0.0, sx1 as f32) as usize) + 1).min(sx1);
-            let dy1 = (((d.y + d.r).ceil().clamp(0.0, sy1 as f32) as usize) + 1).min(sy1);
-            for y in dy0..dy1 {
+        let sw = sx1 - sx0;
+        let op = if stroke.erase {
+            edit_model::MaskOp::Subtract
+        } else {
+            edit_model::MaskOp::Add
+        };
+        // ⚠⚠ **One row of this stroke, as a GATHER rather than a scatter.** The shape this
+        // replaced splatted each dab into a shared `layer`, which cannot be parallelised because
+        // dabs overlap. Walking the dabs *per row* inverts that: the row owns its own scratch and
+        // its own row of `cov`, so rows are independent and `layer` disappears entirely — three
+        // passes per stroke (clear, splat, composite) become one.
+        //
+        // ⚠⚠ **The short-circuit before the gate is load-bearing and must not move.** The gate
+        // can only ever reduce an alpha, so a dab whose positional alpha already loses the
+        // running max cannot change the pixel however its gate resolves — and dabs are laid
+        // `SPACING` (a quarter radius) apart and overlap heavily, so most of them lose. Gating
+        // before the skip is *correct* and measurably slower.
+        //
+        // ⚠ Dabs are visited in stroke order. That is for the skip's effectiveness, **not** for
+        // correctness: the within-stroke combine is a `max` and the skip only ever drops a dab
+        // whose gated alpha is already below it, so the value is exactly `max_d gated_alpha(d)`
+        // and is order-independent. Both facts were verified by sabotage rather than assumed.
+        let row_body = |y: usize, cov_row: &mut [f32], scratch: &mut [f32]| {
+            // ⚠ One scratch row, reused down a chunk and cleared per row. Within a stroke the
+            // dabs combine with `max` so a slow drag is not darker than a fast one; the stroke's
+            // result is then composited into `cov`, so a second pass over the same place *does*
+            // build up. That two-level rule is what flow needs and what a single flattened `max`
+            // could never express.
+            //
+            // ⚠ Clearing is per ROW rather than per stroke now. Miss it and one row's coverage
+            // leaks into the next, which is the likeliest bug in this rewrite — sabotage-verified
+            // against `the_rasterizer_is_bit_identical_to_its_reference`.
+            for v in scratch.iter_mut() {
+                *v = 0.0;
+            }
+            for d in &stroke.dabs {
+                let dy0 = (d.y - d.r).floor().clamp(sy0 as f32, sy1 as f32) as usize;
+                let dy1 = (((d.y + d.r).ceil().clamp(0.0, sy1 as f32) as usize) + 1).min(sy1);
+                if y < dy0 || y >= dy1 {
+                    continue;
+                }
+                let dx0 = (d.x - d.r).floor().clamp(sx0 as f32, sx1 as f32) as usize;
+                let dx1 = (((d.x + d.r).ceil().clamp(0.0, sx1 as f32) as usize) + 1).min(sx1);
                 for x in dx0..dx1 {
                     let dist = (((x as f32 + 0.5) - d.x).powi(2)
                         + ((y as f32 + 0.5) - d.y).powi(2))
                     .sqrt();
                     let a = dab_alpha(dist, d.r, d.hard);
-                    // ⚠⚠ The gate multiplies the dab's alpha **before** the per-stroke `max`
-                    // below, and that is what per-dab references force: two dabs on opposite
-                    // sides of a ridge carry different references, so a gate applied after the
-                    // `max` could only ever honour one of them.
-                    //
-                    // ⚠ With no base — the CLI before this landed, or the tint outside the
-                    // rendered region — an auto-masked dab paints positionally. Documented
-                    // degradation, not an error; `Brush::needs_base` plus `BrushCache`'s refusal
-                    // are what stop the *render* ever taking that path.
-                    let slot = &mut layer[(y - y0) * w + (x - x0)];
-                    // ⚠⚠ **Short-circuit before the gate, and it is sound rather than an
-                    // approximation.** Dabs within a stroke combine with `max`, and the gate can
-                    // only ever *reduce* an alpha — so a dab whose positional alpha already loses
-                    // the `max` cannot change this pixel however its gate resolves. Worth having
-                    // because dabs are laid `SPACING` (a quarter radius) apart and overlap
-                    // heavily, so most of them lose.
+                    let slot = &mut scratch[x - sx0];
                     if a <= *slot {
                         continue;
                     }
+                    // ⚠⚠ The gate multiplies the dab's alpha **before** the per-stroke
+                    // `max` below, and that is what per-dab references force: two dabs on
+                    // opposite sides of a ridge carry different references, so a gate applied
+                    // after the `max` could only ever honour one of them.
+                    //
+                    // ⚠ With no base — the CLI, or the tint outside the rendered region — an
+                    // auto-masked dab paints positionally. Documented degradation, not an error;
+                    // `Brush::needs_base` plus `BrushCache`'s refusal are what stop the *render*
+                    // ever taking that path.
                     let a = match (&d.gate, &base_lab) {
                         (Some((r, ceil)), Some(lab)) => {
                             a * auto_mask_gate(lab[(y - y0) * w + (x - x0)], *r, *ceil)
@@ -368,33 +419,46 @@ pub fn rasterize_in(
                     *slot = slot.max(a);
                 }
             }
-        }
-        for y in sy0..sy1 {
+            // ⚠⚠ **The same two rules `MaskOp` offers BETWEEN masks, called from here so the
+            // two cannot drift.** `Subtract` is `c * (1 - a)` and `Add` is the standard "over" —
+            // a second pass adds a fraction of what is still uncovered, so repeated strokes
+            // approach full coverage without ever exceeding it.
+            //
+            // ⚠ Bit-identical to the two expressions it replaced (`c *= 1-a` and
+            // `c += (1-c)*a` are the same f32 operations in the same order), which is what the
+            // byte-identical goldens prove rather than merely "still green".
+            //
+            // ⚠ This is the whole argument for the product algebra between masks:
+            // erase-within-a-brush and subtract-between-masks are ONE rule, not two that happen
+            // to agree at the endpoints and diverge at every partial coverage.
             for x in sx0..sx1 {
-                let idx = (y - y0) * w + (x - x0);
-                let a = layer[idx] * stroke.flow;
+                let a = scratch[x - sx0] * stroke.flow;
                 if a <= 0.0 {
                     continue;
                 }
-                // ⚠⚠ **The same two rules `MaskOp` offers BETWEEN masks, called from here so the
-                // two cannot drift.** `Subtract` is `c * (1 - a)` and `Add` is the standard
-                // "over" — a second pass adds a fraction of what is still uncovered, so repeated
-                // strokes approach full coverage without ever exceeding it.
-                //
-                // ⚠ Bit-identical to the two expressions this replaces (`c *= 1-a` and
-                // `c += (1-c)*a` are the same f32 operations in the same order), which is what
-                // the 60 byte-identical goldens prove rather than merely "still green".
-                //
-                // ⚠ This is the whole argument for the product algebra between masks:
-                // erase-within-a-brush and subtract-between-masks are now ONE rule, not two that
-                // happen to agree at the endpoints and diverge at every partial coverage.
-                let op = if stroke.erase {
-                    edit_model::MaskOp::Subtract
-                } else {
-                    edit_model::MaskOp::Add
-                };
-                cov[idx] = op.combine(cov[idx], a);
+                let idx = x - x0;
+                cov_row[idx] = op.combine(cov_row[idx], a);
             }
+        };
+        let r0 = sy0 - y0;
+        let r1 = sy1 - y0;
+        let rows = &mut cov[r0 * w..r1 * w];
+        if (sy1 - sy0) * sw < SEQUENTIAL_FLOOR_PX {
+            let mut scratch = vec![0.0f32; sw];
+            for (ri, cov_row) in rows.chunks_mut(w).enumerate() {
+                row_body(sy0 + ri, cov_row, &mut scratch);
+            }
+        } else {
+            #[cfg(test)]
+            PARALLEL_STROKES.with(|c| c.set(c.get() + 1));
+            rows.par_chunks_mut(w * CHUNK_ROWS)
+                .enumerate()
+                .for_each(|(ci, chunk)| {
+                    let mut scratch = vec![0.0f32; sw];
+                    for (ri, cov_row) in chunk.chunks_mut(w).enumerate() {
+                        row_body(sy0 + ci * CHUNK_ROWS + ri, cov_row, &mut scratch);
+                    }
+                });
         }
     }
 
@@ -593,29 +657,42 @@ mod tests {
         // delegated to the function under test would compare it against itself and pass forever —
         // the vacuous shape this project records more often than any other. It is the rule
         // `downscale_to`'s and the 8-bit pack's parallelisations each followed.
+        //
+        // ⚠⚠ **Both frame sizes are load-bearing and the small one alone is BLIND.** A stroke
+        // below `SEQUENTIAL_FLOOR_PX` takes the sequential splat, so an 80x60 fixture never
+        // reaches the parallel branch at all — which is why the counter is asserted rather than
+        // assumed. Found by a sabotage that an unrelated test caught while this one stayed green.
         let b = gather_fixture();
         let g = Geometry::default();
-        let want = rasterize_in_reference(&b, &g, 80, 60, None, Some(&HalfBase));
-        let got = rasterize_in(&b, &g, 80, 60, None, Some(&HalfBase));
-        let read = |m: &CoverageMap| -> Vec<u8> {
-            (0..60)
-                .flat_map(|y| (0..80).map(move |x| (x, y)))
-                .map(|(x, y)| m.at(x, y))
-                .collect()
-        };
-        let (want, got) = (read(&want), read(&got));
-        assert!(
-            got.iter().any(|&v| v > 0) && got.contains(&0),
-            "fixture check: the brush must both cover and not cover, or this test is vacuous"
-        );
-        assert!(
-            got.iter().any(|&v| v > 0 && v < 255),
-            "fixture check: some coverage must be partial, or the gate and the max are untested"
-        );
-        assert_eq!(
-            want, got,
-            "the rasterizer must be bit-identical to its reference"
-        );
+        for (fw, fh, want_parallel) in [(80usize, 60usize, false), (900, 700, true)] {
+            PARALLEL_STROKES.with(|c| c.set(0));
+            let want = rasterize_in_reference(&b, &g, fw, fh, None, Some(&HalfBase));
+            let got = rasterize_in(&b, &g, fw, fh, None, Some(&HalfBase));
+            let took_parallel = PARALLEL_STROKES.with(|c| c.get()) > 0;
+            assert_eq!(
+                took_parallel, want_parallel,
+                "fixture check: {fw}x{fh} must exercise the expected splat"
+            );
+            let read = |m: &CoverageMap| -> Vec<u8> {
+                (0..fh)
+                    .flat_map(|y| (0..fw).map(move |x| (x, y)))
+                    .map(|(x, y)| m.at(x, y))
+                    .collect()
+            };
+            let (want, got) = (read(&want), read(&got));
+            assert!(
+                got.iter().any(|&v| v > 0) && got.contains(&0),
+                "fixture check: at {fw}x{fh} the brush must both cover and not cover"
+            );
+            assert!(
+                got.iter().any(|&v| v > 0 && v < 255),
+                "fixture check: at {fw}x{fh} some coverage must be partial"
+            );
+            assert_eq!(
+                want, got,
+                "the rasterizer must be bit-identical to its reference at {fw}x{fh}"
+            );
+        }
     }
 
     /// A verbatim copy of `rasterize_in` as it stood before M8.3i parallelised it: sequential
