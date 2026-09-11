@@ -2,6 +2,7 @@
 
 use super::FrameMap;
 use edit_model::{Brush, Geometry};
+use rayon::prelude::*;
 
 /// A rasterized brush mask: 8-bit coverage over a bounding box in **frame** pixels.
 ///
@@ -68,7 +69,10 @@ const MIN_RADIUS_PX: f32 = 0.5;
 ///
 /// ⚠ Must be **total**. The rasterizer only ever asks inside its own clip, but an implementation
 /// is still required to answer rather than panic.
-pub trait BasePixels {
+/// ⚠ `Sync` is a supertrait because `rasterize_in` reads the base from several rayon threads at
+/// once when it builds `base_lab`. Every implementor here already holds only shared references,
+/// so this costs nothing; the compiler names any future one that does not.
+pub trait BasePixels: Sync {
     fn at(&self, x: usize, y: usize) -> [f32; 3];
 }
 
@@ -279,12 +283,18 @@ pub fn rasterize_in(
                 .flat_map(|s| s.dabs.iter())
                 .any(|d| d.gate.is_some()) =>
         {
-            let mut v = Vec::with_capacity(w * h);
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    v.push(color::oklab::prophoto_to_oklab(b.at(x, y)));
-                }
-            }
+            // ⚠ Rayon over rows, the shape `map_pixels_xy` and the 8-bit pack already use. Each
+            // element is a pure function of one base pixel and the order is unchanged, so this is
+            // bit-identical by construction rather than by tolerance.
+            let mut v = vec![[0.0f32; 3]; w * h];
+            v.par_chunks_exact_mut(w)
+                .enumerate()
+                .for_each(|(row, out)| {
+                    let y = y0 + row;
+                    for (i, slot) in out.iter_mut().enumerate() {
+                        *slot = color::oklab::prophoto_to_oklab(b.at(x0 + i, y));
+                    }
+                });
             Some(v)
         }
         _ => None,
