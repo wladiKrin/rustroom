@@ -5,9 +5,6 @@ use pipeline::hue_table::MAX_HUE_SHIFT_DEG;
 use pipeline::PipelineStage;
 use std::sync::Arc;
 
-const WORKGROUP: u32 = 64;
-const MAX_GROUPS_PER_DIM: u32 = 65535;
-
 /// ⚠ Mirrors `stages::hsl`'s own constants. Duplicated rather than re-exported because `pipeline`
 /// keeps them private, and widening its API for one consumer is the trade this project declined
 /// for `pub mod stages`. **A test asserts the shader agrees with the CPU stage**, which is what
@@ -114,11 +111,8 @@ impl GpuStage for GpuHslStage {
         // of 0 already says so and the chain lends it an empty slice.
         _scratch: &[wgpu::Buffer],
     ) {
-        let device = &ctx.device;
         let pixels = img.pixels();
-        let total_groups = pixels.div_ceil(WORKGROUP);
-        let row_groups = total_groups.min(MAX_GROUPS_PER_DIM);
-        let col_groups = total_groups.div_ceil(row_groups);
+        let (row_groups, _) = crate::dispatch::Dispatch::grid(pixels);
         let table_len = (self.table.len() / 3) as u32;
 
         // ⚠ Two u32 fields then two f32s then two more f32s: laid out to match the WGSL struct
@@ -132,80 +126,13 @@ impl GpuStage for GpuHslStage {
         params[16..20].copy_from_slice(&CHROMA_EPS.to_le_bytes());
         params[20..24].copy_from_slice(&CHROMA_FADE.to_le_bytes());
 
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("hsl"),
-            source: wgpu::ShaderSource::Wgsl(
-                format!("{}{}", crate::oklab_wgsl::OKLAB_WGSL, SHADER).into(),
-            ),
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hsl-params"),
-            size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        ctx.queue.write_buffer(&uniform, 0, &params);
-        let table = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hsl-table"),
-            size: (self.table.len() * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        ctx.queue
-            .write_buffer(&table, 0, bytemuck::cast_slice(&self.table));
-
-        let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hsl-layout"),
-            entries: &[
-                entry(0, wgpu::BufferBindingType::Storage { read_only: false }),
-                entry(1, wgpu::BufferBindingType::Uniform),
-                entry(2, wgpu::BufferBindingType::Storage { read_only: true }),
-            ],
-        });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hsl-bind"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: img.buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: table.as_entire_binding(),
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("hsl-pipeline-layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let compute = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("hsl-pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        pass.set_pipeline(&compute);
-        pass.set_bind_group(0, &bind, &[]);
-        pass.dispatch_workgroups(row_groups, col_groups, 1);
+        crate::dispatch::Dispatch {
+            label: "hsl",
+            shader: format!("{}{}", crate::oklab_wgsl::OKLAB_WGSL, SHADER),
+            params: params.to_vec(),
+            storages: &[&self.table],
+        }
+        .encode(ctx, pass, img);
     }
 
     fn cpu(&self) -> &dyn PipelineStage {

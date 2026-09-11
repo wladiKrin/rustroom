@@ -10,6 +10,7 @@
 mod accelerate;
 mod chain;
 mod context;
+mod dispatch;
 mod equivalence;
 mod exposure;
 mod grading;
