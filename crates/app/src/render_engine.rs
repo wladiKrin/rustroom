@@ -1144,7 +1144,7 @@ fn render_cached(
         // one-second wait. With the setting off nothing GPU-related may be touched at all.
         if gpu_tail {
             match gpu_pipeline::shared() {
-                Some(ctx) => gpu_pipeline::accelerate(tail, edits, scale, ctx),
+                Some(ctx) => gpu_pipeline::accelerate(tail, edits, scale, profile, ctx),
                 None => tail,
             }
         } else {

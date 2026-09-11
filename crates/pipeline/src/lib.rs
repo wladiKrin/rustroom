@@ -112,6 +112,10 @@ pub use stages::contrast::ContrastStage;
 pub use stages::creative_look::CreativeLookStage;
 pub use stages::dehaze::DehazeStage;
 pub use stages::display_rendering::DisplayRenderingStage;
+/// ⚠ Re-exported by name rather than opening `stages`, the rule `hue_table` set: a GPU shader
+/// must upload these rather than re-type them, and two copies of a tuned constant is how the two
+/// come to disagree about a number nobody re-derives.
+pub use stages::display_rendering::{CHROMA_BOOST, SHADOW_KNEE};
 pub use stages::exposure::ExposureStage;
 pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
@@ -678,6 +682,17 @@ fn is_identity(points: &[[f32; 2]]) -> bool {
     points.len() < 2 || points.iter().all(|p| (p[0] - p[1]).abs() < 1e-4)
 }
 
+/// The profile curve a [`DisplayRenderingStage`] should actually be built with.
+///
+/// ⚠⚠ **One rule, one place.** The tail applies [`is_identity`] before constructing the stage, and
+/// anything that rebuilds that stage — `gpu-pipeline`'s `accelerate` does — must apply exactly the
+/// same filter. Two callers each remembering to would be two chances to forget, and the symptom is
+/// a GPU render that differs from the CPU one only on cameras whose profile declares an identity
+/// curve, which is most of them.
+pub fn effective_profile_curve(curve: Option<&[[f32; 2]]>) -> Option<&[[f32; 2]]> {
+    curve.filter(|p| !is_identity(p))
+}
+
 /// The tail in two halves, split exactly where the grading stage goes.
 ///
 /// ⚠ The split exists whether or not `ColorGradingStage` is active: Blending and Balance define
@@ -894,7 +909,7 @@ pub fn build_pipeline_split_tapped(
             // literally [[0,0],[1,1]], so honouring it would produce no rendering at all —
             // indistinguishable from `None`, and the setting would silently do nothing on the
             // author's own camera.
-            let curve = profile_curve.filter(|p| !is_identity(p));
+            let curve = effective_profile_curve(profile_curve);
             tail.push(Box::new(DisplayRenderingStage::new(curve, baseline_ev)));
         }
     }

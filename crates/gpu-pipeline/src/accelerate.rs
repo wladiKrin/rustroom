@@ -1,19 +1,25 @@
 //! Swapping runs of CPU stages for GPU chains in a built pipeline.
 
 use crate::{
-    GpuChain, GpuContext, GpuExposureStage, GpuGradingStage, GpuHslStage, GpuSharpenStage,
-    GpuStage, GpuToneRegionsStage,
+    GpuChain, GpuContext, GpuDisplayRenderingStage, GpuExposureStage, GpuGradingStage, GpuHslStage,
+    GpuSharpenStage, GpuStage, GpuToneRegionsStage,
 };
 use edit_model::Edits;
-use pipeline::{Pipeline, PipelineStage, RenderScale};
+use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale};
 use std::sync::Arc;
 
-/// Builds one GPU stage from the edits the tail was built from.
+/// Builds one GPU stage from what the tail was built from.
 ///
 /// ⚠ It takes the [`RenderScale`] as well as the [`Edits`], because `SharpenStage`'s sigma is in
 /// **full-resolution pixels** and only the scale says what that is at this rung. `GpuHslStage`
 /// ignores it; a signature that omitted it would make the sharpen entry unwritable.
-type Builder = fn(&Edits, RenderScale, &Arc<GpuContext>) -> Box<dyn GpuStage>;
+///
+/// ⚠⚠ **And the [`ProfileRendering`], because `display_rendering` is NOT built from `Edits`.** Its
+/// curve and baseline exposure come from the camera profile, which `pipeline` never loads — they
+/// are handed to `build_pipeline_split_in_region_with_brush` by the caller. A builder without it
+/// would silently give every photograph the built-in curve and the built-in baseline while a
+/// profile declaring its own sat unused, which is a plausible picture rather than an error.
+type Builder = fn(&Edits, RenderScale, ProfileRendering<'_>, &Arc<GpuContext>) -> Box<dyn GpuStage>;
 
 /// The stages this can replace, by the name `PipelineStage::name` reports.
 ///
@@ -29,18 +35,31 @@ type Builder = fn(&Edits, RenderScale, &Arc<GpuContext>) -> Box<dyn GpuStage>;
 /// ⚠ Kept in **tail order**. The order does not affect the lookup, but a table that reads in
 /// pipeline order is one a reader can check against `build_pipeline_split_in_region` by eye.
 const REPLACEABLE: &[(&str, Builder)] = &[
-    ("exposure", |e, _, ctx| {
+    ("exposure", |e, _, _, ctx| {
         Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
     }),
-    ("tone_regions", |e, _, ctx| {
+    ("tone_regions", |e, _, _, ctx| {
         Box::new(GpuToneRegionsStage::new(e, ctx))
     }),
-    ("hsl", |e, _, ctx| Box::new(GpuHslStage::new(&e.hsl, ctx))),
-    ("color_grading", |e, _, ctx| {
+    ("hsl", |e, _, _, ctx| {
+        Box::new(GpuHslStage::new(&e.hsl, ctx))
+    }),
+    ("color_grading", |e, _, _, ctx| {
         Box::new(GpuGradingStage::new(&e.color_grading, ctx))
     }),
-    ("sharpening", |e, scale, ctx| {
+    ("sharpening", |e, scale, _, ctx| {
         Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx))
+    }),
+    // ⚠⚠ The only row built from something other than `Edits`. ⚠ `effective_profile_curve` is
+    // what the CPU tail applies before constructing this stage — skipping it would render every
+    // camera whose profile declares an identity curve differently from the CPU, which is most of
+    // them, the X-T4 included.
+    ("display_rendering", |_, _, profile, ctx| {
+        Box::new(GpuDisplayRenderingStage::new(
+            pipeline::effective_profile_curve(profile.curve),
+            profile.baseline_ev,
+            ctx,
+        ))
     }),
 ];
 
@@ -84,6 +103,7 @@ pub fn accelerate(
     tail: Pipeline,
     edits: &Edits,
     scale: RenderScale,
+    profile: ProfileRendering<'_>,
     ctx: &Arc<GpuContext>,
 ) -> Pipeline {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
@@ -93,7 +113,7 @@ pub fn accelerate(
     let mut run: Vec<Candidate> = Vec::new();
     for s in tail.into_stages() {
         match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
-            Some((_, build)) => run.push((build(edits, scale, ctx), s)),
+            Some((_, build)) => run.push((build(edits, scale, profile, ctx), s)),
             None => {
                 flush(&mut run, &mut out, ctx);
                 out.push(s);
@@ -171,7 +191,7 @@ mod tests {
             ..Edits::default()
         };
         let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
-        let names: Vec<_> = accelerate(tail, &e, SCALE, &ctx)
+        let names: Vec<_> = accelerate(tail, &e, SCALE, ProfileRendering::default(), &ctx)
             .into_stages()
             .iter()
             .map(|s| s.name())
@@ -262,7 +282,7 @@ mod tests {
             before.windows(2).any(|w| w == ["hsl", "sharpening"]),
             "fixture check: hsl and sharpening must be adjacent, got {before:?}"
         );
-        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        let after = accelerate(tail, &e, SCALE, ProfileRendering::default(), &ctx).stage_names();
         assert_eq!(
             chains(&after),
             1,
@@ -295,7 +315,7 @@ mod tests {
             before.contains(&"vignette"),
             "fixture check: an unaccelerated stage must sit between them, got {before:?}"
         );
-        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        let after = accelerate(tail, &e, SCALE, ProfileRendering::default(), &ctx).stage_names();
         assert_eq!(
             chains(&after),
             2,
@@ -310,7 +330,8 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
         e.vignette.amount = -40.0;
-        let after = accelerate(tail_of(&e), &e, SCALE, &ctx).stage_names();
+        let after =
+            accelerate(tail_of(&e), &e, SCALE, ProfileRendering::default(), &ctx).stage_names();
         let grade = after
             .iter()
             .position(|n| *n == "vignette")
@@ -349,7 +370,7 @@ mod tests {
                 .any(|w| w == ["hsl", "color_grading", "sharpening"]),
             "fixture check: the three must be consecutive, got {before:?}"
         );
-        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        let after = accelerate(tail, &e, SCALE, ProfileRendering::default(), &ctx).stage_names();
         assert_eq!(
             chains(&after),
             1,
@@ -394,7 +415,8 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let e = graded(with_sharpening(with_hsl()));
         let cpu = tail_of(&e).run(scene_ramp());
-        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(scene_ramp());
+        let gpu =
+            accelerate(tail_of(&e), &e, SCALE, ProfileRendering::default(), &ctx).run(scene_ramp());
         let d = crate::compare(&cpu, &gpu);
         assert!(
             d.worst_levels < 0.02,
@@ -411,7 +433,7 @@ mod tests {
         let e = with_hsl();
         let tail = tail_of(&e);
         let before = tail.stage_names();
-        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        let after = accelerate(tail, &e, SCALE, ProfileRendering::default(), &ctx).stage_names();
         assert_eq!(
             before.len(),
             after.len(),
@@ -452,7 +474,10 @@ mod tests {
         );
         // ⚠ And it must not be empty, or "unchanged" would be vacuously true.
         assert!(before.len() >= 2, "fixture check: got {before:?}");
-        assert_eq!(accelerate(tail, &e, SCALE, &ctx).stage_names(), before);
+        assert_eq!(
+            accelerate(tail, &e, SCALE, ProfileRendering::default(), &ctx).stage_names(),
+            before
+        );
     }
 
     fn ramp() -> core_image::ImageBuf {
@@ -470,7 +495,7 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let e = with_sharpening(with_hsl());
         let cpu = tail_of(&e).run(ramp());
-        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
+        let gpu = accelerate(tail_of(&e), &e, SCALE, ProfileRendering::default(), &ctx).run(ramp());
         let d = crate::compare(&cpu, &gpu);
         assert!(
             d.worst_levels < 0.01,
@@ -489,7 +514,7 @@ mod tests {
         let mut e = with_sharpening(with_hsl());
         e.vignette.amount = -40.0;
         let cpu = tail_of(&e).run(ramp());
-        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
+        let gpu = accelerate(tail_of(&e), &e, SCALE, ProfileRendering::default(), &ctx).run(ramp());
         let d = crate::compare(&cpu, &gpu);
         assert!(
             d.worst_levels < 0.01,

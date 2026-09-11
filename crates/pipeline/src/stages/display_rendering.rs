@@ -90,7 +90,7 @@ const LUT_SIZE: usize = 4096;
 ///
 /// ⚠ X-T4-derived, like [`BUILT_IN`] and [`BASELINE_EV`], and for the same reason: it is what a
 /// profile's `ProfileLookTable` would otherwise supply, and most community profiles omit one.
-const CHROMA_BOOST: f32 = 1.18;
+pub const CHROMA_BOOST: f32 = 1.18;
 
 /// The rendered luminance below which the chroma boost ramps away to nothing.
 ///
@@ -98,7 +98,7 @@ const CHROMA_BOOST: f32 = 1.18;
 /// "saturation" is the `(max−min)/max` of near-black sensor noise — both our render and the
 /// camera read ~0.83 there, which no real content produces. Boosting it amplifies chroma
 /// speckle. The measurement agrees: the deepest bucket needed no boost at 1.006×.
-const SHADOW_KNEE: f32 = 0.08;
+pub const SHADOW_KNEE: f32 = 0.08;
 
 /// The largest scene value the LUT resolves *before* the baseline gain; above it the curve is
 /// flat at 1 anyway.
@@ -193,6 +193,22 @@ impl DisplayRenderingStage {
             })
             .collect();
         Self { lut, lut_max }
+    }
+
+    /// The table, and the largest scene value it resolves.
+    ///
+    /// ⚠⚠ **Both, always together.** An index computed against the wrong top is a smoothly wrong
+    /// picture rather than an error — the table is built over `[0, lut_max]`, and `lut_max` is
+    /// `LUT_TOP / gain`, so it moves with the baseline exposure.
+    ///
+    /// ⚠ 4096 entries is measured — at 1024 the table drifts 0.61 of an 8-bit level from the
+    /// spline — so a caller must upload it as it is rather than resampling it.
+    pub fn lut(&self) -> &[f32] {
+        &self.lut
+    }
+
+    pub fn lut_max(&self) -> f32 {
+        self.lut_max
     }
 
     /// The curve's output for one scene value.
