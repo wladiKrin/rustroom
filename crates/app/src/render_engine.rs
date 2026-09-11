@@ -326,7 +326,7 @@ impl RenderEngine {
                 // user is actually waiting for.
                 let debug_render = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
                 let t0 = std::time::Instant::now();
-                let (frame, _stages_run) = render_cached(
+                let (frame, ran) = render_cached(
                     &buffer,
                     &edits,
                     req.spec,
@@ -343,7 +343,7 @@ impl RenderEngine {
                 );
                 if debug_render {
                     eprintln!(
-                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {_stages_run}",
+                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  bytes {}",
                         t0.elapsed().as_secs_f64() * 1000.0,
                         req.spec.max_dim,
                         frame.width,
@@ -351,6 +351,8 @@ impl RenderEngine {
                         (frame.width * frame.height) as f64 / 1e6,
                         if frame.region.is_some() { "yes" } else { "no " },
                         edits.masks.len(),
+                        ran.prefix_stages,
+                        if ran.bytes { "yes" } else { "no " },
                     );
                 }
                 if res_tx.send(frame).is_err() {
@@ -464,19 +466,57 @@ pub fn scale_from_full(full_long: usize, buffer_long: usize, max_dim: usize) -> 
 /// ⚠ `proofed` is the **second** tail run — the same frame rendered into ProPhoto — paired with the
 /// proof it was rendered for. It is `None` on the ordinary path, which is then bit-exactly what it
 /// was before soft proofing existed.
+/// What a finished render hands to [`pack`].
+///
+/// ⚠⚠ **The `Rgba8` arm carries no `ImageBuf` at all**, and that is what keeps it small: the
+/// histogram already comes from the quantized bytes, and `srgb` and `rgba` become one shared
+/// allocation — precisely the existing `display_space == Srgb` branch.
+///
+/// ⚠ It is constructible **only where M8.3g's gate held**. Three things downstream need the float
+/// — a non-sRGB display space, Visualize Spots and soft proofing — and on this arm they are
+/// unrepresentable rather than guarded against.
+pub enum Packed {
+    Float(ImageBuf),
+    Rgba8 { bytes: Vec<u8>, w: usize, h: usize },
+}
+
+/// The float image, on the paths that need it.
+///
+/// ⚠ Every caller is on a path [`Packed::Rgba8`] cannot reach, because the gate that builds it
+/// excludes exactly those three. The message is the documentation of that invariant — if it ever
+/// fires, the gate and this function have come to disagree, which is the one thing the enum is
+/// shaped to prevent.
+fn float(out: &Option<ImageBuf>) -> &ImageBuf {
+    out.as_ref()
+        .expect("this path needs the float image, and the gate keeps it for exactly these")
+}
+
 fn pack(
-    out: ImageBuf,
+    packed: Packed,
     proofed: Option<(ImageBuf, Proof)>,
     region: Option<Region>,
     max_dim: usize,
     display_space: color::OutputSpace,
     visualize: Option<f32>,
 ) -> RenderedFrame {
-    let (width, height) = (out.width(), out.height());
+    let (out, width, height, pre) = match packed {
+        Packed::Float(out) => {
+            let (w, h) = (out.width(), out.height());
+            (Some(out), w, h, None)
+        }
+        Packed::Rgba8 { bytes, w, h } => (None, w, h, Some(bytes)),
+    };
     // ⚠ Quantized to sRGB *first*, and the histogram taken from that. The histogram describes
     // the image; the texture describes what this monitor must be driven with. Deriving one from
     // the other is the bug this ordering exists to prevent.
-    let srgb8 = out.to_rgba8();
+    //
+    // ⚠⚠ On the byte path the GPU has **already done this quantization**, with the same rounding
+    // rule — so the histogram is unchanged by construction rather than by a second implementation.
+    // That is what makes M8.3g's `Rgba8` arm small: it needs no `ImageBuf` at all.
+    let srgb8 = match pre {
+        Some(b) => b,
+        None => float(&out).to_rgba8(),
+    };
     let hist = crate::histogram::histogram_rgba(&srgb8);
     // ⚠⚠ Wrapped **here**, above the Visualize Spots block, so `srgb` carries the photograph's
     // bytes rather than the edge view's — the same ordering `hist` on the line above depends on,
@@ -497,9 +537,9 @@ fn pack(
     // case they are one allocation.
     let (out, shown) = match visualize {
         Some(threshold) => {
-            let out = edge_image(&out, threshold);
+            let out = edge_image(float(&out), threshold);
             let shown = Arc::new(out.to_rgba8());
-            (out, shown)
+            (Some(out), shown)
         }
         None => (out, Arc::clone(&srgb)),
     };
@@ -533,16 +573,17 @@ fn pack(
             // compresses the range and costs roughly 0.8 bits, which shows as banding on a smooth
             // sky. The extra quantization pass is paid only when a display space is actually set.
             Arc::new(
-                out.map_pixels(move |c| {
-                    let lin = c.map(color::srgb_to_linear);
-                    let conv = display_space.from_srgb(lin);
-                    [
-                        display_space.encode(conv[0]),
-                        display_space.encode(conv[1]),
-                        display_space.encode(conv[2]),
-                    ]
-                })
-                .to_rgba8(),
+                float(&out)
+                    .map_pixels(move |c| {
+                        let lin = c.map(color::srgb_to_linear);
+                        let conv = display_space.from_srgb(lin);
+                        [
+                            display_space.encode(conv[0]),
+                            display_space.encode(conv[1]),
+                            display_space.encode(conv[2]),
+                        ]
+                    })
+                    .to_rgba8(),
             )
         }
     };
@@ -986,6 +1027,22 @@ impl BrushCache {
     }
 }
 
+/// What a render actually did — for the tests that cannot see it any other way.
+///
+/// ⚠⚠ Returned and **discarded in production**. `prefix_stages` already worked this way: the
+/// correctness tests would all pass with the prefix cache deleted, so a count is the only thing
+/// that can see it working. `bytes` is the same shape for M8.3g — the byte path and the float path
+/// produce **identical** frames by design, so nothing in the output can distinguish them and only
+/// an explicit observable can.
+///
+/// ⚠ Per render rather than a process-wide static: `cargo test` runs in parallel, and a global
+/// counter reading someone else's renders is a contaminated observable this project has already
+/// paid for once, in `GpuChain`'s transfer counts.
+pub struct Ran {
+    pub prefix_stages: usize,
+    pub bytes: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_cached(
     buffer: &Arc<ImageBuf>,
@@ -997,7 +1054,7 @@ fn render_cached(
     profile: pipeline::ProfileRendering<'_>,
     cache: &mut PrefixCache,
     brush_cache: &mut BrushCache,
-) -> (RenderedFrame, usize) {
+) -> (RenderedFrame, Ran) {
     // Destructured so the body below reads exactly as it did before these three were grouped.
     let FrameSpec {
         max_dim,
@@ -1064,7 +1121,7 @@ fn render_cached(
         img = Arc::new(step.stage.apply((*img).clone()));
         cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
     }
-    let ran = steps.len() - start;
+    let prefix_stages = steps.len() - start;
 
     // ⚠ The complete prefix output must always live in the protected tier, even when we
     // resumed at it without running anything. A prefix that *shrinks* — its last stage going
@@ -1072,7 +1129,7 @@ fn render_cached(
     // tier would let a large render evict the very thing the zoom guarantee rests on.
     // `steps.is_empty()` is excluded because there the final *is* checkpoint 0, which is
     // either free (and must not be stored) or was already inserted as a final above.
-    if ran == 0 && !steps.is_empty() {
+    if prefix_stages == 0 && !steps.is_empty() {
         cache.insert(key_at(steps.len()), img.clone(), Tier::Final);
     }
 
@@ -1110,6 +1167,25 @@ fn render_cached(
         max_dim,
     };
     let coverage = brush_cache.get_or_build(edits, cov_spec);
+    // ⚠⚠ **M8.3g's gate, derived ONCE and passed down rather than re-derived.** Three things
+    // downstream need the float image, and each is a view mode or a setting:
+    //
+    //   1. a **non-sRGB display space** — `pack` converts from the float deliberately, because an
+    //      8-bit → 8-bit conversion costs roughly 0.8 bits and bands a smooth sky. ⚠ Opt-in and
+    //      Linux/Windows-only: on macOS `tag_as_srgb` succeeds, so `effective_display_space`
+    //      returns `Srgb` whatever the dropdown says.
+    //   2. **Visualize Spots** — `edge_image` is computed from the float.
+    //   3. **soft proofing** — the ProPhoto run is decoded back to the working space to test the
+    //      gamut, which an 8-bit round trip cannot support.
+    //
+    // ⚠ The **grade range view** is a fourth and needs nothing: it bypasses `accelerate` entirely,
+    // building its own halves through `build_pipeline_split_tapped`.
+    //
+    // ⚠ A four-part condition spanning two crates is the shape this project's record says goes
+    // wrong silently, so the other half — "is this chain last, and does it end in
+    // `output_transform`" — is answered by construction inside `accelerate` rather than here.
+    let float_needed =
+        display_space != color::OutputSpace::Srgb || visualize.is_some() || soft_proof.is_some();
     let build_tail = |space| {
         // ⚠ Hoisted into a local because `accelerate` needs it too: `output_transform` is built
         // from the render's output space rather than from `Edits`, and two constructions of one
@@ -1150,14 +1226,12 @@ fn render_cached(
         if gpu_tail {
             match gpu_pipeline::shared() {
                 Some(ctx) => {
-                    let (p, c) =
-                        gpu_pipeline::accelerate(tail, edits, scale, profile, render_spec, ctx);
-                    gpu_pipeline::rejoin(p, c)
+                    gpu_pipeline::accelerate(tail, edits, scale, profile, render_spec, ctx)
                 }
-                None => tail,
+                None => (tail, None),
             }
         } else {
-            tail
+            (tail, None)
         }
     };
 
@@ -1181,10 +1255,10 @@ fn render_cached(
     // ⚠ `input` is cloned **only** when proofing. With the proof off there is one tail, one run,
     // and no clone — bit-exactly the path that existed before this feature.
     let proofed = proof.map(|p| {
-        (
-            build_tail(color::OutputSpace::ProPhoto).run(input.clone()),
-            p,
-        )
+        // ⚠ Rejoined at once: the proof is one of the three things that needs the float, so its
+        // tail is never a candidate for the byte path.
+        let (pipe, chain) = build_tail(color::OutputSpace::ProPhoto);
+        (gpu_pipeline::rejoin(pipe, chain).run(input.clone()), p)
     });
     // ⚠ The **pipeline** is always sRGB here, whatever the proof does. The display transform is a
     // post-step in `pack`, deliberately outside the pipeline so the histogram stays image-referred.
@@ -1215,9 +1289,37 @@ fn render_cached(
             // active: the ranges exist before a wheel is turned.
             let g = &edits.color_grading;
             let plane = crate::grade_view::coverage(&mid, range, g.blending, g.balance);
-            (halves.from_grade.run(mid), Some(Arc::new(plane)))
+            (
+                Packed::Float(halves.from_grade.run(mid)),
+                Some(Arc::new(plane)),
+            )
         }
-        None => (build_tail(color::OutputSpace::Srgb).run(input), None),
+        None => {
+            let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
+            // ⚠⚠ **M8.3g: the tail's last chain quantizes on the GPU and downloads 27 MB instead
+            // of 82.** Measured at rung 3200: 6.33 ms of copy+map plus a 6.87 ms `to_vec` become
+            // 2.59 + 2.19, and `pack`'s own `to_rgba8` disappears rather than moving.
+            match chain {
+                Some(c) if !float_needed => {
+                    let mid = pipe.run(input);
+                    let (w, h) = (mid.width(), mid.height());
+                    match c.run_rgba8(&mid) {
+                        Some(b) => (Packed::Rgba8 { bytes: b, w, h }, None),
+                        // ⚠ A GPU failure falls back through `apply`, which retries once and then
+                        // takes the CPU path. One wasted attempt on a rare path beats a second
+                        // fallback implementation here that could drift from the first.
+                        // ⚠ Fully qualified rather than importing `PipelineStage` into this
+                        // module: this is the only place that needs it, and the import would sit
+                        // in scope for a whole file that deliberately talks in pipelines.
+                        None => (Packed::Float(pipeline::PipelineStage::apply(&c, mid)), None),
+                    }
+                }
+                other => (
+                    Packed::Float(gpu_pipeline::rejoin(pipe, other).run(input)),
+                    None,
+                ),
+            }
+        }
     };
     // ⚠⚠ **Harvest what the stages built, after every tail has run.** A gating brush's coverage
     // can only be rasterized where the image is, inside `MaskStage::apply`, so this is the only
@@ -1234,6 +1336,10 @@ fn render_cached(
             }
         }
     }
+    // ⚠ **Derived** from what was actually produced rather than tracked alongside it. Two facts
+    // that can disagree is the shape `render_max_dim` and `Session::geometry_mode` were each
+    // fixed for; here there is only one.
+    let bytes = matches!(out, Packed::Rgba8 { .. });
     let mut frame = pack(out, proofed, region, max_dim, display_space, visualize);
     frame.grade_view = plane;
     // ⚠ `edits` here is already the **view** edits — `Session::view_edits` has run
@@ -1245,7 +1351,13 @@ fn render_cached(
         crate::view_region::fit_cap(buffer_long, crate::view_region::PREVIEW_MAX_DIM),
         &edits.geometry,
     );
-    (frame, ran)
+    (
+        frame,
+        Ran {
+            prefix_stages,
+            bytes,
+        },
+    )
 }
 
 /// Render `edits` against `buffer` at a working resolution capped by `max_dim`.
@@ -1270,7 +1382,7 @@ pub fn render_once(
         source_scale,
     );
     let mut frame = pack(
-        pipeline::build_pipeline_with(edits, scale, resampler).run(preview),
+        Packed::Float(pipeline::build_pipeline_with(edits, scale, resampler).run(preview)),
         // ⚠ Never proofed. This is the before/after baseline and the reference the cached path is
         // tested against; a proof is a property of the *view* and would make the reference move
         // with a menu setting.
@@ -1505,6 +1617,137 @@ mod tests {
         }
     }
 
+    // ─────────────────────────── M8.3g: the 8-bit readback ───────────────────────────
+
+    /// A tail worth accelerating: `hsl` alone clears the cost gate, so the tail becomes one chain
+    /// ending in `output_transform` — the shape the byte path needs.
+    fn hsl_edits() -> Edits {
+        let mut e = Edits::default();
+        e.hsl.bands[0] = edit_model::HslBand {
+            hue: 20.0,
+            saturation: 10.0,
+            luminance: 5.0,
+        };
+        e
+    }
+
+    fn byte_spec() -> FrameSpec {
+        FrameSpec {
+            gpu_tail: true,
+            ..FrameSpec::fit(8)
+        }
+    }
+
+    fn rendered(spec: FrameSpec) -> (RenderedFrame, Ran) {
+        render_cached(
+            &varied(),
+            &hsl_edits(),
+            spec,
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            &mut PrefixCache::default(),
+            &mut BrushCache::default(),
+        )
+    }
+
+    /// ⚠⚠ **Without this, the three "keeps the float" tests below all pass against an
+    /// implementation that never takes the byte path at all** — which is the failure mode that let
+    /// creative LUTs ship fully tested and 100% dead.
+    #[test]
+    fn with_none_of_the_float_consumers_active_the_bytes_are_used() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let (_, ran) = rendered(byte_spec());
+        assert!(ran.bytes, "the tail's last chain must download RGBA8");
+    }
+
+    /// ⚠ `pack` converts to a non-sRGB display space from the **float**, because an 8-bit → 8-bit
+    /// conversion costs roughly 0.8 bits and bands a smooth sky.
+    #[test]
+    fn a_non_srgb_display_space_keeps_the_float_path() {
+        if gpu_pipeline::shared().is_none() {
+            return;
+        }
+        let (_, ran) = rendered(FrameSpec {
+            display_space: color::OutputSpace::DisplayP3,
+            ..byte_spec()
+        });
+        assert!(!ran.bytes);
+    }
+
+    /// ⚠ The edge view is computed from the float.
+    #[test]
+    fn visualize_spots_keeps_the_float_path() {
+        if gpu_pipeline::shared().is_none() {
+            return;
+        }
+        let (_, ran) = rendered(FrameSpec {
+            visualize: Some(12.0),
+            ..byte_spec()
+        });
+        assert!(!ran.bytes);
+    }
+
+    /// ⚠ The ProPhoto run is decoded back to the working space to test the gamut, which an 8-bit
+    /// round trip cannot support.
+    #[test]
+    fn a_soft_proof_keeps_the_float_path() {
+        if gpu_pipeline::shared().is_none() {
+            return;
+        }
+        let (_, ran) = rendered(FrameSpec {
+            soft_proof: Some(Proof {
+                space: color::OutputSpace::Srgb,
+                warn: false,
+            }),
+            ..byte_spec()
+        });
+        assert!(!ran.bytes);
+    }
+
+    /// ⚠⚠ **THE CARRIER.** Every test above can pass while the bytes never reach the texture. The
+    /// two paths are designed to be indistinguishable in the output, so this asserts exactly that
+    /// — and it is what would fail if the shader's quantization and `ImageBuf::quantize` ever
+    /// diverged on a real frame rather than on the synthetic fixture in `gpu-pipeline`.
+    #[test]
+    fn the_byte_path_and_the_float_path_produce_the_same_frame() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let (with_bytes, ran) = rendered(byte_spec());
+        assert!(ran.bytes, "fixture check: this must be the byte path");
+        let (with_float, ran) = rendered(FrameSpec {
+            gpu_tail: false,
+            ..byte_spec()
+        });
+        assert!(!ran.bytes, "fixture check: this must be the float path");
+        assert_eq!(
+            (with_bytes.width, with_bytes.height),
+            (with_float.width, with_float.height)
+        );
+        // ⚠ The GPU's transcendentals diverge from the CPU's by well under an 8-bit level, so the
+        // comparison is in levels rather than bit-exact — the bound `gpu-pipeline`'s own
+        // equivalence tests establish. What it catches is a *wrong* quantization, which moves
+        // whole levels.
+        let worst = with_bytes
+            .rgba
+            .iter()
+            .zip(with_float.rgba.iter())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(worst <= 1, "texture differs by {worst} levels");
+        assert!(
+            Arc::ptr_eq(&with_bytes.rgba, &with_bytes.srgb),
+            "on the byte path the texture and the photograph are one allocation"
+        );
+    }
+
     #[test]
     fn a_change_reruns_only_what_is_downstream_of_it() {
         // The feature itself. `every_cached_frame_matches_a_cold_render` proves the output is
@@ -1526,7 +1769,10 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(cold, 3, "a cold render runs every prefix stage");
+        assert_eq!(
+            cold.prefix_stages, 3,
+            "a cold render runs every prefix stage"
+        );
 
         let (_, hit) = render_cached(
             &buf,
@@ -1539,7 +1785,7 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(hit, 0, "an unchanged prefix runs nothing");
+        assert_eq!(hit.prefix_stages, 0, "an unchanged prefix runs nothing");
 
         // A tail-only change still runs nothing: it resumes at the final checkpoint.
         let tail_only = Edits {
@@ -1557,7 +1803,10 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(ran, 0, "a tail change must not touch the prefix");
+        assert_eq!(
+            ran.prefix_stages, 0,
+            "a tail change must not touch the prefix"
+        );
 
         // Dehaze is last in the prefix, so only dehaze re-runs. This is the 86.8 ms case.
         let dehaze = Edits {
@@ -1575,7 +1824,10 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(ran, 1, "a dehaze change must resume after noise reduction");
+        assert_eq!(
+            ran.prefix_stages, 1,
+            "a dehaze change must resume after noise reduction"
+        );
 
         // Noise reduction is second, so NR and dehaze re-run but geometry does not.
         let nr = Edits {
@@ -1597,7 +1849,10 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(ran, 2, "an NR change must resume after geometry");
+        assert_eq!(
+            ran.prefix_stages, 2,
+            "an NR change must resume after geometry"
+        );
 
         // Geometry is first, so everything re-runs — but the downscale is still reused.
         let geo = Edits {
@@ -1618,7 +1873,10 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(ran, 3, "a geometry change invalidates the whole prefix");
+        assert_eq!(
+            ran.prefix_stages, 3,
+            "a geometry change invalidates the whole prefix"
+        );
     }
 
     #[test]
@@ -1703,7 +1961,10 @@ mod tests {
             &mut cache,
             &mut bc,
         );
-        assert_eq!(ran, 0, "the post-NR checkpoint is now the final one");
+        assert_eq!(
+            ran.prefix_stages, 0,
+            "the post-NR checkpoint is now the final one"
+        );
         assert_eq!(
             got.rgba,
             render_once(
@@ -3020,6 +3281,45 @@ mod tests {
     /// the photograph and not the grey edge view — the ordering `hist` already depends on, and
     /// the reason `pack` wraps the `Arc` above that block rather than below it. Nothing in the
     /// canvas can see this: an edge-view readout is a plausible-looking number.
+    /// ⚠⚠ The two arms of [`Packed`] must produce the **same frame**, because the GPU's
+    /// quantization and `to_rgba8` are the same rounding of the same number — M8.3g's whole
+    /// premise. If this ever fails, the shader and `ImageBuf::quantize` have diverged.
+    ///
+    /// ⚠ And the histogram must come from the bytes rather than being recomputed: on the byte path
+    /// there is no float left to recompute it from, which is what makes that arm small.
+    #[test]
+    fn packing_bytes_gives_the_same_frame_as_packing_the_float() {
+        let buf = ImageBuf::from_vec(2, 1, vec![0.0, 0.5, 1.0, -0.2, 0.25, 1.7]);
+        let want = pack(
+            Packed::Float(buf.clone()),
+            None,
+            None,
+            16,
+            color::OutputSpace::Srgb,
+            None,
+        );
+        let got = pack(
+            Packed::Rgba8 {
+                bytes: buf.to_rgba8(),
+                w: 2,
+                h: 1,
+            },
+            None,
+            None,
+            16,
+            color::OutputSpace::Srgb,
+            None,
+        );
+        assert_eq!(*got.rgba, *want.rgba, "texture");
+        assert_eq!(*got.srgb, *want.srgb, "the photograph's own bytes");
+        assert_eq!(got.hist, want.hist, "histogram");
+        assert_eq!((got.width, got.height), (2, 1));
+        assert!(
+            Arc::ptr_eq(&got.rgba, &got.srgb),
+            "the two must be one allocation, as on the float sRGB path"
+        );
+    }
+
     #[test]
     fn the_srgb_channel_is_unaffected_by_visualize_spots() {
         // A hard edge, so the edge view is far from the photograph and the textures must differ.
@@ -3030,8 +3330,22 @@ mod tests {
                 buf.set_pixel(x, y, [v, v, v]);
             }
         }
-        let plain = pack(buf.clone(), None, None, 16, color::OutputSpace::Srgb, None);
-        let vis = pack(buf, None, None, 16, color::OutputSpace::Srgb, Some(12.0));
+        let plain = pack(
+            Packed::Float(buf.clone()),
+            None,
+            None,
+            16,
+            color::OutputSpace::Srgb,
+            None,
+        );
+        let vis = pack(
+            Packed::Float(buf),
+            None,
+            None,
+            16,
+            color::OutputSpace::Srgb,
+            Some(12.0),
+        );
         assert_ne!(
             *plain.rgba, *vis.rgba,
             "fixture check: the view mode did not reach the pixels"
@@ -3056,8 +3370,22 @@ mod tests {
                 buf.set_pixel(x, y, [v, v, v]);
             }
         }
-        let plain = pack(buf.clone(), None, None, 16, color::OutputSpace::Srgb, None);
-        let vis = pack(buf, None, None, 16, color::OutputSpace::Srgb, Some(12.0));
+        let plain = pack(
+            Packed::Float(buf.clone()),
+            None,
+            None,
+            16,
+            color::OutputSpace::Srgb,
+            None,
+        );
+        let vis = pack(
+            Packed::Float(buf),
+            None,
+            None,
+            16,
+            color::OutputSpace::Srgb,
+            Some(12.0),
+        );
         assert_ne!(
             plain.rgba, vis.rgba,
             "the view mode did not reach the pixels"
