@@ -96,6 +96,13 @@ the app renders**. Browsing an unedited folder is exactly when that is felt.
 1.56× — while three cheap ones may not. The quantity that decides it is **work**, so that is what
 the gate measures.
 
+⚠ **It forces a shape change in `accelerate`.** The run currently holds `Box<dyn GpuStage>` and
+has already *dropped* the CPU stage it replaced — so a gate that refuses a run would have nothing
+to put back, and `GpuStage::cpu()` hands out a borrow that cannot be pushed into the output. The
+run therefore carries **both** — the built GPU stage and the original — and `flush` chooses. Found
+while planning rather than by the compiler, which would have accepted a `cpu()`-shaped design and
+failed only at the borrow.
+
 ```rust
 /// This stage's CPU cost, in milliseconds per 6.8 megapixels.
 ///
@@ -133,6 +140,13 @@ renders a plausible photograph rather than an error.**
   weights are shaped on **display-encoded** luminance, not linear — that asymmetry is the fix for
   "the Whites slider did nothing on most photographs" and must be inside the table, not
   re-derived in WGSL.
+  - ⚠⚠ **This one table does not exist on the CPU yet, so building it introduces a quantization
+    the CPU stage does not have** — unlike `tone_curve` and `display_rendering`, which are already
+    tables. That is the deliberate trade: one implementation of the weight shaping with a bounded
+    table error, against two implementations that cannot drift on a number nobody re-derives.
+    ⚠ The size is **measured, not chosen** — the recipe `DisplayRenderingStage`'s own 4096 came
+    from, sweeping until the drift falls below a tenth of an 8-bit level — and the table is built
+    **by the CPU stage**, so there is still only one `gain_for_luma`.
 - **`tone_curve`** — a 1024-entry LUT already built by the CPU stage, applied per channel.
 - **`display_rendering`** — a **4096**-entry LUT (the size is measured: 1024 drifts 0.61 of an
   8-bit level) applied per channel, then `chroma_scale(y)` about the pixel's own luminance. ⚠ Its
