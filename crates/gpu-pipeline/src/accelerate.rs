@@ -86,18 +86,25 @@ const REPLACEABLE: &[(&str, Builder)] = &[
 /// ⚠⚠ **THE MEASUREMENT, AND WHY IT MOVED (M8.3h).** This was **34.0** from M8.3e until M8.3h,
 /// and two later milestones made the round trip cheaper *without re-measuring it*: **M8.3f**'s
 /// resource cache recovered 9.46 ms per render, and **M8.3g**'s 8-bit readback took the download
-/// from 13.20 ms to 4.78. Re-measured at 3200x2136: **26.80 ms**, rounded here to 27.0. For two
-/// milestones the gate was refusing runs that would have paid, using a number that had stopped
-/// describing reality.
+/// from 13.20 ms to 4.78. For two milestones the gate was refusing runs that would have paid,
+/// using a number that had stopped describing reality.
+///
+/// ⚠⚠ **QUOTED AS A RANGE, BECAUSE ONE RUN IS NOT A MEASUREMENT HERE.** Seven runs of `probe_rt`
+/// at 3200x2136 on a quiet machine give a float round trip of **23.0-26.8 ms** and a byte one of
+/// **15.7-21.0**. The first reading taken was 26.80 — the *top* of its band — and quoting it
+/// alone would have stated a number that does not reproduce. **27.0 sits at or just above the
+/// top of the float band**, which is what keeps it conservative.
 ///
 /// ⚠⚠ **THIS IS THE FLOAT ROUND TRIP, DELIBERATELY, THOUGH THE CASE IT UNLOCKS TAKES THE BYTE
-/// PATH.** The byte round trip measures **21.02 ms** and is *not* used, because a lone
-/// `display_rendering` run (25.7 ms) can occur — `CreativeLookStage` sits between it and
-/// `output_transform`, so a creative look makes it a run of its own — and **that run is not
-/// trailing, so it can never take the byte path**. A byte-valued threshold would accept it and
-/// pay the float price for less work. One conservative constant refuses it by construction, with
-/// no second rule to keep in step. Revisit only when a ported stage's cost lands between 21 and
-/// 27.
+/// PATH.** The byte figure is *not* used, because a lone `display_rendering` run (25.7 ms) can
+/// occur — `CreativeLookStage` sits between it and `output_transform`, so a creative look makes
+/// it a run of its own — and **that run is not trailing, so it can never take the byte path**.
+/// ⚠ Stated honestly: 25.7 sits **inside** the float band, so accelerating it is not a clear
+/// loss, merely not a clear win — and the gate's own property, *fail toward the CPU, because a
+/// wrong number costs milliseconds and never pixels*, is what settles it. A byte-valued
+/// threshold would accept it on the strength of a saving it cannot have. One conservative
+/// constant refuses it by construction, with no second rule to keep in step. Revisit when a
+/// ported stage's cost lands clearly between the two bands.
 ///
 /// ⚠⚠ **STANDING RULE: anything that changes the upload, the dispatch count or the download must
 /// re-run `probe_rt` and update this.** That is how it went stale, and it is recorded as a rule
@@ -105,8 +112,8 @@ const REPLACEABLE: &[(&str, Builder)] = &[
 /// project already records that a benchmark is not a test.
 ///
 /// ⚠ **The comparison is scale-free, which is why this is one number and not one per rung.** Both
-/// sides are linear in pixel count, and both paths measure it: float 7.23 -> 26.80 ms and byte
-/// 5.22 -> 21.02 ms across a 4.0x pixel ratio.
+/// sides are linear in pixel count, and both paths measure it: at 1600x1068 the float trip is
+/// ~7.2-7.3 ms and the byte one ~5.1-5.2, against a 4.0x pixel ratio.
 const TRANSFER_COST: f32 = 27.0;
 
 /// A stage that could be replaced, beside the CPU stage it would replace.

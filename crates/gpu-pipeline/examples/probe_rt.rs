@@ -8,7 +8,7 @@
 //! ⚠ It also establishes that the comparison is **scale-free** — 4x the pixels gives ~3.9x the
 //! round trip — which is what lets a stage carry one cost constant rather than one per rung.
 use core_image::ImageBuf;
-use gpu_pipeline::{GpuChain, GpuExposureStage};
+use gpu_pipeline::{GpuChain, GpuExposureStage, GpuOutputTransformStage};
 use pipeline::PipelineStage;
 use std::time::Instant;
 
@@ -45,6 +45,40 @@ fn main() {
         println!(
             "{w}x{h} ({:.1} MB): one-stage chain {best:.2} ms  <- essentially the round trip",
             (w * h * 12) as f64 / 1e6
+        );
+
+        // ⚠⚠ **The byte path, measured end to end rather than derived by subtraction — and the
+        // measurement is what showed the derivation was FINE.** M8.3g's components predict
+        // 26.80 - 8.42 = 18.4 ms here, and over seven runs this reads **15.7-21.0**, which
+        // contains it. M8.3h's spec first claimed the derivation was "wrong by 45%" on the
+        // strength of one top-of-band reading of 21.02 — comparing a point prediction against a
+        // single sample, which is exactly the error M8.3g's control row exists to expose.
+        //
+        // ⚠ So the row earns its place for a different reason than first claimed: it gives the
+        // **range**, and the range is what makes `TRANSFER_COST` defensible as a conservative
+        // number rather than a central one. Quote a band from several runs, never one figure.
+        //
+        // ⚠ This is the evidence that `TRANSFER_COST` can stay a **single** conservative
+        // constant: see its doc comment for the `display_rendering` case that rules out using
+        // this number as a second threshold.
+        let mut bbest = f64::MAX;
+        for _ in 0..5 {
+            let chain = GpuChain::new(
+                std::sync::Arc::clone(ctx),
+                vec![Box::new(GpuOutputTransformStage::new(
+                    color::OutputSpace::Srgb,
+                    ctx,
+                ))],
+            );
+            let t = Instant::now();
+            let out = chain.run_rgba8(&img);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            assert!(out.is_some(), "the byte path must be available");
+            std::hint::black_box(&out);
+            bbest = bbest.min(ms);
+        }
+        println!(
+            "{w}x{h}: one-stage chain, BYTE path  {bbest:.2} ms  <- trailing output_transform"
         );
     }
 }
