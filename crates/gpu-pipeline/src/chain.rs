@@ -56,6 +56,19 @@ pub trait GpuStage: Send + Sync {
     fn cpu(&self) -> &dyn PipelineStage;
 }
 
+/// What the chain downloads.
+///
+/// ⚠⚠ The two modes share **one** upload, one compute pass and one submit — the whole point is
+/// that only the *download* differs, so a second code path would be two things that could come to
+/// disagree about how a chain runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Download {
+    /// The resident f32 image: `w * h * 12` bytes.
+    Float,
+    /// Packed RGBA8, quantized by a final dispatch: `w * h * 4` bytes.
+    Rgba8,
+}
+
 /// A run of GPU stages sharing one upload and one download.
 pub struct GpuChain {
     stages: Vec<Box<dyn GpuStage>>,
@@ -121,8 +134,34 @@ impl GpuChain {
         image
     }
 
+    /// The name of the stage this chain ends with, if any.
+    ///
+    /// ⚠ [`crate::accelerate`] asks so it can decide whether the tail's output is
+    /// display-referred. Asked rather than inferred from "`output_transform` is always last",
+    /// which is true of today's pipeline and is an assumption rather than a guarantee.
+    pub fn last_name(&self) -> Option<&'static str> {
+        self.stages.last().map(|s| s.name())
+    }
+
+    /// Run the chain and download **RGBA8** rather than f32.
+    ///
+    /// ⚠⚠ Sound **only** when this chain's output is display-referred `[0, 1]`, which is what
+    /// [`crate::accelerate`] establishes before handing the chain over: it is the tail's last
+    /// stage, and its own last stage is `output_transform`. A caller reaching past that would
+    /// quantize scene-referred values, which do not fit in a byte.
+    ///
+    /// ⚠ `None` on any GPU failure, like the float path. The caller falls back through
+    /// [`PipelineStage::apply`], which retries once and then takes the CPU path — one wasted
+    /// attempt on a path that is rare, rather than a second fallback implementation here.
+    pub fn run_rgba8(&self, image: &ImageBuf) -> Option<Vec<u8>> {
+        if self.stages.is_empty() {
+            return None;
+        }
+        self.run_with(image, Download::Rgba8)
+    }
+
     /// The GPU path, or `None` on any failure at all.
-    fn run(&self, image: &ImageBuf) -> Option<Vec<f32>> {
+    fn run_with(&self, image: &ImageBuf, mode: Download) -> Option<Vec<u8>> {
         let ctx = &self.ctx;
         let device = &ctx.device;
         let img = GpuImage::new(ctx, image.width(), image.height())?;
@@ -167,21 +206,46 @@ impl GpuChain {
         // ⚠ Scratch is allocated **once for the whole chain, and only when something asks** — so
         // an HSL-only chain allocates nothing and costs exactly what it did in M8.3b.
         let scratch = GpuImage::scratch(ctx, image.width(), image.height(), self.scratch_needed());
+        // ⚠ The packed target is allocated only in bytes mode. Measured, an 82 MB buffer costs
+        // 0.05 ms to create and a 27 MB one proportionally less, so this is not worth caching —
+        // unlike the staging buffer, whose cost was `mapped_at_creation` rather than allocation.
+        let packed = match mode {
+            Download::Float => None,
+            Download::Rgba8 => Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("chain-packed"),
+                size: (image.width() * image.height() * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })),
+        };
         {
             let mut pass = enc.begin_compute_pass(&Default::default());
             for s in &self.stages {
                 s.encode(ctx, &mut pass, &img, &scratch);
             }
+            // ⚠ Inside the **same** pass, so it sees every stage's writes under the in-pass
+            // barrier this chain already depends on and measures.
+            if let Some(p) = &packed {
+                crate::quantize::encode(ctx, &mut pass, &img, p);
+            }
         }
 
         // ── download, once ────────────────────────────────────────────────────────────
+        // ⚠⚠ In bytes mode this moves **27 MB instead of 82** at rung 3200. Measured: f32 costs
+        // 6.33 ms of copy+map plus a 6.87 ms `to_vec`, against 2.59 + 2.19 for RGBA8 — so **8.4 ms**,
+        // which is a **2.8x** saving rather than the 4x the size ratio suggests, because a download
+        // carries a **1.28 ms fixed cost** that no size reduction touches.
+        let (src, out_bytes) = match &packed {
+            Some(p) => (p, (image.width() * image.height() * 4) as u64),
+            None => (&img.buffer, bytes),
+        };
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("chain-readback"),
-            size: bytes,
+            size: out_bytes,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        enc.copy_buffer_to_buffer(&img.buffer, 0, &readback, 0, bytes);
+        enc.copy_buffer_to_buffer(src, 0, &readback, 0, out_bytes);
         ctx.queue.submit(Some(enc.finish()));
 
         let slice = readback.slice(..);
@@ -194,7 +258,7 @@ impl GpuChain {
             timeout: None,
         });
         rx.recv().ok()?.ok()?;
-        let out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);
         // ⚠ Returned only **here**, after `poll(Wait)` has confirmed the submission finished —
@@ -218,8 +282,8 @@ impl PipelineStage for GpuChain {
             return image;
         }
         let (w, h) = (image.width(), image.height());
-        match self.run(&image) {
-            Some(data) => ImageBuf::from_vec(w, h, data),
+        match self.run_with(&image, Download::Float) {
+            Some(data) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
             None => self.cpu_fallback(image),
         }
     }
@@ -243,6 +307,73 @@ mod tests {
     fn ramp(w: usize, h: usize) -> ImageBuf {
         let n = w * h * 3;
         ImageBuf::from_vec(w, h, (0..n).map(|i| (i % 601) as f32 / 601.0).collect())
+    }
+
+    /// ⚠⚠ **THE test of this milestone.** The GPU's bytes must be what the CPU would have
+    /// quantized — not close to it, *identical* to it, because both sides are a defined rounding
+    /// of the same number and a tolerance would hide exactly the tie bug below.
+    ///
+    /// ⚠⚠ **The fixture is the test.** WGSL's `round` breaks ties to the EVEN whole number while
+    /// Rust's `f32::round` breaks them AWAY FROM ZERO, and `v * 255` lands on exact halves
+    /// routinely — so a shader using `round` is correct on every ordinary value and off by one
+    /// level on every tie. A ramp that never lands on a half cannot see that. This fixture carries
+    /// every tie `(2k+1)/510`, plus a negative, a value above 1, and a NaN.
+    #[test]
+    fn the_gpu_bytes_are_what_the_cpu_would_have_quantized() {
+        let Some(ctx) = ctx() else { return };
+        let mut px: Vec<f32> = Vec::new();
+        for k in 0..255u32 {
+            // (2k+1)/510 * 255 == k + 0.5 exactly
+            let half = (2 * k + 1) as f32 / 510.0;
+            px.extend_from_slice(&[half, half, half]);
+        }
+        px.extend_from_slice(&[-0.25, 1.5, f32::NAN]);
+        px.extend_from_slice(&[0.0, 1.0, 0.5]);
+        let w = px.len() / 3;
+        let img = ImageBuf::from_vec(w, 1, px);
+        // ⚠ An identity chain: exposure at 0 EV multiplies by exactly 1.0, so the only thing under
+        // test is the quantization. A chain that *changed* the pixels would still pass, but a
+        // failure could then be the stage rather than the rounding.
+        let chain = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(0.0, ctx.clone()))],
+        );
+        let want = chain.apply(img.clone()).to_rgba8();
+        let got = chain
+            .run_rgba8(&img)
+            .expect("the GPU path must be available here");
+        assert_eq!(got.len(), want.len(), "byte count");
+        let bad: Vec<(usize, u8, u8)> = got
+            .iter()
+            .zip(&want)
+            .enumerate()
+            .filter(|(_, (g, w))| g != w)
+            .map(|(i, (g, w))| (i, *g, *w))
+            .take(6)
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "GPU vs CPU quantize, first few (index, gpu, cpu): {bad:?}"
+        );
+    }
+
+    /// ⚠ The chain must know what it ends in — `accelerate` asks, to decide whether the tail's
+    /// output is display-referred and therefore safe to quantize on the GPU.
+    #[test]
+    fn a_chain_reports_the_name_of_its_last_stage() {
+        let Some(ctx) = ctx() else { return };
+        let chain = GpuChain::new(
+            ctx.clone(),
+            vec![
+                Box::new(GpuExposureStage::new(0.0, ctx.clone())),
+                Box::new(crate::GpuOutputTransformStage::new(
+                    color::OutputSpace::Srgb,
+                    &ctx,
+                )),
+            ],
+        );
+        assert_eq!(chain.last_name(), Some("output_transform"));
+        assert_eq!(GpuChain::new(ctx.clone(), vec![]).last_name(), None);
     }
 
     /// TEMPORARY probe: what is inside the round trip, and what would a 4x smaller readback buy?

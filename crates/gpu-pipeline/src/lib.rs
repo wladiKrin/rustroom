@@ -21,6 +21,7 @@ mod image;
 mod luma_wgsl;
 mod oklab_wgsl;
 mod output_transform;
+mod quantize;
 mod sharpen;
 mod tone_regions;
 
