@@ -1,6 +1,6 @@
 //! Swapping runs of CPU stages for GPU chains in a built pipeline.
 
-use crate::{GpuChain, GpuContext, GpuHslStage, GpuSharpenStage, GpuStage};
+use crate::{GpuChain, GpuContext, GpuGradingStage, GpuHslStage, GpuSharpenStage, GpuStage};
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, RenderScale};
 use std::sync::Arc;
@@ -25,6 +25,9 @@ type Builder = fn(&Edits, RenderScale, &Arc<GpuContext>) -> Box<dyn GpuStage>;
 /// by `the_replaceable_names_occur_at_most_once_in_a_tail`.
 const REPLACEABLE: &[(&str, Builder)] = &[
     ("hsl", |e, _, ctx| Box::new(GpuHslStage::new(&e.hsl, ctx))),
+    ("color_grading", |e, _, ctx| {
+        Box::new(GpuGradingStage::new(&e.color_grading, ctx))
+    }),
     ("sharpening", |e, scale, ctx| {
         Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx))
     }),
@@ -179,14 +182,20 @@ mod tests {
         // ⚠⚠ **The half that makes the test above mean something.** An implementation that merged
         // every replaceable stage regardless of position would pass it — and would run the CPU
         // stage's work in the wrong order, producing a plausible photograph rather than an error.
+        //
+        // ⚠ **Re-aimed at the VIGNETTE at M8.3d.** It used to use the colour grade, which stopped
+        // being a CPU stage when that was accelerated — so the fixture check below would have
+        // failed loudly rather than the test going quietly vacuous, but the rule it guards is
+        // unchanged and only its example moved. The vignette runs after sharpening and is not
+        // replaceable, so it still splits a run.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.color_grading.shadows.saturation = 30.0;
+        e.vignette.amount = -40.0;
         let tail = tail_of(&e);
         let before = tail.stage_names();
         assert!(
-            before.contains(&"color_grading"),
-            "fixture check: the grade must sit between them, got {before:?}"
+            before.contains(&"vignette"),
+            "fixture check: an unaccelerated stage must sit between them, got {before:?}"
         );
         let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
         assert_eq!(
@@ -199,15 +208,15 @@ mod tests {
     #[test]
     fn merging_preserves_order() {
         // ⚠ A regrouping, never a reordering. The non-replaceable stage must keep its position
-        // relative to the chains around it.
+        // relative to the chains around it. ⚠ Re-aimed at the vignette at M8.3d, with the grade.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.color_grading.shadows.saturation = 30.0;
+        e.vignette.amount = -40.0;
         let after = accelerate(tail_of(&e), &e, SCALE, &ctx).stage_names();
         let grade = after
             .iter()
-            .position(|n| *n == "color_grading")
-            .expect("the grade is kept");
+            .position(|n| *n == "vignette")
+            .expect("the vignette is kept");
         let at: Vec<usize> = after
             .iter()
             .enumerate()
@@ -218,6 +227,58 @@ mod tests {
         assert!(
             at[0] < grade && grade < at[1],
             "the grade must stay between the two chains, got {after:?}"
+        );
+    }
+
+    fn graded(mut e: Edits) -> Edits {
+        e.color_grading.shadows.saturation = 30.0;
+        e.color_grading.shadows.hue = 250.0;
+        e
+    }
+
+    #[test]
+    fn three_consecutive_gpu_stages_merge_into_one_chain() {
+        // ⚠⚠ **The whole point of M8.3d.** Before it, an active grade sat between hsl and
+        // sharpening, split the run and took the win from 1.52x to 1.04x. Now the three are ONE
+        // chain — the first three-stage run, and the best case run-merging has.
+        let Some(ctx) = ctx() else { return };
+        let e = graded(with_sharpening(with_hsl()));
+        let tail = tail_of(&e);
+        let before = tail.stage_names();
+        assert!(
+            before
+                .windows(3)
+                .any(|w| w == ["hsl", "color_grading", "sharpening"]),
+            "fixture check: the three must be consecutive, got {before:?}"
+        );
+        let after = accelerate(tail, &e, SCALE, &ctx).stage_names();
+        assert_eq!(
+            chains(&after),
+            1,
+            "three must become ONE chain, got {after:?}"
+        );
+        assert_eq!(
+            after.len(),
+            before.len() - 2,
+            "three collapse to one stage, got {after:?}"
+        );
+    }
+
+    #[test]
+    fn a_three_stage_run_renders_the_same_picture() {
+        // ⚠ The carrier. The shape test above passes against a chain of three stages that compute
+        // nonsense, or that run in the wrong order.
+        let Some(ctx) = ctx() else { return };
+        let e = graded(with_sharpening(with_hsl()));
+        let cpu = tail_of(&e).run(ramp());
+        let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.01,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
         );
     }
 
@@ -294,7 +355,7 @@ mod tests {
         // different execution than one chain, and a reordering bug lives exactly there.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.color_grading.shadows.saturation = 30.0;
+        e.vignette.amount = -40.0;
         let cpu = tail_of(&e).run(ramp());
         let gpu = accelerate(tail_of(&e), &e, SCALE, &ctx).run(ramp());
         let d = crate::compare(&cpu, &gpu);
