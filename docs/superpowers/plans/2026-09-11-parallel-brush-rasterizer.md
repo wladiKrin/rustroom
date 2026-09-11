@@ -628,18 +628,26 @@ edit `rasterize_in_reference` to match. That copy is frozen and is the shipped b
 short-circuit moved after the gate; `scratch` not cleared per row; `cov_row` indexed by `x - sx0`
 instead of `x - x0`.
 
-- [ ] **Step 3: Sabotage — visit the dabs in reverse order**
+- [ ] **Step 3: Sabotage — drop a row's dabs**
+
+⚠⚠ **CORRECTED DURING EXECUTION (Task 2).** The plan first called for reversing the dab order and
+predicted a failure. **Reversing is provably INERT**: within a stroke the combine is `max`, and
+the short-circuit only ever drops a dab whose gated alpha is already ≤ the running max, so the
+result is exactly `max_d gated_alpha(d)` — order-independent. `*slot = a` in place of
+`*slot = slot.max(a)` is inert for the same reason (that line is reached only when `a > *slot`).
+**Both were tried against the reference in Task 2 and both passed.** Stroke order still matters
+for the *skip's effectiveness*, i.e. for speed, and not for the value.
 
 ```bash
 cp crates/pipeline/src/brush/raster.rs /tmp/rr-m83i-raster-t4.bak
 ```
 
-Change `for d in &stroke.dabs {` inside `row_body` to `for d in stroke.dabs.iter().rev() {`.
+Change `row_body`'s row test `if y < dy0 || y >= dy1 { continue; }` to
+`if y < dy0 || y >= dy1.saturating_sub(1) { continue; }` — a row genuinely dropped from each dab.
 Re-run Step 2. Expected: **`the_rasterizer_is_bit_identical_to_its_reference` fails.**
 
-⚠ If it passes, the fixture's overlapping dabs do not differ in their gates and the test cannot
-see order — strengthen `gather_fixture` (more overlap on the auto-masked stroke, spanning the
-base's split) and repeat before continuing.
+⚠ If it passes, `gather_fixture`'s strokes are thinner than two rows and the test cannot see a
+row boundary — strengthen it and repeat before continuing.
 
 Restore:
 
