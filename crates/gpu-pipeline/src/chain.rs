@@ -245,6 +245,190 @@ mod tests {
         ImageBuf::from_vec(w, h, (0..n).map(|i| (i % 601) as f32 / 601.0).collect())
     }
 
+    /// TEMPORARY probe: what is inside the round trip, and what would a 4x smaller readback buy?
+    ///
+    /// `cargo test --release -p gpu-pipeline -- --ignored --nocapture probe_breakdown`
+    #[test]
+    #[ignore]
+    fn probe_breakdown() {
+        use std::time::Instant;
+        let Some(ctx) = ctx() else { return };
+        let (w, h) = (3200usize, 2136);
+        let img_cpu = ramp(w, h);
+        let edits = edit_model::Edits {
+            exposure: 0.4,
+            highlights: -30.0,
+            shadows: 25.0,
+            ..Default::default()
+        };
+        let stages: Vec<Box<dyn GpuStage>> = vec![
+            Box::new(GpuExposureStage::new(0.4, ctx.clone())),
+            Box::new(crate::GpuToneRegionsStage::new(&edits, &ctx)),
+            Box::new(crate::GpuDisplayRenderingStage::new(None, None, &ctx)),
+            Box::new(crate::GpuOutputTransformStage::new(
+                color::OutputSpace::Srgb,
+                &ctx,
+            )),
+        ];
+        // warm: compile every shader and seed the staging pool
+        let warm = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(0.0, ctx.clone()))],
+        );
+        std::hint::black_box(warm.apply(img_cpu.clone()));
+
+        let device = &ctx.device;
+        let mut b = [f64::MAX; 12];
+        for _ in 0..5 {
+            let gi = GpuImage::new(&ctx, w, h).unwrap();
+            let bytes = gi.bytes();
+
+            // 1. CPU memcpy into the mapped staging buffer
+            let t = Instant::now();
+            let staging = ctx.cache.take_staging(device, bytes).unwrap();
+            staging
+                .slice(..bytes)
+                .get_mapped_range_mut()
+                .copy_from_slice(bytemuck::cast_slice(img_cpu.data()));
+            staging.unmap();
+            b[0] = b[0].min(t.elapsed().as_secs_f64() * 1000.0);
+
+            // 2. device-side upload copy, on its own submit
+            let t = Instant::now();
+            let mut e = device.create_command_encoder(&Default::default());
+            e.copy_buffer_to_buffer(&staging, 0, &gi.buffer, 0, bytes);
+            ctx.queue.submit(Some(e.finish()));
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            b[1] = b[1].min(t.elapsed().as_secs_f64() * 1000.0);
+
+            // 3. the four dispatches
+            let t = Instant::now();
+            let mut e = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = e.begin_compute_pass(&Default::default());
+                for s in &stages {
+                    s.encode(&ctx, &mut pass, &gi, &[]);
+                }
+            }
+            ctx.queue.submit(Some(e.finish()));
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            b[2] = b[2].min(t.elapsed().as_secs_f64() * 1000.0);
+
+            // 4. device-side download copy + map, f32 (what ships today)
+            let rb = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let t = Instant::now();
+            let mut e = device.create_command_encoder(&Default::default());
+            e.copy_buffer_to_buffer(&gi.buffer, 0, &rb, 0, bytes);
+            ctx.queue.submit(Some(e.finish()));
+            let sl = rb.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            sl.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            rx.recv().unwrap().unwrap();
+            b[3] = b[3].min(t.elapsed().as_secs_f64() * 1000.0);
+
+            // 5. the to_vec
+            let t = Instant::now();
+            let v: Vec<f32> = bytemuck::cast_slice(&sl.get_mapped_range()).to_vec();
+            b[4] = b[4].min(t.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box(&v);
+            rb.unmap();
+
+            // 6. the same download at a QUARTER the size -- what RGBA8 would move.
+            //    The bytes are meaningless; only the transfer is being measured.
+            for (i, frac) in [(6usize, 3u64), (7, 12), (8, 82_000)].into_iter() {
+                let n = (bytes / frac).max(256) & !255;
+                let t = Instant::now();
+                let r = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: n,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let mut e = device.create_command_encoder(&Default::default());
+                e.copy_buffer_to_buffer(&gi.buffer, 0, &r, 0, n);
+                ctx.queue.submit(Some(e.finish()));
+                let sl = r.slice(..);
+                let (tx, rx) = std::sync::mpsc::channel();
+                sl.map_async(wgpu::MapMode::Read, move |x| {
+                    let _ = tx.send(x);
+                });
+                let _ = device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                });
+                rx.recv().unwrap().unwrap();
+                b[i] = b[i].min(t.elapsed().as_secs_f64() * 1000.0);
+                let t = Instant::now();
+                let v: Vec<u8> = sl.get_mapped_range().to_vec();
+                b[i + 3] = b[i + 3].min(t.elapsed().as_secs_f64() * 1000.0);
+                std::hint::black_box(&v);
+                r.unmap();
+            }
+            let quarter = bytes / 3;
+            let rb8 = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: quarter,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let t = Instant::now();
+            let mut e = device.create_command_encoder(&Default::default());
+            e.copy_buffer_to_buffer(&gi.buffer, 0, &rb8, 0, quarter);
+            ctx.queue.submit(Some(e.finish()));
+            let sl8 = rb8.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            sl8.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            rx.recv().unwrap().unwrap();
+            let v8: Vec<u8> = sl8.get_mapped_range().to_vec();
+            b[5] = b[5].min(t.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box(&v8);
+            rb8.unmap();
+
+            ctx.cache.put_staging(staging);
+        }
+        println!(
+            "\n=== round trip at {w}x{h} ({:.0} MB f32), best of 5, separate submits",
+            (w * h * 12) as f64 / 1e6
+        );
+        println!("  1 staging memcpy (CPU)      {:6.2} ms", b[0]);
+        println!("  2 upload copy   (device)    {:6.2} ms", b[1]);
+        println!("  3 four dispatches           {:6.2} ms", b[2]);
+        println!("  4 download f32 copy+map     {:6.2} ms", b[3]);
+        println!("  5 to_vec of 82 MB (CPU)     {:6.2} ms", b[4]);
+        println!("  -- download scaling, copy+map  +  to_vec:");
+        for (label, c, v) in [
+            ("82 MB (1/1, f32 today)", b[3], b[4]),
+            ("27 MB (1/3, = RGBA8)", b[6], b[9]),
+            ("6.8 MB (1/12)", b[7], b[10]),
+            ("~256 B (fixed cost)", b[8], b[11]),
+        ] {
+            println!("     {label:24} {c:6.2}  +  {v:6.2}  =  {:6.2} ms", c + v);
+        }
+    }
+
     #[test]
     fn three_chained_exposures_equal_one_combined_exposure() {
         // ⚠⚠ **THE BARRIER TEST, and the most important assertion in this slice.** Successive
