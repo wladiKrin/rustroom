@@ -219,7 +219,15 @@ pub fn accelerate(
         // trailing chain anyway: `output_transform` is not something `adjustment_stages` places,
         // so the byte path is unreachable here **by construction** and a mask always pays the
         // float round trip that `TRANSFER_COST` describes.
-        let (p, c) = walk(Pipeline::new(stages), &e, sub_scale, profile, spec, ctx, None);
+        let (p, c) = walk(
+            Pipeline::new(stages),
+            &e,
+            sub_scale,
+            profile,
+            spec,
+            ctx,
+            None,
+        );
         rejoin(p, c).into_stages()
     };
     // ⚠ The cast is explicit: an unsize coercion from `&{closure}` to `&dyn Fn` inside a `Some(..)`
@@ -537,8 +545,10 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut e = Edits::default();
-        e.masks = vec![mask_carrying(adjustments)];
+        let e = Edits {
+            masks: vec![mask_carrying(adjustments)],
+            ..Edits::default()
+        };
 
         let unmasked = tail_of(&Edits::default()).run(scene_ramp());
         let cpu = tail_of(&e).run(scene_ramp());
@@ -811,11 +821,13 @@ mod tests {
     #[test]
     fn a_masked_hsl_becomes_a_chain_inside_the_mask() {
         let Some(ctx) = ctx() else { return };
-        let mut e = Edits::default();
-        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
-            hsl: with_hsl().hsl,
-            ..Default::default()
-        })];
+        let e = Edits {
+            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
         let before = mask_sub_stages(&tail_of(&e));
         assert_eq!(
             before,
@@ -844,11 +856,13 @@ mod tests {
     #[test]
     fn a_mask_carrying_only_exposure_is_not_worth_a_chain() {
         let Some(ctx) = ctx() else { return };
-        let mut e = Edits::default();
-        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
-            exposure: -3.6,
-            ..Default::default()
-        })];
+        let e = Edits {
+            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+                exposure: -3.6,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
         let after = mask_sub_stages(&accel(
             tail_of(&e),
             &e,
@@ -871,16 +885,18 @@ mod tests {
     #[test]
     fn accelerating_the_tail_leaves_the_prefixs_mask_alone() {
         let Some(ctx) = ctx() else { return };
-        let mut e = Edits::default();
-        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
-            hsl: with_hsl().hsl,
-            noise_reduction: edit_model::NoiseReduction {
-                luminance: 40.0,
-                color: 40.0,
+        let e = Edits {
+            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                noise_reduction: edit_model::NoiseReduction {
+                    luminance: 40.0,
+                    color: 40.0,
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        })];
+            })],
+            ..Edits::default()
+        };
         let (prefix, tail) = pipeline::build_pipeline_split(&e, SCALE);
         assert!(
             prefix.sub_stage_names_of("mask").is_some(),
