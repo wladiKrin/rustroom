@@ -33,6 +33,30 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     }),
 ];
 
+/// What one round trip costs, in the same units as [`GpuStage::cpu_cost`] — milliseconds per 6.8
+/// megapixels, measured by `gpu-pipeline`'s `probe_rt` on an Apple M2.
+///
+/// ⚠⚠ **The comparison is scale-free, which is why this is one number and not one per rung.**
+/// Both sides are linear in pixel count — the transfer moves `w*h*12` bytes, a per-pixel stage
+/// does `w*h` work — so the ratio does not depend on resolution. Measured rather than assumed:
+/// 4x the pixels gave 3.9x the round trip, 8.71 -> 34.03 ms.
+const TRANSFER_COST: f32 = 34.0;
+
+/// A stage that could be replaced, beside the CPU stage it would replace.
+///
+/// ⚠ Both halves travel together because `flush` may decide against the chain, and
+/// `GpuStage::cpu()` hands out a borrow that cannot be pushed into the output pipeline.
+type Candidate = (Box<dyn GpuStage>, Box<dyn PipelineStage>);
+
+/// Is this run worth a round trip?
+///
+/// ⚠⚠ **Work, not a stage count.** One expensive stage pays easily — `hsl` alone is a measured
+/// 1.56x — while three cheap ones do not, so a minimum count would refuse the case M8.3b shipped
+/// and accept the case this exists to refuse.
+fn worth_a_chain(costs: &[f32]) -> bool {
+    costs.iter().sum::<f32>() > TRANSFER_COST
+}
+
 /// Replace runs of GPU-capable stages in `tail` with chains.
 ///
 /// ⚠⚠ **Consecutive stages share ONE chain, and therefore one round trip.** That is the point:
@@ -52,10 +76,13 @@ pub fn accelerate(
     ctx: &Arc<GpuContext>,
 ) -> Pipeline {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
-    let mut run: Vec<Box<dyn GpuStage>> = Vec::new();
+    // ⚠⚠ **Both halves.** A run that turns out not to be worth the transfer has to be put back,
+    // and `GpuStage::cpu()` hands out a *borrow* that cannot be pushed into `out` — so the
+    // original travels beside the GPU stage and `flush` chooses between them.
+    let mut run: Vec<Candidate> = Vec::new();
     for s in tail.into_stages() {
         match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
-            Some((_, build)) => run.push(build(edits, scale, ctx)),
+            Some((_, build)) => run.push((build(edits, scale, ctx), s)),
             None => {
                 flush(&mut run, &mut out, ctx);
                 out.push(s);
@@ -66,14 +93,22 @@ pub fn accelerate(
     Pipeline::new(out)
 }
 
-/// Turn any pending run into a chain.
-fn flush(
-    run: &mut Vec<Box<dyn GpuStage>>,
-    out: &mut Vec<Box<dyn PipelineStage>>,
-    ctx: &Arc<GpuContext>,
-) {
-    if !run.is_empty() {
-        out.push(Box::new(GpuChain::new(ctx.clone(), std::mem::take(run))));
+/// Turn any pending run into a chain — or put it back on the CPU if it is not worth the transfer.
+fn flush(run: &mut Vec<Candidate>, out: &mut Vec<Box<dyn PipelineStage>>, ctx: &Arc<GpuContext>) {
+    if run.is_empty() {
+        return;
+    }
+    let taken = std::mem::take(run);
+    let costs: Vec<f32> = taken.iter().map(|(g, _)| g.cpu_cost()).collect();
+    if worth_a_chain(&costs) {
+        out.push(Box::new(GpuChain::new(
+            ctx.clone(),
+            taken.into_iter().map(|(g, _)| g).collect(),
+        )));
+    } else {
+        // ⚠ In order, so a refused run keeps its position exactly as the CPU stages had it —
+        // the same rule that makes this a regrouping and never a reordering.
+        out.extend(taken.into_iter().map(|(_, c)| c));
     }
 }
 
@@ -83,6 +118,33 @@ mod tests {
     use edit_model::{HslBand, Sharpening};
 
     const SCALE: RenderScale = RenderScale::FULL;
+
+    /// ⚠⚠ The gate's whole reason for existing: `output_transform` is on **every** photograph, so
+    /// without this a neutral frame would build a one-stage chain and pay a 34 ms toll for 28.6 ms
+    /// of work — a regression where there is none today, felt exactly while browsing.
+    #[test]
+    fn a_run_cheaper_than_the_transfer_is_left_on_the_cpu() {
+        assert!(
+            !worth_a_chain(&[0.5, 1.2]),
+            "two trivial stages must not be worth a round trip"
+        );
+    }
+
+    /// ⚠ The other direction, and it is what rules out a stage *count* as the gate: one expensive
+    /// stage pays easily — `hsl` alone is a measured 1.56x — while three cheap ones do not.
+    #[test]
+    fn one_expensive_stage_is_still_worth_a_chain() {
+        assert!(
+            worth_a_chain(&[60.0]),
+            "hsl alone must still be accelerated"
+        );
+    }
+
+    /// ⚠ Fails toward the CPU: an empty run is never a chain.
+    #[test]
+    fn an_empty_run_is_not_a_chain() {
+        assert!(!worth_a_chain(&[]));
+    }
 
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {

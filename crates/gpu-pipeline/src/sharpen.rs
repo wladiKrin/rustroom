@@ -216,6 +216,13 @@ impl GpuSharpenStage {
 }
 
 impl GpuStage for GpuSharpenStage {
+    /// ⚠ Derived from the bench's 1600x1068 delta scaled by 3.9, not measured at 3200 — see
+    /// `GpuHslStage::cpu_cost`. ⚠ Spatial, so unlike the per-pixel stages its cost is only
+    /// roughly linear in pixel count; the margin over the bar is large enough not to care.
+    fn cpu_cost(&self) -> f32 {
+        54.0
+    }
+
     fn name(&self) -> &'static str {
         "sharpening"
     }

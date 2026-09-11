@@ -98,6 +98,13 @@ impl GpuHslStage {
 }
 
 impl GpuStage for GpuHslStage {
+    /// ⚠ Derived, not measured directly: the bench's delta at 1600x1068 scaled by 3.9, because
+    /// `probe_stages` cannot reach an already-ported stage at 3200. Comfortably over the bar
+    /// either way.
+    fn cpu_cost(&self) -> f32 {
+        60.0
+    }
+
     fn name(&self) -> &'static str {
         "hsl"
     }

@@ -67,6 +67,12 @@ impl GpuGradingStage {
 }
 
 impl GpuStage for GpuGradingStage {
+    /// ⚠ Derived from the bench's 1600x1068 delta scaled by 3.9, not measured at 3200 — see
+    /// `GpuHslStage::cpu_cost`.
+    fn cpu_cost(&self) -> f32 {
+        48.0
+    }
+
     fn name(&self) -> &'static str {
         "color_grading"
     }

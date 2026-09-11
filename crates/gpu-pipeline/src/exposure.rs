@@ -156,6 +156,12 @@ impl GpuExposureStage {
 }
 
 impl crate::GpuStage for GpuExposureStage {
+    /// Measured at 3200x2136 by `pipeline`'s `probe_stages`: +1.29 ms. ⚠⚠ Far under the transfer,
+    /// which is the point — exposure alone must stay on the CPU.
+    fn cpu_cost(&self) -> f32 {
+        1.3
+    }
+
     fn name(&self) -> &'static str {
         "exposure"
     }

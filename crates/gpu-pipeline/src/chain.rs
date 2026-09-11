@@ -14,6 +14,18 @@ use std::sync::Arc;
 pub trait GpuStage: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// This stage's CPU cost, in milliseconds per 6.8 megapixels.
+    ///
+    /// ⚠⚠ **Used ONLY to decide whether a run is worth a round trip, never to decide what is
+    /// rendered.** It fails toward "run on the CPU", which is always correct — a wrong number
+    /// costs milliseconds, never pixels. That is what separates it from the cost heuristic
+    /// `PrefixCache` deliberately refused, where a wrong guess would have changed what was
+    /// cached and therefore what you saw.
+    ///
+    /// ⚠ Deliberately has **no default**, so adding a stage forces the measurement rather than
+    /// silently inheriting someone else's. `pipeline`'s `probe_stages` is how the number is got.
+    fn cpu_cost(&self) -> f32;
+
     /// How many single-channel scratch planes this stage needs.
     ///
     /// ⚠ Defaults to **0**, so every stage written before M8.3c keeps working untouched.
@@ -320,6 +332,10 @@ mod tests {
     }
 
     impl GpuStage for NeedsScratch {
+        fn cpu_cost(&self) -> f32 {
+            99.0
+        }
+
         fn name(&self) -> &'static str {
             "needs_scratch"
         }
