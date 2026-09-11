@@ -123,7 +123,7 @@ pub fn accelerate(
     profile: ProfileRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
-) -> Pipeline {
+) -> (Pipeline, Option<GpuChain>) {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
     // ⚠⚠ **Both halves.** A run that turns out not to be worth the transfer has to be put back,
     // and `GpuStage::cpu()` hands out a *borrow* that cannot be pushed into `out` — so the
@@ -133,31 +133,72 @@ pub fn accelerate(
         match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
             Some((_, build)) => run.push((build(edits, scale, profile, spec, ctx), s)),
             None => {
-                flush(&mut run, &mut out, ctx);
+                // ⚠ A chain followed by a CPU stage is **not** the tail's last stage, so it goes
+                // straight back into the pipeline and can never be a candidate for the byte path.
+                if let Some(c) = flush(&mut run, &mut out, ctx) {
+                    out.push(Box::new(c));
+                }
                 out.push(s);
             }
         }
     }
-    flush(&mut run, &mut out, ctx);
-    Pipeline::new(out)
+    // ⚠⚠ Whatever this produces **is** last, by construction — the loop is over, so there is
+    // nothing left to push after it. That is what makes the question answerable here and nowhere
+    // else: a caller holding the finished `Pipeline` could only recognise a chain by downcasting.
+    match flush(&mut run, &mut out, ctx) {
+        // ⚠ The name is **checked**, not assumed. `output_transform` ends every tail today, and
+        // that is a fact about the current pipeline rather than a guarantee about the next one —
+        // and it is the stage that clamps, so it is what makes the output display-referred.
+        Some(c) if c.last_name() == Some("output_transform") => (Pipeline::new(out), Some(c)),
+        Some(c) => {
+            out.push(Box::new(c));
+            (Pipeline::new(out), None)
+        }
+        None => (Pipeline::new(out), None),
+    }
+}
+
+/// Put a chain back on the end of a pipeline.
+///
+/// ⚠ For the callers that want one plain `Pipeline` — the soft-proof tail, and every case the
+/// M8.3g gate turns down. Written once so that "the pipeline plus its chain" cannot be assembled
+/// two ways.
+pub fn rejoin(p: Pipeline, chain: Option<GpuChain>) -> Pipeline {
+    match chain {
+        None => p,
+        Some(c) => {
+            let mut v = p.into_stages();
+            v.push(Box::new(c));
+            Pipeline::new(v)
+        }
+    }
 }
 
 /// Turn any pending run into a chain — or put it back on the CPU if it is not worth the transfer.
-fn flush(run: &mut Vec<Candidate>, out: &mut Vec<Box<dyn PipelineStage>>, ctx: &Arc<GpuContext>) {
+///
+/// ⚠⚠ **Returns the chain rather than pushing it**, so the caller can see whether the last thing
+/// it built was one. Pushing into a `Vec<Box<dyn PipelineStage>>` would make that question
+/// answerable only by downcasting.
+fn flush(
+    run: &mut Vec<Candidate>,
+    out: &mut Vec<Box<dyn PipelineStage>>,
+    ctx: &Arc<GpuContext>,
+) -> Option<GpuChain> {
     if run.is_empty() {
-        return;
+        return None;
     }
     let taken = std::mem::take(run);
     let costs: Vec<f32> = taken.iter().map(|(g, _)| g.cpu_cost()).collect();
     if worth_a_chain(&costs) {
-        out.push(Box::new(GpuChain::new(
+        Some(GpuChain::new(
             ctx.clone(),
             taken.into_iter().map(|(g, _)| g).collect(),
-        )));
+        ))
     } else {
         // ⚠ In order, so a refused run keeps its position exactly as the CPU stages had it —
         // the same rule that makes this a regrouping and never a reordering.
         out.extend(taken.into_iter().map(|(_, c)| c));
+        None
     }
 }
 
@@ -209,7 +250,7 @@ mod tests {
             ..Edits::default()
         };
         let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
-        let names: Vec<_> = accelerate(
+        let names: Vec<_> = accel(
             tail,
             &e,
             SCALE,
@@ -235,6 +276,123 @@ mod tests {
                 None
             }
         }
+    }
+
+    /// The whole accelerated tail as one pipeline.
+    ///
+    /// ⚠ Every test that predates M8.3g goes through here, so its assertions are **unchanged** —
+    /// which is what makes their passing evidence that splitting the last chain out moved no
+    /// behaviour, rather than merely evidence that they were edited until they passed.
+    fn accel(
+        tail: Pipeline,
+        e: &Edits,
+        scale: RenderScale,
+        profile: ProfileRendering<'_>,
+        spec: RenderSpec,
+        ctx: &Arc<GpuContext>,
+    ) -> Pipeline {
+        let (p, c) = accelerate(tail, e, scale, profile, spec, ctx);
+        rejoin(p, c)
+    }
+
+    fn split(tail: Pipeline, e: &Edits, ctx: &Arc<GpuContext>) -> (Pipeline, Option<GpuChain>) {
+        accelerate(
+            tail,
+            e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            ctx,
+        )
+    }
+
+    /// ⚠⚠ The condition M8.3g's whole gate rests on, and it is answered **by construction** here
+    /// rather than by a caller trying to recognise a chain through a `Box<dyn PipelineStage>`.
+    #[test]
+    fn a_tail_ending_in_an_accelerated_output_transform_hands_the_chain_back() {
+        let Some(ctx) = ctx() else { return };
+        let e = with_hsl();
+        let (rest, chain) = split(tail_of(&e), &e, &ctx);
+        let chain = chain.expect("this tail ends in a chain");
+        assert_eq!(
+            chain.last_name(),
+            Some("output_transform"),
+            "only a chain ending in the output transform is display-referred"
+        );
+        assert!(
+            !rest.stage_names().contains(&"gpu_chain"),
+            "the returned pipeline must no longer hold that chain, got {:?}",
+            rest.stage_names()
+        );
+    }
+
+    /// ⚠⚠ **A CPU stage after the chain means the tail's output is NOT the chain's output**, so
+    /// nothing may be handed back.
+    ///
+    /// ⚠ No `Edits` can produce this today — `output_transform` ends every tail and is itself
+    /// replaceable — so the tail is built by hand. The plan predicted this case would be
+    /// unreachable and recorded as inert; it is constructible after all, which is strictly better
+    /// than a guard nothing exercises.
+    #[test]
+    fn a_cpu_stage_after_the_chain_means_no_chain_is_handed_back() {
+        let Some(ctx) = ctx() else { return };
+        let e = with_hsl();
+        let mut stages = tail_of(&e).into_stages();
+        stages.push(Box::new(pipeline::SaturationStage::new(20.0, 0.0)));
+        let (rest, chain) = split(Pipeline::new(stages), &e, &ctx);
+        assert!(
+            chain.is_none(),
+            "a trailing CPU stage must keep the chain inside the pipeline"
+        );
+        assert_eq!(
+            chains(&rest.stage_names()),
+            1,
+            "and the chain must still be there: {:?}",
+            rest.stage_names()
+        );
+    }
+
+    /// ⚠⚠ **The name guard, and it needs its own fixture because nothing else reaches it.** The
+    /// trailing-CPU-stage test above does not: there the final flush is empty, so `None` comes back
+    /// whether or not the name is checked. Only a chain that genuinely *is* last while ending in
+    /// something other than `output_transform` exercises it — which no `Edits` can produce today,
+    /// since that stage ends every tail and is itself replaceable. Hand-built, so the guard is
+    /// exercised rather than recorded as inert.
+    ///
+    /// ⚠ What it protects: `run_rgba8` quantizes to a byte, which is sound only for
+    /// display-referred `[0, 1]` data. A chain ending in `hsl` hands back scene-referred values
+    /// with headroom above white, and quantizing those would clip every highlight to 255.
+    #[test]
+    fn a_chain_not_ending_in_the_output_transform_is_not_handed_back() {
+        let Some(ctx) = ctx() else { return };
+        let e = with_hsl();
+        let stages: Vec<Box<dyn PipelineStage>> = tail_of(&e)
+            .into_stages()
+            .into_iter()
+            .filter(|s| s.name() != "output_transform")
+            .collect();
+        let (rest, chain) = split(Pipeline::new(stages), &e, &ctx);
+        assert!(
+            chain.is_none(),
+            "a chain ending in {:?} is not display-referred and must stay in the pipeline",
+            rest.stage_names()
+        );
+        assert_eq!(chains(&rest.stage_names()), 1, "and it must still be there");
+    }
+
+    /// ⚠ A run the cost gate refused is not a chain at all — the byte path must not appear out of
+    /// a tail that was left entirely on the CPU.
+    #[test]
+    fn a_tail_the_cost_gate_refused_hands_nothing_back() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits::default();
+        let (rest, chain) = split(tail_of(&e), &e, &ctx);
+        assert!(chain.is_none());
+        assert!(
+            rest.stage_names().contains(&"output_transform"),
+            "the CPU output transform must survive, got {:?}",
+            rest.stage_names()
+        );
     }
 
     fn with_hsl() -> Edits {
@@ -322,7 +480,7 @@ mod tests {
             before.windows(2).any(|w| w == ["hsl", "sharpening"]),
             "fixture check: hsl and sharpening must be adjacent, got {before:?}"
         );
-        let after = accelerate(
+        let after = accel(
             tail,
             &e,
             SCALE,
@@ -359,7 +517,7 @@ mod tests {
             before.contains(&"vignette"),
             "fixture check: an unaccelerated stage must sit between them, got {before:?}"
         );
-        let after = accelerate(
+        let after = accel(
             tail,
             &e,
             SCALE,
@@ -382,7 +540,7 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
         e.vignette.amount = -40.0;
-        let after = accelerate(
+        let after = accel(
             tail_of(&e),
             &e,
             SCALE,
@@ -429,7 +587,7 @@ mod tests {
                 .any(|w| w == ["hsl", "color_grading", "sharpening"]),
             "fixture check: the three must be consecutive, got {before:?}"
         );
-        let after = accelerate(
+        let after = accel(
             tail,
             &e,
             SCALE,
@@ -478,7 +636,7 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let e = graded(with_sharpening(with_hsl()));
         let cpu = tail_of(&e).run(scene_ramp());
-        let gpu = accelerate(
+        let gpu = accel(
             tail_of(&e),
             &e,
             SCALE,
@@ -503,7 +661,7 @@ mod tests {
         let e = with_hsl();
         let tail = tail_of(&e);
         let before = tail.stage_names();
-        let after = accelerate(
+        let after = accel(
             tail,
             &e,
             SCALE,
@@ -555,7 +713,7 @@ mod tests {
         );
         assert!(before.len() >= 2, "fixture check: got {before:?}");
         assert_eq!(
-            accelerate(
+            accel(
                 tail,
                 &e,
                 SCALE,
@@ -584,7 +742,7 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let e = with_sharpening(with_hsl());
         let cpu = tail_of(&e).run(ramp());
-        let gpu = accelerate(
+        let gpu = accel(
             tail_of(&e),
             &e,
             SCALE,
@@ -611,7 +769,7 @@ mod tests {
         let mut e = with_sharpening(with_hsl());
         e.vignette.amount = -40.0;
         let cpu = tail_of(&e).run(ramp());
-        let gpu = accelerate(
+        let gpu = accel(
             tail_of(&e),
             &e,
             SCALE,

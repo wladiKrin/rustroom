@@ -25,7 +25,7 @@ mod quantize;
 mod sharpen;
 mod tone_regions;
 
-pub use accelerate::accelerate;
+pub use accelerate::{accelerate, rejoin};
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
 pub use display_rendering::GpuDisplayRenderingStage;

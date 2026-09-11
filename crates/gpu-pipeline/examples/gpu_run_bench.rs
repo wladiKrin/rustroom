@@ -18,6 +18,27 @@ use edit_model::{Edits, HslBand, Sharpening};
 use pipeline::{Pipeline, PipelineStage, RenderScale};
 use std::time::Instant;
 
+/// The accelerated tail as one pipeline.
+///
+/// ⚠ M8.3g splits the tail's last chain out so `render_cached` can ask it for RGBA8; a bench
+/// wants the whole thing back, and `rejoin` is what puts it there.
+fn accel(
+    tail: Pipeline,
+    edits: &edit_model::Edits,
+    scale: pipeline::RenderScale,
+    ctx: &std::sync::Arc<gpu_pipeline::GpuContext>,
+) -> Pipeline {
+    let (p, c) = gpu_pipeline::accelerate(
+        tail,
+        edits,
+        scale,
+        Default::default(),
+        Default::default(),
+        ctx,
+    );
+    gpu_pipeline::rejoin(p, c)
+}
+
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
@@ -102,18 +123,11 @@ fn main() {
 
     for (label, edits) in cases {
         let tail = || pipeline::build_pipeline_split(&edits, scale).1;
-        let chains = gpu_pipeline::accelerate(
-            tail(),
-            &edits,
-            scale,
-            Default::default(),
-            Default::default(),
-            ctx,
-        )
-        .stage_names()
-        .iter()
-        .filter(|s| **s == "gpu_chain")
-        .count();
+        let chains = accel(tail(), &edits, scale, ctx)
+            .stage_names()
+            .iter()
+            .filter(|s| **s == "gpu_chain")
+            .count();
         println!("── {label} — {chains} chain(s)");
 
         // ⚠⚠ **Round 0 is not the steady state.** The first encode compiles the shaders, which a
@@ -126,14 +140,7 @@ fn main() {
             let t = Instant::now();
             let cpu = tail().run(img.clone());
             let c = ms(t);
-            let g_tail: Pipeline = gpu_pipeline::accelerate(
-                tail(),
-                &edits,
-                scale,
-                Default::default(),
-                Default::default(),
-                ctx,
-            );
+            let g_tail: Pipeline = accel(tail(), &edits, scale, ctx);
             let t = Instant::now();
             let gpu = g_tail.run(img.clone());
             let g = ms(t);
@@ -164,12 +171,10 @@ fn main() {
     // colour grade's own cost, which is the arithmetic this project has been misled by before.
     let edits = sharpened(hsl_edits());
     let one = || {
-        gpu_pipeline::accelerate(
+        accel(
             pipeline::build_pipeline_split(&edits, scale).1,
             &edits,
             scale,
-            Default::default(),
-            Default::default(),
             ctx,
         )
     };
