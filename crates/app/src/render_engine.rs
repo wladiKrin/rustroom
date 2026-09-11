@@ -1111,18 +1111,23 @@ fn render_cached(
     };
     let coverage = brush_cache.get_or_build(edits, cov_spec);
     let build_tail = |space| {
+        // ⚠ Hoisted into a local because `accelerate` needs it too: `output_transform` is built
+        // from the render's output space rather than from `Edits`, and two constructions of one
+        // spec is how the pipeline and its accelerated twin would come to disagree about which
+        // space they are rendering into.
+        let render_spec = pipeline::RenderSpec {
+            space,
+            // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
+            // is carried for consistency rather than because it changes a pixel here.
+            resampler,
+            baseline: wb_baseline,
+        };
         let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
             edits,
             scale,
             region,
             Some(&coverage),
-            pipeline::RenderSpec {
-                space,
-                // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
-                // is carried for consistency rather than because it changes a pixel here.
-                resampler,
-                baseline: wb_baseline,
-            },
+            render_spec,
             // Lens correction lives in the *prefix*, which this call discards — only the tail is
             // wanted here. `None` is therefore correct rather than provisional.
             None,
@@ -1144,7 +1149,9 @@ fn render_cached(
         // one-second wait. With the setting off nothing GPU-related may be touched at all.
         if gpu_tail {
             match gpu_pipeline::shared() {
-                Some(ctx) => gpu_pipeline::accelerate(tail, edits, scale, profile, ctx),
+                Some(ctx) => {
+                    gpu_pipeline::accelerate(tail, edits, scale, profile, render_spec, ctx)
+                }
                 None => tail,
             }
         } else {

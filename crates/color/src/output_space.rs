@@ -14,10 +14,10 @@ use crate::spaces::{
 ///
 /// ⚠ **563/256, not 2.2.** The two differ by under 0.1%, but 2.2 is a value the specification
 /// does not contain, and a profile claiming to be Adobe RGB should carry Adobe RGB's number.
-const ADOBE_RGB_GAMMA: f32 = 563.0 / 256.0;
+pub const ADOBE_RGB_GAMMA: f32 = 563.0 / 256.0;
 
 /// ROMM's linear-segment threshold, 1/512.
-const PROPHOTO_TOE_END: f32 = 0.001_953_125;
+pub const PROPHOTO_TOE_END: f32 = 0.001_953_125;
 
 /// A space an export can be written in.
 ///

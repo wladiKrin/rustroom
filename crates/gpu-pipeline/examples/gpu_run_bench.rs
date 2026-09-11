@@ -78,11 +78,18 @@ fn main() {
 
     for (label, edits) in cases {
         let tail = || pipeline::build_pipeline_split(&edits, scale).1;
-        let chains = gpu_pipeline::accelerate(tail(), &edits, scale, Default::default(), ctx)
-            .stage_names()
-            .iter()
-            .filter(|s| **s == "gpu_chain")
-            .count();
+        let chains = gpu_pipeline::accelerate(
+            tail(),
+            &edits,
+            scale,
+            Default::default(),
+            Default::default(),
+            ctx,
+        )
+        .stage_names()
+        .iter()
+        .filter(|s| **s == "gpu_chain")
+        .count();
         println!("── {label} — {chains} chain(s)");
 
         // ⚠⚠ **Round 0 is not the steady state.** The first encode compiles the shaders, which a
@@ -95,8 +102,14 @@ fn main() {
             let t = Instant::now();
             let cpu = tail().run(img.clone());
             let c = ms(t);
-            let g_tail: Pipeline =
-                gpu_pipeline::accelerate(tail(), &edits, scale, Default::default(), ctx);
+            let g_tail: Pipeline = gpu_pipeline::accelerate(
+                tail(),
+                &edits,
+                scale,
+                Default::default(),
+                Default::default(),
+                ctx,
+            );
             let t = Instant::now();
             let gpu = g_tail.run(img.clone());
             let g = ms(t);
@@ -131,6 +144,7 @@ fn main() {
             pipeline::build_pipeline_split(&edits, scale).1,
             &edits,
             scale,
+            Default::default(),
             Default::default(),
             ctx,
         )

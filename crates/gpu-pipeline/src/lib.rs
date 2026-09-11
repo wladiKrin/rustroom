@@ -19,6 +19,7 @@ mod hsl;
 mod image;
 mod luma_wgsl;
 mod oklab_wgsl;
+mod output_transform;
 mod sharpen;
 mod tone_regions;
 
@@ -31,5 +32,6 @@ pub use exposure::GpuExposureStage;
 pub use grading::GpuGradingStage;
 pub use hsl::GpuHslStage;
 pub use image::GpuImage;
+pub use output_transform::GpuOutputTransformStage;
 pub use sharpen::GpuSharpenStage;
 pub use tone_regions::GpuToneRegionsStage;
