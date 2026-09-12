@@ -29,6 +29,14 @@ mod tone_regions;
 
 pub use accelerate::{accelerate, rejoin};
 pub use brush_raster::GpuBrushRaster;
+
+/// How many dabs one 16×16 tile's shared list holds before the rasteriser re-scans.
+///
+/// ⚠ Exposed so a probe can report the real occupancy against it — the measurement that keeps that
+/// constant defensible rather than estimated.
+pub fn max_tile_dabs() -> u32 {
+    brush_wgsl::MAX_TILE_DABS
+}
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
 pub use display_rendering::GpuDisplayRenderingStage;

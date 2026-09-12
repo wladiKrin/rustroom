@@ -12,17 +12,41 @@
 
 /// Dabs a single tile's shared list can hold before it falls back to re-scanning.
 ///
-/// ⚠⚠ **The budget is `Limits::default().max_compute_workgroup_storage_size` = 16384 bytes** —
-/// verified in `wgpu-types`, and `GpuContext` requests `DeviceDescriptor::default()`, so that
-/// default is what it gets. This array is 3584 x 4 = 14336 of it; the 256-entry per-thread
-/// count/offset array below is a further 1024, leaving headroom. **It is 3584 rather than 4095
-/// because that ordering array has to fit**, and the ordering is not optional — see the two-pass
-/// scan in the shader.
+/// ⚠⚠ **SWEPT — AND THE FIRST VALUE WAS SIZED BY THE LIMIT RATHER THAN BY THE DATA, WHICH MADE THE
+/// WHOLE RASTERISER 5x SLOWER THAN THE CPU IT REPLACES.**
+/// `Limits::default().max_compute_workgroup_storage_size` is 16384 bytes, so 3584 entries (14336)
+/// plus the 256-entry ordering array (1024) *fits* — and **fitting was never the question**.
+/// Workgroup storage throttles **occupancy**: at ~15.4 KB per workgroup barely any are resident per
+/// core and there is nothing left to hide latency with.
 ///
-/// ⚠ The real brush averages **22** dabs per tile (3,645 × ~72 tiles each / ~11,900 tiles), so
-/// this is not a number anything realistic approaches — which is precisely why the overflow path
-/// has to be reachable by injection in a test. *An unreachable guard is an untested one.*
-pub(crate) const MAX_TILE_DABS: u32 = 3584;
+/// Measured on the real 36-stroke brush, 3.05 Mpx box, Apple M2, best of 5 warm rounds:
+///
+/// | capacity | GPU | vs CPU |
+/// |---|---|---|
+/// | 128 | 48.72 ms | 1.26x |
+/// | 256 | 44.76 | 1.37x |
+/// | 512 | 37.73 | 1.62x |
+/// | **1024** | **36.54** | **1.69x** |
+/// | 2048 | 36.66 | 1.68x |
+/// | 3584 | **320.20** | **0.20x** |
+///
+/// ⚠⚠ **A CLIFF between 2048 and 3584 — 8.7x — not a gradient.** Correctness is identical at every
+/// capacity (worst 1 level at the same pixel), so this is purely occupancy and nothing to do with
+/// the algorithm.
+///
+/// ⚠⚠ **AND THE HEADROOM IS MEASURED RATHER THAN ESTIMATED, which corrected a guess by 10x.** An
+/// earlier version of this comment reasoned that the real brush "averages 22 dabs per tile" from
+/// average dab area. `rasterize_with_occupancy` reports the busiest tile directly, and on that
+/// brush it holds **229** — so 1024 is 4.5x the measured worst case, where 256 would have been
+/// under-provisioned on the very photograph this exists for. **An average is not a capacity.**
+///
+/// ⚠ 1024 is chosen mid-plateau and at its lower end: the cliff shows workgroup storage is the
+/// sensitive dimension, so a device with less of it than this one should still land on the plateau.
+/// 2048 measures identically and buys only headroom nothing needs.
+///
+/// ⚠ Nothing realistic approaches the capacity, which is precisely why the overflow path has to be
+/// reachable by injection in a test. *An unreachable guard is an untested one.*
+pub(crate) const MAX_TILE_DABS: u32 = 1024;
 
 /// Tile edge in pixels. 16 × 16 = 256 threads, one per pixel.
 pub(crate) const TILE: u32 = 16;
@@ -190,6 +214,12 @@ fn main(
         }
         total = running;
         overflowed = select(0u, 1u, running > {MAX_TILE_DABS}u);
+        // ⚠⚠ **Unconditional, and it is what defends `MAX_TILE_DABS` as a number rather than as
+        // an estimate.** One `atomicMax` per WORKGROUP — 12,065 of them on the real brush — so
+        // unlike the per-pixel gate/dab counters below it costs nothing measurable and can stay in
+        // production. Without it the capacity is justified by arithmetic about average dab area;
+        // with it, by the largest tile any real brush actually produces.
+        atomicMax(&counters[2], running);
     }
     workgroupBarrier();
 

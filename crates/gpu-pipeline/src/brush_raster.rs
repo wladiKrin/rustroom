@@ -84,7 +84,22 @@ impl GpuBrushRaster {
         invert: bool,
         base: Option<(&[f32], usize, usize)>,
     ) -> Option<CoverageMap> {
-        self.run(plan, invert, base).map(|(m, _, _)| m)
+        self.rasterize_with_occupancy(plan, invert, base)
+            .map(|(m, _)| m)
+    }
+
+    /// As [`Self::rasterize`], also returning **the largest number of dabs any one 16×16 tile
+    /// held** — the measurement that justifies [`brush_wgsl::MAX_TILE_DABS`].
+    ///
+    /// ⚠ Occupancy only, deliberately. It is one `atomicMax` per workgroup, so it is free; the
+    /// gate/dab-test counters are per **pixel** and are behind a compile-time flag for that reason.
+    pub fn rasterize_with_occupancy(
+        &self,
+        plan: &DabPlan,
+        invert: bool,
+        base: Option<(&[f32], usize, usize)>,
+    ) -> Option<(CoverageMap, u32)> {
+        self.run(plan, invert, base).map(|(m, _, _, occ)| (m, occ))
     }
 
     /// As [`Self::rasterize`], also returning `(gate evaluations, dab tests)`.
@@ -108,6 +123,7 @@ impl GpuBrushRaster {
             count_tests: true,
         }
         .run(plan, invert, base)
+        .map(|(m, g, d, _)| (m, g, d))
     }
 
     /// A rasteriser whose tile list holds `capacity` dabs, so the overflow path is reachable.
@@ -130,7 +146,7 @@ impl GpuBrushRaster {
         plan: &DabPlan,
         invert: bool,
         base: Option<(&[f32], usize, usize)>,
-    ) -> Option<(CoverageMap, u32, u32)> {
+    ) -> Option<(CoverageMap, u32, u32, u32)> {
         let ctx = &self.ctx;
         let device = &ctx.device;
         let (w, h) = (plan.w, plan.h);
@@ -201,13 +217,34 @@ impl GpuBrushRaster {
         // ⚠ The base plane is uploaded only when something actually gates. `plan.gating_rows`
         // says whether it does; a non-gating brush pays nothing at all, which is the same
         // property the CPU's lazily-built `base_lab` has.
+        //
+        // ⚠⚠ **Through the CACHED STAGING buffer, not `queue.write_buffer` — and the first version
+        // of this got it wrong.** `GpuChain::run_with` records the measurement: 1.86 ms against
+        // 3.90 for 19.6 MB, a **2.1x** difference, and it is `mapped_at_creation` that is expensive
+        // rather than the allocation, so the pool matters. The base plane here is the **whole
+        // frame** — 78 MB at rung 3200 — so this is the single largest item in the round trip.
+        // Measured on the real brush: 15.24 ms with no base at all against 38.97 with one.
+        //
+        // ⚠ `slice(..bytes)` rather than `slice(..)`: a pooled buffer may be **larger** than this
+        // render needs, and the copy is given `bytes` for the same reason.
+        let mut staging = None;
         let (base_buf, img_w, img_h, has_base) = match (base, plan.gating_rows) {
-            (Some((plane, bw, bh)), Some(_)) => (
-                storage("brush-base", bytemuck::cast_slice(plane)),
-                bw as u32,
-                bh as u32,
-                1u32,
-            ),
+            (Some((plane, bw, bh)), Some(_)) => {
+                let bytes = std::mem::size_of_val(plane) as u64;
+                let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("brush-base"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let st = ctx.cache.take_staging(device, bytes)?;
+                st.slice(..bytes)
+                    .get_mapped_range_mut()
+                    .copy_from_slice(bytemuck::cast_slice(plane));
+                st.unmap();
+                staging = Some((st, bytes));
+                (buf, bw as u32, bh as u32, 1u32)
+            }
             _ => (storage("brush-base", &[]), 1, 1, 0u32),
         };
 
@@ -316,6 +353,9 @@ impl GpuBrushRaster {
         let gy = tiles.div_ceil(gx);
 
         let mut enc = device.create_command_encoder(&Default::default());
+        if let Some((st, bytes)) = &staging {
+            enc.copy_buffer_to_buffer(st, 0, &base_buf, 0, *bytes);
+        }
         {
             let mut pass = enc.begin_compute_pass(&Default::default());
             pass.set_pipeline(&pipelines[0]);
@@ -362,6 +402,12 @@ impl GpuBrushRaster {
         let counts: Vec<u32> = bytemuck::cast_slice(&cslice.get_mapped_range()).to_vec();
         readback.unmap();
         counter_read.unmap();
+        // ⚠ Returned only **here**, after `poll(Wait)` has confirmed the submission finished — the
+        // GPU reads this buffer during the submit, so handing it back any earlier would let the
+        // next render map a buffer still being read. `GpuChain::run_with`'s rule, verbatim.
+        if let Some((st, _)) = staging {
+            ctx.cache.put_staging(st);
+        }
 
         // ⚠ Narrowed here rather than in the shader, because packing four samples into one word
         // would mean four threads read-modify-writing the same address — a race. See the shader.
@@ -377,6 +423,7 @@ impl GpuBrushRaster {
             },
             counts[0],
             counts[1],
+            counts[2],
         ))
     }
 }
