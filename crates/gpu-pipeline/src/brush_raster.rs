@@ -11,7 +11,7 @@
 //! `sharpen` is the existing precedent for encoding a dispatch by hand.
 
 use crate::{brush_wgsl, GpuContext};
-use pipeline::brush::{CoverageMap, DabPlan};
+use pipeline::brush::{BaseRef, CoverageMap, DabPlan};
 use std::sync::Arc;
 
 /// One dab as the shader sees it. 48 bytes, and the layout must match `Dab` in the WGSL.
@@ -49,6 +49,10 @@ struct Params {
     invert: u32,
     has_base: u32,
     tiles_x: u32,
+    /// The frame coordinate of the base plane's `(0, 0)`. ⚠ Zero for a whole-frame render, which
+    /// is every fixture plan 1 wrote — see the shader for why that made them blind to this.
+    base_x0: u32,
+    base_y0: u32,
     _pad: [u32; 2],
 }
 
@@ -82,7 +86,7 @@ impl GpuBrushRaster {
         &self,
         plan: &DabPlan,
         invert: bool,
-        base: Option<(&[f32], usize, usize)>,
+        base: Option<BaseRef<'_>>,
     ) -> Option<CoverageMap> {
         self.rasterize_with_occupancy(plan, invert, base)
             .map(|(m, _)| m)
@@ -97,7 +101,7 @@ impl GpuBrushRaster {
         &self,
         plan: &DabPlan,
         invert: bool,
-        base: Option<(&[f32], usize, usize)>,
+        base: Option<BaseRef<'_>>,
     ) -> Option<(CoverageMap, u32)> {
         self.run(plan, invert, base).map(|(m, _, _, occ)| (m, occ))
     }
@@ -115,7 +119,7 @@ impl GpuBrushRaster {
         &self,
         plan: &DabPlan,
         invert: bool,
-        base: Option<(&[f32], usize, usize)>,
+        base: Option<BaseRef<'_>>,
     ) -> Option<(CoverageMap, u32, u32)> {
         Self {
             ctx: self.ctx.clone(),
@@ -145,7 +149,7 @@ impl GpuBrushRaster {
         &self,
         plan: &DabPlan,
         invert: bool,
-        base: Option<(&[f32], usize, usize)>,
+        base: Option<BaseRef<'_>>,
     ) -> Option<(CoverageMap, u32, u32, u32)> {
         let ctx = &self.ctx;
         let device = &ctx.device;
@@ -228,8 +232,9 @@ impl GpuBrushRaster {
         // ⚠ `slice(..bytes)` rather than `slice(..)`: a pooled buffer may be **larger** than this
         // render needs, and the copy is given `bytes` for the same reason.
         let mut staging = None;
-        let (base_buf, img_w, img_h, has_base) = match (base, plan.gating_rows) {
-            (Some((plane, bw, bh)), Some(_)) => {
+        let (base_buf, img_w, img_h, bx0, by0, has_base) = match (base, plan.gating_rows) {
+            (Some(b), Some(_)) => {
+                let plane = b.plane;
                 let bytes = std::mem::size_of_val(plane) as u64;
                 let buf = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("brush-base"),
@@ -243,9 +248,9 @@ impl GpuBrushRaster {
                     .copy_from_slice(bytemuck::cast_slice(plane));
                 st.unmap();
                 staging = Some((st, bytes));
-                (buf, bw as u32, bh as u32, 1u32)
+                (buf, b.w as u32, b.h as u32, b.x0 as u32, b.y0 as u32, 1u32)
             }
-            _ => (storage("brush-base", &[]), 1, 1, 0u32),
+            _ => (storage("brush-base", &[]), 1, 1, 0, 0, 0u32),
         };
 
         let cov_bytes = (w * h * 4) as u64;
@@ -276,6 +281,8 @@ impl GpuBrushRaster {
             invert: u32::from(invert),
             has_base,
             tiles_x,
+            base_x0: bx0,
+            base_y0: by0,
             _pad: [0; 2],
         };
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -425,6 +432,32 @@ impl GpuBrushRaster {
             counts[1],
             counts[2],
         ))
+    }
+}
+
+/// The smallest box worth a round trip, in pixels.
+///
+/// ⚠ A **starting** value, taken from `brush::raster::SEQUENTIAL_FLOOR_PX` because it answers the
+/// same question on the CPU side — and swept in this milestone's Task 5 rather than left at it. A
+/// floor nobody measured is a floor nobody can defend.
+const MIN_GPU_BOX_PX: usize = 64 * 1024;
+
+/// ⚠ The trait lives in `pipeline` and is implemented here — the direction that keeps wgpu out of
+/// the CLI, `export` and all 63 goldens.
+impl pipeline::CoverageRasterizer for GpuBrushRaster {
+    fn rasterize(
+        &self,
+        plan: &DabPlan,
+        invert: bool,
+        base: Option<BaseRef<'_>>,
+    ) -> Option<CoverageMap> {
+        // ⚠⚠ **Fails toward the CPU, which is the trait's own rule.** A tiny box cannot repay a
+        // round trip: the coverage download carries a fixed ~1.3 ms no size reduction touches
+        // (M8.3g's decomposition) on top of 4 bytes a pixel.
+        if plan.w.checked_mul(plan.h)? < MIN_GPU_BOX_PX {
+            return None;
+        }
+        GpuBrushRaster::rasterize(self, plan, invert, base)
     }
 }
 
@@ -592,7 +625,17 @@ mod tests {
         let base = SliceBase(&plane, bw);
         let plan = pipeline::brush::plan_dabs(&b, &g, bw, bh, None, Some(&base)).unwrap();
         let (_, gate_tests, dab_tests) = GpuBrushRaster::new(&ctx)
-            .rasterize_counting(&plan, b.invert, Some((&plane, bw, bh)))
+            .rasterize_counting(
+                &plan,
+                b.invert,
+                Some(BaseRef {
+                    plane: &plane,
+                    w: bw,
+                    h: bh,
+                    x0: 0,
+                    y0: 0,
+                }),
+            )
             .unwrap();
         assert!(dab_tests > 0, "fixture check: dabs must be tested at all");
         assert!(
@@ -705,7 +748,17 @@ mod tests {
             "fixture check: the plan must report a gating span"
         );
         let gpu = GpuBrushRaster::new(&ctx)
-            .rasterize(&plan, b.invert, Some((&plane, bw, bh)))
+            .rasterize(
+                &plan,
+                b.invert,
+                Some(BaseRef {
+                    plane: &plane,
+                    w: bw,
+                    h: bh,
+                    x0: 0,
+                    y0: 0,
+                }),
+            )
             .unwrap();
         assert_agrees(&gpu, &cpu);
     }

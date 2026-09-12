@@ -90,6 +90,8 @@ struct Params {
     invert: u32,
     has_base: u32,
     tiles_x: u32,
+    base_x0: u32,
+    base_y0: u32,
     pad0: u32,
     pad1: u32,
 };
@@ -138,8 +140,21 @@ fn auto_mask_gate(px: vec3<f32>, reference: vec3<f32>, ceiling: f32) -> f32 {
 
 // ⚠ `prophoto_to_oklab` takes three SCALARS, not a vec3 — checked in `oklab_wgsl` rather than
 // guessed. A vec3 call is a compile error, which is the harmless direction.
+//
+// ⚠⚠ **FRAME COORDINATES IN, REGION-LOCAL OUT — and the offset is not cosmetic.** Dabs live in
+// frame space; a region render's base buffer covers only part of the frame. Indexing
+// `(fy * img_w + fx)` reads pixels shifted by the region origin, which gates the auto-mask against
+// colours from somewhere else entirely — a plausible mask, not an error. **Every fixture plan 1
+// wrote is whole-frame, so `x0 == y0 == 0` and all ten of them agree with the wrong version.**
+//
+// ⚠ The clamp is the CPU's documented behaviour rather than defence: `BaseView::at` does
+// `x.saturating_sub(x0).min(w - 1)`, so a frame coordinate left of or above the region reads the
+// region's **edge** pixel. `saturating_sub` on an unsigned is `max` then subtract, which is what
+// `max(fx, base_x0) - base_x0` spells in WGSL.
 fn base_oklab(fx: u32, fy: u32) -> vec3<f32> {
-    let i = (fy * p.img_w + fx) * 3u;
+    let lx = min(max(fx, p.base_x0) - p.base_x0, p.img_w - 1u);
+    let ly = min(max(fy, p.base_y0) - p.base_y0, p.img_h - 1u);
+    let i = (ly * p.img_w + lx) * 3u;
     return prophoto_to_oklab(base[i], base[i + 1u], base[i + 2u]);
 }
 

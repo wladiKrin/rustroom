@@ -139,7 +139,17 @@ fn main() {
 
         let t = Instant::now();
         let (gpu, occ) = raster
-            .rasterize_with_occupancy(&plan, brush.invert, Some((base.data(), w, h)))
+            .rasterize_with_occupancy(
+                &plan,
+                brush.invert,
+                Some(pipeline::brush::BaseRef {
+                    plane: base.data(),
+                    w,
+                    h,
+                    x0: 0,
+                    y0: 0,
+                }),
+            )
             .expect("the GPU raster failed");
         let gpu_ms = t.elapsed().as_secs_f64() * 1e3;
         occupancy = occupancy.max(occ);
