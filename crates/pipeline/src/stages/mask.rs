@@ -40,6 +40,12 @@ pub struct MaskStage {
     /// *parameters* a CPU stage does not expose. A `Box<dyn PipelineStage>` reports only `name`
     /// and `apply`, so the only alternative was downcasting every stage in the workspace.
     adjustments: edit_model::LocalAdjustments,
+    /// A GPU coverage rasteriser, when the app has offered one.
+    ///
+    /// ⚠⚠ **`None` for the CLI, every export and all 63 goldens** — none of which has a GPU
+    /// context — so those paths are byte-for-byte unchanged, which is exactly what keeps the
+    /// goldens a valid guard on this milestone.
+    coverage_gpu: Option<std::sync::Arc<dyn crate::CoverageRasterizer>>,
     /// The rung these sub-stages were built for.
     ///
     /// ⚠ `GpuSharpenStage`'s sigma is in **full-resolution** pixels and only the scale says what
@@ -88,6 +94,7 @@ impl MaskStage {
             deposit,
             adjustments: masked.adjustments.clone(),
             scale,
+            coverage_gpu: None,
         }
     }
 
@@ -122,6 +129,7 @@ impl MaskStage {
             // both directions, which beats safe by one caller remembering.
             adjustments: masked.adjustments.clone(),
             scale,
+            coverage_gpu: None,
         }
     }
 
@@ -219,6 +227,14 @@ impl PipelineStage for MaskStage {
         self.stages.iter().map(|s| s.name()).collect()
     }
 
+    fn set_coverage_rasterizer(&mut self, r: &std::sync::Arc<dyn crate::CoverageRasterizer>) {
+        self.coverage_gpu = Some(r.clone());
+    }
+
+    fn has_coverage_rasterizer(&self) -> bool {
+        self.coverage_gpu.is_some()
+    }
+
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
         if w == 0 || h == 0 || self.stages.is_empty() {
@@ -271,14 +287,44 @@ impl PipelineStage for MaskStage {
                     x0,
                     y0,
                 };
-                let built = std::sync::Arc::new(crate::brush::rasterize_in(
-                    brush,
-                    geometry,
-                    fw,
-                    fh,
-                    clip,
-                    Some(&view),
-                ));
+                // ⚠⚠ **Planned ONCE and offered to both.** `plan_dabs` does the `SPACING`
+                // interpolation, the per-dab gate reference, the clip rejection and the box; the
+                // GPU and the CPU then consume the same plan, so they cannot disagree about which
+                // dabs exist. A GPU path planning its own would be a second copy of that
+                // arithmetic — the duplication `adjustment_stages` exists to avoid for stages.
+                //
+                // ⚠ Fails toward the CPU at every step: no rasteriser offered, a plan that yields
+                // nothing, or a rasteriser that declines (no adapter, a box below its floor, an
+                // allocation refused) all fall through to `rasterize_in`, costing only the attempt.
+                let built = self
+                    .coverage_gpu
+                    .as_ref()
+                    .and_then(|r| {
+                        let plan =
+                            crate::brush::plan_dabs(brush, geometry, fw, fh, clip, Some(&view))?;
+                        r.rasterize(
+                            &plan,
+                            brush.invert,
+                            Some(crate::brush::BaseRef {
+                                plane: image.data(),
+                                w,
+                                h,
+                                x0,
+                                y0,
+                            }),
+                        )
+                    })
+                    .map(std::sync::Arc::new)
+                    .unwrap_or_else(|| {
+                        std::sync::Arc::new(crate::brush::rasterize_in(
+                            brush,
+                            geometry,
+                            fw,
+                            fh,
+                            clip,
+                            Some(&view),
+                        ))
+                    });
                 // ⚠ Reported, not cached here. This stage holds no cache and does no lookup: what
                 // identifies a base lives beside `PrefixKey`, in `render_engine`. See the
                 // coverage-cache spec's §4.0.
@@ -1196,6 +1242,105 @@ mod tests {
     /// over `LocalAdjustments`, which has **no `masks` field**, so there is nothing for it to
     /// build one from. Asserted here so a future `LocalAdjustments::masks` is caught by a test
     /// rather than by an infinite recursion at render time.
+    /// A rasteriser that records what it was asked and returns a map of its own.
+    ///
+    /// ⚠⚠ **A stub rather than the real GPU one, and a COUNTER rather than a pixel comparison.**
+    /// The two rasterisers agree to within one level by design, so nothing in the output can say
+    /// which ran — the same reason `PARALLEL_STROKES` and `Ran { bytes }` exist. Using a stub also
+    /// lets the wiring be tested here in `pipeline`, which has no GPU at all and must not.
+    struct StubRaster {
+        calls: std::sync::atomic::AtomicUsize,
+        origin: std::sync::Mutex<Option<(usize, usize)>>,
+    }
+    impl crate::CoverageRasterizer for StubRaster {
+        fn rasterize(
+            &self,
+            plan: &crate::brush::DabPlan,
+            invert: bool,
+            base: Option<crate::brush::BaseRef<'_>>,
+        ) -> Option<crate::brush::CoverageMap> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            *self.origin.lock().unwrap() = base.map(|b| (b.x0, b.y0));
+            // ⚠ Deliberately a DIFFERENT map from the CPU's — full coverage inside the box — so
+            // the test can prove the stage used what it was handed rather than merely that it ran.
+            Some(crate::brush::CoverageMap {
+                x0: plan.x0,
+                y0: plan.y0,
+                w: plan.w,
+                h: plan.h,
+                data: vec![255; plan.w * plan.h],
+                outside: u8::from(invert) * 255,
+            })
+        }
+    }
+
+    fn stub() -> std::sync::Arc<StubRaster> {
+        std::sync::Arc::new(StubRaster {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            origin: std::sync::Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn an_offered_rasterizer_builds_the_coverage_and_the_stage_uses_it() {
+        let m = painted();
+        let mut stage = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        let s = stub();
+        let as_trait: std::sync::Arc<dyn crate::CoverageRasterizer> = s.clone();
+        stage.set_coverage_rasterizer(&as_trait);
+        assert!(stage.has_coverage_rasterizer());
+
+        let plain = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        let with_gpu = stage.apply(flat(80, 60));
+        let without = plain.apply(flat(80, 60));
+
+        assert_eq!(
+            s.calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the stage must ask the rasteriser exactly once"
+        );
+        assert_ne!(
+            with_gpu.data(),
+            without.data(),
+            "the stage must USE the map it was handed — a full-coverage map cannot render the \
+             same picture as the real one"
+        );
+        assert_eq!(
+            *s.origin.lock().unwrap(),
+            Some((0, 0)),
+            "a whole-frame render hands the rasteriser the frame's own origin"
+        );
+    }
+
+    /// ⚠ Declining must fall back, not fail. A rasteriser returning `None` must leave the render
+    /// **byte-identical** to having offered nothing at all — that is what makes offering one
+    /// always safe, and it is the property the CLI and every export rely on by never offering.
+    #[test]
+    fn a_rasterizer_that_declines_falls_back_to_the_cpu() {
+        struct Decline;
+        impl crate::CoverageRasterizer for Decline {
+            fn rasterize(
+                &self,
+                _: &crate::brush::DabPlan,
+                _: bool,
+                _: Option<crate::brush::BaseRef<'_>>,
+            ) -> Option<crate::brush::CoverageMap> {
+                None
+            }
+        }
+        let m = painted();
+        let mut stage = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        let r: std::sync::Arc<dyn crate::CoverageRasterizer> = std::sync::Arc::new(Decline);
+        stage.set_coverage_rasterizer(&r);
+        let plain = MaskStage::new(&m, RenderScale::FULL, &Geometry::default());
+        assert_eq!(
+            stage.apply(flat(80, 60)).data(),
+            plain.apply(flat(80, 60)).data(),
+            "declining must be byte-identical to offering nothing"
+        );
+    }
+
     #[test]
     fn a_masks_sub_stages_never_contain_a_mask() {
         let mut m = masked([0.0, 0.0], [1.0, 1.0]);

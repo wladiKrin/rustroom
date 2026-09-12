@@ -46,6 +46,24 @@ impl CoverageMap {
     }
 }
 
+/// A base plane as a GPU rasteriser needs it: contiguous samples plus where they sit in the frame.
+///
+/// ⚠⚠ **The origin is NOT optional, and that is the whole reason this is a struct rather than a
+/// tuple.** [`BasePixels::at`] takes **frame** coordinates; a region render's buffer covers only
+/// part of the frame, so a consumer indexing `(fy * w + fx)` reads pixels shifted by the origin.
+/// That renders an auto-mask gating against colours from somewhere else — a plausible mask rather
+/// than an error — and every whole-frame fixture is blind to it.
+#[derive(Clone, Copy)]
+pub struct BaseRef<'a> {
+    pub plane: &'a [f32],
+    pub w: usize,
+    pub h: usize,
+    /// The frame coordinate of the plane's `(0, 0)`.
+    pub x0: usize,
+    /// The frame coordinate of the plane's `(0, 0)`.
+    pub y0: usize,
+}
+
 /// Dabs are laid this fraction of a radius apart along a stroke, so a fast drag leaves no gaps.
 const SPACING: f32 = 0.25;
 /// Below this a hardness is treated as a hard edge.

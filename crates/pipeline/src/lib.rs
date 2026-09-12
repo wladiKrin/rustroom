@@ -195,6 +195,49 @@ pub trait PipelineStage: Send + Sync {
     fn sub_stage_names(&self) -> Vec<&'static str> {
         Vec::new()
     }
+
+    /// Offer this stage a coverage rasteriser. Default: this stage builds no coverage.
+    ///
+    /// ⚠ A second defaulted hook rather than a parameter on [`PipelineStage::accelerate_inner`]:
+    /// that one transforms a **stage list** and this hands over a **collaborator**, so folding them
+    /// together would give one method two unrelated jobs.
+    fn set_coverage_rasterizer(&mut self, _r: &std::sync::Arc<dyn CoverageRasterizer>) {}
+
+    /// Whether this stage holds a coverage rasteriser.
+    ///
+    /// ⚠⚠ **The observable, and it has to exist for the same reason [`Self::sub_stage_names`]
+    /// does.** A coverage rasteriser changes no pixel a test can read — the GPU and CPU maps agree
+    /// to within one level by design — so without this the offer could be deleted and every test
+    /// in the workspace would stay green. That is the W5 failure mode exactly.
+    fn has_coverage_rasterizer(&self) -> bool {
+        false
+    }
+}
+
+/// Builds a brush's coverage from an already-planned dab list.
+///
+/// ⚠⚠ **This exists because `MaskStage` cannot call `gpu-pipeline`.** That crate depends on
+/// `pipeline` and its own header records that nothing may depend on it — so a GPU rasteriser is
+/// **injected** rather than referenced, exactly as [`SubStageAccelerator`] is and for the same
+/// reason. A `pipeline` that reached upward would put wgpu into the CLI, `export` and all 63
+/// goldens.
+///
+/// ⚠ `Send + Sync` because [`PipelineStage`] is, and a mask's coverage is built inside a stage
+/// that then blends through `map_pixels_xy`'s rayon rows.
+pub trait CoverageRasterizer: Send + Sync {
+    /// `None` declines, and the caller falls back to the CPU rasteriser.
+    ///
+    /// ⚠⚠ **Declining must always be safe, and every implementation should prefer it when
+    /// unsure.** An adapter that cannot allocate, a box too small to repay a round trip, or a plan
+    /// this implementation does not handle all return `None` and cost only the attempt. **Fail
+    /// toward the CPU** — `GpuStage::cpu_cost`'s rule and `PrefixKey`'s, because a wrong answer
+    /// here is wrong pixels rather than lost milliseconds.
+    fn rasterize(
+        &self,
+        plan: &brush::DabPlan,
+        invert: bool,
+        base: Option<brush::BaseRef<'_>>,
+    ) -> Option<brush::CoverageMap>;
 }
 
 /// Transform a stage's inner sub-stage list, given the adjustments it was built from.
@@ -239,6 +282,16 @@ impl Pipeline {
     /// cannot be downcast — so without this a test can see *that* a pipeline contains a mask and
     /// nothing at all about what the mask contains, which is exactly where M8.3j's work happens.
     /// `None` means no stage of that name; an empty `Vec` means one carrying no sub-stages.
+    /// Whether the first `mask` stage holds a coverage rasteriser.
+    ///
+    /// ⚠ The observable for M8.3k's wiring — see [`PipelineStage::has_coverage_rasterizer`] for
+    /// why a pixel comparison cannot serve.
+    pub fn mask_has_coverage_rasterizer(&self) -> bool {
+        self.stages
+            .iter()
+            .any(|s| s.name() == "mask" && s.has_coverage_rasterizer())
+    }
+
     pub fn sub_stage_names_of(&self, name: &str) -> Option<Vec<&'static str>> {
         self.stages
             .iter()
