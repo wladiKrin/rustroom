@@ -184,11 +184,20 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             });
             theme::hint(
                 ui,
-                "Runs the HSL, colour grading and sharpening stages on the graphics \
-             card. Off by default: the CPU is the reference, and the two agree to \
-             about a hundredth of an 8-bit level, so the picture should not change. \
-             ⚠ Does not apply inside a mask, and the first render after switching it \
-             on spends about a sixth of a second compiling shaders.",
+                // ⚠⚠ **Deliberately does NOT enumerate the ported stages.** It named three of
+                // them, which stopped being true at M8.3e when the per-pixel tail took the count
+                // to seven, and the "does not apply inside a mask" clause stopped being true at
+                // M8.3j. A hint that lists a growing set is a hint that goes silently wrong —
+                // the "Reset crop" hover text and the "Lens scale" label were each corrected for
+                // exactly this, and `EDIT_GROUP_NAMES` is derived rather than written out for the
+                // same reason. Describe the rule, not the membership.
+                "Runs the per-pixel develop stages on the graphics card, inside a mask \
+             as well as outside one. Off by default: the CPU is the reference, and the \
+             two agree to about a hundredth of an 8-bit level, so the picture should \
+             not change. ⚠ A stage is only moved across when the work saved is worth \
+             the transfer, so a lightly edited photograph deliberately stays on the \
+             CPU. The first render after switching it on spends about a sixth of a \
+             second compiling shaders.",
             );
 
             ui.separator();
