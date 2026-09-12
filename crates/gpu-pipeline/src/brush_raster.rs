@@ -87,6 +87,44 @@ impl GpuBrushRaster {
         self.run(plan, invert, base).map(|(m, _, _)| m)
     }
 
+    /// As [`Self::rasterize`], also returning `(gate evaluations, dab tests)`.
+    ///
+    /// ⚠⚠ **A COUNTER, not a flag, and it counts EVENTS rather than describing state.** Dropping
+    /// the short-circuit before the gate is *correct* and merely slower, so nothing in the output
+    /// can distinguish the two and only an event count can — verified in Task 4, where that exact
+    /// sabotage left all eight equivalence tests green. The `PARALLEL_STROKES` lesson, and the
+    /// reason `Ran { bytes }` exists: **an observable describing the current state cannot see its
+    /// own absence.**
+    #[cfg(test)]
+    fn rasterize_counting(
+        &self,
+        plan: &DabPlan,
+        invert: bool,
+        base: Option<(&[f32], usize, usize)>,
+    ) -> Option<(CoverageMap, u32, u32)> {
+        Self {
+            ctx: self.ctx.clone(),
+            capacity: self.capacity,
+            count_tests: true,
+        }
+        .run(plan, invert, base)
+    }
+
+    /// A rasteriser whose tile list holds `capacity` dabs, so the overflow path is reachable.
+    ///
+    /// ⚠ Injection is the **only** way to reach it: the real brush averages 22 dabs per tile
+    /// against a capacity of 3584, so nothing realistic comes near. *An unreachable guard is an
+    /// untested one* — the correction `visualize`'s tool gate and the lens-correction identity
+    /// fill each needed.
+    #[cfg(test)]
+    fn with_capacity(ctx: &Arc<GpuContext>, capacity: u32) -> Self {
+        Self {
+            ctx: ctx.clone(),
+            capacity,
+            count_tests: false,
+        }
+    }
+
     fn run(
         &self,
         plan: &DabPlan,
@@ -450,6 +488,74 @@ mod tests {
             .rasterize(&plan, b.invert, None)
             .unwrap();
         assert_agrees(&gpu, &cpu);
+    }
+
+    /// ⚠⚠ **The overflow path must RE-SCAN, never clip.** A tile whose shared list fills falls
+    /// back to walking the whole dab list per pixel — correct, slower, confined to that tile. A
+    /// kernel that silently used the first `capacity` dabs would render a plausible-but-wrong
+    /// mask, which is the failure mode this whole module is written against.
+    #[test]
+    fn a_tile_that_overflows_its_shared_list_still_agrees() {
+        let Some(ctx) = ctx() else { return };
+        let b = one_stroke();
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize(&b, &g, 400, 300);
+        let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).unwrap();
+        // ⚠ A capacity of 1 forces every tile the stroke touches down the overflow path, which is
+        // the only way to reach it at all.
+        let gpu = GpuBrushRaster::with_capacity(&ctx, 1)
+            .rasterize(&plan, b.invert, None)
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
+    /// ⚠⚠ **The only guard that can see the short-circuit dropped.** Task 4 confirmed by sabotage
+    /// that moving the gate above it leaves every equivalence test green — it is *correct* and
+    /// merely slower. So this counts **gate evaluations against dab tests**, which is an event
+    /// count rather than a description of state.
+    ///
+    /// ⚠⚠ **The bound is 0.5, and it was SWEPT rather than chosen — the first attempt guessed a
+    /// tenth and was simply wrong about this fixture.** Measured both ways on it:
+    ///
+    /// | | gate evaluations | share |
+    /// |---|---|---|
+    /// | **with** the short-circuit | 35,854 of 121,275 | **29.6%** |
+    /// | **without** (gate moved above it) | 121,275 of 121,275 | **100.0%** |
+    ///
+    /// The without-case is exactly **all** of them by construction, so any bound in (0.30, 1.00)
+    /// discriminates; 0.5 sits with ~1.7x margin below and 2x above. ⚠ A tenth was not a safer
+    /// number, it was a **failing** one — and adjusting it upward until the test passed, without
+    /// measuring the other state, would have left a bound nobody could defend.
+    ///
+    /// ⚠ Why only ~70% of gate evaluations are skipped rather than more: the skip's effectiveness
+    /// depends on dab overlap and on the order dabs are visited, and this is one stroke. M8.3i's
+    /// `gate_rows=1718 of 2019` is a **different** quantity — box rows that gate at all, not dab
+    /// tests skipped — so the two are not comparable and should not be read as such.
+    ///
+    /// ⚠ A ratio rather than an absolute, so the fixture can change without the test going
+    /// vacuous.
+    #[test]
+    fn the_short_circuit_keeps_the_gate_off_most_dabs() {
+        let Some(ctx) = ctx() else { return };
+        let (plane, bw, bh) = half_base(400, 300);
+        let mut b = one_stroke();
+        b.strokes[0].auto_mask = true;
+        b.strokes[0].radius = 0.06;
+        let g = Geometry::default();
+        let base = SliceBase(&plane, bw);
+        let plan = pipeline::brush::plan_dabs(&b, &g, bw, bh, None, Some(&base)).unwrap();
+        let (_, gate_tests, dab_tests) = GpuBrushRaster::new(&ctx)
+            .rasterize_counting(&plan, b.invert, Some((&plane, bw, bh)))
+            .unwrap();
+        assert!(dab_tests > 0, "fixture check: dabs must be tested at all");
+        assert!(
+            gate_tests > 0,
+            "fixture check: the gate must run at all, or this measures nothing"
+        );
+        assert!(
+            f64::from(gate_tests) < f64::from(dab_tests) * 0.5,
+            "the gate ran on {gate_tests} of {dab_tests} dab tests — the short-circuit is gone"
+        );
     }
 
     /// A base whose halves differ in Oklab, so the gate genuinely discriminates rather than
