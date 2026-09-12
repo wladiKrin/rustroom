@@ -1,0 +1,433 @@
+//! The brush coverage rasteriser on the GPU.
+//!
+//! ⚠⚠ **Not a `GpuStage`, and that was checked rather than assumed.** That trait's `encode` takes
+//! a [`crate::GpuImage`] and produces an image in place, and its scratch is image-sized
+//! single-channel f32 planes. This needs a variable-length dab buffer and produces a `u8` coverage
+//! map — so forcing it into `GpuStage` would mean sizing scratch by the image for data that is not
+//! image-shaped. That is the same reasoning `GpuStage` itself rests on against `PipelineStage`.
+//!
+//! ⚠ It is also not a [`crate::dispatch::Dispatch`] client: that type is `workgroup_size(64)` over
+//! pixels with bindings fixed by convention, and this needs one workgroup per 16×16 tile.
+//! `sharpen` is the existing precedent for encoding a dispatch by hand.
+
+use crate::{brush_wgsl, GpuContext};
+use pipeline::brush::{CoverageMap, DabPlan};
+use std::sync::Arc;
+
+/// One dab as the shader sees it. 48 bytes, and the layout must match `Dab` in the WGSL.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuDab {
+    /// x, y, r, hard
+    pos: [f32; 4],
+    /// Oklab reference in xyz, the gate ceiling in w. ⚠ A **negative** ceiling means "no gate" —
+    /// the sentinel exists because WGSL has no `Option` and 0.0 is a legitimate ceiling.
+    gate: [f32; 4],
+    stroke: u32,
+    _pad: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuStroke {
+    flow: f32,
+    erase: u32,
+    _pad: [u32; 2],
+}
+
+/// ⚠ 48 bytes, a multiple of 16, which a uniform binding requires.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+    img_w: u32,
+    img_h: u32,
+    dab_count: u32,
+    invert: u32,
+    has_base: u32,
+    tiles_x: u32,
+    _pad: [u32; 2],
+}
+
+pub struct GpuBrushRaster {
+    ctx: Arc<GpuContext>,
+    /// ⚠ Injectable **only** so the overflow path is reachable: the real brush averages 22 dabs
+    /// per tile against a capacity of 4095, so nothing realistic reaches it and an unreachable
+    /// guard is an untested one.
+    capacity: u32,
+    count_tests: bool,
+}
+
+impl GpuBrushRaster {
+    pub fn new(ctx: &Arc<GpuContext>) -> Self {
+        Self {
+            ctx: ctx.clone(),
+            capacity: brush_wgsl::MAX_TILE_DABS,
+            count_tests: false,
+        }
+    }
+
+    /// Rasterise a planned dab list. `None` on any GPU failure at all.
+    ///
+    /// ⚠ `base` is `(&[f32], w, h)` rather than `&dyn BasePixels`: the shader needs the **whole
+    /// plane** as contiguous bytes, and `BasePixels` is a per-pixel accessor that cannot be
+    /// uploaded. Plan 2 hands it `image.data()`, which is the buffer M8.3j already uploads.
+    ///
+    /// ⚠ A plan that gates with **no base** rasterises positionally — the documented degradation
+    /// `rasterize_in` already has (the CLI, and the tint before a frame lands), not an error.
+    pub fn rasterize(
+        &self,
+        plan: &DabPlan,
+        invert: bool,
+        base: Option<(&[f32], usize, usize)>,
+    ) -> Option<CoverageMap> {
+        self.run(plan, invert, base).map(|(m, _, _)| m)
+    }
+
+    fn run(
+        &self,
+        plan: &DabPlan,
+        invert: bool,
+        base: Option<(&[f32], usize, usize)>,
+    ) -> Option<(CoverageMap, u32, u32)> {
+        let ctx = &self.ctx;
+        let device = &ctx.device;
+        let (w, h) = (plan.w, plan.h);
+        if w == 0 || h == 0 {
+            return None;
+        }
+
+        // ── flatten the plan ──────────────────────────────────────────────────────────
+        //
+        // ⚠ Stroke-major, which is what makes an ascending dab index *be* stroke order — the
+        // property the shader's tile list depends on.
+        let mut dabs: Vec<GpuDab> = Vec::new();
+        let mut strokes: Vec<GpuStroke> = Vec::with_capacity(plan.strokes.len());
+        for (si, s) in plan.strokes.iter().enumerate() {
+            strokes.push(GpuStroke {
+                flow: s.flow,
+                erase: u32::from(s.erase),
+                _pad: [0; 2],
+            });
+            // ⚠ A stroke with no dabs or no flow contributes nothing, exactly as the CPU kernel's
+            // `continue` does — so its dabs are simply not emitted and its `StrokeInfo` is never
+            // referenced. Emitting them would be harmless but would inflate the tile lists.
+            if s.dabs.is_empty() || s.flow <= 0.0 {
+                continue;
+            }
+            for d in &s.dabs {
+                let (gate, ceiling) = match d.gate {
+                    Some((r, c)) => (r, c),
+                    // ⚠ A negative ceiling is the "no gate" sentinel; see `GpuDab::gate`.
+                    None => ([0.0; 3], -1.0),
+                };
+                dabs.push(GpuDab {
+                    pos: [d.x, d.y, d.r, d.hard],
+                    gate: [gate[0], gate[1], gate[2], ceiling],
+                    stroke: si as u32,
+                    _pad: [0; 3],
+                });
+            }
+        }
+        if dabs.is_empty() {
+            return None;
+        }
+
+        let tiles_x = (w as u32).div_ceil(brush_wgsl::TILE);
+        let tiles_y = (h as u32).div_ceil(brush_wgsl::TILE);
+        let tiles = tiles_x.checked_mul(tiles_y)?;
+
+        // ── buffers ───────────────────────────────────────────────────────────────────
+        //
+        // ⚠ `.max(16)` throughout because wgpu refuses a zero-sized buffer — the same guard
+        // `Dispatch` and `GpuImage::scratch` carry.
+        let storage = |label: &'static str, bytes: &[u8]| -> wgpu::Buffer {
+            let b = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (bytes.len() as u64).max(16),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            if !bytes.is_empty() {
+                ctx.queue.write_buffer(&b, 0, bytes);
+            }
+            b
+        };
+
+        let dab_buf = storage("brush-dabs", bytemuck::cast_slice(&dabs));
+        let stroke_buf = storage("brush-strokes", bytemuck::cast_slice(&strokes));
+
+        // ⚠ The base plane is uploaded only when something actually gates. `plan.gating_rows`
+        // says whether it does; a non-gating brush pays nothing at all, which is the same
+        // property the CPU's lazily-built `base_lab` has.
+        let (base_buf, img_w, img_h, has_base) = match (base, plan.gating_rows) {
+            (Some((plane, bw, bh)), Some(_)) => (
+                storage("brush-base", bytemuck::cast_slice(plane)),
+                bw as u32,
+                bh as u32,
+                1u32,
+            ),
+            _ => (storage("brush-base", &[]), 1, 1, 0u32),
+        };
+
+        let cov_bytes = (w * h * 4) as u64;
+        let cov_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-cov"),
+            size: cov_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let counters = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-counters"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        ctx.queue.write_buffer(&counters, 0, &[0u8; 16]);
+
+        let params = Params {
+            x0: plan.x0 as u32,
+            y0: plan.y0 as u32,
+            w: w as u32,
+            h: h as u32,
+            img_w,
+            img_h,
+            dab_count: dabs.len() as u32,
+            invert: u32::from(invert),
+            has_base,
+            tiles_x,
+            _pad: [0; 2],
+        };
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-params"),
+            size: std::mem::size_of::<Params>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        ctx.queue
+            .write_buffer(&uniform, 0, bytemuck::bytes_of(&params));
+
+        // ── the program, from the cache ───────────────────────────────────────────────
+        //
+        // ⚠ Keyed on the shader TEXT, so the injected capacity and the test-counter flag each
+        // produce their own pipeline rather than serving a stale one — `cache::program`'s rule,
+        // and the reason it hashes the source rather than the label.
+        let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let layout_entries = [
+            entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
+            entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+            entry(2, wgpu::BufferBindingType::Storage { read_only: true }),
+            entry(3, wgpu::BufferBindingType::Storage { read_only: false }),
+            entry(4, wgpu::BufferBindingType::Uniform),
+            entry(5, wgpu::BufferBindingType::Storage { read_only: false }),
+        ];
+        let shader = brush_wgsl::source(self.capacity, self.count_tests);
+        let (layout, pipelines) =
+            ctx.cache
+                .program(device, "brush-raster", &shader, &layout_entries, &["main"]);
+
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-raster"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: dab_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: stroke_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: base_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: cov_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: counters.as_entire_binding(),
+                },
+            ],
+        });
+
+        // ⚠ One workgroup per TILE, laid out 1-D and unpacked in the shader from `tiles_x`. The
+        // 65535-per-dimension limit applies here too: a 26 Mpx box is ~101,000 tiles, so the
+        // second dimension is not optional.
+        let gx = tiles.clamp(1, 65535);
+        let gy = tiles.div_ceil(gx);
+
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipelines[0]);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
+
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-readback"),
+            size: cov_bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_buffer_to_buffer(&cov_buf, 0, &readback, 0, cov_bytes);
+        let counter_read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-counter-readback"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_buffer_to_buffer(&counters, 0, &counter_read, 0, 16);
+        ctx.queue.submit(Some(enc.finish()));
+
+        // ⚠ The readback idiom is `GpuChain::run_with`'s, deliberately reused rather than
+        // reinvented: `map_async`, then `poll(Wait)`, then receive.
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let cslice = counter_read.slice(..);
+        let (ctx2, crx) = std::sync::mpsc::channel();
+        cslice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = ctx2.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().ok()?.ok()?;
+        crx.recv().ok()?.ok()?;
+
+        let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        let counts: Vec<u32> = bytemuck::cast_slice(&cslice.get_mapped_range()).to_vec();
+        readback.unmap();
+        counter_read.unmap();
+
+        // ⚠ Narrowed here rather than in the shader, because packing four samples into one word
+        // would mean four threads read-modify-writing the same address — a race. See the shader.
+        let data: Vec<u8> = words.iter().map(|&v| v.min(255) as u8).collect();
+        Some((
+            CoverageMap {
+                x0: plan.x0,
+                y0: plan.y0,
+                w,
+                h,
+                data,
+                outside: plan.outside,
+            },
+            counts[0],
+            counts[1],
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit_model::{Brush, BrushStroke, Geometry};
+
+    fn ctx() -> Option<Arc<GpuContext>> {
+        match crate::shared() {
+            Some(c) => Some(c.clone()),
+            None => {
+                eprintln!("SKIPPED: no GPU adapter on this machine");
+                None
+            }
+        }
+    }
+
+    /// One plain stroke, no gate, no erase — the smallest case that exercises the tile scan, the
+    /// shared list, `dab_alpha` and the composite.
+    fn one_stroke() -> Brush {
+        Brush {
+            strokes: vec![BrushStroke {
+                points: (0..20).map(|i| [0.2 + i as f32 * 0.02, 0.5]).collect(),
+                radius: 0.03,
+                hardness: 40.0,
+                flow: 100.0,
+                auto_mask: false,
+                tolerance: 25.0,
+                ..Default::default()
+            }],
+            invert: false,
+        }
+    }
+
+    /// ⚠⚠ **The whole-map comparison against the CPU rasteriser, in 8-bit levels.** Coverage *is*
+    /// a `u8`, so "within 1 level" is a statement about the stored value rather than about a
+    /// rendering of it — which is why this is far stricter than a pixel-pipeline equivalence test.
+    ///
+    /// ⚠ M8.3i's frozen-copy **bit-identity** standard deliberately cannot hold here: the gate
+    /// needs `cbrt` and a matrix on the GPU, and M8.3a established that GPU and CPU float differ
+    /// in the last bits (subnormals flush, transcendentals differ). A real change of standard,
+    /// argued in the spec's §7 rather than quietly adopted.
+    fn assert_agrees(gpu: &CoverageMap, cpu: &CoverageMap) {
+        assert_eq!(
+            (gpu.x0, gpu.y0, gpu.w, gpu.h),
+            (cpu.x0, cpu.y0, cpu.w, cpu.h),
+            "the boxes must agree"
+        );
+        assert_eq!(gpu.outside, cpu.outside, "outside must agree");
+        let mut worst = 0i32;
+        let mut differing = 0usize;
+        let mut at = (0usize, 0usize);
+        for y in 0..cpu.h {
+            for x in 0..cpu.w {
+                let i = y * cpu.w + x;
+                let d = (i32::from(gpu.data[i]) - i32::from(cpu.data[i])).abs();
+                if d > 0 {
+                    differing += 1;
+                }
+                if d > worst {
+                    worst = d;
+                    at = (x, y);
+                }
+            }
+        }
+        assert!(
+            worst <= 1,
+            "worst {worst} levels at {at:?}, {differing} of {} samples differ",
+            cpu.w * cpu.h
+        );
+    }
+
+    #[test]
+    fn one_plain_stroke_agrees_with_the_cpu_rasterizer() {
+        let Some(ctx) = ctx() else { return };
+        let b = one_stroke();
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize(&b, &g, 400, 300);
+        assert!(
+            cpu.data.iter().any(|&v| v > 0),
+            "fixture check: the CPU map must be non-empty"
+        );
+        let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None)
+            .expect("fixture check: the brush must produce dabs");
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(&plan, b.invert, None)
+            .expect("the GPU raster must succeed on an available adapter");
+        assert_agrees(&gpu, &cpu);
+    }
+}

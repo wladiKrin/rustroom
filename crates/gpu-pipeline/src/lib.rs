@@ -8,6 +8,8 @@
 //! ⚠ Nothing in the app uses this crate. See the spec's §8 for why that is deliberate.
 
 mod accelerate;
+mod brush_raster;
+mod brush_wgsl;
 mod cache;
 mod chain;
 mod context;
@@ -26,6 +28,7 @@ mod sharpen;
 mod tone_regions;
 
 pub use accelerate::{accelerate, rejoin};
+pub use brush_raster::GpuBrushRaster;
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
 pub use display_rendering::GpuDisplayRenderingStage;
