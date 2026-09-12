@@ -262,12 +262,21 @@ fn walk(
     // and `GpuStage::cpu()` hands out a *borrow* that cannot be pushed into `out` — so the
     // original travels beside the GPU stage and `flush` chooses between them.
     let mut run: Vec<Candidate> = Vec::new();
+    // ⚠ Built once for the whole walk rather than per stage: it holds only an `Arc<GpuContext>`,
+    // and a mask clones the `Arc` rather than the rasteriser.
+    let coverage: Arc<dyn pipeline::CoverageRasterizer> = Arc::new(crate::GpuBrushRaster::new(ctx));
     for mut s in tail.into_stages() {
         // ⚠ Offered to **every** stage this walk sees, before the lookup. A replaceable stage has
         // no inner list and inherits the empty default, so one rule covers both arms rather than
         // one arm carrying an exception nobody would think to check.
+        //
+        // ⚠⚠ Both hooks are guarded by the same `inner.is_some()`, so the **recursive** call
+        // offers neither. That is sound for the same reason the depth bound is: a mask's
+        // sub-stages can never contain a mask, so they build no coverage and offering into them
+        // would be machinery for a case that cannot arise.
         if let Some(f) = inner {
             s.accelerate_inner(f);
+            s.set_coverage_rasterizer(&coverage);
         }
         match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
             Some((_, build)) => run.push((build(edits, scale, profile, spec, ctx), s)),
@@ -818,6 +827,59 @@ mod tests {
     /// this file compares an accelerated render against a CPU one, and a hook that never fired
     /// makes the two trivially identical — so something has to assert the chain was **built**. That
     /// is the W5 failure mode (creative LUTs shipped fully tested and 100% dead) as a test.
+    /// A brush mask, because only a **painted** mask rasterises coverage at all — an analytic one
+    /// answers from its own position, so offering it a rasteriser is a no-op and this test would
+    /// be vacuous.
+    fn brush_mask() -> edit_model::MaskedAdjustment {
+        let mut m = mask_carrying(edit_model::LocalAdjustments {
+            exposure: 0.5,
+            ..Default::default()
+        });
+        m.mask = edit_model::Mask::Brush(edit_model::Brush {
+            strokes: vec![edit_model::BrushStroke {
+                points: (0..10).map(|i| [0.3 + i as f32 * 0.03, 0.5]).collect(),
+                radius: 0.05,
+                hardness: 50.0,
+                flow: 100.0,
+                auto_mask: false,
+                tolerance: 25.0,
+                erase: false,
+            }],
+            invert: false,
+        });
+        m
+    }
+
+    /// ⚠⚠ **The carrier: `accelerate` really offers the rasteriser.** Everything else in this file
+    /// would pass with the offer deleted — the mask would build its coverage on the CPU and render
+    /// the same picture, because the two rasterisers agree to within one level by design. Even
+    /// `sub_stage_names_of` cannot see it, since a coverage rasteriser is not a stage. That is the
+    /// W5 failure mode, and this is the only guard against it.
+    #[test]
+    fn accelerate_offers_a_coverage_rasterizer_to_a_mask() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits {
+            masks: vec![brush_mask()],
+            ..Edits::default()
+        };
+        assert!(
+            !tail_of(&e).mask_has_coverage_rasterizer(),
+            "fixture check: an unaccelerated tail must hold none, or this proves nothing"
+        );
+        let accelerated = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        assert!(
+            accelerated.mask_has_coverage_rasterizer(),
+            "the mask must have been offered a coverage rasteriser"
+        );
+    }
+
     #[test]
     fn a_masked_hsl_becomes_a_chain_inside_the_mask() {
         let Some(ctx) = ctx() else { return };
