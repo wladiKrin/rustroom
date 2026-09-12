@@ -232,6 +232,20 @@ pub trait CoverageRasterizer: Send + Sync {
     /// this implementation does not handle all return `None` and cost only the attempt. **Fail
     /// toward the CPU** — `GpuStage::cpu_cost`'s rule and `PrefixKey`'s, because a wrong answer
     /// here is wrong pixels rather than lost milliseconds.
+    /// Called once at the top of every mask's `apply`, before any coverage is built.
+    ///
+    /// ⚠⚠ **This exists so an implementation can drop state scoped to ONE apply, and without it a
+    /// shared GPU plane would be taken by the wrong frame.** A frame whose coverage comes from
+    /// `BrushCache`'s prebuilt map rasterises nothing and so deposits nothing — and a sub-stage
+    /// chain that then found a *previous* apply's plane still resident would render those pixels.
+    /// The failure is a plausible photograph, not an error.
+    ///
+    /// ⚠ Deliberately **not** folded into [`Self::rasterize`]: a mask calls this even when it goes
+    /// on to rasterise nothing at all, which is exactly the case that makes it necessary.
+    ///
+    /// ⚠ Defaulted to nothing, so an implementation holding no per-apply state ignores it.
+    fn begin_mask(&self) {}
+
     fn rasterize(
         &self,
         plan: &brush::DabPlan,

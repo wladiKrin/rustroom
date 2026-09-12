@@ -236,6 +236,15 @@ impl PipelineStage for MaskStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
+        // ⚠⚠ **Above every early return, not after them.** An offered rasteriser may hold state
+        // scoped to one apply — `gpu-pipeline` parks the base plane it uploaded there — and a mask
+        // that returns early still has to let go of the previous apply's. Telling it only on the
+        // path that rasterises would leave a stale plane resident in exactly the case where this
+        // mask built no coverage of its own, which is the one case a later consumer must not be
+        // handed one.
+        if let Some(r) = &self.coverage_gpu {
+            r.begin_mask();
+        }
         let (w, h) = (image.width(), image.height());
         if w == 0 || h == 0 || self.stages.is_empty() {
             return image;
@@ -444,6 +453,62 @@ mod tests {
     // now, so a module-level import would be unused in a non-test build.
     use super::super::mask_coverage::{hue_chroma, lightness};
     use edit_model::{LinearGradient, LocalAdjustments, Mask};
+
+    /// ⚠⚠ **The carrier, and nothing else in the workspace can see this.** `begin_mask` changes
+    /// no pixel by construction — it exists so an implementation can drop state — so deleting the
+    /// call leaves every render identical and every other test green. That is the W5 failure mode
+    /// (creative LUTs shipped fully tested and 100% dead) as a test, and a counting stub is the
+    /// only guard against it.
+    ///
+    /// ⚠ The fixture's mask rasterises **nothing** — a linear gradient answers from its own
+    /// position — which is deliberate: that is precisely the case the hook exists for, since a
+    /// mask that builds no coverage is a mask that deposits no plane and must still let go of the
+    /// previous apply's.
+    #[test]
+    fn every_mask_apply_begins_by_telling_its_rasterizer() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct Counting(Arc<AtomicUsize>);
+        impl crate::CoverageRasterizer for Counting {
+            fn begin_mask(&self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+            fn rasterize(
+                &self,
+                _plan: &crate::brush::DabPlan,
+                _invert: bool,
+                _base: Option<crate::brush::BaseRef<'_>>,
+            ) -> Option<crate::brush::CoverageMap> {
+                None
+            }
+        }
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let masked = MaskedAdjustment {
+            mask: Mask::Linear(LinearGradient::default()),
+            refine: Vec::new(),
+            adjustments: LocalAdjustments {
+                exposure: 0.5,
+                ..Default::default()
+            },
+        };
+        let mut stage = MaskStage::new(&masked, RenderScale::new(1.0), &Geometry::default());
+        assert!(
+            !stage.has_coverage_rasterizer(),
+            "fixture check: the stage must start without one"
+        );
+        let r: Arc<dyn crate::CoverageRasterizer> = Arc::new(Counting(seen.clone()));
+        stage.set_coverage_rasterizer(&r);
+
+        let out = stage.apply(ImageBuf::new(8, 8));
+        assert_eq!(out.width(), 8, "fixture check: the stage must have run");
+        assert_eq!(
+            seen.load(Ordering::Relaxed),
+            1,
+            "the mask must tell its rasteriser that an apply has begun"
+        );
+    }
 
     #[test]
     fn a_masked_brush_gates_against_the_buffer_it_is_handed() {
