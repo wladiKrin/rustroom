@@ -12,15 +12,17 @@
 
 /// Dabs a single tile's shared list can hold before it falls back to re-scanning.
 ///
-/// ⚠⚠ **4095 `u32` plus the counter is 16384 bytes, which is exactly
-/// `Limits::default().max_compute_workgroup_storage_size`** — verified in `wgpu-types` rather than
-/// assumed, and `GpuContext` requests `DeviceDescriptor::default()`, so that default is what it
-/// gets. Raising it needs a device that advertises more, which is not something to assume.
+/// ⚠⚠ **The budget is `Limits::default().max_compute_workgroup_storage_size` = 16384 bytes** —
+/// verified in `wgpu-types`, and `GpuContext` requests `DeviceDescriptor::default()`, so that
+/// default is what it gets. This array is 3584 x 4 = 14336 of it; the 256-entry per-thread
+/// count/offset array below is a further 1024, leaving headroom. **It is 3584 rather than 4095
+/// because that ordering array has to fit**, and the ordering is not optional — see the two-pass
+/// scan in the shader.
 ///
 /// ⚠ The real brush averages **22** dabs per tile (3,645 × ~72 tiles each / ~11,900 tiles), so
 /// this is not a number anything realistic approaches — which is precisely why the overflow path
 /// has to be reachable by injection in a test. *An unreachable guard is an untested one.*
-pub(crate) const MAX_TILE_DABS: u32 = 4095;
+pub(crate) const MAX_TILE_DABS: u32 = 3584;
 
 /// Tile edge in pixels. 16 × 16 = 256 threads, one per pixel.
 pub(crate) const TILE: u32 = 16;
@@ -32,6 +34,7 @@ pub(crate) fn source(max_tile_dabs: u32, count_tests: bool) -> String {
         crate::oklab_wgsl::OKLAB_WGSL,
         BODY.replace("{MAX_TILE_DABS}", &max_tile_dabs.to_string())
             .replace("{TILE}", &TILE.to_string())
+            .replace("{THREADS}", &(TILE * TILE).to_string())
             .replace("{COUNT_TESTS}", if count_tests { "true" } else { "false" })
     )
 }
@@ -75,7 +78,11 @@ struct Params {
 @group(0) @binding(5) var<storage, read_write> counters: array<atomic<u32>>;
 
 var<workgroup> tile_dabs: array<u32, {MAX_TILE_DABS}>;
-var<workgroup> tile_count: atomic<u32>;
+/// Per-thread match counts, converted **in place** to exclusive prefix offsets by thread 0.
+///
+/// ⚠ One array reused for both, because two would not fit in the 16384-byte budget.
+var<workgroup> thread_off: array<u32, {THREADS}>;
+var<workgroup> total: u32;
 var<workgroup> overflowed: u32;
 
 // ⚠ Transcribed from `pipeline::brush::raster::dab_alpha`. The `hard >= 1 - 1e-4` branch is a fast
@@ -140,26 +147,63 @@ fn main(
     let tx1 = tx0 + f32({TILE}u);
     let ty1 = ty0 + f32({TILE}u);
 
+    // ⚠⚠ **THE SHARED LIST MUST BE IN ASCENDING DAB INDEX ORDER, BECAUSE ASCENDING INDEX IS
+    // STROKE ORDER — and an `atomicAdd` counter CANNOT deliver that.** A single cooperative scan
+    // appending through one atomic gives slots in whatever order 256 threads race to claim them,
+    // so the per-pixel walk then sees strokes interleaved and composites them out of order. That
+    // is invisible on a single stroke and on any two strokes that only paint; it shows the moment
+    // one of them erases. Found by `swapping_two_strokes_changes_the_answer_and_both_agree` and by
+    // the two erase tests, all three of which exist for exactly this.
+    //
+    // So the scan is **two passes over a CONTIGUOUS per-thread range, with a prefix sum between
+    // them**. Contiguous is what makes it sound: thread `t` scans an ascending, disjoint range, so
+    // concatenating the threads' blocks in thread order is globally ascending. A strided
+    // assignment (`i = li; i += 256`) would keep each thread's own finds ascending and still
+    // interleave them globally, which is the trap this replaced.
+    //
+    // ⚠ Two scans rather than one — 86.8 million bounding-box tests on the real brush instead of
+    // 43.4. Still three orders of magnitude below the 11.1 billion a per-pixel gather would cost,
+    // and the price of determinism.
+    let per = (p.dab_count + {THREADS}u - 1u) / {THREADS}u;
+    let lo = min(li * per, p.dab_count);
+    let hi = min(lo + per, p.dab_count);
+
+    var found = 0u;
+    var i = lo;
+    loop {
+        if (i >= hi) { break; }
+        if (touches_tile(dabs[i], tx0, ty0, tx1, ty1)) { found = found + 1u; }
+        i = i + 1u;
+    }
+    thread_off[li] = found;
+    workgroupBarrier();
+
+    // ⚠ The prefix sum on one lane: 256 iterations against a scan of thousands, so a parallel
+    // scan would be machinery for nothing. It converts `thread_off` in place from counts to
+    // exclusive offsets.
     if (li == 0u) {
-        atomicStore(&tile_count, 0u);
-        overflowed = 0u;
+        var running = 0u;
+        for (var t = 0u; t < {THREADS}u; t = t + 1u) {
+            let c = thread_off[t];
+            thread_off[t] = running;
+            running = running + c;
+        }
+        total = running;
+        overflowed = select(0u, 1u, running > {MAX_TILE_DABS}u);
     }
     workgroupBarrier();
 
-    // ⚠ Cooperative: each of the 256 threads strides through the dab list, so the scan costs
-    // dab_count/256 iterations per thread rather than dab_count.
-    var i = li;
-    loop {
-        if (i >= p.dab_count) { break; }
-        if (touches_tile(dabs[i], tx0, ty0, tx1, ty1)) {
-            let slot = atomicAdd(&tile_count, 1u);
-            if (slot < {MAX_TILE_DABS}u) {
-                tile_dabs[slot] = i;
-            } else {
-                overflowed = 1u;
+    if (overflowed == 0u) {
+        var w = thread_off[li];
+        var j = lo;
+        loop {
+            if (j >= hi) { break; }
+            if (touches_tile(dabs[j], tx0, ty0, tx1, ty1)) {
+                tile_dabs[w] = j;
+                w = w + 1u;
             }
+            j = j + 1u;
         }
-        i = i + {TILE}u * {TILE}u;
     }
     workgroupBarrier();
 
@@ -182,7 +226,7 @@ fn main(
     // kernel that silently used the first {MAX_TILE_DABS} would render a plausible-but-wrong mask,
     // which is the failure this whole module is written against. Correct, slower, and confined to
     // the tile that overflowed.
-    var count = min(atomicLoad(&tile_count), {MAX_TILE_DABS}u);
+    var count = min(total, {MAX_TILE_DABS}u);
     if (overflowed == 1u) { count = p.dab_count; }
 
     var cover = 0.0;
@@ -244,6 +288,20 @@ fn main(
     // ⚠⚠ **`floor(x + 0.5)`, never `round`.** WGSL's `round` breaks ties to the EVEN whole number
     // while Rust's `f32::round` breaks them away from zero — M8.3g's off-by-one-level bug, correct
     // on every ordinary value and wrong on every exact tie. Do not "tidy" this.
+    //
+    // ⚠⚠ **AND SUBSTITUTING `round` HERE IS INERT — measured, and inert BY CONSTRUCTION rather
+    // than merely on this fixture, which is a stronger statement and the reason it is written
+    // down.** Coverage is scaled by **255, an odd number**: for `cover * 255` to be an exact
+    // `k + 0.5`, `cover` must be `m/2^n` with `2^(n-1)` dividing `255m`, and since 255 is odd that
+    // forces `n = 1` — so **`cover = 0.5` is the only constructible tie, and there both rules give
+    // 128 because 128 is even.** The ties that *would* diverge (76.5, 2.5, 128.5) need coverage
+    // values no dyadic fraction reaches.
+    //
+    // ⚠ So this is kept as **defence in depth, not as a guarded property**: M8.3g measured the
+    // same substitution as a real one-level error on `ImageBuf::quantize`, where the input is an
+    // arbitrary scene-referred sample and ties are routine. If the scale here ever stops being 255
+    // — a 16-bit coverage map, say — the sabotage becomes live and the rule starts earning its
+    // place again.
     var q = 0.0;
     if (cover == cover) { q = floor(clamp(cover, 0.0, 1.0) * 255.0 + 0.5); }
     // ⚠ One `u32` per sample rather than a packed byte array: packing four samples into one word

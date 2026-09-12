@@ -413,6 +413,154 @@ mod tests {
         );
     }
 
+    /// A soft, partial-flow stroke along `y`, so two of them overlap at partial coverage.
+    fn soft(y: f32) -> BrushStroke {
+        BrushStroke {
+            points: (0..12).map(|i| [0.25 + i as f32 * 0.03, y]).collect(),
+            radius: 0.05,
+            hardness: 0.0,
+            flow: 45.0,
+            auto_mask: false,
+            tolerance: 25.0,
+            ..Default::default()
+        }
+    }
+
+    /// ⚠⚠ **The two-level combine, and the only fixture that can see it flattened.** Two strokes
+    /// overlapping at partial coverage: a flat `max` over all dabs agrees with the composite at 0
+    /// and 1 and differs everywhere in between, so a kernel that took one flat `max` passes every
+    /// single-stroke test and fails this one.
+    #[test]
+    fn two_overlapping_strokes_composite_rather_than_max() {
+        let Some(ctx) = ctx() else { return };
+        let b = Brush {
+            strokes: vec![soft(0.48), soft(0.52)],
+            invert: false,
+        };
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize(&b, &g, 400, 300);
+        // ⚠ The fixture check that makes the test mean anything: there must be samples strictly
+        // between 0 and 255, or `max` and the composite would agree everywhere.
+        assert!(
+            cpu.data.iter().any(|&v| v > 10 && v < 245),
+            "fixture check: the overlap must be at PARTIAL coverage"
+        );
+        let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).unwrap();
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(&plan, b.invert, None)
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
+    /// A paint stroke and a narrower erase stroke over it, both at partial flow.
+    fn paint_then_erase() -> (BrushStroke, BrushStroke) {
+        let paint = BrushStroke {
+            points: (0..14).map(|i| [0.2 + i as f32 * 0.04, 0.5]).collect(),
+            radius: 0.06,
+            hardness: 30.0,
+            flow: 80.0,
+            erase: false,
+            auto_mask: false,
+            tolerance: 25.0,
+        };
+        let mut rub = paint.clone();
+        rub.erase = true;
+        rub.flow = 70.0;
+        rub.radius = 0.03;
+        (paint, rub)
+    }
+
+    /// ⚠ Erase is `c * (1 - a)` — the `MaskOp::Subtract` rule, not `min`. The two agree at 0 and 1
+    /// and diverge at every partial coverage, which is what this fixture's partial flow reaches.
+    #[test]
+    fn an_erase_stroke_over_a_paint_stroke_agrees() {
+        let Some(ctx) = ctx() else { return };
+        let (paint, rub) = paint_then_erase();
+        let b = Brush {
+            strokes: vec![paint, rub],
+            invert: false,
+        };
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize(&b, &g, 400, 300);
+        assert!(
+            cpu.data.iter().any(|&v| v > 10 && v < 245),
+            "fixture check: the erase must leave PARTIAL coverage"
+        );
+        let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).unwrap();
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(&plan, b.invert, None)
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
+    /// ⚠⚠ **Stroke ORDER is observable once erase is in play** — erase-then-paint restores where
+    /// paint-then-erase removes. A kernel that walked its tile list in an arbitrary order passes
+    /// both tests above and fails this one, so the `assert_ne!` is what gives it teeth.
+    #[test]
+    fn swapping_two_strokes_changes_the_answer_and_both_agree() {
+        let Some(ctx) = ctx() else { return };
+        let (paint, rub) = paint_then_erase();
+        let g = Geometry::default();
+        let forward = Brush {
+            strokes: vec![paint.clone(), rub.clone()],
+            invert: false,
+        };
+        let reverse = Brush {
+            strokes: vec![rub, paint],
+            invert: false,
+        };
+        let a = pipeline::brush::rasterize(&forward, &g, 400, 300);
+        let z = pipeline::brush::rasterize(&reverse, &g, 400, 300);
+        assert_ne!(
+            a.data, z.data,
+            "fixture check: the order must be observable, or this test proves nothing"
+        );
+        let r = GpuBrushRaster::new(&ctx);
+        for (b, cpu) in [(forward, a), (reverse, z)] {
+            let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).unwrap();
+            assert_agrees(&r.rasterize(&plan, b.invert, None).unwrap(), &cpu);
+        }
+    }
+
+    /// ⚠ An inverted brush with **no strokes** covers EVERYTHING — `outside` is 255, not 0. That is
+    /// a property of the caller rather than of the kernel (`plan_dabs` returns `None`), and it is
+    /// asserted here because it was a real bug found in use on the CPU side: the inversion was
+    /// confined to a rectangle around the strokes and grew as more was painted.
+    #[test]
+    fn an_inverted_brush_with_no_strokes_covers_everything() {
+        let b = Brush {
+            strokes: Vec::new(),
+            invert: true,
+        };
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize(&b, &g, 400, 300);
+        assert_eq!(cpu.outside, 255);
+        assert!(!cpu.is_inert());
+        assert!(
+            pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).is_none(),
+            "no strokes must plan no dabs, so the GPU path is never entered"
+        );
+    }
+
+    /// ⚠ And an inverted brush that DOES paint, so the kernel's own `1 - cover` is exercised.
+    #[test]
+    fn an_inverted_painted_brush_agrees() {
+        let Some(ctx) = ctx() else { return };
+        let mut b = one_stroke();
+        b.invert = true;
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize(&b, &g, 400, 300);
+        assert_eq!(
+            cpu.outside, 255,
+            "fixture check: inverted means outside 255"
+        );
+        let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).unwrap();
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(&plan, b.invert, None)
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
     #[test]
     fn one_plain_stroke_agrees_with_the_cpu_rasterizer() {
         let Some(ctx) = ctx() else { return };
