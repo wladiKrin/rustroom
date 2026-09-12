@@ -437,10 +437,37 @@ impl GpuBrushRaster {
 
 /// The smallest box worth a round trip, in pixels.
 ///
-/// ⚠ A **starting** value, taken from `brush::raster::SEQUENTIAL_FLOOR_PX` because it answers the
-/// same question on the CPU side — and swept in this milestone's Task 5 rather than left at it. A
-/// floor nobody measured is a floor nobody can defend.
-const MIN_GPU_BOX_PX: usize = 64 * 1024;
+/// ⚠⚠ **SWEPT, AND THE STARTING VALUE WAS TOO LOW BY ~8x.** It began at
+/// `brush::raster::SEQUENTIAL_FLOOR_PX`'s 64 Ki because that constant answers the same question on
+/// the CPU side — and measured, at 126,504 px the GPU is **2.3x slower**, so that floor would have
+/// handed small brushes to a path that loses. Measured by `brush_raster_probe`'s box-size sweep,
+/// Apple M2, two runs, best of 5 warm rounds each:
+///
+/// | box px | CPU | GPU | ratio |
+/// |---|---|---|---|
+/// | 2,176 | 0.05 ms | 1.6 | 0.03x |
+/// | 8,064 | 0.19 | 1.6 | 0.12x |
+/// | 31,752 | 0.81 | 1.6 | 0.48x |
+/// | 126,504 | 0.74 | 1.7 | 0.43x |
+/// | 440,860 | 2.67 | 1.8-3.4 | 0.80-1.50x |
+/// | 1,759,688 | 9.1 | 6.9-8.5 | 1.05-1.36x |
+///
+/// ⚠⚠ **The GPU has a ~1.6 ms floor whatever the box size** — M8.3g decomposed that as a **1.28 ms
+/// fixed download cost no size reduction touches**, plus the dispatch. So below a few hundred
+/// thousand pixels the round trip simply cannot be repaid, and the curve is a floor rather than a
+/// slope.
+///
+/// ⚠ **512 Ki sits just above the ambiguous 440,860 point**, where two runs straddled parity
+/// (0.80x and 1.50x). Refusing there is the trait's own rule — *fail toward the CPU* — because a
+/// wrong answer is milliseconds and never pixels.
+///
+/// ⚠⚠ **Measured on a NON-GATING brush, which is the GPU's weakest case, so this is conservative
+/// for a gating one.** An auto-masked brush costs the CPU an Oklab conversion per pixel — the real
+/// brush measures ~20 ns/px against this sweep's ~5 — so its crossover is several times lower and
+/// this floor refuses some gating brushes the GPU would win. **A per-gating floor is a recorded
+/// follow-up, not an oversight**; the case that matters here (3.05 Mpx) is 6x above this either
+/// way.
+const MIN_GPU_BOX_PX: usize = 512 * 1024;
 
 /// ⚠ The trait lives in `pipeline` and is implemented here — the direction that keeps wgpu out of
 /// the CLI, `export` and all 63 goldens.
@@ -568,6 +595,45 @@ mod tests {
             .rasterize(&plan, b.invert, None)
             .unwrap();
         assert_agrees(&gpu, &cpu);
+    }
+
+    /// ⚠⚠ **The floor is reachable only through the TRAIT, and nothing else in this file uses it.**
+    /// Every other test calls the inherent `rasterize`, which has no floor — so without this the
+    /// guard would ship untested, and *an unreachable guard is an untested one*.
+    #[test]
+    fn a_box_below_the_floor_is_declined_so_the_cpu_keeps_it() {
+        let Some(ctx) = ctx() else { return };
+        use pipeline::CoverageRasterizer;
+        let tiny = Brush {
+            strokes: vec![BrushStroke {
+                points: vec![[0.5, 0.5]],
+                radius: 0.01,
+                hardness: 50.0,
+                flow: 100.0,
+                auto_mask: false,
+                tolerance: 25.0,
+                erase: false,
+            }],
+            invert: false,
+        };
+        let g = Geometry::default();
+        let plan = pipeline::brush::plan_dabs(&tiny, &g, 400, 300, None, None).unwrap();
+        assert!(
+            plan.w * plan.h < super::MIN_GPU_BOX_PX,
+            "fixture check: the box must be below the floor, got {}",
+            plan.w * plan.h
+        );
+        let r = GpuBrushRaster::new(&ctx);
+        assert!(
+            CoverageRasterizer::rasterize(&r, &plan, tiny.invert, None).is_none(),
+            "a box below the floor must be declined"
+        );
+        // ⚠ And the inherent method still does it — the floor is the trait's policy, not a
+        // limitation of the rasteriser, which is what lets the sweep above measure past it.
+        assert!(
+            r.rasterize(&plan, tiny.invert, None).is_some(),
+            "the inherent rasterizer has no floor and must still work"
+        );
     }
 
     /// The base seen the way `MaskStage::BaseView` sees it: frame coordinates in, region-local out.

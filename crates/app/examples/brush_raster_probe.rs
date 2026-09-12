@@ -206,6 +206,53 @@ fn main() {
     );
     println!("  GPU  {gpu_best:7.2} ms   {:.2}x", cpu_best / gpu_best);
     println!();
+    // ⚠⚠ **The crossover sweep that sets `MIN_GPU_BOX_PX`.** A tiny box cannot repay a round trip:
+    // the coverage download carries a fixed ~1.3 ms no size reduction touches (M8.3g). The floor
+    // started at `SEQUENTIAL_FLOOR_PX`'s 64 Ki because it answers the same question on the CPU
+    // side — and a floor nobody measured is a floor nobody can defend, so this measures it.
+    println!();
+    println!("box-size sweep — where does the GPU stop paying?");
+    println!("      box px       CPU       GPU   ratio");
+    for k in [0.01f32, 0.02, 0.04, 0.08, 0.15, 0.30] {
+        let n = 12;
+        let sweep = Brush {
+            strokes: vec![edit_model::BrushStroke {
+                points: (0..n)
+                    .map(|i| [0.5 - k / 2.0 + k * i as f32 / (n - 1) as f32, 0.5])
+                    .collect(),
+                radius: (k / 2.0).max(0.002),
+                hardness: 50.0,
+                flow: 100.0,
+                auto_mask: false,
+                tolerance: 25.0,
+                erase: false,
+            }],
+            invert: false,
+        };
+        let Some(pl) = plan_dabs(&sweep, &geometry, w, h, None, None) else {
+            continue;
+        };
+        let area = pl.w * pl.h;
+        let mut c = f64::MAX;
+        let mut gp = f64::MAX;
+        for round in 0..5 {
+            let t = Instant::now();
+            let _ = rasterize_in(&sweep, &geometry, w, h, None, None);
+            let cm = t.elapsed().as_secs_f64() * 1e3;
+            let t = Instant::now();
+            // ⚠ Through the inherent method, NOT the trait — the trait applies the very floor this
+            // sweep exists to choose, so going through it would measure the floor rather than the
+            // crossover it is meant to sit at.
+            let _ = raster.rasterize(&pl, false, None);
+            let gm = t.elapsed().as_secs_f64() * 1e3;
+            if round > 0 {
+                c = c.min(cm);
+                gp = gp.min(gm);
+            }
+        }
+        println!("  {area:>10}  {c:7.3} ms {gp:7.3} ms  {:5.2}x", c / gp);
+    }
+    println!();
     println!(
         "⚠ Quote a BAND over several runs, not one figure — M8.3h had to retract a headline for\n\
          ⚠ quoting the top of a band as the value. ⚠ A worst of 0 or 1 level is agreement; a\n\

@@ -305,6 +305,35 @@ fn main() {
                 c / g,
                 c - g
             );
+
+            // ⚠⚠ **The row above is a cache HIT and cannot show brush coverage at all.** `best`
+            // renders the same edits five times, so the auto-mask coverage cache serves every
+            // frame after the first and coverage costs nothing — which is exactly the caveat
+            // M8.3j's record carries about it.
+            //
+            // ⚠ Coverage is only re-rasterised when a **global** edit changes the base the gate
+            // reads, because `BrushCache` declines an auto-masked brush and the coverage cache's
+            // key is invalidated by any global change. So this row varies the exposure between
+            // frames — which is what a drag is — and it is the only row that prices the work
+            // M8.3k does.
+            let mut drag_off = f64::MAX;
+            let mut drag_on = f64::MAX;
+            for r in 0..6 {
+                let mut d = e.clone();
+                d.exposure = 0.05 * (r as f32 + 1.0);
+                let a = frame_ms(&engine, &d, off);
+                let b = frame_ms(&engine, &d, on);
+                if r > 0 {
+                    drag_off = drag_off.min(a);
+                    drag_on = drag_on.min(b);
+                }
+            }
+            println!(
+                "  {:<32} {drag_off:7.2} ms {drag_on:7.2} ms   {:5.2}x  {:+6.2} ms",
+                "REAL SIDECAR, global drag",
+                drag_off / drag_on,
+                drag_off - drag_on
+            );
         }
         println!();
     }
