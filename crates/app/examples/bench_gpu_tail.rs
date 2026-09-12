@@ -186,10 +186,14 @@ fn main() {
             .collect(),
         ..Edits::default()
     };
-    // ⚠⚠ **The control, and the honest headline: this is what the catalogue's ONE masked
-    // photograph carries.** 1.3 ms of sub-stage work against a 27.0 ms transfer, so the cost gate
-    // must refuse it and this row must NOT move. A row that got faster here would mean the gate
-    // was reaching the wrong verdict inside a mask.
+    // ⚠⚠ **The control: a mask whose sub-stages the cost gate must REFUSE.** 1.3 ms of work against
+    // a 27.0 ms transfer, so this row must not move — one that got faster would mean the gate was
+    // reaching the wrong verdict inside a mask.
+    //
+    // ⚠ It was once described here as "what the catalogue's one masked photograph carries", and
+    // that stopped being true on 2026-09-12 when M8.3j's own confirmation check added an HSL to
+    // that mask. **The REAL SIDECAR row below is the one that tracks the catalogue; this one is a
+    // fixture and is meant to stay fixed.**
     let masked_exposure = Edits {
         masks: vec![masked(edit_model::LocalAdjustments {
             exposure: -3.6,
@@ -197,6 +201,34 @@ fn main() {
         })],
         ..Edits::default()
     };
+
+    // ⚠⚠ **The real sidecar, if one sits beside the RAW — and it is the only row here that is not
+    // invented.** Every other case is a fixture chosen to isolate a stage; this one is whatever the
+    // photographer actually saved, masks included. `mask_breakdown` has carried such a row since
+    // M8.3i and this bench did not, which is why M8.3j's first record quoted a synthetic figure for
+    // the catalogue's one masked photograph and got it wrong.
+    let side = path.with_file_name(format!(
+        "{}.json",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    let real: Option<Edits> = std::fs::read_to_string(&side).ok().and_then(|t| {
+        let v: serde_json::Value = serde_json::from_str(&t).ok()?;
+        let e = v.get("copies")?.get(0)?.get("edits")?.clone();
+        serde_json::from_value(e).ok()
+    });
+    if let Some(e) = &real {
+        println!(
+            "real sidecar: {} mask(s){}\n",
+            e.masks.len(),
+            if e.masks.is_empty() {
+                " — this photo exercises no mask row"
+            } else {
+                ""
+            }
+        );
+    } else {
+        println!("no sidecar beside this RAW — the REAL row is skipped\n");
+    }
 
     let cases: [(&str, &Edits); 8] = [
         ("TYPICAL of this catalogue", &typical),
@@ -244,6 +276,32 @@ fn main() {
             let g = best(&engine, edits, on, 5);
             println!(
                 "  {label:<32} {c:7.2} ms {g:7.2} ms   {:5.2}x  {:+6.2} ms",
+                c / g,
+                c - g
+            );
+        }
+        // ⚠ Last, and separated, because it is the only row describing a real photograph rather
+        // than a fixture built to isolate a stage.
+        if let Some(e) = &real {
+            let off = FrameSpec {
+                max_dim,
+                region: None,
+                display_space: color::OutputSpace::Srgb,
+                resampler: pipeline::Resampler::default(),
+                gpu_tail: false,
+                grade_view: None,
+                soft_proof: None,
+                visualize: None,
+            };
+            let on = FrameSpec {
+                gpu_tail: true,
+                ..off
+            };
+            let c = best(&engine, e, off, 5);
+            let g = best(&engine, e, on, 5);
+            println!(
+                "  {:<32} {c:7.2} ms {g:7.2} ms   {:5.2}x  {:+6.2} ms",
+                format!("REAL SIDECAR, {} mask(s)", e.masks.len()),
                 c / g,
                 c - g
             );
