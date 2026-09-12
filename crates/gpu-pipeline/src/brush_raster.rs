@@ -452,6 +452,133 @@ mod tests {
         assert_agrees(&gpu, &cpu);
     }
 
+    /// A base whose halves differ in Oklab, so the gate genuinely discriminates rather than
+    /// passing everything.
+    ///
+    /// ⚠⚠ **Two near-NEUTRAL greys differing almost entirely in LIGHTNESS, and the first version
+    /// of this fixture was wrong in the interesting direction.** It used a dark green against a
+    /// bright magenta — which differ in both lightness and chroma, so it looked like the stronger
+    /// choice. But the gate's ceiling at tolerance 25 is only **0.095**, and those two are so far
+    /// apart that the **chroma distance alone already exceeds it**: dropping the lightness term
+    /// left the gate fully off either way and the sabotage **passed**.
+    ///
+    /// ⚠ The discriminating fixture is the opposite of extreme. Two greys have a chroma distance
+    /// near zero — below the gate's `lo` of 0.0475, so chroma alone would pass everything — while
+    /// their lightness distance is far above the ceiling. So the term this fixture exists to guard
+    /// is the only term that decides the answer. **"Most different" is not "the content under
+    /// test"**, which is the same correction the dehaze probe's "haziest frames" needed.
+    fn half_base(w: usize, h: usize) -> (Vec<f32>, usize, usize) {
+        let mut v = vec![0.0f32; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let p = if x < w / 2 {
+                    [0.18, 0.18, 0.18]
+                } else {
+                    [0.55, 0.55, 0.55]
+                };
+                let i = (y * w + x) * 3;
+                v[i..i + 3].copy_from_slice(&p);
+            }
+        }
+        (v, w, h)
+    }
+
+    /// The same plane seen through `BasePixels`, so the CPU and the GPU are handed identical data.
+    struct SliceBase<'a>(&'a [f32], usize);
+    impl pipeline::brush::BasePixels for SliceBase<'_> {
+        fn at(&self, x: usize, y: usize) -> [f32; 3] {
+            let i = (y * self.1 + x) * 3;
+            [self.0[i], self.0[i + 1], self.0[i + 2]]
+        }
+    }
+
+    /// ⚠⚠ **The gate, and the fixture check is what makes it a test.** A stroke crossing the
+    /// colour boundary must be cut off at it, so the CPU map is first asserted to contain both
+    /// painted and blocked samples — a gate that passed everything would agree trivially.
+    #[test]
+    fn an_auto_masked_stroke_agrees_with_the_cpu_gate() {
+        let Some(ctx) = ctx() else { return };
+        let (plane, bw, bh) = half_base(400, 300);
+        let b = Brush {
+            strokes: vec![BrushStroke {
+                // Starts in the dark half and crosses into the light one.
+                // ⚠⚠ **The stroke runs ALONG the boundary, entirely inside the dark half — it
+                // does not cross it, and that correction is the whole fixture.** A stroke crossing
+                // the edge cuts nothing: each dab references the pixel under **its own centre**,
+                // dabs are laid a quarter-radius apart, and the within-stroke combine is a `max` —
+                // so on the far side of the edge there is always a nearby dab whose reference
+                // matches, and it wins the max. Measured: a crossing stroke gave `cut = 0`.
+                //
+                // ⚠ Running parallel to the edge is also what the feature is *for*: every dab
+                // references the dark side, so the part of each dab reaching across is blocked.
+                // That is "paint along an edge and let it stop at the edge".
+                points: (0..24).map(|i| [0.47, 0.2 + i as f32 * 0.025]).collect(),
+                // ⚠ Wide enough to reach across: 0.06 of the 400 px long edge is 24 px, against a
+                // boundary 12 px away, so half of each dab lands on the light side.
+                radius: 0.06,
+                hardness: 60.0,
+                flow: 100.0,
+                auto_mask: true,
+                tolerance: 25.0,
+                erase: false,
+            }],
+            invert: false,
+        };
+        let g = Geometry::default();
+        let base = SliceBase(&plane, bw);
+        let cpu = pipeline::brush::rasterize_in(&b, &g, bw, bh, None, Some(&base));
+
+        // ⚠⚠ **The fixture check compares against the POSITIONAL raster, not against a count of
+        // dark samples.** Counting `v < 20` over the whole box was the first version and it is
+        // nearly vacuous: most of the box is background the stroke never touched, so it passes
+        // whether or not the gate does anything. What this asserts instead is the property the
+        // test is named for — that the gate **blocks coverage the same brush would otherwise
+        // paint**.
+        let mut ungated = b.clone();
+        ungated.strokes[0].auto_mask = false;
+        let positional = pipeline::brush::rasterize(&ungated, &g, bw, bh);
+        let cut = (0..cpu.data.len())
+            .filter(|&i| i32::from(positional.data[i]) - i32::from(cpu.data[i]) > 40)
+            .count();
+        let painted = cpu.data.iter().filter(|&&v| v > 200).count();
+        assert!(
+            painted > 100 && cut > 100,
+            "fixture check: the gate must paint ({painted}) AND cut coverage the positional \
+             raster lays down ({cut})"
+        );
+        let plan = pipeline::brush::plan_dabs(&b, &g, bw, bh, None, Some(&base)).unwrap();
+        assert!(
+            plan.gating_rows.is_some(),
+            "fixture check: the plan must report a gating span"
+        );
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(&plan, b.invert, Some((&plane, bw, bh)))
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
+    /// ⚠ A gating plan with **no base** paints positionally — the documented degradation
+    /// `rasterize_in` already has (the CLI, and the tint before a frame lands), not an error. Both
+    /// sides must degrade the same way, or the GPU path would quietly paint a different mask
+    /// wherever the app has no base to offer.
+    #[test]
+    fn a_gating_plan_with_no_base_paints_positionally_on_both_sides() {
+        let Some(ctx) = ctx() else { return };
+        let mut b = one_stroke();
+        b.strokes[0].auto_mask = true;
+        let g = Geometry::default();
+        let cpu = pipeline::brush::rasterize_in(&b, &g, 400, 300, None, None);
+        assert!(
+            cpu.data.iter().any(|&v| v > 200),
+            "fixture check: with no base the stroke must paint at full strength"
+        );
+        let plan = pipeline::brush::plan_dabs(&b, &g, 400, 300, None, None).unwrap();
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(&plan, b.invert, None)
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
     /// A paint stroke and a narrower erase stroke over it, both at partial flow.
     fn paint_then_erase() -> (BrushStroke, BrushStroke) {
         let paint = BrushStroke {
