@@ -232,6 +232,7 @@ impl GpuBrushRaster {
         // ⚠ `slice(..bytes)` rather than `slice(..)`: a pooled buffer may be **larger** than this
         // render needs, and the copy is given `bytes` for the same reason.
         let mut staging = None;
+        let mut d_stage = std::time::Duration::ZERO;
         let (base_buf, img_w, img_h, bx0, by0, has_base) = match (base, plan.gating_rows) {
             (Some(b), Some(_)) => {
                 let plane = b.plane;
@@ -242,11 +243,13 @@ impl GpuBrushRaster {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
+                let t_stage = std::time::Instant::now();
                 let st = ctx.cache.take_staging(device, bytes)?;
                 st.slice(..bytes)
                     .get_mapped_range_mut()
                     .copy_from_slice(bytemuck::cast_slice(plane));
                 st.unmap();
+                d_stage = t_stage.elapsed();
                 staging = Some((st, bytes));
                 (buf, b.w as u32, b.h as u32, b.x0 as u32, b.y0 as u32, 1u32)
             }
@@ -359,6 +362,7 @@ impl GpuBrushRaster {
         let gx = tiles.clamp(1, 65535);
         let gy = tiles.div_ceil(gx);
 
+        let t_submit = std::time::Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
         if let Some((st, bytes)) = &staging {
             enc.copy_buffer_to_buffer(st, 0, &base_buf, 0, *bytes);
@@ -405,6 +409,8 @@ impl GpuBrushRaster {
         rx.recv().ok()?.ok()?;
         crx.recv().ok()?.ok()?;
 
+        let d_gpu = t_submit.elapsed();
+        let t_read = std::time::Instant::now();
         let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
         let counts: Vec<u32> = bytemuck::cast_slice(&cslice.get_mapped_range()).to_vec();
         readback.unmap();
@@ -412,6 +418,7 @@ impl GpuBrushRaster {
         // ⚠ Returned only **here**, after `poll(Wait)` has confirmed the submission finished — the
         // GPU reads this buffer during the submit, so handing it back any earlier would let the
         // next render map a buffer still being read. `GpuChain::run_with`'s rule, verbatim.
+        let base_mb = staging.as_ref().map_or(0.0, |(_, b)| *b as f64 / 1.0e6);
         if let Some((st, _)) = staging {
             ctx.cache.put_staging(st);
         }
@@ -419,6 +426,24 @@ impl GpuBrushRaster {
         // ⚠ Narrowed here rather than in the shader, because packing four samples into one word
         // would mean four threads read-modify-writing the same address — a race. See the shader.
         let data: Vec<u8> = words.iter().map(|&v| v.min(255) as u8).collect();
+        let d_read = t_read.elapsed();
+
+        // ⚠⚠ Kept, the `RUSTROOM_DEBUG_MASK` / `RUSTROOM_DEBUG_BRUSH` precedent. The split it
+        // reports — staging memcpy against everything the submit covers against the readback — is
+        // what says whether sharing an already-resident buffer is worth a mechanism, and this
+        // project has been wrong about exactly that kind of subtraction three times.
+        if std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
+            eprintln!(
+                "BRUSHGPU box={}x{} dabs={} base_mb={:.1} stage={:.2} gpu={:.2} read={:.2}",
+                w,
+                h,
+                dabs.len(),
+                base_mb,
+                d_stage.as_secs_f64() * 1e3,
+                d_gpu.as_secs_f64() * 1e3,
+                d_read.as_secs_f64() * 1e3,
+            );
+        }
         Some((
             CoverageMap {
                 x0: plan.x0,

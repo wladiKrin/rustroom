@@ -316,12 +316,22 @@ fn main() {
             // key is invalidated by any global change. So this row varies the exposure between
             // frames — which is what a drag is — and it is the only row that prices the work
             // M8.3k does.
+            // ⚠⚠ **The two configurations walk DISJOINT exposure ladders, and the row is
+            // worthless without it.** `MaskCoverageKey::base` is the truncated `Edits` plus the
+            // rung; `gpu_tail` lives in `FrameSpec` and is **not** in `Edits`, so rendering the
+            // same exposure off-then-on inside one round made the CPU frame populate the coverage
+            // cache and the GPU frame read it for free — `cov=0.00` on every accelerated render
+            // against `cov=62` on every CPU one. The row then reported a tail difference plus a
+            // whole rasterization the GPU never paid, which is the opposite of what it claims to
+            // price. The 0.003 EV offset is far below any visible difference and costs the
+            // same work; all it does is make the two keys distinct.
             let mut drag_off = f64::MAX;
             let mut drag_on = f64::MAX;
             for r in 0..6 {
                 let mut d = e.clone();
                 d.exposure = 0.05 * (r as f32 + 1.0);
                 let a = frame_ms(&engine, &d, off);
+                d.exposure += 0.003;
                 let b = frame_ms(&engine, &d, on);
                 if r > 0 {
                     drag_off = drag_off.min(a);
