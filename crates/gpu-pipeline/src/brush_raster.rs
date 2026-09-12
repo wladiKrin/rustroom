@@ -570,6 +570,91 @@ mod tests {
         assert_agrees(&gpu, &cpu);
     }
 
+    /// The base seen the way `MaskStage::BaseView` sees it: frame coordinates in, region-local out.
+    ///
+    /// ⚠ Written to match `BaseView::at` exactly — `saturating_sub` then clamp — because that is
+    /// the behaviour the shader has to agree with, not a re-derivation of what it ought to be.
+    struct RegionBase<'a> {
+        plane: &'a [f32],
+        w: usize,
+        h: usize,
+        x0: usize,
+        y0: usize,
+    }
+    impl pipeline::brush::BasePixels for RegionBase<'_> {
+        fn at(&self, x: usize, y: usize) -> [f32; 3] {
+            let lx = x.saturating_sub(self.x0).min(self.w - 1);
+            let ly = y.saturating_sub(self.y0).min(self.h - 1);
+            let i = (ly * self.w + lx) * 3;
+            [self.plane[i], self.plane[i + 1], self.plane[i + 2]]
+        }
+    }
+
+    /// ⚠⚠ **The guard plan 1 structurally could not have: every one of its fixtures is
+    /// whole-frame, so `x0 == y0 == 0` and a shader ignoring the origin agrees perfectly.** A
+    /// region render's buffer covers only part of the frame, and reading it without the offset
+    /// gates the auto-mask against pixels from somewhere else — a plausible mask, not an error.
+    #[test]
+    fn a_region_base_is_read_from_its_own_origin() {
+        let Some(ctx) = ctx() else { return };
+        let (plane, fw, fh) = half_base(400, 300);
+        // The region: right of and below the frame's origin, so BOTH offsets are exercised.
+        let (rx0, ry0, rw, rh) = (120usize, 60usize, 240usize, 180usize);
+        assert!(
+            rx0 > 0 && ry0 > 0,
+            "fixture check: the origin must be non-zero, or this is another whole-frame test"
+        );
+        let mut sub = vec![0.0f32; rw * rh * 3];
+        for y in 0..rh {
+            let src = ((ry0 + y) * fw + rx0) * 3;
+            sub[y * rw * 3..(y + 1) * rw * 3].copy_from_slice(&plane[src..src + rw * 3]);
+        }
+
+        // ⚠ Along the boundary, for Task 4's reason: a stroke crossing it cuts nothing, because
+        // each dab references its own centre and the within-stroke combine is a `max`.
+        let b = Brush {
+            strokes: vec![BrushStroke {
+                points: (0..16).map(|i| [0.47, 0.25 + i as f32 * 0.02]).collect(),
+                radius: 0.06,
+                hardness: 50.0,
+                flow: 100.0,
+                auto_mask: true,
+                tolerance: 25.0,
+                erase: false,
+            }],
+            invert: false,
+        };
+        let g = Geometry::default();
+        let view = RegionBase {
+            plane: &sub,
+            w: rw,
+            h: rh,
+            x0: rx0,
+            y0: ry0,
+        };
+        let clip = Some((rx0, ry0, rw, rh));
+        let cpu = pipeline::brush::rasterize_in(&b, &g, fw, fh, clip, Some(&view));
+        let plan = pipeline::brush::plan_dabs(&b, &g, fw, fh, clip, Some(&view)).unwrap();
+        assert!(
+            plan.gating_rows.is_some(),
+            "fixture check: the plan must gate, or the origin is never read at all"
+        );
+        let gpu = GpuBrushRaster::new(&ctx)
+            .rasterize(
+                &plan,
+                b.invert,
+                Some(BaseRef {
+                    plane: &sub,
+                    w: rw,
+                    h: rh,
+                    x0: rx0,
+                    y0: ry0,
+                }),
+            )
+            .unwrap();
+        assert_agrees(&gpu, &cpu);
+    }
+
     /// ⚠⚠ **The overflow path must RE-SCAN, never clip.** A tile whose shared list fills falls
     /// back to walking the whole dab list per pixel — correct, slower, confined to that tile. A
     /// kernel that silently used the first `capacity` dabs would render a plausible-but-wrong
