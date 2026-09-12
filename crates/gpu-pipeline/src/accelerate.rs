@@ -905,6 +905,362 @@ mod tests {
         );
     }
 
+    // ── M8.3l: the shared upload ──────────────────────────────────────────────────────
+    //
+    // ⚠⚠ **A shared upload changes no pixel any test can read**, because the same bytes reach the
+    // same buffer by a different route. Every equivalence test in this file passes with the whole
+    // mechanism deleted, so the deposit counters are the only observable — the W5 failure mode,
+    // and the same reason `GpuChain::transfer_counts` exists.
+
+    /// A **private** context, so the shared plane's counters describe this test and nothing else.
+    ///
+    /// ⚠⚠ **Never `shared()` here.** That one is process-wide and `cargo test` runs in parallel,
+    /// so its deposit and take counts would be whatever the rest of the suite happened to do —
+    /// exactly the contamination that made `GpuChain`'s transfer counters per chain rather than
+    /// global. A second `GpuContext::new()` in a process that already has one is **259 us**
+    /// (measured in M8.3a), so a private context costs nothing.
+    fn private_ctx() -> Option<Arc<GpuContext>> {
+        match GpuContext::new() {
+            Some(c) => Some(Arc::new(c)),
+            None => {
+                eprintln!("SKIPPED: no GPU adapter on this machine");
+                None
+            }
+        }
+    }
+
+    /// A brush big enough for the GPU and gating hard enough to make it upload a base.
+    ///
+    /// ⚠⚠ **Both properties are load-bearing and neither is obvious.** `GpuBrushRaster` declines a
+    /// box below `MIN_GPU_BOX_PX` (512 Ki px), so a small stroke never reaches the GPU at all; and
+    /// the base plane is uploaded **only when a stroke is auto-masked**, since a positional brush
+    /// needs no pixels to rasterise. A fixture missing either one deposits nothing and makes every
+    /// assertion below vacuous — which is why each test asserts on `deposits()` first.
+    fn gating_brush_mask(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
+        let mut m = mask_carrying(a);
+        m.mask = edit_model::Mask::Brush(edit_model::Brush {
+            strokes: vec![edit_model::BrushStroke {
+                points: (0..12).map(|i| [0.1 + i as f32 * 0.07, 0.5]).collect(),
+                radius: 0.45,
+                hardness: 50.0,
+                flow: 100.0,
+                auto_mask: true,
+                tolerance: 25.0,
+                erase: false,
+            }],
+            invert: false,
+        });
+        m
+    }
+
+    /// A scene big enough that the brush's box clears `MIN_GPU_BOX_PX`.
+    fn big_scene() -> core_image::ImageBuf {
+        let (w, h) = (1024, 1024);
+        core_image::ImageBuf::from_vec(
+            w,
+            h,
+            (0..w * h * 3).map(|i| (i % 977) as f32 / 977.0).collect(),
+        )
+    }
+
+    /// ⚠⚠ **THE test of this milestone.** The mask's gate uploads the base plane, and the mask's
+    /// first sub-stage chain takes that very allocation instead of uploading the same bytes again.
+    #[test]
+    fn a_masked_chain_at_index_zero_takes_the_plane_its_gate_uploaded() {
+        let Some(ctx) = private_ctx() else { return };
+        let e = Edits {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        assert_eq!(
+            mask_sub_stages(&p),
+            vec!["gpu_chain"],
+            "fixture check: the mask's hsl must have become a chain, and it must be first"
+        );
+        let _ = p.run(big_scene());
+        assert_eq!(
+            ctx.shared_plane().deposits(),
+            1,
+            "fixture check: the gate must have uploaded a base plane, or there is nothing to share"
+        );
+        assert_eq!(
+            ctx.shared_plane().takes(),
+            1,
+            "the mask's first sub-stage must take the plane instead of uploading it again"
+        );
+    }
+
+    /// ⚠⚠ **The negative half, and it is the one that matters.** A chain behind a CPU stage
+    /// receives **that stage's output**, not the plane the gate was handed. Taking the deposit
+    /// there would render a picture that is plausible and wrong — the failure mode this project
+    /// records more than any other.
+    ///
+    /// ⚠ `local_contrast` is the wedge because it is a mask sub-stage that is **not** in
+    /// `REPLACEABLE`, so it stays on the CPU, and it runs *before* hsl in a mask's chain — so the
+    /// chain lands at index 1.
+    #[test]
+    fn a_chain_behind_a_cpu_stage_does_not_take_the_plane() {
+        let Some(ctx) = private_ctx() else { return };
+        let e = Edits {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 0.0,
+                    clarity: 40.0,
+                },
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let subs = mask_sub_stages(&p);
+        assert_eq!(
+            subs.first(),
+            Some(&"local_contrast"),
+            "fixture check: a CPU stage must come first, got {subs:?}"
+        );
+        assert!(
+            subs.contains(&"gpu_chain"),
+            "fixture check: there must still be a chain behind it, got {subs:?}"
+        );
+        let _ = p.run(big_scene());
+        assert_eq!(
+            ctx.shared_plane().deposits(),
+            1,
+            "fixture check: the gate must still have uploaded a base plane"
+        );
+        assert_eq!(
+            ctx.shared_plane().takes(),
+            0,
+            "a chain that is not the mask's first sub-stage must upload its own input"
+        );
+    }
+
+    /// ⚠⚠ **The test that fails when `begin_mask` is deleted, and nothing else does.** Render
+    /// twice through one pipeline: each render's gate deposits a fresh plane, so each take must be
+    /// of that render's own. A slot that were never cleared would still hand out *a* plane — the
+    /// previous render's — and the take count would look identical, so the assertion that
+    /// discriminates is on the **pixels**.
+    #[test]
+    fn a_second_render_does_not_take_the_first_renders_plane() {
+        let Some(ctx) = private_ctx() else { return };
+        let e = Edits {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        let first = p.run(big_scene());
+        let second = p.run(big_scene());
+        let d = crate::compare(&first, &second);
+        assert!(
+            d.is_exact(),
+            "two renders of one scene must agree exactly: {d:?}"
+        );
+        assert_eq!(
+            ctx.shared_plane().takes(),
+            2,
+            "each render must share its own plane"
+        );
+    }
+
+    /// ⚠⚠ **`share_input` is load-bearing, and finding that out took a sabotage rather than
+    /// review.** The obvious reading is that restricting the offer to a mask's sub-stages is belt
+    /// and braces — the outer tail has no coverage rasteriser, so what deposit could its chain
+    /// possibly take? **The previous frame's.** A mask whose own chain sits behind a CPU stage
+    /// leaves its deposit in the slot; the outer tail's chain runs *before* any mask, so on the
+    /// next frame it would find that plane, at matching dimensions on the same thread, and render
+    /// the previous frame's pixels into the current frame's tail.
+    ///
+    /// ⚠ The fixture therefore needs both halves at once: a **global** hsl, which puts a chain at
+    /// index 0 of the outer walk, and a mask whose chain is behind `local_contrast`, which is what
+    /// leaves a deposit unclaimed. Neither alone can see it.
+    #[test]
+    fn the_outer_tails_own_chain_never_takes_a_masks_leftover_plane() {
+        let Some(ctx) = private_ctx() else { return };
+        let mut e = with_hsl();
+        e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
+            local_contrast: edit_model::LocalContrast {
+                texture: 0.0,
+                clarity: 40.0,
+            },
+            hsl: with_hsl().hsl,
+            ..Default::default()
+        })];
+        let p = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        assert_eq!(
+            p.stage_names().first(),
+            Some(&"gpu_chain"),
+            "fixture check: the global hsl must be a chain at the outer tail's index 0, got {:?}",
+            p.stage_names()
+        );
+        assert_eq!(
+            mask_sub_stages(&p).first(),
+            Some(&"local_contrast"),
+            "fixture check: the mask's chain must sit behind a CPU stage, so its deposit is left"
+        );
+
+        let first = p.run(big_scene());
+        assert_eq!(
+            ctx.shared_plane().deposits(),
+            1,
+            "fixture check: the mask's gate must have deposited a plane nobody took"
+        );
+        let second = p.run(big_scene());
+        let d = crate::compare(&first, &second);
+        assert!(
+            d.is_exact(),
+            "the outer tail must not render a plane left over from a mask: {d:?}"
+        );
+        assert_eq!(
+            ctx.shared_plane().takes(),
+            0,
+            "nothing outside a mask may take a deposited plane"
+        );
+    }
+
+    /// A brush the GPU will rasterise but that needs **no base plane**, so it deposits nothing.
+    ///
+    /// ⚠ `auto_mask: false` is the whole of it: without a gate `plan.gating_rows` is `None`, and
+    /// the rasteriser uploads no base at all. That is also why the shared upload is worth nothing
+    /// to a plain brush — a real limit of this milestone rather than an oversight.
+    fn plain_brush_mask(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
+        let mut m = gating_brush_mask(a);
+        if let edit_model::Mask::Brush(b) = &mut m.mask {
+            b.strokes[0].auto_mask = false;
+        }
+        m
+    }
+
+    /// A second scene, plainly different from [`big_scene`] and the same size.
+    fn other_scene() -> core_image::ImageBuf {
+        let (w, h) = (1024, 1024);
+        core_image::ImageBuf::from_vec(
+            w,
+            h,
+            (0..w * h * 3)
+                .map(|i| 1.0 - (i % 389) as f32 / 389.0)
+                .collect(),
+        )
+    }
+
+    /// ⚠⚠ **THE test `begin_mask` exists for, and the obvious one could not see it.** A test that
+    /// renders the same pipeline twice cannot: its chain *takes* the deposit every time, so the
+    /// slot is already empty at the next apply and clearing is a no-op. Deleting `begin_mask`'s
+    /// body left that test green — found by running the sabotage, not by reading.
+    ///
+    /// ⚠ The discriminating case needs two different pipelines sharing one context: one that
+    /// **leaves** a deposit (its chain sits behind a CPU stage) and one that **deposits nothing**
+    /// (a plain brush needs no base) whose chain is at index 0 and would therefore take whatever
+    /// it finds. Without the clear, the second renders the first's pixels — a plausible
+    /// photograph, and of the wrong photograph.
+    #[test]
+    fn a_mask_that_deposits_nothing_never_takes_another_masks_plane() {
+        let Some(ctx) = private_ctx() else { return };
+
+        let leaver = Edits {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                local_contrast: edit_model::LocalContrast {
+                    texture: 0.0,
+                    clarity: 40.0,
+                },
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        let taker = Edits {
+            masks: vec![plain_brush_mask(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+
+        let build = |e: &Edits| {
+            accel(
+                tail_of(e),
+                e,
+                SCALE,
+                ProfileRendering::default(),
+                RenderSpec::default(),
+                &ctx,
+            )
+        };
+        let (pl, pt) = (build(&leaver), build(&taker));
+        assert_eq!(
+            mask_sub_stages(&pl).first(),
+            Some(&"local_contrast"),
+            "fixture check: the leaver's chain must sit behind a CPU stage"
+        );
+        assert_eq!(
+            mask_sub_stages(&pt),
+            vec!["gpu_chain"],
+            "fixture check: the taker's chain must be at index 0, or it could never take one"
+        );
+
+        // ⚠ The reference first, on a context whose slot is empty.
+        let clean = pt.run(other_scene());
+        assert_eq!(
+            ctx.shared_plane().deposits(),
+            0,
+            "fixture check: a plain brush must deposit nothing, or this proves nothing"
+        );
+
+        let _ = pl.run(big_scene());
+        assert_eq!(
+            ctx.shared_plane().deposits(),
+            1,
+            "fixture check: the leaver must have deposited a plane nobody took"
+        );
+
+        let after = pt.run(other_scene());
+        let d = crate::compare(&clean, &after);
+        assert!(
+            d.is_exact(),
+            "a mask that deposited nothing must render its own input, not another's: {d:?}"
+        );
+        assert_eq!(
+            ctx.shared_plane().takes(),
+            0,
+            "nothing may take a stale plane"
+        );
+    }
+
     #[test]
     fn a_masked_hsl_becomes_a_chain_inside_the_mask() {
         let Some(ctx) = ctx() else { return };
