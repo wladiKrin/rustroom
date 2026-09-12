@@ -127,16 +127,16 @@ pub trait BasePixels: Sync {
 }
 
 /// One splat: centre, radius and profile in frame pixels.
-struct Dab {
-    x: f32,
-    y: f32,
-    r: f32,
-    hard: f32,
+pub struct Dab {
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+    pub hard: f32,
     /// `(reference in Oklab, ceiling)` when this dab was painted with Auto Mask on.
     ///
     /// ⚠ The **ceiling** is precomputed per stroke rather than the raw tolerance, so the inner
     /// pixel loop does a distance and a smoothstep and nothing else.
-    gate: Option<([f32; 3], f32)>,
+    pub gate: Option<([f32; 3], f32)>,
 }
 
 /// One stroke's dabs, with the properties that apply to the stroke as a whole.
@@ -145,10 +145,26 @@ struct Dab {
 /// correct: within a stroke the dabs combine with `max`, so a slow drag is not darker than a fast
 /// one over the same path; across strokes the results composite, so a second pass builds up.
 /// Flattening would force one rule to serve both.
-struct Stroke {
-    dabs: Vec<Dab>,
-    flow: f32,
-    erase: bool,
+pub struct Stroke {
+    pub dabs: Vec<Dab>,
+    pub flow: f32,
+    pub erase: bool,
+}
+
+/// Every dab a brush produces, grouped by stroke, with the box they fall in.
+///
+/// ⚠ `x0`/`y0`/`w`/`h` are the **clipped** box, already clamped exactly as the coverage map's is,
+/// so a consumer never re-derives it and the two cannot disagree about which pixels exist.
+pub struct DabPlan {
+    pub strokes: Vec<Stroke>,
+    pub x0: usize,
+    pub y0: usize,
+    pub w: usize,
+    pub h: usize,
+    /// Coverage everywhere outside the box — 255 for an inverted brush.
+    pub outside: u8,
+    /// The row span a gating dab can read, if anything gates.
+    pub gating_rows: Option<(usize, usize)>,
 }
 
 /// Rasterize a brush into a coverage map over the whole frame.
@@ -173,21 +189,27 @@ pub fn rasterize(
 ///
 /// ⚠ `None` rasterizes the whole frame and is byte-identical to the pre-clip behaviour — which is
 /// why no golden moved when this landed.
-pub fn rasterize_in(
+/// Plan every dab, or `None` when there is nothing to rasterise.
+///
+/// ⚠⚠ **One dab list, two consumers** — [`rasterize_planned`] below and `gpu-pipeline`'s
+/// `GpuBrushRaster`. That is the rule `adjustment_stages` already follows for stages: the
+/// duplication that would actually hurt is this arithmetic — the `SPACING` interpolation, the
+/// per-dab gate reference, the clip rejection, the box — and it exists once.
+///
+/// ⚠ Returns `None` for each of the early-outs `rasterize_in` had, because in every one of them
+/// the answer is the same: a map with no box and only `outside`. The caller builds that.
+pub fn plan_dabs(
     brush: &Brush,
     geometry: &Geometry,
     frame_w: usize,
     frame_h: usize,
     clip: Option<(usize, usize, usize, usize)>,
     base: Option<&dyn BasePixels>,
-) -> CoverageMap {
+) -> Option<DabPlan> {
     // ⚠ An inverted brush with no strokes covers everything, not nothing.
     let outside = if brush.invert { 255 } else { 0 };
     if brush.strokes.is_empty() || frame_w == 0 || frame_h == 0 {
-        return CoverageMap {
-            outside,
-            ..Default::default()
-        };
+        return None;
     }
     // The clip in frame pixels, clamped to the frame. `None` is the whole frame.
     let (cx0, cy0, cx1, cy1) = match clip {
@@ -200,10 +222,7 @@ pub fn rasterize_in(
         None => (0, 0, frame_w, frame_h),
     };
     if cx1 <= cx0 || cy1 <= cy0 {
-        return CoverageMap {
-            outside,
-            ..Default::default()
-        };
+        return None;
     }
     let map = FrameMap::new(geometry, frame_w, frame_h);
 
@@ -292,10 +311,7 @@ pub fn rasterize_in(
         });
     }
     if strokes.iter().all(|s| s.dabs.is_empty()) {
-        return CoverageMap {
-            outside,
-            ..Default::default()
-        };
+        return None;
     }
 
     // Bounding box, clipped to the frame.
@@ -314,18 +330,9 @@ pub fn rasterize_in(
     let x1 = ((hx.ceil().clamp(cx0 as f32, cx1 as f32) as usize) + 1).min(cx1);
     let y1 = ((hy.ceil().clamp(cy0 as f32, cy1 as f32) as usize) + 1).min(cy1);
     if x1 <= x0 || y1 <= y0 {
-        return CoverageMap {
-            outside,
-            ..Default::default()
-        };
+        return None;
     }
     let (w, h) = (x1 - x0, y1 - y0);
-
-    // ⚠ One Oklab conversion per pixel of the box, eagerly, rather than one per pixel *per dab*.
-    // Dabs are laid a quarter of a radius apart (`SPACING`) and overlap heavily, so a lazy
-    // per-dab conversion would convert the same pixel a dozen times over. Built only when
-    // something actually gates, so a plain brush pays nothing at all.
-    let t_lab = std::time::Instant::now();
     // ⚠ Only the rows a gating dab can read are converted. `base_lab` is still indexed over the
     // WHOLE box — rows outside the gating span are simply never written and never read — so the
     // `(y - y0) * w + (x - x0)` arithmetic in the dab loop is unchanged.
@@ -350,6 +357,65 @@ pub fn rasterize_in(
             (b > a).then_some((a, b))
         }
     };
+    Some(DabPlan {
+        strokes,
+        x0,
+        y0,
+        w,
+        h,
+        outside,
+        gating_rows,
+    })
+}
+
+pub fn rasterize_in(
+    brush: &Brush,
+    geometry: &Geometry,
+    frame_w: usize,
+    frame_h: usize,
+    clip: Option<(usize, usize, usize, usize)>,
+    base: Option<&dyn BasePixels>,
+) -> CoverageMap {
+    // ⚠ An inverted brush with no strokes covers everything, not nothing.
+    let outside = if brush.invert { 255 } else { 0 };
+    let Some(plan) = plan_dabs(brush, geometry, frame_w, frame_h, clip, base) else {
+        return CoverageMap {
+            outside,
+            ..Default::default()
+        };
+    };
+    rasterize_planned(&plan, brush.invert, base)
+}
+
+/// The CPU kernel over an already-planned dab list.
+///
+/// ⚠ Split out at M8.3k so [`plan_dabs`] has one caller shape and the GPU rasteriser can
+/// consume the same plan. **The arithmetic below is unmoved** — which is what the
+/// byte-identical goldens and the unchanged test count establish, not a claim in this comment.
+///
+/// ⚠ `t_lab` now brackets the Oklab conversion **alone**, where it used to include the
+/// `gating_rows` scan over the dab list. That scan moved into `plan_dabs`, so the `lab` figure
+/// in `RUSTROOM_DEBUG_MASK` is a slightly tighter measurement of the same thing rather than a
+/// different one.
+fn rasterize_planned(plan: &DabPlan, invert: bool, base: Option<&dyn BasePixels>) -> CoverageMap {
+    let DabPlan {
+        strokes,
+        x0,
+        y0,
+        w,
+        h,
+        outside,
+        gating_rows,
+    } = plan;
+    let (x0, y0, w, h) = (*x0, *y0, *w, *h);
+    let (outside, gating_rows) = (*outside, *gating_rows);
+    let (x1, y1) = (x0 + w, y0 + h);
+
+    // ⚠ One Oklab conversion per pixel of the box, eagerly, rather than one per pixel *per dab*.
+    // Dabs are laid a quarter of a radius apart (`SPACING`) and overlap heavily, so a lazy
+    // per-dab conversion would convert the same pixel a dozen times over. Built only when
+    // something actually gates, so a plain brush pays nothing at all.
+    let t_lab = std::time::Instant::now();
     let base_lab: Option<Vec<[f32; 3]>> = match (base, gating_rows) {
         (Some(b), Some((gy0, gy1))) => {
             // ⚠ Rayon over rows, the shape `map_pixels_xy` and the 8-bit pack already use. Each
@@ -373,7 +439,7 @@ pub fn rasterize_in(
     let d_lab = t_lab.elapsed();
     let t_dabs = std::time::Instant::now();
     let mut cov = vec![0.0f32; w * h];
-    for stroke in &strokes {
+    for stroke in strokes {
         if stroke.dabs.is_empty() || stroke.flow <= 0.0 {
             continue;
         }
@@ -505,7 +571,6 @@ pub fn rasterize_in(
         }
     }
 
-    let invert = brush.invert;
     let data = cov
         .iter()
         .map(|c| {
