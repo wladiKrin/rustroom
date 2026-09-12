@@ -24,6 +24,7 @@ mod luma_wgsl;
 mod oklab_wgsl;
 mod output_transform;
 mod quantize;
+mod shared_plane;
 mod sharpen;
 mod tone_regions;
 
@@ -46,5 +47,6 @@ pub use grading::GpuGradingStage;
 pub use hsl::GpuHslStage;
 pub use image::GpuImage;
 pub use output_transform::GpuOutputTransformStage;
+pub use shared_plane::SharedPlane;
 pub use sharpen::GpuSharpenStage;
 pub use tone_regions::GpuToneRegionsStage;

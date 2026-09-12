@@ -233,16 +233,27 @@ impl GpuBrushRaster {
         // render needs, and the copy is given `bytes` for the same reason.
         let mut staging = None;
         let mut d_stage = std::time::Duration::ZERO;
+        // ⚠⚠ **Carried beside the binding rather than produced by the match, because the no-gate
+        // arm has no image to produce** — and a `GpuImage` at a dummy size would be a lie the
+        // dimension check in `SharedPlane::take` is there to catch.
+        let mut resident: Option<crate::GpuImage> = None;
         let (base_buf, img_w, img_h, bx0, by0, has_base) = match (base, plan.gating_rows) {
             (Some(b), Some(_)) => {
                 let plane = b.plane;
                 let bytes = std::mem::size_of_val(plane) as u64;
-                let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("brush-base"),
-                    size: bytes,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
+                // ⚠⚠ **A `GpuImage`, not a bare buffer, and that is the whole of M8.3l.** Its
+                // layout is `w*h*3` f32 — bit for bit what `ImageBuf::data()` holds and what a
+                // chain uploads — and its usages are a superset of what the gate's base binding
+                // needs. So the very allocation the gate reads from can be handed on to this
+                // mask's first sub-stage instead of a second copy of the same bytes.
+                //
+                // ⚠ Declining on a length mismatch rather than assuming one: a `BaseRef` whose
+                // plane disagrees with its own dimensions is a programming error, and every path
+                // in this function fails toward the CPU.
+                if plane.len() != b.w.checked_mul(b.h)?.checked_mul(3)? {
+                    return None;
+                }
+                let img = crate::GpuImage::new(ctx, b.w, b.h)?;
                 let t_stage = std::time::Instant::now();
                 let st = ctx.cache.take_staging(device, bytes)?;
                 st.slice(..bytes)
@@ -251,6 +262,8 @@ impl GpuBrushRaster {
                 st.unmap();
                 d_stage = t_stage.elapsed();
                 staging = Some((st, bytes));
+                let buf = img.buffer.clone();
+                resident = Some(img);
                 (buf, b.w as u32, b.h as u32, b.x0 as u32, b.y0 as u32, 1u32)
             }
             _ => (storage("brush-base", &[]), 1, 1, 0, 0, 0u32),
@@ -422,6 +435,16 @@ impl GpuBrushRaster {
         if let Some((st, _)) = staging {
             ctx.cache.put_staging(st);
         }
+        // ⚠⚠ **Deposited only HERE, after `poll(Wait)` has confirmed the submission finished** —
+        // the same rule, and for the same reason, that governs when the staging buffer goes back
+        // to the pool one line above. The GPU reads this buffer during the submit, so handing it
+        // on any earlier would let the sub-stage chain mutate a plane still being read.
+        //
+        // ⚠ Whoever does not take it simply drops it at the next `begin_mask`; nothing downstream
+        // is obliged to want it, which is what keeps this an offer rather than a contract.
+        if let Some(img) = resident {
+            ctx.shared_plane().deposit(img.width(), img.height(), img);
+        }
 
         // ⚠ Narrowed here rather than in the shader, because packing four samples into one word
         // would mean four threads read-modify-writing the same address — a race. See the shader.
@@ -497,6 +520,15 @@ const MIN_GPU_BOX_PX: usize = 512 * 1024;
 /// ⚠ The trait lives in `pipeline` and is implemented here — the direction that keeps wgpu out of
 /// the CLI, `export` and all 63 goldens.
 impl pipeline::CoverageRasterizer for GpuBrushRaster {
+    /// ⚠⚠ **Guard 2 of the shared upload, and without it a cached-coverage frame renders the
+    /// PREVIOUS frame's pixels.** Such a frame rasterises nothing, so it deposits nothing — and a
+    /// sub-stage chain finding the last apply's plane still resident would take it, producing a
+    /// plausible photograph rather than an error. Clearing at the top of every apply bounds a
+    /// deposit's life to the mask that made it.
+    fn begin_mask(&self) {
+        self.ctx.shared_plane().clear();
+    }
+
     fn rasterize(
         &self,
         plan: &DabPlan,

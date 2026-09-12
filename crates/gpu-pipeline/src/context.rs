@@ -15,6 +15,17 @@ pub struct GpuContext {
     /// ⚠ The wgpu objects that outlive a render. Here rather than on `GpuChain` because
     /// `accelerate` rebuilds every chain and stage per render — see `cache.rs`.
     pub(crate) cache: crate::cache::GpuCache,
+    /// The base plane a mask's gate uploaded, offered to that mask's first sub-stage chain.
+    ///
+    /// ⚠⚠ **Here because it is the only place both participants can reach.** `GpuBrushRaster` and
+    /// `GpuChain` are built separately by `accelerate` and never meet; both hold this
+    /// `Arc<GpuContext>`.
+    ///
+    /// ⚠⚠ **Deliberately NOT part of `cache`, whose rule is the opposite.** That one exists to
+    /// outlive a render; this one must not outlive a single `MaskStage::apply`, which clears it at
+    /// the top through `CoverageRasterizer::begin_mask`. Folding it in would invite someone to
+    /// treat a stale plane as a cache hit, and a stale plane renders the previous frame's pixels.
+    shared_plane: crate::SharedPlane<crate::GpuImage>,
     adapter_name: String,
     backend: String,
 }
@@ -47,9 +58,17 @@ impl GpuContext {
             device,
             queue,
             cache: Default::default(),
+            shared_plane: Default::default(),
             adapter_name: info.name,
             backend: format!("{:?}", info.backend),
         })
+    }
+
+    /// The slot a mask's gate parks its uploaded base plane in, for that mask's first sub-stage.
+    ///
+    /// ⚠ See the field: a deposit lives only for the duration of one `MaskStage::apply`.
+    pub fn shared_plane(&self) -> &crate::SharedPlane<crate::GpuImage> {
+        &self.shared_plane
     }
 
     /// The adapter's name, for the probe and for a future Settings readout.

@@ -227,6 +227,9 @@ pub fn accelerate(
             spec,
             ctx,
             None,
+            // ⚠⚠ **True only here.** A mask's first sub-stage is the one place in the workspace
+            // that receives the very plane a coverage rasteriser was handed — see `mark_shared`.
+            true,
         );
         rejoin(p, c).into_stages()
     };
@@ -240,6 +243,9 @@ pub fn accelerate(
         spec,
         ctx,
         Some(&inner as &pipeline::SubStageAccelerator<'_>),
+        // ⚠ Nothing in the outer tail stands in a mask's relationship to a coverage rasteriser, so
+        // there is never a deposit for its chain to take.
+        false,
     )
 }
 
@@ -256,6 +262,7 @@ fn walk(
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
     inner: Option<&pipeline::SubStageAccelerator<'_>>,
+    share_input: bool,
 ) -> (Pipeline, Option<GpuChain>) {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
     // ⚠⚠ **Both halves.** A run that turns out not to be worth the transfer has to be put back,
@@ -283,7 +290,8 @@ fn walk(
             None => {
                 // ⚠ A chain followed by a CPU stage is **not** the tail's last stage, so it goes
                 // straight back into the pipeline and can never be a candidate for the byte path.
-                if let Some(c) = flush(&mut run, &mut out, ctx) {
+                if let Some(mut c) = flush(&mut run, &mut out, ctx) {
+                    mark_shared(&mut c, share_input, out.is_empty());
                     out.push(Box::new(c));
                 }
                 out.push(s);
@@ -298,7 +306,8 @@ fn walk(
         // that is a fact about the current pipeline rather than a guarantee about the next one —
         // and it is the stage that clamps, so it is what makes the output display-referred.
         Some(c) if c.last_name() == Some("output_transform") => (Pipeline::new(out), Some(c)),
-        Some(c) => {
+        Some(mut c) => {
+            mark_shared(&mut c, share_input, out.is_empty());
             out.push(Box::new(c));
             (Pipeline::new(out), None)
         }
@@ -319,6 +328,22 @@ pub fn rejoin(p: Pipeline, chain: Option<GpuChain>) -> Pipeline {
             v.push(Box::new(c));
             Pipeline::new(v)
         }
+    }
+}
+
+/// Let a chain take a mask's deposited base plane, when it is that mask's **first** sub-stage.
+///
+/// ⚠⚠ **`out.is_empty()` is what "first" means, and it is checked AT THE PUSH rather than inferred
+/// afterwards.** A finished `Vec<Box<dyn PipelineStage>>` cannot be asked which of its entries is
+/// a chain without downcasting, so the position has to be recorded where it is still known.
+///
+/// ⚠ `share_input` is true only for the recursive walk — a mask's sub-stages — because the
+/// property this rests on is `MaskStage::apply`'s: it clones the image and pipes it through its
+/// sub-stages in order, so only the first receives the plane the gate was handed. A chain at index
+/// 1 gets whatever index 0 produced, and taking the deposit there is a plausible wrong picture.
+fn mark_shared(c: &mut GpuChain, share_input: bool, is_first: bool) {
+    if share_input && is_first {
+        c.allow_shared_input();
     }
 }
 

@@ -84,6 +84,15 @@ pub struct GpuChain {
     /// collisions this repo already records. Per-chain state cannot be perturbed by anyone else.
     uploads: AtomicUsize,
     downloads: AtomicUsize,
+    /// Whether this chain may take a base plane a mask's gate deposited.
+    ///
+    /// ⚠⚠ **False unless `accelerate::walk` marked it, and only the FIRST sub-stage of a mask is
+    /// ever marked.** `MaskStage::apply` clones the image and pipes it through its sub-stages in
+    /// order, so only `stages[0]` receives the plane the gate was handed; a chain at index 1 gets
+    /// whatever index 0 produced, and taking the deposit there would render a picture that is
+    /// plausible and wrong. Opt-in means the rule is decided where the position is known — at the
+    /// push — and nowhere else.
+    take_shared: bool,
 }
 
 impl GpuChain {
@@ -93,7 +102,16 @@ impl GpuChain {
             ctx,
             uploads: AtomicUsize::new(0),
             downloads: AtomicUsize::new(0),
+            take_shared: false,
         }
+    }
+
+    /// Allow this chain to take a base plane deposited by a mask's gate, instead of uploading
+    /// its own input.
+    ///
+    /// ⚠ Called by `accelerate::walk` and by nothing else — see [`Self::take_shared`].
+    pub fn allow_shared_input(&mut self) {
+        self.take_shared = true;
     }
 
     /// Transfers **this chain** has performed, as `(uploads, downloads)`.
@@ -164,7 +182,22 @@ impl GpuChain {
     fn run_with(&self, image: &ImageBuf, mode: Download) -> Option<Vec<u8>> {
         let ctx = &self.ctx;
         let device = &ctx.device;
-        let img = GpuImage::new(ctx, image.width(), image.height())?;
+        // ⚠⚠ **The shared upload (M8.3l).** When this chain is a mask's first sub-stage, the
+        // plane it is about to upload is the one that mask's auto-mask gate uploaded moments ago —
+        // the same bytes, in the same `w*h*3` f32 layout, already resident. Taking it deletes a
+        // host memcpy and a device copy of the whole frame: ~2.1 ms and ~6-10 ms respectively at
+        // rung 3200. `take` refuses anything that is not this thread's deposit at these exact
+        // dimensions, and a refusal costs only the lock.
+        let shared = if self.take_shared {
+            ctx.shared_plane().take(image.width(), image.height())
+        } else {
+            None
+        };
+        let shared_taken = shared.is_some();
+        let img = match shared {
+            Some(img) => img,
+            None => GpuImage::new(ctx, image.width(), image.height())?,
+        };
         let bytes = img.bytes();
 
         // ── upload, once ──────────────────────────────────────────────────────────────
@@ -180,15 +213,25 @@ impl GpuChain {
         // ⚠ `slice(..bytes)` rather than `slice(..)`: the cached buffer may be **larger** than
         // this render needs, and the copy below is likewise given `bytes`. That is what makes a
         // grown buffer serving a smaller render correct by construction.
-        let staging = ctx.cache.take_staging(device, bytes)?;
-        staging
-            .slice(..bytes)
-            .get_mapped_range_mut()
-            .copy_from_slice(bytemuck::cast_slice(image.data()));
-        staging.unmap();
+        //
+        // ⚠⚠ **Skipped entirely when the plane was shared** — there is nothing to copy and no
+        // staging buffer to ask the pool for. The counter moves with it: a chain that shared its
+        // input has genuinely uploaded nothing, and `transfer_counts` must say so or the claim
+        // this milestone makes is unobservable.
         let mut enc = device.create_command_encoder(&Default::default());
-        enc.copy_buffer_to_buffer(&staging, 0, &img.buffer, 0, bytes);
-        self.uploads.fetch_add(1, Ordering::Relaxed);
+        let staging = if shared_taken {
+            None
+        } else {
+            let staging = ctx.cache.take_staging(device, bytes)?;
+            staging
+                .slice(..bytes)
+                .get_mapped_range_mut()
+                .copy_from_slice(bytemuck::cast_slice(image.data()));
+            staging.unmap();
+            enc.copy_buffer_to_buffer(&staging, 0, &img.buffer, 0, bytes);
+            self.uploads.fetch_add(1, Ordering::Relaxed);
+            Some(staging)
+        };
 
         // ── every stage, one pass ─────────────────────────────────────────────────────
         //
@@ -265,7 +308,11 @@ impl GpuChain {
         // the GPU reads this buffer during the submit, so handing it back any earlier would let
         // the next render map a buffer still being read. On the `?` paths above it is simply
         // dropped and the next render allocates; that is rare and costs one allocation.
-        ctx.cache.put_staging(staging);
+        // ⚠ Only when this render actually took one: a chain that shared its input never asked the
+        // pool and must not hand it a buffer it does not own.
+        if let Some(st) = staging {
+            ctx.cache.put_staging(st);
+        }
         Some(out)
     }
 }
