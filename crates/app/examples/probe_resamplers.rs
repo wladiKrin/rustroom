@@ -105,7 +105,16 @@ fn main() {
         .nth(1)
         .expect("usage: probe_resamplers <raw>");
     let path = std::path::Path::new(&path);
-    let opts = raw_decode::DecodeOptions::preview();
+    // ⚠⚠ **`full` picks the FULL-RESOLUTION decode, which is what 1:1 actually renders from.**
+    // Every earlier reading from this probe used `preview()` — the half-size buffer at 6.5 Mpx —
+    // and a 1:1 view renders from the 26 Mpx one, FOUR times the pixels. Quoting the preview
+    // figure as though it described the zoomed case is what made "visibly quicker at 1:1" wrong.
+    let full = std::env::args().any(|a| a == "--full");
+    let opts = if full {
+        raw_decode::DecodeOptions::linear_scene()
+    } else {
+        raw_decode::DecodeOptions::preview()
+    };
     let d = raw_decode::decode_raw(path, &opts).expect("decode");
     let buf = d.image;
     let (w, h) = (buf.width(), buf.height());
@@ -229,4 +238,70 @@ fn main() {
         "  perspective,             sequential {pseq:.1} ms vs rayon {ppar:.1} ms — {:.2}x",
         pseq / ppar
     );
+
+    // ⚠⚠ **THE ROW THAT MATTERS IS A DRAG, NOT A STAGE — M8.3q's lesson applied here.** The three
+    // rows above price each stage in isolation, and what a photographer feels is a *gesture*. A
+    // Straighten drag re-runs only the steps from `geometry` onward: the lens-correction and
+    // perspective checkpoints are keyed on edits the drag does not touch, so they stay valid.
+    //
+    // ⚠⚠ **So lens correction is CACHED throughout a Straighten drag and contributes nothing to
+    // it** — which means porting it to the GPU, item 3 of the agreed order, does not touch this
+    // symptom at all. Item 3 is the right answer to a cold render and a rung change; it is the
+    // wrong answer to "the straighten drag is slow".
+    {
+        use pipeline::{build_pipeline_split_in_region, Region};
+        // The common case: a RAW with lens corrections on (the default) and a straighten being
+        // dragged. Perspective is left out deliberately — most photographs carry none, and it
+        // would only be one more cached checkpoint the drag never reaches.
+        let drag = Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: true,
+                ..Default::default()
+            }),
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let dsteps = pipeline::build_prefix_steps(&drag, sc, shot.clone(), Resampler::default());
+        let mut checkpoints = vec![buf.clone()];
+        for step in &dsteps {
+            checkpoints.push(step.stage.apply(checkpoints.last().unwrap().clone()));
+        }
+        let mid = checkpoints.last().unwrap();
+        // ⚠ The tail renders a REGION, which is what the app does at a native rung — the prefix
+        // above does not, and that asymmetry is the finding rather than an artefact of the probe.
+        let (rw, rh) = (1400.min(mid.width()), 900.min(mid.height()));
+        let region = Region {
+            full_w: mid.width(),
+            full_h: mid.height(),
+            x0: 0,
+            y0: 0,
+        };
+        let (_, tail) = build_pipeline_split_in_region(&drag, sc, Some(region));
+        println!("\n  a drag resumes at its own step; everything upstream stays cached:");
+        for start in 0..=dsteps.len() {
+            let label = if start == dsteps.len() {
+                "a TAIL slider (nothing in the prefix re-runs)".to_string()
+            } else {
+                format!("a `{}` drag", dsteps[start].stage.name())
+            };
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let t = Instant::now();
+                let mut img = checkpoints[start].clone();
+                for step in &dsteps[start..] {
+                    img = step.stage.apply(img);
+                }
+                let sub = img.crop(0, 0, rw, rh);
+                std::hint::black_box(tail.run(sub));
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("{best:8.1} ms   {label}");
+        }
+        println!("           (the tail rendered a {rw}x{rh} region)");
+    }
 }
