@@ -118,12 +118,21 @@ fn main() {
         }
     }
 
+    // ⚠⚠ **The engine gets the real looks directory, or the creative-look row cannot exist.** The
+    // look is resolved on the render worker from `Edits.look.file`, so a bench without a
+    // `looks_dir` would render that row with **no look at all** and report a speed-up for a stage
+    // that never ran — the W5 failure mode as a benchmark.
+    let looks = dirs::config_dir().map(|c| rustroom_app::looks::LookStore::user_default(&c));
+    let first_look = looks.as_ref().and_then(|s| s.list().first().cloned());
     let engine = RenderEngine::new(
         buffer,
         opts.source_scale(),
         None,
         d.metadata.as_shot.unwrap_or_default(),
-        Default::default(),
+        rustroom_app::decode_worker::ProfileParts {
+            looks_dir: looks.as_ref().map(|s| s.dir().to_path_buf()),
+            ..Default::default()
+        },
         true,
         || {},
     );
@@ -287,20 +296,83 @@ fn main() {
         ..full_head.clone()
     };
 
-    let cases: [(&str, &Edits); 12] = [
+    // ⚠⚠ **The rows M8.3p exists for, and like M8.3n's they are deliberately NOT catalogue rows.**
+    // Re-scanned at M8.3o: **0 of 40 sidecars use the vignette and 0 use a creative look** — the
+    // look is `null` in every one. No existing row can see this milestone.
+    //
+    // ⚠ The vignette is split by shape because `probe_stages` measured the two branches **5x
+    // apart**: 8.57-9.05 ms elliptical against 40.44-45.51 for the superellipse, a `sqrt` against
+    // two `powf` and a reciprocal exponent. One row would describe neither.
+    let vignette_elliptical = Edits {
+        vignette: edit_model::Vignette {
+            amount: -60.0,
+            ..Default::default()
+        },
+        ..Edits::default()
+    };
+    let vignette_superellipse = Edits {
+        vignette: edit_model::Vignette {
+            amount: -60.0,
+            roundness: -60.0,
+            ..Default::default()
+        },
+        ..Edits::default()
+    };
+    // ⚠ The head **through** the vignette and the look: before this milestone each of them split
+    // the tail, and the look additionally left a lone `display_rendering` run the gate refused
+    // outright. This row prices the splits closing rather than either stage's own cost.
+    let whole_tail = Edits {
+        vignette: edit_model::Vignette {
+            amount: -60.0,
+            ..Default::default()
+        },
+        look: edit_model::Look {
+            file: first_look.as_ref().map(|e| e.file.clone()),
+            space: edit_model::LutSpace::SrgbDisplay,
+            strength: 100.0,
+        },
+        ..full_head.clone()
+    };
+    let look_only = Edits {
+        look: edit_model::Look {
+            file: first_look.as_ref().map(|e| e.file.clone()),
+            space: edit_model::LutSpace::SrgbDisplay,
+            strength: 100.0,
+        },
+        ..Edits::default()
+    };
+
+    let colorimetric = Edits::default();
+    let mut cases: Vec<(&str, &Edits)> = vec![
         ("TYPICAL of this catalogue", &typical),
         ("the whole per-pixel head", &full_head),
         ("texture -60 (guided)", &texture_minus),
         ("texture +60 + clarity 50", &local_contrast_both),
         ("the head THROUGH local contrast", &head_through_local),
         ("unedited, camera rendering", &neutral_rendered),
-        ("unedited, colorimetric", &Edits::default()),
+        ("unedited, colorimetric", &colorimetric),
         ("hsl only", &hsl_only),
         ("hsl + grade + sharpening", &three),
         ("1 masked HSL (gradient)", &masked_hsl),
         ("3 masked HSL (gradient)", &masked_hsl_x3),
         ("1 masked exposure — the control", &masked_exposure),
+        ("vignette -60 (elliptical)", &vignette_elliptical),
+        ("vignette -60 roundness -60", &vignette_superellipse),
     ];
+    // ⚠ Conditional, and it says so rather than silently vanishing: a look row with no `.cube`
+    // installed would measure a tail with no look in it and report a meaningless ratio.
+    match &first_look {
+        Some(e) => {
+            println!(
+                "look: {} (from {:?})\n",
+                e.file,
+                looks.as_ref().map(|s| s.dir())
+            );
+            cases.push(("creative look (sRGB display)", &look_only));
+            cases.push(("the WHOLE tail", &whole_tail));
+        }
+        None => println!("⚠ no .cube installed — the creative-look rows are SKIPPED, not zero\n"),
+    }
 
     // ⚠⚠ Two rungs, because they are different questions. **1600 is the fit texture**; **3200 is
     // what a fitted photo actually renders at on a large HiDPI window** — the interactive-rung
@@ -314,7 +386,7 @@ fn main() {
         };
         println!("── rung {max_dim} — whole image, ~{mpx:.1} Mpx");
         println!("  case                              cpu        gpu     speed-up   saved");
-        for (label, edits) in cases {
+        for (label, edits) in cases.iter().copied() {
             let off = FrameSpec {
                 max_dim,
                 region: None,
