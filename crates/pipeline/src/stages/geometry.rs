@@ -2,6 +2,7 @@ use crate::resample::{self, Resampler, Weights};
 use crate::PipelineStage;
 use core_image::ImageBuf;
 use edit_model::{CropRect, Geometry, Orientation, Quarter};
+use rayon::prelude::*;
 
 /// Orient (quarter turns and mirroring), straighten (a resampled rotation about the centre),
 /// then crop to a normalized rectangle.
@@ -79,24 +80,44 @@ impl PipelineStage for GeometryStage {
 }
 
 /// Rotate about the image center by `angle_rad`, keeping the canvas size.
+///
+/// ⚠⚠ **Parallel over OUTPUT rows, and that is bit-identical rather than merely close.** This is a
+/// **gather**: an output pixel reads the whole source and writes only itself, so no two threads
+/// write the same byte and none reads another's output. The float operations are therefore the
+/// same operations in the same order as the sequential form — which is what lets the 63 goldens
+/// stand as the check on it, exactly as they do for `LensCorrectionStage`'s own rayon port.
+///
+/// ⚠ Measured at a native rung (3123x2085, Catmull-Rom, 8 threads): **160.5 ms sequential against
+/// 33.1 ms here, 4.85x**. The sequential form was a deliberate choice that predated anyone
+/// measuring it — `perspective.rs` recorded "if this ever needs to be faster, both should move
+/// together", and they moved together.
 fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
     let w = src.width();
     let h = src.height();
     let cx = (w as f32 - 1.0) / 2.0;
     let cy = (h as f32 - 1.0) / 2.0;
     let (sin, cos) = angle_rad.sin_cos();
-    let mut out = ImageBuf::new(w, h);
-    for y in 0..h {
-        for x in 0..w {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            // Inverse map: sample the source at -angle.
-            let sx = cx + dx * cos + dy * sin;
-            let sy = cy - dx * sin + dy * cos;
-            out.set_pixel(x, y, resample::sample(src, sx, sy, weights));
-        }
+    const CH: usize = ImageBuf::CHANNELS;
+    let stride = w * CH;
+    let mut data = vec![0.0f32; w * h * CH];
+    // ⚠ `par_chunks_exact_mut(0)` PANICS, and a zero-width image reaches here. The same guard
+    // `map_pixels_xy` and `LensCorrectionStage` already carry.
+    if stride == 0 {
+        return ImageBuf::from_vec(w, h, data);
     }
-    out
+    data.par_chunks_exact_mut(stride)
+        .enumerate()
+        .for_each(|(y, orow)| {
+            for (x, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cy;
+                // Inverse map: sample the source at -angle.
+                let sx = cx + dx * cos + dy * sin;
+                let sy = cy - dx * sin + dy * cos;
+                *out = resample::sample(src, sx, sy, weights);
+            }
+        });
+    ImageBuf::from_vec(w, h, data)
 }
 
 /// Crop to the normalized rectangle; a full-frame rect returns the image unchanged.
