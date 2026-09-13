@@ -4,7 +4,7 @@ use crate::{
     GpuChain, GpuContext, GpuContrastStage, GpuDisplayRenderingStage, GpuExposureStage,
     GpuGradingStage, GpuHslStage, GpuLocalContrastStage, GpuOutputTransformStage,
     GpuSaturationStage, GpuSharpenStage, GpuStage, GpuToneCurveStage, GpuToneRegionsStage,
-    GpuWhiteBalanceStage,
+    GpuVignetteStage, GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, ProfileRendering, Region, RenderScale, RenderSpec};
@@ -27,6 +27,12 @@ use std::sync::Arc;
 /// ProPhoto for a soft proof. ⚠ The whole spec rather than just the space, because it also
 /// carries the white-balance `baseline` that stage will need — one signature change instead of
 /// two.
+/// ⚠⚠ **`Option`, so a builder may DECLINE.** `creative_look` is built from the profile's parsed
+/// `.cube`, which the tail also needed in order to have placed the stage at all — but "the tail and
+/// this call were handed the same profile" is an invariant across two calls rather than something
+/// the types say. Declining leaves the CPU stage in place, which is the gate's own rule: fail
+/// toward the CPU, where a wrong answer costs milliseconds and never pixels. An `expect` here
+/// would panic on a render worker instead.
 type Builder = fn(
     &Edits,
     RenderScale,
@@ -40,7 +46,7 @@ type Builder = fn(
     ProfileRendering<'_>,
     RenderSpec,
     &Arc<GpuContext>,
-) -> Box<dyn GpuStage>;
+) -> Option<Box<dyn GpuStage>>;
 
 /// The stages this can replace, by the name `PipelineStage::name` reports.
 ///
@@ -60,61 +66,93 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // rather than from `Edits` alone. `white_balance_gains` is shared with `adjustment_stages`,
     // so the GPU and CPU stages cannot disagree about what "as shot" means.
     ("white_balance", |e, _, _, _, spec, ctx| {
-        Box::new(GpuWhiteBalanceStage::new(
+        Some(Box::new(GpuWhiteBalanceStage::new(
             pipeline::white_balance_gains(&e.white_balance, spec.baseline),
             ctx,
-        ))
+        )))
     }),
     ("exposure", |e, _, _, _, _, ctx| {
-        Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
+        Some(Box::new(GpuExposureStage::new(e.exposure, ctx.clone())))
     }),
     // ⚠⚠ Between `exposure` and `tone_regions`, which is the whole reason 1.2 ms is worth
     // porting: on the CPU it split the per-pixel head into two runs the gate refused.
     ("contrast", |e, _, _, _, _, ctx| {
-        Box::new(GpuContrastStage::new(e.contrast, ctx))
+        Some(Box::new(GpuContrastStage::new(e.contrast, ctx)))
     }),
     ("tone_regions", |e, _, _, _, _, ctx| {
-        Box::new(GpuToneRegionsStage::new(e, ctx))
+        Some(Box::new(GpuToneRegionsStage::new(e, ctx)))
     }),
     // ⚠ After `tone_regions`, as in the tail. Like `contrast`, it sits between ported stages and
     // split the per-pixel head before this milestone.
     ("tone_curve", |e, _, _, _, _, ctx| {
-        Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx))
+        Some(Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx)))
     }),
     // ⚠⚠ **The last stage that could split a mask's sub-stage chain**, and the last that could
     // take the LEADING position and deny a mask M8.3l's shared upload. Takes the render scale,
     // because both bands' radii are in full-resolution pixels.
     ("local_contrast", |e, scale, _, _, _, ctx| {
-        Box::new(GpuLocalContrastStage::new(&e.local_contrast, scale, ctx))
+        Some(Box::new(GpuLocalContrastStage::new(
+            &e.local_contrast,
+            scale,
+            ctx,
+        )))
     }),
     // ⚠ Before `hsl`, as in the tail — colour follows tone.
     ("saturation", |e, _, _, _, _, ctx| {
-        Box::new(GpuSaturationStage::new(e.saturation, e.vibrance, ctx))
+        Some(Box::new(GpuSaturationStage::new(
+            e.saturation,
+            e.vibrance,
+            ctx,
+        )))
     }),
     ("hsl", |e, _, _, _, _, ctx| {
-        Box::new(GpuHslStage::new(&e.hsl, ctx))
+        Some(Box::new(GpuHslStage::new(&e.hsl, ctx)))
     }),
     ("color_grading", |e, _, _, _, _, ctx| {
-        Box::new(GpuGradingStage::new(&e.color_grading, ctx))
+        Some(Box::new(GpuGradingStage::new(&e.color_grading, ctx)))
     }),
     ("sharpening", |e, scale, _, _, _, ctx| {
-        Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx))
+        Some(Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx)))
+    }),
+    // ⚠⚠ **After `sharpening`, as in the tail — and the ONLY row that reads the region.** Its
+    // falloff is measured against the whole frame, so a region render must be shaded exactly as
+    // that part of the whole would have been; passing `None` here would re-centre the vignette on
+    // whatever slice is on screen and slide it across the picture as you pan.
+    ("vignette", |e, _, region, _, _, ctx| {
+        Some(Box::new(GpuVignetteStage::new(&e.vignette, region, ctx)))
     }),
     // ⚠⚠ The only row built from something other than `Edits`. ⚠ `effective_profile_curve` is
     // what the CPU tail applies before constructing this stage — skipping it would render every
     // camera whose profile declares an identity curve differently from the CPU, which is most of
     // them, the X-T4 included.
     ("display_rendering", |_, _, _, profile, _, ctx| {
-        Box::new(GpuDisplayRenderingStage::new(
+        Some(Box::new(GpuDisplayRenderingStage::new(
             pipeline::effective_profile_curve(profile.curve),
             profile.baseline_ev,
             ctx,
-        ))
+        )))
+    }),
+    // ⚠⚠ **Between `display_rendering` and `output_transform`, as in the tail — which is the
+    // position that matters most in this table.** A creative look sitting on the CPU is what made
+    // a lone `display_rendering` run possible at all, and that run is the one case
+    // `TRANSFER_COST`'s doc records as sitting inside the float band and being refused.
+    //
+    // ⚠ The only row that can DECLINE: the cube comes from the profile, and the tail placed this
+    // stage only because it had one. Declining leaves the CPU stage rather than panicking.
+    ("creative_look", |e, _, _, profile, _, ctx| {
+        profile.look.map(|cube| {
+            Box::new(crate::GpuCreativeLookStage::new(
+                cube,
+                e.look.space,
+                e.look.strength,
+                ctx,
+            )) as Box<dyn GpuStage>
+        })
     }),
     // ⚠ Last, as in the tail — and the only stage here that is on **every** photograph, which is
     // what the cost gate exists to keep honest.
     ("output_transform", |_, _, _, _, spec, ctx| {
-        Box::new(GpuOutputTransformStage::new(spec.space, ctx))
+        Some(Box::new(GpuOutputTransformStage::new(spec.space, ctx)))
     }),
 ];
 
@@ -395,8 +433,14 @@ fn walk(
             s.accelerate_inner(f);
             s.set_coverage_rasterizer(&coverage);
         }
-        match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
-            Some((_, build)) => run.push((build(edits, scale, region, profile, spec, ctx), s)),
+        match REPLACEABLE
+            .iter()
+            .find(|(n, _)| *n == s.name())
+            .and_then(|(_, build)| build(edits, scale, region, profile, spec, ctx))
+        {
+            // ⚠ `and_then`, so a builder that declines falls through to the CPU arm below rather
+            // than being treated as a replaceable stage with nothing behind it.
+            Some(g) => run.push((g, s)),
             None => {
                 // ⚠ A chain followed by a CPU stage is **not** the tail's last stage, so it goes
                 // straight back into the pipeline and can never be a candidate for the byte path.
@@ -1805,6 +1849,204 @@ mod tests {
         names.iter().filter(|n| **n == "gpu_chain").count()
     }
 
+    /// A `.cube` for the look, so `creative_look` is actually in the tail.
+    fn a_cube() -> std::sync::Arc<pipeline::lut::Cube> {
+        std::sync::Arc::new(
+            pipeline::lut::Cube::parse(
+                "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
+            )
+            .expect("the fixture cube parses"),
+        )
+    }
+
+    /// An `Edits` that switches on every tail stage this table can replace.
+    ///
+    /// ⚠ Hand-built here rather than borrowed from `pipeline`'s own `all_edits`, which is private
+    /// to that crate's tests. What stops it going stale is the completeness assertion in
+    /// `every_tail_stage_is_replaceable_or_a_mask`, not care.
+    fn every_tail_stage() -> Edits {
+        let mut hsl = edit_model::Hsl::default();
+        hsl.bands[0].saturation = 20.0;
+        Edits {
+            white_balance: edit_model::WhiteBalance {
+                kelvin: Some(4000.0),
+                tint: 5.0,
+            },
+            exposure: 0.5,
+            contrast: 10.0,
+            whites: 5.0,
+            blacks: -5.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            saturation: 10.0,
+            hsl,
+            color_grading: edit_model::ColorGrading {
+                shadows: edit_model::GradeWheel {
+                    hue: 240.0,
+                    saturation: 40.0,
+                    luminance: -15.0,
+                },
+                ..Default::default()
+            },
+            local_contrast: edit_model::LocalContrast {
+                texture: 40.0,
+                clarity: -25.0,
+            },
+            vignette: edit_model::Vignette {
+                amount: -30.0,
+                ..Default::default()
+            },
+            sharpening: edit_model::Sharpening {
+                amount: 60.0,
+                ..Default::default()
+            },
+            rendering: Some(edit_model::Rendering::Camera),
+            look: edit_model::Look {
+                file: Some("x.cube".into()),
+                space: edit_model::LutSpace::SrgbDisplay,
+                strength: 100.0,
+            },
+            ..Edits::default()
+        }
+    }
+
+    /// The tail for [`every_tail_stage`], with the cube supplied.
+    fn full_tail(e: &Edits, cube: Option<&std::sync::Arc<pipeline::lut::Cube>>) -> Pipeline {
+        pipeline::build_pipeline_split_in_region_with_brush(
+            e,
+            SCALE,
+            None,
+            None,
+            RenderSpec::default(),
+            None,
+            ProfileRendering {
+                look: cube,
+                ..ProfileRendering::default()
+            },
+        )
+        .1
+    }
+
+    /// ⚠⚠ **THE MILESTONE'S HEADLINE AS A TEST: after M8.3p a tail contains nothing this table
+    /// cannot replace except a mask.** The vignette and the creative look were the last two stages
+    /// that could split it, and with both ported the property is worth asserting rather than
+    /// describing — a stage added to the tail without a `REPLACEABLE` row silently reintroduces a
+    /// split, and nothing else would notice.
+    ///
+    /// ⚠ `mask` is excepted because `accelerate` recurses *into* it rather than replacing it: it
+    /// keeps its name and its position by design, which is what `merging_preserves_order` rests on.
+    #[test]
+    fn every_tail_stage_is_replaceable_or_a_mask() {
+        let cube = a_cube();
+        let e = every_tail_stage();
+        let names = full_tail(&e, Some(&cube)).stage_names();
+        // ⚠⚠ **The fixture check, and it is what stops this going stale.** The fixture is
+        // hand-built, so a row added to `REPLACEABLE` with no field here would leave the property
+        // asserted over a tail that never contained the new stage. Asserting the tail carries
+        // **every** replaceable name makes that a failure rather than a silence.
+        for (n, _) in REPLACEABLE {
+            assert!(
+                names.contains(n),
+                "fixture check: `every_tail_stage` must switch on {n}, got {names:?}"
+            );
+        }
+        for n in &names {
+            assert!(
+                *n == "mask" || REPLACEABLE.iter().any(|(r, _)| r == n),
+                "{n} is in the tail and is neither replaceable nor a mask: {names:?}"
+            );
+        }
+    }
+
+    /// ⚠⚠ **And its consequence: an unmasked tail is now exactly ONE chain and one round trip.**
+    /// Before this milestone a photograph carrying a vignette paid two, and one carrying a creative
+    /// look paid two more — with a lone `display_rendering` run between them that the gate then
+    /// refused outright, leaving 25.7 ms of ported work stranded on the CPU.
+    #[test]
+    fn an_unmasked_tail_is_exactly_one_chain() {
+        let Some(ctx) = ctx() else { return };
+        let cube = a_cube();
+        let e = every_tail_stage();
+        let after = accel(
+            full_tail(&e, Some(&cube)),
+            &e,
+            SCALE,
+            ProfileRendering {
+                look: Some(&cube),
+                ..ProfileRendering::default()
+            },
+            RenderSpec::default(),
+            &ctx,
+        )
+        .stage_names();
+        assert_eq!(chains(&after), 1, "one chain, one round trip: {after:?}");
+        assert_eq!(
+            after.len(),
+            1,
+            "and nothing beside it — every tail stage joined it: {after:?}"
+        );
+    }
+
+    /// ⚠⚠ **The carrier for the region, and nothing else can see it.** `GpuVignetteStage`'s own
+    /// `a_region_is_shaded_as_that_part_of_the_whole` proves the *stage* honours a region; it says
+    /// nothing about whether this table's row **passes** one. A row built with `None` would render
+    /// a perfectly plausible photograph whose vignette is centred on whatever slice is on screen
+    /// and slides across the picture as you pan — the M8.3k region-origin failure in a new place.
+    #[test]
+    fn the_vignette_row_carries_the_region() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits {
+            vignette: edit_model::Vignette {
+                amount: -80.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        // A region well away from the frame's centre, so the falloff there is nothing like the
+        // falloff a region-less stage would compute from the slice's own middle.
+        let region = Region {
+            full_w: 64,
+            full_h: 48,
+            x0: 40,
+            y0: 30,
+        };
+        let img = || {
+            let mut px = Vec::with_capacity(20 * 16 * 3);
+            for i in 0..20 * 16 {
+                let t = (i % 97) as f32 / 97.0;
+                px.extend_from_slice(&[t, t * 0.9, t * 1.1]);
+            }
+            core_image::ImageBuf::from_vec(20, 16, px)
+        };
+        let render = |r: Option<Region>| {
+            let tail = pipeline::build_pipeline_split_in_region(&e, SCALE, r).1;
+            let (p, c) = accelerate(
+                tail,
+                &e,
+                SCALE,
+                r,
+                ProfileRendering::default(),
+                RenderSpec::default(),
+                &ctx,
+            );
+            rejoin(p, c).run(img())
+        };
+        let want = pipeline::build_pipeline_split_in_region(&e, SCALE, Some(region))
+            .1
+            .run(img());
+        let with = render(Some(region));
+        let without = render(None);
+        // ⚠ The fixture check: the region must actually change the answer, or "it carries the
+        // region" is asserted over a case where carrying it makes no difference.
+        assert!(
+            crate::compare(&want, &without).worst_levels > 4.0,
+            "fixture check: this region must change the vignette"
+        );
+        let d = crate::compare(&want, &with);
+        assert!(d.worst_levels < 1.0, "the region was not carried: {d:?}");
+    }
+
     #[test]
     fn the_replaceable_names_occur_at_most_once_in_a_tail() {
         // ⚠⚠ This is what makes name-matching sound, and it is a real property rather than an
@@ -1887,18 +2129,23 @@ mod tests {
         // every replaceable stage regardless of position would pass it — and would run the CPU
         // stage's work in the wrong order, producing a plausible photograph rather than an error.
         //
-        // ⚠ **Re-aimed at the VIGNETTE at M8.3d.** It used to use the colour grade, which stopped
-        // being a CPU stage when that was accelerated — so the fixture check below would have
-        // failed loudly rather than the test going quietly vacuous, but the rule it guards is
-        // unchanged and only its example moved. The vignette runs after sharpening and is not
-        // replaceable, so it still splits a run.
+        // ⚠⚠ **Re-aimed TWICE, and the second time is the interesting one.** It used the colour
+        // grade until M8.3d and the **vignette** until M8.3p, and each stopped being a CPU stage
+        // the moment it was ported. The wedge is a **mask** now, which is the last stage the outer
+        // tail contains that `REPLACEABLE` cannot reach — `accelerate` recurses *into* it, so it
+        // keeps its name and its position and still splits the run. Nothing else can play this
+        // part any more, and that is the fourth time this crate has watched a property become
+        // unconstructible by being fixed.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.vignette.amount = -40.0;
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            exposure: 0.4,
+            ..Default::default()
+        })];
         let tail = tail_of(&e);
         let before = tail.stage_names();
         assert!(
-            before.contains(&"vignette"),
+            before.contains(&"mask"),
             "fixture check: an unaccelerated stage must sit between them, got {before:?}"
         );
         let after = accel(
@@ -1920,10 +2167,14 @@ mod tests {
     #[test]
     fn merging_preserves_order() {
         // ⚠ A regrouping, never a reordering. The non-replaceable stage must keep its position
-        // relative to the chains around it. ⚠ Re-aimed at the vignette at M8.3d, with the grade.
+        // relative to the chains around it. ⚠ Re-aimed at the vignette at M8.3d and at a **mask**
+        // at M8.3p, for the reason written out on the test above.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.vignette.amount = -40.0;
+        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+            exposure: 0.4,
+            ..Default::default()
+        })];
         let after = accel(
             tail_of(&e),
             &e,
@@ -1933,10 +2184,10 @@ mod tests {
             &ctx,
         )
         .stage_names();
-        let grade = after
+        let wedge = after
             .iter()
-            .position(|n| *n == "vignette")
-            .expect("the vignette is kept");
+            .position(|n| *n == "mask")
+            .expect("the mask is kept");
         let at: Vec<usize> = after
             .iter()
             .enumerate()
@@ -1945,8 +2196,8 @@ mod tests {
             .collect();
         assert_eq!(at.len(), 2, "{after:?}");
         assert!(
-            at[0] < grade && grade < at[1],
-            "the grade must stay between the two chains, got {after:?}"
+            at[0] < wedge && wedge < at[1],
+            "the mask must stay between the two chains, got {after:?}"
         );
     }
 
