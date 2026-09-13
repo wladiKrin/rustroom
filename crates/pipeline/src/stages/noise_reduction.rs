@@ -11,18 +11,18 @@ use rayon::prelude::*;
 /// Guided-filter window radius, in **full-resolution** pixels: the scale of the noise
 /// grain we are averaging out. Not user-exposed — Detail already exposes the quality
 /// trade-off, and a second knob here buys nothing.
-const LUM_RADIUS_FULL: f32 = 6.0;
+pub const LUM_RADIUS_FULL: f32 = 6.0;
 /// Chroma blur radius at Smoothness 0 and 100, in full-resolution pixels. Far larger than
 /// the luminance radius: chroma is genuinely low-frequency in real images, so a wide blur
 /// costs almost no visible detail.
-const COL_RADIUS_FULL: (f32, f32) = (8.0, 32.0);
+pub const COL_RADIUS_FULL: (f32, f32) = (8.0, 32.0);
 /// `eps` at Detail 0 and Detail 100 — the local variance below which a neighbourhood
 /// counts as noise rather than structure.
 const EPS_AT_DETAIL_0: f32 = 1e-3;
 const EPS_AT_DETAIL_100: f32 = 1e-5;
 /// Two box passes approximate a Gaussian closely enough to avoid the cross-shaped
 /// artifact a single box blur leaves, and cost nothing asymptotically.
-const CHROMA_PASSES: usize = 2;
+pub const CHROMA_PASSES: usize = 2;
 
 /// Convert a full-resolution radius to the resolution actually being rendered. Never
 /// returns 0: that would silently turn the filter off at small preview scales.
@@ -32,13 +32,13 @@ fn scaled_radius(full_px: f32, scale: RenderScale) -> usize {
 
 /// The guided filter's noise/structure threshold, from the Detail slider. Interpolated
 /// geometrically because the quantity spans two decades.
-fn eps_for_detail(detail: f32) -> f32 {
+pub fn eps_for_detail(detail: f32) -> f32 {
     let t = (detail / 100.0).clamp(0.0, 1.0);
     EPS_AT_DETAIL_0 * (EPS_AT_DETAIL_100 / EPS_AT_DETAIL_0).powf(t)
 }
 
 /// Chroma blur radius in full-resolution pixels, from the Smoothness slider.
-fn chroma_radius_full(smoothness: f32) -> f32 {
+pub fn chroma_radius_full(smoothness: f32) -> f32 {
     let t = (smoothness / 100.0).clamp(0.0, 1.0);
     COL_RADIUS_FULL.0 + (COL_RADIUS_FULL.1 - COL_RADIUS_FULL.0) * t
 }

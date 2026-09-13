@@ -140,6 +140,16 @@ pub use stages::local_contrast::{
 };
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
+// ⚠⚠ Re-exported so `gpu-pipeline` SUBSTITUTES these into WGSL rather than transcribing them.
+// A substituted constant cannot disagree; a transcribed one is merely checked for agreeing —
+// and `color`'s own doc records six copies of a Rec.709 luma triple that all went wrong on one
+// day. The same rule the `dehaze` block above follows.
+// ⚠ `CHROMA_PASSES` is ALIASED on the way out: a bare name gives a reader no way to tell which
+// stage's passes it counts, and `display_rendering` already exports a `CHROMA_BOOST` beside it.
+pub use stages::noise_reduction::{
+    chroma_radius_full, eps_for_detail, CHROMA_PASSES as NR_CHROMA_PASSES, COL_RADIUS_FULL,
+    LUM_RADIUS_FULL,
+};
 pub use stages::output_transform::OutputTransform;
 pub use stages::saturation::{SaturationStage, EPS as SATURATION_EPS};
 pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
