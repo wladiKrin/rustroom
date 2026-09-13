@@ -39,12 +39,28 @@ fn main() {
         })
         .collect();
 
-    println!("{w}x{h} ({:.1} Mpx), plane = {:.1} MB", n as f64 / 1e6, (n * 4) as f64 / 1e6);
+    println!(
+        "{w}x{h} ({:.1} Mpx), plane = {:.1} MB",
+        n as f64 / 1e6,
+        (n * 4) as f64 / 1e6
+    );
     println!();
     println!("radii the stage actually asks for, at RenderScale::FULL:");
-    println!("  texture  gaussian_blur(sigma 2)   -> kernel_radius   {:>3} ({} taps)", kernel_radius(2.0), 2 * kernel_radius(2.0) + 1);
-    println!("  texture  guided_filter            -> box radius      {:>3} ({} taps)", wide_blur_radius(2.0).max(1), 2 * wide_blur_radius(2.0).max(1) + 1);
-    println!("  clarity  wide_blur(sigma 40)      -> box radius      {:>3} ({} taps)", wide_blur_radius(40.0), 2 * wide_blur_radius(40.0) + 1);
+    println!(
+        "  texture  gaussian_blur(sigma 2)   -> kernel_radius   {:>3} ({} taps)",
+        kernel_radius(2.0),
+        2 * kernel_radius(2.0) + 1
+    );
+    println!(
+        "  texture  guided_filter            -> box radius      {:>3} ({} taps)",
+        wide_blur_radius(2.0).max(1),
+        2 * wide_blur_radius(2.0).max(1) + 1
+    );
+    println!(
+        "  clarity  wide_blur(sigma 40)      -> box radius      {:>3} ({} taps)",
+        wide_blur_radius(40.0),
+        2 * wide_blur_radius(40.0) + 1
+    );
     println!();
 
     let r_clarity = wide_blur_radius(40.0);
@@ -71,10 +87,17 @@ fn main() {
     let t_self = time(|| self_guided(&plane, w, h, r_tex, 2e-4));
     println!("self-guided, duplicate blurs removed:");
     println!("  guided_filter  (4 stat blurs)  {t_full:6.2} ms");
-    println!("  self_guided    (2 stat blurs)  {t_self:6.2} ms   ({:+.1}%)", (t_self / t_full - 1.0) * 100.0);
+    println!(
+        "  self_guided    (2 stat blurs)  {t_self:6.2} ms   ({:+.1}%)",
+        (t_self / t_full - 1.0) * 100.0
+    );
     let a = guided_filter(&plane, &plane, w, h, r_tex, 2e-4);
     let b = self_guided(&plane, w, h, r_tex, 2e-4);
-    let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+    let worst = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
     println!("  worst difference between them: {worst:e}   (0 means bit-identical)");
 }
 

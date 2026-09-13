@@ -174,8 +174,12 @@ impl GpuStage for BoxProbe {
         // not one per pixel, and dispatching w*h threads for 2136 rows of work would price the
         // scheduler rather than the algorithm.
         let per_pixel = (row_groups, col_groups);
-        let per_row = (img.height() as u32).div_ceil(WORKGROUP).min(MAX_GROUPS_PER_DIM);
-        let per_col = (img.width() as u32).div_ceil(WORKGROUP).min(MAX_GROUPS_PER_DIM);
+        let per_row = (img.height() as u32)
+            .div_ceil(WORKGROUP)
+            .min(MAX_GROUPS_PER_DIM);
+        let per_col = (img.width() as u32)
+            .div_ceil(WORKGROUP)
+            .min(MAX_GROUPS_PER_DIM);
         let mut names: Vec<&str> = vec!["seed"];
         let mut groups: Vec<(u32, u32)> = vec![per_pixel];
         for _ in 0..self.passes {
@@ -288,7 +292,11 @@ mod tests {
         let ctx: Arc<GpuContext> = ctx.clone();
         let (w, h) = (3200usize, 2136);
         let img = scene(w, h);
-        println!("{w}x{h} ({:.1} Mpx) on {}", (w * h) as f64 / 1e6, ctx.adapter_name());
+        println!(
+            "{w}x{h} ({:.1} Mpx) on {}",
+            (w * h) as f64 / 1e6,
+            ctx.adapter_name()
+        );
 
         let run = |r: u32, passes: usize, running: bool| -> f64 {
             let mut best = f64::MAX;
@@ -326,7 +334,10 @@ mod tests {
         let base = run(0, 0, false);
         println!("  transfer only (0 passes)          {base:6.2} ms");
         println!();
-        println!("  {:<30} {:>8} {:>8}   {:>6}", "", "naive", "running", "CPU");
+        println!(
+            "  {:<30} {:>8} {:>8}   {:>6}",
+            "", "naive", "running", "CPU"
+        );
         for (label, r, passes, cpu) in [
             ("clarity  wide_blur r=40 x3", 40u32, 3usize, 13.5f64),
             ("texture  guided    r=2  x4", 2, 4, 28.0),

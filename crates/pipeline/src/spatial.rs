@@ -277,13 +277,35 @@ pub fn guided_filter(p: &[f32], guide: &[f32], w: usize, h: usize, r: usize, eps
     assert_eq!(p.len(), w * h, "p size mismatch");
     assert_eq!(guide.len(), w * h, "guide size mismatch");
 
-    let guide_sq: Vec<f32> = guide.iter().map(|v| v * v).collect();
-    let cross: Vec<f32> = guide.iter().zip(p).map(|(g, v)| g * v).collect();
+    // ⚠⚠ **When `p` IS `guide`, `mean_p` is `mean_guide` and `cross` is `guide_sq`** — so the
+    // general form computes four statistic box blurs where two suffice, and builds two
+    // whole-image temporaries it does not need. Both self-guided callers (noise reduction and
+    // negative Texture) pay that today.
+    //
+    // Measured at 3200x2136: **40.6 -> 28.3 ms, and bit-identical**, because the arithmetic that
+    // survives is the same arithmetic in the same order. Dehaze uses the general form — it
+    // filters the transmission map guided by luma — and is untouched.
+    //
+    // ⚠ Detected by **pointer identity**, not by comparing contents: comparing would cost a full
+    // pass over the data to save two, and two callers that mean "the same plane" pass the same
+    // slice. A caller passing an equal-but-distinct plane simply takes the general path, which is
+    // correct and merely slower — the check fails toward doing more work, never toward doing the
+    // wrong work.
+    let self_guided = std::ptr::eq(p.as_ptr(), guide.as_ptr()) && p.len() == guide.len();
 
+    let guide_sq: Vec<f32> = guide.iter().map(|v| v * v).collect();
     let mean_guide = box_blur(guide, w, h, r);
-    let mean_p = box_blur(p, w, h, r);
     let mean_guide_sq = box_blur(&guide_sq, w, h, r);
-    let mean_cross = box_blur(&cross, w, h, r);
+
+    // ⚠ Borrowed rather than cloned in the self-guided case: a clone would hand back the ~27 MB
+    // per plane that the skipped blurs were the point of not spending.
+    let mean_p_owned = (!self_guided).then(|| box_blur(p, w, h, r));
+    let mean_cross_owned = (!self_guided).then(|| {
+        let cross: Vec<f32> = guide.iter().zip(p).map(|(g, v)| g * v).collect();
+        box_blur(&cross, w, h, r)
+    });
+    let mean_p: &[f32] = mean_p_owned.as_deref().unwrap_or(&mean_guide);
+    let mean_cross: &[f32] = mean_cross_owned.as_deref().unwrap_or(&mean_guide_sq);
 
     let mut slope = Vec::with_capacity(p.len());
     let mut offset = Vec::with_capacity(p.len());
@@ -890,6 +912,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The **general** form, frozen verbatim as it stood before the self-guided shortcut.
+    ///
+    /// ⚠⚠ It must NEVER be updated to match `guided_filter`. If the two disagree, that is the
+    /// finding — the shortcut's whole claim is that the arithmetic which survives is the same
+    /// arithmetic in the same order. The `rasterize_in` frozen copy (M8.3i) is the precedent, and
+    /// its first draft's mistake was to *call* the function under test, which compares it against
+    /// itself and passes forever.
+    fn guided_filter_general_reference(
+        p: &[f32],
+        guide: &[f32],
+        w: usize,
+        h: usize,
+        r: usize,
+        eps: f32,
+    ) -> Vec<f32> {
+        let guide_sq: Vec<f32> = guide.iter().map(|v| v * v).collect();
+        let cross: Vec<f32> = guide.iter().zip(p).map(|(g, v)| g * v).collect();
+
+        let mean_guide = box_blur(guide, w, h, r);
+        let mean_p = box_blur(p, w, h, r);
+        let mean_guide_sq = box_blur(&guide_sq, w, h, r);
+        let mean_cross = box_blur(&cross, w, h, r);
+
+        let mut slope = Vec::with_capacity(p.len());
+        let mut offset = Vec::with_capacity(p.len());
+        for (((&mg, &mp), &mgsq), &mc) in mean_guide
+            .iter()
+            .zip(mean_p.iter())
+            .zip(mean_guide_sq.iter())
+            .zip(mean_cross.iter())
+        {
+            let var = (mgsq - mg * mg).max(0.0);
+            let cov = mc - mg * mp;
+            let s = cov / (var + eps);
+            slope.push(s);
+            offset.push(mp - s * mg);
+        }
+
+        let mean_slope = box_blur(&slope, w, h, r);
+        let mean_offset = box_blur(&offset, w, h, r);
+        mean_slope
+            .iter()
+            .zip(mean_offset.iter())
+            .zip(guide.iter())
+            .map(|((&ms, &mo), &g)| ms * g + mo)
+            .collect()
+    }
+
+    #[test]
+    fn the_self_guided_shortcut_is_bit_identical() {
+        // ⚠ The fixture needs real structure at the filter's own scale, or every implementation
+        // agrees: on a flat plane the variance is 0 everywhere and `slope` is 0 whatever the
+        // statistics say. `noisy_plane` carries a step plus noise for exactly that reason.
+        let (w, h) = (48usize, 32usize);
+        let p = noisy_plane(w, h);
+        for (r, eps) in [
+            (1usize, 2e-4f32),
+            (2, 2e-4),
+            (3, 1e-3),
+            (6, 1e-4),
+            (12, 1e-5),
+        ] {
+            let want = guided_filter_general_reference(&p, &p, w, h, r, eps);
+            let got = guided_filter(&p, &p, w, h, r, eps);
+            assert_eq!(
+                want, got,
+                "the self-guided shortcut must be bit-identical at r={r} eps={eps}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cross_guided_call_still_takes_the_general_path() {
+        // ⚠⚠ The other half, and the one a self-guided test structurally cannot see: dehaze
+        // filters the transmission map guided by luma, so `p != guide` and all four statistic
+        // blurs are genuinely needed. A shortcut that fired unconditionally would return
+        // `mean_guide` where `mean_p` belongs — a smooth, plausible transmission map that is
+        // simply the wrong one.
+        let (w, h) = (48usize, 32usize);
+        let guide = noisy_plane(w, h);
+        let blurry: Vec<f32> = guide.iter().map(|v| 0.4 + v * 0.2).collect();
+        let want = guided_filter_general_reference(&blurry, &guide, w, h, 4, 1e-6);
+        let got = guided_filter(&blurry, &guide, w, h, 4, 1e-6);
+        assert_eq!(
+            want, got,
+            "a cross-guided call must be untouched by the shortcut"
+        );
     }
 
     #[test]
