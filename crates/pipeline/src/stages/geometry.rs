@@ -120,14 +120,30 @@ fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
     ImageBuf::from_vec(w, h, data)
 }
 
-/// Crop to the normalized rectangle; a full-frame rect returns the image unchanged.
-fn apply_crop(image: ImageBuf, c: &CropRect) -> ImageBuf {
-    let w = image.width();
-    let h = image.height();
+/// The crop's pixel bounds `(x0, y0, x1, y1)` in an image of `w` x `h`.
+///
+/// ⚠⚠ **The one rule, read by both [`apply_crop`] and `GeometryStage::output_dims`.** Two
+/// derivations of where the crop starts is how a predicted output size and the real one come to
+/// disagree — and a region-scoped render would then rasterise every brush mask at the wrong size,
+/// which is a wrong picture rather than an error.
+///
+/// ⚠ Found in passing and deliberately **not** fixed here: a `CropRect` with `left == 1.0` gives
+/// `x0 == w`, and `clamp(x0 + 1, w)` then panics because its minimum exceeds its maximum. That is
+/// pre-existing and unreachable from the crop tool, which keeps a minimum size; fixing it inside a
+/// refactor whose acceptance is "no behaviour moved" would hide the change.
+fn crop_bounds(w: usize, h: usize, c: &CropRect) -> (usize, usize, usize, usize) {
     let x0 = ((c.left.clamp(0.0, 1.0) * w as f32).round() as usize).min(w);
     let y0 = ((c.top.clamp(0.0, 1.0) * h as f32).round() as usize).min(h);
     let x1 = ((c.right.clamp(0.0, 1.0) * w as f32).round() as usize).clamp(x0 + 1, w);
     let y1 = ((c.bottom.clamp(0.0, 1.0) * h as f32).round() as usize).clamp(y0 + 1, h);
+    (x0, y0, x1, y1)
+}
+
+/// Crop to the normalized rectangle; a full-frame rect returns the image unchanged.
+fn apply_crop(image: ImageBuf, c: &CropRect) -> ImageBuf {
+    let w = image.width();
+    let h = image.height();
+    let (x0, y0, x1, y1) = crop_bounds(w, h, c);
     if x0 == 0 && y0 == 0 && x1 == w && y1 == h {
         return image;
     }
