@@ -75,6 +75,13 @@ fn main() {
             e.local_contrast.texture = 60.0;
             e.local_contrast.clarity = 60.0;
         }),
+        // ⚠ Both shapes, because the superellipse branch costs two `powf` per pixel where the
+        // elliptical one costs a `sqrt` — one number for "the vignette" would describe neither.
+        ("vignette_elliptical", |e| e.vignette.amount = -60.0),
+        ("vignette_superellipse", |e| {
+            e.vignette.amount = -60.0;
+            e.vignette.roundness = -60.0;
+        }),
         ("display_rendering", |e| {
             e.rendering = Some(edit_model::Rendering::Camera)
         }),

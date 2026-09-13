@@ -40,6 +40,7 @@ mod shared_plane;
 mod sharpen;
 mod tone_curve;
 mod tone_regions;
+mod vignette;
 mod white_balance;
 
 pub use accelerate::{accelerate, accelerate_prefix_stage, rejoin};
@@ -69,4 +70,5 @@ pub use shared_plane::SharedPlane;
 pub use sharpen::GpuSharpenStage;
 pub use tone_curve::GpuToneCurveStage;
 pub use tone_regions::GpuToneRegionsStage;
+pub use vignette::GpuVignetteStage;
 pub use white_balance::GpuWhiteBalanceStage;
