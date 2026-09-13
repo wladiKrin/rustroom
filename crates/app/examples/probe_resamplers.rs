@@ -249,7 +249,7 @@ fn main() {
     // symptom at all. Item 3 is the right answer to a cold render and a rung change; it is the
     // wrong answer to "the straighten drag is slow".
     {
-        use pipeline::{build_pipeline_split_in_region, Region};
+        use pipeline::{build_pipeline_split_in_region, OutRect, Region};
         // The common case: a RAW with lens corrections on (the default) and a straighten being
         // dragged. Perspective is left out deliberately — most photographs carry none, and it
         // would only be one more cached checkpoint the drag never reaches.
@@ -301,6 +301,35 @@ fn main() {
                 best = best.min(t.elapsed().as_secs_f64() * 1000.0);
             }
             println!("{best:8.1} ms   {label}");
+        }
+
+        // ⚠⚠ **M8.6's own row: the same drag, with the last prefix step producing ONLY the
+        // region.** A projection is not a result — this crate has had three composed projections
+        // miss — so the milestone is judged by this line rather than by arithmetic on the one
+        // above it.
+        {
+            let last = dsteps.len() - 1;
+            let before = &checkpoints[last];
+            let (ow, oh) = dsteps[last]
+                .stage
+                .output_dims(before.width(), before.height());
+            let rect = OutRect {
+                x0: 0,
+                y0: 0,
+                w: rw.min(ow),
+                h: rh.min(oh),
+            };
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let t = Instant::now();
+                let sub = dsteps[last]
+                    .stage
+                    .apply_region(before, rect)
+                    .expect("fixture check: the last step must accept a region");
+                std::hint::black_box(tail.run(sub));
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("{best:8.1} ms   a `geometry` drag, REGION-SCOPED");
         }
         println!("           (the tail rendered a {rw}x{rh} region)");
     }
