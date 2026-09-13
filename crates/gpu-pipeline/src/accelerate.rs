@@ -3,7 +3,7 @@
 use crate::{
     GpuChain, GpuContext, GpuContrastStage, GpuDisplayRenderingStage, GpuExposureStage,
     GpuGradingStage, GpuHslStage, GpuOutputTransformStage, GpuSharpenStage, GpuStage,
-    GpuToneRegionsStage, GpuWhiteBalanceStage,
+    GpuToneCurveStage, GpuToneRegionsStage, GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale, RenderSpec};
@@ -67,6 +67,11 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     }),
     ("tone_regions", |e, _, _, _, ctx| {
         Box::new(GpuToneRegionsStage::new(e, ctx))
+    }),
+    // ⚠ After `tone_regions`, as in the tail. Like `contrast`, it sits between ported stages and
+    // split the per-pixel head before this milestone.
+    ("tone_curve", |e, _, _, _, ctx| {
+        Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx))
     }),
     ("hsl", |e, _, _, _, ctx| {
         Box::new(GpuHslStage::new(&e.hsl, ctx))

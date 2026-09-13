@@ -27,6 +27,7 @@ mod output_transform;
 mod quantize;
 mod shared_plane;
 mod sharpen;
+mod tone_curve;
 mod tone_regions;
 mod white_balance;
 
@@ -52,5 +53,6 @@ pub use image::GpuImage;
 pub use output_transform::GpuOutputTransformStage;
 pub use shared_plane::SharedPlane;
 pub use sharpen::GpuSharpenStage;
+pub use tone_curve::GpuToneCurveStage;
 pub use tone_regions::GpuToneRegionsStage;
 pub use white_balance::GpuWhiteBalanceStage;
