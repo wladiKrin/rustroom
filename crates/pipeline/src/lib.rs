@@ -239,6 +239,41 @@ pub trait PipelineStage: Send + Sync {
     fn has_coverage_rasterizer(&self) -> bool {
         false
     }
+
+    /// This stage's output dimensions for an input of `w` x `h`. Default: unchanged.
+    ///
+    /// ⚠⚠ **The caller needs this BEFORE the stage runs.** A region-scoped render never produces
+    /// the whole frame, and the frame's dimensions are what every brush mask's coverage is
+    /// rasterised at. Taking them off a region-scoped buffer would rasterise every mask at the
+    /// region's size — a wrong mask, and a coverage cache that thrashes on every pan.
+    ///
+    /// ⚠ The identity default is correct for every stage in the tree today: lens correction,
+    /// perspective, spot removal, noise reduction, dehaze and the masked capture corrections all
+    /// preserve dimensions, and only `GeometryStage` does not. ⚠⚠ It is silently wrong for a
+    /// future dim-changing stage, which is what
+    /// `every_prefix_stages_output_dims_match_what_it_produces` exists to catch.
+    fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+        (w, h)
+    }
+
+    /// Produce only `rect` of this stage's output. Default: this stage cannot.
+    ///
+    /// ⚠⚠ **`None` is what makes every other stage decline BY CONSTRUCTION.** Dehaze's airlight is
+    /// estimated from the whole frame and noise reduction reads a neighbourhood, so neither can be
+    /// region-scoped without changing the photograph as you pan. Inheriting the default is what
+    /// stops a caller name-checking its way into that. The rule `GpuStage::cpu()` and
+    /// `accelerate_prefix_stage` already follow: **fail toward the whole-buffer path**, where a
+    /// wrong answer costs milliseconds and never pixels.
+    ///
+    /// ⚠ It **borrows** where [`Self::apply`] consumes, and that is load-bearing rather than tidy:
+    /// a gather only reads its source, and the consuming signature would force a clone of the whole
+    /// checkpoint — measured at 8.4 ms on a 26 Mpx buffer, most of the frame this exists to shrink.
+    ///
+    /// ⚠ `rect` is in the stage's **output** coordinates, so a caller must resolve it against
+    /// [`Self::output_dims`] rather than against the input.
+    fn apply_region(&self, _src: &ImageBuf, _rect: OutRect) -> Option<ImageBuf> {
+        None
+    }
 }
 
 /// Builds a brush's coverage from an already-planned dab list.
@@ -367,6 +402,20 @@ pub struct Region {
     pub full_h: usize,
     pub x0: usize,
     pub y0: usize,
+}
+
+/// A sub-rect of a stage's **output**, for [`PipelineStage::apply_region`].
+///
+/// ⚠ Deliberately **not** [`Region`]: that type carries an origin plus the *frame's* size and takes
+/// its own width and height from the buffer it describes. A stage producing a sub-rect cannot do
+/// that, because the buffer does not exist yet — the same trap `render_cached`'s `clip` comment
+/// already records for deriving a size as "frame minus origin".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutRect {
+    pub x0: usize,
+    pub y0: usize,
+    pub w: usize,
+    pub h: usize,
 }
 
 /// One prefix stage's parameters, identifying the image that stage produces.
@@ -1567,6 +1616,45 @@ mod tests {
     /// Every field is listed explicitly rather than using `..Default::default()`, on purpose:
     /// adding a field to `Edits` then breaks this function's compilation, forcing whoever
     /// adds it to decide which half of the split it belongs to.
+    /// ⚠⚠ Total over the **whole prefix** rather than over `GeometryStage` alone, because the
+    /// identity default is what every other stage inherits — and a default that is silently wrong
+    /// for a future dim-changing stage is exactly the trap this guards. A region-scoped render
+    /// takes the frame's dimensions from this prediction, so a stage that lies here rasterises
+    /// every brush mask at the wrong size.
+    #[test]
+    fn every_prefix_stages_output_dims_match_what_it_produces() {
+        let mut src = ImageBuf::new(37, 23);
+        for y in 0..23 {
+            for x in 0..37 {
+                src.set_pixel(x, y, [x as f32 / 37.0, y as f32 / 23.0, 0.5]);
+            }
+        }
+        let steps = build_prefix_steps(
+            &all_edits(),
+            RenderScale::new(1.0),
+            None,
+            Resampler::default(),
+        );
+        assert!(
+            steps.len() >= 4,
+            "fixture check: the fixture must build a real prefix, got {}",
+            steps.len()
+        );
+        let mut img = src;
+        for step in &steps {
+            let predicted = step.stage.output_dims(img.width(), img.height());
+            let out = step.stage.apply(img.clone());
+            assert_eq!(
+                predicted,
+                (out.width(), out.height()),
+                "`{}` predicted {predicted:?} and produced {:?}",
+                step.stage.name(),
+                (out.width(), out.height())
+            );
+            img = out;
+        }
+    }
+
     fn all_edits() -> Edits {
         let mut hsl = edit_model::Hsl::default();
         hsl.bands[0].saturation = 20.0;

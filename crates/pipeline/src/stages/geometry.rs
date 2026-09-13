@@ -77,6 +77,22 @@ impl PipelineStage for GeometryStage {
         };
         apply_crop(rotated, &self.crop)
     }
+
+    /// ⚠ Orientation can swap the axes and the crop reduces; the rotation keeps the canvas size,
+    /// so those are the only two terms. Read through [`crop_bounds`], never re-derived.
+    fn output_dims(&self, w: usize, h: usize) -> (usize, usize) {
+        let (w, h) = if self.orientation.rotate.swaps_axes() {
+            (h, w)
+        } else {
+            (w, h)
+        };
+        let (x0, y0, x1, y1) = crop_bounds(w, h, &self.crop);
+        if x0 == 0 && y0 == 0 && x1 == w && y1 == h {
+            (w, h)
+        } else {
+            (x1 - x0, y1 - y0)
+        }
+    }
 }
 
 /// Rotate about the image center by `angle_rad`, keeping the canvas size.
