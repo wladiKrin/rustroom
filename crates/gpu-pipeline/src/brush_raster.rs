@@ -549,7 +549,10 @@ impl pipeline::CoverageRasterizer for GpuBrushRaster {
         if plan.w.checked_mul(plan.h)? < MIN_GPU_BOX_PX {
             return None;
         }
-        GpuBrushRaster::rasterize(self, plan, invert, base)
+        // ⚠ Guarded for `GpuChain::apply`'s reason: this runs on the **render worker**, and a
+        // `wgpu` validation error is reported by panicking rather than by returning. Declining
+        // costs the CPU rasteriser; panicking used to cost every remaining frame of the session.
+        crate::guarded(|| GpuBrushRaster::rasterize(self, plan, invert, base))
     }
 }
 

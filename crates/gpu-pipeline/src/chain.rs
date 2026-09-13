@@ -187,7 +187,9 @@ impl GpuChain {
         if self.stages.is_empty() {
             return None;
         }
-        self.run_with(image, Download::Rgba8)
+        // ⚠ Guarded for the same reason `apply` is — this one's `None` reaches a caller that
+        // retries through `apply`, so a panic here would otherwise kill the worker just the same.
+        crate::guarded(|| self.run_with(image, Download::Rgba8))
     }
 
     /// The GPU path, or `None` on any failure at all.
@@ -341,7 +343,7 @@ impl PipelineStage for GpuChain {
             return image;
         }
         let (w, h) = (image.width(), image.height());
-        match self.run_with(&image, Download::Float) {
+        match crate::guarded(|| self.run_with(&image, Download::Float)) {
             Some(data) => ImageBuf::from_vec(w, h, bytemuck::cast_slice(&data).to_vec()),
             None => self.cpu_fallback(image),
         }

@@ -44,6 +44,32 @@ mod tone_regions;
 mod vignette;
 mod white_balance;
 
+/// Run a GPU attempt, turning a **panic** into `None` so the caller takes the CPU path.
+///
+/// ⚠⚠ **Because a GPU failure that kills the thread is the one failure this crate's design does
+/// not already handle.** Everything else degrades silently: `apply` has no failure channel, so
+/// every `?` inside `run_with` lands on `cpu_fallback`. But `wgpu` reports a validation error by
+/// **panicking through its uncaptured-error handler**, and rendering happens on a worker thread —
+/// so a single bad frame ended the session's rendering entirely. Reported as the sliders doing
+/// nothing at 1:1 while the thumbnail kept updating, and cured by switching photos, which builds a
+/// new engine and therefore a new worker.
+///
+/// ⚠ Deliberately wrapped around the **GPU attempt alone**, not the whole render. A panic in the
+/// CPU pipeline is a real bug and must still be loud; this converts only "the GPU refused" into
+/// "the CPU rendered it", which is what every other GPU failure here already means.
+///
+/// ⚠ It prints, once per occurrence. A silent fallback would hide a performance cliff — the frame
+/// still arrives, several times slower, with nothing to say why.
+pub(crate) fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("rustroom: the GPU path panicked; this frame fell back to the CPU");
+            None
+        }
+    }
+}
+
 pub use accelerate::{accelerate, accelerate_prefix_stage, rejoin};
 pub use brush_raster::GpuBrushRaster;
 
