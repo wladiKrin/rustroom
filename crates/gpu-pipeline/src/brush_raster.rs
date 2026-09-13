@@ -58,9 +58,16 @@ struct Params {
 
 pub struct GpuBrushRaster {
     ctx: Arc<GpuContext>,
-    /// ⚠ Injectable **only** so the overflow path is reachable: the real brush averages 22 dabs
-    /// per tile against a capacity of 4095, so nothing realistic reaches it and an unreachable
-    /// guard is an untested one.
+    /// ⚠ Injectable **only** so the overflow path is reachable at all: on the real brush the
+    /// busiest 16×16 tile holds **229** dabs against [`brush_wgsl::MAX_TILE_DABS`], so nothing
+    /// realistic comes near it, and *an unreachable guard is an untested one.*
+    ///
+    /// ⚠⚠ **An earlier version of this comment wrote BOTH numbers out as literals and both went
+    /// stale** — "averages 22 dabs per tile against a capacity of 4095". The 22 was estimated from
+    /// average dab area and is wrong by **10×**; the capacity predates the sweep that set it. The
+    /// 229 is measured, by [`Self::rasterize_with_occupancy`], and the capacity is **named rather
+    /// than repeated**, which is what stops that half going stale a second time. The constant's
+    /// own doc carries the sweep and the rule the 22 broke: **an average is not a capacity.**
     capacity: u32,
     count_tests: bool,
 }
@@ -132,10 +139,11 @@ impl GpuBrushRaster {
 
     /// A rasteriser whose tile list holds `capacity` dabs, so the overflow path is reachable.
     ///
-    /// ⚠ Injection is the **only** way to reach it: the real brush averages 22 dabs per tile
-    /// against a capacity of 3584, so nothing realistic comes near. *An unreachable guard is an
-    /// untested one* — the correction `visualize`'s tool gate and the lens-correction identity
-    /// fill each needed.
+    /// ⚠ Injection is the **only** way to reach it: on the real brush the busiest tile holds 229
+    /// dabs against [`brush_wgsl::MAX_TILE_DABS`], so nothing realistic comes near. *An
+    /// unreachable guard is an untested one* — the correction `visualize`'s tool gate and the
+    /// lens-correction identity fill each needed. See [`Self::capacity`] for why neither number is
+    /// written out as a literal here any more.
     #[cfg(test)]
     fn with_capacity(ctx: &Arc<GpuContext>, capacity: u32) -> Self {
         Self {
