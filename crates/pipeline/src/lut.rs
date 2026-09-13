@@ -161,6 +161,31 @@ impl Cube {
         })
     }
 
+    /// The table itself, flat, in the format's own ordering (red fastest).
+    ///
+    /// ⚠⚠ Exposed so `gpu-pipeline` uploads **this** table rather than rebuilding one. Two
+    /// constructions of one table is how the two come to disagree about a look nobody re-derives
+    /// — the rule `ToneCurveStage::lut`, `ColorGradingStage::lut` and `HueTable::entries` already
+    /// follow, and the reason they follow it.
+    pub fn entries(&self) -> &[[f32; 3]] {
+        &self.entries
+    }
+
+    /// The declared input domain's lower bound, per channel.
+    ///
+    /// ⚠ A shader that indexed over `[0, 1]` regardless would be **silently** wrong rather than
+    /// loudly wrong — misplacing every sample while still producing a plausible image. A real ACES
+    /// LMT declares `LUT_3D_INPUT_RANGE 0.0927061729 1.0196260353`, so this is reachable in
+    /// practice.
+    pub fn dmin(&self) -> [f32; 3] {
+        self.dmin
+    }
+
+    /// The declared input domain's upper bound, per channel. See [`Cube::dmin`].
+    pub fn dmax(&self) -> [f32; 3] {
+        self.dmax
+    }
+
     /// The entry at integer cube coordinates. ⚠ Red varies fastest — the format's own ordering.
     pub fn at(&self, r: usize, g: usize, b: usize) -> [f32; 3] {
         self.entries[(b * self.size + g) * self.size + r]

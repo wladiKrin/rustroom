@@ -21,6 +21,7 @@ mod box_probe;
 mod chain;
 mod context;
 mod contrast;
+mod creative_look;
 mod dehaze;
 mod dispatch;
 mod display_rendering;
@@ -56,6 +57,7 @@ pub fn max_tile_dabs() -> u32 {
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
 pub use contrast::GpuContrastStage;
+pub use creative_look::GpuCreativeLookStage;
 pub use dehaze::GpuDehazeStage;
 pub use display_rendering::GpuDisplayRenderingStage;
 pub use equivalence::{compare, Divergence};
