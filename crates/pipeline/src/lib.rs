@@ -111,6 +111,13 @@ pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::{ContrastStage, PIVOT as CONTRAST_PIVOT};
 pub use stages::creative_look::CreativeLookStage;
 pub use stages::dehaze::DehazeStage;
+// ⚠⚠ Re-exported so `gpu-pipeline` substitutes these into WGSL rather than transcribing them.
+// ⚠ `T_MIN` and `A_MIN` are ALIASED on the way out: they are dehaze's own floors and a bare name
+// would give a reader no way to tell which stage they belong to.
+pub use stages::dehaze::{
+    airlight, scaled_radius, AIRLIGHT_TOLERANCE, A_MIN as DEHAZE_A_MIN, OMEGA, PATCH_RADIUS_FULL,
+    REFINE_EPS, REFINE_RADIUS_FULL, T_MIN as DEHAZE_T_MIN,
+};
 pub use stages::display_rendering::DisplayRenderingStage;
 /// ⚠ Re-exported by name rather than opening `stages`, the rule `hue_table` set: a GPU shader
 /// must upload these rather than re-type them, and two copies of a tuned constant is how the two

@@ -27,7 +27,18 @@ const MAX_GROUPS_PER_DIM: u32 = 65535;
 /// An earlier draft carried its own copy of both bodies — which measures a copy, and would let the
 /// two drift the moment either was tuned. The frozen-reference rule (M8.3i) applies to a
 /// deliberate oracle; it does not license a second implementation of the thing under test.
-fn shader(r: usize, running: bool) -> String {
+/// Which primitive the probe runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Kind {
+    /// The naive O(r) box body.
+    BoxNaive,
+    /// The running-sum O(1) box body.
+    BoxRunning,
+    /// The sliding-window minimum — naive only, because a min has no running form.
+    Min,
+}
+
+fn shader(r: usize, kind: Kind) -> String {
     format!(
         r#"
 struct Params {{
@@ -68,7 +79,15 @@ fn emit(@builtin(global_invocation_id) id: vec3<u32>) {{
 }}
 {passes}
 "#,
-        passes = crate::box_wgsl::box_pass_forcing("box_h", "box_v", "a", "a", "b", r, running)
+        passes = match kind {
+            Kind::Min => crate::min_wgsl::min_pass("box_h", "box_v", "a", "a", "b", r),
+            Kind::BoxRunning => {
+                crate::box_wgsl::box_pass_forcing("box_h", "box_v", "a", "a", "b", r, true)
+            }
+            Kind::BoxNaive => {
+                crate::box_wgsl::box_pass_forcing("box_h", "box_v", "a", "a", "b", r, false)
+            }
+        }
     )
 }
 
@@ -76,21 +95,29 @@ pub(crate) struct BoxProbe {
     pub r: u32,
     pub passes: usize,
     /// ⚠ Explicit, so the sweep can time both bodies at one radius. Production derives it.
-    pub running: bool,
+    pub kind: Kind,
     cpu: pipeline::ExposureStage,
 }
 
 impl BoxProbe {
     /// The variant the threshold picks — what production would do at this radius.
     pub fn new(r: u32, passes: usize) -> Self {
-        Self::forcing(r, passes, crate::box_wgsl::use_running_sum(r as usize))
+        Self::forcing(
+            r,
+            passes,
+            if crate::box_wgsl::use_running_sum(r as usize) {
+                Kind::BoxRunning
+            } else {
+                Kind::BoxNaive
+            },
+        )
     }
 
-    pub fn forcing(r: u32, passes: usize, running: bool) -> Self {
+    pub fn forcing(r: u32, passes: usize, kind: Kind) -> Self {
         Self {
             r,
             passes,
-            running,
+            kind,
             cpu: pipeline::ExposureStage::new(0.0),
         }
     }
@@ -131,7 +158,7 @@ impl GpuStage for BoxProbe {
         let mut names: Vec<&str> = vec!["seed"];
         let mut groups: Vec<(u32, u32)> = vec![per_pixel];
         for _ in 0..self.passes {
-            if self.running {
+            if self.kind == Kind::BoxRunning {
                 names.push("box_h");
                 groups.push((per_row, 1));
                 names.push("box_v");
@@ -158,8 +185,8 @@ impl GpuStage for BoxProbe {
             count: None,
         };
         let label: &'static str =
-            Box::leak(format!("box_probe_{}_{}", self.r, self.running).into_boxed_str());
-        let src = shader(self.r as usize, self.running);
+            Box::leak(format!("box_probe_{}_{:?}", self.r, self.kind).into_boxed_str());
+        let src = shader(self.r as usize, self.kind);
         let (layout, pipelines) = ctx.cache.program(
             device,
             label,
@@ -295,12 +322,12 @@ mod tests {
             ctx.adapter_name()
         );
 
-        let run = |r: u32, passes: usize, running: bool| -> f64 {
+        let run = |r: u32, passes: usize, kind: Kind| -> f64 {
             let mut best = f64::MAX;
             for _ in 0..5 {
                 let chain = crate::GpuChain::new(
                     ctx.clone(),
-                    vec![Box::new(BoxProbe::forcing(r, passes, running)) as Box<dyn GpuStage>],
+                    vec![Box::new(BoxProbe::forcing(r, passes, kind)) as Box<dyn GpuStage>],
                 );
                 let c = img.clone();
                 let t = Instant::now();
@@ -313,12 +340,12 @@ mod tests {
 
         // ⚠ Zero passes is the same chain with the same transfer and no blur at all, so the
         // subtraction isolates the blur rather than pricing the round trip again.
-        let base = run(0, 0, false);
+        let base = run(0, 0, Kind::BoxNaive);
         println!("  transfer only (0 passes)          {base:6.2} ms");
         println!("  crossover sweep, 3 passes:");
         for r in [1u32, 2, 3, 4, 6, 8, 10, 16, 24, 40] {
-            let naive = run(r, 3, false) - base;
-            let running = run(r, 3, true) - base;
+            let naive = run(r, 3, Kind::BoxNaive) - base;
+            let running = run(r, 3, Kind::BoxRunning) - base;
             println!(
                 "    r={r:<3} naive {naive:6.2}   running {running:6.2}   {}",
                 if naive < running { "naive" } else { "RUNNING" }
@@ -338,8 +365,8 @@ mod tests {
             ("dehaze dark ch  r=10 x1", 10, 1),
             ("NR chroma       r=16 x2", 16, 2),
         ] {
-            let n = run(r, passes, false) - base;
-            let g = run(r, passes, true) - base;
+            let n = run(r, passes, Kind::BoxNaive) - base;
+            let g = run(r, passes, Kind::BoxRunning) - base;
             println!("  {label:<30} {n:8.2} {g:8.2}");
         }
         println!();
@@ -351,8 +378,8 @@ mod tests {
             ("clarity  wide_blur r=40 x3", 40u32, 3usize, 13.5f64),
             ("texture  guided    r=2  x4", 2, 4, 18.5),
         ] {
-            let naive = run(r, passes, false) - base;
-            let running = run(r, passes, true) - base;
+            let naive = run(r, passes, Kind::BoxNaive) - base;
+            let running = run(r, passes, Kind::BoxRunning) - base;
             println!(
                 "  {label:<30} {naive:7.2}  {running:7.2}   {cpu:5.1}   naive {:.2}x  running {:.2}x",
                 cpu / naive,
@@ -463,6 +490,53 @@ mod tests {
                 "naive shader at r={r}: worst {worst} against a bound of {}",
                 row_drift(&p, w)
             );
+        }
+    }
+
+    /// Channel 0 of one GPU **minimum** pass at radius `r`.
+    fn gpu_min(ctx: &Arc<GpuContext>, p: &[f32], w: usize, h: usize, r: u32) -> Vec<f32> {
+        let out = crate::GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(BoxProbe::forcing(r, 1, Kind::Min))],
+        )
+        .apply(as_image(p, w, h));
+        out.data().as_chunks::<3>().0.iter().map(|c| c[0]).collect()
+    }
+
+    /// ⚠⚠ **BIT-IDENTICAL, and that is a stronger claim than anything else in this crate can
+    /// make.** A minimum **selects an input sample** rather than computing a new one, so there is
+    /// no rounding to diverge on — no sum to accumulate, no divide, no multiply-add to fuse.
+    /// M8.3a's subnormal flush is the only mechanism that could still bite, and it cannot: a
+    /// subnormal that survives selection was already subnormal in the input.
+    ///
+    /// ⚠ The radii are the ones that occur: `PATCH_RADIUS_FULL = 20` scales to r=5 at a fit rung
+    /// and r=10 at a native one, with 20 as the unscaled ceiling.
+    #[test]
+    fn the_min_shader_is_bit_identical_to_min_filter() {
+        let Some(ctx) = ctx() else { return };
+        let (w, h) = (97usize, 71);
+        let p = plane(w, h);
+        for r in [1u32, 5, 10, 20] {
+            let want = pipeline::spatial::min_filter(&p, w, h, r as usize);
+            let got = gpu_min(&ctx, &p, w, h, r);
+            assert_eq!(want, got, "the minimum must be bit-identical at r={r}");
+        }
+    }
+
+    /// ⚠ A minimum over a constant plane is the constant, **exactly** — no accumulation, so
+    /// unlike the box blur's version of this test there is no drift to allow for. It is kept
+    /// because it is the one case where a wrong window bound shows as a value rather than as a
+    /// rounding difference: reading past the edge of a plane whose border is the minimum would
+    /// pull it down.
+    #[test]
+    fn a_constant_plane_survives_the_min_shader_exactly() {
+        let Some(ctx) = ctx() else { return };
+        let (w, h) = (97usize, 71);
+        let p = vec![0.37f32; w * h];
+        for r in [5u32, 20] {
+            for (i, v) in gpu_min(&ctx, &p, w, h, r).iter().enumerate() {
+                assert_eq!(*v, 0.37, "r={r} sample {i}");
+            }
         }
     }
 

@@ -6,17 +6,27 @@ use rayon::prelude::*;
 
 /// Haze deliberately retained at full strength. Removing all of it flattens aerial
 /// perspective, and keeping a little also softens the bright-object failure case.
-const OMEGA: f32 = 0.95;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const OMEGA: f32 = 0.95;
 /// Transmission floor: bounds the recovery gain to x10 in dense haze.
-const T_MIN: f32 = 0.1;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const T_MIN: f32 = 0.1;
 /// Dark-channel patch radius, in **full-resolution** pixels.
-const PATCH_RADIUS_FULL: f32 = 20.0;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const PATCH_RADIUS_FULL: f32 = 20.0;
 /// Guided-filter radius for refining the transmission, in full-resolution pixels.
 /// Deliberately much larger than the patch: the refinement's job is to restore the edges the
 /// patch minimum smeared.
-const REFINE_RADIUS_FULL: f32 = 60.0;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const REFINE_RADIUS_FULL: f32 = 60.0;
 /// Guided-filter regularisation, against **linear** luma variance.
-const REFINE_EPS: f32 = 1e-4;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const REFINE_EPS: f32 = 1e-4;
 /// Long edge of the fixed-size image the airlight is estimated on.
 const AIRLIGHT_SAMPLE: usize = 256;
 /// Fraction of the darkest-channel histogram treated as "most hazy".
@@ -28,7 +38,9 @@ const AIRLIGHT_FRACTION: f32 = 0.001;
 /// local region" into "the whole frame".
 const AIRLIGHT_PATCH_DIV: usize = 32;
 /// Floor on each channel of the airlight. Load-bearing: `I_c / A_c` divides by it.
-const A_MIN: f32 = 1e-3;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const A_MIN: f32 = 1e-3;
 
 /// Distance from the airlight, in **linear working-space** units and as the largest per-channel
 /// difference, within which a pixel is read as an object of that colour rather than as haze.
@@ -54,7 +66,9 @@ const A_MIN: f32 = 1e-3;
 ///
 /// ⚠ A fixed constant, no slider: Lightroom exposes none, and the Clarity halo suppressor set the
 /// precedent that this is part of what the tool means.
-const AIRLIGHT_TOLERANCE: f32 = 0.1;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const AIRLIGHT_TOLERANCE: f32 = 0.1;
 
 /// The tolerance rule: `t` raised toward 1 as `dist` falls below `tolerance`.
 ///
@@ -79,7 +93,7 @@ fn luma(px: &[f32]) -> f32 {
 
 /// Convert a full-resolution radius to the resolution being rendered. Never 0, which would
 /// silently disable the filter at small preview scales. Mirrors `noise_reduction`.
-fn scaled_radius(full_px: f32, scale: RenderScale) -> usize {
+pub fn scaled_radius(full_px: f32, scale: RenderScale) -> usize {
     ((full_px * scale.get()).round().max(0.0) as usize).max(1)
 }
 
