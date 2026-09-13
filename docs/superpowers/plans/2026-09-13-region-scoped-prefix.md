@@ -798,6 +798,9 @@ Replace `crates/app/src/render_engine.rs:1130-1183` — the `for (i, step) in ..
     //
     // ⚠ At the fitted rung `region` is `None`, so this never engages there.
     let mut scoped = None;
+    // ⚠ A plain flag rather than something derived from the output's size afterwards: a derived
+    // fact that can be wrong is what `Session::geometry_mode` was deleted for.
+    let mut was_scoped = false;
     if start + 1 == steps.len() {
         if let Some(want) = region {
             let last = &steps[start].stage;
@@ -813,6 +816,7 @@ Replace `crates/app/src/render_engine.rs:1130-1183` — the `for (i, step) in ..
                     },
                 ) {
                     scoped = Some((out, r, ow, oh));
+                    was_scoped = true;
                 }
             }
         }
@@ -878,7 +882,7 @@ Replace `crates/app/src/render_engine.rs:1130-1183` — the `for (i, step) in ..
         };
         (input, rect, pw, ph, ran)
     };
-    let region_scoped = prefix_stages == 1 && rect.is_some() && input.width() != pw;
+    let region_scoped = was_scoped;
 
     // ⚠⚠ **The frame dimensions are `(pw, ph)` — the prefix output's — and on the region-scoped
     // path they come from `output_dims` rather than from the buffer.** That buffer *is* the region
@@ -892,13 +896,9 @@ Replace `crates/app/src/render_engine.rs:1130-1183` — the `for (i, step) in ..
     });
 ```
 
-⚠⚠ **`region_scoped` above is derived from a size comparison and that is fragile** — replace it
-with the honest form: set a `let mut was_scoped = false;` beside `let mut scoped = None;`, assign
-`was_scoped = true;` inside the `if let Some(..)` branch, and use that. A derived flag that can be
-wrong is exactly what this codebase deletes (`Session::geometry_mode`). Do it that way.
-
-Then delete the now-duplicated `let clip = rect.map(...)` line's *neighbours* only if they moved;
-`clip` itself stays as it is, since `rect` is still in scope with the same meaning.
+⚠ `clip` (the `let clip = rect.map(|r| (r.x, r.y, r.w, r.h));` line just below this block) is
+**unchanged** and must stay: `rect` is still in scope with the same meaning on both paths, and it
+carries the region's own width and height, which `Region` does not.
 
 ⚠ `gpu_prefix_steps` stays 0 on the scoped path and nothing is lost: `accelerate_prefix_stage` has
 twins only for dehaze and noise reduction, neither of which can be the region-scoped step.
