@@ -317,12 +317,15 @@ fn main() {
         }
 
         // Resuming at checkpoint `start` means running steps[start..] plus the tail and pack.
+        // ⚠⚠ **These labels were hardcoded and WRONG.** `build_prefix_steps` pushes a stage only
+        // when it is active, so the list's length and order depend on the edits — and this printed
+        // "geometry change" for a list that contains no geometry at all. Derived from the steps
+        // now, which is the same rule `EDIT_GROUP_NAMES` and the GPU hint string already follow.
         for start in 0..=steps.len() {
-            let label = match start {
-                0 => "geometry change  (resume at the downscale)",
-                1 => "NR change        (resume after geometry)",
-                2 => "dehaze change    (resume after NR)",
-                _ => "tail slider      (resume at the final)",
+            let label = if start == steps.len() {
+                "tail slider (nothing in the prefix re-runs)".to_string()
+            } else {
+                format!("drag `{}` (resume before it)", steps[start].stage.name())
             };
             let mut best = f64::MAX;
             for _ in 0..5 {
@@ -344,6 +347,80 @@ fn main() {
                 best = best.min(ms);
             }
             println!("{best:8.1} ms   {label}");
+        }
+    }
+
+    // ⚠⚠ **The same decomposition at a NATIVE rung, which is the one that decides whether the
+    // prefix is worth moving to the GPU.** The block above runs at `PREVIEW_MAX_DIM`; with
+    // `drag_quality: Full` a fitted photo on a large HiDPI window renders at **rung 3200**, so a
+    // Dehaze drag pays these numbers rather than those. The prefix also runs **whole-buffer**
+    // whatever the zoom, so there is no region to shrink it.
+    {
+        use pipeline::{build_pipeline_split_in_region, build_prefix_steps, RenderScale};
+        let buffer_long = buf.width().max(buf.height());
+        let sc = RenderScale::new(scale);
+        let heavy = Edits {
+            noise_reduction: NoiseReduction {
+                luminance: 50.0,
+                color: 50.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            exposure: 0.5,
+            ..Edits::default()
+        };
+        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear);
+        let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
+        let base = buf.downscale_to(buffer_long);
+        println!(
+            "\n  prefix steps at a NATIVE rung ({}x{}, {:.1} Mpx): {}",
+            base.width(),
+            base.height(),
+            (base.width() * base.height()) as f64 / 1e6,
+            steps.len()
+        );
+
+        let mut checkpoints = vec![base];
+        for step in &steps {
+            let next = step.stage.apply(checkpoints.last().unwrap().clone());
+            checkpoints.push(next);
+        }
+        // ⚠⚠ **Labels DERIVED from the steps, never enumerated** — the block below this one
+        // hardcoded three names against a list whose length depends on the edits, so it printed
+        // "geometry change" for whatever happened to be first. A label that enumerates a list
+        // goes wrong the moment the list changes, which is this file's most-repeated finding.
+        for start in 0..=steps.len() {
+            let label = if start == steps.len() {
+                "tail slider (nothing in the prefix re-runs)".to_string()
+            } else {
+                format!("drag `{}` (resume before it)", steps[start].stage.name())
+            };
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let t = Instant::now();
+                let mut img = checkpoints[start].clone();
+                for step in &steps[start..] {
+                    img = step.stage.apply(img);
+                }
+                let out = tail.run(img);
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                std::hint::black_box(&out);
+                best = best.min(ms);
+            }
+            println!("{best:8.1} ms   {label}");
+        }
+
+        // ⚠ Each prefix stage alone, with no tail, so the spec prices what a GPU run would
+        // actually replace rather than inferring it from a difference of two totals.
+        for (i, step) in steps.iter().enumerate() {
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let t = Instant::now();
+                let out = step.stage.apply(checkpoints[i].clone());
+                best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+                std::hint::black_box(&out);
+            }
+            println!("{best:8.1} ms   {} ALONE (whole buffer)", step.stage.name());
         }
     }
 

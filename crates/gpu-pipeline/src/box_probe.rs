@@ -325,6 +325,24 @@ mod tests {
             );
         }
         println!();
+        // ⚠⚠ **The prefix's shapes, priced before any prefix design.** Dehaze's refinement is a
+        // CROSS-guided filter (`p` is the transmission map, `guide` is luma), so M8.3n's
+        // self-guided shortcut does NOT apply and it needs all six statistic box blurs. Its
+        // radius is `REFINE_RADIUS_FULL = 60` scaled, i.e. **r=31 at a native rung** — above the
+        // crossover, so the running body. The dark channel is a `min_filter` at
+        // `PATCH_RADIUS_FULL = 20` scaled, i.e. **r=10**; a box blur cannot stand in for a minimum
+        // (a min is not invertible, so there is no running form) but it bounds the naive cost.
+        println!("  {:<30} {:>8} {:>8}", "prefix shapes", "naive", "running");
+        for (label, r, passes) in [
+            ("dehaze guided   r=31 x6", 31u32, 6usize),
+            ("dehaze dark ch  r=10 x1", 10, 1),
+            ("NR chroma       r=16 x2", 16, 2),
+        ] {
+            let n = run(r, passes, false) - base;
+            let g = run(r, passes, true) - base;
+            println!("  {label:<30} {n:8.2} {g:8.2}");
+        }
+        println!();
         println!(
             "  {:<30} {:>8} {:>8}   {:>6}",
             "", "naive", "running", "CPU"
