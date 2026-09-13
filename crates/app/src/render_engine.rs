@@ -1050,6 +1050,14 @@ pub struct Ran {
     /// runs in parallel, and a global counter reading someone else's renders is a contaminated
     /// observable this project has already paid for once, in `GpuChain`'s transfer counts.
     pub gpu_prefix_steps: usize,
+    /// Whether the prefix's last step produced only the region, rather than the whole frame.
+    ///
+    /// ⚠⚠ **An observable, because the two paths produce the same picture BY DESIGN.** A
+    /// region-scoped render and a whole-buffer render cropped are bit-identical, so every
+    /// equivalence test in the workspace passes against a gate that never fires — which is exactly
+    /// how creative LUTs (W5) shipped fully tested and 100% dead. `prefix_stages`, `bytes` and
+    /// `gpu_prefix_steps` all exist for this reason.
+    pub region_scoped: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1124,64 +1132,125 @@ fn render_cached(
         }
     };
 
-    // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU seam
-    // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
-    // (fit) and 2.1 ms (native) against the 13–117 ms each avoided stage costs.
-    for (i, step) in steps.iter().enumerate().skip(start) {
-        // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
-        // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
-        // after geometry and noise reduction — so substituting up front would estimate it from
-        // the raw buffer, before the crop. A slightly different airlight is a different
-        // photograph, not an error.
-        //
-        // ⚠ The step's `key` is never touched: `PrefixStepKey` is derived from the edits, so a
-        // checkpoint written by either path is a legitimate hit for the other and `PrefixCache`
-        // needs no change at all.
-        let accelerated = if gpu_tail {
-            gpu_pipeline::shared().and_then(|ctx| {
-                gpu_pipeline::accelerate_prefix_stage(step.stage.name(), edits, scale, &img, ctx)
-            })
-        } else {
-            None
-        };
-        img = Arc::new(match accelerated {
-            Some(g) => {
-                gpu_prefix_steps += 1;
-                g.apply((*img).clone())
+    // ⚠⚠ **THE REGION-SCOPED PREFIX, and the gate is DERIVED rather than a flag.** Engage only
+    // when *exactly* the last prefix step needs re-running — which is what a Straighten or
+    // Perspective drag is, since every upstream checkpoint is keyed on edits the drag does not
+    // touch. `render_cached` already knows it, so there is no drag signal to plumb and nothing
+    // that can disagree with anything else.
+    //
+    // ⚠ Only the LAST step, and that is structural: step n-1's region-scoped output cannot feed
+    // step n, because step n is a gather that reads anywhere in its source. Chaining would need
+    // pre-image analysis per stage, which is the whole thing this avoids.
+    //
+    // ⚠ At the fitted rung `region` is `None`, so this never engages there — it engages exactly
+    // at the native rungs, which is where the cost is.
+    let mut scoped = None;
+    // ⚠ A plain flag rather than something derived from the output's size afterwards: a derived
+    // fact that can be wrong is what `Session::geometry_mode` was deleted for.
+    let mut was_scoped = false;
+    if start + 1 == steps.len() {
+        if let Some(want) = region {
+            let last = &steps[start].stage;
+            let (ow, oh) = last.output_dims(img.width(), img.height());
+            if let Some(r) = want.clamped(ow, oh) {
+                if let Some(out) = last.apply_region(
+                    &img,
+                    pipeline::OutRect {
+                        x0: r.x,
+                        y0: r.y,
+                        w: r.w,
+                        h: r.h,
+                    },
+                ) {
+                    scoped = Some((out, r, ow, oh));
+                    was_scoped = true;
+                }
             }
-            None => step.stage.apply((*img).clone()),
-        });
-        cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
-    }
-    let prefix_stages = steps.len() - start;
-
-    // ⚠ The complete prefix output must always live in the protected tier, even when we
-    // resumed at it without running anything. A prefix that *shrinks* — its last stage going
-    // neutral — turns a former intermediate into the final, and leaving it in the budgeted
-    // tier would let a large render evict the very thing the zoom guarantee rests on.
-    // `steps.is_empty()` is excluded because there the final *is* checkpoint 0, which is
-    // either free (and must not be stored) or was already inserted as a final above.
-    if prefix_stages == 0 && !steps.is_empty() {
-        cache.insert(key_at(steps.len()), img.clone(), Tier::Final);
+        }
     }
 
-    // The region can only be resolved once the prefix output's dimensions are known, which is
-    // why the tail is built here rather than alongside the steps. Building is a few Box
-    // allocations.
-    let (pw, ph) = (img.width(), img.height());
-    let rect = region.and_then(|r| r.clamped(pw, ph));
-    let (input, region) = match rect {
-        Some(r) => (
-            img.crop(r.x, r.y, r.w, r.h),
-            Some(Region {
-                full_w: pw,
-                full_h: ph,
-                x0: r.x,
-                y0: r.y,
-            }),
-        ),
-        None => ((*img).clone(), None),
+    let (input, rect, pw, ph, prefix_stages) = if let Some((out, r, ow, oh)) = scoped {
+        // ⚠⚠ **DELIBERATELY NOT CACHED.** A region-scoped checkpoint served for a *different*
+        // region is the one failure here that shows as a plausible photograph rather than an
+        // error, and leaving the insert out is what makes it unrepresentable rather than guarded.
+        // The cost is that a later whole-buffer render rebuilds the final checkpoint — against
+        // re-running the step whole-buffer on every frame of the drag, which is what this replaces.
+        //
+        // ⚠ `gpu_prefix_steps` stays 0 here and nothing is lost: `accelerate_prefix_stage` has
+        // twins only for dehaze and noise reduction, neither of which can be the region-scoped
+        // step, because neither is region-safe and both therefore decline.
+        (out, Some(r), ow, oh, 1)
+    } else {
+        // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU seam
+        // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
+        // (fit) and 2.1 ms (native) against the 13–117 ms each avoided stage costs.
+        for (i, step) in steps.iter().enumerate().skip(start) {
+            // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
+            // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
+            // after geometry and noise reduction — so substituting up front would estimate it from
+            // the raw buffer, before the crop. A slightly different airlight is a different
+            // photograph, not an error.
+            //
+            // ⚠ The step's `key` is never touched: `PrefixStepKey` is derived from the edits, so a
+            // checkpoint written by either path is a legitimate hit for the other and `PrefixCache`
+            // needs no change at all.
+            let accelerated = if gpu_tail {
+                gpu_pipeline::shared().and_then(|ctx| {
+                    gpu_pipeline::accelerate_prefix_stage(
+                        step.stage.name(),
+                        edits,
+                        scale,
+                        &img,
+                        ctx,
+                    )
+                })
+            } else {
+                None
+            };
+            img = Arc::new(match accelerated {
+                Some(g) => {
+                    gpu_prefix_steps += 1;
+                    g.apply((*img).clone())
+                }
+                None => step.stage.apply((*img).clone()),
+            });
+            cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
+        }
+        let ran = steps.len() - start;
+
+        // ⚠ The complete prefix output must always live in the protected tier, even when we
+        // resumed at it without running anything. A prefix that *shrinks* — its last stage going
+        // neutral — turns a former intermediate into the final, and leaving it in the budgeted
+        // tier would let a large render evict the very thing the zoom guarantee rests on.
+        // `steps.is_empty()` is excluded because there the final *is* checkpoint 0, which is
+        // either free (and must not be stored) or was already inserted as a final above.
+        if ran == 0 && !steps.is_empty() {
+            cache.insert(key_at(steps.len()), img.clone(), Tier::Final);
+        }
+
+        // The region can only be resolved once the prefix output's dimensions are known, which is
+        // why the tail is built here rather than alongside the steps. Building is a few Box
+        // allocations.
+        let (pw, ph) = (img.width(), img.height());
+        let rect = region.and_then(|r| r.clamped(pw, ph));
+        let input = match rect {
+            Some(r) => img.crop(r.x, r.y, r.w, r.h),
+            None => (*img).clone(),
+        };
+        (input, rect, pw, ph, ran)
     };
+    let region_scoped = was_scoped;
+
+    // ⚠⚠ **The frame dimensions are `(pw, ph)` — the prefix output's — and on the region-scoped
+    // path they come from `output_dims` rather than from the buffer.** That buffer *is* the region
+    // there, so taking its size would rasterise every brush mask at the region's size and thrash
+    // the coverage cache on every pan.
+    let region = rect.map(|r| Region {
+        full_w: pw,
+        full_h: ph,
+        x0: r.x,
+        y0: r.y,
+    });
 
     // ⚠ The frame dimensions are the PREFIX OUTPUT's — `(pw, ph)` — not the region's. That image
     // *is* the frame. Passing the region's would rasterize at the wrong size and, because the dims
@@ -1388,6 +1457,7 @@ fn render_cached(
         Ran {
             prefix_stages,
             gpu_prefix_steps,
+            region_scoped,
             bytes,
         },
     )
@@ -1630,6 +1700,149 @@ mod tests {
             "the fit size was {lo:?} at one rung and {hi:?} at another — it is being derived \
              from the rendered frame's rounded dimensions"
         );
+    }
+
+    // ─────────────── M8.6: the region-scoped prefix ───────────────
+
+    /// A straighten plus a vignette.
+    ///
+    /// ⚠⚠ **The vignette is what makes this fixture able to see the §5 hazard at all.** It is the
+    /// one tail stage whose result depends on WHERE a pixel is, so a `Region` carrying the
+    /// region's own size instead of the frame's re-centres the falloff and the bytes differ.
+    /// Without it the frame dimensions could be taken off the region-scoped buffer and every byte
+    /// would still match — the test would name the hazard and be unable to detect it.
+    fn scoped_edits() -> Edits {
+        Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            vignette: edit_model::Vignette {
+                amount: -60.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        }
+    }
+
+    fn scoped_spec() -> FrameSpec {
+        FrameSpec {
+            region: Some(RegionRect {
+                x: 3,
+                y: 2,
+                w: 9,
+                h: 7,
+            }),
+            ..FrameSpec::fit(24)
+        }
+    }
+
+    fn render_with(
+        buf: &Arc<ImageBuf>,
+        e: &Edits,
+        spec: FrameSpec,
+        cache: &mut PrefixCache,
+        bc: &mut BrushCache,
+    ) -> (RenderedFrame, Ran) {
+        render_cached(
+            buf,
+            e,
+            spec,
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            cache,
+            bc,
+        )
+    }
+
+    /// ⚠⚠ **The acceptance for the whole milestone, end to end.** The region-scoped prefix and the
+    /// whole-buffer-then-crop path must produce the same frame **byte for byte** — they are the
+    /// same gather in the same order, so a tolerance would hide exactly what this exists to catch.
+    ///
+    /// ⚠ The two paths are forced apart by the CACHE, not by a flag: a warm final checkpoint means
+    /// nothing is left to run, so the gate cannot fire and the region is taken by `img.crop`.
+    #[test]
+    fn a_region_scoped_render_matches_the_whole_buffer_path_byte_for_byte() {
+        let buf = varied_sized(24);
+        let e = scoped_edits();
+        let spec = scoped_spec();
+        let mut bc = BrushCache::default();
+
+        let mut warm = PrefixCache::default();
+        let _ = render_with(&buf, &e, FrameSpec::fit(24), &mut warm, &mut bc);
+        let (via_crop, a) = render_with(&buf, &e, spec, &mut warm, &mut bc);
+        assert!(
+            !a.region_scoped,
+            "fixture check: a warm final checkpoint must NOT take the scoped path"
+        );
+
+        let mut cold = PrefixCache::default();
+        let (via_region, b) = render_with(&buf, &e, spec, &mut cold, &mut bc);
+        assert!(
+            b.region_scoped,
+            "fixture check: a cold cache with one step left must take the scoped path"
+        );
+
+        assert_eq!(
+            (via_crop.width, via_crop.height),
+            (via_region.width, via_region.height)
+        );
+        assert_eq!(
+            via_crop.rgba, via_region.rgba,
+            "the two paths must agree byte for byte"
+        );
+    }
+
+    /// ⚠⚠ The gate itself. Every pixel test passes against a gate that never fires, because the
+    /// two paths are bit-identical by design — this is what says it fired.
+    #[test]
+    fn a_drag_of_the_last_prefix_step_renders_only_the_region() {
+        let buf = varied_sized(24);
+        let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
+        let spec = scoped_spec();
+
+        let (_, cold) = render_with(&buf, &scoped_edits(), spec, &mut cache, &mut bc);
+        assert_eq!(cold.prefix_stages, 1, "fixture check: one prefix step");
+
+        // A Straighten drag: the same prefix, a different angle. Exactly the last step re-runs.
+        let dragged = Edits {
+            geometry: edit_model::Geometry {
+                angle: 3.4,
+                ..Default::default()
+            },
+            ..scoped_edits()
+        };
+        let (frame, ran) = render_with(&buf, &dragged, spec, &mut cache, &mut bc);
+        assert!(ran.region_scoped, "the drag must render only the region");
+        assert_eq!(ran.prefix_stages, 1);
+        assert_eq!((frame.width, frame.height), (9, 7));
+    }
+
+    /// ⚠⚠ A region-scoped checkpoint served for a *different* region is the one failure that shows
+    /// as a plausible photograph. Not inserting it is what makes that unrepresentable — and the way
+    /// to see it is that a second identical render must scope **again** rather than find a final.
+    #[test]
+    fn a_region_scoped_render_leaves_no_final_checkpoint() {
+        let buf = varied_sized(24);
+        let e = scoped_edits();
+        let spec = scoped_spec();
+        let mut cache = PrefixCache::default();
+        let mut bc = BrushCache::default();
+
+        let (_, first) = render_with(&buf, &e, spec, &mut cache, &mut bc);
+        assert!(
+            first.region_scoped,
+            "fixture check: the gate must have fired"
+        );
+        let (_, second) = render_with(&buf, &e, spec, &mut cache, &mut bc);
+        assert!(
+            second.region_scoped,
+            "no final checkpoint may have been stored, so the next render scopes again"
+        );
+        assert_eq!(second.prefix_stages, 1);
     }
 
     /// Every prefix stage active, so a resume point is observable at each depth.
