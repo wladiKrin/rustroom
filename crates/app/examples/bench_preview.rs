@@ -410,6 +410,31 @@ fn main() {
             println!("{best:8.1} ms   {label}");
         }
 
+        // ⚠⚠ **The same steps with the GPU seam offered, which is what M8.3o is judged by.** This
+        // project has over-predicted a whole frame by ~2x (M8.3g) and been right in magnitude
+        // while wrong by 8x in attribution (M8.3f) by composing component measurements — so the
+        // real thing is measured here rather than added up from `box_probe`'s rows.
+        if let Some(ctx) = gpu_pipeline::shared() {
+            println!("  with the GPU seam offered ({}):", ctx.adapter_name());
+            for (i, step) in steps.iter().enumerate() {
+                let name = step.stage.name();
+                let Some(g) =
+                    gpu_pipeline::accelerate_prefix_stage(name, &heavy, sc, &checkpoints[i], ctx)
+                else {
+                    println!("           —    `{name}` has no GPU twin");
+                    continue;
+                };
+                let mut best = f64::MAX;
+                for _ in 0..5 {
+                    let t = Instant::now();
+                    let out = g.apply(checkpoints[i].clone());
+                    best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+                    std::hint::black_box(&out);
+                }
+                println!("{best:8.1} ms   `{name}` ALONE on the GPU");
+            }
+        }
+
         // ⚠ Each prefix stage alone, with no tail, so the spec prices what a GPU run would
         // actually replace rather than inferring it from a difference of two totals.
         for (i, step) in steps.iter().enumerate() {

@@ -217,6 +217,52 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
     }
 }
 
+/// A GPU twin for one **prefix** step, or `None` to leave it on the CPU — the first acceleration
+/// outside the tail.
+///
+/// ⚠⚠ **Per step and at APPLY time, not over the whole list up front, and the airlight is what
+/// forces that.** `dehaze::airlight` is estimated from the image the stage is handed — which in
+/// the prefix is the checkpoint *after* geometry and noise reduction, not the raw buffer. Geometry
+/// crops, so an estimate taken from the buffer would key on pixels the crop has removed: a
+/// slightly different airlight, which is a different photograph rather than an error. The plan for
+/// this milestone said "substitute the list up front" and was wrong for exactly that reason.
+///
+/// ⚠⚠ **The caller keeps the step's `key` untouched, and that is the whole safety argument.**
+/// `PrefixStepKey` is derived from the **edits**, never from the stage — so a checkpoint written
+/// by the CPU path is a legitimate hit for the GPU path and the reverse, and `PrefixCache` needs
+/// no change at all. ⚠ It also means `gpu_tail` must **not** enter any key: the rule the resampler
+/// follows and HSL deliberately does not. Returning a *stage* rather than a *step* makes a mutated
+/// key unrepresentable instead of merely tested.
+///
+/// ⚠⚠ **One stage per round trip, never chained.** Chaining the two prefix stages would pay the
+/// transfer once — and destroy the post-NR checkpoint, which exists precisely so a Dehaze drag
+/// resumes *after* noise reduction. Priced at 6.5 Mpx: per-step gives a Dehaze drag ~92 ms against
+/// chaining's ~113, and a Dehaze drag is the case that matters, dehaze being used twice as often
+/// as NR in this catalogue. ⚠ Chaining wins an **NR** drag (~113 against ~139), recorded rather
+/// than hidden: it becomes the right answer if NR is ever ported *and* the checkpoint's value is
+/// re-measured.
+pub fn accelerate_prefix_stage(
+    name: &str,
+    edits: &Edits,
+    scale: RenderScale,
+    image: &core_image::ImageBuf,
+    ctx: &Arc<GpuContext>,
+) -> Option<Box<dyn PipelineStage>> {
+    // ⚠ Name-matched, exactly as `REPLACEABLE` is, and for the same reason: a `dyn PipelineStage`
+    // exposes only `name()` and `apply()`, while the caller still holds the `Edits` it was built
+    // from.
+    let gpu: Box<dyn GpuStage> = match name {
+        "dehaze" => Box::new(crate::GpuDehazeStage::new(&edits.dehaze, scale, image, ctx)),
+        _ => return None,
+    };
+    // ⚠ The same question the tail asks, and it fails toward the CPU for the same reason: a wrong
+    // number costs milliseconds and never pixels.
+    if !worth_a_chain(&[gpu.cpu_cost()]) {
+        return None;
+    }
+    Some(Box::new(GpuChain::new(ctx.clone(), vec![gpu])))
+}
+
 /// A stage that could be replaced, beside the CPU stage it would replace.
 ///
 /// ⚠ Both halves travel together because `flush` may decide against the chain, and
@@ -710,6 +756,121 @@ mod tests {
         let d = crate::compare(&cpu, &gpu);
         assert!(
             d.worst_levels < 0.02,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
+    /// A hazy fixture big enough for the guided reach (twice its radius).
+    fn hazy(w: usize, h: usize) -> core_image::ImageBuf {
+        let a = [0.85f32, 0.87, 0.9];
+        let mut img = core_image::ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let dark = x % 40 < 6 && y % 40 < 6;
+                let clear = if dark {
+                    [0.01, 0.01, 0.01]
+                } else {
+                    [0.05 + 0.7 * u, 0.05 + 0.6 * v, 0.05 + 0.5 * (1.0 - u)]
+                };
+                let t = 0.95 - 0.9 * u;
+                let mut px = [0.0f32; 3];
+                for c in 0..3 {
+                    px[c] = clear[c] * t + a[c] * (1.0 - t);
+                }
+                img.set_pixel(x, y, px);
+            }
+        }
+        img
+    }
+
+    fn hazed_edits(amount: f32) -> Edits {
+        Edits {
+            dehaze: edit_model::Dehaze { amount },
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠ The seam exists and fires. Without this every assertion below could pass against a
+    /// function nothing calls — the W5 failure mode.
+    #[test]
+    fn a_dehaze_prefix_step_becomes_a_chain() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(200, 160);
+        let g = accelerate_prefix_stage("dehaze", &hazed_edits(60.0), SCALE, &img, &ctx)
+            .expect("dehaze must be replaceable");
+        assert_eq!(g.name(), "gpu_chain");
+    }
+
+    /// ⚠ Every other prefix stage stays on the CPU. Noise reduction is the one that will not, and
+    /// naming it here is what makes adding it a deliberate act rather than a silent one.
+    #[test]
+    fn every_other_prefix_stage_is_left_alone() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(64, 64);
+        for name in [
+            "noise_reduction",
+            "geometry",
+            "lens_correction",
+            "perspective",
+        ] {
+            assert!(
+                accelerate_prefix_stage(name, &hazed_edits(60.0), SCALE, &img, &ctx).is_none(),
+                "`{name}` has no GPU twin and must be left alone"
+            );
+        }
+    }
+
+    /// ⚠⚠ **THE CACHE-COMPATIBILITY GUARD, and it is the reason this seam is safe at all.** The
+    /// substitution returns a **stage**, never a step, so a mutated `PrefixStepKey` is
+    /// unrepresentable rather than merely tested — and a checkpoint written by one path is a
+    /// legitimate hit for the other. This asserts the premise that rests on: the key is a function
+    /// of the **edits**, so building the steps twice for the same edits gives equal keys whatever
+    /// is done to the stages.
+    #[test]
+    fn a_prefix_key_is_a_function_of_the_edits_alone() {
+        let e = hazed_edits(60.0);
+        let a = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        let b = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        assert!(!a.is_empty(), "fixture check: dehaze must produce a step");
+        let ka: Vec<_> = (0..=a.len())
+            .map(|n| pipeline::PrefixKey::upto(&a, n, SCALE))
+            .collect();
+        let kb: Vec<_> = (0..=b.len())
+            .map(|n| pipeline::PrefixKey::upto(&b, n, SCALE))
+            .collect();
+        assert_eq!(
+            ka, kb,
+            "a prefix key must not depend on which stage is inside"
+        );
+    }
+
+    /// ⚠ The picture must be the same however the step ran — that is what makes a checkpoint
+    /// written by either path interchangeable rather than merely equal in its key.
+    #[test]
+    fn an_accelerated_prefix_step_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let e = hazed_edits(70.0);
+        let img = hazy(200, 160);
+        let steps = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        let step = steps
+            .iter()
+            .find(|s| s.stage.name() == "dehaze")
+            .expect("fixture check: there must be a dehaze step");
+        let cpu = step.stage.apply(img.clone());
+        let gpu = accelerate_prefix_stage("dehaze", &e, SCALE, &img, &ctx)
+            .expect("dehaze must be replaceable")
+            .apply(img.clone());
+        assert!(
+            !crate::compare(&img, &cpu).is_exact(),
+            "fixture check: the step must actually change the picture"
+        );
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 1.0,
             "worst {} levels over {} of {} samples",
             d.worst_levels,
             d.differing,

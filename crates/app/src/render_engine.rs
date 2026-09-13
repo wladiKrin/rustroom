@@ -1041,6 +1041,15 @@ impl BrushCache {
 pub struct Ran {
     pub prefix_stages: usize,
     pub bytes: bool,
+    /// How many prefix steps ran on the GPU.
+    ///
+    /// ⚠⚠ **An observable, because the two paths produce the same picture by design** — every
+    /// equivalence test in the workspace passes against a seam that never fires, which is exactly
+    /// how creative LUTs (W5) shipped fully tested and 100% dead. `prefix_stages` and `bytes`
+    /// exist for the same reason. ⚠ Per render rather than a process-wide static: `cargo test`
+    /// runs in parallel, and a global counter reading someone else's renders is a contaminated
+    /// observable this project has already paid for once, in `GpuChain`'s transfer counts.
+    pub gpu_prefix_steps: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1088,6 +1097,7 @@ fn render_cached(
     };
 
     // Resume from the deepest checkpoint still held. `n == 0` is the bare downscale.
+    let mut gpu_prefix_steps = 0usize;
     let mut resumed = None;
     for n in (0..=steps.len()).rev() {
         if let Some(img) = cache.get(&key_at(n)) {
@@ -1118,7 +1128,29 @@ fn render_cached(
     // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
     // (fit) and 2.1 ms (native) against the 13–117 ms each avoided stage costs.
     for (i, step) in steps.iter().enumerate().skip(start) {
-        img = Arc::new(step.stage.apply((*img).clone()));
+        // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
+        // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
+        // after geometry and noise reduction — so substituting up front would estimate it from
+        // the raw buffer, before the crop. A slightly different airlight is a different
+        // photograph, not an error.
+        //
+        // ⚠ The step's `key` is never touched: `PrefixStepKey` is derived from the edits, so a
+        // checkpoint written by either path is a legitimate hit for the other and `PrefixCache`
+        // needs no change at all.
+        let accelerated = if gpu_tail {
+            gpu_pipeline::shared().and_then(|ctx| {
+                gpu_pipeline::accelerate_prefix_stage(step.stage.name(), edits, scale, &img, ctx)
+            })
+        } else {
+            None
+        };
+        img = Arc::new(match accelerated {
+            Some(g) => {
+                gpu_prefix_steps += 1;
+                g.apply((*img).clone())
+            }
+            None => step.stage.apply((*img).clone()),
+        });
         cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
     }
     let prefix_stages = steps.len() - start;
@@ -1355,6 +1387,7 @@ fn render_cached(
         frame,
         Ran {
             prefix_stages,
+            gpu_prefix_steps,
             bytes,
         },
     )
@@ -1650,6 +1683,102 @@ mod tests {
             &mut PrefixCache::default(),
             &mut BrushCache::default(),
         )
+    }
+
+    /// A hazy buffer large enough for dehaze's guided reach, which is **twice** its radius.
+    fn hazy_buffer() -> Arc<ImageBuf> {
+        let (w, h) = (200usize, 160);
+        let a = [0.85f32, 0.87, 0.9];
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+                let dark = x % 40 < 6 && y % 40 < 6;
+                let clear = if dark {
+                    [0.01, 0.01, 0.01]
+                } else {
+                    [0.05 + 0.7 * u, 0.05 + 0.6 * v, 0.05 + 0.5 * (1.0 - u)]
+                };
+                let t = 0.95 - 0.9 * u;
+                let mut px = [0.0f32; 3];
+                for c in 0..3 {
+                    px[c] = clear[c] * t + a[c] * (1.0 - t);
+                }
+                img.set_pixel(x, y, px);
+            }
+        }
+        Arc::new(img)
+    }
+
+    fn dehaze_edits() -> Edits {
+        Edits {
+            dehaze: edit_model::Dehaze { amount: 70.0 },
+            ..Edits::default()
+        }
+    }
+
+    fn rendered_hazy(gpu: bool, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {
+        render_cached(
+            &hazy_buffer(),
+            &dehaze_edits(),
+            FrameSpec {
+                gpu_tail: gpu,
+                ..FrameSpec::fit(200)
+            },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            cache,
+            &mut BrushCache::default(),
+        )
+    }
+
+    /// ⚠⚠ **THE CARRIER, and without it every test in `gpu-pipeline` passes against a seam
+    /// `render_cached` never calls.** The prefix seam changes no pixel a test can read — the two
+    /// paths render the same picture by design — so only an explicit count can see it. That
+    /// asymmetry is exactly how creative LUTs (W5) shipped fully tested and 100% dead.
+    #[test]
+    fn a_dehaze_prefix_step_runs_on_the_gpu() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let (_, ran) = rendered_hazy(true, &mut PrefixCache::default());
+        assert_eq!(
+            ran.prefix_stages, 1,
+            "fixture check: there must be exactly one prefix step to accelerate"
+        );
+        assert_eq!(ran.gpu_prefix_steps, 1, "dehaze must have run on the GPU");
+    }
+
+    /// ⚠ The other direction, and it is not symmetry: without it a seam that fired
+    /// **unconditionally** — ignoring the setting entirely — would pass the carrier above.
+    #[test]
+    fn with_the_setting_off_no_prefix_step_runs_on_the_gpu() {
+        let (_, ran) = rendered_hazy(false, &mut PrefixCache::default());
+        assert_eq!(ran.prefix_stages, 1, "fixture check: one prefix step");
+        assert_eq!(ran.gpu_prefix_steps, 0);
+    }
+
+    /// ⚠⚠ **A checkpoint written by either path is a legitimate hit for the other**, which is what
+    /// `PrefixStepKey` being derived from the **edits** buys — and it is a claim until something
+    /// asserts it. Render once on the GPU, then once on the CPU **through the same cache**: the
+    /// second must run no prefix step at all.
+    #[test]
+    fn a_checkpoint_written_by_either_path_is_a_hit_for_the_other() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let mut cache = PrefixCache::default();
+        let (_, first) = rendered_hazy(true, &mut cache);
+        assert_eq!(first.gpu_prefix_steps, 1, "fixture check: the GPU ran it");
+        let (_, second) = rendered_hazy(false, &mut cache);
+        assert_eq!(
+            second.prefix_stages, 0,
+            "the CPU path must hit the checkpoint the GPU path wrote"
+        );
     }
 
     /// ⚠⚠ **Without this, the three "keeps the float" tests below all pass against an
