@@ -28,6 +28,13 @@ pub struct GpuContext {
     shared_plane: crate::SharedPlane<crate::GpuImage>,
     adapter_name: String,
     backend: String,
+    /// The largest resident image this device will accept, in bytes.
+    ///
+    /// ⚠⚠ **The `min` of two limits, and taking only one of them is how this was missed.** The
+    /// image is allocated as a buffer *and* bound whole as a storage buffer, so
+    /// `max_buffer_size` and `max_storage_buffer_binding_size` both apply — and under
+    /// `Limits::default()` they are 256 MiB and **128 MiB**, so the binding is the tighter one.
+    max_image_bytes: u64,
 }
 
 impl GpuContext {
@@ -52,8 +59,29 @@ impl GpuContext {
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .ok()?;
         let info = adapter.get_info();
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        // ⚠⚠ **The adapter's own limits, never `Limits::default()` — and asking for the default
+        // was a live bug that killed the render worker.** `DeviceDescriptor::default()` requests
+        // the downlevel-safe floor: `max_buffer_size` 256 MiB and `max_storage_buffer_binding_size`
+        // **128 MiB**. A full-resolution X-T4 frame is 6246x4170 RGB f32 = **298 MiB**, so every
+        // whole-image GPU render above ~11 Mpx failed `create_buffer` validation — which wgpu
+        // reports through a **panic**, on the render worker thread, killing it for the rest of the
+        // session. Symptom: at 1:1 the sliders stopped changing the picture while the *thumbnail*
+        // kept updating, and switching photos fixed it because that builds a new engine.
+        //
+        // ⚠ Measured on this machine: the M2 offers **9093 MiB** per buffer and **4096 MiB** per
+        // storage binding, so the ceiling we opted into was 32x below what was available.
+        //
+        // ⚠ `adapter.limits()` is by definition supported by that adapter, so this cannot make
+        // `request_device` fail where the default would have succeeded.
+        let limits = adapter.limits();
+        let max_image_bytes = limits
+            .max_buffer_size
+            .min(limits.max_storage_buffer_binding_size);
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .ok()?;
         Some(Self {
             device,
             queue,
@@ -61,6 +89,7 @@ impl GpuContext {
             shared_plane: Default::default(),
             adapter_name: info.name,
             backend: format!("{:?}", info.backend),
+            max_image_bytes,
         })
     }
 
@@ -79,6 +108,18 @@ impl GpuContext {
     /// The backend in use — `Metal`, `Vulkan`, `Dx12`, …
     pub fn backend(&self) -> &str {
         &self.backend
+    }
+
+    /// The largest resident image this device will accept, in bytes.
+    ///
+    /// ⚠⚠ **Consulted by [`crate::GpuImage::new`] and by nothing else, deliberately.** Every
+    /// image-sized allocation in this crate is that one or is derived from it — scratch planes and
+    /// the packed RGBA8 target are each exactly a **third** of the image, the readback is at most
+    /// the image and is not storage-bound, and the staging buffer is image-sized and likewise not
+    /// storage-bound. So one gate on the largest dominates them all, and a second would be a
+    /// second rule to keep in step.
+    pub fn max_image_bytes(&self) -> u64 {
+        self.max_image_bytes
     }
 }
 

@@ -28,6 +28,18 @@ impl GpuImage {
         if bytes == 0 {
             return None;
         }
+        // ⚠⚠ **Refusing is the whole point: `create_buffer` does not return an error, it
+        // PANICS.** wgpu reports a validation failure through the uncaptured-error handler, which
+        // aborts the calling thread — and the caller here is the render worker, so one oversized
+        // frame stopped the app rendering for the rest of the session. `None` instead, which every
+        // caller already handles by falling back to the CPU twin.
+        //
+        // ⚠ The ceiling is the device's, not a constant: see [`GpuContext::max_image_bytes`]. With
+        // the adapter's real limits an M2 allows 4 GiB, so nothing a camera produces reaches this
+        // — it is the guard that makes the next sensor a slower render rather than a dead worker.
+        if bytes > ctx.max_image_bytes() {
+            return None;
+        }
         let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gpu-image"),
             size: bytes,
@@ -108,6 +120,44 @@ mod tests {
         assert!(GpuImage::new(ctx, 0, 10).is_none());
         assert!(GpuImage::new(ctx, 10, 0).is_none());
         assert!(GpuImage::new(ctx, 4, 4).is_some());
+    }
+
+    #[test]
+    fn an_image_past_the_devices_ceiling_is_refused_rather_than_allocated() {
+        // ⚠⚠ **This is the M8.3p crash as a test, and it discriminates by PANICKING without the
+        // guard** — `wgpu::Device::create_buffer` reports a validation failure by aborting the
+        // calling thread, so a missing gate does not merely return the wrong value here.
+        //
+        // ⚠ The size is chosen to clear `usize` overflow — which the two `checked_mul`s above
+        // already reject — so the only thing that can refuse it is the ceiling itself.
+        let Some(ctx) = crate::shared() else {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        };
+        let side = 200_000; // 4e10 px x 12 bytes = 480 GB, past any device
+        assert!(
+            GpuImage::new(ctx, side, side).is_none(),
+            "an image past max_image_bytes must be declined, never handed to create_buffer"
+        );
+    }
+
+    #[test]
+    fn a_full_resolution_frame_fits_this_device() {
+        // ⚠⚠ **The regression, stated in the units the bug arrived in.** A 26 Mpx X-T4 frame is
+        // 298 MiB of RGB f32; under `Limits::default()` the storage-binding ceiling is 128 MiB, so
+        // this was refused — and before the guard above, fatally. It passes only because
+        // `GpuContext::new` now asks the adapter for what it actually offers.
+        //
+        // ⚠ A device that genuinely cannot take 298 MiB would fail this, and that is the honest
+        // outcome: the GPU path cannot carry a full-resolution frame there and the reader should
+        // know rather than wonder why 1:1 is slow.
+        let Some(ctx) = crate::shared() else { return };
+        assert!(
+            GpuImage::new(ctx, 6246, 4170).is_some(),
+            "a full-resolution frame must fit: needed {} bytes, device allows {}",
+            6246u64 * 4170 * 3 * 4,
+            ctx.max_image_bytes()
+        );
     }
 
     #[test]
