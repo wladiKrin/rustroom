@@ -2,8 +2,8 @@
 
 use crate::{
     GpuChain, GpuContext, GpuContrastStage, GpuDisplayRenderingStage, GpuExposureStage,
-    GpuGradingStage, GpuHslStage, GpuOutputTransformStage, GpuSharpenStage, GpuStage,
-    GpuToneCurveStage, GpuToneRegionsStage, GpuWhiteBalanceStage,
+    GpuGradingStage, GpuHslStage, GpuOutputTransformStage, GpuSaturationStage, GpuSharpenStage,
+    GpuStage, GpuToneCurveStage, GpuToneRegionsStage, GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale, RenderSpec};
@@ -72,6 +72,10 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // split the per-pixel head before this milestone.
     ("tone_curve", |e, _, _, _, ctx| {
         Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx))
+    }),
+    // ⚠ Before `hsl`, as in the tail — colour follows tone.
+    ("saturation", |e, _, _, _, ctx| {
+        Box::new(GpuSaturationStage::new(e.saturation, e.vibrance, ctx))
     }),
     ("hsl", |e, _, _, _, ctx| {
         Box::new(GpuHslStage::new(&e.hsl, ctx))
