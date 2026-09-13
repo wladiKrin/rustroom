@@ -13,6 +13,7 @@ mod brush_wgsl;
 mod cache;
 mod chain;
 mod context;
+mod contrast;
 mod dispatch;
 mod display_rendering;
 mod equivalence;
@@ -41,6 +42,7 @@ pub fn max_tile_dabs() -> u32 {
 }
 pub use chain::{GpuChain, GpuStage};
 pub use context::{shared, GpuContext};
+pub use contrast::GpuContrastStage;
 pub use display_rendering::GpuDisplayRenderingStage;
 pub use equivalence::{compare, Divergence};
 pub use exposure::GpuExposureStage;

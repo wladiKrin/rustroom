@@ -1,8 +1,9 @@
 //! Swapping runs of CPU stages for GPU chains in a built pipeline.
 
 use crate::{
-    GpuChain, GpuContext, GpuDisplayRenderingStage, GpuExposureStage, GpuGradingStage, GpuHslStage,
-    GpuOutputTransformStage, GpuSharpenStage, GpuStage, GpuToneRegionsStage, GpuWhiteBalanceStage,
+    GpuChain, GpuContext, GpuContrastStage, GpuDisplayRenderingStage, GpuExposureStage,
+    GpuGradingStage, GpuHslStage, GpuOutputTransformStage, GpuSharpenStage, GpuStage,
+    GpuToneRegionsStage, GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale, RenderSpec};
@@ -58,6 +59,11 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     }),
     ("exposure", |e, _, _, _, ctx| {
         Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
+    }),
+    // ⚠⚠ Between `exposure` and `tone_regions`, which is the whole reason 1.2 ms is worth
+    // porting: on the CPU it split the per-pixel head into two runs the gate refused.
+    ("contrast", |e, _, _, _, ctx| {
+        Box::new(GpuContrastStage::new(e.contrast, ctx))
     }),
     ("tone_regions", |e, _, _, _, ctx| {
         Box::new(GpuToneRegionsStage::new(e, ctx))
