@@ -11,6 +11,12 @@ mod accelerate;
 mod brush_raster;
 mod brush_wgsl;
 mod cache;
+// ⚠ `#[cfg(test)]` because every item in it is reachable only from its own `#[ignore]`d probe.
+// A `pub(crate)` item in a LIBRARY whose only callers are `#[cfg(test)]` is dead code for the lib
+// target and `clippy -D warnings` rejects it — the trap this file's own history records for bin
+// crates, arriving in a library through `pub(crate)`.
+#[cfg(test)]
+mod box_probe;
 mod chain;
 mod context;
 mod contrast;

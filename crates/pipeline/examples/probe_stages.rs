@@ -64,6 +64,17 @@ fn main() {
             e.tone_curve.points = vec![[0.0, 0.0], [0.4, 0.5], [1.0, 1.0]]
         }),
         ("saturation", |e| e.saturation = 20.0),
+        // ⚠⚠ The one stage `probe_stages` did not cover until M8.3n, which is why this file's
+        // own numbers could never say what local contrast costs. Split by band **and by sign**,
+        // because positive Texture measures against a Gaussian and negative against a guided
+        // filter — two different amounts of work behind one slider.
+        ("texture_plus", |e| e.local_contrast.texture = 60.0),
+        ("texture_minus", |e| e.local_contrast.texture = -60.0),
+        ("clarity", |e| e.local_contrast.clarity = 60.0),
+        ("texture+clarity", |e| {
+            e.local_contrast.texture = 60.0;
+            e.local_contrast.clarity = 60.0;
+        }),
         ("display_rendering", |e| {
             e.rendering = Some(edit_model::Rendering::Camera)
         }),
