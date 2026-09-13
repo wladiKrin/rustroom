@@ -478,6 +478,54 @@ fn main() {
             }
         }
 
+        // ⚠⚠ **The NR DRAG, which is the row M8.3q is judged by and which no existing row can
+        // see.** Noise reduction is the FIRST prefix step, so moving its slider re-runs NR *and*
+        // dehaze *and* the tail — 216.4 ms on the CPU against a Dehaze drag's 132.0, which makes
+        // it the most expensive drag anywhere in the prefix. The rows above price one stage each;
+        // this prices the frame, which is what a photographer waits for.
+        if let Some(ctx) = gpu_pipeline::shared() {
+            let from = steps
+                .iter()
+                .position(|s| s.stage.name() == "noise_reduction")
+                .filter(|_| !steps.is_empty());
+            if let Some(from) = from {
+                let (t2, chain) = gpu_pipeline::accelerate(
+                    build_pipeline_split_in_region(&heavy, sc, None).1,
+                    &heavy,
+                    sc,
+                    None,
+                    pipeline::ProfileRendering::default(),
+                    pipeline::RenderSpec::default(),
+                    ctx,
+                );
+                let t2 = gpu_pipeline::rejoin(t2, chain);
+                // ⚠ Every prefix step from noise reduction onward, each offered the seam — that
+                // is what a drag actually re-runs, and it is why a per-stage number understates
+                // it. A step with no twin stays on the CPU here, exactly as it would in the app.
+                let mut best = f64::MAX;
+                for _ in 0..5 {
+                    let t = Instant::now();
+                    let mut img = checkpoints[from].clone();
+                    for step in steps.iter().skip(from) {
+                        img = match gpu_pipeline::accelerate_prefix_stage(
+                            step.stage.name(),
+                            &heavy,
+                            sc,
+                            &img,
+                            ctx,
+                        ) {
+                            Some(g) => g.apply(img),
+                            None => step.stage.apply(img),
+                        };
+                    }
+                    let out = t2.run(img);
+                    best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+                    std::hint::black_box(&out);
+                }
+                println!("{best:8.1} ms   NR DRAG, prefix steps AND tail on the GPU");
+            }
+        }
+
         // ⚠ Each prefix stage alone, with no tail, so the spec prices what a GPU run would
         // actually replace rather than inferring it from a difference of two totals.
         for (i, step) in steps.iter().enumerate() {

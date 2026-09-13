@@ -107,6 +107,17 @@ fn copy_l(@builtin(global_invocation_id) id: vec3<u32>) {
 // negative when `p` and `guide` are anti-correlated, which cannot happen when they are the same
 // plane. Kept as two names because it mirrors the CPU line for line.
 //
+// ⚠⚠ **A SABOTAGE DROPPING THIS CLAMP IS RECORDED AS NEAR-INERT RATHER THAN COUNTED, and it is
+// M8.3n's finding arriving in a second stage.** Because the two are equal in exact arithmetic, the
+// only way `cov` goes negative here is float cancellation on nearly-flat areas — so the difference
+// is rounding noise, measured there at 4.7e-6, which is *below* the GPU/CPU baseline divergence of
+// 1.05e-5 in the same regime. No test in this crate can separate the two, and one that appeared to
+// would be measuring the baseline. Verified: removing it left all 10 tests green.
+//
+// ⚠ Kept anyway, and deliberately: it costs nothing, it mirrors the CPU line for line, and the
+// distinction becomes load-bearing the moment anything drives this shader with `p` and `guide`
+// genuinely different — which is what dehaze already does.
+//
 // ⚠ Reads BOTH planes before writing EITHER — it overwrites its own inputs in place.
 @compute @workgroup_size(64)
 fn slope_offset(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -249,12 +260,18 @@ impl GpuStage for GpuNoiseReductionStage {
         "noise_reduction"
     }
 
-    /// Measured whole-buffer at 3123x2085 (6.5 Mpx) by `bench_preview`'s native block: **86.1 ms**.
+    /// Measured whole-buffer at 3123x2085 (6.5 Mpx) by `bench_preview`'s native block, three runs:
+    /// **81.9-82.8 ms**.
     ///
-    /// ⚠ Ships at the bottom of that reading, the conservative direction — a lower number makes a
+    /// ⚠ Ships at the bottom of that band, the conservative direction — a lower number makes a
     /// step less likely to chain, and the gate must fail toward the CPU.
+    ///
+    /// ⚠⚠ **A single earlier reading said 86.1 and the band says 81.9-82.8 — quote a band, not a
+    /// figure.** That reading was taken at load 5.43 against this band's 4.24-5.27, and a busier
+    /// machine biases the CPU column upward. M8.3h had to retract a headline for exactly this
+    /// reason: a point measurement compared against a point prediction says less than it looks.
     fn cpu_cost(&self) -> f32 {
-        86.0
+        81.0
     }
 
     /// ⚠ Four, against dehaze's seven: the self-guided filter needs two statistics where the
