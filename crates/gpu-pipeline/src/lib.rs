@@ -8,6 +8,7 @@
 //! ⚠ Nothing in the app uses this crate. See the spec's §8 for why that is deliberate.
 
 mod accelerate;
+mod box_wgsl;
 mod brush_raster;
 mod brush_wgsl;
 mod cache;
@@ -27,6 +28,7 @@ mod exposure;
 mod grading;
 mod hsl;
 mod image;
+mod local_contrast;
 mod luma_wgsl;
 mod oklab_wgsl;
 mod output_transform;
@@ -57,6 +59,7 @@ pub use exposure::GpuExposureStage;
 pub use grading::GpuGradingStage;
 pub use hsl::GpuHslStage;
 pub use image::GpuImage;
+pub use local_contrast::GpuLocalContrastStage;
 pub use output_transform::GpuOutputTransformStage;
 pub use saturation::GpuSaturationStage;
 pub use shared_plane::SharedPlane;

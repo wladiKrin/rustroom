@@ -114,6 +114,18 @@ impl GpuChain {
         self.take_shared = true;
     }
 
+    /// Whether `mark_shared` let this chain take a deposited plane.
+    ///
+    /// ⚠⚠ Exists because after M8.3n **every mask sub-stage is ported**, so a chain behind a CPU
+    /// stage is no longer constructible from any `Edits` — the same shape M8.3e hit when
+    /// `output_transform` made "a tail with nothing replaceable" unbuildable, and M8.3h when a
+    /// trailing run stopped being refusable. The rule is therefore observed directly rather than
+    /// through a render, which is **stronger** than what it replaces: it needs no deposit, no GPU
+    /// run and no inference from a pixel.
+    pub fn shares_input(&self) -> bool {
+        self.take_shared
+    }
+
     /// Transfers **this chain** has performed, as `(uploads, downloads)`.
     pub fn transfer_counts(&self) -> (usize, usize) {
         (

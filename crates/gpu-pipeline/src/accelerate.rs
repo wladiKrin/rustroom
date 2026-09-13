@@ -2,8 +2,9 @@
 
 use crate::{
     GpuChain, GpuContext, GpuContrastStage, GpuDisplayRenderingStage, GpuExposureStage,
-    GpuGradingStage, GpuHslStage, GpuOutputTransformStage, GpuSaturationStage, GpuSharpenStage,
-    GpuStage, GpuToneCurveStage, GpuToneRegionsStage, GpuWhiteBalanceStage,
+    GpuGradingStage, GpuHslStage, GpuLocalContrastStage, GpuOutputTransformStage,
+    GpuSaturationStage, GpuSharpenStage, GpuStage, GpuToneCurveStage, GpuToneRegionsStage,
+    GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale, RenderSpec};
@@ -72,6 +73,12 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // split the per-pixel head before this milestone.
     ("tone_curve", |e, _, _, _, ctx| {
         Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx))
+    }),
+    // ⚠⚠ **The last stage that could split a mask's sub-stage chain**, and the last that could
+    // take the LEADING position and deny a mask M8.3l's shared upload. Takes the render scale,
+    // because both bands' radii are in full-resolution pixels.
+    ("local_contrast", |e, scale, _, _, ctx| {
+        Box::new(GpuLocalContrastStage::new(&e.local_contrast, scale, ctx))
     }),
     // ⚠ Before `hsl`, as in the tail — colour follows tone.
     ("saturation", |e, _, _, _, ctx| {
@@ -149,10 +156,24 @@ const TRANSFER_COST: f32 = 27.0;
 /// photograph rather than an error. That is `MaskStage::source_for`'s rule (*"exhaustive on
 /// purpose — a catch-all here is a trap"*) applied to the projection.
 ///
-/// ⚠ The eight carried fields are exactly the ones a `REPLACEABLE` builder reads. The eight
-/// ignored ones have **no GPU stage**: white balance, contrast, the tone curve, local contrast and
-/// saturation are M8.3e plan 2's; noise reduction and dehaze run in the **prefix** and are never in
-/// a mask's tail sub-stage list at all.
+/// ⚠ The carried fields are exactly the ones a `REPLACEABLE` builder reads. The **two** ignored
+/// ones have no GPU stage and cannot have one here: noise reduction and dehaze run in the
+/// **prefix** and are never in a mask's tail sub-stage list at all.
+///
+/// ⚠⚠ **THE EXHAUSTIVE DESTRUCTURE DOES NOT PROTECT AGAINST THE FAILURE THAT ACTUALLY HAPPENED.**
+/// It catches a *new field*, because a new field has no arm. It cannot catch a field whose status
+/// **changed** — and M8.3m shipped exactly that: it added `white_balance`, `contrast`,
+/// `tone_curve` and `saturation` to [`REPLACEABLE`] and left all four sitting under
+/// "deliberately not carried" here. The consequence inside a mask was silent and total: the
+/// builder read `Edits::default()`, so a masked white balance solved gains of `[1, 1, 1]`, a
+/// masked contrast a slope of 1, a masked tone curve an empty point list — **every one of them an
+/// identity**, while the CPU stage they replaced did the work. A slider that does nothing, with
+/// `gpu_tail` on, and no error anywhere.
+///
+/// ⚠ Nobody hit it: `gpu_tail` is off by default and 0 of 40 sidecars use those four. That is luck
+/// rather than a guard. **Anything added to `REPLACEABLE` must be carried here**, and
+/// `a_mask_carrying_every_ported_stage_renders_the_same_picture` is what now sees it — its fixture
+/// is built from the same list rather than from a hand-written set that went stale.
 ///
 /// ⚠ `display_rendering` and `output_transform` are the two builders not built from `Edits`, and
 /// neither can occur in a mask's sub-stage list — `adjustment_stages` does not place them.
@@ -167,15 +188,15 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
         hsl,
         color_grading,
         sharpening,
-        // deliberately not carried — no GPU stage exists for them
+        white_balance,
+        contrast,
+        tone_curve,
+        saturation,
+        vibrance,
+        local_contrast,
+        // deliberately not carried — these two run in the PREFIX and cannot reach a mask's tail
         noise_reduction: _,
         dehaze: _,
-        white_balance: _,
-        contrast: _,
-        tone_curve: _,
-        saturation: _,
-        vibrance: _,
-        local_contrast: _,
     } = a;
     Edits {
         exposure: *exposure,
@@ -186,6 +207,12 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
         hsl: *hsl,
         color_grading: *color_grading,
         sharpening: *sharpening,
+        white_balance: *white_balance,
+        contrast: *contrast,
+        tone_curve: tone_curve.clone(),
+        saturation: *saturation,
+        vibrance: *vibrance,
+        local_contrast: *local_contrast,
         ..Edits::default()
     }
 }
@@ -577,9 +604,18 @@ mod tests {
     }
 
     /// ⚠⚠ **The guard on the projection, and the only thing that can see a mis-mapped field.**
-    /// Every one of the eight projected fields is non-default here, so a projection that forgot
-    /// `whites` — or carried the *global* value instead of the mask's — renders a different
-    /// photograph. A fixture setting only `hsl` would be blind to seven of the eight.
+    /// Every projected field is non-default here, so a projection that forgot one — or carried the
+    /// *global* value instead of the mask's — renders a different photograph. A fixture setting
+    /// only `hsl` would be blind to every other.
+    ///
+    /// ⚠⚠ **THIS FIXTURE WENT STALE ONCE AND THE TEST KEPT PASSING.** Its doc used to read
+    /// *"every one of the eight projected fields is non-default here"*, which was true when
+    /// written — and M8.3m grew the projected set to twelve without touching the fixture, so four
+    /// stages sat silently inert inside every mask and this test reported green. **A guard that
+    /// enumerates a list stops guarding the moment the list grows**, which is the masked-grade
+    /// milestone's sharpest finding arriving in a new place. ⚠ The mitigation is the assertion
+    /// below: the fixture must leave nothing at its default but the two prefix stages, and that is
+    /// checked rather than trusted.
     ///
     /// ⚠ The fixture check matters as much as the assertion: an accelerated mask and a CPU one
     /// agree trivially if the mask covers nothing, so the masked render is first shown to differ
@@ -601,8 +637,55 @@ mod tests {
                 detail: 50.0,
                 masking: 0.0,
             },
+            white_balance: edit_model::WhiteBalance {
+                kelvin: Some(4200.0),
+                tint: 8.0,
+            },
+            contrast: 28.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.4, 0.52], [1.0, 1.0]],
+            },
+            saturation: 22.0,
+            vibrance: 16.0,
+            local_contrast: edit_model::LocalContrast {
+                texture: 45.0,
+                clarity: 35.0,
+            },
+            // ⚠ The only two left at their defaults, and they must be: noise reduction and dehaze
+            // run in the PREFIX and can never appear in a mask's tail sub-stage list.
             ..Default::default()
         };
+        // ⚠⚠ **The check that stops this fixture going stale again.** Anything added to
+        // `REPLACEABLE` must be carried by `sub_edits`, and `sub_edits` reads these fields — so a
+        // field left at its default here is a field this test cannot see.
+        let carried = sub_edits(&adjustments);
+        assert_ne!(
+            carried,
+            Edits::default(),
+            "fixture check: the projection must carry something"
+        );
+        for (name, same) in [
+            ("exposure", carried.exposure == 0.0),
+            ("whites", carried.whites == 0.0),
+            ("white_balance", carried.white_balance.kelvin.is_none()),
+            ("contrast", carried.contrast == 0.0),
+            ("tone_curve", carried.tone_curve.points.is_empty()),
+            ("saturation", carried.saturation == 0.0),
+            ("vibrance", carried.vibrance == 0.0),
+            ("local_contrast", !carried.local_contrast.is_active()),
+            ("hsl", carried.hsl == Edits::default().hsl),
+            (
+                "color_grading",
+                carried.color_grading == Edits::default().color_grading,
+            ),
+            ("sharpening", carried.sharpening.amount == 0.0),
+        ] {
+            assert!(
+                !same,
+                "fixture check: `{name}` reached the projection at its default, so this test is \
+                 blind to it — either the fixture or `sub_edits` is stale"
+            );
+        }
         let e = Edits {
             masks: vec![mask_carrying(adjustments)],
             ..Edits::default()
@@ -837,19 +920,39 @@ mod tests {
 
     /// ⚠ The projection must carry **nothing else**. A field that leaked in would be a global
     /// value applied inside a mask — same class of bug, opposite direction.
+    ///
+    /// ⚠⚠ **THIS TEST ASSERTED THE M8.3m BUG WAS CORRECT BEHAVIOUR, AND THAT IS THE SHARPEST
+    /// FINDING OF M8.3n.** Its fixture was `contrast`, `saturation` and `vibrance` — the exact
+    /// fields whose `REPLACEABLE` rows M8.3m had just added — so it demanded that a projection
+    /// *drop* three values a GPU builder now reads. It passed, loudly and wrongly, and its name
+    /// said the opposite of what it checked.
+    ///
+    /// ⚠ Rebuilt against the property that is actually stable: the only things a projection must
+    /// never carry are the two stages that **cannot reach a mask's tail at all** — noise reduction
+    /// and dehaze run in the prefix — and `masks` themselves, since `LocalAdjustments` has no
+    /// `masks` field and a mask can never contain a mask. Those cannot go stale as `REPLACEABLE`
+    /// grows, where an enumerated list of ignored fields provably can.
     #[test]
     fn the_projection_carries_nothing_a_gpu_builder_does_not_read() {
         let a = edit_model::LocalAdjustments {
-            contrast: 40.0,
-            saturation: 35.0,
-            vibrance: 30.0,
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 60.0,
+                color: 55.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 45.0 },
             ..Default::default()
         };
         let e = sub_edits(&a);
         let d = Edits::default();
-        assert_eq!(e.contrast, d.contrast);
-        assert_eq!(e.saturation, d.saturation);
-        assert_eq!(e.vibrance, d.vibrance);
+        assert_eq!(
+            e.noise_reduction, d.noise_reduction,
+            "noise reduction runs in the PREFIX and can never be a mask's tail sub-stage"
+        );
+        assert_eq!(
+            e.dehaze, d.dehaze,
+            "dehaze runs in the PREFIX and can never be a mask's tail sub-stage"
+        );
         assert_eq!(e.masks.len(), 0, "a projection must never carry masks");
     }
 
@@ -1025,59 +1128,6 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The negative half, and it is the one that matters.** A chain behind a CPU stage
-    /// receives **that stage's output**, not the plane the gate was handed. Taking the deposit
-    /// there would render a picture that is plausible and wrong — the failure mode this project
-    /// records more than any other.
-    ///
-    /// ⚠ `local_contrast` is the wedge because it is a mask sub-stage that is **not** in
-    /// `REPLACEABLE`, so it stays on the CPU, and it runs *before* hsl in a mask's chain — so the
-    /// chain lands at index 1.
-    #[test]
-    fn a_chain_behind_a_cpu_stage_does_not_take_the_plane() {
-        let Some(ctx) = private_ctx() else { return };
-        let e = Edits {
-            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
-                local_contrast: edit_model::LocalContrast {
-                    texture: 0.0,
-                    clarity: 40.0,
-                },
-                hsl: with_hsl().hsl,
-                ..Default::default()
-            })],
-            ..Edits::default()
-        };
-        let p = accel(
-            tail_of(&e),
-            &e,
-            SCALE,
-            ProfileRendering::default(),
-            RenderSpec::default(),
-            &ctx,
-        );
-        let subs = mask_sub_stages(&p);
-        assert_eq!(
-            subs.first(),
-            Some(&"local_contrast"),
-            "fixture check: a CPU stage must come first, got {subs:?}"
-        );
-        assert!(
-            subs.contains(&"gpu_chain"),
-            "fixture check: there must still be a chain behind it, got {subs:?}"
-        );
-        let _ = p.run(big_scene());
-        assert_eq!(
-            ctx.shared_plane().deposits(),
-            1,
-            "fixture check: the gate must still have uploaded a base plane"
-        );
-        assert_eq!(
-            ctx.shared_plane().takes(),
-            0,
-            "a chain that is not the mask's first sub-stage must upload its own input"
-        );
-    }
-
     /// ⚠⚠ **The test that fails when `begin_mask` is deleted, and nothing else does.** Render
     /// twice through one pipeline: each render's gate deposits a fresh plane, so each take must be
     /// of that render's own. A slot that were never cleared would still hand out *a* plane — the
@@ -1115,6 +1165,57 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The negative half, and it is the one that matters.** A chain behind a CPU stage
+    /// receives **that stage's output**, not the plane the gate was handed. Taking the deposit
+    /// there would render a picture that is plausible and wrong — the failure mode this project
+    /// records more than any other.
+    ///
+    /// ⚠⚠ **REBUILT AT M8.3n, AND THE REASON IS A RESULT RATHER THAN A GAP.** The fixture was a
+    /// mask whose chain sat behind `local_contrast` — the last mask sub-stage with no
+    /// `REPLACEABLE` row. Porting it means **all ten are ported**, so a mask's sub-stages are
+    /// contiguous and its chain always lands at index 0: *"a chain behind a CPU stage"* is no
+    /// longer constructible through any `Edits`. That is precisely the milestone's third claim
+    /// delivered in full — **every** mask can now take M8.3l's shared upload, not merely more of
+    /// them — and it is the third time this crate has watched a property become unreachable by
+    /// being fixed (M8.3e's "a tail with nothing replaceable", M8.3h's "a trailing run refused").
+    ///
+    /// ⚠ So the rule is driven directly, over its whole truth table. Weaker than an end-to-end
+    /// render in one way — it does not prove `walk` passes the right `is_first` — and stronger in
+    /// another: it cannot go vacuous as the fixture drifts, which is exactly what happened to the
+    /// test it replaces. ⚠ The carrier half is covered by
+    /// `a_masks_first_sub_stage_takes_the_plane`, which is an end-to-end render and still builds.
+    #[test]
+    fn only_a_leading_chain_offered_the_plane_takes_it() {
+        let Some(ctx) = private_ctx() else { return };
+        let chain = || {
+            GpuChain::new(
+                ctx.clone(),
+                vec![Box::new(GpuExposureStage::new(0.5, ctx.clone())) as Box<dyn GpuStage>],
+            )
+        };
+        for (share_input, is_first, want) in [
+            (true, true, true),
+            // ⚠ The case the whole mechanism exists for: offered, but not at index 0.
+            (true, false, false),
+            // ⚠ And the outer tail, which is never offered — it has no rasteriser of its own, so
+            // any plane it found would be a *previous frame's* leftover.
+            (false, true, false),
+            (false, false, false),
+        ] {
+            let mut c = chain();
+            assert!(
+                !c.shares_input(),
+                "fixture check: a fresh chain must not already share"
+            );
+            mark_shared(&mut c, share_input, is_first);
+            assert_eq!(
+                c.shares_input(),
+                want,
+                "share_input={share_input} is_first={is_first}"
+            );
+        }
+    }
+
     /// ⚠⚠ **`share_input` is load-bearing, and finding that out took a sabotage rather than
     /// review.** The obvious reading is that restricting the offer to a mask's sub-stages is belt
     /// and braces — the outer tail has no coverage rasteriser, so what deposit could its chain
@@ -1124,18 +1225,19 @@ mod tests {
     /// the previous frame's pixels into the current frame's tail.
     ///
     /// ⚠ The fixture therefore needs both halves at once: a **global** hsl, which puts a chain at
-    /// index 0 of the outer walk, and a mask whose chain is behind `local_contrast`, which is what
-    /// leaves a deposit unclaimed. Neither alone can see it.
+    /// index 0 of the outer walk, and a mask that leaves a deposit unclaimed. Neither alone can
+    /// see it.
     #[test]
     fn the_outer_tails_own_chain_never_takes_a_masks_leftover_plane() {
         let Some(ctx) = private_ctx() else { return };
         let mut e = with_hsl();
+        // ⚠⚠ **The wedge changed at M8.3n and the property did not.** It used to be a mask whose
+        // chain sat behind `local_contrast`; porting that stage means every mask sub-stage is now
+        // GPU-able, so a mask leaves its deposit unclaimed for the *other* reason instead — its
+        // sub-stages are too cheap to be worth a chain, so no chain exists to take the plane.
+        // Exposure alone is 1.3 ms against a 27.0 ms transfer.
         e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
-            local_contrast: edit_model::LocalContrast {
-                texture: 0.0,
-                clarity: 40.0,
-            },
-            hsl: with_hsl().hsl,
+            exposure: 0.6,
             ..Default::default()
         })];
         let p = accel(
@@ -1152,10 +1254,10 @@ mod tests {
             "fixture check: the global hsl must be a chain at the outer tail's index 0, got {:?}",
             p.stage_names()
         );
-        assert_eq!(
-            mask_sub_stages(&p).first(),
-            Some(&"local_contrast"),
-            "fixture check: the mask's chain must sit behind a CPU stage, so its deposit is left"
+        let subs = mask_sub_stages(&p);
+        assert!(
+            !subs.contains(&"gpu_chain"),
+            "fixture check: the mask must build NO chain, so its deposit is left, got {subs:?}"
         );
 
         let first = p.run(big_scene());
@@ -1208,7 +1310,7 @@ mod tests {
     /// body left that test green — found by running the sabotage, not by reading.
     ///
     /// ⚠ The discriminating case needs two different pipelines sharing one context: one that
-    /// **leaves** a deposit (its chain sits behind a CPU stage) and one that **deposits nothing**
+    /// **leaves** a deposit (its sub-stages are too cheap to chain) and one that **deposits nothing**
     /// (a plain brush needs no base) whose chain is at index 0 and would therefore take whatever
     /// it finds. Without the clear, the second renders the first's pixels — a plausible
     /// photograph, and of the wrong photograph.
@@ -1216,13 +1318,13 @@ mod tests {
     fn a_mask_that_deposits_nothing_never_takes_another_masks_plane() {
         let Some(ctx) = private_ctx() else { return };
 
+        // ⚠ The leaver's sub-stages are too cheap to be worth a chain (exposure alone is 1.3 ms
+        // against a 27.0 ms transfer), so its gate deposits a plane nobody takes. ⚠⚠ It used to
+        // be a mask whose chain sat behind `local_contrast`; porting that stage at M8.3n made
+        // every mask sub-stage GPU-able, so that fixture no longer exists.
         let leaver = Edits {
             masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
-                local_contrast: edit_model::LocalContrast {
-                    texture: 0.0,
-                    clarity: 40.0,
-                },
-                hsl: with_hsl().hsl,
+                exposure: 0.6,
                 ..Default::default()
             })],
             ..Edits::default()
@@ -1246,10 +1348,10 @@ mod tests {
             )
         };
         let (pl, pt) = (build(&leaver), build(&taker));
-        assert_eq!(
-            mask_sub_stages(&pl).first(),
-            Some(&"local_contrast"),
-            "fixture check: the leaver's chain must sit behind a CPU stage"
+        assert!(
+            !mask_sub_stages(&pl).contains(&"gpu_chain"),
+            "fixture check: the leaver must build NO chain, so its deposit is left, got {:?}",
+            mask_sub_stages(&pl)
         );
         assert_eq!(
             mask_sub_stages(&pt),
@@ -1337,13 +1439,19 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **Nine of ten mask sub-stages, and the tenth is named.** `local_contrast` is now the
-    /// only thing a mask can carry that stays on the CPU — which is what turns "port the rest of a
-    /// mask" from a list into one item. ⚠ It also matters to M8.3l: the shared upload reaches only
-    /// a mask whose sub-stages **begin** with a GPU-able stage, and `local_contrast` is the one
-    /// remaining stage that can take that leading position.
+    /// ⚠⚠ **TEN of ten mask sub-stages, which is M8.3n's headline for masks.** Whatever a mask
+    /// carries, its sub-stages are now contiguous and collapse to **one** chain — so a mask always
+    /// pays one round trip rather than two, and its chain always sits at index 0, which is what
+    /// makes M8.3l's shared upload reachable for **every** mask shape rather than merely more of
+    /// them.
+    ///
+    /// ⚠⚠ **This test used to name `local_contrast` and its fixture did not contain one.** It
+    /// asserted "with no local_contrast the whole set must become ONE chain" over a fixture that
+    /// had none by construction, so it passed for the trivial reason and could never have seen the
+    /// stage it was named for. The fixture now carries **every** sub-stage a mask can hold, and
+    /// the fixture check below is what stops it drifting back.
     #[test]
-    fn a_mask_carrying_the_whole_per_pixel_set_keeps_only_local_contrast_on_the_cpu() {
+    fn a_mask_carrying_the_whole_per_pixel_set_becomes_one_chain() {
         let Some(ctx) = ctx() else { return };
         let a = edit_model::LocalAdjustments {
             white_balance: edit_model::WhiteBalance {
@@ -1358,6 +1466,18 @@ mod tests {
             },
             saturation: 20.0,
             hsl: with_hsl().hsl,
+            color_grading: graded(Edits::default()).color_grading,
+            sharpening: Sharpening {
+                amount: 50.0,
+                radius: 1.1,
+                detail: 50.0,
+                masking: 0.0,
+            },
+            // ⚠ The stage this milestone ports, and the one whose absence made this test vacuous.
+            local_contrast: edit_model::LocalContrast {
+                texture: 40.0,
+                clarity: 30.0,
+            },
             ..Default::default()
         };
         let e = Edits {
@@ -1365,10 +1485,26 @@ mod tests {
             ..Edits::default()
         };
         let subs = mask_sub_stages(&tail_of(&e));
-        assert!(
-            subs.len() > 1,
-            "fixture check: the mask must carry several sub-stages, got {subs:?}"
-        );
+        // ⚠⚠ **All ten, asserted by name.** `subs.len() > 1` was the old check and it is far too
+        // weak: it holds for any two, so the one stage the test is about could go missing without
+        // anything failing — which is exactly what happened.
+        for want in [
+            "white_balance",
+            "exposure",
+            "contrast",
+            "tone_regions",
+            "tone_curve",
+            "local_contrast",
+            "saturation",
+            "hsl",
+            "color_grading",
+            "sharpening",
+        ] {
+            assert!(
+                subs.contains(&want),
+                "fixture check: the mask must carry `{want}` before acceleration, got {subs:?}"
+            );
+        }
         let after = mask_sub_stages(&accel(
             tail_of(&e),
             &e,
@@ -1380,7 +1516,7 @@ mod tests {
         assert_eq!(
             after,
             vec!["gpu_chain"],
-            "with no local_contrast the whole set must become ONE chain, got {after:?}"
+            "every sub-stage a mask can carry must collapse into ONE chain, got {after:?}"
         );
     }
 

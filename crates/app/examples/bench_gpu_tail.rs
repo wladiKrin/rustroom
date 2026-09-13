@@ -256,9 +256,43 @@ fn main() {
         ..Edits::default()
     };
 
-    let cases: [(&str, &Edits); 9] = [
+    // ⚠⚠ **The rows M8.3n exists for, and like the head row they are deliberately NOT catalogue
+    // rows.** Re-scanned at M8.3n: **0 of 40 sidecars use Texture and 1 uses Clarity at -5.0**, so
+    // no existing row can see this milestone — the asymmetry M8.3j recorded as the whole mechanism
+    // of its own wrong caveat. Split by band and by **sign**, because positive Texture measures
+    // against a Gaussian and negative against a guided filter: two different amounts of work
+    // behind one slider, measured at 17.9 and 38.7 ms.
+    let texture_minus = Edits {
+        local_contrast: edit_model::LocalContrast {
+            texture: -60.0,
+            clarity: 0.0,
+        },
+        ..Edits::default()
+    };
+    let local_contrast_both = Edits {
+        local_contrast: edit_model::LocalContrast {
+            texture: 60.0,
+            clarity: 50.0,
+        },
+        ..Edits::default()
+    };
+    // ⚠ The head **through** local contrast: before M8.3n this stage sat between `tone_curve` and
+    // `saturation` and split the per-pixel head in two, so this is the row that prices the split
+    // closing rather than the stage's own cost.
+    let head_through_local = Edits {
+        local_contrast: edit_model::LocalContrast {
+            texture: 60.0,
+            clarity: 50.0,
+        },
+        ..full_head.clone()
+    };
+
+    let cases: [(&str, &Edits); 12] = [
         ("TYPICAL of this catalogue", &typical),
         ("the whole per-pixel head", &full_head),
+        ("texture -60 (guided)", &texture_minus),
+        ("texture +60 + clarity 50", &local_contrast_both),
+        ("the head THROUGH local contrast", &head_through_local),
         ("unedited, camera rendering", &neutral_rendered),
         ("unedited, colorimetric", &Edits::default()),
         ("hsl only", &hsl_only),
