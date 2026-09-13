@@ -424,6 +424,42 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⚠⚠ A GPU buffer resident across the prefix→tail seam (recorded 2026-09-13, at M8.3o's merge — MEASURED, not estimated)
+
+**What it is.** A dehaze drag at a native rung renders in **88.9 ms with both the prefix step and
+the tail accelerated**, against 128.4 all-CPU. Of that 88.9, roughly **26 ms is a zero-work GPU
+round trip, paid TWICE**: the prefix step downloads its result so `PrefixCache` can hold it as an
+`ImageBuf` checkpoint, and the tail's chain uploads the same pixels again on the next line.
+Keeping the buffer device-side across that seam is worth **~25–30 ms of the 88.9**, taking the
+frame to ~60 ms (17 fps against 11).
+
+**⚠⚠ And during a drag that checkpoint is written, used once, and invalidated by the very next
+frame.** `PrefixStepKey::Dehaze` holds the dehaze parameters, so moving the slider changes the key
+— the download is pure waste on exactly the interaction the acceleration exists for. It earns its
+place only when you *stop* dragging and move some other slider.
+
+**Why it was not taken at M8.3o.** The seam that milestone built hands back a
+`Box<dyn PipelineStage>`, whose `apply(ImageBuf) -> ImageBuf` **forces the round trip by its
+signature** — the same observation that made `GpuStage` deliberately not a `PipelineStage` at
+M8.3b. Closing it is not a tweak to `accelerate_prefix_stage`; it is a change to what a prefix
+checkpoint *is*.
+
+**⚠ Two shapes, and the second is the one to think about first.**
+- **Fuse the last prefix step into the tail's chain.** Cheapest, and it **destroys the
+  checkpoint**, so a drag of anything *downstream* then re-runs dehaze. M8.3o priced exactly that
+  trade and chose per-step; this would reverse it without the measurement changing.
+- **`PrefixCache` learns to hold a `GpuImage`.** The honest one. A checkpoint becomes "CPU buffer
+  **or** resident device buffer", `MID_BUDGET_BYTES` starts describing VRAM as well as RAM, and
+  every consumer that reads a checkpoint as an `ImageBuf` (the region crop, the brush cache's
+  sizing, `render_cached`'s tail seeding) needs an answer. ⚠ It is also what would let **two
+  consecutive prefix steps** share one upload — the case that appears the moment noise reduction
+  is ported and sits directly above dehaze.
+
+**⚠ Do not start it before the prefix is mostly ported.** With one GPU prefix stage the win is one
+seam; with lens correction, geometry, NR and dehaze all on the GPU it is the difference between
+one round trip per frame and four. The measurement above is the floor, not the ceiling.
+
+
 ### ✅ FIXED 2026-09-07 — "dragging a masked exposure stutters", which was never the mask
 
 **✅ FIXED by the interactive rung** — `docs/superpowers/specs/2026-09-07-interactive-rung-design.md`.
