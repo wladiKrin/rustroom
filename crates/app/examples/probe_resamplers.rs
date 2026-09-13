@@ -36,7 +36,11 @@ fn best_of<F: FnMut() -> ImageBuf>(n: usize, mut f: F) -> f64 {
 ///
 /// ⚠ Parallel over **output** rows, which is sound for the same reason the lens stage's is: this
 /// is a gather, so an output pixel reads the whole source and writes only itself.
-fn rotate_parallel(src: &ImageBuf, angle_rad: f32, weights: &pipeline::resample::Weights) -> ImageBuf {
+fn rotate_parallel(
+    src: &ImageBuf,
+    angle_rad: f32,
+    weights: &pipeline::resample::Weights,
+) -> ImageBuf {
     let (w, h) = (src.width(), src.height());
     let cx = (w as f32 - 1.0) / 2.0;
     let cy = (h as f32 - 1.0) / 2.0;
@@ -61,8 +65,45 @@ fn rotate_parallel(src: &ImageBuf, angle_rad: f32, weights: &pipeline::resample:
     ImageBuf::from_vec(w, h, data)
 }
 
+/// A rayon-parallel homography, for measurement only — the same inverse map
+/// `PerspectiveStage::apply` uses.
+///
+/// ⚠ Parallel over **output** rows, sound for the same reason the rotation's is: a gather.
+///
+/// ⚠⚠ It builds the **real** `Homography` rather than reimplementing the transform — a hand-rolled
+/// copy would measure a different map and report it as this one.
+fn perspective_parallel(
+    src: &ImageBuf,
+    params: &edit_model::Perspective,
+    weights: &pipeline::resample::Weights,
+) -> ImageBuf {
+    let (w, h) = (src.width(), src.height());
+    let cx = (w as f32 - 1.0) / 2.0;
+    let cy = (h as f32 - 1.0) / 2.0;
+    let aspect = cx / cy;
+    let hom = pipeline::perspective::Homography::from_edits(params, aspect);
+    const CH: usize = ImageBuf::CHANNELS;
+    let stride = w * CH;
+    let mut data = vec![0.0f32; w * h * CH];
+    if stride == 0 {
+        return ImageBuf::from_vec(w, h, data);
+    }
+    data.par_chunks_exact_mut(stride)
+        .enumerate()
+        .for_each(|(y, orow)| {
+            for (x, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
+                let n = ((x as f32 - cx) / cy, (y as f32 - cy) / cy);
+                let s = hom.source_of(n);
+                *out = pipeline::resample::sample(src, cx + s.0 * cy, cy + s.1 * cy, weights);
+            }
+        });
+    ImageBuf::from_vec(w, h, data)
+}
+
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: probe_resamplers <raw>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: probe_resamplers <raw>");
     let path = std::path::Path::new(&path);
     let opts = raw_decode::DecodeOptions::preview();
     let d = raw_decode::decode_raw(path, &opts).expect("decode");
@@ -90,8 +131,16 @@ fn main() {
     });
     println!(
         "lens: {} -> {}",
-        d.metadata.lens.as_ref().map(|l| l.name.as_str()).unwrap_or("(none in EXIF)"),
-        if shot.is_some() { "PROFILE MATCHED" } else { "no profile" }
+        d.metadata
+            .lens
+            .as_ref()
+            .map(|l| l.name.as_str())
+            .unwrap_or("(none in EXIF)"),
+        if shot.is_some() {
+            "PROFILE MATCHED"
+        } else {
+            "no profile"
+        }
     );
 
     // Every resampling stage active at once, which is what a typical RAW with a straighten and a
@@ -152,5 +201,32 @@ fn main() {
     println!(
         "\n  geometry's rotation, sequential {seq:.1} ms vs rayon {par:.1} ms — {:.2}x",
         seq / par
+    );
+
+    let pp = edit_model::Perspective {
+        vertical: 30.0,
+        ..Default::default()
+    };
+    // ⚠ Reached through `build_prefix_steps` rather than by constructing the stage: `pipeline`
+    // re-exports `GeometryStage` but NOT `PerspectiveStage`, so this is the only route from
+    // outside the crate — and it is also the one the prefix itself takes.
+    let psteps = pipeline::build_prefix_steps(
+        &Edits {
+            perspective: pp,
+            ..Edits::default()
+        },
+        sc,
+        None,
+        Resampler::default(),
+    );
+    let pstage = psteps
+        .iter()
+        .find(|s| s.stage.name() == "perspective")
+        .expect("fixture check: there must be a perspective step");
+    let pseq = best_of(3, || pstage.stage.apply(src.clone()));
+    let ppar = best_of(3, || perspective_parallel(&src, &pp, &weights));
+    println!(
+        "  perspective,             sequential {pseq:.1} ms vs rayon {ppar:.1} ms — {:.2}x",
+        pseq / ppar
     );
 }
