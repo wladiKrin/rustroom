@@ -77,6 +77,51 @@ impl Shape {
     }
 }
 
+/// Everything an evaluation of the vignette needs, derived once from the parameters and the
+/// frame the falloff is measured against.
+///
+/// ⚠⚠ **This exists so the model is derived in exactly one place.** [`VignetteStage::apply`] and
+/// `gpu-pipeline`'s `GpuVignetteStage` both read it, so the two cannot come to disagree about
+/// `R_MID`, `FEATHER`, the superellipse or the amount curve the first time any of them moves —
+/// and they would disagree **invisibly**, because both answers are plausible photographs. The
+/// rule `white_balance_gains` already follows, for the reason it follows it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VignetteParams {
+    /// Horizontal stretch of the iso-contour metric.
+    pub wu: f32,
+    /// Vertical stretch of the iso-contour metric.
+    pub wv: f32,
+    /// Superellipse exponent; 2 is an ellipse.
+    pub expo: f32,
+    /// Whether `expo` is 2, so the caller may take the `sqrt` fast path.
+    pub elliptical: bool,
+    /// Inner edge of the transition band, in the shape's metric.
+    pub e0: f32,
+    /// Outer edge of the transition band.
+    pub e1: f32,
+    /// Signed strength, `amount / 100` clamped to ±1.
+    pub k: f32,
+}
+
+/// Derive [`VignetteParams`] from the edit and the **full frame's** dimensions.
+///
+/// ⚠ `fw`/`fh` are the frame's, not the rendered buffer's — they set the aspect, so passing a
+/// region's dimensions here would silently reshape the vignette.
+pub fn vignette_params(p: &Vignette, fw: usize, fh: usize) -> VignetteParams {
+    let shape = Shape::new(p.roundness, fw, fh);
+    let r_mid = lerp(R_MID.0, R_MID.1, (p.midpoint / 100.0).clamp(0.0, 1.0));
+    let width = lerp(FEATHER.0, FEATHER.1, (p.feather / 100.0).clamp(0.0, 1.0)).max(WIDTH_EPS);
+    VignetteParams {
+        wu: shape.wu,
+        wv: shape.wv,
+        expo: shape.expo,
+        elliptical: shape.elliptical,
+        e0: r_mid - width * 0.5,
+        e1: r_mid + width * 0.5,
+        k: (p.amount / 100.0).clamp(-1.0, 1.0),
+    }
+}
+
 /// Post-crop vignette: a position-dependent gain applied in linear light.
 ///
 /// Needs no `RenderScale` — it works in normalized frame coordinates, so the preview and the
@@ -140,11 +185,16 @@ impl PipelineStage for VignetteStage {
             None => (w, h, 0, 0),
         };
 
-        let shape = Shape::new(p.roundness, fw, fh);
-        let r_mid = lerp(R_MID.0, R_MID.1, (p.midpoint / 100.0).clamp(0.0, 1.0));
-        let width = lerp(FEATHER.0, FEATHER.1, (p.feather / 100.0).clamp(0.0, 1.0)).max(WIDTH_EPS);
-        let (e0, e1) = (r_mid - width * 0.5, r_mid + width * 0.5);
-        let k = (p.amount / 100.0).clamp(-1.0, 1.0);
+        // ⚠ Through `vignette_params` rather than inline, so this path IS the reference the GPU
+        // stage reads rather than merely agreeing with it.
+        let vp = vignette_params(&p, fw, fh);
+        let shape = Shape {
+            wu: vp.wu,
+            wv: vp.wv,
+            expo: vp.expo,
+            elliptical: vp.elliptical,
+        };
+        let (e0, e1, k) = (vp.e0, vp.e1, vp.k);
         let (hw, hh) = (fw as f32 * 0.5, fh as f32 * 0.5);
 
         image.map_pixels_xy(|x, y, rgb| {

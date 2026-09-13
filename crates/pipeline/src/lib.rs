@@ -146,7 +146,7 @@ pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
 pub use stages::spot_removal::SpotRemovalStage;
 pub use stages::tone_curve::ToneCurveStage;
 pub use stages::tone_regions::ToneRegionsStage;
-pub use stages::vignette::VignetteStage;
+pub use stages::vignette::{vignette_params, VignetteParams, VignetteStage};
 pub use stages::white_balance::WhiteBalanceStage;
 
 /// Ratio of the image being rendered to the full-resolution original: `1.0` at full res,
