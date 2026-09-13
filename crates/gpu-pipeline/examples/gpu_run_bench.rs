@@ -32,6 +32,7 @@ fn accel(
         tail,
         edits,
         scale,
+        None,
         Default::default(),
         Default::default(),
         ctx,

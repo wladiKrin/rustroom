@@ -460,6 +460,7 @@ fn main() {
                     build_pipeline_split_in_region(&heavy, sc, None).1,
                     &heavy,
                     sc,
+                    None,
                     pipeline::ProfileRendering::default(),
                     pipeline::RenderSpec::default(),
                     ctx,

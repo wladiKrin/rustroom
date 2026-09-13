@@ -7,7 +7,7 @@ use crate::{
     GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
-use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale, RenderSpec};
+use pipeline::{Pipeline, PipelineStage, ProfileRendering, Region, RenderScale, RenderSpec};
 use std::sync::Arc;
 
 /// Builds one GPU stage from what the tail was built from.
@@ -30,6 +30,13 @@ use std::sync::Arc;
 type Builder = fn(
     &Edits,
     RenderScale,
+    // ⚠⚠ The **frame** the render is a part of, when it is a part of one. Only `vignette` reads
+    // it — its falloff is measured against the whole frame, so a region must be shaded exactly as
+    // that part of the whole would have been. ⚠ Deliberately a parameter of its own rather than a
+    // field of `RenderSpec`: `build_pipeline_split_in_region` takes the region *beside* the spec,
+    // and giving it two homes in one call is the two-facts-that-can-disagree shape this project
+    // has already paid for three times.
+    Option<Region>,
     ProfileRendering<'_>,
     RenderSpec,
     &Arc<GpuContext>,
@@ -52,52 +59,52 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     // ⚠⚠ First, as in the tail — and the only row whose parameters come from the `RenderSpec`
     // rather than from `Edits` alone. `white_balance_gains` is shared with `adjustment_stages`,
     // so the GPU and CPU stages cannot disagree about what "as shot" means.
-    ("white_balance", |e, _, _, spec, ctx| {
+    ("white_balance", |e, _, _, _, spec, ctx| {
         Box::new(GpuWhiteBalanceStage::new(
             pipeline::white_balance_gains(&e.white_balance, spec.baseline),
             ctx,
         ))
     }),
-    ("exposure", |e, _, _, _, ctx| {
+    ("exposure", |e, _, _, _, _, ctx| {
         Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
     }),
     // ⚠⚠ Between `exposure` and `tone_regions`, which is the whole reason 1.2 ms is worth
     // porting: on the CPU it split the per-pixel head into two runs the gate refused.
-    ("contrast", |e, _, _, _, ctx| {
+    ("contrast", |e, _, _, _, _, ctx| {
         Box::new(GpuContrastStage::new(e.contrast, ctx))
     }),
-    ("tone_regions", |e, _, _, _, ctx| {
+    ("tone_regions", |e, _, _, _, _, ctx| {
         Box::new(GpuToneRegionsStage::new(e, ctx))
     }),
     // ⚠ After `tone_regions`, as in the tail. Like `contrast`, it sits between ported stages and
     // split the per-pixel head before this milestone.
-    ("tone_curve", |e, _, _, _, ctx| {
+    ("tone_curve", |e, _, _, _, _, ctx| {
         Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx))
     }),
     // ⚠⚠ **The last stage that could split a mask's sub-stage chain**, and the last that could
     // take the LEADING position and deny a mask M8.3l's shared upload. Takes the render scale,
     // because both bands' radii are in full-resolution pixels.
-    ("local_contrast", |e, scale, _, _, ctx| {
+    ("local_contrast", |e, scale, _, _, _, ctx| {
         Box::new(GpuLocalContrastStage::new(&e.local_contrast, scale, ctx))
     }),
     // ⚠ Before `hsl`, as in the tail — colour follows tone.
-    ("saturation", |e, _, _, _, ctx| {
+    ("saturation", |e, _, _, _, _, ctx| {
         Box::new(GpuSaturationStage::new(e.saturation, e.vibrance, ctx))
     }),
-    ("hsl", |e, _, _, _, ctx| {
+    ("hsl", |e, _, _, _, _, ctx| {
         Box::new(GpuHslStage::new(&e.hsl, ctx))
     }),
-    ("color_grading", |e, _, _, _, ctx| {
+    ("color_grading", |e, _, _, _, _, ctx| {
         Box::new(GpuGradingStage::new(&e.color_grading, ctx))
     }),
-    ("sharpening", |e, scale, _, _, ctx| {
+    ("sharpening", |e, scale, _, _, _, ctx| {
         Box::new(GpuSharpenStage::new(&e.sharpening, scale, ctx))
     }),
     // ⚠⚠ The only row built from something other than `Edits`. ⚠ `effective_profile_curve` is
     // what the CPU tail applies before constructing this stage — skipping it would render every
     // camera whose profile declares an identity curve differently from the CPU, which is most of
     // them, the X-T4 included.
-    ("display_rendering", |_, _, profile, _, ctx| {
+    ("display_rendering", |_, _, _, profile, _, ctx| {
         Box::new(GpuDisplayRenderingStage::new(
             pipeline::effective_profile_curve(profile.curve),
             profile.baseline_ev,
@@ -106,7 +113,7 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     }),
     // ⚠ Last, as in the tail — and the only stage here that is on **every** photograph, which is
     // what the cost gate exists to keep honest.
-    ("output_transform", |_, _, _, spec, ctx| {
+    ("output_transform", |_, _, _, _, spec, ctx| {
         Box::new(GpuOutputTransformStage::new(spec.space, ctx))
     }),
 ];
@@ -299,6 +306,7 @@ pub fn accelerate(
     tail: Pipeline,
     edits: &Edits,
     scale: RenderScale,
+    region: Option<Region>,
     profile: ProfileRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
@@ -320,6 +328,9 @@ pub fn accelerate(
             Pipeline::new(stages),
             &e,
             sub_scale,
+            // ⚠ Carried for one rule rather than because anything reads it: `LocalAdjustments`
+            // has no vignette, so no mask sub-stage can ask about the frame.
+            region,
             profile,
             spec,
             ctx,
@@ -336,6 +347,7 @@ pub fn accelerate(
         tail,
         edits,
         scale,
+        region,
         profile,
         spec,
         ctx,
@@ -355,6 +367,7 @@ fn walk(
     tail: Pipeline,
     edits: &Edits,
     scale: RenderScale,
+    region: Option<Region>,
     profile: ProfileRendering<'_>,
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
@@ -383,7 +396,7 @@ fn walk(
             s.set_coverage_rasterizer(&coverage);
         }
         match REPLACEABLE.iter().find(|(n, _)| *n == s.name()) {
-            Some((_, build)) => run.push((build(edits, scale, profile, spec, ctx), s)),
+            Some((_, build)) => run.push((build(edits, scale, region, profile, spec, ctx), s)),
             None => {
                 // ⚠ A chain followed by a CPU stage is **not** the tail's last stage, so it goes
                 // straight back into the pipeline and can never be a candidate for the byte path.
@@ -901,7 +914,7 @@ mod tests {
         spec: RenderSpec,
         ctx: &Arc<GpuContext>,
     ) -> Pipeline {
-        let (p, c) = accelerate(tail, e, scale, profile, spec, ctx);
+        let (p, c) = accelerate(tail, e, scale, None, profile, spec, ctx);
         rejoin(p, c)
     }
 
@@ -910,6 +923,7 @@ mod tests {
             tail,
             e,
             SCALE,
+            None,
             ProfileRendering::default(),
             RenderSpec::default(),
             ctx,

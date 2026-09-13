@@ -1258,7 +1258,7 @@ fn render_cached(
         if gpu_tail {
             match gpu_pipeline::shared() {
                 Some(ctx) => {
-                    gpu_pipeline::accelerate(tail, edits, scale, profile, render_spec, ctx)
+                    gpu_pipeline::accelerate(tail, edits, scale, region, profile, render_spec, ctx)
                 }
                 None => (tail, None),
             }
