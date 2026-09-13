@@ -230,8 +230,35 @@ fn main() {
         println!("no sidecar beside this RAW — the REAL row is skipped\n");
     }
 
-    let cases: [(&str, &Edits); 8] = [
+    // ⚠⚠ **The row M8.3m exists for, and it is deliberately NOT a catalogue row.** **0 of 40
+    // sidecars use white balance, contrast, the tone curve or saturation globally** — measured
+    // before M8.3k, and why plan 2 waited three milestones. What this prices is the **shape**: a
+    // photo whose per-pixel head is complete. Before M8.3m `contrast` and `tone_curve` sat between
+    // ported stages and split that head into `[exposure]` at 1.3 ms and `[tone_regions]` at 18.0,
+    // each refused by the gate — so 19.3 ms of already-ported work was stranded on the CPU by a
+    // 1 ms neighbour. Pinned as a decision by
+    // `the_per_pixel_head_becomes_one_run_once_every_member_is_ported`.
+    let full_head = Edits {
+        white_balance: edit_model::WhiteBalance {
+            kelvin: None,
+            tint: 8.0,
+        },
+        exposure: 0.4,
+        contrast: 25.0,
+        highlights: -30.0,
+        shadows: 20.0,
+        tone_curve: edit_model::ToneCurve {
+            points: vec![[0.0, 0.0], [0.3, 0.42], [1.0, 1.0]],
+        },
+        saturation: 20.0,
+        vibrance: 15.0,
+        rendering: Some(edit_model::Rendering::Camera),
+        ..Edits::default()
+    };
+
+    let cases: [(&str, &Edits); 9] = [
         ("TYPICAL of this catalogue", &typical),
+        ("the whole per-pixel head", &full_head),
         ("unedited, camera rendering", &neutral_rendered),
         ("unedited, colorimetric", &Edits::default()),
         ("hsl only", &hsl_only),
