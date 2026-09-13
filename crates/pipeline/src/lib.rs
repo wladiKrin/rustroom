@@ -108,7 +108,7 @@ pub use stages::hue_table;
 
 pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
-pub use stages::contrast::ContrastStage;
+pub use stages::contrast::{ContrastStage, PIVOT as CONTRAST_PIVOT};
 pub use stages::creative_look::CreativeLookStage;
 pub use stages::dehaze::DehazeStage;
 pub use stages::display_rendering::DisplayRenderingStage;
@@ -124,7 +124,7 @@ pub use stages::local_contrast::LocalContrastStage;
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransform;
-pub use stages::saturation::SaturationStage;
+pub use stages::saturation::{SaturationStage, EPS as SATURATION_EPS};
 pub use stages::sharpening::{max_kernel_radius, SharpenStage, RADIUS_RANGE};
 pub use stages::spot_removal::SpotRemovalStage;
 pub use stages::tone_curve::ToneCurveStage;
@@ -599,6 +599,24 @@ impl Default for RenderSpec {
 /// ⚠ `scale` reaches the spatial stages only. The per-pixel ones ignore it, which
 /// `per_pixel_stages_ignore_the_render_scale` still asserts bit for bit — and that test now
 /// doubles as the guard that the **global** path did not accidentally gain a spatial stage.
+/// The gains [`WhiteBalanceStage`] is built from, for a white balance and a source baseline.
+///
+/// ⚠⚠ **One expression, two consumers** — [`adjustment_stages`] and `gpu-pipeline`'s builder. The
+/// second was about to recompute it, which is how the CPU and GPU stages would come to disagree
+/// about what "as shot" means: a wrong picture rather than an error, and invisible on any neutral
+/// fixture because both sides land near `[1, 1, 1]`.
+///
+/// ⚠ `kelvin: None` is "as shot", which resolves to the **baseline's** temperature so the
+/// arithmetic lands on `[1, 1, 1]` — tint alone still needs a temperature to sit at, and the
+/// baseline is the only one that leaves the temperature axis untouched.
+pub fn white_balance_gains(
+    wb: &edit_model::WhiteBalance,
+    baseline: color::wb::Illuminant,
+) -> [f32; 3] {
+    let declared = color::wb::Illuminant::new(wb.kelvin.unwrap_or(baseline.kelvin), wb.tint);
+    color::wb::adaptation_gains(declared, baseline, &color::spaces::PROPHOTO_TO_XYZ)
+}
+
 fn adjustment_stages(
     a: &edit_model::LocalAdjustments,
     baseline: color::wb::Illuminant,
@@ -611,10 +629,9 @@ fn adjustment_stages(
         // cheapest way to be *exactly* neutral is to insert no stage rather than to trust the
         // arithmetic to land on [1, 1, 1]. Tint alone still needs a temperature to sit at, and
         // the baseline is the only one that leaves the temperature axis untouched.
-        let declared = color::wb::Illuminant::new(wb.kelvin.unwrap_or(baseline.kelvin), wb.tint);
-        out.push(Box::new(WhiteBalanceStage::new(
-            color::wb::adaptation_gains(declared, baseline, &color::spaces::PROPHOTO_TO_XYZ),
-        )));
+        out.push(Box::new(WhiteBalanceStage::new(white_balance_gains(
+            wb, baseline,
+        ))));
     }
     if a.exposure != 0.0 {
         out.push(Box::new(ExposureStage::new(a.exposure)));

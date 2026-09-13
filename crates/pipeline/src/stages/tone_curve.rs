@@ -24,6 +24,18 @@ impl ToneCurveStage {
     /// ⚠ Public so the panel's curve widget can *plot the function this stage applies* rather
     /// than re-deriving it — two implementations of one curve is how a preview stops being
     /// evidence about the render.
+    /// The compiled curve, for a consumer that samples it itself.
+    ///
+    /// ⚠⚠ **`gpu-pipeline` uploads THIS table rather than rebuilding one**, the rule
+    /// [`crate::ColorGradingStage::lut`] and `HueTable::entries` already follow: two constructions
+    /// of one curve is how a preview stops being evidence about the render.
+    pub fn lut(&self) -> &[f32] {
+        &self.lut
+    }
+
+    /// Entries in [`Self::lut`].
+    pub const LUT_LEN: usize = LUT_SIZE;
+
     pub fn sample(&self, v: f32) -> f32 {
         let v = v.clamp(0.0, 1.0);
         let pos = v * (LUT_SIZE - 1) as f32;

@@ -1,7 +1,13 @@
 use crate::PipelineStage;
 use core_image::ImageBuf;
 
-const PIVOT: f32 = 0.18; // linear middle gray
+/// Linear middle grey — the value contrast pivots around.
+///
+/// ⚠ `pub` so `gpu-pipeline`'s shader can **substitute** it rather than transcribe it. A
+/// transcribed constant is checked for agreeing; a substituted one **cannot disagree**, which is
+/// the distinction `luma_wgsl`'s doc records as making it stronger than `oklab_wgsl`. `color`'s
+/// own doc records six copies of a Rec.709 triple that all went wrong on one day.
+pub const PIVOT: f32 = 0.18;
 
 /// Contrast around a mid-gray pivot: `out = pivot + (in - pivot) * slope`.
 pub struct ContrastStage {

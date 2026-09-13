@@ -2,7 +2,11 @@ use crate::PipelineStage;
 use core_image::ImageBuf;
 
 /// Guards the chroma ratio against division by zero on black pixels.
-const EPS: f32 = 1e-6;
+/// Guards the chroma division for a black pixel, whose `max` is zero.
+///
+/// ⚠ `pub` for the shader to substitute — see [`crate::CONTRAST_PIVOT`] for why substituting
+/// beats transcribing.
+pub const EPS: f32 = 1e-6;
 
 /// Chroma scaling around the luma axis: a uniform part (`saturation`) times a part
 /// weighted toward already-muted pixels (`vibrance`).
