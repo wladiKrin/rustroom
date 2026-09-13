@@ -1781,6 +1781,54 @@ mod tests {
         );
     }
 
+    fn denoised_edits() -> Edits {
+        Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 60.0,
+                color: 60.0,
+                ..edit_model::NoiseReduction::default()
+            },
+            ..Edits::default()
+        }
+    }
+
+    fn rendered_denoised(gpu: bool, cache: &mut PrefixCache) -> (RenderedFrame, Ran) {
+        render_cached(
+            &hazy_buffer(),
+            &denoised_edits(),
+            FrameSpec {
+                gpu_tail: gpu,
+                ..FrameSpec::fit(200)
+            },
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            pipeline::ProfileRendering::default(),
+            cache,
+            &mut BrushCache::default(),
+        )
+    }
+
+    /// ⚠⚠ **The same property for the SECOND stage across the seam, and it is a claim again.**
+    /// `PrefixStepKey` is derived from the edits, never from the stage — so a checkpoint written
+    /// by one path must be a legitimate hit for the other. The dangerous direction is a stale
+    /// hit, which renders the previous frame's pixels: a plausible photograph, not an error.
+    #[test]
+    fn a_noise_reduction_checkpoint_is_shared_between_the_paths() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let mut cache = PrefixCache::default();
+        let (_, first) = rendered_denoised(true, &mut cache);
+        assert_eq!(first.gpu_prefix_steps, 1, "fixture check: the GPU ran it");
+        let (_, second) = rendered_denoised(false, &mut cache);
+        assert_eq!(
+            second.prefix_stages, 0,
+            "the CPU path must hit the checkpoint the GPU path wrote"
+        );
+    }
+
     /// ⚠⚠ **Without this, the three "keeps the float" tests below all pass against an
     /// implementation that never takes the byte path at all** — which is the failure mode that let
     /// creative LUTs ship fully tested and 100% dead.
