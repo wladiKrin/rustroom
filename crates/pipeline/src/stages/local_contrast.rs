@@ -15,13 +15,17 @@ pub const TEXTURE_SIGMA: f32 = 2.0;
 pub const CLARITY_SIGMA: f32 = 40.0;
 
 /// Luma that the midtone weight peaks at: mid-gray.
-const MID_GRAY: f32 = 0.18;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const MID_GRAY: f32 = 0.18;
 /// What fraction of Clarity survives at a hard edge — the suppressor's floor, `s` in
 /// `stages/sharpening.rs`'s Detail model.
 ///
 /// A fixed constant with no slider, because Lightroom has no halo control either: this is part
 /// of what "Clarity" means rather than a decision to hand to the user.
-pub(crate) const CLARITY_HALO_FLOOR: f32 = 0.25;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const CLARITY_HALO_FLOOR: f32 = 0.25;
 /// Coarse-band excursion at which the suppressor is half engaged.
 ///
 /// ⚠ **Derived, not copied from `sharpening::HALO_KNEE` (0.05).** That knee is in luma-delta
@@ -29,7 +33,9 @@ pub(crate) const CLARITY_HALO_FLOOR: f32 = 0.25;
 /// larger — on the golden chart `|d_c|` is 0.158 at the hard edge against 0.048 max / 0.017
 /// mean in the texture region. 0.08 sits between the two, so an edge is well above it and
 /// texture well below.
-pub(crate) const CLARITY_HALO_KNEE: f32 = 0.08;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const CLARITY_HALO_KNEE: f32 = 0.08;
 
 /// Regularisation of the guided base that **negative** Texture measures against.
 ///
@@ -54,7 +60,9 @@ pub(crate) const CLARITY_HALO_KNEE: f32 = 0.08;
 /// decade below the edge's. So buying edge fidelity always costs removal power. 2e-4 is chosen
 /// because *edge preservation is this half of the slider's whole stated purpose*; if −80 now feels
 /// too gentle, −100 is the answer rather than a larger eps.
-pub(crate) const TEXTURE_GUIDED_EPS: f32 = 2e-4;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const TEXTURE_GUIDED_EPS: f32 = 2e-4;
 
 /// Box radius of the guided base, in **rendered** pixels.
 ///
@@ -68,15 +76,19 @@ pub(crate) const TEXTURE_GUIDED_EPS: f32 = 2e-4;
 /// statistic collapses, the base becomes the input exactly, and negative Texture would be
 /// **silently inert** at fit resolution. A neighbourhood slightly wider than asked for is a
 /// lesser fault than a dead control. `negative_texture_is_never_inert_at_a_preview_scale`.
-pub(crate) fn texture_guided_radius(scale: RenderScale) -> usize {
+pub fn texture_guided_radius(scale: RenderScale) -> usize {
     wide_blur_radius(TEXTURE_SIGMA * scale.get()).max(1)
 }
 
 /// Near-black guard for the ratio. Load-bearing, exactly as in `stages/sharpening.rs`:
 /// without it a dark pixel beside a bright edge divides by ~0 and the gain explodes.
-const LUMA_EPS: f32 = 1e-3;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const LUMA_EPS: f32 = 1e-3;
 /// Caps a halo in near-black regions at +2 stops.
-const GAIN_MAX: f32 = 4.0;
+/// ⚠ `pub` so `gpu-pipeline` can SUBSTITUTE it into WGSL rather than transcribe it. A
+/// substituted constant **cannot** disagree; a transcribed one is merely checked for agreeing.
+pub const GAIN_MAX: f32 = 4.0;
 
 /// Rec.709 luma, in linear light. Same as `stages/sharpening.rs`.
 fn luma(px: &[f32]) -> f32 {

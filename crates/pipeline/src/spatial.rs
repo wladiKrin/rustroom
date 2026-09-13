@@ -196,7 +196,9 @@ fn gauss_cols(src: &[f32], w: usize, h: usize, k: &[f32]) -> Vec<f32> {
 /// Number of box-blur passes [`wide_blur`] uses. Three is where the iterated box response
 /// gets within a few percent of a true Gaussian; the cost is linear in this and the accuracy
 /// gain past three is not worth a fourth pass over the data.
-const WIDE_PASSES: usize = 3;
+/// ⚠ `pub` so the GPU twin iterates the SAME number of box passes. Two definitions of "how
+/// many" is how a preview stops being evidence about the render.
+pub const WIDE_PASSES: usize = 3;
 
 /// Box radius whose [`WIDE_PASSES`]-fold iteration has variance `sigma^2`.
 ///

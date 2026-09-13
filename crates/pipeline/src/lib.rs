@@ -121,6 +121,16 @@ pub use stages::geometry::GeometryStage;
 pub use stages::hsl::HslStage;
 pub use stages::lens_correction::LensCorrectionStage;
 pub use stages::local_contrast::LocalContrastStage;
+// ⚠⚠ Re-exported so `gpu-pipeline` substitutes these into WGSL rather than transcribing them —
+// `color`'s own doc records six copies of a Rec.709 triple that all went wrong on one day.
+// ⚠ `LUMA_EPS` and `GAIN_MAX` are ALIASED on the way out: `stages::sharpening` has constants of
+// both names with different values, and a reader hitting a bare `pipeline::LUMA_EPS` would have
+// to guess which stage it belongs to.
+pub use stages::local_contrast::{
+    texture_guided_radius, CLARITY_HALO_FLOOR, CLARITY_HALO_KNEE, CLARITY_SIGMA,
+    GAIN_MAX as LOCAL_CONTRAST_GAIN_MAX, LUMA_EPS as LOCAL_CONTRAST_LUMA_EPS, MID_GRAY,
+    TEXTURE_GUIDED_EPS, TEXTURE_SIGMA,
+};
 pub use stages::mask::MaskStage;
 pub use stages::noise_reduction::NoiseReductionStage;
 pub use stages::output_transform::OutputTransform;
