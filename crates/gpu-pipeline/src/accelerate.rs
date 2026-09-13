@@ -1285,6 +1285,105 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **What M8.3m actually buys, as a test — and it is NOT the four stages' own cost.**
+    /// `contrast` and `tone_curve` sit **between** ported stages, so before this milestone a photo
+    /// using them split the per-pixel head into pieces too small to pay: `[exposure]` at 1.3 ms
+    /// and `[tone_regions]` at 18.0 were each refused by the gate, stranding **19.3 ms of
+    /// already-ported work** on the CPU for no reason but a 1 ms neighbour standing between them.
+    ///
+    /// ⚠ M8.3h's lesson: state which decisions change and pin them, rather than believing the runs
+    /// merged. This asserts the whole per-pixel head is absorbed — no member survives as a named
+    /// CPU stage.
+    #[test]
+    fn the_per_pixel_head_becomes_one_run_once_every_member_is_ported() {
+        let Some(ctx) = ctx() else { return };
+        const HEAD: [&str; 6] = [
+            "white_balance",
+            "exposure",
+            "contrast",
+            "tone_regions",
+            "tone_curve",
+            "saturation",
+        ];
+        let mut e = with_hsl();
+        e.white_balance.tint = 8.0;
+        e.exposure = 0.4;
+        e.contrast = 25.0;
+        e.highlights = -30.0;
+        e.tone_curve.points = vec![[0.0, 0.0], [0.3, 0.42], [1.0, 1.0]];
+        e.saturation = 20.0;
+
+        let before = tail_of(&e).stage_names();
+        for s in HEAD {
+            assert!(
+                before.contains(&s),
+                "fixture check: {s} must be in the CPU tail, got {before:?}"
+            );
+        }
+        let after = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .stage_names();
+        let survivors: Vec<_> = after.iter().filter(|n| HEAD.contains(n)).collect();
+        assert!(
+            survivors.is_empty(),
+            "every per-pixel head stage must have been absorbed into a chain, {survivors:?} \
+             survived in {after:?}"
+        );
+    }
+
+    /// ⚠⚠ **Nine of ten mask sub-stages, and the tenth is named.** `local_contrast` is now the
+    /// only thing a mask can carry that stays on the CPU — which is what turns "port the rest of a
+    /// mask" from a list into one item. ⚠ It also matters to M8.3l: the shared upload reaches only
+    /// a mask whose sub-stages **begin** with a GPU-able stage, and `local_contrast` is the one
+    /// remaining stage that can take that leading position.
+    #[test]
+    fn a_mask_carrying_the_whole_per_pixel_set_keeps_only_local_contrast_on_the_cpu() {
+        let Some(ctx) = ctx() else { return };
+        let a = edit_model::LocalAdjustments {
+            white_balance: edit_model::WhiteBalance {
+                kelvin: None,
+                tint: 8.0,
+            },
+            exposure: 0.4,
+            contrast: 25.0,
+            highlights: -30.0,
+            tone_curve: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.3, 0.42], [1.0, 1.0]],
+            },
+            saturation: 20.0,
+            hsl: with_hsl().hsl,
+            ..Default::default()
+        };
+        let e = Edits {
+            masks: vec![mask_carrying(a)],
+            ..Edits::default()
+        };
+        let subs = mask_sub_stages(&tail_of(&e));
+        assert!(
+            subs.len() > 1,
+            "fixture check: the mask must carry several sub-stages, got {subs:?}"
+        );
+        let after = mask_sub_stages(&accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        ));
+        assert_eq!(
+            after,
+            vec!["gpu_chain"],
+            "with no local_contrast the whole set must become ONE chain, got {after:?}"
+        );
+    }
+
     #[test]
     fn a_masked_hsl_becomes_a_chain_inside_the_mask() {
         let Some(ctx) = ctx() else { return };
