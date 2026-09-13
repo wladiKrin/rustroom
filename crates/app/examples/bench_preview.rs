@@ -435,6 +435,48 @@ fn main() {
             }
         }
 
+        // ⚠⚠ **The WHOLE dehaze-drag frame, with the tail accelerated too — the thing the user
+        // actually waits for.** The rows above price one stage each; this prices the frame, which
+        // is what "still sluggish" is about. It also counts the **round trips**, because the
+        // strong hypothesis is that there are TWO — one for the prefix step and one for the tail —
+        // and that more than half the frame is moving bytes rather than computing.
+        if let Some(ctx) = gpu_pipeline::shared() {
+            let gpu_dehaze = steps
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.stage.name() == "dehaze")
+                .and_then(|(i, s)| {
+                    gpu_pipeline::accelerate_prefix_stage(
+                        s.stage.name(),
+                        &heavy,
+                        sc,
+                        &checkpoints[i],
+                        ctx,
+                    )
+                    .map(|g| (i, g))
+                });
+            if let Some((i, g)) = gpu_dehaze {
+                let (t2, chain) = gpu_pipeline::accelerate(
+                    build_pipeline_split_in_region(&heavy, sc, None).1,
+                    &heavy,
+                    sc,
+                    pipeline::ProfileRendering::default(),
+                    pipeline::RenderSpec::default(),
+                    ctx,
+                );
+                let t2 = gpu_pipeline::rejoin(t2, chain);
+                let mut best = f64::MAX;
+                for _ in 0..5 {
+                    let t = Instant::now();
+                    let mid = g.apply(checkpoints[i].clone());
+                    let out = t2.run(mid);
+                    best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+                    std::hint::black_box(&out);
+                }
+                println!("{best:8.1} ms   DEHAZE DRAG, prefix step AND tail on the GPU");
+            }
+        }
+
         // ⚠ Each prefix stage alone, with no tail, so the spec prices what a GPU run would
         // actually replace rather than inferring it from a difference of two totals.
         for (i, step) in steps.iter().enumerate() {
