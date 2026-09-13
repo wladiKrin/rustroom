@@ -298,6 +298,14 @@ pub fn accelerate_prefix_stage(
     // from.
     let gpu: Box<dyn GpuStage> = match name {
         "dehaze" => Box::new(crate::GpuDehazeStage::new(&edits.dehaze, scale, image, ctx)),
+        // ⚠ Takes no image — noise reduction estimates nothing from the photograph, where dehaze's
+        // airlight is a property of *this* frame. The buffer is handed over regardless, because
+        // one signature serves both.
+        "noise_reduction" => Box::new(crate::GpuNoiseReductionStage::new(
+            &edits.noise_reduction,
+            scale,
+            ctx,
+        )),
         _ => return None,
     };
     // ⚠ The same question the tail asks, and it fails toward the CPU for the same reason: a wrong
@@ -862,18 +870,72 @@ mod tests {
         assert_eq!(g.name(), "gpu_chain");
     }
 
-    /// ⚠ Every other prefix stage stays on the CPU. Noise reduction is the one that will not, and
-    /// naming it here is what makes adding it a deliberate act rather than a silent one.
+    fn denoised_edits(luminance: f32, color: f32) -> Edits {
+        Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance,
+                color,
+                ..edit_model::NoiseReduction::default()
+            },
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠ The seam's second arm exists and fires. Without this the whole milestone could be fully
+    /// tested and never reached — the W5 failure mode, which this crate has now recorded twice.
+    #[test]
+    fn a_noise_reduction_prefix_step_becomes_a_chain() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(200, 160);
+        let g = accelerate_prefix_stage(
+            "noise_reduction",
+            &denoised_edits(60.0, 60.0),
+            SCALE,
+            &img,
+            &ctx,
+        )
+        .expect("noise reduction must be replaceable");
+        assert_eq!(g.name(), "gpu_chain");
+    }
+
+    /// ⚠ The picture must be the same however the step ran — that is what makes a checkpoint
+    /// written by either path interchangeable rather than merely equal in its key.
+    #[test]
+    fn an_accelerated_noise_reduction_step_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let e = denoised_edits(70.0, 70.0);
+        let img = hazy(200, 160);
+        let steps = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        let step = steps
+            .iter()
+            .find(|s| s.stage.name() == "noise_reduction")
+            .expect("fixture check: there must be a noise_reduction step");
+        let cpu = step.stage.apply(img.clone());
+        let gpu = accelerate_prefix_stage("noise_reduction", &e, SCALE, &img, &ctx)
+            .expect("noise reduction must be replaceable")
+            .apply(img.clone());
+        assert!(
+            !crate::compare(&img, &cpu).is_exact(),
+            "fixture check: the step must actually change the picture"
+        );
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 1.0,
+            "worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
+    /// ⚠ Every remaining prefix stage stays on the CPU. The three resamplers are the ones that
+    /// will not — they are item 3 of the agreed order and are ONE mechanism rather than three —
+    /// and naming them here is what makes adding one a deliberate act rather than a silent one.
     #[test]
     fn every_other_prefix_stage_is_left_alone() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(64, 64);
-        for name in [
-            "noise_reduction",
-            "geometry",
-            "lens_correction",
-            "perspective",
-        ] {
+        for name in ["geometry", "lens_correction", "perspective"] {
             assert!(
                 accelerate_prefix_stage(name, &hazed_edits(60.0), SCALE, &img, &ctx).is_none(),
                 "`{name}` has no GPU twin and must be left alone"
