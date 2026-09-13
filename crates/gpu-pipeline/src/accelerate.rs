@@ -2,7 +2,7 @@
 
 use crate::{
     GpuChain, GpuContext, GpuDisplayRenderingStage, GpuExposureStage, GpuGradingStage, GpuHslStage,
-    GpuOutputTransformStage, GpuSharpenStage, GpuStage, GpuToneRegionsStage,
+    GpuOutputTransformStage, GpuSharpenStage, GpuStage, GpuToneRegionsStage, GpuWhiteBalanceStage,
 };
 use edit_model::Edits;
 use pipeline::{Pipeline, PipelineStage, ProfileRendering, RenderScale, RenderSpec};
@@ -47,6 +47,15 @@ type Builder = fn(
 /// ⚠ Kept in **tail order**. The order does not affect the lookup, but a table that reads in
 /// pipeline order is one a reader can check against `build_pipeline_split_in_region` by eye.
 const REPLACEABLE: &[(&str, Builder)] = &[
+    // ⚠⚠ First, as in the tail — and the only row whose parameters come from the `RenderSpec`
+    // rather than from `Edits` alone. `white_balance_gains` is shared with `adjustment_stages`,
+    // so the GPU and CPU stages cannot disagree about what "as shot" means.
+    ("white_balance", |e, _, _, spec, ctx| {
+        Box::new(GpuWhiteBalanceStage::new(
+            pipeline::white_balance_gains(&e.white_balance, spec.baseline),
+            ctx,
+        ))
+    }),
     ("exposure", |e, _, _, _, ctx| {
         Box::new(GpuExposureStage::new(e.exposure, ctx.clone()))
     }),

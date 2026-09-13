@@ -27,6 +27,7 @@ mod quantize;
 mod shared_plane;
 mod sharpen;
 mod tone_regions;
+mod white_balance;
 
 pub use accelerate::{accelerate, rejoin};
 pub use brush_raster::GpuBrushRaster;
@@ -50,3 +51,4 @@ pub use output_transform::GpuOutputTransformStage;
 pub use shared_plane::SharedPlane;
 pub use sharpen::GpuSharpenStage;
 pub use tone_regions::GpuToneRegionsStage;
+pub use white_balance::GpuWhiteBalanceStage;
