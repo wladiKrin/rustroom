@@ -165,6 +165,7 @@ pub struct Corrector {
     has_vignetting: bool,
     applied_scale: f32,
     autoscale: f32,
+    max_disp: f32,
 }
 
 impl Corrector {
@@ -202,9 +203,13 @@ impl Corrector {
             has_vignetting,
             applied_scale: 1.0,
             autoscale: 1.0,
+            max_disp: 0.0,
         };
         c.autoscale = c.compute_autoscale();
         c.applied_scale = 1.0 + (c.autoscale - 1.0) * (want.scale.clamp(0.0, 100.0) / 100.0);
+        // ⚠ After `applied_scale`, never before: `fill_row` reads it, so a bound computed here
+        // would describe a map this corrector does not have.
+        c.max_disp = c.compute_max_displacement();
         Some(c)
     }
 
@@ -216,6 +221,40 @@ impl Corrector {
     /// The scale actually in force, after the slider.
     pub fn applied_scale(&self) -> f32 {
         self.applied_scale
+    }
+
+    /// The largest distance any output pixel's source sits from the pixel itself, in pixels.
+    ///
+    /// ⚠⚠ **FRAME-GLOBAL on purpose, and that is the one real hazard in region-scoping this
+    /// stage.** `PerspectiveStage::input_rect_for` bounds an output rect by its four mapped
+    /// corners, which is *exact* for a homography because a homography sends lines to lines.
+    /// **A radial map bows every edge**, so the image of a rectangle is a curved quadrilateral
+    /// whose extreme can sit at an edge midpoint — a corner bound would under-estimate, and the
+    /// failure is a dark band at one edge of the region rather than an error. No pixel can move
+    /// further than the furthest-moving pixel, whatever shape the rect is.
+    ///
+    /// ⚠ Sampled through [`Self::fill_row`] over at most `SAMPLE_ROWS` rows, every column of
+    /// each, so only the *vertical* sampling is coarse. The field is smooth — 50.6 px of
+    /// displacement develops over ~3700 px of radius on the reference frame, about 0.014 px per
+    /// px — so a step of tens of pixels costs a fraction of a pixel, and [`Self::margin`] adds a
+    /// whole pixel on top. `no_pixel_displaces_further_than_the_margin` is what makes that a
+    /// guarantee rather than an estimate.
+    pub fn max_displacement(&self) -> f32 {
+        self.max_disp
+    }
+
+    /// The margin a region-scoped render must grow its request by, for a resampler of tap radius
+    /// `pad`.
+    ///
+    /// ⚠⚠ **One definition, read by `LensCorrectionStage::input_rect_for` and by the test that
+    /// guarantees it.** Two derivations of a margin is how a bound and the thing it bounds come
+    /// to disagree — the shape `render_max_dim`, `fit_image_size` and `Session::geometry_mode`
+    /// were each deleted for — and here they disagree as a band at the region's edge.
+    ///
+    /// ⚠ The extra pixel is slack for [`Self::max_displacement`]'s vertical sampling, not
+    /// decoration. It costs 0.1% of the frame on the region that matters.
+    pub fn margin(&self, pad: usize) -> usize {
+        self.max_disp.ceil().max(0.0) as usize + 1 + pad
     }
 
     /// Where output pixel `(x, y)` comes from, per channel: `[[rx, ry], [gx, gy], [bx, by]]`.
@@ -372,6 +411,49 @@ impl Corrector {
         (self.height.max(1) - 1) as f32 * 0.5
     }
 
+    /// Sample the displacement field and take the largest magnitude.
+    ///
+    /// ⚠ Bounded at `SAMPLE_ROWS` rows rather than a fixed step, so the cost does not grow with
+    /// the frame: ~256 [`Self::fill_row`] calls is ~6% of the field at 26 Mpx, and the field is
+    /// 5% of the stage. The last row is always included, so the bottom border is exact.
+    ///
+    /// ⚠ All three channels, because TCA gives R, G and B different source points and the bound
+    /// must cover the worst of them.
+    ///
+    /// ⚠⚠ **Two sabotages of this function are INERT on a centred radial profile, and that is
+    /// recorded rather than counted.** Probing the frame's four corners alone passes, and never
+    /// sampling the last row passes — because a lensfun distortion model is radial about a centre
+    /// and monotone in radius at ordinary coefficients, so the maximum sits at the furthest
+    /// corner and any border probe finds it. **This is defence in depth for the cases that break
+    /// that**: a profile declaring a decentred optical axis (`center_x`/`center_y`, which
+    /// `Modifier` keeps private), and a `poly5` whose coefficients make the displacement
+    /// non-monotone. Neither exists in this catalogue, so no test here can distinguish the two —
+    /// and the row form costs ~2 ms on a 700 ms stage, which is not a risk worth taking to save.
+    fn compute_max_displacement(&self) -> f32 {
+        const SAMPLE_ROWS: usize = 256;
+        let (w, h) = (self.width, self.height);
+        if w == 0 || h == 0 {
+            return 0.0;
+        }
+        let step = h.div_ceil(SAMPLE_ROWS).max(1);
+        let mut map = RowMap::new(w);
+        let mut worst = 0.0f32;
+        let mut y = 0usize;
+        loop {
+            self.fill_row(y, &mut map);
+            for x in 0..w {
+                for sc in map.source(x).iter() {
+                    worst = worst.max((sc[0] - x as f32).hypot(sc[1] - y as f32));
+                }
+            }
+            if y == h - 1 {
+                break;
+            }
+            y = (y + step).min(h - 1);
+        }
+        worst
+    }
+
     /// The smallest scale for which no output pixel on the frame border reads from outside the
     /// source.
     ///
@@ -510,6 +592,10 @@ mod tests {
     }
 
     fn corrector(distortion: &str, want: Corrections) -> Corrector {
+        corrector_sized(distortion, want, 400, 300)
+    }
+
+    fn corrector_sized(distortion: &str, want: Corrections, w: usize, h: usize) -> Corrector {
         let db = synthetic_db(distortion, TCA, VIGNETTING);
         let p = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
         Corrector::new(
@@ -518,8 +604,8 @@ mod tests {
                 focal: 50.0,
                 aperture: 2.8,
             },
-            400,
-            300,
+            w,
+            h,
             want,
         )
         .expect("corrector")
@@ -808,5 +894,56 @@ mod tests {
             (a[0] - b[0]).abs() > 1.0,
             "scaling did not move the corner: {a:?} vs {b:?}"
         );
+    }
+
+    /// ⚠⚠ **The margin's guarantee is this test, not an argument.** [`Corrector::max_displacement`]
+    /// samples at most `SAMPLE_ROWS` rows, so nothing about its own construction proves it bounds
+    /// the rows it did not look at. This scans **every** pixel and **all three channels** of a
+    /// real-sized frame — three, because TCA gives R, G and B different source points and the
+    /// margin must bound the worst of them.
+    ///
+    /// ⚠ Real-sized on purpose: at 1600x1067 the sampling step is 5 rows, so a step that grew
+    /// carelessly would miss peaks this test can see. A 400x300 fixture samples every row and
+    /// could witness nothing.
+    ///
+    /// ⚠ Both distortion signs, because the bound is a magnitude and a barrel correction displaces
+    /// inward where a pincushion one displaces outward.
+    ///
+    /// ⚠⚠ **`pad` runs from ZERO, and that is what makes the test discriminating at all.** With a
+    /// resampler's tap radius in the margin there are two free pixels for an under-estimate to
+    /// hide behind: dropping [`Corrector::margin`]'s ceiling **and** its slack still passes at
+    /// `pad = 2`, because truncation loses at most one pixel and the pad absorbs it. At `pad = 0`
+    /// the assertion is the bare property — does the margin bound the displacement — and the same
+    /// sabotage fails. **A test whose own parameter carries slack cannot see slack being
+    /// removed.**
+    #[test]
+    fn no_pixel_displaces_further_than_the_margin() {
+        for (distortion, pad) in [BARREL, PINCUSHION]
+            .into_iter()
+            .flat_map(|d| [0usize, 3].into_iter().map(move |p| (d, p)))
+        {
+            let (w, h) = (1600usize, 1067usize);
+            let c = corrector_sized(distortion, ALL, w, h);
+            let margin = c.margin(pad) as f32;
+            let mut map = RowMap::new(w);
+            let mut worst = 0.0f32;
+            for y in 0..h {
+                c.fill_row(y, &mut map);
+                for x in 0..w {
+                    for sc in map.source(x).iter() {
+                        worst = worst.max((sc[0] - x as f32).hypot(sc[1] - y as f32));
+                    }
+                }
+            }
+            // Fixture check: a correction that moves nothing cannot witness a margin at all.
+            assert!(
+                worst > 1.0,
+                "fixture check: the correction must actually displace pixels, got {worst}"
+            );
+            assert!(
+                worst <= margin,
+                "a pixel displaced {worst} px, past a margin of {margin} at pad {pad}"
+            );
+        }
     }
 }
