@@ -53,6 +53,57 @@ impl PipelineStage for LensCorrectionStage {
         let src = RegionSrc::whole(&image);
         self.render(&src, &corrector, Rect { x: 0, y: 0, w, h })
     }
+    /// ⚠⚠ **The margin is frame-global, never a bound on this rect's four mapped corners.** A
+    /// homography sends lines to lines, so [`crate::stages::perspective::PerspectiveStage`] can
+    /// map four corners and be exact; **a radial map bows every edge**, so the image of a
+    /// rectangle is a curved quadrilateral whose extreme can sit at an edge midpoint. A corner
+    /// bound would under-estimate, and the failure is a dark band at one edge of the region —
+    /// a plausible photograph rather than an error. [`Corrector::margin`] is the one definition,
+    /// and `no_pixel_displaces_further_than_the_margin` is its guarantee.
+    ///
+    /// ⚠ The tap radius comes from `self.weights.kernel()` rather than a stored [`Resampler`], so
+    /// the weights and the radius cannot disagree. Geometry's and perspective's rule.
+    ///
+    /// ⚠ Dimension-preserving, so `out` is already in the input's coordinate space and
+    /// [`PipelineStage::output_dims`] keeps the trait's identity default.
+    fn input_rect_for(&self, out: Rect, in_w: usize, in_h: usize) -> Option<Rect> {
+        if out.w == 0 || out.h == 0 || in_w == 0 || in_h == 0 {
+            return None;
+        }
+        // ⚠ Refuse a rect this stage could not produce, rather than clamping it: a caller that
+        // asked for the wrong thing must fall back to the whole-buffer path, not silently get a
+        // different rectangle back without being told. Geometry's rule.
+        if out.x + out.w > in_w || out.y + out.h > in_h {
+            return None;
+        }
+        let Some(corrector) = self.corrector(in_w, in_h) else {
+            // Nothing enabled: an exact identity, so the rect is its own pre-image — the same
+            // branch `apply` takes when it passes the image through untouched.
+            return Some(out);
+        };
+        Some(out.grown(corrector.margin(self.weights.kernel().radius()), in_w, in_h))
+    }
+
+    /// ⚠⚠ **`src.full` is the FULL image's dimensions, never the slice in hand.** The corrector is
+    /// built against the frame — its centre, its normalisation and its autoscale are all
+    /// properties of the frame — so building it from `src.buf` would correct a different lens.
+    /// That is M8.6's centre sabotage in this stage's costume: a plausible photograph of the wrong
+    /// part of the frame, invisible to all 63 goldens.
+    fn apply_region(&self, src: &RegionSrc<'_>, rect: Rect) -> Option<ImageBuf> {
+        let (w, h) = src.full;
+        if rect.w == 0 || rect.h == 0 || rect.x + rect.w > w || rect.y + rect.h > h {
+            return None;
+        }
+        let Some(corrector) = self.corrector(w, h) else {
+            // An exact identity, so a sub-rect of the output is a sub-rect of the source — the
+            // same branch `input_rect_for` takes.
+            // ⚠ Local coordinates for the buffer copy: `rect` is in full-image space.
+            let lx = rect.x.checked_sub(src.origin.0)?;
+            let ly = rect.y.checked_sub(src.origin.1)?;
+            return Some(src.buf.crop(lx, ly, rect.w, rect.h));
+        };
+        Some(self.render(src, &corrector, rect))
+    }
 }
 
 impl LensCorrectionStage {
@@ -125,17 +176,31 @@ mod tests {
     /// database — the seam that makes lens correction testable in CI at all, since a real
     /// profile needs a real camera and lens. Mirrors the golden harness's fixture.
     fn lens_shot() -> LensShot {
-        let xml = r#"<lensdatabase version="1">
+        lens_shot_b("0.05")
+    }
+
+    /// ⚠⚠ **The sign of `b` decides whether a four-corner bound is sound, and that is the whole
+    /// reason this is a parameter.** ptlens is `r_d = r * (b * r^2 + (1 - b))`, so the radial
+    /// factor is **increasing** in `r` for a pincushion correction (`b > 0`) and **decreasing**
+    /// for a barrel one (`b < 0`). Increasing puts every extreme of a rect's image at a corner,
+    /// so the corner box contains it; decreasing puts the extreme at an **edge midpoint** whenever
+    /// the rect's span brackets the optical centre, and the corner box misses the bulge.
+    /// `every_source_a_region_reads_lies_inside_the_rect_it_asked_for` needs the barrel case, and
+    /// on the pincushion fixture that test cannot witness a corner bound at all.
+    fn lens_shot_b(b: &str) -> LensShot {
+        let xml = format!(
+            r#"<lensdatabase version="1">
             <camera><maker>TestMaker</maker><model>TestCam</model>
                 <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
             <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
                 <mount>TestMount</mount><cropfactor>1.0</cropfactor>
                 <calibration>
-                    <distortion model="ptlens" focal="50" a="0.0" b="0.05" c="0.0"/>
+                    <distortion model="ptlens" focal="50" a="0.0" b="{b}" c="0.0"/>
                     <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
                 </calibration></lens>
-        </lensdatabase>"#;
-        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        </lensdatabase>"#
+        );
+        let db = lens_profile::Catalogue::from_xml(&xml).unwrap();
         let profile = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
         LensShot {
             profile,
@@ -187,6 +252,199 @@ mod tests {
                 corrected(k).data(),
                 bilinear.data(),
                 "{k:?} rendered identically to bilinear"
+            );
+        }
+    }
+
+    /// ⚠⚠ **Byte for byte, and that is achievable here where a chain carrying a local is bounded
+    /// to one ulp.** Lens correction is a pure gather, and `apply` **is** `apply_region` at full
+    /// extent — so anything but exact equality means the field was computed differently for the
+    /// two, which is the one way this can go wrong.
+    ///
+    /// ⚠ One rect in the interior and one against the frame's corner, where the margin clips and
+    /// the taps run out — an implementation right in the middle and wrong at the edge is exactly
+    /// the band this stage's margin exists to prevent.
+    #[test]
+    fn a_region_matches_the_same_part_of_the_whole() {
+        let src = grid(160, 120);
+        let want = Corrections {
+            distortion: true,
+            tca: true,
+            vignetting: true,
+            scale: 0.0,
+        };
+        let stage = LensCorrectionStage::new(lens_shot(), want, Resampler::CatmullRom);
+        let whole = stage.apply(src.clone());
+        // Fixture check: a stage that moved nothing would make every comparison below vacuous.
+        assert_ne!(whole.data(), src.data(), "the correction must move pixels");
+
+        for rect in [
+            Rect {
+                x: 40,
+                y: 30,
+                w: 48,
+                h: 36,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 32,
+                h: 24,
+            },
+        ] {
+            let need = stage
+                .input_rect_for(rect, 160, 120)
+                .expect("lens correction accepts a region");
+            let slice = src.crop(need.x, need.y, need.w, need.h);
+            let region_src = RegionSrc {
+                buf: &slice,
+                origin: (need.x, need.y),
+                full: (160, 120),
+            };
+            let got = stage
+                .apply_region(&region_src, rect)
+                .expect("apply_region agrees with input_rect_for");
+            assert_eq!((got.width(), got.height()), (rect.w, rect.h));
+            for ry in 0..rect.h {
+                for rx in 0..rect.w {
+                    assert_eq!(
+                        got.pixel(rx, ry),
+                        whole.pixel(rect.x + rx, rect.y + ry),
+                        "rect {rect:?} at ({rx}, {ry})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// ⚠⚠ **THE test for the margin, and the byte-for-byte equivalence test CANNOT stand in for
+    /// it.** Every source point a rect's pixels read, plus the resampler's taps, must lie inside
+    /// the rect [`PipelineStage::input_rect_for`] asked for — otherwise `sample_channel_region`
+    /// reads black outside the buffer it was given, which is the dark band at the region's edge.
+    ///
+    /// ⚠⚠ **Transplanting `PerspectiveStage`'s four-corner bound here passes the equivalence test
+    /// and fails this one — but only on the BARREL fixture, and working out why sharpened the
+    /// design's own argument.** "A radial map bends lines, so a corner bound is unsound" is too
+    /// loose: ptlens is `r_d = r * (b * r^2 + (1 - b))`, so for a **pincushion** correction
+    /// (`b > 0`) the radial factor increases with `r`, every extreme of a rect's image sits at a
+    /// corner, and the corner box genuinely contains it. For a **barrel** correction (`b < 0`) the
+    /// factor decreases, so the extreme sits at an **edge midpoint** whenever the rect's span
+    /// brackets the optical centre — and the corner box misses the bulge outright. Measured on
+    /// this fixture: **9.2 px** of shortfall, against a Lanczos3 tap radius of 3.
+    ///
+    /// ⚠ The rects therefore **bracket the centre in both axes**, which is the condition, and the
+    /// coefficient is strong enough that the bulge exceeds any tap radius. A rect in one quadrant
+    /// cannot witness this however large the displacement.
+    #[test]
+    fn every_source_a_region_reads_lies_inside_the_rect_it_asked_for() {
+        let want = Corrections {
+            distortion: true,
+            tca: true,
+            vignetting: true,
+            scale: 0.0,
+        };
+        let (w, h) = (400usize, 300usize);
+        let pad = Resampler::Lanczos3.radius() as f32;
+        for b in ["0.05", "-0.05", "0.3", "-0.3"] {
+            let stage = LensCorrectionStage::new(lens_shot_b(b), want, Resampler::Lanczos3);
+            let c = stage
+                .corrector(w, h)
+                .expect("the profile supplies a correction");
+            for rect in [
+                // Bracketing the centre in both axes: the case a barrel correction bulges in.
+                Rect {
+                    x: 40,
+                    y: 40,
+                    w: 320,
+                    h: 220,
+                },
+                Rect {
+                    x: 120,
+                    y: 90,
+                    w: 160,
+                    h: 120,
+                },
+                // And one in a corner, where the margin clips against the frame.
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 120,
+                    h: 90,
+                },
+            ] {
+                let need = stage
+                    .input_rect_for(rect, w, h)
+                    .expect("lens correction accepts a region");
+                let mut map = RowMap::new(w);
+                for ry in 0..rect.h {
+                    let y = rect.y + ry;
+                    c.fill_row(y, &mut map);
+                    for rx in 0..rect.w {
+                        let x = rect.x + rx;
+                        for (ch, sc) in map.source(x).iter().enumerate() {
+                            // The taps reach `pad` either side, and a source outside the frame is
+                            // fine — the whole-buffer path reads black there too. Only what falls
+                            // *inside* the frame has to be inside `need`.
+                            let lo_x = (sc[0] - pad).max(0.0);
+                            let hi_x = (sc[0] + pad).min(w as f32 - 1.0);
+                            let lo_y = (sc[1] - pad).max(0.0);
+                            let hi_y = (sc[1] + pad).min(h as f32 - 1.0);
+                            assert!(
+                                lo_x >= need.x as f32
+                                    && hi_x <= (need.x + need.w) as f32 - 1.0
+                                    && lo_y >= need.y as f32
+                                    && hi_y <= (need.y + need.h) as f32 - 1.0,
+                                "b={b} {rect:?} channel {ch} at ({x}, {y}) reads \
+                                 [{lo_x}, {hi_x}] x [{lo_y}, {hi_y}], outside {need:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// ⚠⚠ **The pair must agree about what is possible**, or `region_plan` promises an input rect
+    /// for an output `apply_region` then refuses to produce. `GeometryStage` declines *both* on a
+    /// non-identity orientation for exactly this reason.
+    #[test]
+    fn the_pair_agrees_about_what_it_refuses() {
+        let want = Corrections {
+            distortion: true,
+            tca: true,
+            vignetting: true,
+            scale: 0.0,
+        };
+        let stage = LensCorrectionStage::new(lens_shot(), want, Resampler::CatmullRom);
+        let src = grid(64, 48);
+        for rect in [
+            // Past the right edge, past the bottom edge, and empty.
+            Rect {
+                x: 40,
+                y: 0,
+                w: 32,
+                h: 8,
+            },
+            Rect {
+                x: 0,
+                y: 40,
+                w: 8,
+                h: 32,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 8,
+            },
+        ] {
+            assert!(
+                stage.input_rect_for(rect, 64, 48).is_none(),
+                "input_rect_for accepted {rect:?}"
+            );
+            assert!(
+                stage.apply_region(&RegionSrc::whole(&src), rect).is_none(),
+                "apply_region accepted {rect:?}"
             );
         }
     }
