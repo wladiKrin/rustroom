@@ -1373,6 +1373,115 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
 #[cfg(test)]
 mod tests {
 
+    use super::{PipelineStage, Rect, RenderScale};
+
+    #[test]
+    fn a_stage_with_no_region_support_declines_to_name_an_input_rect() {
+        // ⚠ The default is what makes lens correction, spot removal and the masked captures
+        // decline without the caller name-checking any of them.
+        let s = crate::stages::exposure::ExposureStage::new(1.0);
+        assert_eq!(
+            s.input_rect_for(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 4,
+                    h: 4
+                },
+                64,
+                64
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn noise_reduction_grows_the_rect_by_its_reach_and_clips_to_the_image() {
+        let p = edit_model::NoiseReduction {
+            luminance: 0.0,
+            color: 50.0,
+            detail: 50.0,
+            smoothness: 100.0,
+        };
+        let s = crate::stages::noise_reduction::NoiseReductionStage::new(&p, RenderScale::FULL);
+        // Reach 32, interior rect: grows on every side.
+        let got = s
+            .input_rect_for(
+                Rect {
+                    x: 100,
+                    y: 100,
+                    w: 10,
+                    h: 10,
+                },
+                1000,
+                1000,
+            )
+            .unwrap();
+        assert_eq!(
+            got,
+            Rect {
+                x: 68,
+                y: 68,
+                w: 74,
+                h: 74
+            }
+        );
+        // ⚠ At the image's own corner it must CLIP rather than underflow or overrun. A margin
+        // larger than the image is ordinary at low render scales.
+        let got = s
+            .input_rect_for(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                20,
+                20,
+            )
+            .unwrap();
+        assert_eq!(
+            got,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 20
+            },
+            "clipped to the whole image"
+        );
+    }
+
+    #[test]
+    fn dehaze_grows_the_rect_by_its_reach() {
+        let s = crate::stages::dehaze::DehazeStage::new(
+            &edit_model::Dehaze { amount: 60.0 },
+            RenderScale::FULL,
+        );
+        let got = s
+            .input_rect_for(
+                Rect {
+                    x: 500,
+                    y: 500,
+                    w: 10,
+                    h: 10,
+                },
+                2000,
+                2000,
+            )
+            .unwrap();
+        assert_eq!(
+            got,
+            Rect {
+                x: 360,
+                y: 360,
+                w: 290,
+                h: 290
+            },
+            "140 on every side"
+        );
+    }
+
     use super::BrushCoverage;
 
     fn a_map() -> std::sync::Arc<crate::brush::CoverageMap> {
