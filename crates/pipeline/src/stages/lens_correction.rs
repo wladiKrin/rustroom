@@ -5,7 +5,7 @@
 //! whole-buffer, so it needs no `Region` and no kernel margin despite being a spatial resample.
 
 use crate::resample::{self, Resampler, Weights};
-use crate::PipelineStage;
+use crate::{PipelineStage, Rect, RegionSrc};
 use core_image::ImageBuf;
 use lens_profile::{Corrections, Corrector, LensShot, RowMap};
 use rayon::prelude::*;
@@ -50,12 +50,38 @@ impl PipelineStage for LensCorrectionStage {
         let Some(corrector) = self.corrector(w, h) else {
             return image;
         };
+        let src = RegionSrc::whole(&image);
+        self.render(&src, &corrector, Rect { x: 0, y: 0, w, h })
+    }
+}
+
+impl LensCorrectionStage {
+    /// Produce `rect` of the correction's output.
+    ///
+    /// ⚠⚠ **[`Self::apply`] is this function at full extent, which is what makes the whole-buffer
+    /// and region paths bit-identical BY CONSTRUCTION rather than by comparison.** Two
+    /// implementations that must agree is how they come to disagree; there is only one here.
+    /// `geometry::rotate` already follows exactly this rule, and for the same reason.
+    ///
+    /// ⚠⚠ **The field is always filled from x = 0, never from the rect.** [`Corrector::fill_row`]
+    /// reaches lensfun's `apply_geometry_distortion`, which computes each `x` as
+    /// `(xu + ns * i as f64) as f32` — **from scratch per `i`, not incrementally**. Starting the
+    /// row at `rect.x` therefore re-associates an f64 addition, and f64 addition is not
+    /// associative: the discrepancy is ~1e-16 against an f32 spacing of ~1.2e-7, so about one
+    /// pixel in 1e9 could round to a different f32. A faint band that appears one pixel in a
+    /// billion is precisely the class of thing this project has paid for. Filling from zero costs
+    /// ~2% of a region render — the field is 5% of the stage, and only the prefix of each row is
+    /// wasted — and it is bit-identical.
+    fn render(&self, src: &RegionSrc<'_>, corrector: &Corrector, rect: Rect) -> ImageBuf {
         const CH: usize = ImageBuf::CHANNELS;
-        let stride = w * CH;
-        let mut data = vec![0.0f32; w * h * CH];
+        // ⚠ The FULL image's width, never the slice in hand: `fill_row` is indexed in frame
+        // coordinates and the corrector was built against the frame.
+        let field_w = src.full.0;
+        let stride = rect.w * CH;
+        let mut data = vec![0.0f32; rect.w * rect.h * CH];
         if stride == 0 {
             // `par_chunks_exact_mut(0)` panics.
-            return ImageBuf::from_vec(w, h, data);
+            return ImageBuf::from_vec(rect.w, rect.h, data);
         }
         // ⚠ Parallel over **output** rows, which is sound because this is a gather: an output
         // pixel reads the whole source and writes only itself. Bit-identical to the sequential
@@ -65,19 +91,21 @@ impl PipelineStage for LensCorrectionStage {
         // one `RowMap` is allocated per worker and reused down its rows. Allocating per row
         // would mean zeroing the scratch millions of times over a full-resolution render.
         data.par_chunks_exact_mut(stride).enumerate().for_each_init(
-            || RowMap::new(w),
-            |map, (y, orow)| {
+            || RowMap::new(field_w),
+            |map, (ry, orow)| {
+                let y = rect.y + ry;
                 corrector.fill_row(y, map);
-                for (x, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
-                    let src = map.source(x);
+                for (rx, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
+                    let x = rect.x + rx;
+                    let s = map.source(x);
                     let gain = map.gain(x);
                     for (ch, p) in out.iter_mut().enumerate() {
                         // ⚠ Per channel, because TCA gives each channel its own source point —
                         // which is why `resample` has a second entry point at all.
-                        *p = resample::sample_channel(
-                            &image,
-                            src[ch][0],
-                            src[ch][1],
+                        *p = resample::sample_channel_region(
+                            src,
+                            s[ch][0],
+                            s[ch][1],
                             ch,
                             &self.weights,
                         ) * gain;
@@ -85,7 +113,7 @@ impl PipelineStage for LensCorrectionStage {
                 }
             },
         );
-        ImageBuf::from_vec(w, h, data)
+        ImageBuf::from_vec(rect.w, rect.h, data)
     }
 }
 
