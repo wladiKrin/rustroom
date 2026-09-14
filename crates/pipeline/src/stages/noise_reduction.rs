@@ -71,7 +71,7 @@ pub fn kernel_reach(params: &NoiseReduction, scale: RenderScale) -> usize {
         // ⚠⚠ **`CHROMA_PASSES` passes, not one.** The chroma blur is `box_blur` applied twice, so
         // its reach is `passes * radius`. Forgetting this is the same species of error as the
         // recorded ~110 px margin estimate for M8.7, one level down — and it was caught by
-        // `a_chained_region_render_matches_the_whole_buffer_path_byte_for_byte` rather than by
+        // `a_chain_with_a_local_agrees_to_within_a_rounding` rather than by
         // review, because an under-sized margin shows only as a wrong band at a region's edge.
         CHROMA_PASSES * scaled_radius(chroma_radius_full(params.smoothness), scale)
     } else {

@@ -1580,10 +1580,15 @@ mod tests {
 
     /// A buffer with varied content, so a stale cache actually shows up as different bytes.
     /// (The flat gray `tiny()` would hide almost any staleness.)
-    fn varied_sized(n: usize) -> Arc<ImageBuf> {
-        let mut img = ImageBuf::new(n, n);
-        for y in 0..n {
-            for x in 0..n {
+    ///
+    /// ⚠ Rectangular, because a square fixture cannot see a width/height swap — the class of bug
+    /// `every_prefix_stages_output_dims_match_what_it_produces` caught in `pipeline` with
+    /// "`geometry` predicted (37, 23) and produced (23, 37)".
+    fn varied_rect(w: usize, h: usize) -> Arc<ImageBuf> {
+        let mut img = ImageBuf::new(w, h);
+        let n = w.max(h).max(1);
+        for y in 0..h {
+            for x in 0..w {
                 img.set_pixel(
                     x,
                     y,
@@ -1596,6 +1601,10 @@ mod tests {
             }
         }
         Arc::new(img)
+    }
+
+    fn varied_sized(n: usize) -> Arc<ImageBuf> {
+        varied_rect(n, n)
     }
 
     fn varied() -> Arc<ImageBuf> {
@@ -1784,6 +1793,175 @@ mod tests {
             "no final checkpoint may have been stored, so the next render scopes again"
         );
         assert_eq!(second.prefix_stages, 1);
+    }
+
+    // ───────────────── M8.7: the whole prefix scoped, from its resume point ─────────────────
+
+    /// A **two-step** prefix: a gather then a local, which is exactly the shape M8.6 declared
+    /// impossible to chain.
+    ///
+    /// ⚠⚠ `smoothness: 0.0`, not the default 50, and it is load-bearing. The chroma radius runs
+    /// 8..32 full-resolution pixels and its reach is **two passes** of it, so a defaulted
+    /// smoothness margins a 24x18 region out to roughly the whole of a 128x96 fixture — past
+    /// `SCOPE_MAX_AREA_PCT`, where the gate **correctly** refuses. The test would then be green
+    /// and blind to everything it is named for.
+    fn chained_edits() -> Edits {
+        Edits {
+            geometry: edit_model::Geometry {
+                angle: 4.0,
+                ..Default::default()
+            },
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 0.0,
+                color: 40.0,
+                detail: 50.0,
+                smoothness: 0.0,
+            },
+            ..Edits::default()
+        }
+    }
+
+    fn chained_spec() -> FrameSpec {
+        FrameSpec {
+            region: Some(RegionRect {
+                x: 50,
+                y: 36,
+                w: 24,
+                h: 18,
+            }),
+            ..FrameSpec::fit(128)
+        }
+    }
+
+    /// ⚠⚠ **THE CARRIER FOR M8.7, and without it the milestone ships dead.** A scoped render and a
+    /// whole-buffer one produce the same picture **by design**, so every correctness test in the
+    /// workspace — all 63 goldens included — passes with the gate deleted. That is precisely how
+    /// creative LUTs (W5) shipped fully tested and 100% non-functional.
+    ///
+    /// ⚠ `prefix_stages` is asserted at **2**, not merely "scoped": M8.6's gate also sets
+    /// `region_scoped`, so a test asking only that would pass against the single-step version this
+    /// milestone replaces — which is the version that did nothing on the reporter's own chain.
+    #[test]
+    fn a_chain_of_prefix_steps_renders_only_the_region() {
+        let buf = varied_rect(128, 96);
+        let e = chained_edits();
+        let spec = chained_spec();
+        let mut bc = BrushCache::default();
+
+        let mut cache = PrefixCache::default();
+        let (frame, ran) = render_with(&buf, &e, spec, &mut cache, &mut bc);
+        assert!(
+            ran.region_scoped,
+            "a region render whose whole chain accepts one must scope"
+        );
+        assert_eq!(
+            ran.prefix_stages, 2,
+            "the scoped chain must cover BOTH steps, not just the last"
+        );
+        assert_eq!((frame.width, frame.height), (24, 18));
+
+        // ⚠ And it must decline with no region at all — the fitted rung, where scoping would be
+        // meaningless and where a gate that fired anyway would be producing a crop nobody asked
+        // for.
+        let mut cold = PrefixCache::default();
+        let (whole, ran) = render_with(&buf, &e, FrameSpec::fit(128), &mut cold, &mut bc);
+        assert!(!ran.region_scoped, "no region means no scoping");
+        assert_eq!((whole.width, whole.height), (128, 96));
+    }
+
+    /// ⚠⚠ The engine-level acceptance for a **chain**: the scoped path and the whole-buffer path
+    /// cropped must agree. The existing byte-for-byte test covers a one-step chain; only this one
+    /// can see a margin that is right for a single step and wrong once composed — which is a wrong
+    /// **band at one edge of the region**, a plausible photograph rather than an error.
+    ///
+    /// ⚠ **Within one 8-bit level, not bit-identical, and that is a property of the chain rather
+    /// than a tolerance chosen for comfort.** Noise reduction's box blur keeps a running sum, so
+    /// each position is reached by a different history of adds and subtracts and the last bits
+    /// differ — `a_chain_with_a_local_agrees_to_within_a_rounding` measures that at one ulp. A
+    /// chain of gathers alone *is* byte-identical, and `a_chain_of_gathers_is_byte_for_byte` is
+    /// where that standard is held.
+    ///
+    /// ⚠ The two paths are forced apart by the CACHE rather than by a flag: a warm final
+    /// checkpoint leaves nothing to run, so the gate cannot fire and the region is taken by
+    /// `img.crop`.
+    #[test]
+    fn a_chained_region_render_agrees_with_the_whole_buffer_path() {
+        let buf = varied_rect(128, 96);
+        let e = chained_edits();
+        let spec = chained_spec();
+        let mut bc = BrushCache::default();
+
+        let mut warm = PrefixCache::default();
+        let _ = render_with(&buf, &e, FrameSpec::fit(128), &mut warm, &mut bc);
+        let (via_crop, a) = render_with(&buf, &e, spec, &mut warm, &mut bc);
+        assert!(
+            !a.region_scoped,
+            "fixture check: a warm final checkpoint must NOT take the scoped path"
+        );
+
+        let mut cold = PrefixCache::default();
+        let (via_region, b) = render_with(&buf, &e, spec, &mut cold, &mut bc);
+        assert!(
+            b.region_scoped,
+            "fixture check: a cold cache must take the scoped path"
+        );
+
+        assert_eq!(
+            (via_crop.width, via_crop.height),
+            (via_region.width, via_region.height)
+        );
+        let worst = via_crop
+            .rgba
+            .iter()
+            .zip(via_region.rgba.iter())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= 1,
+            "the two paths must agree to within a rounding, worst {worst} levels"
+        );
+    }
+
+    /// ⚠⚠ **The caveat as a behaviour rather than as a sentence in a document.** A masked capture
+    /// correction runs **last** in the prefix and declines a region by construction — it inherits
+    /// `PipelineStage::input_rect_for`'s `None`. One decline abandons the whole plan, because a
+    /// step that must run whole-buffer needs a whole-buffer input and therefore so does every step
+    /// above it. So a photograph carrying a masked dehaze or a masked noise reduction gets no
+    /// scoping at all, and that is recorded here so a later reader meets it as a decision.
+    #[test]
+    fn a_masked_capture_switches_scoping_off_for_that_photo() {
+        let buf = varied_rect(128, 96);
+        let spec = chained_spec();
+        let mut bc = BrushCache::default();
+
+        let mut plain = PrefixCache::default();
+        let (_, before) = render_with(&buf, &chained_edits(), spec, &mut plain, &mut bc);
+        assert!(
+            before.region_scoped,
+            "fixture check: without the mask this photo does scope"
+        );
+
+        let mut e = chained_edits();
+        e.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+            refine: Vec::new(),
+            adjustments: edit_model::LocalAdjustments {
+                dehaze: edit_model::Dehaze { amount: 30.0 },
+                ..Default::default()
+            },
+        });
+
+        let mut cache = PrefixCache::default();
+        let (_, ran) = render_with(&buf, &e, spec, &mut cache, &mut bc);
+        assert!(
+            !ran.region_scoped,
+            "a masked capture correction declines a region, which abandons the whole plan"
+        );
+        assert_eq!(
+            ran.prefix_stages, 3,
+            "fixture check: the mask really added a prefix step"
+        );
     }
 
     /// Every prefix stage active, so a resume point is observable at each depth.
