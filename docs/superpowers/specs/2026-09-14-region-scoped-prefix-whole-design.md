@@ -79,9 +79,13 @@ pixels.
 |---|---|
 | `NoiseReductionStage` | grow by a new `kernel_reach` — max(2 x 6, chroma 8..32) |
 | `DehazeStage` | grow by a new `kernel_reach` — 2 x 60 + 20 |
-| `GeometryStage` | back-project four corners through the inverse crop, rotation **and orientation**, bbox, + tap radius |
+| `GeometryStage` | ⚠ **declines on a non-identity orientation**, matching `apply_region`; otherwise offsets by the crop origin and back-projects four corners through the inverse rotation, bbox, + tap radius |
 | `PerspectiveStage` | back-project through the inverse homography, bbox, + tap radius |
 | everything else | inherits `None` |
+
+⚠⚠ **Corrected while reading the code, 2026-09-14.** An earlier draft of this table said geometry should back-project through the orientation too. It must not: `GeometryStage::apply_region` already **declines** on a non-identity orientation, because `orient` is a whole-buffer index permutation feeding the rotation's gather. `input_rect_for` must decline on exactly the same condition, or the plan would promise an input rect for an output the forward half then refuses to produce.
+
+⚠ Both back-projections are **exact rather than conservative**, and for a reason worth stating: an affine map and a homography both send lines to lines, so the image of a rectangle is a parallelogram or a quadrilateral and the bounding box of its four corners contains it exactly. ⚠ The homography's exception is a rect crossing the horizon, where the denominator vanishes and the image is unbounded — guarded by testing the mapped corners for `is_finite` and returning `None`, which fails toward the whole-buffer path.
 
 Both `kernel_reach` functions follow `local_contrast::kernel_reach`'s shape **and its 2r rule**, and
 carry the same warning that a renderer cropping before the stage must keep at least this margin.
