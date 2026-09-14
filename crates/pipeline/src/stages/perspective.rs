@@ -70,9 +70,7 @@ impl PipelineStage for PerspectiveStage {
         }
         Some(self.render(src, rect))
     }
-}
 
-impl PerspectiveStage {
     /// The gather, producing only `rect` of the output.
     ///
     /// ⚠⚠ **`cx`, `cy` and `aspect` are the FULL output's, never the sub-rect's** — the homography
@@ -92,6 +90,70 @@ impl PerspectiveStage {
     /// here asked for: *"if this ever needs to be faster, both should move together."*
     /// Measured at a native rung (3123x2085, Catmull-Rom, 8 threads): **158.8 ms sequential
     /// against 30.2 ms here, 5.26x**, beside geometry's 4.85x.
+    /// ⚠ A homography sends lines to lines, so the image of a rectangle is a quadrilateral and
+    /// the bounding box of its four mapped corners contains it **exactly** — the same argument as
+    /// geometry's rotation, which is affine.
+    ///
+    /// ⚠⚠ **Except across the horizon**, where the denominator vanishes and the image is
+    /// unbounded. `is_finite` on every mapped corner is the guard, and it **declines** — failing
+    /// toward the whole-buffer path, where a wrong answer costs milliseconds rather than pixels.
+    ///
+    /// ⚠ The tap radius comes from `self.weights.kernel()` rather than a stored `Resampler`, so
+    /// the weights and the radius cannot disagree. Geometry's rule.
+    fn input_rect_for(&self, out: Rect, in_w: usize, in_h: usize) -> Option<Rect> {
+        if out.w == 0 || out.h == 0 || in_w < 2 || in_h < 2 {
+            return None;
+        }
+        if !self.params.is_active() {
+            // Dimension-preserving and an exact identity, so the rect is its own pre-image.
+            return Some(out);
+        }
+        let cx = (in_w as f32 - 1.0) / 2.0;
+        let cy = (in_h as f32 - 1.0) / 2.0;
+        let hom = Homography::from_edits(&self.params, cx / cy);
+        let (mut lo_x, mut lo_y) = (f32::INFINITY, f32::INFINITY);
+        let (mut hi_x, mut hi_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        let xs = [out.x as f32, (out.x + out.w - 1) as f32];
+        let ys = [out.y as f32, (out.y + out.h - 1) as f32];
+        for &y in &ys {
+            for &x in &xs {
+                let n = ((x - cx) / cy, (y - cy) / cy);
+                let sp = hom.source_of(n);
+                let sx = cx + sp.0 * cy;
+                let sy = cy + sp.1 * cy;
+                // ⚠⚠ **Defence in depth, and the sabotage for it is INERT — recorded rather
+                // than covered by an invented test.** A homography's denominator vanishes at the
+                // horizon and the image of the rect is then unbounded, so this would be
+                // load-bearing for an unbounded transform. It is unreachable for any
+                // representable `Perspective`: `MAX_ANGLE_DEG` is 30, so the denominator vanishes
+                // at y = -1/tan(30 deg) ~= -1.73 half-heights while the frame spans y in [-1, 1].
+                // Disabling this leaves all 473 tests green, which is a fact about the parameter
+                // bounds rather than about the guard. It becomes live the moment `MAX_ANGLE_DEG`
+                // passes 45.
+                if !sx.is_finite() || !sy.is_finite() {
+                    return None;
+                }
+                lo_x = lo_x.min(sx);
+                hi_x = hi_x.max(sx);
+                lo_y = lo_y.min(sy);
+                hi_y = hi_y.max(sy);
+            }
+        }
+        let pad = self.weights.kernel().radius();
+        let x = (lo_x.floor().max(0.0) as usize).saturating_sub(pad);
+        let y = (lo_y.floor().max(0.0) as usize).saturating_sub(pad);
+        let bx = ((hi_x.ceil().max(0.0) as usize) + pad + 1).min(in_w);
+        let by = ((hi_y.ceil().max(0.0) as usize) + pad + 1).min(in_h);
+        Some(Rect {
+            x,
+            y,
+            w: bx.saturating_sub(x),
+            h: by.saturating_sub(y),
+        })
+    }
+}
+
+impl PerspectiveStage {
     fn render(&self, image: &ImageBuf, rect: Rect) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
         let cx = (w as f32 - 1.0) / 2.0;
@@ -127,6 +189,100 @@ impl PerspectiveStage {
 mod tests {
     use super::*;
     use crate::PipelineStage;
+
+    #[test]
+    fn perspective_back_projects_every_sample_it_will_read() {
+        // The same containment property geometry's carries, against the real inverse map.
+        let p = Perspective {
+            vertical: 40.0,
+            ..Default::default()
+        };
+        let s = PerspectiveStage::new(p, Resampler::CatmullRom);
+        let (w, h) = (400usize, 300usize);
+        let out = Rect {
+            x: 100,
+            y: 80,
+            w: 50,
+            h: 40,
+        };
+        let got = s.input_rect_for(out, w, h).unwrap();
+
+        let cx = (w as f32 - 1.0) / 2.0;
+        let cy = (h as f32 - 1.0) / 2.0;
+        let hom = Homography::from_edits(&p, cx / cy);
+        let pad = Resampler::CatmullRom.radius() as f32;
+        for oy in out.y..out.y + out.h {
+            for ox in out.x..out.x + out.w {
+                let n = ((ox as f32 - cx) / cy, (oy as f32 - cy) / cy);
+                let sp = hom.source_of(n);
+                let (sx, sy) = (cx + sp.0 * cy, cy + sp.1 * cy);
+                for (tx, ty) in [(sx - pad, sy - pad), (sx + pad, sy + pad)] {
+                    let tx = tx.clamp(0.0, w as f32 - 1.0);
+                    let ty = ty.clamp(0.0, h as f32 - 1.0);
+                    assert!(
+                        tx >= got.x as f32 - 1.0
+                            && tx <= (got.x + got.w) as f32
+                            && ty >= got.y as f32 - 1.0
+                            && ty <= (got.y + got.h) as f32,
+                        "sample ({tx}, {ty}) for output ({ox}, {oy}) falls outside {got:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_degenerate_frame_declines_rather_than_producing_a_rect() {
+        // ⚠⚠ A homography's denominator vanishes at the horizon and the image of the rect is then
+        // unbounded; `is_finite` is the guard and it fails toward the whole-buffer path. This
+        // fixture reaches the *other* refusal — a frame too small to normalise — and the horizon
+        // branch itself is recorded as defence in depth below.
+        let s = PerspectiveStage::new(
+            Perspective {
+                vertical: 100.0,
+                ..Default::default()
+            },
+            Resampler::CatmullRom,
+        );
+        assert_eq!(
+            s.input_rect_for(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1
+                },
+                1,
+                1
+            ),
+            None
+        );
+        assert_eq!(
+            s.input_rect_for(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0
+                },
+                400,
+                300
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_inactive_perspective_asks_for_exactly_the_rect_it_was_given() {
+        let s = PerspectiveStage::new(Perspective::default(), Resampler::CatmullRom);
+        let out = Rect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 20,
+        };
+        assert_eq!(s.input_rect_for(out, 200, 200), Some(out));
+    }
 
     /// ⚠ The same acceptance geometry's carries, for the same reason: both are gathers, so
     /// equality is byte-for-byte and a tolerance would hide a map centred on the wrong point.

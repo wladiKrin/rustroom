@@ -1482,6 +1482,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_back_projections_are_reachable_through_the_trait_object() {
+        // ⚠⚠ **A test on the concrete type cannot tell a trait method from an inherent one.**
+        // `input_rect_for` was written into `impl PerspectiveStage` once by mistake; both its own
+        // tests passed, because `s.input_rect_for(..)` resolved to the inherent method — while the
+        // TRAIT method still returned the default `None`. `region_plan` calls through
+        // `dyn PipelineStage`, so it would have seen the feature as simply absent. Only clippy's
+        // dead-code pass caught it, which is luck rather than a guard.
+        //
+        // ⚠ This asks the way `region_plan` asks. A stage that answers here answers there.
+        let g = edit_model::Geometry {
+            angle: 5.0,
+            ..Default::default()
+        };
+        let geo: Box<dyn PipelineStage> = Box::new(crate::stages::geometry::GeometryStage::new(
+            &g,
+            crate::resample::Resampler::CatmullRom,
+        ));
+        assert!(
+            geo.input_rect_for(
+                Rect {
+                    x: 10,
+                    y: 10,
+                    w: 20,
+                    h: 20
+                },
+                400,
+                300
+            )
+            .is_some(),
+            "geometry must answer through the trait, not only on the concrete type"
+        );
+
+        let p = edit_model::Perspective {
+            vertical: 40.0,
+            ..Default::default()
+        };
+        let per: Box<dyn PipelineStage> =
+            Box::new(crate::stages::perspective::PerspectiveStage::new(
+                p,
+                crate::resample::Resampler::CatmullRom,
+            ));
+        assert!(
+            per.input_rect_for(
+                Rect {
+                    x: 10,
+                    y: 10,
+                    w: 20,
+                    h: 20
+                },
+                400,
+                300
+            )
+            .is_some(),
+            "perspective must answer through the trait, not only on the concrete type"
+        );
+
+        let nr = edit_model::NoiseReduction {
+            luminance: 50.0,
+            color: 50.0,
+            detail: 50.0,
+            smoothness: 50.0,
+        };
+        let n: Box<dyn PipelineStage> = Box::new(
+            crate::stages::noise_reduction::NoiseReductionStage::new(&nr, RenderScale::FULL),
+        );
+        assert!(n
+            .input_rect_for(
+                Rect {
+                    x: 10,
+                    y: 10,
+                    w: 20,
+                    h: 20
+                },
+                400,
+                300
+            )
+            .is_some());
+
+        let d: Box<dyn PipelineStage> = Box::new(crate::stages::dehaze::DehazeStage::new(
+            &edit_model::Dehaze { amount: 60.0 },
+            RenderScale::FULL,
+        ));
+        assert!(d
+            .input_rect_for(
+                Rect {
+                    x: 10,
+                    y: 10,
+                    w: 20,
+                    h: 20
+                },
+                400,
+                300
+            )
+            .is_some());
+    }
+
     use super::BrushCoverage;
 
     fn a_map() -> std::sync::Arc<crate::brush::CoverageMap> {
