@@ -1,5 +1,5 @@
 use crate::spatial::{box_blur, guided_filter};
-use crate::{PipelineStage, RenderScale};
+use crate::{PipelineStage, Rect, RenderScale};
 // ⚠ The **ProPhoto** pair, not the sRGB one: this stage converts the working space in
 // and out again, and mixing the two directions produces a smooth, plausible colour shift
 // that is very hard to attribute later.
@@ -68,7 +68,12 @@ pub fn kernel_reach(params: &NoiseReduction, scale: RenderScale) -> usize {
         0
     };
     let col = if params.color > 0.0 {
-        scaled_radius(chroma_radius_full(params.smoothness), scale)
+        // ⚠⚠ **`CHROMA_PASSES` passes, not one.** The chroma blur is `box_blur` applied twice, so
+        // its reach is `passes * radius`. Forgetting this is the same species of error as the
+        // recorded ~110 px margin estimate for M8.7, one level down — and it was caught by
+        // `a_chained_region_render_matches_the_whole_buffer_path_byte_for_byte` rather than by
+        // review, because an under-sized margin shows only as a wrong band at a region's edge.
+        CHROMA_PASSES * scaled_radius(chroma_radius_full(params.smoothness), scale)
     } else {
         0
     };
@@ -98,6 +103,34 @@ impl NoiseReductionStage {
 impl PipelineStage for NoiseReductionStage {
     fn name(&self) -> &'static str {
         "noise_reduction"
+    }
+
+    /// Produce only `out` of this stage's output, from a margined region of its input.
+    ///
+    /// ⚠⚠ **Byte-identical to the whole-buffer path for every pixel in `out`, and the margin is
+    /// what makes that true rather than approximately true.** [`crate::region_plan`] grows the
+    /// request by [`kernel_reach`] on every side, so a pixel inside `out` reads only samples that
+    /// are inside the buffer — and those samples hold exactly what the whole image holds there.
+    /// The box blur's window shrinks only at the *buffer's* own edge, which `out` is inset from by
+    /// construction.
+    ///
+    /// ⚠ It therefore fails **loudly** rather than clamping when `out` is not inside the buffer:
+    /// that means some `input_rect_for` under-asked, and the symptom would otherwise be a subtly
+    /// wrong band at the region's edge rather than an error.
+    ///
+    /// ⚠ The clone is of the *margined region*, not the frame — far smaller than the buffer this
+    /// exists to avoid processing, which is the whole point.
+    fn apply_region(&self, src: &crate::RegionSrc<'_>, out: Rect) -> Option<ImageBuf> {
+        if out.w == 0 || out.h == 0 {
+            return None;
+        }
+        let ox = out.x.checked_sub(src.origin.0)?;
+        let oy = out.y.checked_sub(src.origin.1)?;
+        if ox + out.w > src.buf.width() || oy + out.h > src.buf.height() {
+            return None;
+        }
+        let done = self.apply(src.buf.clone());
+        Some(done.crop(ox, oy, out.w, out.h))
     }
 
     /// ⚠ Grows by [`kernel_reach`] on every side. This stage preserves dimensions, so `out` and
@@ -187,16 +220,24 @@ mod tests {
             )
         };
         assert_eq!(at(50.0, 0.0, 0.0), 12, "luminance only: 2 x 6");
-        assert_eq!(at(0.0, 50.0, 0.0), 8, "chroma only, smoothness 0");
-        assert_eq!(at(0.0, 50.0, 100.0), 32, "chroma only, smoothness 100");
+        assert_eq!(
+            at(0.0, 50.0, 0.0),
+            16,
+            "chroma only, smoothness 0: 2 passes x 8"
+        );
+        assert_eq!(
+            at(0.0, 50.0, 100.0),
+            64,
+            "chroma only, smoothness 100: 2 passes x 32"
+        );
         assert_eq!(
             at(50.0, 50.0, 0.0),
-            12,
-            "both, and luminance is wider at smoothness 0"
+            16,
+            "both, and chroma is already wider at smoothness 0: 2 passes x 8 beats 2 x 6"
         );
         assert_eq!(
             at(50.0, 50.0, 50.0),
-            20,
+            40,
             "both, and chroma is wider at smoothness 50"
         );
     }
@@ -241,8 +282,8 @@ mod tests {
             detail: 50.0,
             smoothness: 100.0,
         };
-        assert_eq!(super::kernel_reach(&p, super::RenderScale::FULL), 32);
-        assert_eq!(super::kernel_reach(&p, super::RenderScale::new(0.5)), 16);
+        assert_eq!(super::kernel_reach(&p, super::RenderScale::FULL), 64);
+        assert_eq!(super::kernel_reach(&p, super::RenderScale::new(0.5)), 32);
     }
 
     // Brings in NoiseReductionStage, RenderScale, ImageBuf, NoiseReduction, PipelineStage
