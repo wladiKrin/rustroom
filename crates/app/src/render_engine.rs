@@ -5,7 +5,7 @@ use crate::prefix_cache::{PrefixCache, Tier};
 use core_image::ImageBuf;
 use edit_model::Edits;
 use pipeline::{build_prefix_steps, PrefixKey, Region, RenderScale};
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -212,6 +212,16 @@ pub struct RenderEngine {
     /// has shipped — the mask overlay kept showing its previous position until some unrelated
     /// edit happened to request a frame.
     requests: Arc<std::sync::atomic::AtomicUsize>,
+    /// How many **warm-behind** renders this engine's worker has run.
+    ///
+    /// ⚠⚠ An observable, because a warm render produces no frame and changes no pixel: the cache
+    /// it leaves behind makes the *next* whole-buffer render fast, and nothing in any output can
+    /// distinguish a warmed engine from one that never warmed. Every equivalence test in the
+    /// workspace passes with the mechanism deleted — `requests_issued`, `prefix_stages`, `bytes`
+    /// and `region_scoped` all exist for exactly this reason.
+    ///
+    /// ⚠ Unconditional rather than `#[cfg(test)]`, for `requests_issued`'s reason.
+    warmed: Arc<std::sync::atomic::AtomicUsize>,
     /// Where this engine's worker looks for `.cube` files, kept so the **full-resolution
     /// handover** can carry it onto the replacement engine.
     ///
@@ -250,7 +260,10 @@ impl RenderEngine {
         let kept_looks_dir = looks_dir.clone();
         let (req_tx, req_rx) = channel::<Request>();
         let (res_tx, res_rx) = channel::<RenderedFrame>();
+        let warmed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let warmed_worker = Arc::clone(&warmed);
         let handle = thread::spawn(move || {
+            let warmed = warmed_worker;
             let mut cache = PrefixCache::default();
             // ⚠⚠ **Resolved HERE rather than on the UI thread**, and cached by name: a 64³ cube
             // is 786 KB and this loop runs on every slider frame. One slot is enough — a photo
@@ -260,7 +273,18 @@ impl RenderEngine {
             // Lives beside the prefix cache and for the same reason: this thread is the sole
             // renderer, so neither needs locking.
             let mut brush_cache = BrushCache::default();
-            while let Ok(mut req) = req_rx.recv() {
+            // ⚠ Holds the request that ended a warm-behind wait, so nothing is ever dropped on the
+            // floor: the wait below **takes** a request out of the channel to learn the gesture is
+            // still live, and the next turn of the loop must serve that one rather than block.
+            let mut pending: Option<Request> = None;
+            loop {
+                let mut req = match pending.take() {
+                    Some(r) => r,
+                    None => match req_rx.recv() {
+                        Ok(r) => r,
+                        Err(_) => return,
+                    },
+                };
                 // Coalesce: skip to the most recent pending request.
                 loop {
                     match req_rx.try_recv() {
@@ -312,6 +336,13 @@ impl RenderEngine {
                 // user is actually waiting for.
                 let debug_render = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
                 let t0 = std::time::Instant::now();
+                // ⚠ Bound once and reused by the warm-behind render below. `ProfileRendering`
+                // is `Copy` precisely so a second render cannot be handed a different one.
+                let rendering = pipeline::ProfileRendering {
+                    curve: profile.curve.as_deref(),
+                    baseline_ev: profile.baseline_ev,
+                    look,
+                };
                 let (frame, ran) = render_cached(
                     &buffer,
                     &edits,
@@ -319,11 +350,7 @@ impl RenderEngine {
                     source_scale,
                     lens.clone(),
                     wb_baseline,
-                    pipeline::ProfileRendering {
-                        curve: profile.curve.as_deref(),
-                        baseline_ev: profile.baseline_ev,
-                        look,
-                    },
+                    rendering,
                     &mut cache,
                     &mut brush_cache,
                 );
@@ -349,6 +376,57 @@ impl RenderEngine {
                     return;
                 }
                 on_done();
+
+                // ⚠⚠ **WARM BEHIND, and without it the gesture INVERTS: fluid while dragging,
+                // then a long stall the moment you let go.** A scoped render is deliberately never
+                // cached, so no drag frame leaves a checkpoint and the settled whole-buffer render
+                // has to build the entire prefix from scratch — measured at ~200 ms on the
+                // reporter's chain. This spends that in the background instead.
+                //
+                // ⚠⚠ **The settle is detected from the CHANNEL, not from a drag signal.** A
+                // gesture produces a request per UI frame, so a quiet channel for longer than a
+                // frame interval *is* the settle — which keeps the whole mechanism inside the
+                // worker and adds nothing that could disagree with the derived gate.
+                //
+                // ⚠ A request arriving during the wait is **taken and carried forward**, never
+                // discarded: the warm render simply never starts, so there is nothing to abandon
+                // and no second coalescing mechanism beside the one above.
+                //
+                // ⚠⚠ The frame is **discarded**. Sending it would replace the canvas texture with
+                // a whole-image one nobody asked for — the point is the cache it leaves behind,
+                // and the swap is invisible only because plan 1 made the two paths agree.
+                if ran.region_scoped {
+                    match req_rx.recv_timeout(WARM_BEHIND) {
+                        Ok(newer) => pending = Some(newer),
+                        Err(RecvTimeoutError::Disconnected) => return,
+                        Err(RecvTimeoutError::Timeout) => {
+                            let t1 = std::time::Instant::now();
+                            let (_, warm) = render_cached(
+                                &buffer,
+                                &edits,
+                                FrameSpec {
+                                    region: None,
+                                    ..req.spec
+                                },
+                                source_scale,
+                                lens.clone(),
+                                wb_baseline,
+                                rendering,
+                                &mut cache,
+                                &mut brush_cache,
+                            );
+                            warmed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if debug_render {
+                                eprintln!(
+                                    "  warm behind: {:6.1} ms  rung {:5}  prefix_ran {}",
+                                    t1.elapsed().as_secs_f64() * 1000.0,
+                                    req.spec.max_dim,
+                                    warm.prefix_stages,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         });
         Self {
@@ -356,6 +434,7 @@ impl RenderEngine {
             res_rx,
             _handle: handle,
             requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            warmed,
             looks_dir: kept_looks_dir,
         }
     }
@@ -383,6 +462,11 @@ impl RenderEngine {
 
     pub fn requests_issued(&self) -> usize {
         self.requests.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many warm-behind renders the worker has run. See the field's doc for why it exists.
+    pub fn warm_renders(&self) -> usize {
+        self.warmed.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Return the newest finished frame, if any (drops older ones).
@@ -892,6 +976,18 @@ pub struct Ran {
     /// `gpu_prefix_steps` all exist for this reason.
     pub region_scoped: bool,
 }
+
+/// How long a quiet request channel means the gesture has settled, after a region-scoped render.
+///
+/// ⚠⚠ **Detected from the channel rather than from a drag signal**, which is what keeps the whole
+/// mechanism inside the worker: a live gesture produces a request per UI frame, so silence for
+/// longer than a frame interval *is* the settle. A `dragging` flag threaded down from the canvas
+/// would be a second fact beside the derived gate, and the two could disagree.
+///
+/// ⚠ Comfortably above a 60 Hz frame (16.7 ms) and below anything a person would notice, so a
+/// paused-but-still-held drag warms once and costs one frame of extra latency when it resumes —
+/// the "abandon, don't abort" trade `DecodeWorker` and `batch_export` already make.
+const WARM_BEHIND: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// The largest share of the frame a **margined** region may occupy and still be worth scoping, in
 /// percent.
@@ -1991,6 +2087,106 @@ mod tests {
         assert_eq!(
             ran.prefix_stages, 3,
             "fixture check: the mask really added a prefix step"
+        );
+    }
+
+    /// Poll `f` until it holds, or fail at a deadline.
+    ///
+    /// ⚠ A deadline rather than an open wait: a regression must **fail** rather than hang CI for
+    /// hours, which is the rule `the_folder_is_loaded_in_parallel` was rewritten for.
+    fn wait_until(mut f: impl FnMut() -> bool, what: &str) {
+        for _ in 0..400 {
+            if f() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    fn chained_engine(buf: &Arc<ImageBuf>) -> RenderEngine {
+        RenderEngine::new(
+            buf.clone(),
+            1.0,
+            None,
+            color::wb::Illuminant::default(),
+            Default::default(),
+            true,
+            || {},
+        )
+    }
+
+    /// ⚠⚠ **Without this the gesture inverts: fluid while dragging, then a stall the moment you
+    /// let go.** A scoped render is deliberately never cached, so no drag frame leaves a
+    /// checkpoint behind and the settled whole-buffer render builds the entire prefix from
+    /// scratch — measured at ~200 ms on the reporter's own chain.
+    ///
+    /// ⚠ A warm render produces no frame and changes no pixel, so nothing in any output can see
+    /// it and every equivalence test in the workspace passes with the mechanism deleted. The
+    /// counter is the only thing that can.
+    #[test]
+    fn a_settled_scoped_render_warms_the_whole_buffer_checkpoint_behind_it() {
+        let buf = varied_rect(128, 96);
+        let engine = chained_engine(&buf);
+        engine.request(chained_edits(), chained_spec());
+        let frame = wait_for_frame(&engine);
+        assert_eq!(
+            (frame.width, frame.height),
+            (24, 18),
+            "fixture check: the region render really happened"
+        );
+        wait_until(|| engine.warm_renders() == 1, "the warm-behind render");
+    }
+
+    /// ⚠ The other half, and a test asserting only the first would pass against a worker that
+    /// warmed after **every** render — which would spend a whole-buffer prefix behind a render
+    /// that had just built one.
+    #[test]
+    fn a_whole_buffer_render_warms_nothing_behind_it() {
+        let buf = varied_rect(128, 96);
+        let engine = chained_engine(&buf);
+        engine.request(chained_edits(), FrameSpec::fit(128));
+        let _ = wait_for_frame(&engine);
+        std::thread::sleep(WARM_BEHIND * 3);
+        assert_eq!(
+            engine.warm_renders(),
+            0,
+            "nothing was scoped, so there is no checkpoint to warm"
+        );
+    }
+
+    /// ⚠⚠ **The warm-behind wait TAKES a request out of the channel to learn the gesture is still
+    /// live, so a dropped one is the way this mechanism can lose a frame** — and a lost frame
+    /// during a drag is the canvas silently showing a stale position, which is a bug this project
+    /// has already shipped once (the mask overlay kept its previous position until some unrelated
+    /// edit happened to request a frame). Every request issued must produce a frame.
+    ///
+    /// ⚠ What this **cannot** assert is that no warm render fires *mid*-gesture. That property is
+    /// held structurally by `recv_timeout` rather than by a test, and deliberately so: asserting
+    /// it means asserting that six renders finish inside 150 ms of wall clock, which is an
+    /// assertion about OS scheduling. This project has three recorded CI flakes from exactly that,
+    /// and `wait_for_frame`'s own deadline is the only timing this test depends on.
+    #[test]
+    fn a_gesture_loses_no_frame_and_warms_once_it_stops() {
+        let buf = varied_rect(128, 96);
+        let engine = chained_engine(&buf);
+        let spec = chained_spec();
+        for i in 0..6 {
+            let mut e = chained_edits();
+            e.geometry.angle = 4.0 + i as f32 * 0.25;
+            engine.request(e, spec);
+            // ⚠ Panics at its own deadline if the frame never comes, which is what makes
+            // "nothing was dropped" an assertion rather than a hope.
+            let frame = wait_for_frame(&engine);
+            assert_eq!(
+                (frame.width, frame.height),
+                (24, 18),
+                "frame {i} came back the wrong size"
+            );
+        }
+        wait_until(
+            || engine.warm_renders() >= 1,
+            "the warm-behind render once the gesture stops",
         );
     }
 
