@@ -1838,6 +1838,15 @@ mod tests {
                 detail: 50.0,
                 smoothness: 0.0,
             },
+            // ⚠⚠ **The vignette is the point of the fixture, not decoration.** It is the only tail
+            // stage whose result depends on *where* a pixel sits in the frame, so it is the only
+            // thing that can see `(pw, ph)` taken from the region-scoped buffer instead of composed
+            // from the plan. M8.6's version of this hazard was caught by exactly this stage and by
+            // nothing else — all 63 goldens were blind to it.
+            vignette: edit_model::Vignette {
+                amount: -60.0,
+                ..Default::default()
+            },
             ..Edits::default()
         }
     }
