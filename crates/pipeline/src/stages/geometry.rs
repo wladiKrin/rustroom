@@ -123,6 +123,72 @@ impl PipelineStage for GeometryStage {
         }
         Some(rotate_region(src, self.angle_rad, &self.weights, out))
     }
+
+    /// ⚠⚠ **Declines on a non-identity orientation, on exactly the condition
+    /// [`Self::apply_region`] declines on.** The two are a pair: a plan built from one and executed
+    /// by the other must never disagree about what is possible.
+    ///
+    /// ⚠ Otherwise two steps. The crop is a pure offset — `out` is in cropped coordinates, so the
+    /// rect in the rotated canvas is `out` shifted by the crop origin. The rotation is then
+    /// back-projected through **the same inverse map [`rotate_region`] uses**, and because a
+    /// rotation is affine it sends lines to lines, so the bounding box of the four mapped corners
+    /// contains the image of the whole rect **exactly** rather than conservatively.
+    ///
+    /// ⚠ Plus the resampler's tap radius, because [`resample::sample`] reads `2 * radius` taps per
+    /// axis around the point it is given, not merely the pixel under it. The radius comes from
+    /// `self.weights` rather than a stored `Resampler` field — two facts that can disagree is the
+    /// shape this project has paid for three times.
+    fn input_rect_for(&self, out: crate::Rect, in_w: usize, in_h: usize) -> Option<crate::Rect> {
+        if !self.orientation.is_identity() {
+            return None;
+        }
+        let (x0, y0, x1, y1) = crop_bounds(in_w, in_h, &self.crop);
+        // ⚠ Refuse a rect this stage could not produce, exactly as `apply_region` does.
+        if out.w == 0 || out.h == 0 || out.x + out.w > x1 - x0 || out.y + out.h > y1 - y0 {
+            return None;
+        }
+        let r = crate::Rect {
+            x: x0 + out.x,
+            y: y0 + out.y,
+            w: out.w,
+            h: out.h,
+        };
+        if self.angle_rad == 0.0 {
+            // No resampling at all, so a sub-rect of the crop is a sub-rect of the source — the
+            // same branch `apply_region` takes.
+            return Some(r);
+        }
+        let cx = (in_w as f32 - 1.0) / 2.0;
+        let cy = (in_h as f32 - 1.0) / 2.0;
+        let (sin, cos) = self.angle_rad.sin_cos();
+        let (mut lo_x, mut lo_y) = (f32::INFINITY, f32::INFINITY);
+        let (mut hi_x, mut hi_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        let xs = [r.x as f32, (r.x + r.w - 1) as f32];
+        let ys = [r.y as f32, (r.y + r.h - 1) as f32];
+        for &y in &ys {
+            for &x in &xs {
+                let dx = x - cx;
+                let dy = y - cy;
+                let sx = cx + dx * cos + dy * sin;
+                let sy = cy - dx * sin + dy * cos;
+                lo_x = lo_x.min(sx);
+                hi_x = hi_x.max(sx);
+                lo_y = lo_y.min(sy);
+                hi_y = hi_y.max(sy);
+            }
+        }
+        let pad = self.weights.kernel().radius();
+        let x = (lo_x.floor().max(0.0) as usize).saturating_sub(pad);
+        let y = (lo_y.floor().max(0.0) as usize).saturating_sub(pad);
+        let bx = ((hi_x.ceil().max(0.0) as usize) + pad + 1).min(in_w);
+        let by = ((hi_y.ceil().max(0.0) as usize) + pad + 1).min(in_h);
+        Some(crate::Rect {
+            x,
+            y,
+            w: bx.saturating_sub(x),
+            h: by.saturating_sub(y),
+        })
+    }
 }
 
 /// Rotate about the image center by `angle_rad`, keeping the canvas size.
@@ -224,6 +290,116 @@ fn apply_crop(image: ImageBuf, c: &CropRect) -> ImageBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geometry_declines_an_input_rect_under_a_non_identity_orientation() {
+        // ⚠⚠ It must decline on exactly the condition `apply_region` declines on. A pair that
+        // disagrees is worse than neither: region_plan would build a plan the forward half refuses.
+        let g = Geometry {
+            angle: 0.0,
+            crop: CropRect::default(),
+            orientation: Orientation {
+                rotate: Quarter::Cw90,
+                mirror: false,
+            },
+        };
+        let s = GeometryStage::new(&g, Resampler::CatmullRom);
+        let r = crate::Rect {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        };
+        assert_eq!(s.input_rect_for(r, 64, 64), None);
+        assert!(
+            s.apply_region(&ImageBuf::new(64, 64), r).is_none(),
+            "the pair must agree about what is possible"
+        );
+    }
+
+    #[test]
+    fn an_unrotated_crop_offsets_the_rect_and_grows_it_by_nothing() {
+        // No resampling at all, so the input rect is the output rect shifted by the crop origin.
+        let g = Geometry {
+            angle: 0.0,
+            crop: CropRect {
+                left: 0.25,
+                top: 0.25,
+                right: 1.0,
+                bottom: 1.0,
+            },
+            orientation: Orientation::default(),
+        };
+        let s = GeometryStage::new(&g, Resampler::CatmullRom);
+        let got = s
+            .input_rect_for(
+                crate::Rect {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                },
+                100,
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            got,
+            crate::Rect {
+                x: 25,
+                y: 25,
+                w: 10,
+                h: 10
+            }
+        );
+    }
+
+    #[test]
+    fn a_rotation_back_projects_the_corners_and_keeps_the_tap_radius() {
+        // ⚠⚠ The discriminating property: the input rect must CONTAIN every source pixel
+        // `rotate_region` will actually sample. Asserted against the REAL inverse map rather than
+        // a re-derivation — re-deriving it in the test proves only that the same mistake was made
+        // twice, which is how GeometryStage's own rotation sign error survived once already.
+        let g = Geometry {
+            angle: 8.0,
+            crop: CropRect::default(),
+            orientation: Orientation::default(),
+        };
+        let s = GeometryStage::new(&g, Resampler::CatmullRom);
+        let (w, h) = (400usize, 300usize);
+        let out = crate::Rect {
+            x: 120,
+            y: 90,
+            w: 40,
+            h: 30,
+        };
+        let got = s.input_rect_for(out, w, h).unwrap();
+
+        let cx = (w as f32 - 1.0) / 2.0;
+        let cy = (h as f32 - 1.0) / 2.0;
+        let (sin, cos) = 8.0f32.to_radians().sin_cos();
+        let pad = Resampler::CatmullRom.radius() as f32;
+        for oy in out.y..out.y + out.h {
+            for ox in out.x..out.x + out.w {
+                let dx = ox as f32 - cx;
+                let dy = oy as f32 - cy;
+                let sx = cx + dx * cos + dy * sin;
+                let sy = cy - dx * sin + dy * cos;
+                // Every tap the resampler reads, not merely the centre.
+                for (tx, ty) in [(sx - pad, sy - pad), (sx + pad, sy + pad)] {
+                    let tx = tx.clamp(0.0, w as f32 - 1.0);
+                    let ty = ty.clamp(0.0, h as f32 - 1.0);
+                    assert!(
+                        tx >= got.x as f32 - 1.0
+                            && tx <= (got.x + got.w) as f32
+                            && ty >= got.y as f32 - 1.0
+                            && ty <= (got.y + got.h) as f32,
+                        "sample ({tx}, {ty}) for output ({ox}, {oy}) falls outside {got:?}"
+                    );
+                }
+            }
+        }
+    }
 
     fn edged_ramp(w: usize, h: usize) -> ImageBuf {
         let mut b = ImageBuf::new(w, h);
