@@ -204,6 +204,30 @@ pub(crate) fn transmission_with(
 /// `t_k = 1 − |k|·(1 − t)`: positive **inverts** the model to remove haze, negative **applies**
 /// it to add haze. At `k = 0`, `t_k = 1` and both collapse to `J = I` exactly. Because `t`
 /// encodes depth, adding haze is depth-aware for free.
+/// The widest neighbourhood one output pixel can depend on, in **rendered** pixels.
+///
+/// ⚠⚠ The two terms **add**, unlike `noise_reduction::kernel_reach`'s max. The dark channel is a
+/// `min_filter` of radius [`PATCH_RADIUS_FULL`] producing a transmission map; the guided
+/// refinement then reads a `2 * REFINE_RADIUS_FULL` neighbourhood **of that map**. So the
+/// dependence composes: 120 + 20 = 140 full-resolution pixels.
+///
+/// ⚠ `2 *` because a guided base reaches `2r` — every window statistic is a box blur of radius
+/// `r` and the coefficients are blurred again. `local_contrast::kernel_reach`'s rule.
+///
+/// ⚠⚠ **The airlight contributes nothing here, and that is the whole point of making it a
+/// parameter** — see [`crate::prefix_airlight`]. Were it still estimated from the stage's own
+/// input, this stage's true reach would be the **entire frame** and no margin could ever be
+/// correct.
+///
+/// Any renderer that crops a region before running this stage must keep at least this much margin
+/// outside what it displays — see [`crate::region_plan`].
+pub fn kernel_reach(params: &Dehaze, scale: RenderScale) -> usize {
+    if !params.is_active() {
+        return 0;
+    }
+    2 * scaled_radius(REFINE_RADIUS_FULL, scale) + scaled_radius(PATCH_RADIUS_FULL, scale)
+}
+
 pub struct DehazeStage {
     params: Dehaze,
     scale: RenderScale,
@@ -221,6 +245,12 @@ impl DehazeStage {
 impl PipelineStage for DehazeStage {
     fn name(&self) -> &'static str {
         "dehaze"
+    }
+
+    /// ⚠ Grows by [`kernel_reach`] on every side. Dimension-preserving, like noise reduction, so
+    /// `out` and the result are in the same space.
+    fn input_rect_for(&self, out: crate::Rect, in_w: usize, in_h: usize) -> Option<crate::Rect> {
+        Some(out.grown(kernel_reach(&self.params, self.scale), in_w, in_h))
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
@@ -265,6 +295,34 @@ impl DehazeStage {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_kernel_reach_is_the_refinement_plus_the_dark_channel_patch() {
+        // ⚠⚠ The two genuinely ADD, unlike noise reduction's two halves. The dark channel is a
+        // min_filter of radius 20 producing a transmission map; the guided refinement then reads a
+        // 2 x 60 neighbourhood OF THAT map. So one output pixel depends on the source within
+        // 120 + 20 = 140.
+        let p = super::Dehaze { amount: 60.0 };
+        assert_eq!(super::kernel_reach(&p, super::RenderScale::FULL), 140);
+    }
+
+    #[test]
+    fn an_inactive_dehaze_reaches_nothing() {
+        assert_eq!(
+            super::kernel_reach(&super::Dehaze { amount: 0.0 }, super::RenderScale::FULL),
+            0
+        );
+    }
+
+    #[test]
+    fn the_dehaze_reach_follows_the_render_scale() {
+        // ⚠ At RenderScale::FULL the scaling is the identity, so the tests above cannot see it
+        // being dropped. This is the only one that can.
+        let p = super::Dehaze { amount: 60.0 };
+        assert_eq!(
+            super::kernel_reach(&p, super::RenderScale::new(0.5)),
+            2 * 30 + 10
+        );
+    }
     use super::*;
 
     /// A synthetic scene: a colourful gradient with structure in all three channels.
