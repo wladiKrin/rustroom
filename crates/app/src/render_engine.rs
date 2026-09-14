@@ -1180,7 +1180,9 @@ fn render_cached(
             let (ow, oh) = last.output_dims(img.width(), img.height());
             if let Some(r) = want.clamped(ow, oh) {
                 if let Some(out) = last.apply_region(
-                    &img,
+                    // M8.6's gate still hands over the whole buffer; M8.7's chain is what will
+                    // pass a non-zero origin.
+                    &pipeline::RegionSrc::whole(&img),
                     pipeline::Rect {
                         x: r.x,
                         y: r.y,

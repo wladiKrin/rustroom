@@ -324,7 +324,7 @@ fn main() {
                 let t = Instant::now();
                 let sub = dsteps[last]
                     .stage
-                    .apply_region(before, rect)
+                    .apply_region(&pipeline::RegionSrc::whole(before), rect)
                     .expect("fixture check: the last step must accept a region");
                 std::hint::black_box(tail.run(sub));
                 best = best.min(t.elapsed().as_secs_f64() * 1000.0);

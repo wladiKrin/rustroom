@@ -271,7 +271,7 @@ pub trait PipelineStage: Send + Sync {
     ///
     /// ⚠ `rect` is in the stage's **output** coordinates, so a caller must resolve it against
     /// [`Self::output_dims`] rather than against the input.
-    fn apply_region(&self, _src: &ImageBuf, _rect: Rect) -> Option<ImageBuf> {
+    fn apply_region(&self, _src: &RegionSrc<'_>, _rect: Rect) -> Option<ImageBuf> {
         None
     }
 
@@ -477,6 +477,46 @@ impl Rect {
             w: x1.saturating_sub(x),
             h: y1.saturating_sub(y),
         }
+    }
+}
+
+/// A stage's input when only part of it exists.
+///
+/// ⚠⚠ **`buf` is a sub-rect of a larger logical image, and both other fields are needed.**
+/// `origin` says where `buf` sits in that image and `full` says how big the image is — a stage
+/// whose result depends on *where* a pixel is (the rotation's centre, the homography's
+/// normalisation) is wrong without them, and wrong as a plausible photograph of the wrong part of
+/// the frame rather than as an error. That is M8.6's centre sabotage, which all 63 goldens were
+/// blind to.
+///
+/// ⚠ The whole-buffer case is `origin == (0, 0)` with `full` equal to `buf`'s dimensions, which is
+/// what makes M8.6's two implementations generalise rather than be rewritten.
+#[derive(Debug, Clone, Copy)]
+pub struct RegionSrc<'a> {
+    pub buf: &'a ImageBuf,
+    pub origin: (usize, usize),
+    pub full: (usize, usize),
+}
+
+impl<'a> RegionSrc<'a> {
+    /// The whole-buffer case: this buffer *is* the whole image.
+    pub fn whole(buf: &'a ImageBuf) -> Self {
+        Self {
+            buf,
+            origin: (0, 0),
+            full: (buf.width(), buf.height()),
+        }
+    }
+
+    /// The sample at a point in **full-image** coordinates, or `None` if `buf` does not hold it.
+    ///
+    /// ⚠ Returning `None` rather than clamping is deliberate: a stage reaching outside what
+    /// [`region_plan`] promised is a bug in some `input_rect_for`, and clamping would hide it
+    /// behind a plausible edge pixel.
+    pub fn at(&self, x: usize, y: usize) -> Option<[f32; 3]> {
+        let lx = x.checked_sub(self.origin.0)?;
+        let ly = y.checked_sub(self.origin.1)?;
+        (lx < self.buf.width() && ly < self.buf.height()).then(|| self.buf.pixel(lx, ly))
     }
 }
 
@@ -1373,7 +1413,7 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
 #[cfg(test)]
 mod tests {
 
-    use super::{PipelineStage, Rect, RenderScale};
+    use super::{PipelineStage, Rect, RegionSrc, RenderScale};
 
     #[test]
     fn a_stage_with_no_region_support_declines_to_name_an_input_rect() {
@@ -1577,6 +1617,34 @@ mod tests {
                 300
             )
             .is_some());
+    }
+
+    #[test]
+    fn a_region_src_reads_in_full_image_coordinates() {
+        // ⚠⚠ Full-image coordinates, not the buffer's. A reader taking buffer coordinates would
+        // shift every read by the origin — M8.6's centre sabotage, which the goldens cannot see.
+        let mut buf = core_image::ImageBuf::new(4, 4);
+        buf.set_pixel(1, 1, [0.5, 0.25, 0.125]);
+        let src = RegionSrc {
+            buf: &buf,
+            origin: (10, 20),
+            full: (100, 100),
+        };
+        assert_eq!(src.at(11, 21), Some([0.5, 0.25, 0.125]));
+        assert_eq!(src.at(9, 21), None, "left of the region");
+        assert_eq!(src.at(11, 19), None, "above the region");
+        assert_eq!(src.at(14, 21), None, "right of the region");
+        assert_eq!(src.at(11, 24), None, "below the region");
+    }
+
+    #[test]
+    fn the_whole_buffer_case_is_the_identity() {
+        // ⚠ This is what makes M8.6's two implementations generalise rather than be rewritten.
+        let buf = core_image::ImageBuf::new(8, 6);
+        let src = RegionSrc::whole(&buf);
+        assert_eq!(src.origin, (0, 0));
+        assert_eq!(src.full, (8, 6));
+        assert_eq!(src.at(7, 5), Some(buf.pixel(7, 5)));
     }
 
     use super::BrushCoverage;

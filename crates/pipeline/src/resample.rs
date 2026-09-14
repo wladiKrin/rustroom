@@ -310,6 +310,26 @@ pub fn sample(src: &ImageBuf, sx: f32, sy: f32, w: &Weights) -> [f32; 3] {
     out
 }
 
+/// Sample a region-scoped source at a point in **full-image** coordinates.
+///
+/// ⚠⚠ **Coordinates are the FULL image's, not the buffer's.** A sampler taking buffer coordinates
+/// would silently shift every read by the region's origin — a plausible photograph of the wrong
+/// part of the frame, which is M8.6's centre sabotage and which all 63 goldens were blind to.
+///
+/// ⚠ A tap outside the buffer reads black, exactly as [`sample`] does outside the frame. That is
+/// correct **because the margin makes it unreachable**: [`crate::region_plan`] asks every stage
+/// what it needs and grows the request accordingly, so within the rect a stage is asked to produce,
+/// every tap it reads is inside the buffer it was given. A tap that does escape is a bug in some
+/// `input_rect_for`, and it shows up as a dark band at the region's edge.
+pub fn sample_region(src: &crate::RegionSrc<'_>, sx: f32, sy: f32, w: &Weights) -> [f32; 3] {
+    sample(
+        src.buf,
+        sx - src.origin.0 as f32,
+        sy - src.origin.1 as f32,
+        w,
+    )
+}
+
 /// Sample **one** channel of `src` at fractional `(sx, sy)`; outside the frame reads black.
 ///
 /// ⚠ Per channel rather than per pixel, because transverse chromatic aberration gives each

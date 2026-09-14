@@ -54,11 +54,12 @@ impl PipelineStage for PerspectiveStage {
         if !self.params.is_active() || w < 2 || h < 2 {
             return image;
         }
-        self.render(&image, Rect { x: 0, y: 0, w, h })
+        self.render(&crate::RegionSrc::whole(&image), Rect { x: 0, y: 0, w, h })
     }
 
-    fn apply_region(&self, src: &ImageBuf, rect: Rect) -> Option<ImageBuf> {
-        let (w, h) = (src.width(), src.height());
+    fn apply_region(&self, src: &crate::RegionSrc<'_>, rect: Rect) -> Option<ImageBuf> {
+        // ⚠⚠ The FULL image's dimensions, never the slice in hand.
+        let (w, h) = src.full;
         // ⚠ Perspective preserves dimensions, so the output rect is bounded by the input's.
         if rect.w == 0 || rect.h == 0 || rect.x + rect.w > w || rect.y + rect.h > h {
             return None;
@@ -66,7 +67,13 @@ impl PipelineStage for PerspectiveStage {
         if !self.params.is_active() || w < 2 || h < 2 {
             // Mirrors `apply`'s neutral guard: the stage is the identity, so the region is a plain
             // sub-rect and resampling through it would soften the frame for nothing.
-            return Some(src.crop(rect.x, rect.y, rect.w, rect.h));
+            // ⚠ Local coordinates for the buffer copy: `rect` is in full-image space.
+            return Some(src.buf.crop(
+                rect.x - src.origin.0,
+                rect.y - src.origin.1,
+                rect.w,
+                rect.h,
+            ));
         }
         Some(self.render(src, rect))
     }
@@ -154,8 +161,11 @@ impl PipelineStage for PerspectiveStage {
 }
 
 impl PerspectiveStage {
-    fn render(&self, image: &ImageBuf, rect: Rect) -> ImageBuf {
-        let (w, h) = (image.width(), image.height());
+    fn render(&self, image: &crate::RegionSrc<'_>, rect: Rect) -> ImageBuf {
+        // ⚠⚠ The FULL image's dimensions. The homography's normalisation is a property of the
+        // frame; taking these from `image.buf` renormalises onto the region and produces a
+        // plausible photograph of the wrong part of it.
+        let (w, h) = image.full;
         let cx = (w as f32 - 1.0) / 2.0;
         let cy = (h as f32 - 1.0) / 2.0;
         // Half-height is the unit, so `x` runs ±aspect and `y` runs ±1.
@@ -178,7 +188,8 @@ impl PerspectiveStage {
                     let x = rect.x + rx;
                     let n = ((x as f32 - cx) / cy, (y as f32 - cy) / cy);
                     let s = hom.source_of(n);
-                    *out = resample::sample(image, cx + s.0 * cy, cy + s.1 * cy, &self.weights);
+                    *out =
+                        resample::sample_region(image, cx + s.0 * cy, cy + s.1 * cy, &self.weights);
                 }
             });
         ImageBuf::from_vec(rect.w, rect.h, data)
@@ -310,7 +321,7 @@ mod tests {
             h: 17,
         };
         let scoped = stage
-            .apply_region(&src, rect)
+            .apply_region(&crate::RegionSrc::whole(&src), rect)
             .expect("fixture check: an active perspective must accept a region");
         let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
         assert_eq!(
@@ -359,7 +370,12 @@ mod tests {
                 h: 30,
             },
         ] {
-            assert!(stage.apply_region(&src, bad).is_none(), "{bad:?}");
+            assert!(
+                stage
+                    .apply_region(&crate::RegionSrc::whole(&src), bad)
+                    .is_none(),
+                "{bad:?}"
+            );
         }
     }
 

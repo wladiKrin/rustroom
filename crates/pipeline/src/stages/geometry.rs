@@ -94,7 +94,7 @@ impl PipelineStage for GeometryStage {
         }
     }
 
-    fn apply_region(&self, src: &ImageBuf, rect: Rect) -> Option<ImageBuf> {
+    fn apply_region(&self, src: &crate::RegionSrc<'_>, rect: Rect) -> Option<ImageBuf> {
         // ⚠ Declines on a non-identity orientation: `orient` is a whole-buffer index permutation
         // feeding the rotation's gather, so region-scoping it needs the permutation folded into
         // the sample coordinates. Uncommon — a camera's portrait orientation is applied at decode
@@ -102,7 +102,9 @@ impl PipelineStage for GeometryStage {
         if !self.orientation.is_identity() {
             return None;
         }
-        let (w, h) = (src.width(), src.height());
+        // ⚠⚠ The FULL image's dimensions, never the slice in hand: the crop is defined
+        // against the frame, and taking these from `src.buf` would crop a different rectangle.
+        let (w, h) = src.full;
         let (x0, y0, x1, y1) = crop_bounds(w, h, &self.crop);
         // ⚠ Refuse a rect this stage could not produce, rather than clamping it: a caller that
         // asked for the wrong thing must fall back to the whole-buffer path, not silently get a
@@ -119,7 +121,11 @@ impl PipelineStage for GeometryStage {
         if self.angle_rad == 0.0 {
             // No resampling at all, so a sub-rect of the crop is a sub-rect of the source — and
             // `apply`'s own guard already takes that branch for the whole image.
-            return Some(src.crop(out.x, out.y, out.w, out.h));
+            // ⚠ Local coordinates for the buffer copy: `out` is in full-image space.
+            return Some(
+                src.buf
+                    .crop(out.x - src.origin.0, out.y - src.origin.1, out.w, out.h),
+            );
         }
         Some(rotate_region(src, self.angle_rad, &self.weights, out))
     }
@@ -205,7 +211,7 @@ impl PipelineStage for GeometryStage {
 /// together", and they moved together.
 fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
     rotate_region(
-        src,
+        &crate::RegionSrc::whole(src),
         angle_rad,
         weights,
         Rect {
@@ -226,9 +232,17 @@ fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
 /// ⚠⚠ **[`rotate`] is this function at full extent, which is what makes the whole-buffer and
 /// region paths bit-identical BY CONSTRUCTION rather than by comparison.** Two implementations that
 /// must agree is how they come to disagree; there is only one here.
-fn rotate_region(src: &ImageBuf, angle_rad: f32, weights: &Weights, rect: Rect) -> ImageBuf {
-    let w = src.width();
-    let h = src.height();
+fn rotate_region(
+    src: &crate::RegionSrc<'_>,
+    angle_rad: f32,
+    weights: &Weights,
+    rect: Rect,
+) -> ImageBuf {
+    // ⚠⚠ **THE load-bearing line.** The rotation's centre is a property of the FRAME, not of
+    // the slice in hand. Taking it from `src.buf` re-centres the rotation on whatever region is
+    // being rendered, which produces a plausible photograph of the wrong part of the image —
+    // M8.6's centre sabotage, invisible to all 63 goldens.
+    let (w, h) = src.full;
     let cx = (w as f32 - 1.0) / 2.0;
     let cy = (h as f32 - 1.0) / 2.0;
     let (sin, cos) = angle_rad.sin_cos();
@@ -251,7 +265,7 @@ fn rotate_region(src: &ImageBuf, angle_rad: f32, weights: &Weights, rect: Rect) 
                 // Inverse map: sample the source at -angle.
                 let sx = cx + dx * cos + dy * sin;
                 let sy = cy - dx * sin + dy * cos;
-                *out = resample::sample(src, sx, sy, weights);
+                *out = resample::sample_region(src, sx, sy, weights);
             }
         });
     ImageBuf::from_vec(rect.w, rect.h, data)
@@ -312,7 +326,8 @@ mod tests {
         };
         assert_eq!(s.input_rect_for(r, 64, 64), None);
         assert!(
-            s.apply_region(&ImageBuf::new(64, 64), r).is_none(),
+            s.apply_region(&crate::RegionSrc::whole(&ImageBuf::new(64, 64)), r)
+                .is_none(),
             "the pair must agree about what is possible"
         );
     }
@@ -481,7 +496,7 @@ mod tests {
                 h: oh - 11,
             };
             let scoped = stage
-                .apply_region(&src, rect)
+                .apply_region(&crate::RegionSrc::whole(&src), rect)
                 .expect("fixture check: this geometry must accept a region");
             let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
             assert_same(&scoped, &want, &format!("angle {}", g.angle));
@@ -514,7 +529,7 @@ mod tests {
             assert!(
                 stage
                     .apply_region(
-                        &src,
+                        &crate::RegionSrc::whole(&src),
                         Rect {
                             x: 0,
                             y: 0,
@@ -562,7 +577,12 @@ mod tests {
                 h: oh,
             },
         ] {
-            assert!(stage.apply_region(&src, bad).is_none(), "{bad:?}");
+            assert!(
+                stage
+                    .apply_region(&crate::RegionSrc::whole(&src), bad)
+                    .is_none(),
+                "{bad:?}"
+            );
         }
     }
     use edit_model::{Orientation, Quarter};
