@@ -2059,6 +2059,130 @@ mod tests {
         (n, worst)
     }
 
+    /// A synthetic lens with a **barrel** correction, which is the sign whose bulge a corner
+    /// bound would miss — see `LensCorrectionStage`'s own margin test.
+    fn test_lens() -> lens_profile::LensShot {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="-0.05" c="0.0"/>
+                    <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        let profile = db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap();
+        lens_profile::LensShot {
+            profile,
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        }
+    }
+
+    /// ⚠⚠ **THE CARRIER, and it asserts the plan's LENGTH rather than merely that scoping
+    /// happened.** A scoped render and a whole-buffer one produce the same picture by design, so
+    /// every correctness test in this workspace — all 63 goldens included — passes with lens
+    /// correction's `input_rect_for` deleted. That is exactly how creative LUTs (W5) shipped fully
+    /// tested and 100% non-functional.
+    ///
+    /// ⚠⚠ **And a test asking only "did it scope" would pass against M8.7**, which is the version
+    /// that left a cold entry into 1:1 at 2392-2528 ms and `scoped no`: there `region_plan` was
+    /// only ever reached with `start >= 1`, because step 0 is `lens_correction` and it declined,
+    /// and one decline anywhere abandons the whole plan. The whole of M8.8 is that `start == 0`
+    /// now succeeds, so the assertion has to be that **every** step is covered.
+    ///
+    /// ⚠ All gathers, so the bytes can be compared exactly — `chain_vs_whole`'s own standard.
+    #[test]
+    fn a_cold_chain_scopes_from_lens_correction() {
+        let mut e = Edits {
+            perspective: edit_model::Perspective {
+                vertical: 20.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        e.geometry.angle = 6.0;
+        e.geometry.crop = edit_model::CropRect {
+            left: 0.1,
+            top: 0.1,
+            right: 0.9,
+            bottom: 0.9,
+        };
+        e.lens_correction = Some(edit_model::LensCorrection {
+            distortion: true,
+            tca: true,
+            vignetting: true,
+            scale: 0.0,
+        });
+        let steps = super::build_prefix_steps(
+            &e,
+            RenderScale::FULL,
+            Some(test_lens()),
+            crate::resample::Resampler::CatmullRom,
+            None,
+        );
+        assert_eq!(
+            steps[0].stage.name(),
+            "lens_correction",
+            "fixture check: lens correction must be STEP 0, which is what made the chain abandon"
+        );
+        assert_eq!(steps.len(), 3, "fixture check: lens, perspective, geometry");
+
+        let src = structured(220, 180);
+        let visible = Rect {
+            x: 40,
+            y: 30,
+            w: 50,
+            h: 40,
+        };
+        let plan = super::region_plan(&steps, 0, visible, src.width(), src.height())
+            .expect("a COLD chain must scope from step 0");
+        assert_eq!(
+            plan.out_rects.len(),
+            steps.len(),
+            "every step from the resume point must be scoped"
+        );
+        // ⚠ The margin must actually have grown the request, or the chain is scoping a rect that
+        // needs no margin and the test says nothing about the bound.
+        let lens_in = plan.out_rects[0];
+        assert!(
+            lens_in.w > visible.w && lens_in.h > visible.h,
+            "fixture check: the margin must grow the request, got {lens_in:?}"
+        );
+
+        let scoped = super::run_region_plan(&steps, 0, &src, &plan).expect("the chain runs");
+        let mut whole = src.clone();
+        for st in &steps {
+            whole = st.stage.apply(whole);
+        }
+        let want = whole.crop(visible.x, visible.y, visible.w, visible.h);
+        assert_eq!(
+            (scoped.width(), scoped.height()),
+            (want.width(), want.height())
+        );
+        let mut differing = 0usize;
+        let mut worst = 0.0f32;
+        for y in 0..want.height() {
+            for x in 0..want.width() {
+                let (a, b) = (scoped.pixel(x, y), want.pixel(x, y));
+                for c in 0..3 {
+                    worst = worst.max((a[c] - b[c]).abs());
+                }
+                if a != b {
+                    differing += 1;
+                }
+            }
+        }
+        assert_eq!(
+            differing, 0,
+            "a chain of gathers must be byte for byte; worst {worst:e}"
+        );
+    }
+
     #[test]
     fn a_chain_of_gathers_is_byte_for_byte() {
         // ⚠⚠ **THE test the centre sabotage needs, and it needs no render engine.** Chain
