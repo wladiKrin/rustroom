@@ -1,5 +1,5 @@
 use crate::resample::{self, Resampler, Weights};
-use crate::{OutRect, PipelineStage};
+use crate::{PipelineStage, Rect};
 use core_image::ImageBuf;
 use edit_model::{CropRect, Geometry, Orientation, Quarter};
 use rayon::prelude::*;
@@ -94,7 +94,7 @@ impl PipelineStage for GeometryStage {
         }
     }
 
-    fn apply_region(&self, src: &ImageBuf, rect: OutRect) -> Option<ImageBuf> {
+    fn apply_region(&self, src: &ImageBuf, rect: Rect) -> Option<ImageBuf> {
         // ⚠ Declines on a non-identity orientation: `orient` is a whole-buffer index permutation
         // feeding the rotation's gather, so region-scoping it needs the permutation folded into
         // the sample coordinates. Uncommon — a camera's portrait orientation is applied at decode
@@ -107,19 +107,19 @@ impl PipelineStage for GeometryStage {
         // ⚠ Refuse a rect this stage could not produce, rather than clamping it: a caller that
         // asked for the wrong thing must fall back to the whole-buffer path, not silently get a
         // different rectangle back without being told.
-        if rect.w == 0 || rect.h == 0 || rect.x0 + rect.w > x1 - x0 || rect.y0 + rect.h > y1 - y0 {
+        if rect.w == 0 || rect.h == 0 || rect.x + rect.w > x1 - x0 || rect.y + rect.h > y1 - y0 {
             return None;
         }
-        let out = OutRect {
-            x0: x0 + rect.x0,
-            y0: y0 + rect.y0,
+        let out = Rect {
+            x: x0 + rect.x,
+            y: y0 + rect.y,
             w: rect.w,
             h: rect.h,
         };
         if self.angle_rad == 0.0 {
             // No resampling at all, so a sub-rect of the crop is a sub-rect of the source — and
             // `apply`'s own guard already takes that branch for the whole image.
-            return Some(src.crop(out.x0, out.y0, out.w, out.h));
+            return Some(src.crop(out.x, out.y, out.w, out.h));
         }
         Some(rotate_region(src, self.angle_rad, &self.weights, out))
     }
@@ -142,9 +142,9 @@ fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
         src,
         angle_rad,
         weights,
-        OutRect {
-            x0: 0,
-            y0: 0,
+        Rect {
+            x: 0,
+            y: 0,
             w: src.width(),
             h: src.height(),
         },
@@ -160,7 +160,7 @@ fn rotate(src: &ImageBuf, angle_rad: f32, weights: &Weights) -> ImageBuf {
 /// ⚠⚠ **[`rotate`] is this function at full extent, which is what makes the whole-buffer and
 /// region paths bit-identical BY CONSTRUCTION rather than by comparison.** Two implementations that
 /// must agree is how they come to disagree; there is only one here.
-fn rotate_region(src: &ImageBuf, angle_rad: f32, weights: &Weights, rect: OutRect) -> ImageBuf {
+fn rotate_region(src: &ImageBuf, angle_rad: f32, weights: &Weights, rect: Rect) -> ImageBuf {
     let w = src.width();
     let h = src.height();
     let cx = (w as f32 - 1.0) / 2.0;
@@ -177,9 +177,9 @@ fn rotate_region(src: &ImageBuf, angle_rad: f32, weights: &Weights, rect: OutRec
     data.par_chunks_exact_mut(stride)
         .enumerate()
         .for_each(|(ry, orow)| {
-            let y = rect.y0 + ry;
+            let y = rect.y + ry;
             for (rx, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
-                let x = rect.x0 + rx;
+                let x = rect.x + rx;
                 let dx = x as f32 - cx;
                 let dy = y as f32 - cy;
                 // Inverse map: sample the source at -angle.
@@ -298,16 +298,16 @@ mod tests {
                 (whole.width(), whole.height()),
                 "fixture check: output_dims must describe this stage"
             );
-            let rect = OutRect {
-                x0: 3,
-                y0: 5,
+            let rect = Rect {
+                x: 3,
+                y: 5,
                 w: ow - 9,
                 h: oh - 11,
             };
             let scoped = stage
                 .apply_region(&src, rect)
                 .expect("fixture check: this geometry must accept a region");
-            let want = whole.crop(rect.x0, rect.y0, rect.w, rect.h);
+            let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
             assert_same(&scoped, &want, &format!("angle {}", g.angle));
         }
     }
@@ -339,9 +339,9 @@ mod tests {
                 stage
                     .apply_region(
                         &src,
-                        OutRect {
-                            x0: 0,
-                            y0: 0,
+                        Rect {
+                            x: 0,
+                            y: 0,
                             w: 4,
                             h: 4
                         }
@@ -367,21 +367,21 @@ mod tests {
         );
         let (ow, oh) = stage.output_dims(40, 30);
         for bad in [
-            OutRect {
-                x0: 0,
-                y0: 0,
+            Rect {
+                x: 0,
+                y: 0,
                 w: ow + 1,
                 h: oh,
             },
-            OutRect {
-                x0: ow - 1,
-                y0: 0,
+            Rect {
+                x: ow - 1,
+                y: 0,
                 w: 2,
                 h: oh,
             },
-            OutRect {
-                x0: 0,
-                y0: 0,
+            Rect {
+                x: 0,
+                y: 0,
                 w: 0,
                 h: oh,
             },

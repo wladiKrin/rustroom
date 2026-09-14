@@ -16,7 +16,7 @@
 
 use crate::perspective::Homography;
 use crate::resample::{self, Resampler, Weights};
-use crate::{OutRect, PipelineStage};
+use crate::{PipelineStage, Rect};
 use core_image::ImageBuf;
 use edit_model::Perspective;
 use rayon::prelude::*;
@@ -54,19 +54,19 @@ impl PipelineStage for PerspectiveStage {
         if !self.params.is_active() || w < 2 || h < 2 {
             return image;
         }
-        self.render(&image, OutRect { x0: 0, y0: 0, w, h })
+        self.render(&image, Rect { x: 0, y: 0, w, h })
     }
 
-    fn apply_region(&self, src: &ImageBuf, rect: OutRect) -> Option<ImageBuf> {
+    fn apply_region(&self, src: &ImageBuf, rect: Rect) -> Option<ImageBuf> {
         let (w, h) = (src.width(), src.height());
         // ⚠ Perspective preserves dimensions, so the output rect is bounded by the input's.
-        if rect.w == 0 || rect.h == 0 || rect.x0 + rect.w > w || rect.y0 + rect.h > h {
+        if rect.w == 0 || rect.h == 0 || rect.x + rect.w > w || rect.y + rect.h > h {
             return None;
         }
         if !self.params.is_active() || w < 2 || h < 2 {
             // Mirrors `apply`'s neutral guard: the stage is the identity, so the region is a plain
             // sub-rect and resampling through it would soften the frame for nothing.
-            return Some(src.crop(rect.x0, rect.y0, rect.w, rect.h));
+            return Some(src.crop(rect.x, rect.y, rect.w, rect.h));
         }
         Some(self.render(src, rect))
     }
@@ -92,7 +92,7 @@ impl PerspectiveStage {
     /// here asked for: *"if this ever needs to be faster, both should move together."*
     /// Measured at a native rung (3123x2085, Catmull-Rom, 8 threads): **158.8 ms sequential
     /// against 30.2 ms here, 5.26x**, beside geometry's 4.85x.
-    fn render(&self, image: &ImageBuf, rect: OutRect) -> ImageBuf {
+    fn render(&self, image: &ImageBuf, rect: Rect) -> ImageBuf {
         let (w, h) = (image.width(), image.height());
         let cx = (w as f32 - 1.0) / 2.0;
         let cy = (h as f32 - 1.0) / 2.0;
@@ -111,9 +111,9 @@ impl PerspectiveStage {
         data.par_chunks_exact_mut(stride)
             .enumerate()
             .for_each(|(ry, orow)| {
-                let y = rect.y0 + ry;
+                let y = rect.y + ry;
                 for (rx, out) in orow.as_chunks_mut::<CH>().0.iter_mut().enumerate() {
-                    let x = rect.x0 + rx;
+                    let x = rect.x + rx;
                     let n = ((x as f32 - cx) / cy, (y as f32 - cy) / cy);
                     let s = hom.source_of(n);
                     *out = resample::sample(image, cx + s.0 * cy, cy + s.1 * cy, &self.weights);
@@ -147,16 +147,16 @@ mod tests {
         };
         let stage = PerspectiveStage::new(p, Resampler::default());
         let whole = stage.apply(src.clone());
-        let rect = OutRect {
-            x0: 7,
-            y0: 4,
+        let rect = Rect {
+            x: 7,
+            y: 4,
             w: 21,
             h: 17,
         };
         let scoped = stage
             .apply_region(&src, rect)
             .expect("fixture check: an active perspective must accept a region");
-        let want = whole.crop(rect.x0, rect.y0, rect.w, rect.h);
+        let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
         assert_eq!(
             (scoped.width(), scoped.height()),
             (want.width(), want.height())
@@ -184,21 +184,21 @@ mod tests {
             Resampler::default(),
         );
         for bad in [
-            OutRect {
-                x0: 0,
-                y0: 0,
+            Rect {
+                x: 0,
+                y: 0,
                 w: 41,
                 h: 30,
             },
-            OutRect {
-                x0: 39,
-                y0: 0,
+            Rect {
+                x: 39,
+                y: 0,
                 w: 2,
                 h: 30,
             },
-            OutRect {
-                x0: 0,
-                y0: 0,
+            Rect {
+                x: 0,
+                y: 0,
                 w: 0,
                 h: 30,
             },

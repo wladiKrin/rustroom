@@ -271,7 +271,7 @@ pub trait PipelineStage: Send + Sync {
     ///
     /// ⚠ `rect` is in the stage's **output** coordinates, so a caller must resolve it against
     /// [`Self::output_dims`] rather than against the input.
-    fn apply_region(&self, _src: &ImageBuf, _rect: OutRect) -> Option<ImageBuf> {
+    fn apply_region(&self, _src: &ImageBuf, _rect: Rect) -> Option<ImageBuf> {
         None
     }
 }
@@ -404,18 +404,59 @@ pub struct Region {
     pub y0: usize,
 }
 
-/// A sub-rect of a stage's **output**, for [`PipelineStage::apply_region`].
+/// A pixel rectangle, in whichever coordinate space the caller names.
 ///
 /// ⚠ Deliberately **not** [`Region`]: that type carries an origin plus the *frame's* size and takes
 /// its own width and height from the buffer it describes. A stage producing a sub-rect cannot do
 /// that, because the buffer does not exist yet — the same trap `render_cached`'s `clip` comment
 /// already records for deriving a size as "frame minus origin".
+///
+/// ⚠⚠ **Deliberately not called `Rect` either, which is what it was until M8.7.**
+/// [`PipelineStage::apply_region`] takes an *output* rect and [`PipelineStage::input_rect_for`]
+/// returns an *input* one; a type whose name asserts one of those reads as a bug in the other
+/// position. It also replaced `app::RegionRect`, which was this same struct with different field
+/// names — two types that could not disagree because they were the same type twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OutRect {
-    pub x0: usize,
-    pub y0: usize,
+pub struct Rect {
+    pub x: usize,
+    pub y: usize,
     pub w: usize,
     pub h: usize,
+}
+
+impl Rect {
+    /// This rect clipped into a `w` x `h` image, or `None` if nothing survives.
+    ///
+    /// ⚠ Moved here from `app::RegionRect` so the one clipping rule lives beside the type rather
+    /// than in whichever crate happened to need it first.
+    pub fn clamped(self, w: usize, h: usize) -> Option<Self> {
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let x = self.x.min(w - 1);
+        let y = self.y.min(h - 1);
+        let cw = self.w.min(w - x);
+        let ch = self.h.min(h - y);
+        (cw > 0 && ch > 0).then_some(Self { x, y, w: cw, h: ch })
+    }
+
+    /// This rect grown by `m` pixels on every side, clipped into `w` x `h`.
+    ///
+    /// ⚠ Saturating on the low side and clipping on the high side, so a margin larger than the
+    /// image yields the whole image rather than an empty rect or a panic. A margin larger than the
+    /// image is **ordinary** at low render scales, not a pathological case.
+    pub fn grown(self, m: usize, w: usize, h: usize) -> Self {
+        let x = self.x.saturating_sub(m);
+        let y = self.y.saturating_sub(m);
+        let x1 = (self.x + self.w + m).min(w);
+        let y1 = (self.y + self.h + m).min(h);
+        Self {
+            x,
+            y,
+            w: x1.saturating_sub(x),
+            h: y1.saturating_sub(y),
+        }
+    }
 }
 
 /// One prefix stage's parameters, identifying the image that stage produces.

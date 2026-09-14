@@ -72,27 +72,12 @@ pub struct RenderedFrame {
 }
 
 /// A requested crop of the rendered image, in post-geometry pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RegionRect {
-    pub x: usize,
-    pub y: usize,
-    pub w: usize,
-    pub h: usize,
-}
-
-impl RegionRect {
-    /// Clamp to an image of `w` x `h`, returning `None` if nothing is left.
-    fn clamped(self, w: usize, h: usize) -> Option<Self> {
-        if w == 0 || h == 0 {
-            return None;
-        }
-        let x = self.x.min(w - 1);
-        let y = self.y.min(h - 1);
-        let cw = self.w.min(w - x);
-        let ch = self.h.min(h - y);
-        (cw > 0 && ch > 0).then_some(Self { x, y, w: cw, h: ch })
-    }
-}
+///
+/// ⚠⚠ **This was `RegionRect`, a struct identical to `pipeline::Rect` in everything but its name.**
+/// Two types that cannot disagree because they are the same type twice is still two places to
+/// change, and M8.7 would otherwise have added a third. The alias is kept so the ~40 call sites in
+/// this crate keep reading as "a region", which is what they are about.
+pub use pipeline::Rect as RegionRect;
 
 /// A soft proof: the output space the canvas is being shown through, and whether the pixels that
 /// space cannot hold are marked.
@@ -1196,9 +1181,9 @@ fn render_cached(
             if let Some(r) = want.clamped(ow, oh) {
                 if let Some(out) = last.apply_region(
                     &img,
-                    pipeline::OutRect {
-                        x0: r.x,
-                        y0: r.y,
+                    pipeline::Rect {
+                        x: r.x,
+                        y: r.y,
                         w: r.w,
                         h: r.h,
                     },

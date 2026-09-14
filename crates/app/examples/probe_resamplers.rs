@@ -249,7 +249,7 @@ fn main() {
     // symptom at all. Item 3 is the right answer to a cold render and a rung change; it is the
     // wrong answer to "the straighten drag is slow".
     {
-        use pipeline::{build_pipeline_split_in_region, OutRect, Region};
+        use pipeline::{build_pipeline_split_in_region, Rect, Region};
         // The common case: a RAW with lens corrections on (the default) and a straighten being
         // dragged. Perspective is left out deliberately — most photographs carry none, and it
         // would only be one more cached checkpoint the drag never reaches.
@@ -313,9 +313,9 @@ fn main() {
             let (ow, oh) = dsteps[last]
                 .stage
                 .output_dims(before.width(), before.height());
-            let rect = OutRect {
-                x0: 0,
-                y0: 0,
+            let rect = Rect {
+                x: 0,
+                y: 0,
                 w: rw.min(ow),
                 h: rh.min(oh),
             };
