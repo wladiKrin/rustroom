@@ -1116,7 +1116,16 @@ fn render_cached(
     // one — which is why panning re-runs only the tail and never invalidates a checkpoint.
     // A missing profile — an unlisted lens, or a JPEG — skips the stage silently, which is the
     // ordinary case and needs no special-casing anywhere else.
-    let steps = build_prefix_steps(edits, scale, lens, resampler);
+    // ⚠⚠ The frame-global airlight, replayed from the SOURCE buffer at a fixed 256 px. It is a
+    // deterministic function of the edits, so it is identical on the whole-buffer path and on a
+    // region-scoped one — which is what lets the two agree by construction rather than
+    // approximately, and what removes any pop when a gesture settles.
+    //
+    // ⚠ Computed unconditionally rather than only when dehaze is active: `prefix_airlight` runs
+    // the prefix on a 65k-pixel copy, and a branch here would be a second place that has to agree
+    // with `Dehaze::is_active`.
+    let airlight = pipeline::prefix_airlight(edits, buffer, resampler, lens.clone());
+    let steps = build_prefix_steps(edits, scale, lens, resampler, Some(airlight));
     // ⚠ Per-step decomposition, env-gated and kept: `RUSTROOM_DEBUG_MASK`'s precedent. A whole-
     // render figure says a drag is slow; only this says WHICH stage is slow, and reasoning about
     // that from a sidecar has already been wrong once here.
@@ -1343,6 +1352,9 @@ fn render_cached(
             // ⚠ The tail resamples nothing — every resampling stage is in the prefix — so this
             // is carried for consistency rather than because it changes a pixel here.
             resampler,
+            // ⚠ Likewise: dehaze is a PREFIX stage, so the tail never builds one. Carried so the
+            // two specs cannot drift if a stage ever moves.
+            airlight: Some(airlight),
             baseline: wb_baseline,
         };
         let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
@@ -1427,6 +1439,7 @@ fn render_cached(
                     space: color::OutputSpace::Srgb,
                     resampler,
                     baseline: wb_baseline,
+                    airlight: Some(airlight),
                 },
                 None,
                 profile,
@@ -1523,6 +1536,7 @@ pub fn render_once(
     source_scale: f32,
     display_space: color::OutputSpace,
     resampler: pipeline::Resampler,
+    lens: Option<lens_profile::LensShot>,
 ) -> RenderedFrame {
     let preview = buffer.downscale_to(max_dim);
     let scale = render_scale(
@@ -1530,8 +1544,21 @@ pub fn render_once(
         preview.width().max(preview.height()),
         source_scale,
     );
+    // ⚠⚠ **The same airlight definition `render_cached` uses, from the same source buffer.** This
+    // function is the reference the cached path is tested against, so a second definition here
+    // would make `every_cached_frame_matches_a_cold_render` fail — which is exactly how this was
+    // caught, at one 8-bit level scattered across the frame.
+    //
+    // ⚠ `lens` is a parameter rather than `None` for that reason: "exact whenever the engine
+    // happens to be lens-less" is a coincidence, not a guarantee, and this is a reference.
+    let spec = pipeline::RenderSpec {
+        space: color::OutputSpace::Srgb,
+        resampler,
+        baseline: color::wb::Illuminant::default(),
+        airlight: Some(pipeline::prefix_airlight(edits, buffer, resampler, lens)),
+    };
     let mut frame = pack(
-        Packed::Float(pipeline::build_pipeline_with(edits, scale, resampler).run(preview)),
+        Packed::Float(pipeline::build_pipeline_spec(edits, scale, spec).run(preview)),
         // ⚠ Never proofed. This is the before/after baseline and the reference the cached path is
         // tested against; a proof is a property of the *view* and would make the reference move
         // with a menu setting.
@@ -1736,6 +1763,7 @@ mod tests {
                 1.0,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             )
             .fit_size
         };
@@ -2409,7 +2437,8 @@ mod tests {
                 8,
                 1.0,
                 color::OutputSpace::Srgb,
-                pipeline::Resampler::default()
+                pipeline::Resampler::default(),
+                None,
             )
             .rgba
         );
@@ -2480,6 +2509,7 @@ mod tests {
             RenderScale::FULL,
             None,
             pipeline::Resampler::Bilinear,
+            None,
         );
         assert!(
             steps.len() >= 3,
@@ -3214,6 +3244,7 @@ mod tests {
             1.0,
             color::OutputSpace::Srgb,
             pipeline::Resampler::default(),
+            None,
         );
         for (name, other) in [("b", &b), ("c", &c), ("d", &d), ("e", &e)] {
             assert_ne!(
@@ -3224,7 +3255,8 @@ mod tests {
                     8,
                     1.0,
                     color::OutputSpace::Srgb,
-                    pipeline::Resampler::default()
+                    pipeline::Resampler::default(),
+                    None,
                 )
                 .rgba,
                 "edit set {name} renders identically to a — the test proves nothing"
@@ -3250,6 +3282,7 @@ mod tests {
                 1.0,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             );
             assert_eq!(got.rgba, cold.rgba, "frame {i} differs from a cold render");
         }
@@ -3335,6 +3368,7 @@ mod tests {
             1.0,
             color::OutputSpace::Srgb,
             pipeline::Resampler::default(),
+            None,
         );
         assert_eq!((f.width, f.height), (4, 4));
         assert!(f.rgba[0] > 180 && f.rgba[0] < 195);
@@ -3682,6 +3716,7 @@ mod tests {
             1.0,
             color::OutputSpace::Srgb,
             pipeline::Resampler::default(),
+            None,
         );
         let p3 = render_once(
             &buf,
@@ -3690,6 +3725,7 @@ mod tests {
             1.0,
             color::OutputSpace::DisplayP3,
             pipeline::Resampler::default(),
+            None,
         );
 
         assert_ne!(srgb.rgba, p3.rgba, "the display space did not reach `pack`");
@@ -3721,6 +3757,7 @@ mod tests {
             1.0,
             color::OutputSpace::Srgb,
             pipeline::Resampler::default(),
+            None,
         );
         let p3 = render_once(
             &buf,
@@ -3729,6 +3766,7 @@ mod tests {
             1.0,
             color::OutputSpace::DisplayP3,
             pipeline::Resampler::default(),
+            None,
         );
 
         assert_ne!(
@@ -3755,6 +3793,7 @@ mod tests {
             1.0,
             space,
             pipeline::Resampler::default(),
+            None,
         )
     }
 
@@ -4049,6 +4088,7 @@ mod tests {
             1.0,
             color::OutputSpace::Srgb,
             pipeline::Resampler::default(),
+            None,
         );
         let off = proofed(&buf, None);
         assert_eq!(

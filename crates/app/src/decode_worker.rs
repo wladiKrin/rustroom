@@ -223,6 +223,11 @@ impl DecodeWorker {
                     // constant, so that a baseline rendered with *real* edits one day would
                     // have to decide.
                     pipeline::Resampler::default(),
+                    // ⚠ `None` and provably harmless, by the same argument as the resampler
+                    // above: `Edits::default()` activates no dehaze, so no airlight is ever
+                    // consulted. Passed rather than assumed, so a baseline rendered with real
+                    // edits one day would have to decide.
+                    None,
                 );
                 Arc::new(Decoded {
                     buffer,

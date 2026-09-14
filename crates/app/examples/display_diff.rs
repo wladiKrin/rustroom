@@ -18,6 +18,7 @@ fn main() {
         0.5,
         color::OutputSpace::Srgb,
         pipeline::Resampler::default(),
+        None,
     );
     for space in [color::OutputSpace::DisplayP3, color::OutputSpace::AdobeRgb] {
         let other = render_once(
@@ -27,6 +28,7 @@ fn main() {
             0.5,
             space,
             pipeline::Resampler::default(),
+            None,
         );
         let mut max = 0i32;
         let mut sum = 0i64;

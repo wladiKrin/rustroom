@@ -675,7 +675,8 @@ pub fn prefix_airlight(
     let long = small.width().max(small.height()).max(1);
     let full_long = src.width().max(src.height()).max(1);
     let scale = RenderScale::new(long as f32 / full_long as f32);
-    let steps = build_prefix_steps(edits, scale, lens, resampler);
+    // ⚠ `None`, so the replay cannot recurse: dehaze is never constructed here.
+    let steps = build_prefix_steps(edits, scale, lens, resampler, None);
     let upto = steps
         .iter()
         .position(|s| s.stage.name() == "dehaze")
@@ -745,6 +746,7 @@ pub fn build_prefix_steps(
     scale: RenderScale,
     lens: Option<lens_profile::LensShot>,
     resampler: Resampler,
+    airlight: Option<[f32; 3]>,
 ) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
@@ -819,7 +821,13 @@ pub fn build_prefix_steps(
     if edits.dehaze.is_active() {
         steps.push(PrefixStep {
             key: PrefixStepKey::Dehaze(edits.dehaze),
-            stage: Box::new(DehazeStage::new(&edits.dehaze, scale)),
+            // ⚠⚠ A supplied airlight is what makes this step region-scopable. Without one the
+            // stage estimates from the image it is handed, which under a scoped run is a slice —
+            // and the photograph would then change as you pan.
+            stage: match airlight {
+                Some(a) => Box::new(DehazeStage::with_airlight(&edits.dehaze, scale, a)),
+                None => Box::new(DehazeStage::new(&edits.dehaze, scale)),
+            },
         });
     }
 
@@ -879,7 +887,9 @@ impl PrefixKey {
         // because whether a corrector exists is constant for a photo and the engine is per photo.
         // ⚠ `None` for `brush` for the same reason as `lens`: a coverage map is needed to RUN
         // the stage, never to KEY it — the key is derived from the edits, and
-        let steps = build_prefix_steps(edits, scale, None, resampler);
+        // ⚠ `None` for the airlight: it is derived from `edits`, which this key already covers,
+        // so carrying it here would be a second copy of a fact the key already holds.
+        let steps = build_prefix_steps(edits, scale, None, resampler, None);
         Self::upto(&steps, steps.len(), scale)
     }
 
@@ -925,6 +935,18 @@ pub struct RenderSpec {
     pub space: color::OutputSpace,
     pub resampler: Resampler,
     pub baseline: color::wb::Illuminant,
+    /// The frame-global dehaze airlight, from [`prefix_airlight`].
+    ///
+    /// ⚠⚠ **`None` means "let dehaze estimate from the image it is handed"**, which is what
+    /// shipped before M8.7 and keeps every existing caller — the CLI, the goldens' default path,
+    /// every test — on exactly the behaviour they had. A region-scoped render REQUIRES `Some`:
+    /// `DehazeStage::apply_region` declines without one, because estimating from a slice changes
+    /// the photograph as you pan.
+    ///
+    /// ⚠ It must be **derived from `edits`** via [`prefix_airlight`], never invented. `PrefixKey`
+    /// does not carry it, and is sound only because the key already covers every edit the replay
+    /// reads; an airlight unrelated to the edits would be a value the cache cannot see.
+    pub airlight: Option<[f32; 3]>,
 }
 
 impl Default for RenderSpec {
@@ -933,6 +955,7 @@ impl Default for RenderSpec {
             space: color::OutputSpace::Srgb,
             resampler: Resampler::default(),
             baseline: color::wb::Illuminant::default(),
+            airlight: None,
         }
     }
 }
@@ -1226,13 +1249,15 @@ pub fn build_pipeline_split_tapped(
         space,
         resampler,
         baseline,
+        airlight,
     } = spec;
     // Defined through `build_prefix_steps` so the pipeline and the cache keys cannot drift:
     // one list, two consumers.
-    let prefix: Vec<Box<dyn PipelineStage>> = build_prefix_steps(edits, scale, lens, resampler)
-        .into_iter()
-        .map(|s| s.stage)
-        .collect();
+    let prefix: Vec<Box<dyn PipelineStage>> =
+        build_prefix_steps(edits, scale, lens, resampler, airlight)
+            .into_iter()
+            .map(|s| s.stage)
+            .collect();
 
     // ⚠ `saturation`/`vibrance` are passed as **zero** here, deliberately. In the global chain
     // saturation runs *after* the tone curve and local contrast, not with the basic
@@ -1820,6 +1845,7 @@ mod tests {
             RenderScale::FULL,
             None,
             crate::resample::Resampler::CatmullRom,
+            None,
         )
     }
 
@@ -2116,6 +2142,91 @@ mod tests {
         assert!(
             worst < 1e-5,
             "a running sum may wobble in the last bits; a margin bug may not. worst {worst:e}"
+        );
+    }
+
+    #[test]
+    fn a_supplied_airlight_is_used_verbatim_rather_than_re_estimated() {
+        // ⚠⚠ The only test that can see the stage falling back to its own estimate. Two renders of
+        // the SAME image with different supplied airlights must differ; if the stage re-estimates,
+        // they are identical and this fails.
+        let img = structured(64, 48);
+        let p = edit_model::Dehaze { amount: 60.0 };
+        let a = crate::stages::dehaze::DehazeStage::with_airlight(&p, RenderScale::FULL, [0.9; 3])
+            .apply(img.clone());
+        let b = crate::stages::dehaze::DehazeStage::with_airlight(&p, RenderScale::FULL, [0.5; 3])
+            .apply(img.clone());
+        assert_ne!(
+            a.data(),
+            b.data(),
+            "the supplied airlight must reach the pixels"
+        );
+        // And the fallback still works when none is supplied.
+        let c = crate::stages::dehaze::DehazeStage::new(&p, RenderScale::FULL).apply(img);
+        assert_ne!(
+            c.data(),
+            a.data(),
+            "None must estimate rather than reuse a supplied value"
+        );
+    }
+
+    #[test]
+    fn the_replay_does_not_depend_on_where_a_render_resumes() {
+        // ⚠⚠ THE property that made this design replay from the START of the prefix. An airlight
+        // that depended on the resume point would change with WHICH SLIDER YOU DRAGGED — two facts
+        // that can disagree, the shape render_max_dim and Session::geometry_mode were deleted for.
+        let img = structured(220, 180);
+        let mut e = Edits {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 30.0,
+                color: 30.0,
+                detail: 50.0,
+                smoothness: 50.0,
+            },
+            ..Default::default()
+        };
+        e.geometry.angle = 4.0;
+        let one = super::prefix_airlight(&e, &img, crate::resample::Resampler::CatmullRom, None);
+        let two = super::prefix_airlight(&e, &img, crate::resample::Resampler::CatmullRom, None);
+        assert_eq!(one, two, "deterministic");
+
+        // ⚠ And it is a function of the EDITS, so a downstream-only edit cannot move it. That is
+        // what makes `PrefixKey` sound without carrying the airlight: the key already covers
+        // every edit the replay reads.
+        let mut f = e.clone();
+        f.exposure = 1.5;
+        f.vignette = edit_model::Vignette {
+            amount: -60.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::prefix_airlight(&f, &img, crate::resample::Resampler::CatmullRom, None),
+            one,
+            "a tail edit must not move the airlight"
+        );
+    }
+
+    #[test]
+    fn the_replay_moves_when_an_upstream_edit_moves() {
+        // The discriminating other half: a constant would pass the test above.
+        let img = structured(220, 180);
+        let e = Edits {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Default::default()
+        };
+        let base = super::prefix_airlight(&e, &img, crate::resample::Resampler::CatmullRom, None);
+        let mut f = e.clone();
+        f.geometry.crop = edit_model::CropRect {
+            left: 0.5,
+            top: 0.5,
+            right: 1.0,
+            bottom: 1.0,
+        };
+        assert_ne!(
+            super::prefix_airlight(&f, &img, crate::resample::Resampler::CatmullRom, None),
+            base,
+            "cropping to a different quarter must change what the brightest pixels are"
         );
     }
 
@@ -2452,6 +2563,7 @@ mod tests {
             RenderScale::new(1.0),
             None,
             Resampler::default(),
+            None,
         );
         assert!(
             steps.len() >= 4,
@@ -2852,7 +2964,14 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            !build_prefix_steps(&denoised, RenderScale::FULL, None, Resampler::Bilinear).is_empty(),
+            !build_prefix_steps(
+                &denoised,
+                RenderScale::FULL,
+                None,
+                Resampler::Bilinear,
+                None
+            )
+            .is_empty(),
             "fixture check: this photo must have a prefix stage to key at all"
         );
         assert_eq!(
@@ -2871,8 +2990,8 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 95.0 },
             ..a.clone()
         };
-        let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default());
-        let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default());
+        let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default(), None);
+        let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default(), None);
         assert_eq!(steps_a.len(), 6);
 
         // Same up to and including noise reduction...
@@ -3000,7 +3119,8 @@ mod tests {
         // build_pipeline_split_in_region is defined through build_prefix_steps, so the two
         // cannot drift: a stage added to one appears in the other.
         for edits in [Edits::default(), all_edits()] {
-            let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default());
+            let steps =
+                build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None);
             let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
             let from_steps: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
             assert_eq!(from_steps, prefix.stage_names());
@@ -3097,7 +3217,7 @@ mod tests {
         // stages shared a key, a checkpoint would be reused across a change that altered it.
         let base = all_edits();
         let keys = |e: &Edits| -> Vec<PrefixStepKey> {
-            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default())
+            build_prefix_steps(e, RenderScale::FULL, None, Resampler::default(), None)
                 .iter()
                 .map(|s| s.key.clone())
                 .collect()
@@ -4001,6 +4121,7 @@ mod tests {
             RenderScale::FULL,
             test_corrector(),
             Resampler::default(),
+            None,
         );
         let names: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
         assert_eq!(names, vec!["lens_correction", "geometry"]);
@@ -4017,7 +4138,8 @@ mod tests {
             ..Edits::default()
         };
         assert!(
-            build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default()).is_empty()
+            build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None)
+                .is_empty()
         );
     }
 
@@ -4034,7 +4156,8 @@ mod tests {
             &edits,
             RenderScale::FULL,
             test_corrector(),
-            Resampler::default()
+            Resampler::default(),
+            None
         )
         .is_empty());
     }
@@ -4044,7 +4167,7 @@ mod tests {
     #[test]
     fn no_spots_means_no_stage() {
         let edits = Edits::default();
-        let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default());
+        let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None);
         assert!(steps.is_empty());
         assert!(!build_pipeline(&edits, RenderScale::FULL)
             .stage_names()

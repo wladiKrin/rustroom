@@ -150,6 +150,7 @@ fn main() {
             scale,
             color::OutputSpace::Srgb,
             pipeline::Resampler::default(),
+            None,
         )
     };
 

@@ -41,6 +41,7 @@ fn main() {
         0.5,
         color::OutputSpace::Srgb,
         pipeline::Resampler::default(),
+        None,
     );
     let b = render_once(
         &buf,
@@ -49,6 +50,7 @@ fn main() {
         0.5,
         color::OutputSpace::Srgb,
         pipeline::Resampler::default(),
+        None,
     );
 
     // (name, lower bound) over the 8-bit mean of the *neutral* render.

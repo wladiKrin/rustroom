@@ -221,6 +221,14 @@ fn render(
             // ⚠ The white-balance baseline the decode left the picture at. Without it a Kelvin in
             // the sidecar would mean one thing in the GUI and another from the CLI.
             baseline: decoded.metadata.as_shot.unwrap_or_default(),
+            // ⚠ Same rule, same reason: a dehazed photo must render identically from the CLI and
+            // from the GUI, and the airlight definition is what decides that.
+            airlight: Some(pipeline::prefix_airlight(
+                &edits,
+                &decoded.image,
+                resampler,
+                lens.clone(),
+            )),
         },
         lens,
         pipeline::ProfileRendering::default(),

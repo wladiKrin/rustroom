@@ -71,6 +71,7 @@ fn main() {
                 0.5,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             );
             // `render_once` hands back RGBA8 in the display space; JPEG wants RGB.
             let rgb: Vec<u8> = f

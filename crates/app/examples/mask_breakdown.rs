@@ -170,6 +170,7 @@ fn main() {
                 scale,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             )
         });
         if *label == "neutral" {
@@ -188,6 +189,7 @@ fn main() {
                 scale,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             )
         });
         let mut bare = e.clone();
@@ -200,6 +202,7 @@ fn main() {
                 scale,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             )
         });
         println!(

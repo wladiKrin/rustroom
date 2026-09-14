@@ -185,6 +185,7 @@ fn main() {
                 scale,
                 color::OutputSpace::Srgb,
                 pipeline::Resampler::default(),
+                None,
             );
             let ms = t.elapsed().as_secs_f64() * 1000.0;
             std::hint::black_box(&f);
@@ -305,7 +306,7 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear);
+        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None);
         let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
         println!("\n  prefix steps: {}", steps.len());
 
@@ -369,7 +370,7 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear);
+        let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None);
         let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
         let base = buf.downscale_to(buffer_long);
         println!(

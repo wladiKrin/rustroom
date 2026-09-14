@@ -297,7 +297,26 @@ fn check_golden(name: &str, edits: &Edits) {
 }
 
 fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
-    compare_or_update(name, build_pipeline(edits, RenderScale::FULL).run(input));
+    // ⚠⚠ **The goldens must render through the airlight definition that SHIPS**, which since M8.7
+    // is a 256 px replay of the prefix rather than an estimate from dehaze's own input. A harness
+    // left on `RenderSpec::default()` would pin a definition nothing uses and go quietly blind to
+    // the one that does — the W5 failure mode, in the one place this project relies on most.
+    //
+    // ⚠ It costs a 65k-pixel run per golden, and it is what makes `dehaze_plus`, `dehaze_minus`
+    // and `mask_dehaze` the only three references that move.
+    let spec = pipeline::RenderSpec {
+        airlight: Some(pipeline::prefix_airlight(
+            edits,
+            &input,
+            pipeline::Resampler::default(),
+            None,
+        )),
+        ..Default::default()
+    };
+    compare_or_update(
+        name,
+        pipeline::build_pipeline_spec(edits, RenderScale::FULL, spec).run(input),
+    );
 }
 
 /// As [`check_golden`], rendering to a non-sRGB output space.

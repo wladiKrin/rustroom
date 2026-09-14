@@ -360,6 +360,11 @@ pub fn export_one(
         None => image,
     };
     let scale = scale_for(source_long, opts.max_edge);
+    // ⚠⚠ The export must use the SAME airlight definition as the preview, or a dehazed photo
+    // would render one way on screen and another in the file — by up to 5.6 of an 8-bit level,
+    // measured. `prefix_airlight` replays the prefix at a fixed 256 px, so it is a deterministic
+    // function of the edits and costs a 65k-pixel run.
+    let airlight = pipeline::prefix_airlight(edits, &scaled, resampler, None);
     let mut rendered = pipeline::build_pipeline_spec(
         edits,
         scale,
@@ -367,6 +372,7 @@ pub fn export_one(
             space: opts.space,
             resampler,
             baseline: wb_baseline,
+            airlight: Some(airlight),
         },
     )
     .run(scaled);

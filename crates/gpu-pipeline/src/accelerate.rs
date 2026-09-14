@@ -905,7 +905,8 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let e = denoised_edits(70.0, 70.0);
         let img = hazy(200, 160);
-        let steps = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        let steps =
+            pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear, None);
         let step = steps
             .iter()
             .find(|s| s.stage.name() == "noise_reduction")
@@ -952,8 +953,8 @@ mod tests {
     #[test]
     fn a_prefix_key_is_a_function_of_the_edits_alone() {
         let e = hazed_edits(60.0);
-        let a = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
-        let b = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        let a = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear, None);
+        let b = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear, None);
         assert!(!a.is_empty(), "fixture check: dehaze must produce a step");
         let ka: Vec<_> = (0..=a.len())
             .map(|n| pipeline::PrefixKey::upto(&a, n, SCALE))
@@ -974,7 +975,8 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let e = hazed_edits(70.0);
         let img = hazy(200, 160);
-        let steps = pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear);
+        let steps =
+            pipeline::build_prefix_steps(&e, SCALE, None, pipeline::Resampler::Bilinear, None);
         let step = steps
             .iter()
             .find(|s| s.stage.name() == "dehaze")

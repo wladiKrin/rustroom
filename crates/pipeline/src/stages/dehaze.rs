@@ -1,5 +1,5 @@
 use crate::spatial::{guided_filter, min_filter};
-use crate::{PipelineStage, RenderScale};
+use crate::{PipelineStage, Rect, RenderScale};
 use core_image::ImageBuf;
 use edit_model::Dehaze;
 use rayon::prelude::*;
@@ -231,6 +231,13 @@ pub fn kernel_reach(params: &Dehaze, scale: RenderScale) -> usize {
 pub struct DehazeStage {
     params: Dehaze,
     scale: RenderScale,
+    /// The frame-global airlight, when the caller supplies one.
+    ///
+    /// ⚠⚠ **`None` means "estimate from the image I am handed", which is what shipped before
+    /// M8.7 and is still correct for a whole-buffer render.** It is *not* correct under a
+    /// region-scoped run, where the image in hand is a slice and the estimate would change as you
+    /// pan — the failure [`crate::PipelineStage::apply_region`]'s `None` default exists to prevent.
+    airlight: Option<[f32; 3]>,
 }
 
 impl DehazeStage {
@@ -238,6 +245,24 @@ impl DehazeStage {
         Self {
             params: *params,
             scale,
+            airlight: None,
+        }
+    }
+
+    /// Build with the airlight supplied rather than estimated from this stage's input.
+    ///
+    /// ⚠⚠ **This is what lets dehaze be region-scoped at all.** Estimated from the input, the
+    /// stage's true reach is the ENTIRE FRAME and no margin could ever be correct — see
+    /// [`kernel_reach`], which counts only the two spatial terms precisely because the airlight is
+    /// no longer one of them.
+    ///
+    /// ⚠ Supplied by [`crate::prefix_airlight`], which replays the prefix at a fixed 256 px so the
+    /// value is a deterministic function of the edits alone.
+    pub fn with_airlight(params: &Dehaze, scale: RenderScale, airlight: [f32; 3]) -> Self {
+        Self {
+            params: *params,
+            scale,
+            airlight: Some(airlight),
         }
     }
 }
@@ -253,6 +278,30 @@ impl PipelineStage for DehazeStage {
         Some(out.grown(kernel_reach(&self.params, self.scale), in_w, in_h))
     }
 
+    /// Produce only `out` of this stage's output, from a margined region of its input.
+    ///
+    /// ⚠⚠ **Declines unless the airlight was supplied**, and that is the whole safety argument.
+    /// Without one this stage would estimate from the slice in hand, so the photograph would change
+    /// as you pan — and it would do so plausibly rather than visibly. Failing toward the
+    /// whole-buffer path is `GpuStage::cpu`'s rule and `apply_region`'s own.
+    ///
+    /// ⚠ Given one, the result is exact for every pixel in `out`: [`crate::region_plan`] grows the
+    /// request by [`kernel_reach`] on every side, so a pixel inside `out` reads only samples that
+    /// are inside the buffer, and those hold what the whole image holds there.
+    fn apply_region(&self, src: &crate::RegionSrc<'_>, out: Rect) -> Option<ImageBuf> {
+        self.airlight?;
+        if out.w == 0 || out.h == 0 {
+            return None;
+        }
+        let ox = out.x.checked_sub(src.origin.0)?;
+        let oy = out.y.checked_sub(src.origin.1)?;
+        if ox + out.w > src.buf.width() || oy + out.h > src.buf.height() {
+            return None;
+        }
+        let done = self.apply(src.buf.clone());
+        Some(done.crop(ox, oy, out.w, out.h))
+    }
+
     fn apply(&self, image: ImageBuf) -> ImageBuf {
         self.apply_with(image, AIRLIGHT_TOLERANCE)
     }
@@ -266,7 +315,7 @@ impl DehazeStage {
         if w == 0 || h == 0 || !self.params.is_active() {
             return image;
         }
-        let a = airlight(&image);
+        let a = self.airlight.unwrap_or_else(|| airlight(&image));
         let t = transmission_with(&image, a, self.scale, tolerance);
         let k = (self.params.amount / 100.0).clamp(-1.0, 1.0);
         let remove = k > 0.0;

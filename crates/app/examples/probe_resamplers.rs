@@ -172,7 +172,7 @@ fn main() {
         ..Edits::default()
     };
 
-    let steps = pipeline::build_prefix_steps(&edits, sc, shot.clone(), Resampler::default());
+    let steps = pipeline::build_prefix_steps(&edits, sc, shot.clone(), Resampler::default(), None);
     println!("\n  prefix steps: {}", steps.len());
 
     // ⚠ Each step is priced on the buffer the one before it produced, which is what the prefix
@@ -227,6 +227,7 @@ fn main() {
         sc,
         None,
         Resampler::default(),
+        None,
     );
     let pstage = psteps
         .iter()
@@ -266,7 +267,8 @@ fn main() {
             },
             ..Edits::default()
         };
-        let dsteps = pipeline::build_prefix_steps(&drag, sc, shot.clone(), Resampler::default());
+        let dsteps =
+            pipeline::build_prefix_steps(&drag, sc, shot.clone(), Resampler::default(), None);
         let mut checkpoints = vec![buf.clone()];
         for step in &dsteps {
             checkpoints.push(step.stage.apply(checkpoints.last().unwrap().clone()));
