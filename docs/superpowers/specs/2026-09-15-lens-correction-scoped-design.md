@@ -77,6 +77,20 @@ is a curved quadrilateral whose extreme can sit at an **edge midpoint**, not at 
 bound would therefore under-estimate — and the failure mode is exactly the one the seam warns
 about: a **dark band at one edge of the region**, a plausible photograph of nearly the right thing.
 
+> ⚠⚠ **Corrected in place during execution, because that phrasing is too loose and the precise
+> condition is sharper.** ptlens is `r_d = r · (b·r² + (1 − b))`, so the radial factor is
+> **increasing** in `r` for a **pincushion** correction (`b > 0`) — and then every extreme of a
+> rect's image really does sit at a corner, so `PerspectiveStage`'s bound would be sound. It is
+> **decreasing** for a **barrel** correction (`b < 0`), and the extreme then sits at an **edge
+> midpoint** whenever the rect's span brackets the optical centre. Measured on a 400×300 fixture
+> at `b = −0.05`: the corner box misses by **9.2 px**, against a Lanczos3 tap radius of 3.
+>
+> Two consequences for the tests. The byte-for-byte equivalence test **cannot see this** —
+> transplanting the corner bound passes it. And a test using only the pincushion fixture, or only
+> rects inside one quadrant, cannot see it either however large the displacement. Hence
+> `every_source_a_region_reads_lies_inside_the_rect_it_asked_for`, which sweeps both signs of `b`
+> and uses rects that bracket the centre in both axes.
+
 The bound that *is* sound is the **largest displacement anywhere in the frame**: no pixel can move
 further than the furthest-moving pixel, whatever shape the rect is. So
 
