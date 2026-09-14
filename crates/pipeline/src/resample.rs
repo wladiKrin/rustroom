@@ -363,6 +363,35 @@ pub fn sample_channel(src: &ImageBuf, sx: f32, sy: f32, ch: usize, w: &Weights) 
     out
 }
 
+/// Sample **one** channel of a region-scoped source at a point in **full-image** coordinates.
+///
+/// ⚠ The per-channel mirror of [`sample_region`], and it exists for the reason that one does:
+/// transverse chromatic aberration gives each channel its own source point, so lens correction
+/// cannot go through the three-channel entry point.
+///
+/// ⚠⚠ **Coordinates are the FULL image's, not the buffer's.** A sampler taking buffer coordinates
+/// would silently shift every read by the region's origin — a plausible photograph of the wrong
+/// part of the frame, which is M8.6's centre sabotage and which all 63 goldens were blind to.
+///
+/// ⚠ A tap outside the buffer reads black exactly as [`sample`] does outside the frame — correct
+/// **because the margin makes it unreachable**. A tap that does escape is a bug in some
+/// `input_rect_for`, and it shows up as a dark band at the region's edge.
+pub fn sample_channel_region(
+    src: &crate::RegionSrc<'_>,
+    sx: f32,
+    sy: f32,
+    ch: usize,
+    w: &Weights,
+) -> f32 {
+    sample_channel(
+        src.buf,
+        sx - src.origin.0 as f32,
+        sy - src.origin.1 as f32,
+        ch,
+        w,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,6 +688,37 @@ mod tests {
             assert!(!k.hint().is_empty());
             assert_eq!(k.taps(), 2 * k.radius());
             assert!(k.taps() <= MAX_TAPS);
+        }
+    }
+
+    /// ⚠ The per-channel mirror of the region sampler's contract: coordinates are the **full
+    /// image's**, so a sampler taking buffer coordinates would silently shift every read by the
+    /// region's origin — a plausible photograph of the wrong part of the frame.
+    ///
+    /// ⚠ Catmull-Rom rather than bilinear, so the taps reach two pixels either side and the
+    /// comparison genuinely exercises the offset rather than a 2x2 neighbourhood that happens to
+    /// sit well inside both buffers.
+    #[test]
+    fn the_per_channel_region_sampler_reads_full_image_coordinates() {
+        let mut src = ImageBuf::new(12, 12);
+        for y in 0..12 {
+            for x in 0..12 {
+                src.set_pixel(x, y, [x as f32, y as f32, (x + y) as f32 * 0.25]);
+            }
+        }
+        let whole = crate::RegionSrc::whole(&src);
+        let w = Weights::new(Resampler::CatmullRom);
+        // The same image, sliced and told where the slice sits.
+        let slice = src.crop(2, 3, 8, 7);
+        let part = crate::RegionSrc {
+            buf: &slice,
+            origin: (2, 3),
+            full: (12, 12),
+        };
+        for ch in 0..3 {
+            let a = sample_channel_region(&whole, 5.25, 6.5, ch, &w);
+            let b = sample_channel_region(&part, 5.25, 6.5, ch, &w);
+            assert_eq!(a, b, "channel {ch}: whole {a} against region {b}");
         }
     }
 }
