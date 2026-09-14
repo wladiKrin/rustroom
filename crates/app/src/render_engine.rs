@@ -883,7 +883,7 @@ pub struct Ran {
     /// runs in parallel, and a global counter reading someone else's renders is a contaminated
     /// observable this project has already paid for once, in `GpuChain`'s transfer counts.
     pub gpu_prefix_steps: usize,
-    /// Whether the prefix's last step produced only the region, rather than the whole frame.
+    /// Whether the prefix ran region-scoped from its resume point, rather than whole-buffer.
     ///
     /// ⚠⚠ **An observable, because the two paths produce the same picture BY DESIGN.** A
     /// region-scoped render and a whole-buffer render cropped are bit-identical, so every
@@ -892,6 +892,18 @@ pub struct Ran {
     /// `gpu_prefix_steps` all exist for this reason.
     pub region_scoped: bool,
 }
+
+/// The largest share of the frame a margined region may occupy and still be worth scoping, in
+/// percent.
+///
+/// ⚠⚠ **Swept, not chosen.** Two constants in this crate were reasoned about instead and both were
+/// wrong: `MIN_GPU_BOX_PX` started low by ~8x, and `MAX_TILE_DABS` was sized by a *limit* rather
+/// than by the data and measured 5x slower than the CPU it replaced.
+///
+/// ⚠ Above this share the scoped path costs roughly what the whole-buffer path costs **and its
+/// output is deliberately not cached**, so the settle render repeats the work — strictly worse than
+/// not scoping at all.
+const SCOPE_MAX_AREA_PCT: u64 = 50;
 
 #[allow(clippy::too_many_arguments)]
 fn render_cached(
@@ -978,15 +990,18 @@ fn render_cached(
         }
     };
 
-    // ⚠⚠ **THE REGION-SCOPED PREFIX, and the gate is DERIVED rather than a flag.** Engage only
-    // when *exactly* the last prefix step needs re-running — which is what a Straighten or
-    // Perspective drag is, since every upstream checkpoint is keyed on edits the drag does not
-    // touch. `render_cached` already knows it, so there is no drag signal to plumb and nothing
-    // that can disagree with anything else.
+    // ⚠⚠ **THE REGION-SCOPED PREFIX, and the gate is DERIVED rather than a flag.** Engage when a
+    // region is wanted and *every* step from the resume point onward accepts one. There is no drag
+    // signal to plumb and therefore nothing that can disagree with anything else — the rule
+    // `Session::geometry_mode` was deleted for. It follows that this speeds a cold entry into 1:1
+    // as well as a drag: the gate asks about the work, not about the gesture.
     //
-    // ⚠ Only the LAST step, and that is structural: step n-1's region-scoped output cannot feed
-    // step n, because step n is a gather that reads anywhere in its source. Chaining would need
-    // pre-image analysis per stage, which is the whole thing this avoids.
+    // ⚠⚠ M8.6's version engaged only when *exactly the last* step needed re-running, on the
+    // argument that step n-1's scoped output cannot feed step n because step n is a gather. That
+    // is true of two gathers in a row and this prefix is never that — its gathers (lens
+    // correction, perspective, geometry) all precede its locals (noise reduction, dehaze), so a
+    // local needs only a margin and the first scoped step is a gather reading a whole cached
+    // buffer. `region_plan` is what establishes that per chain rather than by assertion.
     //
     // ⚠ At the fitted rung `region` is `None`, so this never engages there — it engages exactly
     // at the native rungs, which is where the cost is.
@@ -994,40 +1009,78 @@ fn render_cached(
     // ⚠ A plain flag rather than something derived from the output's size afterwards: a derived
     // fact that can be wrong is what `Session::geometry_mode` was deleted for.
     let mut was_scoped = false;
-    if start + 1 == steps.len() {
-        if let Some(want) = region {
-            let last = &steps[start].stage;
-            let (ow, oh) = last.output_dims(img.width(), img.height());
-            if let Some(r) = want.clamped(ow, oh) {
-                if let Some(out) = last.apply_region(
-                    // M8.6's gate still hands over the whole buffer; M8.7's chain is what will
-                    // pass a non-zero origin.
-                    &pipeline::RegionSrc::whole(&img),
-                    pipeline::Rect {
-                        x: r.x,
-                        y: r.y,
-                        w: r.w,
-                        h: r.h,
-                    },
-                ) {
-                    scoped = Some((out, r, ow, oh));
+    if let Some(want) = region {
+        let visible = pipeline::Rect {
+            x: want.x,
+            y: want.y,
+            w: want.w,
+            h: want.h,
+        };
+        // ⚠ `region_plan` clamps `visible` against the frame itself, so no clamping is done here —
+        // two clamps would be two rules about the same rect.
+        if let Some(plan) = pipeline::region_plan(&steps, start, visible, img.width(), img.height())
+        {
+            // ⚠⚠ **The area gate.** A margined region close to the whole frame costs roughly what
+            // the whole-buffer path costs *and is not cached*, so the settle render repeats the
+            // work — strictly worse than not scoping. `out_rects[0]` is the earliest scoped output
+            // and therefore the largest of them, which is what makes it the right proxy.
+            let margined: u64 = plan
+                .out_rects
+                .first()
+                .map_or(0, |r| r.w as u64 * r.h as u64);
+            let whole = plan.frame.0 as u64 * plan.frame.1 as u64;
+            if whole > 0 && margined * 100 < whole * SCOPE_MAX_AREA_PCT {
+                if let Some(out) = pipeline::run_region_plan(&steps, start, &img, &plan) {
+                    let last = *plan.out_rects.last().expect("a plan has at least one rect");
+                    if debug_steps {
+                        eprintln!(
+                            "  prefix: {:?}  resuming at {start} of {}  SCOPED {}x{} -> {}x{} of {}x{}",
+                            steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>(),
+                            steps.len(),
+                            plan.out_rects[0].w,
+                            plan.out_rects[0].h,
+                            last.w,
+                            last.h,
+                            plan.frame.0,
+                            plan.frame.1,
+                        );
+                    }
+                    // The step count rides in the tuple rather than in a separate local: a count
+                    // stored beside the thing it counts is a second fact that can go stale.
+                    scoped = Some((out, last, plan.frame, plan.out_rects.len()));
                     was_scoped = true;
                 }
             }
         }
     }
 
-    let (input, rect, pw, ph, prefix_stages) = if let Some((out, r, ow, oh)) = scoped {
+    let (input, rect, pw, ph, prefix_stages) = if let Some((out, last, frame, ran)) = scoped {
         // ⚠⚠ **DELIBERATELY NOT CACHED.** A region-scoped checkpoint served for a *different*
         // region is the one failure here that shows as a plausible photograph rather than an
         // error, and leaving the insert out is what makes it unrepresentable rather than guarded.
         // The cost is that a later whole-buffer render rebuilds the final checkpoint — against
-        // re-running the step whole-buffer on every frame of the drag, which is what this replaces.
+        // re-running every step whole-buffer on every frame of the drag, which is what this
+        // replaces.
         //
-        // ⚠ `gpu_prefix_steps` stays 0 here and nothing is lost: `accelerate_prefix_stage` has
-        // twins only for dehaze and noise reduction, neither of which can be the region-scoped
-        // step, because neither is region-safe and both therefore decline.
-        (out, Some(r), ow, oh, 1)
+        // ⚠⚠ `frame` comes from the **plan**, composed through `output_dims` and read before any
+        // step ran. Taking it from `out` would be the region's own size, which rasterises every
+        // brush mask at the wrong size and thrashes the coverage cache on every pan — M8.6's
+        // sharpest hazard, and it is sharper here because the chain is longer.
+        //
+        // ⚠ `gpu_prefix_steps` stays 0 here. Nothing is lost that the seam could have supplied:
+        // `accelerate_prefix_stage`'s twins run whole-buffer, so a scoped chain is the CPU's.
+        (
+            out,
+            Some(RegionRect {
+                x: last.x,
+                y: last.y,
+                w: last.w,
+                h: last.h,
+            }),
+            frame.0,
+            frame.1,
+            ran,
+        )
     } else {
         // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU seam
         // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
