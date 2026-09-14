@@ -43,6 +43,38 @@ pub fn chroma_radius_full(smoothness: f32) -> f32 {
     COL_RADIUS_FULL.0 + (COL_RADIUS_FULL.1 - COL_RADIUS_FULL.0) * t
 }
 
+/// The widest neighbourhood one output pixel can depend on, in **rendered** pixels.
+///
+/// ⚠⚠ The **max** of the two halves, not their sum: both are computed from the same Oklab
+/// conversion of the same source and written into different channels, so neither composes with
+/// the other. (Contrast `sharpening::max_kernel_radius`, where the mask blurs `|d|` on top of the
+/// first blur and the two radii genuinely add.)
+///
+/// ⚠⚠ **The luminance half reaches `2r`, not `r`.** It is a self-guided filter: every window
+/// statistic is a box blur of radius `r`, and `mean_slope`/`mean_offset` blur those again. That is
+/// `local_contrast::kernel_reach`'s rule, and forgetting it is what made this repo's recorded
+/// ~110 px margin estimate for M8.7 too small by 1.6x.
+///
+/// ⚠ An inactive half contributes nothing, so a photo carrying only luminance NR does not keep a
+/// 32 px margin for a chroma blur that never runs. That mirrors [`NoiseReduction::is_active`],
+/// which is amount-only for the same reason.
+///
+/// Any renderer that crops a region before running this stage must keep at least this much margin
+/// outside what it displays — see [`crate::region_plan`].
+pub fn kernel_reach(params: &NoiseReduction, scale: RenderScale) -> usize {
+    let lum = if params.luminance > 0.0 {
+        2 * scaled_radius(LUM_RADIUS_FULL, scale)
+    } else {
+        0
+    };
+    let col = if params.color > 0.0 {
+        scaled_radius(chroma_radius_full(params.smoothness), scale)
+    } else {
+        0
+    };
+    lum.max(col)
+}
+
 /// Luminance and color noise reduction, in Oklab.
 ///
 /// Runs early in the pipeline — before white balance — so it denoises the source rather
@@ -66,6 +98,12 @@ impl NoiseReductionStage {
 impl PipelineStage for NoiseReductionStage {
     fn name(&self) -> &'static str {
         "noise_reduction"
+    }
+
+    /// ⚠ Grows by [`kernel_reach`] on every side. This stage preserves dimensions, so `out` and
+    /// the result are in the same space and no `output_dims` resolution is needed.
+    fn input_rect_for(&self, out: crate::Rect, in_w: usize, in_h: usize) -> Option<crate::Rect> {
+        Some(out.grown(kernel_reach(&self.params, self.scale), in_w, in_h))
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
@@ -131,6 +169,82 @@ impl PipelineStage for NoiseReductionStage {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_kernel_reach_is_the_wider_of_the_two_halves() {
+        // Luminance is a self-guided filter at radius 6, and a guided base reaches 2r — the rule
+        // `local_contrast::kernel_reach` records. Chroma is a plain box blur at 8..32, so it
+        // reaches its own radius. At smoothness 0 chroma is 8 and luminance's 12 wins; by
+        // smoothness 50 the chroma window is 20 and it wins outright.
+        let at = |lum: f32, col: f32, smooth: f32| {
+            super::kernel_reach(
+                &super::NoiseReduction {
+                    luminance: lum,
+                    color: col,
+                    detail: 50.0,
+                    smoothness: smooth,
+                },
+                super::RenderScale::FULL,
+            )
+        };
+        assert_eq!(at(50.0, 0.0, 0.0), 12, "luminance only: 2 x 6");
+        assert_eq!(at(0.0, 50.0, 0.0), 8, "chroma only, smoothness 0");
+        assert_eq!(at(0.0, 50.0, 100.0), 32, "chroma only, smoothness 100");
+        assert_eq!(
+            at(50.0, 50.0, 0.0),
+            12,
+            "both, and luminance is wider at smoothness 0"
+        );
+        assert_eq!(
+            at(50.0, 50.0, 50.0),
+            20,
+            "both, and chroma is wider at smoothness 50"
+        );
+    }
+
+    #[test]
+    fn an_inactive_half_contributes_no_reach() {
+        // ⚠ The discriminating case: an implementation that always took the max of both radii
+        // would keep a 32 px margin for a photo carrying no chroma NR at all.
+        let p = super::NoiseReduction {
+            luminance: 50.0,
+            color: 0.0,
+            detail: 50.0,
+            smoothness: 100.0,
+        };
+        assert_eq!(
+            super::kernel_reach(&p, super::RenderScale::FULL),
+            12,
+            "chroma is off, so its 32 must not count"
+        );
+        let q = super::NoiseReduction {
+            luminance: 0.0,
+            color: 0.0,
+            detail: 50.0,
+            smoothness: 100.0,
+        };
+        assert_eq!(
+            super::kernel_reach(&q, super::RenderScale::FULL),
+            0,
+            "wholly inactive reaches nothing"
+        );
+    }
+
+    #[test]
+    fn the_reach_follows_the_render_scale() {
+        // ⚠⚠ At RenderScale::FULL the scaling is the identity, so every test above is
+        // structurally blind to the scale being dropped — the exact blind spot
+        // `the_radii_follow_the_render_scale` was written for in M8.3q. This is the only test
+        // here that can see it.
+        let p = super::NoiseReduction {
+            luminance: 0.0,
+            color: 50.0,
+            detail: 50.0,
+            smoothness: 100.0,
+        };
+        assert_eq!(super::kernel_reach(&p, super::RenderScale::FULL), 32);
+        assert_eq!(super::kernel_reach(&p, super::RenderScale::new(0.5)), 16);
+    }
+
     // Brings in NoiseReductionStage, RenderScale, ImageBuf, NoiseReduction, PipelineStage
     // (needed for `.apply`) and the Oklab conversions.
     use super::*;

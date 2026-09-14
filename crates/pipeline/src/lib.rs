@@ -274,6 +274,27 @@ pub trait PipelineStage: Send + Sync {
     fn apply_region(&self, _src: &ImageBuf, _rect: Rect) -> Option<ImageBuf> {
         None
     }
+
+    /// The input rect this stage needs in order to produce `out` of its output.
+    ///
+    /// ⚠⚠ **`None` is the default, so every stage declines BY CONSTRUCTION.** It is the mirror of
+    /// [`Self::apply_region`] and carries the same rule: **fail toward the whole-buffer path**,
+    /// where a wrong answer costs milliseconds and never pixels. Lens correction, spot removal and
+    /// the masked captures all decline without the caller name-checking any of them.
+    ///
+    /// ⚠⚠ **A stage implementing one of the pair and not the other is a bug.** `region_plan` would
+    /// promise an input rect for an output `apply_region` then refuses to produce — which is why
+    /// `GeometryStage` declines *both* on a non-identity orientation rather than only one.
+    ///
+    /// ⚠ `out` is in this stage's **output** coordinates and the result is in its **input**
+    /// coordinates, which for a dimension-changing stage are different spaces. Resolve `out`
+    /// against [`Self::output_dims`] first.
+    ///
+    /// ⚠ Implementations clip the result into `in_w` x `in_h` themselves: a margin larger than the
+    /// image is ordinary at low render scales, and [`Rect::grown`] does it.
+    fn input_rect_for(&self, _out: Rect, _in_w: usize, _in_h: usize) -> Option<Rect> {
+        None
+    }
 }
 
 /// Builds a brush's coverage from an already-planned dab list.
