@@ -106,6 +106,12 @@ mod stages;
 /// needs the table and the small-angle pair to sweep table sizes against real pixels.
 pub use stages::hue_table;
 
+/// The dehaze airlight of an image, as [`stages::dehaze`] estimates it.
+///
+/// ⚠ Re-exported by name rather than opening `stages`, the rule `hue_table` already follows: a
+/// `pub mod stages` would make every stage public API for the sake of one probe.
+pub use stages::dehaze::airlight as dehaze_airlight;
+
 pub use resample::Resampler;
 pub use stages::color_grading::ColorGradingStage;
 pub use stages::contrast::{ContrastStage, PIVOT as CONTRAST_PIVOT};
@@ -637,6 +643,48 @@ pub fn run_region_plan(
         );
     }
     carried
+}
+
+/// The dehaze airlight for `edits`, from a fixed 256 px replay of the prefix up to dehaze.
+///
+/// ⚠⚠ **It replays from the START of the prefix, never from a resume point.** Replaying from
+/// wherever a render happens to resume would make the airlight depend on *which slider was
+/// dragged* — two facts that can disagree, the shape `render_max_dim`, `fit_image_size` and
+/// `Session::geometry_mode` were each deleted for. Starting from the source buffer makes it a
+/// deterministic function of the edits alone: independent of the region, of the resume point, and
+/// of the render scale.
+///
+/// ⚠⚠ **This is what lets dehaze be region-scoped at all.** Estimated from the stage's own input
+/// under a scoped run, the airlight would come from whatever slice is on screen and the photograph
+/// would change as you pan — the failure `PipelineStage::apply_region`'s `None` default exists to
+/// prevent.
+///
+/// ⚠ 256 px because that is what the estimator uses anyway: `AIRLIGHT_SAMPLE`, chosen at M8.3o
+/// precisely so the estimate cannot vary with the render scale. The replay is a 65k-pixel run.
+///
+/// ⚠ `None` is passed for the airlight of the steps it builds, so the replay cannot recurse:
+/// dehaze is never constructed here, only the steps above it.
+pub fn prefix_airlight(
+    edits: &Edits,
+    src: &ImageBuf,
+    resampler: Resampler,
+    lens: Option<lens_profile::LensShot>,
+) -> [f32; 3] {
+    const SAMPLE: usize = 256;
+    let small = src.downscale_to(SAMPLE);
+    let long = small.width().max(small.height()).max(1);
+    let full_long = src.width().max(src.height()).max(1);
+    let scale = RenderScale::new(long as f32 / full_long as f32);
+    let steps = build_prefix_steps(edits, scale, lens, resampler);
+    let upto = steps
+        .iter()
+        .position(|s| s.stage.name() == "dehaze")
+        .unwrap_or(steps.len());
+    let mut cur = small;
+    for s in &steps[..upto] {
+        cur = s.stage.apply(cur);
+    }
+    stages::dehaze::airlight(&cur)
 }
 
 /// One prefix stage's parameters, identifying the image that stage produces.
