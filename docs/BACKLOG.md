@@ -424,6 +424,42 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⚠⚠ The dehaze airlight estimator is UNSTABLE UNDER GEOMETRY, and it always has been (recorded 2026-09-14, at M8.7 — MEASURED)
+
+**What it is.** `dehaze::airlight` takes the mean of the haziest 0.1% of pixels. That is an **order
+statistic over the frame**, so it moves whenever the frame's content moves — and a Straighten drag
+moves the frame's content on every single frame.
+
+**Measured on DSCF6291.RAF while building M8.7's airlight parameterisation**: the *true* airlight —
+what today's code computes, estimated from the stage's own input — moves **21 of 255 levels** across
+an ordinary Straighten drag. So **today's shipped app already wobbles during that gesture**, before
+any of M8.7's work, and nobody has reported it.
+
+**⚠⚠ This is not M8.7's doing and M8.7 did not make it worse — it made it smaller.** The replay
+airlight M8.7 ships is a deterministic function of the edits, so it does not move during a drag at
+all; what it costs is a **5.6-level** one-off shift against what the old code computed, measured and
+accepted at the time. The three candidates measured then:
+
+| definition | worst shift against today | stable during a drag? |
+|---|---|---|
+| **replay from the source, 256 px** (shipped) | **5.6 levels** | yes |
+| held from the first frame of the gesture | 21 | no — it *is* the instability, frozen |
+| estimated from the source buffer | 95 | no, and worse |
+
+**⚠ The source-buffer candidate is dead** and should not be revisited: a mild 0.1–0.9 crop moves
+DSCF6291's true airlight by **65 levels**, because cropping changes which pixels are in the top 0.1%.
+
+**Why it is worth an entry.** The instability belongs to the **estimator**, not to any milestone
+that consumes it, and the fix is a different question from anything M8.7 answered: a percentile that
+does not move when the frame is re-framed. Candidates worth measuring rather than arguing about —
+estimate on the pre-geometry buffer (stable under straighten and crop by construction, but then it
+describes pixels the photograph no longer contains); a spatially-weighted statistic; or simply a
+larger sample where the 0.1% is less sensitive to which pixels are present.
+
+**⚠ Not urgent.** It has shipped unnoticed for the life of the feature, and M8.7 made the drag case
+strictly better. It is recorded so that a later report of *"the haze changes as I straighten"* is
+met with a measurement rather than a search.
+
 ### ⚠⚠ A GPU buffer resident across the prefix→tail seam (recorded 2026-09-13, at M8.3o's merge — MEASURED, not estimated)
 
 **What it is.** A dehaze drag at a native rung renders in **88.9 ms with both the prefix step and
