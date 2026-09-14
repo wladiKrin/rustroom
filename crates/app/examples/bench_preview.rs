@@ -591,6 +591,154 @@ fn main() {
         println!("{best:8.2} ms   brush rasterize CLIPPED to 1400x900, full 6246x4170");
     }
 
+    // ⚠⚠ **THE SWEEP THAT SETS `SCOPE_MAX_AREA_PCT`, and the row M8.7 is judged by.** Every row
+    // above prices a *stage*; this prices a **drag frame** — the whole chain from the resume point
+    // plus the tail — the whole-buffer way and the region-scoped way, at several region sizes.
+    //
+    // ⚠ A constant nobody can re-measure is a constant nobody can defend. `MIN_GPU_BOX_PX` shipped
+    // low by ~8x and `MAX_TILE_DABS` was sized by a *limit* rather than by the data and measured 5x
+    // slower than the CPU it replaced; both were reasoned about instead of swept.
+    //
+    // ⚠⚠ The margined share is what the gate reads, **not** the visible share. A local's reach is
+    // in full-resolution pixels, so at a native rung a modest viewport margins out a long way —
+    // which is exactly why a share threshold rather than an absolute size.
+    //
+    // Measured on `DSCF6296.RAF`, chain `perspective -> geometry -> noise_reduction -> dehaze`,
+    // dragging `geometry`, frame 3123x2085, best of 3 (⚠ load average 3.6, not a quiet machine):
+    //
+    //   region      margined   scoped    whole-buffer
+    //    10%           2.9%      8.7 ms      200.4 ms   22.9x
+    //    30%          13.8%     34.5        204.8        5.94x
+    //    50%          32.7%     78.6        222.4        2.83x
+    //    60%          45.1%    109.4        213.1        1.95x   <- SCOPE_MAX_AREA_PCT sits here
+    //    70%          59.6%    146.2        218.3        1.49x
+    //    85%          85.0%    203.3        226.7        1.12x
+    //   100%         100.0%    236.6        229.9        0.97x
+    //
+    // ⚠⚠ Parity on the frame alone is at ~100% and that is the **wrong** number to set the gate
+    // from, because the scoped output is never cached — see `SCOPE_MAX_AREA_PCT`'s own doc for the
+    // per-gesture arithmetic that puts the threshold at 50 instead.
+    {
+        use pipeline::{
+            build_pipeline_split_in_region, build_prefix_steps, region_plan, run_region_plan, Rect,
+            Region, RenderScale,
+        };
+        let buffer_long = buf.width().max(buf.height());
+        let sc = RenderScale::new(scale);
+        // The reporter's chain, minus lens correction — no profile is available here, and it is a
+        // gather like the two below it, so the chain's *shape* is the same: gathers then locals.
+        let heavy = Edits {
+            perspective: edit_model::Perspective {
+                vertical: 12.0,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
+            noise_reduction: NoiseReduction {
+                luminance: 50.0,
+                color: 50.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Edits::default()
+        };
+        // ⚠ Without a supplied airlight `DehazeStage` declines a region outright, and the sweep
+        // would silently measure a chain that stops one step short.
+        let airlight = pipeline::prefix_airlight(&heavy, &buf, pipeline::Resampler::Bilinear, None);
+        let steps = build_prefix_steps(
+            &heavy,
+            sc,
+            None,
+            pipeline::Resampler::Bilinear,
+            Some(airlight),
+        );
+        let base = buf.downscale_to(buffer_long);
+
+        // A Straighten drag: everything above `geometry` stays cached, everything from it onward
+        // re-runs. That is the gesture the milestone exists for.
+        let start = steps
+            .iter()
+            .position(|s| s.stage.name() == "geometry")
+            .unwrap_or(0);
+        let mut warm = base.clone();
+        for s in &steps[..start] {
+            warm = s.stage.apply(warm.clone());
+        }
+        let frame = {
+            let (mut w, mut h) = (warm.width(), warm.height());
+            for s in &steps[start..] {
+                let (ow, oh) = s.stage.output_dims(w, h);
+                w = ow;
+                h = oh;
+            }
+            (w, h)
+        };
+        println!(
+            "\n  SCOPED DRAG SWEEP — chain {:?}, dragging `{}`, frame {}x{} ({:.1} Mpx)",
+            steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>(),
+            steps[start].stage.name(),
+            frame.0,
+            frame.1,
+            (frame.0 * frame.1) as f64 / 1e6,
+        );
+
+        for pct in [10usize, 20, 30, 40, 50, 60, 70, 85, 100] {
+            // A viewport-shaped rect centred in the frame, `pct` of each axis.
+            let rw = (frame.0 * pct / 100).max(1);
+            let rh = (frame.1 * pct / 100).max(1);
+            let visible = Rect {
+                x: (frame.0 - rw) / 2,
+                y: (frame.1 - rh) / 2,
+                w: rw,
+                h: rh,
+            };
+            let Some(plan) = region_plan(&steps, start, visible, warm.width(), warm.height())
+            else {
+                println!("      —        {rw}x{rh}: the chain declined a region");
+                continue;
+            };
+            let margined = plan.out_rects[0].w as u64 * plan.out_rects[0].h as u64;
+            let share = margined as f64 * 100.0 / (frame.0 as u64 * frame.1 as u64) as f64;
+
+            let region = Region {
+                full_w: frame.0,
+                full_h: frame.1,
+                x0: visible.x,
+                y0: visible.y,
+            };
+            let (_, tail) = build_pipeline_split_in_region(&heavy, sc, Some(region));
+
+            let mut whole_ms = f64::MAX;
+            for _ in 0..3 {
+                let t = Instant::now();
+                let mut img = warm.clone();
+                for s in &steps[start..] {
+                    img = s.stage.apply(img);
+                }
+                let sub = img.crop(visible.x, visible.y, visible.w, visible.h);
+                std::hint::black_box(tail.run(sub));
+                whole_ms = whole_ms.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+
+            let mut scoped_ms = f64::MAX;
+            for _ in 0..3 {
+                let t = Instant::now();
+                let out = run_region_plan(&steps, start, &warm, &plan).expect("the plan runs");
+                std::hint::black_box(tail.run(out));
+                scoped_ms = scoped_ms.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+
+            println!(
+                "{scoped_ms:8.1} ms   region {rw}x{rh} ({pct}% of each axis), margined {:.1}% of the frame  \
+                 — whole-buffer {whole_ms:8.1} ms, {:.2}x",
+                share,
+                whole_ms / scoped_ms,
+            );
+        }
+    }
+
     // The RGBA8 pack, at both render resolutions. It runs on every frame, including the ones
     // the prefix checkpoints made cheap, so it is measured on its own rather than buried in a
     // whole-frame number.

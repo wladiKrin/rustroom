@@ -893,16 +893,37 @@ pub struct Ran {
     pub region_scoped: bool,
 }
 
-/// The largest share of the frame a margined region may occupy and still be worth scoping, in
+/// The largest share of the frame a **margined** region may occupy and still be worth scoping, in
 /// percent.
 ///
-/// ⚠⚠ **Swept, not chosen.** Two constants in this crate were reasoned about instead and both were
-/// wrong: `MIN_GPU_BOX_PX` started low by ~8x, and `MAX_TILE_DABS` was sized by a *limit* rather
-/// than by the data and measured 5x slower than the CPU it replaced.
+/// ⚠⚠ **Swept, not chosen** — `bench_preview`'s SCOPED DRAG SWEEP, on `DSCF6296.RAF` at a native
+/// rung (3123x2085, 6.5 Mpx), chain `perspective -> geometry -> noise_reduction -> dehaze`,
+/// dragging `geometry`, best of 3. ⚠ Load average 3.6, so **not a quiet machine**.
 ///
-/// ⚠ Above this share the scoped path costs roughly what the whole-buffer path costs **and its
-/// output is deliberately not cached**, so the settle render repeats the work — strictly worse than
-/// not scoping at all.
+/// | region (each axis) | margined share | scoped | whole-buffer | |
+/// |---|---|---|---|---|
+/// | 10% | 2.9% | 8.7 ms | 200.4 ms | 22.9x |
+/// | 30% | 13.8% | 34.5 | 204.8 | 5.94x |
+/// | 50% | 32.7% | 78.6 | 222.4 | 2.83x |
+/// | **60%** | **45.1%** | **109.4** | **213.1** | **1.95x** |
+/// | 70% | 59.6% | 146.2 | 218.3 | 1.49x |
+/// | 85% | 85.0% | 203.3 | 226.7 | 1.12x |
+/// | 100% | 100.0% | 236.6 | 229.9 | **0.97x** |
+///
+/// ⚠⚠ **Parity on the frame alone is at ~100%, and that is the wrong number to set this from**,
+/// because the scoped output is deliberately never cached: a drag of `n` frames costs
+/// `n * scoped + whole` against the whole-buffer path's `n * whole + tail`, so the break-even
+/// tightens as the gesture shortens. At 45.1% a two-frame gesture already wins (432 ms against
+/// 441); at 59.6% it **loses** (511 against 452) and only pays off past about five frames.
+///
+/// 50 sits between those two rows, so the gate refuses exactly the band where a short gesture would
+/// be worse off — the rule that it must fail toward the whole-buffer path, where a wrong answer
+/// costs milliseconds and never pixels. The placeholder value turned out to be the right one; what
+/// changed is that it is now defensible.
+///
+/// ⚠ It is the **margined** share, not the visible one. A local's reach is in full-resolution
+/// pixels, so at a native rung a modest viewport margins out a long way — 50% of each axis becomes
+/// a third of the frame — which is why this is a share rather than an absolute size.
 const SCOPE_MAX_AREA_PCT: u64 = 50;
 
 #[allow(clippy::too_many_arguments)]
