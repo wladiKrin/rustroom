@@ -614,6 +614,16 @@ impl PrefixKey {
         Self::upto(&steps, steps.len(), scale)
     }
 
+    /// How many prefix steps this key covers — checkpoint 0 is the bare downscale, so a key of
+    /// depth `n` is the output of the first `n` steps.
+    ///
+    /// ⚠⚠ **Derived from the key rather than carried beside it.** A cache that stored a depth
+    /// alongside a key would be two facts that can disagree, which is the shape
+    /// `render_max_dim` and `Session::geometry_mode` were each deleted for.
+    pub fn depth(&self) -> usize {
+        self.steps.len()
+    }
+
     /// The key for the checkpoint after the first `n` prefix stages have run.
     ///
     /// `n == 0` is the checkpoint straight after the downscale, before any stage. `n` beyond

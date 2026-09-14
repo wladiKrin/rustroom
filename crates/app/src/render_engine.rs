@@ -343,7 +343,7 @@ impl RenderEngine {
                 );
                 if debug_render {
                     eprintln!(
-                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  bytes {}",
+                        "render: {:6.1} ms  rung {:5}  frame {}x{} ({:.1} Mpx)  region {}  masks {}  prefix_ran {}  scoped {}  bytes {}",
                         t0.elapsed().as_secs_f64() * 1000.0,
                         req.spec.max_dim,
                         frame.width,
@@ -352,6 +352,10 @@ impl RenderEngine {
                         if frame.region.is_some() { "yes" } else { "no " },
                         edits.masks.len(),
                         ran.prefix_stages,
+                        // ⚠ M8.6's observable in the running app. The two paths produce the same
+                        // picture by design, so without this a gate that never fires looks
+                        // exactly like one that does.
+                        if ran.region_scoped { "yes" } else { "no " },
                         if ran.bytes { "yes" } else { "no " },
                     );
                 }
@@ -662,10 +666,22 @@ enum Tier {
 /// had before intermediates existed, and it is preserved unconditionally: a native render must
 /// never be able to evict the fit final to make room for its own intermediates.
 ///
-/// `mids` holds the intermediates under a byte budget. Retention is effectively deepest-first,
-/// and falls out of plain LRU rather than needing its own rule: within one render checkpoints
-/// are inserted shallow to deep, so the deepest is the most recently used and the shallowest is
-/// evicted first. That is the right order — the deeper checkpoint saves more upstream work.
+/// `mids` holds the intermediates under a byte budget, and eviction takes the **deepest** entry.
+///
+/// ⚠⚠ **That is a rule of its own, and plain LRU is exactly backwards for the case that matters.**
+/// This cache used to lean on insertion order — checkpoints go in shallow to deep, so the deepest
+/// is the most recently used and the shallowest is evicted first — and defended it as *"the right
+/// order, the deeper checkpoint saves more upstream work"*. **That reasoning holds for a cold
+/// render and fails for a DRAG**, which is the interaction it is paid for: dragging step `g`
+/// invalidates every checkpoint below it, so next frame the deep entries LRU kept are all stale
+/// and the shallow one it discarded was the only usable resume point.
+///
+/// ⚠⚠ It bit only at full resolution, which is why it survived so long. A checkpoint is ~74 MiB
+/// at rung 3123 and the 512 MB budget holds six, so `MIDS_CAP` bound it and the byte budget never
+/// chose; at rung 6246 one entry is **298 MiB** and the budget holds exactly **one**, so a
+/// five-step prefix evicted its own upstream checkpoints within a single render and every drag
+/// frame restarted from zero — measured at **1730–2223 ms a frame**, re-running lens correction
+/// each time. Ties fall back to least-recently-used, which is what the preview rungs still use.
 ///
 /// Both tiers are most-recently-used first.
 struct PrefixCache {
@@ -759,6 +775,24 @@ impl PrefixCache {
         std::mem::size_of_val(img.data())
     }
 
+    /// The entry it costs least to lose: the **deepest** checkpoint, ties broken toward the least
+    /// recently used.
+    ///
+    /// ⚠⚠ **Deepest rather than oldest, because during a drag the deep entries are the stale
+    /// ones.** Dragging prefix step `g` invalidates every checkpoint below `g`, so the render
+    /// resumes at `g`, then inserts `g+1 .. n` — all of which its own next frame will miss. Plain
+    /// LRU pushes the freshly-read checkpoint `g` to the back and evicts it to make room for
+    /// entries that are already doomed.
+    ///
+    /// ⚠ `max_by_key` returns the LAST maximum, and the tuple makes that explicit: equal depths
+    /// resolve to the larger index, which is further back and therefore least recently used.
+    fn evictable(mids: &[(CacheKey, Arc<ImageBuf>)]) -> Option<usize> {
+        mids.iter()
+            .enumerate()
+            .max_by_key(|(i, (k, _))| (k.0.depth(), *i))
+            .map(|(i, _)| i)
+    }
+
     /// Look in both tiers, promoting a hit to the front of its own tier.
     fn get(&mut self, key: &CacheKey) -> Option<Arc<ImageBuf>> {
         for tier in [&mut self.finals, &mut self.mids] {
@@ -790,8 +824,11 @@ impl PrefixCache {
                 self.mids.truncate(Self::MIDS_CAP);
                 let mut total: usize = self.mids.iter().map(|(_, i)| Self::bytes(i)).sum();
                 while total > self.mid_budget {
-                    match self.mids.pop() {
-                        Some((_, evicted)) => total -= Self::bytes(&evicted),
+                    match Self::evictable(&self.mids) {
+                        Some(i) => {
+                            let (_, evicted) = self.mids.remove(i);
+                            total -= Self::bytes(&evicted);
+                        }
                         None => break,
                     }
                 }
@@ -1095,6 +1132,10 @@ fn render_cached(
     // A missing profile — an unlisted lens, or a JPEG — skips the stage silently, which is the
     // ordinary case and needs no special-casing anywhere else.
     let steps = build_prefix_steps(edits, scale, lens, resampler);
+    // ⚠ Per-step decomposition, env-gated and kept: `RUSTROOM_DEBUG_MASK`'s precedent. A whole-
+    // render figure says a drag is slow; only this says WHICH stage is slow, and reasoning about
+    // that from a sidecar has already been wrong once here.
+    let debug_steps = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
     let key_at = |n: usize| (PrefixKey::upto(&steps, n, scale), max_dim);
     let tier_at = |n: usize| {
         if n == steps.len() {
@@ -1184,7 +1225,15 @@ fn render_cached(
         // `PipelineStage::apply` consumes its input — the ownership that keeps the future GPU seam
         // clean — so each step that runs clones the checkpoint it starts from. Measured at 0.5 ms
         // (fit) and 2.1 ms (native) against the 13–117 ms each avoided stage costs.
+        if debug_steps {
+            eprintln!(
+                "  prefix: {:?}  resuming at {start} of {}",
+                steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>(),
+                steps.len()
+            );
+        }
         for (i, step) in steps.iter().enumerate().skip(start) {
+            let t_step = std::time::Instant::now();
             // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
             // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
             // after geometry and noise reduction — so substituting up front would estimate it from
@@ -1214,6 +1263,16 @@ fn render_cached(
                 }
                 None => step.stage.apply((*img).clone()),
             });
+            if debug_steps {
+                eprintln!(
+                    "    [{i}] {:>16} {:8.1} ms   -> {}x{} ({:.1} Mpx)",
+                    step.stage.name(),
+                    t_step.elapsed().as_secs_f64() * 1000.0,
+                    img.width(),
+                    img.height(),
+                    (img.width() * img.height()) as f64 / 1e6,
+                );
+            }
             cache.insert(key_at(i + 1), img.clone(), tier_at(i + 1));
         }
         let ran = steps.len() - start;
@@ -2408,16 +2467,93 @@ mod tests {
         cache.insert(fake_key(2), dummy(4, 0.3), Tier::Mid);
 
         assert_eq!(cache.mid_len(), 2, "the budget must bound the mids tier");
-        // Insertion order within one render is shallow -> deep, so the most recent insert is
-        // the deepest checkpoint. Evicting the LRU is therefore evicting the shallowest.
-        assert!(
-            cache.get(&fake_key(2)).is_some(),
-            "the deepest must survive"
-        );
+        // ⚠⚠ This tests the **tie-break**, not depth, and its comment used to claim otherwise:
+        // *"insertion order within one render is shallow -> deep, so the most recent insert is the
+        // deepest checkpoint; evicting the LRU is therefore evicting the shallowest."* `fake_key`
+        // varies only the `max_dim` tag, so all three keys have the SAME depth — the fixture could
+        // never exercise the story the comment told. Eviction is deepest-first now, and equal
+        // depths still resolve to least-recently-used, which is what these three are.
+        assert!(cache.get(&fake_key(2)).is_some(), "the newest survives");
         assert!(cache.get(&fake_key(1)).is_some());
         assert!(
             cache.get(&fake_key(0)).is_none(),
-            "the shallowest goes first"
+            "at equal depth the least recently used goes first"
+        );
+    }
+
+    /// ⚠⚠ **The bug, as a unit test.** A drag resumes at the checkpoint *before* the stage it
+    /// moves, and plain LRU evicted exactly that one: the render reads it, which promotes it to
+    /// the front, and then its own later inserts push it to the back and out. At full resolution
+    /// the budget holds a single 298 MiB checkpoint, so this happened on every frame.
+    #[test]
+    fn a_full_mid_tier_evicts_the_deepest_checkpoint_not_the_shallowest() {
+        let e = full_prefix();
+        let steps = pipeline::build_prefix_steps(
+            &e,
+            RenderScale::FULL,
+            None,
+            pipeline::Resampler::Bilinear,
+        );
+        assert!(
+            steps.len() >= 3,
+            "fixture check: a multi-step prefix is the whole point, got {}",
+            steps.len()
+        );
+        let key = |n| (PrefixKey::upto(&steps, n, RenderScale::FULL), 0usize);
+        // Each dummy is 4*4*3*4 = 192 bytes; a budget of 200 holds exactly one, which is the
+        // full-resolution situation in miniature.
+        let mut cache = PrefixCache::with_mid_budget(200);
+        cache.insert(key(1), dummy(4, 0.1), Tier::Mid);
+        cache.insert(key(2), dummy(4, 0.2), Tier::Mid);
+        cache.insert(key(3), dummy(4, 0.3), Tier::Mid);
+
+        assert_eq!(
+            cache.mid_len(),
+            1,
+            "fixture check: the budget must hold exactly one"
+        );
+        assert!(
+            cache.get(&key(1)).is_some(),
+            "the shallowest must survive — it is the one a drag can still resume from"
+        );
+        assert!(cache.get(&key(2)).is_none());
+        assert!(cache.get(&key(3)).is_none());
+    }
+
+    /// ⚠⚠ **The symptom it was found as**: at a native rung every frame of a prefix drag restarted
+    /// from zero, re-running lens correction each time — measured in the running app at
+    /// **1730–2223 ms a frame** with `prefix_ran 5` on every one.
+    #[test]
+    fn a_prefix_drag_resumes_when_the_budget_holds_one_checkpoint() {
+        let buf = varied_sized(16);
+        // 16*16*3*4 = 3072 bytes a checkpoint, so 4000 holds exactly one — 298 MiB against a
+        // 512 MB budget, in miniature.
+        let mut cache = PrefixCache::with_mid_budget(4000);
+        let mut bc = BrushCache::default();
+        let base = full_prefix();
+        let (_, cold) = render_with(&buf, &base, FrameSpec::fit(16), &mut cache, &mut bc);
+        assert_eq!(
+            cold.prefix_stages, 3,
+            "fixture check: a cold render runs the whole prefix"
+        );
+
+        // ⚠ Drag NOISE REDUCTION rather than geometry: geometry is the FIRST prefix step in this
+        // fixture, so moving it invalidates every checkpoint and there is nothing to resume from
+        // whatever the policy. The bug is about a drag that HAS valid upstream work — which is
+        // every real one, since lens correction is on by default and runs first.
+        let dragged = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 61.0,
+                color: 60.0,
+                ..Default::default()
+            },
+            ..base.clone()
+        };
+        let (_, ran) = render_with(&buf, &dragged, FrameSpec::fit(16), &mut cache, &mut bc);
+        assert!(
+            ran.prefix_stages < 3,
+            "the drag must resume at the checkpoint before noise reduction rather than restart, ran {}",
+            ran.prefix_stages
         );
     }
 
