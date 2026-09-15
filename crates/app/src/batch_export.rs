@@ -599,33 +599,53 @@ impl ExportWorker {
     }
 }
 
+/// One photo, with its destination already settled.
+///
+/// ⚠⚠ **Everything that needs a decision is resolved before this exists**, which is what lets an
+/// export run several photos at once: the phase that decodes has no dialogs in it, no `claimed`
+/// set, and no shared mutable naming state — only work.
+struct Planned {
+    source: PathBuf,
+    dest: PathBuf,
+    edits: Edits,
+    meta: export::FileMetadata,
+}
+
+/// Settle every filename and every collision, without decoding anything.
+///
+/// ⚠⚠ **Up front rather than as the run goes, and that is a deliberate change in what the person
+/// exporting sees** (user's call, 2026-09-15). The old loop **blocked** on a decision mid-run — it
+/// asked about photo 3 while 4–20 waited — which concurrently is a stall behind one dialog and a
+/// state that has to be reasoned about per photo. Settled first, the prompts all arrive before
+/// anything starts: answer once, or once with *apply to all*, and walk away.
+///
+/// ⚠ Affordable because it is a `stat` per photo — milliseconds for a hundred — where a decode is
+/// seconds.
+///
+/// ⚠⚠ **`claimed` records a name when it is PLANNED, not when it is written.** The old loop
+/// inserted after a successful export, so a photo whose export *failed* left its name free for a
+/// later one to take. Reserving at plan time is the only reading that works with several photos in
+/// flight, and it is also the one under which two photos can never race for one name.
+///
+/// `None` means the event channel is gone — the app is going away, so stop rather than spin, and
+/// do not bother sending a report nobody will read.
 #[allow(clippy::too_many_arguments)]
-fn run(
+fn plan(
     jobs: Vec<ExportJob>,
-    opts: ExportOptions,
-    decode: impl Fn(&Path) -> Result<ExportSource, String>,
-    events: Sender<ExportEvent>,
-    decisions: Receiver<Decision>,
-    cancel: Arc<AtomicBool>,
-    render: ExportRender,
-) {
-    let total = jobs.len();
-    let mut report = ExportReport::default();
+    opts: &ExportOptions,
+    template: &Template,
+    events: &Sender<ExportEvent>,
+    decisions: &Receiver<Decision>,
+    cancel: &AtomicBool,
+    report: &mut ExportReport,
+) -> Option<Vec<Planned>> {
     // Names produced during this run. ⚠ Without this, two sources sharing a stem
     // (`a.RAF`, `a.jpg`) would silently overwrite each other in an empty folder.
     let mut claimed: HashSet<PathBuf> = HashSet::new();
     let mut remembered: Option<Collision> = None;
-    // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
-    // the default rather than failing the run: the dialog refuses to start an export with an
-    // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
-    // the old way beats no folder at all.
-    let template = Template::parse(&opts.filename_template).unwrap_or_default();
+    let mut out: Vec<Planned> = Vec::new();
 
-    if events.send(ExportEvent::Started { total }).is_err() {
-        return;
-    }
-
-    for (done, job) in jobs.into_iter().enumerate() {
+    for (seq, job) in jobs.into_iter().enumerate() {
         // ⚠ Resolved per job, before the loop takes the job apart: the preset's defaults under
         // this photo's own words, cut to the scope. `export_one` then only embeds.
         let meta = export::FileMetadata::resolve(&opts.metadata, file_metadata(&job));
@@ -653,7 +673,7 @@ fn run(
                 .unwrap_or("export"),
             copy: id.copy,
             copy_label: name.as_deref(),
-            seq: done + 1,
+            seq: seq + 1,
             taken: capture.taken,
             camera: capture.camera.as_deref(),
         });
@@ -662,12 +682,9 @@ fn run(
             let collision = match remembered {
                 Some(c) => c,
                 None => {
-                    if events
+                    events
                         .send(ExportEvent::Collision { dest: dest.clone() })
-                        .is_err()
-                    {
-                        return;
-                    }
+                        .ok()?;
                     // Blocks until the UI answers. A disconnected channel means the app is
                     // going away, so stop rather than spin.
                     match decisions.recv() {
@@ -689,12 +706,11 @@ fn run(
             };
             match collision {
                 Collision::Skip => {
+                    // ⚠ A skipped photo is dropped here and never reaches the export, so it is
+                    // absent from `total` as well. It is reported by `report.skipped`, which the
+                    // dialog already shows — counting it in the progress line would mean counting
+                    // a photo that was never exported.
                     report.skipped += 1;
-                    let _ = events.send(ExportEvent::Item {
-                        done: done + 1,
-                        total,
-                        name: file_label(&source),
-                    });
                     continue;
                 }
                 Collision::Overwrite => {}
@@ -714,13 +730,59 @@ fn run(
             }
         }
 
-        let _ = events.send(ExportEvent::Item {
-            done: done + 1,
-            total,
-            name: file_label(&source),
+        claimed.insert(dest.clone());
+        out.push(Planned {
+            source,
+            dest,
+            edits,
+            meta,
         });
+    }
+    Some(out)
+}
 
-        let decoded = decode(&source);
+#[allow(clippy::too_many_arguments)]
+fn run(
+    jobs: Vec<ExportJob>,
+    opts: ExportOptions,
+    decode: impl Fn(&Path) -> Result<ExportSource, String>,
+    events: Sender<ExportEvent>,
+    decisions: Receiver<Decision>,
+    cancel: Arc<AtomicBool>,
+    render: ExportRender,
+) {
+    let mut report = ExportReport::default();
+    // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
+    // the default rather than failing the run: the dialog refuses to start an export with an
+    // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
+    // the old way beats no folder at all.
+    let template = Template::parse(&opts.filename_template).unwrap_or_default();
+
+    let Some(planned) = plan(
+        jobs,
+        &opts,
+        &template,
+        &events,
+        &decisions,
+        &cancel,
+        &mut report,
+    ) else {
+        return;
+    };
+
+    // ⚠ The **planned** count, after skips — see `plan`'s note on why a skipped photo is not in it.
+    let total = planned.len();
+    if events.send(ExportEvent::Started { total }).is_err() {
+        return;
+    }
+
+    for (done, p) in planned.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            break;
+        }
+
+        let decoded = decode(&p.source);
 
         // ⚠ Checked *again* after the decode, which is the slow part. Cancelling during a
         // ~11 s decode must not still write that photo out: libraw cannot be interrupted, so
@@ -731,13 +793,19 @@ fn run(
             break;
         }
 
-        match decoded.and_then(|src| export_one(src, &edits, &dest, &opts, render, &meta)) {
-            Ok(()) => {
-                report.exported += 1;
-                claimed.insert(dest);
-            }
-            Err(e) => report.failed.push((source, e)),
+        match decoded.and_then(|src| export_one(src, &p.edits, &p.dest, &opts, render, &p.meta)) {
+            Ok(()) => report.exported += 1,
+            Err(e) => report.failed.push((p.source.clone(), e)),
         }
+
+        // ⚠⚠ Sent on **completion**, and `done` counts completions rather than positions. With
+        // several photos in flight the fourth can land before the second, so a position would
+        // jump about where a count only ever rises.
+        let _ = events.send(ExportEvent::Item {
+            done: done + 1,
+            total,
+            name: file_label(&p.source),
+        });
     }
 
     let _ = events.send(ExportEvent::Finished(report));
@@ -1492,6 +1560,66 @@ mod tests {
             .filter(|e| matches!(e, ExportEvent::Item { .. }))
             .count();
         assert_eq!(items, 2, "each photo reports progress exactly once");
+    }
+
+    /// ⚠⚠ **THE PROPERTY THE WHOLE PARALLEL PHASE RESTS ON.** A decision that leaked into the
+    /// export phase would mean a worker blocking on a dialog while its neighbours ran — the stall
+    /// the up-front resolution exists to remove, and a state nothing else here could see.
+    ///
+    /// ⚠ **Both collisions, because one alone passes against "resolved one photo ahead".** A loop
+    /// that merely moved the prompt before *its own* decode would raise the first collision with
+    /// nothing decoded and then decode photo 1 before asking about photo 2.
+    ///
+    /// ⚠⚠ **Recorded honestly: today this property is STRUCTURAL rather than guarded** — `plan`
+    /// returns before `run` decodes anything, so there is no cheap sabotage that can break the
+    /// ordering without rebuilding the old interleaved loop wholesale. What this test is for is
+    /// the *future* regression: someone folding the decode back into the planning loop to "save a
+    /// pass". It would fail immediately, and nothing else would.
+    #[test]
+    fn no_photo_is_decoded_before_every_collision_is_answered() {
+        let d = TempDir::new("plan_first");
+        // Both destinations already exist, so both collide.
+        std::fs::write(d.0.join("a.jpg"), b"x").unwrap();
+        std::fs::write(d.0.join("b.jpg"), b"x").unwrap();
+        let decoded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = decoded.clone();
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            opts(&d, None),
+            move |_: &Path| {
+                seen.fetch_add(1, Ordering::Relaxed);
+                Ok(source(flat(8, 4)))
+            },
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+        );
+        let mut collisions = 0;
+        let mut report = ExportReport::default();
+        while let Ok(ev) = worker.events().recv() {
+            match ev {
+                ExportEvent::Collision { .. } => {
+                    collisions += 1;
+                    assert_eq!(
+                        decoded.load(Ordering::Relaxed),
+                        0,
+                        "collision {collisions} was raised after {} decodes — a decision reached \
+                         the export phase",
+                        decoded.load(Ordering::Relaxed)
+                    );
+                    worker.decide(Decision::Resolve {
+                        collision: Collision::Overwrite,
+                        apply_to_all: false,
+                    });
+                }
+                ExportEvent::Finished(r) => {
+                    report = r;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(collisions, 2, "fixture check: both photos must collide");
+        assert_eq!(report.exported, 2);
     }
 
     #[test]
