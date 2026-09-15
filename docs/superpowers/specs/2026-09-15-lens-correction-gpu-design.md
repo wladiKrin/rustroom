@@ -93,6 +93,11 @@ interpolates bilinearly between grid points. `probe_lens`'s sweep, on a 6246×41
 
 **2.74 MiB against 695 MiB — 0.9% of the 298 MiB image.**
 
+⚠⚠ **CORRECTED IN PLACE AFTER THE SWEEP: the step ships at 8, not 16.** See §3.6 — the measurement
+that decides it is *output levels per pixel of lattice error*, and it came out at **~1000, where this
+spec estimated ~250**. Step 8 is 10.9 MiB and 2.6 ms, still noise against a 298 MiB image and a
+650 ms stage, and four times more accurate.
+
 ⚠ **And a second, unlooked-for win: building the grid at step 16 costs 1.4 ms against the full
 field's 38.3**, because it calls `fill_row` only every 16th row.
 
@@ -137,15 +142,37 @@ barrier M8.3b established by measurement.
 
 The grid and the LUT remain ordinary uploaded buffers.
 
-### 3.6 ⚠⚠ The grid step is SWEPT against OUTPUT 8-BIT LEVELS, never field pixel error
+### 3.6 ⚠⚠ The grid step is SWEPT against OUTPUT 8-BIT LEVELS — and the sweep moved it
 
-0.0027 px of source error on a hard edge is roughly **0.7 of a level**; 0.0348 px would be ~9.
-Candidates 8 / 16 / 32, measured through the real stage against the CPU's own output, and the
-recommendation is **16**.
+**Recommended 16; measured, and it ships at 8.** The sweep, Catmull-Rom on a 200×160 hard grid chart
+with a synthetic `b = -0.05`, each step's lattice error taken from `lens_grid`'s own sweep:
+
+| step | lattice error | worst output levels |
+|---|---|---|
+| 1 | exact at every pixel | **0.00009** |
+| 2 | 0.0017 px | 2.57 |
+| 4 | 0.0069 px | 7.68 |
+| **8** | **0.028 px** | **28.4** |
+| 16 | 0.111 px | 94.7 |
+| 32 | 0.459 px | 221.0 |
+
+⚠⚠ **That is about 1000 output levels per pixel of lattice error, where this spec estimated ~250.**
+A hard 0.1/0.9 edge resampled through a kernel that overshoots produces gradients far steeper than
+the 156 levels/px an edge naively suggests. Carried to the real XF16-80 — 0.0007 px at step 8 against
+0.0027 at step 16 — that is roughly **0.7 levels against 2.7**, on a chart far harsher than any
+photograph.
+
+⚠ Step 8 costs **10.9 MiB and 2.6 ms** against step 16's 2.74 MiB and 1.4 ms. Both are noise against
+a 298 MiB image and a 650 ms stage, so there is nothing to trade.
+
+⚠⚠ **And the step-1 row is the milestone's sharpest measurement: with the lattice exact, the shader
+agrees with the CPU to 0.00009 of a level, on all four kernels.** So everything above that row is
+interpolation and none of it is the shader — which is what separates the two questions and is why
+the equivalence tests run at step 1 while the lattice gets a sweep of its own.
 
 ⚠ This is deliberate, and the reason is recorded twice already in this file: `MIN_GPU_BOX_PX` was low
 by ~8× and `MAX_TILE_DABS` sat past an 8.7× occupancy cliff — **both were reasoned about instead of
-swept.**
+swept.** This is the third, and the sweep disagreed with the reasoning again.
 
 ### 3.7 Device limits
 
@@ -197,7 +224,11 @@ plan 2 worth landing on its own merits even if plan 1 slipped.
 1. **The scoped preview path stays on the CPU by design.** `render_engine.rs:1188` says so: the
    seam's twins run whole-buffer, so a scoped chain is the CPU's. The preview gains only on
    **unscoped** renders — the fit rung, the warm-behind, and cold entries the area gate refuses.
-2. **Not bit-identical.** FMA contraction, subnormal flush-to-zero, and now the grid.
+2. **Not bit-identical, and this is the least bit-faithful GPU stage in the crate.** Per-pixel
+   stages agree to about a hundredth of a level; with the lattice exact this one does too
+   (0.00009), but at the shipped step 8 a real lens costs roughly **0.7 of a level** on a hard
+   edge — FMA contraction and subnormal flush-to-zero on top. A resampler interpolating a field is
+   inherently a different bargain from a per-pixel multiply, and it is stated rather than glossed.
 3. **298 MiB in, 298 MiB out** at 26 Mpx, degraded to the CPU rather than to a dead worker.
 4. **`gpu_tail` now governs three things under a name that says "tail".**
 5. **`gpu_tail` is still off by default**, so nobody gets a rendering change they did not ask for.
