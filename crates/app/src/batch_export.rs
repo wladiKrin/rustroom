@@ -561,15 +561,30 @@ impl ExportWorker {
     pub fn spawn(
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
-        decode: impl Fn(&Path) -> Result<ExportSource, String> + Send + 'static,
+        // ⚠ `+ Sync` because the workers share one closure across threads. The production
+        // closure captures a `Demosaic` (`Copy`) and an `Option<PathBuf>` it clones per call, so
+        // it already is — this narrows the bound rather than forcing a change.
+        decode: impl Fn(&Path) -> Result<ExportSource, String> + Send + Sync + 'static,
         cancel: Arc<AtomicBool>,
         render: ExportRender,
+        // ⚠ From `Settings::export_width`, already repaired — see its doc for why the ceiling is
+        // the core count and why this is a setting rather than a constant.
+        width: usize,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
         let flag = cancel.clone();
         std::thread::spawn(move || {
-            run(jobs, opts, decode, event_tx, decision_rx, flag, render);
+            run(
+                jobs,
+                opts,
+                decode,
+                event_tx,
+                decision_rx,
+                flag,
+                render,
+                width,
+            );
         });
         Self {
             events,
@@ -745,11 +760,12 @@ fn plan(
 fn run(
     jobs: Vec<ExportJob>,
     opts: ExportOptions,
-    decode: impl Fn(&Path) -> Result<ExportSource, String>,
+    decode: impl Fn(&Path) -> Result<ExportSource, String> + Sync,
     events: Sender<ExportEvent>,
     decisions: Receiver<Decision>,
     cancel: Arc<AtomicBool>,
     render: ExportRender,
+    width: usize,
 ) {
     let mut report = ExportReport::default();
     // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
@@ -776,37 +792,82 @@ fn run(
         return;
     }
 
-    for (done, p) in planned.iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            report.cancelled = true;
-            break;
+    // ⚠⚠ **A shared cursor rather than static chunks**, `ThumbLoader`'s rule and for its reason: a
+    // selection mixes RAW and JPEG whose decode costs differ by an order of magnitude, so chunking
+    // would leave workers idle on the tail.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let finished = std::sync::atomic::AtomicUsize::new(0);
+    let shared = std::sync::Mutex::new(report);
+
+    // ⚠⚠ **Each worker does a WHOLE photo — decode, render, write — rather than a pool of decoders
+    // feeding one renderer.** The render is ~8% of a photo (0.6 s against a 7.7 s decode), so
+    // handing it over would buy that 8% and cost a channel, a buffer and a second place for a
+    // 298 MiB image to be alive. The honest consequence is that **peak memory is `width` whole
+    // photos**, which is exactly what the setting exists to bound.
+    //
+    // ⚠ `thread::scope` rather than detached threads: the workers borrow `planned`, `opts` and
+    // `decode`, and the scope is what makes that sound without an `Arc` around each.
+    std::thread::scope(|s| {
+        for _ in 0..width.max(1) {
+            // ⚠ A clone per worker rather than sharing one `Sender`: `mpsc::Sender` is `Clone` by
+            // design for exactly this, and it needs no assumption about its `Sync`ness.
+            let events = events.clone();
+            let next = &next;
+            let finished = &finished;
+            let shared = &shared;
+            let decode = &decode;
+            let planned = &planned;
+            let opts = &opts;
+            let cancel = &cancel;
+            s.spawn(move || loop {
+                if cancel.load(Ordering::Relaxed) {
+                    shared.lock().expect("export report").cancelled = true;
+                    return;
+                }
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(p) = planned.get(i) else { return };
+
+                let decoded = decode(&p.source);
+
+                // ⚠ Checked *again* after the decode, which is the slow part. Cancelling during a
+                // ~11 s decode must not still write that photo out: libraw cannot be interrupted,
+                // so the decode finishes, but its result is discarded here.
+                //
+                // ⚠⚠ **With several in flight this now abandons up to `width` decodes rather than
+                // one** — up to ~30 s of background CPU on a four-wide run, spent and discarded.
+                // Inherent, and the same "abandon, don't abort" trade the sequential version
+                // already made for one.
+                if cancel.load(Ordering::Relaxed) {
+                    shared.lock().expect("export report").cancelled = true;
+                    return;
+                }
+
+                let outcome = decoded
+                    .and_then(|src| export_one(src, &p.edits, &p.dest, opts, render, &p.meta));
+                {
+                    // ⚠ `failed` is now in **completion** order, which is nondeterministic. Any
+                    // test comparing it must sort or compare as a set.
+                    let mut r = shared.lock().expect("export report");
+                    match outcome {
+                        Ok(()) => r.exported += 1,
+                        Err(e) => r.failed.push((p.source.clone(), e)),
+                    }
+                }
+
+                // ⚠⚠ Sent on **completion**, and `done` counts completions rather than positions.
+                // With several in flight the fourth photo can land before the second, so a
+                // position would jump about where a count only ever rises. It is out of order by
+                // **name**, and honestly so.
+                let done = finished.fetch_add(1, Ordering::Relaxed) + 1;
+                let _ = events.send(ExportEvent::Item {
+                    done,
+                    total,
+                    name: file_label(&p.source),
+                });
+            });
         }
-
-        let decoded = decode(&p.source);
-
-        // ⚠ Checked *again* after the decode, which is the slow part. Cancelling during a
-        // ~11 s decode must not still write that photo out: libraw cannot be interrupted, so
-        // the decode finishes, but its result is discarded here. Without this the file the
-        // user cancelled would appear anyway.
-        if cancel.load(Ordering::Relaxed) {
-            report.cancelled = true;
-            break;
-        }
-
-        match decoded.and_then(|src| export_one(src, &p.edits, &p.dest, &opts, render, &p.meta)) {
-            Ok(()) => report.exported += 1,
-            Err(e) => report.failed.push((p.source.clone(), e)),
-        }
-
-        // ⚠⚠ Sent on **completion**, and `done` counts completions rather than positions. With
-        // several photos in flight the fourth can land before the second, so a position would
-        // jump about where a count only ever rises.
-        let _ = events.send(ExportEvent::Item {
-            done: done + 1,
-            total,
-            name: file_label(&p.source),
-        });
-    }
+    });
+    let report = shared.into_inner().expect("export report");
 
     let _ = events.send(ExportEvent::Finished(report));
 }
@@ -1309,9 +1370,12 @@ mod tests {
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
         answer: Vec<Decision>,
-        decode: impl Fn(&Path) -> Result<ExportSource, String> + Send + 'static,
+        decode: impl Fn(&Path) -> Result<ExportSource, String> + Send + Sync + 'static,
     ) -> (ExportReport, Vec<ExportEvent>) {
-        let worker = ExportWorker::spawn(jobs, opts, decode, Arc::new(AtomicBool::new(false)), CPU);
+        // ⚠ Width 1 by default here, so every pre-existing test keeps its exact meaning; the
+        // carrier below drives the wide path explicitly.
+        let worker =
+            ExportWorker::spawn(jobs, opts, decode, Arc::new(AtomicBool::new(false)), CPU, 1);
         let mut answers = answer.into_iter();
         let mut events = Vec::new();
         let mut report = ExportReport::default();
@@ -1575,6 +1639,74 @@ mod tests {
     /// ordering without rebuilding the old interleaved loop wholesale. What this test is for is
     /// the *future* regression: someone folding the decode back into the planning loop to "save a
     /// pass". It would fail immediately, and nothing else would.
+    /// ⚠⚠ **THE CARRIER, and it needs BOTH halves.** A wide run and a sequential one produce the
+    /// same files **by design**, so "the output is right" passes with the concurrency deleted; and
+    /// "it ran concurrently" passes against a run that wrote the wrong files. Only the pair says
+    /// the feature is there *and* correct — the W5 failure mode, where creative LUTs shipped fully
+    /// tested and 100% non-functional.
+    ///
+    /// ⚠⚠ **Concurrency is asserted as PEAK SIMULTANEOUS DECODES, never by wall clock** —
+    /// `ThumbLoader`'s rule and for its reason: a timing assertion is a CI flake, and this project
+    /// has three on record. The count lives in the **injected decode fn**, so no production
+    /// observable is needed at all.
+    #[test]
+    fn a_wide_export_decodes_several_at_once_and_writes_the_same_files() {
+        let names = |dir: &TempDir| {
+            let mut v: Vec<String> = std::fs::read_dir(&dir.0)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let run_at = |width: usize, dir: &TempDir| -> usize {
+            let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (l, p) = (live.clone(), peak.clone());
+            let worker = ExportWorker::spawn(
+                jobs(
+                    dir,
+                    &[
+                        "p0.RAF", "p1.RAF", "p2.RAF", "p3.RAF", "p4.RAF", "p5.RAF", "p6.RAF",
+                        "p7.RAF",
+                    ],
+                ),
+                opts(dir, None),
+                move |_: &Path| {
+                    let n = l.fetch_add(1, Ordering::Relaxed) + 1;
+                    p.fetch_max(n, Ordering::Relaxed);
+                    // ⚠ Long enough that the workers genuinely overlap, short enough that the test
+                    // is not a sleep. **The assertion is on the peak, never on elapsed time.**
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                    l.fetch_sub(1, Ordering::Relaxed);
+                    Ok(source(flat(8, 4)))
+                },
+                Arc::new(AtomicBool::new(false)),
+                CPU,
+                width,
+            );
+            let report = finished(&worker);
+            assert_eq!(
+                report.exported, 8,
+                "width {width} exported {}",
+                report.exported
+            );
+            peak.load(Ordering::Relaxed)
+        };
+        let one = TempDir::new("wide_one");
+        let four = TempDir::new("wide_four");
+        assert_eq!(run_at(1, &one), 1, "width 1 must never overlap");
+        assert!(
+            run_at(4, &four) > 1,
+            "width 4 must decode more than one photo at a time"
+        );
+        assert_eq!(
+            names(&one),
+            names(&four),
+            "the two widths must write the same files"
+        );
+    }
+
     #[test]
     fn no_photo_is_decoded_before_every_collision_is_answered() {
         let d = TempDir::new("plan_first");
@@ -1592,6 +1724,7 @@ mod tests {
             },
             Arc::new(AtomicBool::new(false)),
             CPU,
+            1,
         );
         let mut collisions = 0;
         let mut report = ExportReport::default();
@@ -1838,6 +1971,7 @@ mod tests {
             ok_decode(),
             Arc::new(AtomicBool::new(true)),
             CPU,
+            1,
         );
         let report = finished(&worker);
         assert!(report.cancelled);
@@ -1857,16 +1991,22 @@ mod tests {
         let d = TempDir::new("cancel_api");
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+        // ⚠ Behind a `Mutex` because the decode fn is now **shared across workers** and so must be
+        // `Sync`, which `mpsc::Receiver` is not. At width 1 nothing contends; the lock is what
+        // makes the handshake expressible under the wider bound rather than a synchronisation the
+        // test needs.
+        let resume_rx = std::sync::Mutex::new(resume_rx);
         let worker = ExportWorker::spawn(
             jobs(&d, &["a.RAF", "b.RAF"]),
             opts(&d, None),
             move |_: &Path| {
                 let _ = started_tx.send(());
-                let _ = resume_rx.recv();
+                let _ = resume_rx.lock().expect("resume").recv();
                 Ok(source(flat(8, 4)))
             },
             Arc::new(AtomicBool::new(false)),
             CPU,
+            1,
         );
 
         started_rx.recv().expect("worker never reached a decode");
@@ -1906,6 +2046,7 @@ mod tests {
             },
             flag,
             CPU,
+            1,
         );
 
         let mut report = ExportReport::default();

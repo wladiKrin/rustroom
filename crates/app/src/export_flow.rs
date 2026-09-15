@@ -126,6 +126,10 @@ impl RustroomApp {
                 resampler: self.settings.resampler,
                 gpu_tail: self.settings.gpu_tail,
             },
+            // ⚠ Read afresh when the run begins, and already repaired — a hand-edited 0 becomes 1
+            // rather than spawning nothing, and a 64 becomes the core count rather than asking for
+            // nineteen gigabytes of decode buffers.
+            self.settings.export_width(),
         ));
     }
 
