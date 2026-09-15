@@ -184,20 +184,28 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             });
             theme::hint(
                 ui,
-                // ⚠⚠ **Deliberately does NOT enumerate the ported stages.** It named three of
-                // them, which stopped being true at M8.3e when the per-pixel tail took the count
-                // to seven, and the "does not apply inside a mask" clause stopped being true at
-                // M8.3j. A hint that lists a growing set is a hint that goes silently wrong —
-                // the "Reset crop" hover text and the "Lens scale" label were each corrected for
-                // exactly this, and `EDIT_GROUP_NAMES` is derived rather than written out for the
-                // same reason. Describe the rule, not the membership.
-                "Runs the per-pixel develop stages on the graphics card, inside a mask \
-             as well as outside one. Off by default: the CPU is the reference, and the \
-             two agree to about a hundredth of an 8-bit level, so the picture should \
-             not change. ⚠ A stage is only moved across when the work saved is worth \
-             the transfer, so a lightly edited photograph deliberately stays on the \
-             CPU. The first render after switching it on spends about a sixth of a \
-             second compiling shaders.",
+                // ⚠⚠ **Deliberately does NOT enumerate what it reaches, and it has been corrected
+                // for exactly that THREE times now.** It named three ported stages, which stopped
+                // being true at M8.3e when the per-pixel tail took the count to seven; its "does
+                // not apply inside a mask" clause stopped being true at M8.3j; and at M8.9 "the
+                // per-pixel develop stages" stopped being true twice over — lens correction is a
+                // **resampler**, not a per-pixel stage, and the setting now reaches an **export**
+                // as well as the preview. A hint that lists a growing set is a hint that goes
+                // silently wrong: the "Reset crop" hover text and the "Lens scale" label were each
+                // corrected for this, and `EDIT_GROUP_NAMES` is derived rather than written out for
+                // the same reason. **Describe the rule, not the membership** — and nothing added to
+                // the seam or to `REPLACEABLE` should require editing this string.
+                //
+                // ⚠ It also carries the naming hazard the setting itself cannot: `gpu_tail` is
+                // named for the tail and decides three things. The text says "where it pays",
+                // which is true of all three and stays true of a fourth.
+                "Runs develop work on the graphics card wherever it pays — while you \
+             edit and while you export, inside a mask as well as outside one. Off by \
+             default: the CPU is the reference, and the picture should not change. \
+             ⚠ Work is only moved across when what it saves is worth the transfer, so \
+             a lightly edited photograph deliberately stays on the CPU. The first \
+             render after switching it on spends about a sixth of a second compiling \
+             shaders.",
             );
 
             ui.separator();
