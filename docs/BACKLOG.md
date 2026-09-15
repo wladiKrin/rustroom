@@ -424,6 +424,33 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### A GPU-side mask coverage cache — worth re-measuring once M8.11 is in use (recorded 2026-09-15, at M8.11 — user's call)
+
+**What it is.** M8.11 puts a mask's coverage and blend on the GPU but **keeps the existing CPU-side
+coverage cache**, so a cache hit *uploads* the stored `CoverageMap` and a miss rasterises on the GPU
+and *downloads* once to deposit. Keeping the plane resident between frames instead would remove both
+transfers.
+
+**What it is worth, as far as is currently known.** At rung 3200 a coverage plane is **6.5 MB as
+`u8`**, which M8.3g's decomposition puts at **~2 ms**. So the ceiling is ~2 ms per transfer, against
+a **31.8–43.5 ms** GPU rasterise (M8.3k) that the cache already avoids. ⚠ That is a *ceiling from an
+adjacent measurement*, not a measurement of this — and composing component measurements has missed in
+this crate **five times** now (M8.3g by ~2×, M8.3f by 8× in attribution, M8.3o by ~18%, M8.10 by
+~12%). **Measure it before scoping it.**
+
+**⚠ Why it was NOT folded into M8.11.** It is a caching question, and folding one into a porting
+milestone is how this project's two worst cache bugs happened — the prefix cache evicting the
+checkpoint a drag resumes from, and the mask tint caching a *screen rect* so a hit survived a pan.
+Both were invisible in a still frame and both shipped.
+
+**⚠ What it needs, so nobody picks it up as a small job.** `GpuCache`'s stated rule is *outlive the
+render*, and this cache's rule is the opposite of `PrefixCache`'s about regions — so the two
+existing caching rules in this crate disagree deliberately and a third must say which it follows. It
+also needs the deposit/lookup seam, which today lives in `render_engine` and keys on
+`MaskCoverageKey`, to reach into the GPU context — which is precisely the coupling M8.3l's
+`SharedPlane` was shaped to avoid. ⚠⚠ And the failure mode is the dangerous one: a stale coverage
+plane renders a **plausible photograph with the wrong mask**, not an error.
+
 ### ⚠⚠ The dehaze airlight estimator is UNSTABLE UNDER GEOMETRY, and it always has been (recorded 2026-09-14, at M8.7 — MEASURED)
 
 **What it is.** `dehaze::airlight` takes the mean of the haziest 0.1% of pixels. That is an **order
