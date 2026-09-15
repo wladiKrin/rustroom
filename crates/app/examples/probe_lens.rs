@@ -512,4 +512,70 @@ fn main() {
     } else {
         println!("\n  no GPU adapter on this machine");
     }
+
+    // ---- Question 5: what does a whole EXPORT cost, the three ways it can go? ----
+    //
+    // ⚠⚠ **The row the milestone is actually judged by.** The stage's own timing above is not an
+    // export: an export also decodes, resamples the tail, encodes and writes. And the first row
+    // here is the behaviour Rustroom shipped until today — `lens: None`, no correction at all —
+    // so the middle row is deliberately **slower than before**, which is the fix rather than a
+    // regression.
+    {
+        use rustroom_app::batch_export::{export_one, ExportRender, ExportSource};
+        let dir = std::env::temp_dir().join("rr-probe-export");
+        let _ = std::fs::create_dir_all(&dir);
+        let dest = dir.join("out.jpg");
+        let o = rustroom_app::batch_export::ExportOptions {
+            dest_dir: dir.clone(),
+            quality: 90,
+            ..Default::default()
+        };
+        let edits = edit_model::Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: want.distortion,
+                tca: want.tca,
+                vignetting: want.vignetting,
+                scale: want.scale,
+            }),
+            ..edit_model::Edits::default()
+        };
+        let one = |lens: Option<LensShot>, gpu_tail: bool| {
+            best_of(3, || {
+                export_one(
+                    ExportSource {
+                        image: image.clone(),
+                        baseline: color::wb::Illuminant::default(),
+                        lens: lens.clone(),
+                    },
+                    &edits,
+                    &dest,
+                    &o,
+                    ExportRender {
+                        resampler: Resampler::default(),
+                        gpu_tail,
+                    },
+                    &export::FileMetadata::default(),
+                )
+                .expect("export")
+            })
+        };
+        println!("\n  a whole export, {w}x{h}");
+        println!(
+            "{:8.1} ms   no lens correction at all (what shipped until M8.9)",
+            one(None, false)
+        );
+        println!(
+            "{:8.1} ms   lens correction on, CPU",
+            one(Some(shot.clone()), false)
+        );
+        if gpu_pipeline::shared().is_some() {
+            println!(
+                "{:8.1} ms   lens correction on, GPU",
+                one(Some(shot.clone()), true)
+            );
+        } else {
+            println!("           —    no GPU adapter on this machine");
+        }
+        let _ = std::fs::remove_file(&dest);
+    }
 }
