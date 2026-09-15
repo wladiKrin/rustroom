@@ -251,6 +251,30 @@ impl Weights {
         self.kernel
     }
 
+    /// Taps per axis.
+    pub fn taps(&self) -> usize {
+        self.taps
+    }
+
+    /// How many phases the table resolves; the index is `min(f * phases, phases - 1)`.
+    pub fn phases(&self) -> usize {
+        LUT_PHASES
+    }
+
+    /// The table [`Weights::axis`] reads, row-major, `phases() * taps()` entries.
+    ///
+    /// ⚠⚠ **Empty for [`Resampler::Bilinear`]**, which is computed exactly — see `axis`'s own
+    /// comment for why that must stay so. A consumer that does not branch on the empty case
+    /// diverges on **one** kernel while agreeing on every other, which is the worst shape a
+    /// divergence can have.
+    ///
+    /// ⚠ Exposed so a GPU twin can upload the CPU's own weights rather than rebuild them:
+    /// substituted, never transcribed, the rule `ToneCurveStage::lut` already follows. Two
+    /// constructions of one table is how they come to disagree about a kernel nobody re-derives.
+    pub fn lut(&self) -> &[f32] {
+        &self.lut
+    }
+
     /// Fill `out[..taps]` with the weights for phase `f ∈ [0, 1)`.
     ///
     /// ⚠⚠ **BILINEAR IS COMPUTED EXACTLY AND MUST STAY THAT WAY.** Two things would otherwise
@@ -395,6 +419,48 @@ pub fn sample_channel_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠⚠ **`Resampler::Bilinear`'s table is deliberately EMPTY, and a consumer that does not
+    /// branch on it diverges on exactly one kernel while agreeing on every other.** `axis`'s own
+    /// comment says why: the table quantises the phase, and computing bilinear exactly is both
+    /// cheaper and more accurate. Anything reading `lut()` must handle the empty case, which is why
+    /// it is asserted here rather than left to be discovered by a black render.
+    #[test]
+    fn the_exposed_table_is_empty_for_bilinear_and_full_for_the_rest() {
+        for k in [
+            Resampler::Bilinear,
+            Resampler::Mitchell,
+            Resampler::CatmullRom,
+            Resampler::Lanczos3,
+        ] {
+            let w = Weights::new(k);
+            assert_eq!(w.taps(), k.taps(), "{k:?}: taps disagree");
+            if k == Resampler::Bilinear {
+                assert!(w.lut().is_empty(), "{k:?}: the table must stay empty");
+            } else {
+                assert_eq!(
+                    w.lut().len(),
+                    w.phases() * w.taps(),
+                    "{k:?}: the table is not phases x taps"
+                );
+            }
+        }
+    }
+
+    /// ⚠ The exposed table must be the one `axis` reads, not a rebuild of it — otherwise a consumer
+    /// uploading it would resample with a kernel the CPU does not use, and nothing in the CPU
+    /// pipeline could ever see it.
+    #[test]
+    fn the_exposed_table_is_the_one_axis_reads() {
+        let w = Weights::new(Resampler::CatmullRom);
+        let mut got = [0.0f32; MAX_TAPS];
+        for p in [0usize, 1, 511, 1023] {
+            let f = p as f32 / w.phases() as f32;
+            w.axis(f, &mut got);
+            let row = &w.lut()[p * w.taps()..(p + 1) * w.taps()];
+            assert_eq!(&got[..w.taps()], row, "phase {p} disagrees with the table");
+        }
+    }
 
     /// **The sampler Rustroom shipped before M7.3**, copied here verbatim.
     ///
