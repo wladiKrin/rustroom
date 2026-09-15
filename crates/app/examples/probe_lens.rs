@@ -559,7 +559,14 @@ fn main() {
                 .expect("export")
             })
         };
+        // ⚠⚠ **The decode, because it is what a real export actually waits for.** Everything
+        // above prices the render; a batch export decodes each file itself, and on an X-T4 that is
+        // ~93% libraw's demosaic — entirely upstream of anything wgpu touches.
+        let decode_ms = best_of(2, || {
+            raw_decode::decode_raw(path, &opts).expect("decode").image
+        });
         println!("\n  a whole export, {w}x{h}");
+        println!("{decode_ms:8.1} ms   the DECODE, paid before any of the rows below");
         println!(
             "{:8.1} ms   no lens correction at all (what shipped until M8.9)",
             one(None, false)
