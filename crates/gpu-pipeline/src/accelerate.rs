@@ -291,6 +291,13 @@ pub fn accelerate_prefix_stage(
     edits: &Edits,
     scale: RenderScale,
     image: &core_image::ImageBuf,
+    // ⚠⚠ **Two facts `Edits` cannot carry, and a stage needing either could not be built from this
+    // seam's old signature.** The `LensShot` comes from the file's own metadata matched against the
+    // bundled database; the `Resampler` is a `RenderSpec` field, a property of the *render* rather
+    // than of the photograph — which is exactly why it is not an `ExportOptions` field either.
+    // Both are in hand at every call site.
+    lens: Option<&lens_profile::LensShot>,
+    resampler: pipeline::Resampler,
     ctx: &Arc<GpuContext>,
 ) -> Option<Box<dyn PipelineStage>> {
     // ⚠ Name-matched, exactly as `REPLACEABLE` is, and for the same reason: a `dyn PipelineStage`
@@ -306,6 +313,24 @@ pub fn accelerate_prefix_stage(
             scale,
             ctx,
         )),
+        // ⚠⚠ **The only arm that can DECLINE, and both `?` are load-bearing.** A photo with no
+        // matched profile, or a profile that yields no corrector, has nothing to accelerate — and
+        // `None` here leaves the CPU stage in place, which is the seam's own rule: fail toward the
+        // whole-buffer path, where a wrong answer costs milliseconds and never pixels.
+        "lens_correction" => {
+            let c = edits.applied_lens_correction();
+            Box::new(crate::GpuLensCorrectionStage::new(
+                lens?,
+                lens_profile::Corrections {
+                    distortion: c.distortion,
+                    tca: c.tca,
+                    vignetting: c.vignetting,
+                    scale: c.scale,
+                },
+                resampler,
+                image,
+            )?)
+        }
         _ => return None,
     };
     // ⚠ The same question the tail asks, and it fails toward the CPU for the same reason: a wrong
@@ -829,6 +854,50 @@ mod tests {
     }
 
     /// A hazy fixture big enough for the guided reach (twice its radius).
+    /// ⚠ Bilinear, so the seam's own tests exercise the branch whose weight table is **empty**.
+    /// Every other kernel reads the uploaded LUT; this one is computed exactly, and a shader that
+    /// only ever read the table would agree on three kernels and render black on the fourth.
+    const RES: pipeline::Resampler = pipeline::Resampler::Bilinear;
+
+    /// The synthetic lens the CPU stage's own tests use, so the two are comparable.
+    ///
+    /// ⚠ Copied rather than shared: it lives in `pipeline`'s test module, which is another crate,
+    /// and exporting a fixture across a crate boundary is more machinery than eight lines is worth.
+    fn lens_fixture() -> lens_profile::LensShot {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="-0.05" c="0.0"/>
+                    <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
+                    <vignetting model="pa" focal="50" aperture="2.8" distance="10"
+                        k1="-0.3" k2="0.0" k3="0.0"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        lens_profile::LensShot {
+            profile: db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap(),
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        }
+    }
+
+    fn lens_edits() -> Edits {
+        Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: true,
+                scale: 0.0,
+            }),
+            ..Edits::default()
+        }
+    }
+
     fn hazy(w: usize, h: usize) -> core_image::ImageBuf {
         let a = [0.85f32, 0.87, 0.9];
         let mut img = core_image::ImageBuf::new(w, h);
@@ -865,7 +934,7 @@ mod tests {
     fn a_dehaze_prefix_step_becomes_a_chain() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(200, 160);
-        let g = accelerate_prefix_stage("dehaze", &hazed_edits(60.0), SCALE, &img, &ctx)
+        let g = accelerate_prefix_stage("dehaze", &hazed_edits(60.0), SCALE, &img, None, RES, &ctx)
             .expect("dehaze must be replaceable");
         assert_eq!(g.name(), "gpu_chain");
     }
@@ -892,6 +961,8 @@ mod tests {
             &denoised_edits(60.0, 60.0),
             SCALE,
             &img,
+            None,
+            RES,
             &ctx,
         )
         .expect("noise reduction must be replaceable");
@@ -912,7 +983,7 @@ mod tests {
             .find(|s| s.stage.name() == "noise_reduction")
             .expect("fixture check: there must be a noise_reduction step");
         let cpu = step.stage.apply(img.clone());
-        let gpu = accelerate_prefix_stage("noise_reduction", &e, SCALE, &img, &ctx)
+        let gpu = accelerate_prefix_stage("noise_reduction", &e, SCALE, &img, None, RES, &ctx)
             .expect("noise reduction must be replaceable")
             .apply(img.clone());
         assert!(
@@ -929,19 +1000,45 @@ mod tests {
         );
     }
 
-    /// ⚠ Every remaining prefix stage stays on the CPU. The three resamplers are the ones that
-    /// will not — they are item 3 of the agreed order and are ONE mechanism rather than three —
-    /// and naming them here is what makes adding one a deliberate act rather than a silent one.
+    /// ⚠⚠ **A FORCING FUNCTION, not a coverage test.** Naming the prefix stages with no GPU twin
+    /// is what makes adding one a deliberate act: this test breaks, and whoever breaks it has to
+    /// say why. It broke for noise reduction, and it broke again for lens correction.
+    ///
+    /// ⚠ What is left are the two **analytic** resamplers, and they are not a third instance of
+    /// this mechanism: perspective is a homography and geometry a rotation, a few arithmetic
+    /// operations per pixel wanting no field and no lattice at all — and M8.5 took both from
+    /// ~160 ms to ~34 by giving them eight cores rather than a GPU. The older note that called the
+    /// three resamplers "ONE mechanism" was wrong about that and is corrected here.
     #[test]
     fn every_other_prefix_stage_is_left_alone() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(64, 64);
-        for name in ["geometry", "lens_correction", "perspective"] {
+        for name in ["geometry", "perspective"] {
             assert!(
-                accelerate_prefix_stage(name, &hazed_edits(60.0), SCALE, &img, &ctx).is_none(),
+                accelerate_prefix_stage(name, &hazed_edits(60.0), SCALE, &img, None, RES, &ctx)
+                    .is_none(),
                 "`{name}` has no GPU twin and must be left alone"
             );
         }
+    }
+
+    /// ⚠⚠ **BOTH halves, because either alone passes against a bug.** An arm that never fires and
+    /// one that fires unconditionally are equally wrong, and only the pair distinguishes them.
+    #[test]
+    fn lens_correction_is_accelerated_only_when_a_profile_is_in_hand() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(200, 160);
+        let e = lens_edits();
+        assert!(
+            accelerate_prefix_stage("lens_correction", &e, SCALE, &img, None, RES, &ctx).is_none(),
+            "with no matched profile there is nothing to accelerate"
+        );
+        let lens = lens_fixture();
+        assert!(
+            accelerate_prefix_stage("lens_correction", &e, SCALE, &img, Some(&lens), RES, &ctx)
+                .is_some(),
+            "with a profile the seam must fire"
+        );
     }
 
     /// ⚠⚠ **THE CACHE-COMPATIBILITY GUARD, and it is the reason this seam is safe at all.** The
@@ -982,7 +1079,7 @@ mod tests {
             .find(|s| s.stage.name() == "dehaze")
             .expect("fixture check: there must be a dehaze step");
         let cpu = step.stage.apply(img.clone());
-        let gpu = accelerate_prefix_stage("dehaze", &e, SCALE, &img, &ctx)
+        let gpu = accelerate_prefix_stage("dehaze", &e, SCALE, &img, None, RES, &ctx)
             .expect("dehaze must be replaceable")
             .apply(img.clone());
         assert!(

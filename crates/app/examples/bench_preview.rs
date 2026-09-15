@@ -419,9 +419,18 @@ fn main() {
             println!("  with the GPU seam offered ({}):", ctx.adapter_name());
             for (i, step) in steps.iter().enumerate() {
                 let name = step.stage.name();
-                let Some(g) =
-                    gpu_pipeline::accelerate_prefix_stage(name, &heavy, sc, &checkpoints[i], ctx)
-                else {
+                let Some(g) = gpu_pipeline::accelerate_prefix_stage(
+                    name,
+                    &heavy,
+                    sc,
+                    &checkpoints[i],
+                    // ⚠ No lens profile here: these fixtures carry no camera metadata, so
+                    // `lens_correction` is not among the steps and the seam is never asked
+                    // about it. `probe_lens` is what prices that stage.
+                    None,
+                    pipeline::Resampler::Bilinear,
+                    ctx,
+                ) else {
                     println!("           —    `{name}` has no GPU twin");
                     continue;
                 };
@@ -452,6 +461,8 @@ fn main() {
                         &heavy,
                         sc,
                         &checkpoints[i],
+                        None,
+                        pipeline::Resampler::Bilinear,
                         ctx,
                     )
                     .map(|g| (i, g))
@@ -513,6 +524,8 @@ fn main() {
                             &heavy,
                             sc,
                             &img,
+                            None,
+                            pipeline::Resampler::Bilinear,
                             ctx,
                         ) {
                             Some(g) => g.apply(img),

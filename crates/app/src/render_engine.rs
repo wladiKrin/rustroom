@@ -1065,7 +1065,9 @@ fn render_cached(
     // the prefix on a 65k-pixel copy, and a branch here would be a second place that has to agree
     // with `Dehaze::is_active`.
     let airlight = pipeline::prefix_airlight(edits, buffer, resampler, lens.clone());
-    let steps = build_prefix_steps(edits, scale, lens, resampler, Some(airlight));
+    // ⚠ Cloned rather than moved: the GPU seam below needs the same profile per step, and a
+    // `LensShot` is a handful of bytes plus a shared profile handle.
+    let steps = build_prefix_steps(edits, scale, lens.clone(), resampler, Some(airlight));
     // ⚠ Per-step decomposition, env-gated and kept: `RUSTROOM_DEBUG_MASK`'s precedent. A whole-
     // render figure says a drag is slow; only this says WHICH stage is slow, and reasoning about
     // that from a sidecar has already been wrong once here.
@@ -1227,6 +1229,10 @@ fn render_cached(
                         edits,
                         scale,
                         &img,
+                        // ⚠ Two facts `Edits` cannot carry — the matched profile and the kernel —
+                        // and lens correction is the first stage across this seam that needs both.
+                        lens.as_ref(),
+                        resampler,
                         ctx,
                     )
                 })
