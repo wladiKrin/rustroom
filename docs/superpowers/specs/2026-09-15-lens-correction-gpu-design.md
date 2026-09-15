@@ -121,10 +121,21 @@ exactly, because the table quantises the phase and `1.0 - (1.0 - f)` is not `f` 
 needs a bilinear branch, or bilinear alone diverges while every other kernel agrees. That hazard gets
 its own test.
 
-### 3.5 No scratch planes
+### 3.5 ⚠⚠ THREE scratch planes — corrected in place, this said "none"
 
-It is a **gather**: read the source, write the output. The grid and the LUT are uploaded buffers, not
-`GpuImage::scratch`. `scratch_planes()` returns 0.
+It is a **gather**, and that is precisely why it *cannot* be in place: an output pixel reads the
+source anywhere within the resampler's support, and those pixels may already have been overwritten.
+Every stage before this one touched only its own pixel, which is what made the chain's one-image
+contract hold.
+
+`scratch_planes()` returns **3**, one plane per channel. Scratch is **single-channel** by
+construction (`width * height * 4` bytes), which is exactly the deinterleaved layout a per-channel
+sampler wants; the chain allocates the widest request once and shares it; and `encode` is handed a
+`&mut ComputePass` and **cannot issue a buffer copy**, so a stage-owned source buffer would need a
+copy kernel anyway. A `seed` dispatch then a `gather` dispatch, in one pass, on the in-pass memory
+barrier M8.3b established by measurement.
+
+The grid and the LUT remain ordinary uploaded buffers.
 
 ### 3.6 ⚠⚠ The grid step is SWEPT against OUTPUT 8-BIT LEVELS, never field pixel error
 
