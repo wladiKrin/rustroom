@@ -1942,6 +1942,7 @@ dependencies = [
  "color 0.1.0",
  "core-image",
  "edit-model",
+ "lens-profile",
  "pipeline",
  "pollster",
  "wgpu",

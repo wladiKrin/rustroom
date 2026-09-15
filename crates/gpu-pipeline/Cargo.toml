@@ -12,6 +12,7 @@ core-image = { path = "../core-image" }
 pipeline = { path = "../pipeline" }
 color = { path = "../color" }
 edit-model = { path = "../edit-model" }
+lens-profile = { path = "../lens-profile" }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 bytemuck = { workspace = true }
