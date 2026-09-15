@@ -35,6 +35,40 @@ Found by grepping for `accelerate_prefix_stage`'s callers *before* designing any
 
 **So "port lens correction, aimed at export" is two pieces of work, not one.** Hence two plans.
 
+### 2.1 ⚠⚠ AND IT IS WORSE THAN THAT: THE GUI'S EXPORT APPLIES NO LENS CORRECTION AT ALL
+
+Found while reading `export_one` to plan the wiring, and **verified end to end rather than by
+reading**. `export_one` builds through `pipeline::build_pipeline_spec`, which hardcodes
+`lens: None` — and `decode_for_export` discards the metadata, keeping only the white-balance
+baseline, so there is no `LensShot` in that path to pass even if it did.
+
+Three renders of one frame agree that this is real:
+
+| path | lens correction |
+|---|---|
+| the preview (`render_cached` → `build_prefix_steps(.., lens, ..)`) | **applied** |
+| `rustroom render` (its own `build_pipeline_split_in_region_with_brush(.., lens, ..)`) | **applied** |
+| **the GUI's Export dialog** (`export_one` → `build_pipeline_spec`) | **not applied** |
+
+Measured on `DSCF6296.RAF`, XF16-80 at 19.2 mm f/8 — a *mild* case, since barrel distortion and
+vignetting are both worst at the wide end and wide open. Corrected against uncorrected, through the
+shipped CLI at full resolution:
+
+> **worst 187 of 255, mean 6.95, and 33.5% of samples differing by more than 4 levels.**
+
+⚠ `lens_diff`'s radial bands read ~1.00 at this aperture, so the **vignetting** half is small here;
+what the numbers above are mostly showing is the **geometry**, which that probe structurally cannot
+see. The recorded worst displacement on this lens is **50.59 px**.
+
+**So the milestone's framing is corrected: plan 2 is not "light up the GPU for export", it is
+"lens correction must reach export at all, and then cross the seam".** You cannot accelerate a stage
+that does not run.
+
+⚠⚠ **A consequence stated rather than discovered: this makes every RAW export ~700 ms/photo slower
+and changes the pixels of every exported RAW.** Both are correct — the export is supposed to match
+the preview — and the GPU port is what pays the time back. It is the reason the two halves belong in
+one milestone.
+
 ## 3. Plan 1 — `GpuLensCorrectionStage`
 
 The third arm on `accelerate_prefix_stage`, beside `dehaze` and `noise_reduction`.
@@ -118,9 +152,11 @@ to build new machinery.
 GPU twin. **Adding an arm breaks it**, which is exactly what makes this a deliberate act rather than
 a silent one — the same shape that fired when noise reduction landed.
 
-## 4. Plan 2 — export across the seam
+## 4. Plan 2 — lens correction reaches export, and crosses the seam
 
-`batch_export` calls `accelerate_prefix_stage` per prefix step, exactly as `render_engine` does.
+First `export_one` runs the prefix as **steps** with the lens shot threaded through, the way
+`render_cached` and the CLI both already do — which is the §2.1 fix. Then it offers each step to
+`accelerate_prefix_stage`, exactly as `render_engine` does.
 
 ### 4.1 ⚠⚠ `gpu_tail` is threaded as a PARAMETER, on a written-down precedent
 
@@ -154,7 +190,10 @@ plan 2 worth landing on its own merits even if plan 1 slipped.
 3. **298 MiB in, 298 MiB out** at 26 Mpx, degraded to the CPU rather than to a dead worker.
 4. **`gpu_tail` now governs three things under a name that says "tail".**
 5. **`gpu_tail` is still off by default**, so nobody gets a rendering change they did not ask for.
-6. One machine, one adapter (Apple M2, Metal), one lens profile.
+6. **Every exported RAW changes**, because §2.1 makes export apply a correction it was silently
+   skipping. That is the fix, not a side effect — but it is a visible change to anyone who has
+   exported from the GUI before today.
+7. One machine, one adapter (Apple M2, Metal), one lens profile.
 
 ## 6. ⚠⚠ No speed-up is projected, deliberately
 
