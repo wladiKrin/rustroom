@@ -53,27 +53,34 @@ fn main() {
         seq / n as f64
     );
 
-    let t = Instant::now();
-    std::thread::scope(|s| {
-        for f in &files {
-            s.spawn(|| {
-                let d = raw_decode::decode_raw(f, &opts).expect("decode");
-                std::hint::black_box(&d.image);
-            });
+    // ⚠⚠ **The sweep, because the ceiling is not the design.** Each decoded X-T4 buffer is
+    // 298 MiB, so how far the curve flattens decides how much memory a batch export has to hold —
+    // and `batch_export` went sequential precisely to bound that. A number that says "3.31x at
+    // four" says nothing about whether three would do.
+    println!("\n  concurrency sweep, {n} files each time");
+    println!("  width      total       per photo     vs sequential     peak decode buffers");
+    for width in [1usize, 2, 3, 4, 6, 8] {
+        if width > n {
+            break;
         }
-    });
-    let par = t.elapsed().as_secs_f64();
-    println!(
-        "{par:8.2} s   {n} decodes CONCURRENTLY ({:.2} s each)",
-        par / n as f64
-    );
-    println!(
-        "\n         speed-up from running them at once: {:.2}x",
-        seq / par
-    );
-    println!(
-        "         peak buffers held at once: {} x {:.0} MiB",
-        n,
-        (6246.0 * 4170.0 * 3.0 * 4.0) / (1024.0 * 1024.0)
-    );
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let t = Instant::now();
+        std::thread::scope(|s| {
+            for _ in 0..width {
+                s.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(f) = files.get(i) else { return };
+                    let d = raw_decode::decode_raw(f, &opts).expect("decode");
+                    std::hint::black_box(&d.image);
+                });
+            }
+        });
+        let el = t.elapsed().as_secs_f64();
+        println!(
+            "  {width:5}   {el:7.2} s    {:7.2} s       {:6.2}x            {:5.0} MiB",
+            el / n as f64,
+            seq / el,
+            width as f64 * (6246.0 * 4170.0 * 3.0 * 4.0) / (1024.0 * 1024.0),
+        );
+    }
 }
