@@ -125,9 +125,15 @@ impl LensCorrectionStage {
     /// wasted — and it is bit-identical.
     fn render(&self, src: &RegionSrc<'_>, corrector: &Corrector, rect: Rect) -> ImageBuf {
         const CH: usize = ImageBuf::CHANNELS;
-        // ⚠ The FULL image's width, never the slice in hand: `fill_row` is indexed in frame
-        // coordinates and the corrector was built against the frame.
-        let field_w = src.full.0;
+        // ⚠⚠ **From x = 0 up to the rect's right edge, and BOTH halves matter.** Indexing is in
+        // frame coordinates, so the row cannot start at the rect (see this function's second
+        // note); but it need not run past it either, because `apply_geometry_distortion` computes
+        // each `x` as `(xu + ns * i as f64) as f32` from the row's own start — so truncating the
+        // row changes *how many* `i` are computed and not *what any of them is*. Bit-identical,
+        // and it is what `a_region_matches_the_same_part_of_the_whole` establishes rather than
+        // assumes. On a cold 1:1 entry the rect's right edge sits at ~4228 of 6246, so this is a
+        // third of the field's rows returned for nothing.
+        let field_w = rect.x + rect.w;
         let stride = rect.w * CH;
         let mut data = vec![0.0f32; rect.w * rect.h * CH];
         if stride == 0 {

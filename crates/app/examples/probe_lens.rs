@@ -342,4 +342,122 @@ fn main() {
             (rw * rh) as f64 / 1e6
         );
     }
+
+    // ---- Question 5: the REAL prefix chain, cold, both ways ----
+    //
+    // ⚠⚠ **This is the shipped code path, not a reproduction of it** — `build_prefix_steps`,
+    // `region_plan` from step **0**, `run_region_plan` — so it prices the thing a cold entry into
+    // 1:1 actually does rather than the stage in isolation. It is still headless, so it is not a
+    // session: the row that decides the milestone is a cold entry measured through
+    // `RUSTROOM_DEBUG_RENDER`, and this is what that row should land near.
+    let mut edits = edit_model::Edits {
+        perspective: edit_model::Perspective {
+            vertical: 12.0,
+            ..Default::default()
+        },
+        noise_reduction: edit_model::NoiseReduction {
+            luminance: 50.0,
+            color: 50.0,
+            ..Default::default()
+        },
+        dehaze: edit_model::Dehaze { amount: 40.0 },
+        ..Default::default()
+    };
+    edits.geometry.angle = 3.0;
+    edits.lens_correction = Some(edit_model::LensCorrection {
+        distortion: true,
+        tca: true,
+        vignetting: true,
+        scale: 0.0,
+    });
+    let airlight =
+        pipeline::prefix_airlight(&edits, &image, Resampler::default(), Some(shot.clone()));
+    let steps = pipeline::build_prefix_steps(
+        &edits,
+        pipeline::RenderScale::FULL,
+        Some(shot.clone()),
+        Resampler::default(),
+        Some(airlight),
+    );
+    println!("\n  the real prefix chain, cold (resuming at 0)");
+    println!(
+        "  steps: {:?}",
+        steps.iter().map(|s| s.stage.name()).collect::<Vec<_>>()
+    );
+    // The viewport a cold entry into 1:1 asks for, from M8.7's own measured session.
+    let visible = pipeline::Rect {
+        x: (w.saturating_sub(1432)) / 2,
+        y: (h.saturating_sub(1034)) / 2,
+        w: 1432.min(w),
+        h: 1034.min(h),
+    };
+    match pipeline::region_plan(&steps, 0, visible, w, h) {
+        None => println!("  ⚠ the chain ABANDONED at step 0 — the pair is not wired up"),
+        Some(plan) => {
+            let margined = plan.out_rects[0];
+            println!(
+                "  SCOPED {}x{} -> {}x{} of {}x{}  ({:.1}% of the frame)",
+                margined.w,
+                margined.h,
+                visible.w,
+                visible.h,
+                plan.frame.0,
+                plan.frame.1,
+                100.0 * (margined.w * margined.h) as f64 / (plan.frame.0 * plan.frame.1) as f64,
+            );
+            let scoped_ms = best_of(3, || {
+                pipeline::run_region_plan(&steps, 0, &image, &plan).expect("the chain runs")
+            });
+            let whole_ms = best_of(3, || {
+                let mut cur = image.clone();
+                for st in &steps {
+                    cur = st.stage.apply(cur);
+                }
+                cur
+            });
+            println!("{whole_ms:8.1} ms   whole-buffer, every step");
+            println!("{scoped_ms:8.1} ms   region-scoped from step 0");
+            println!("           {:.1}x", whole_ms / scoped_ms);
+
+            // ⚠ Per step, because the GPU-port decision turns on what lens correction costs
+            // INSIDE the scoped chain rather than whole-buffer. Each step is run on its own
+            // against the plan's own rects, so the sum is the chain with the carried buffers
+            // rebuilt — slightly pessimistic, and the shape is what matters.
+            println!("\n  the scoped chain, per step");
+            let mut carried: Option<ImageBuf> = None;
+            for (i, st) in steps.iter().enumerate() {
+                let rsrc_owner = carried.clone();
+                let ms = best_of(3, || {
+                    let rsrc = match &rsrc_owner {
+                        None => pipeline::RegionSrc::whole(&image),
+                        Some(buf) => pipeline::RegionSrc {
+                            buf,
+                            origin: (plan.out_rects[i - 1].x, plan.out_rects[i - 1].y),
+                            full: plan.dims[i],
+                        },
+                    };
+                    st.stage
+                        .apply_region(&rsrc, plan.out_rects[i])
+                        .expect("every step in the plan accepts its rect")
+                });
+                let r = plan.out_rects[i];
+                println!(
+                    "{ms:8.1} ms   [{i}] {:16} -> {}x{} ({:.1} Mpx)",
+                    st.stage.name(),
+                    r.w,
+                    r.h,
+                    (r.w * r.h) as f64 / 1e6
+                );
+                let rsrc = match &rsrc_owner {
+                    None => pipeline::RegionSrc::whole(&image),
+                    Some(buf) => pipeline::RegionSrc {
+                        buf,
+                        origin: (plan.out_rects[i - 1].x, plan.out_rects[i - 1].y),
+                        full: plan.dims[i],
+                    },
+                };
+                carried = st.stage.apply_region(&rsrc, plan.out_rects[i]);
+            }
+        }
+    }
 }
