@@ -217,11 +217,15 @@ pub(crate) fn full_res_worker(
 /// itself rather than borrowing the open session's. Drop it and every exported RAW gets D65's
 /// gains where the preview used the camera's own, so **the file would not match what was on
 /// screen**.
+/// ⚠⚠ **It also hands over the matched LENS, which until M8.9 it threw away** — and that is how
+/// the GUI's export came to render every RAW with no lens correction while the preview and
+/// `rustroom render` both applied it. `resolve_lens` is the same function the preview's decode
+/// uses, so both paths match one lens the same way rather than by two rules that could disagree.
 pub(crate) fn decode_for_export(
     path: &std::path::Path,
     demosaic: raw_decode::Demosaic,
     profile: Option<std::path::PathBuf>,
-) -> Result<(core_image::ImageBuf, color::wb::Illuminant), String> {
+) -> Result<rustroom_app::batch_export::ExportSource, String> {
     if catalog::is_raw(path) {
         raw_decode::decode_raw(
             path,
@@ -231,11 +235,21 @@ pub(crate) fn decode_for_export(
                 ..raw_decode::DecodeOptions::linear_scene()
             },
         )
-        .map(|d| (d.image, d.metadata.as_shot.unwrap_or_default()))
+        .map(|d| rustroom_app::batch_export::ExportSource {
+            lens: resolve_lens(&d.metadata).shot,
+            baseline: d.metadata.as_shot.unwrap_or_default(),
+            image: d.image,
+        })
         .map_err(|e| e.to_string())
     } else {
+        // ⚠ `lens: None` is correct rather than a fallback: a JPEG carries no lens metadata
+        // through `image_decode`, so there is nothing to match.
         image_decode::decode(path)
-            .map(|d| (d.image, color::wb::Illuminant::default()))
+            .map(|d| rustroom_app::batch_export::ExportSource {
+                image: d.image,
+                baseline: color::wb::Illuminant::default(),
+                lens: None,
+            })
             .map_err(|e| e.to_string())
     }
 }

@@ -74,12 +74,20 @@ fn main() {
         o.format = fmt;
         let dest = out.join(format!("deliverable_{fmt:?}.{}", fmt.extension()));
         match export_one(
-            image.clone(),
+            // ⚠ A synthetic chart carries no lens metadata, so `lens: None` is the truth here
+            // rather than a shortcut — the same thing a JPEG's decode hands over.
+            rustroom_app::batch_export::ExportSource {
+                image: image.clone(),
+                baseline: color::wb::Illuminant::default(),
+                lens: None,
+            },
             &edit_model::Edits::default(),
             &dest,
             &o,
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            rustroom_app::batch_export::ExportRender {
+                resampler: pipeline::Resampler::default(),
+                gpu_tail: false,
+            },
             &export::FileMetadata::resolve(&o.metadata, described()),
         ) {
             Ok(()) => println!("wrote {}", dest.display()),

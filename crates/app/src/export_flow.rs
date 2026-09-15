@@ -115,9 +115,17 @@ impl RustroomApp {
             // would want per-file lookup, which is noted as a limitation rather than guessed at.
             move |p: &std::path::Path| decode_for_export(p, demosaic, export_profile.clone()),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // ⚠ From `Settings`, never from `opts`: the kernel is one choice shared with the
-            // preview, so an export preset must not be able to carry a different one.
-            self.settings.resampler,
+            // ⚠ From `Settings`, never from `opts`: both are choices shared with the preview, so
+            // an export preset must not be able to carry a different one.
+            //
+            // ⚠⚠ `gpu_tail` is named for the *tail* and now decides three things — the tail, the
+            // preview's prefix seam, and this. Reusing it was chosen over a new `ExportOptions`
+            // field (user's call, 2026-09-15) precisely so there is one setting rather than two
+            // that could disagree; the naming hazard is carried by the Settings hint instead.
+            rustroom_app::batch_export::ExportRender {
+                resampler: self.settings.resampler,
+                gpu_tail: self.settings.gpu_tail,
+            },
         ));
     }
 

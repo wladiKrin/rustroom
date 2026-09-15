@@ -345,37 +345,144 @@ pub fn file_metadata(job: &ExportJob) -> export::FileMetadata {
     }
 }
 
+// ⚠⚠ **A COUNTER, and it exists because an accelerated export and a CPU export produce the SAME
+// photograph by design** — so every correctness test in the workspace passes with the seam
+// deleted. That is the W5 failure mode, where creative LUTs shipped fully tested and 100%
+// non-functional. `RenderEngine::requests_issued` and `Ran { prefix_stages }` exist for the same
+// reason.
+//
+// ⚠ A **counter** rather than a flag: an observable describing the current state cannot see its
+// own absence. ⚠ And **thread-local**, because `cargo test` runs tests in parallel and a shared
+// count would report whatever the rest of the suite happened to be doing — the contamination
+// `GpuChain`'s transfer counters were made per chain to avoid.
+//
+// ⚠ Plain `//`, not `///`: a doc comment on a `thread_local!` invocation is `unused_doc_comments`,
+// which `-D warnings` rejects. This file's own history records that trap; it fired again here.
+#[cfg(test)]
+thread_local! {
+    static ACCELERATED_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn accelerated_steps_bump() {
+    ACCELERATED_STEPS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(not(test))]
+fn accelerated_steps_bump() {}
+
+/// Reset the counter and return what the closure's exports crossed the seam with.
+#[cfg(test)]
+fn accelerated_steps<T>(f: impl FnOnce() -> T) -> usize {
+    ACCELERATED_STEPS.with(|c| c.set(0));
+    f();
+    ACCELERATED_STEPS.with(|c| c.get())
+}
+
+/// Render one photo and write it out.
+///
+/// ⚠⚠ **The prefix runs as STEPS rather than as one pipeline, and that is what lets each of them
+/// be offered to the GPU seam** — the shape `render_cached` already uses, and for its reason:
+/// `accelerate_prefix_stage` substitutes a stage by name and has to see them one at a time.
+///
+/// ⚠⚠ **And it is what makes lens correction reach an export at all.** This used to build through
+/// `pipeline::build_pipeline_spec`, which hardcodes `lens: None` — so for the life of the export
+/// dialog every RAW was written out with no lens correction while the preview and the CLI both
+/// applied it. Measured on an X-T4 frame at a mild 19.2 mm f/8: **worst 187 of 255 levels, mean
+/// 6.95, 33.5% of samples differing by more than 4.** `a_lens_profile_reaches_the_exported_pixels`
+/// is the carrier; nothing in `pipeline` could ever have seen it, because the stage itself was
+/// never broken.
+///
+/// ⚠ The tail comes from `build_pipeline_split_in_region_with_brush` with its prefix **discarded**,
+/// deliberately: both halves then come from one builder, so they cannot drift about what belongs
+/// in which.
 pub fn export_one(
-    image: ImageBuf,
+    source: ExportSource,
     edits: &Edits,
     dest: &Path,
     opts: &ExportOptions,
-    resampler: pipeline::Resampler,
-    wb_baseline: color::wb::Illuminant,
+    render: ExportRender,
     meta: &export::FileMetadata,
 ) -> Result<(), String> {
-    let source_long = image.width().max(image.height());
+    let source_long = source.image.width().max(source.image.height());
     let scaled = match opts.max_edge {
-        Some(max) => image.downscale_to(max),
-        None => image,
+        Some(max) => source.image.downscale_to(max),
+        None => source.image,
     };
     let scale = scale_for(source_long, opts.max_edge);
     // ⚠⚠ The export must use the SAME airlight definition as the preview, or a dehazed photo
     // would render one way on screen and another in the file — by up to 5.6 of an 8-bit level,
     // measured. `prefix_airlight` replays the prefix at a fixed 256 px, so it is a deterministic
     // function of the edits and costs a 65k-pixel run.
-    let airlight = pipeline::prefix_airlight(edits, &scaled, resampler, None);
-    let mut rendered = pipeline::build_pipeline_spec(
+    //
+    // ⚠ And it is handed the **lens**, for the same reason: the replay walks the prefix, so a
+    // replay without the correction would estimate the airlight from a differently-shaped
+    // photograph than the one being exported.
+    let airlight = pipeline::prefix_airlight(edits, &scaled, render.resampler, source.lens.clone());
+    let spec = pipeline::RenderSpec {
+        space: opts.space,
+        resampler: render.resampler,
+        baseline: source.baseline,
+        airlight: Some(airlight),
+    };
+    let steps = pipeline::build_prefix_steps(
         edits,
         scale,
-        pipeline::RenderSpec {
-            space: opts.space,
-            resampler,
-            baseline: wb_baseline,
-            airlight: Some(airlight),
-        },
-    )
-    .run(scaled);
+        source.lens.clone(),
+        render.resampler,
+        Some(airlight),
+    );
+    // ⚠ `ProfileRendering::default()` is inherited from `build_pipeline_spec` rather than
+    // introduced here: the camera rendering's profile curve and baseline exposure do not reach an
+    // export today either. Deliberately **not** fixed in this change — it is a second bug with its
+    // own measurement, and mixing it in would make this diff unattributable. See `docs/BACKLOG.md`.
+    let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        edits,
+        scale,
+        None,
+        None,
+        spec,
+        source.lens.clone(),
+        pipeline::ProfileRendering::default(),
+    );
+
+    let mut img = scaled;
+    for step in &steps {
+        // ⚠⚠ **Per step and at apply time, exactly as `render_cached` does it** — never over the
+        // whole list up front. `dehaze::airlight` is estimated from the image the stage is HANDED,
+        // and geometry crops, so substituting up front would estimate it from the wrong pixels: a
+        // slightly different airlight is a different photograph, not an error.
+        //
+        // ⚠⚠ **`if` rather than `match (gpu_tail, shared())`** — a tuple scrutinee evaluates both
+        // elements, so with the setting off `shared()` would still acquire an adapter. That was a
+        // real bug when `gpu_tail` first landed and it cost ~42 s per debug test run.
+        //
+        // ⚠ An export decode is never cached, so there is no `PrefixStepKey` question here at all:
+        // the seam returns a **stage**, never a step, and nothing stores the result.
+        let accelerated = if render.gpu_tail {
+            gpu_pipeline::shared().and_then(|ctx| {
+                gpu_pipeline::accelerate_prefix_stage(
+                    step.stage.name(),
+                    edits,
+                    scale,
+                    &img,
+                    source.lens.as_ref(),
+                    render.resampler,
+                    ctx,
+                )
+            })
+        } else {
+            None
+        };
+        img = match accelerated {
+            Some(gpu) => {
+                accelerated_steps_bump();
+                gpu.apply(img)
+            }
+            None => step.stage.apply(img),
+        };
+    }
+    let mut rendered = tail.run(img);
 
     // ⚠⚠ **THE ORDER OF THESE THREE IS THE FEATURE, NOT AN ARRANGEMENT.**
     //
@@ -391,6 +498,40 @@ pub fn export_one(
     export::save(&rendered, dest, opts.format, opts.quality, opts.space)
         .map_err(|e| e.to_string())?;
     export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
+}
+
+/// What a decode hands the exporter.
+///
+/// ⚠⚠ **A struct rather than a growing tuple, and the third field is why it exists.** Until M8.9
+/// this was `(ImageBuf, Illuminant)` and the lens shot was simply **discarded** — which is how the
+/// GUI's export came to render every RAW with **no lens correction at all** while the preview and
+/// `rustroom render` both applied it. Measured on an X-T4 frame at a mild 19.2 mm f/8: worst 187
+/// of 255 levels, mean 6.95, and 33.5% of samples differing by more than 4. A named field is
+/// harder to drop than a tuple element.
+pub struct ExportSource {
+    pub image: ImageBuf,
+    /// The white-balance baseline the decode left the picture at. Drop it and every exported RAW
+    /// gets D65's gains where the preview used the camera's own.
+    pub baseline: color::wb::Illuminant,
+    /// The matched lens profile; `None` for a JPEG, or for a lens the database does not list.
+    pub lens: Option<lens_profile::LensShot>,
+}
+
+/// What the *render* needs that [`ExportOptions`] deliberately does not carry.
+///
+/// ⚠⚠ **Neither field may become an `ExportOptions` field, and the reason is already written down
+/// in [`ExportWorker::spawn`]'s own doc comment**: in `ExportOptions` they would be saved into
+/// every export preset, so a preset could disagree with the preview about how the photograph is
+/// rendered. Two facts that can disagree.
+///
+/// ⚠ `gpu_tail` is named for the *tail* and now governs three things — the tail, the preview's
+/// prefix seam, and this. That naming hazard was flagged and accepted (user's call, 2026-09-15);
+/// the Settings hint is what carries the correction, by describing the rule rather than
+/// enumerating what it reaches.
+#[derive(Clone, Copy)]
+pub struct ExportRender {
+    pub resampler: pipeline::Resampler,
+    pub gpu_tail: bool,
 }
 
 /// A running batch export.
@@ -411,23 +552,24 @@ impl ExportWorker {
     /// *inside* the injected decode fn, which is the only way to exercise the mid-photo
     /// cancel check deterministically.
     ///
-    /// ⚠ `resampler` is a parameter rather than a field of [`ExportOptions`], and that is the
+    /// ⚠ [`ExportRender`] is a parameter rather than a field of [`ExportOptions`], and that is the
     /// whole reason there is one setting instead of two: in `ExportOptions` it would be saved
     /// into every export preset, so a preset could disagree with the preview about which kernel
-    /// the photograph is rendered with. Two facts that can disagree.
+    /// the photograph is rendered with — and, since M8.9, about whether it renders on the GPU.
+    /// Two facts that can disagree.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
-        decode: impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String> + Send + 'static,
+        decode: impl Fn(&Path) -> Result<ExportSource, String> + Send + 'static,
         cancel: Arc<AtomicBool>,
-        resampler: pipeline::Resampler,
+        render: ExportRender,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
         let flag = cancel.clone();
         std::thread::spawn(move || {
-            run(jobs, opts, decode, event_tx, decision_rx, flag, resampler);
+            run(jobs, opts, decode, event_tx, decision_rx, flag, render);
         });
         Self {
             events,
@@ -461,11 +603,11 @@ impl ExportWorker {
 fn run(
     jobs: Vec<ExportJob>,
     opts: ExportOptions,
-    decode: impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String>,
+    decode: impl Fn(&Path) -> Result<ExportSource, String>,
     events: Sender<ExportEvent>,
     decisions: Receiver<Decision>,
     cancel: Arc<AtomicBool>,
-    resampler: pipeline::Resampler,
+    render: ExportRender,
 ) {
     let total = jobs.len();
     let mut report = ExportReport::default();
@@ -589,9 +731,7 @@ fn run(
             break;
         }
 
-        match decoded.and_then(|(img, baseline)| {
-            export_one(img, &edits, &dest, &opts, resampler, baseline, &meta)
-        }) {
+        match decoded.and_then(|src| export_one(src, &edits, &dest, &opts, render, &meta)) {
             Ok(()) => {
                 report.exported += 1;
                 claimed.insert(dest);
@@ -684,6 +824,21 @@ mod tests {
         img
     }
 
+    /// A decode with no lens profile, standing in for a JPEG or an unlisted lens.
+    fn source(image: ImageBuf) -> ExportSource {
+        ExportSource {
+            image,
+            baseline: color::wb::Illuminant::default(),
+            lens: None,
+        }
+    }
+
+    /// The render settings every test but the seam's own uses: the default kernel, CPU.
+    const CPU: ExportRender = ExportRender {
+        resampler: pipeline::Resampler::CatmullRom,
+        gpu_tail: false,
+    };
+
     fn opts(dir: &TempDir, max_edge: Option<usize>) -> ExportOptions {
         ExportOptions {
             dest_dir: dir.0.clone(),
@@ -704,12 +859,11 @@ mod tests {
         let d = TempDir::new("one_full");
         let dest = d.0.join("a.jpg");
         export_one(
-            flat(40, 20),
+            source(flat(40, 20)),
             &Edits::default(),
             &dest,
             &opts(&d, None),
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            CPU,
             &export::FileMetadata::default(),
         )
         .unwrap();
@@ -721,12 +875,11 @@ mod tests {
         let d = TempDir::new("one_cap");
         let dest = d.0.join("a.jpg");
         export_one(
-            flat(40, 20),
+            source(flat(40, 20)),
             &Edits::default(),
             &dest,
             &opts(&d, Some(10)),
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            CPU,
             &export::FileMetadata::default(),
         )
         .unwrap();
@@ -739,12 +892,11 @@ mod tests {
         let d = TempDir::new("one_big_cap");
         let dest = d.0.join("a.jpg");
         export_one(
-            flat(40, 20),
+            source(flat(40, 20)),
             &Edits::default(),
             &dest,
             &opts(&d, Some(999)),
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            CPU,
             &export::FileMetadata::default(),
         )
         .unwrap();
@@ -760,6 +912,133 @@ mod tests {
             }
         }
         img
+    }
+
+    /// A synthetic lens with coefficients chosen here rather than read from the bundled database.
+    ///
+    /// ⚠ Copied from `pipeline`'s and `gpu-pipeline`'s own fixtures rather than shared: they live
+    /// in other crates' test modules, and exporting a fixture across a crate boundary is more
+    /// machinery than eight lines is worth.
+    fn lens_fixture() -> lens_profile::LensShot {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="-0.05" c="0.0"/>
+                    <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
+                    <vignetting model="pa" focal="50" aperture="2.8" distance="10"
+                        k1="-0.3" k2="0.0" k3="0.0"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        lens_profile::LensShot {
+            profile: db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap(),
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        }
+    }
+
+    fn lens_on() -> Edits {
+        Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: true,
+                scale: 0.0,
+            }),
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠⚠ **THE CARRIER FOR THE M8.9 FIX, and the bug it guards had shipped for the life of the
+    /// export dialog.** `export_one` used to build through `pipeline::build_pipeline_spec`, which
+    /// hardcodes `lens: None` — so every RAW was written out with **no lens correction** while the
+    /// preview and `rustroom render` both applied it. Measured through the shipped CLI on an X-T4
+    /// frame at a mild 19.2 mm f/8: **worst 187 of 255 levels, mean 6.95, and 33.5% of samples
+    /// differing by more than 4.**
+    ///
+    /// ⚠ Nothing in `pipeline` could ever have seen it, because the stage itself was never broken
+    /// — which is why this test has to go through `export_one` rather than through the pipeline.
+    /// The W5 failure mode: fully tested, and never reached.
+    #[test]
+    fn a_lens_profile_reaches_the_exported_pixels() {
+        let d = TempDir::new("one_lens");
+        let dest = d.0.join("a.png");
+        let o = ExportOptions {
+            format: ExportFormat::Png8,
+            ..opts(&d, None)
+        };
+        let write = |lens: Option<lens_profile::LensShot>| {
+            export_one(
+                ExportSource {
+                    image: edged(160, 120),
+                    baseline: color::wb::Illuminant::default(),
+                    lens,
+                },
+                &lens_on(),
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::default(),
+            )
+            .unwrap();
+            std::fs::read(&dest).unwrap()
+        };
+        let without = write(None);
+        let with = write(Some(lens_fixture()));
+        assert_ne!(
+            without, with,
+            "a matched lens profile must change the exported file"
+        );
+    }
+
+    /// ⚠⚠ **THE CARRIER FOR THE SEAM, and a picture test cannot be one.** An accelerated export and
+    /// a CPU export produce the same photograph **by design**, so every correctness test here
+    /// passes with the whole offer deleted. The observable is the count of steps that crossed.
+    ///
+    /// ⚠ The fixture drives **dehaze**, not lens correction, deliberately: dehaze is already
+    /// ported and needs no profile, so this says something about the **wiring** independently of
+    /// whether the lens shader exists at all. That is what makes this half of the milestone worth
+    /// landing on its own merits.
+    #[test]
+    fn an_accelerated_export_really_uses_the_seam() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let d = TempDir::new("one_seam");
+        let dest = d.0.join("a.jpg");
+        let edits = Edits {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Edits::default()
+        };
+        let run = |gpu_tail: bool| {
+            accelerated_steps(|| {
+                export_one(
+                    source(edged(160, 120)),
+                    &edits,
+                    &dest,
+                    &opts(&d, None),
+                    ExportRender {
+                        resampler: pipeline::Resampler::CatmullRom,
+                        gpu_tail,
+                    },
+                    &export::FileMetadata::default(),
+                )
+                .unwrap();
+            })
+        };
+        // ⚠ Both halves: an offer that never fires and one that fires unconditionally are equally
+        // wrong, and only the pair distinguishes them.
+        assert_eq!(run(false), 0, "with the setting off nothing may cross");
+        assert!(
+            run(true) >= 1,
+            "with it on, dehaze — which is ported — must cross"
+        );
     }
 
     /// Export `edged` twice — once neutral, once with `tweak` applied to the options — and
@@ -779,12 +1058,11 @@ mod tests {
         base.format = ExportFormat::Tiff8;
         let plain = d.0.join("plain.tif");
         export_one(
-            edged(160, 120),
+            source(edged(160, 120)),
             &Edits::default(),
             &plain,
             &base,
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            CPU,
             &export::FileMetadata::resolve(&base.metadata, export::FileMetadata::default()),
         )
         .unwrap();
@@ -792,12 +1070,11 @@ mod tests {
         tweak(&mut changed);
         let other = d.0.join("other.tif");
         export_one(
-            edged(160, 120),
+            source(edged(160, 120)),
             &Edits::default(),
             &other,
             &changed,
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            CPU,
             &export::FileMetadata::resolve(&changed.metadata, export::FileMetadata::default()),
         )
         .unwrap();
@@ -935,12 +1212,11 @@ mod tests {
         let d = TempDir::new("one_bad");
         let dest = d.0.join("no_such_dir").join("a.jpg");
         assert!(export_one(
-            flat(4, 4),
+            source(flat(4, 4)),
             &Edits::default(),
             &dest,
             &opts(&d, None),
-            pipeline::Resampler::default(),
-            color::wb::Illuminant::default(),
+            CPU,
             &export::FileMetadata::default(),
         )
         .is_err());
@@ -965,15 +1241,9 @@ mod tests {
         jobs: Vec<ExportJob>,
         opts: ExportOptions,
         answer: Vec<Decision>,
-        decode: impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String> + Send + 'static,
+        decode: impl Fn(&Path) -> Result<ExportSource, String> + Send + 'static,
     ) -> (ExportReport, Vec<ExportEvent>) {
-        let worker = ExportWorker::spawn(
-            jobs,
-            opts,
-            decode,
-            Arc::new(AtomicBool::new(false)),
-            pipeline::Resampler::default(),
-        );
+        let worker = ExportWorker::spawn(jobs, opts, decode, Arc::new(AtomicBool::new(false)), CPU);
         let mut answers = answer.into_iter();
         let mut events = Vec::new();
         let mut report = ExportReport::default();
@@ -1013,9 +1283,8 @@ mod tests {
             .collect()
     }
 
-    fn ok_decode(
-    ) -> impl Fn(&Path) -> Result<(ImageBuf, color::wb::Illuminant), String> + Send + 'static {
-        |_: &Path| Ok((flat(8, 4), color::wb::Illuminant::default()))
+    fn ok_decode() -> impl Fn(&Path) -> Result<ExportSource, String> + Send + 'static {
+        |_: &Path| Ok(source(flat(8, 4)))
     }
 
     /// Jobs carrying capture metadata, for the tokens that come from the catalog.
@@ -1382,7 +1651,7 @@ mod tests {
                 if p.to_string_lossy().contains("bad") {
                     Err("no".to_string())
                 } else {
-                    Ok((flat(8, 4), color::wb::Illuminant::default()))
+                    Ok(source(flat(8, 4)))
                 }
             },
         );
@@ -1440,7 +1709,7 @@ mod tests {
             opts(&d, None),
             ok_decode(),
             Arc::new(AtomicBool::new(true)),
-            pipeline::Resampler::default(),
+            CPU,
         );
         let report = finished(&worker);
         assert!(report.cancelled);
@@ -1466,10 +1735,10 @@ mod tests {
             move |_: &Path| {
                 let _ = started_tx.send(());
                 let _ = resume_rx.recv();
-                Ok((flat(8, 4), color::wb::Illuminant::default()))
+                Ok(source(flat(8, 4)))
             },
             Arc::new(AtomicBool::new(false)),
-            pipeline::Resampler::default(),
+            CPU,
         );
 
         started_rx.recv().expect("worker never reached a decode");
@@ -1505,10 +1774,10 @@ mod tests {
             opts(&d, None),
             move |_: &Path| {
                 in_decode.store(true, Ordering::Relaxed);
-                Ok((flat(8, 4), color::wb::Illuminant::default()))
+                Ok(source(flat(8, 4)))
             },
             flag,
-            pipeline::Resampler::default(),
+            CPU,
         );
 
         let mut report = ExportReport::default();
