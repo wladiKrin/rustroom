@@ -460,4 +460,56 @@ fn main() {
             }
         }
     }
+
+    // ---- Question 4: what does the GPU stage actually cost, and does it agree? ----
+    //
+    // ⚠⚠ **The row the milestone is judged by, and the reason the spec projects nothing.**
+    // Composing component measurements has missed in this crate three times — M8.3g over-predicted
+    // a whole frame by ~2x, M8.3f was right in magnitude and wrong by 8x in attribution, M8.3o was
+    // optimistic by ~18%. So this prices the real thing through the real seam rather than adding
+    // up transfer costs.
+    if let Some(ctx) = gpu_pipeline::shared() {
+        println!(
+            "\n  the GPU stage, on this photograph ({})",
+            ctx.adapter_name()
+        );
+        let edits = edit_model::Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: want.distortion,
+                tca: want.tca,
+                vignetting: want.vignetting,
+                scale: want.scale,
+            }),
+            ..edit_model::Edits::default()
+        };
+        match gpu_pipeline::accelerate_prefix_stage(
+            "lens_correction",
+            &edits,
+            pipeline::RenderScale::FULL,
+            &image,
+            Some(&shot),
+            Resampler::default(),
+            ctx,
+        ) {
+            None => println!("           —    the seam declined (no corrector, or below the gate)"),
+            Some(g) => {
+                let gpu_ms = best_of(3, || g.apply(image.clone()));
+                println!("{whole:8.1} ms   the CPU stage");
+                println!("{gpu_ms:8.1} ms   the same stage across the seam");
+                println!("           {:.2}x", whole / gpu_ms);
+                // ⚠ And whether it is the same photograph, in 8-bit levels — the only unit a
+                // judgement about a picture is made in.
+                let cpu_out = stage.apply(image.clone());
+                let gpu_out = g.apply(image.clone());
+                let d = gpu_pipeline::compare(&cpu_out, &gpu_out);
+                println!(
+                    "           worst {:.3} levels over {:.3}% of samples",
+                    d.worst_levels,
+                    d.differing_percent()
+                );
+            }
+        }
+    } else {
+        println!("\n  no GPU adapter on this machine");
+    }
 }

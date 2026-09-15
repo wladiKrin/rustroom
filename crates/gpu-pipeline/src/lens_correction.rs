@@ -50,11 +50,18 @@ const MAX_GROUPS_PER_DIM: u32 = 65535;
 /// so a position error buys several times the levels one would guess. That factor is the whole
 /// reason this constant was swept rather than chosen, and it is what moved it.
 ///
-/// Carrying it to a real photograph: `pipeline::lens_grid` measures the real XF16-80 at
-/// **0.0007 px at step 8 and 0.0027 at step 16**, so on an equally brutal chart those are roughly
-/// **0.7 and 2.7 levels**. Step 8 costs 10.9 MiB against step 16's 2.74 on a 26 Mpx frame — 3.7%
-/// of the 298 MiB image rather than 0.9% — and 2.6 ms to build against 1.4. **Four times the
-/// accuracy for a cost that is noise either way.**
+/// ⚠⚠ **And on a REAL photograph the two steps are nearly the same, which is a correction to this
+/// comment's own first draft.** `probe_lens` on the XF16-80 at 26.0 Mpx measures the lattice error
+/// as **0.0015 / 0.0020 / 0.0027 / 0.0093 / 0.0348 px at steps 4 / 8 / 16 / 32 / 64** — essentially
+/// **floored around 0.002 px below step 32**, because there the f32 precision of the field itself
+/// dominates rather than the interpolation. So step 8 buys about **1.35x** over step 16 here, not
+/// the 4x the synthetic sweep suggests, and the measured end-to-end divergence at step 8 is
+/// **0.797 of a level**.
+///
+/// ⚠ It ships at 8 anyway, for a reason that is about the *next* lens rather than this one: the
+/// XF16-80 at 19.2 mm is a mild correction, and on a fisheye or an ultrawide the quadratic term
+/// takes over sooner — where step 8 really is 4x better. It costs **10.9 MiB against 2.74** on a
+/// 298 MiB frame and **4.8 ms against 1.4** on a 730 ms stage. There is nothing to trade.
 ///
 /// ⚠ Two constants in this crate were reasoned about instead of swept — `MIN_GPU_BOX_PX` low by
 /// ~8x, `MAX_TILE_DABS` sitting past an 8.7x occupancy cliff. This is the third, and the sweep
@@ -259,13 +266,15 @@ impl GpuStage for GpuLensCorrectionStage {
         "lens_correction"
     }
 
-    /// Measured whole-buffer by `probe_lens`: **169.0 ms at 6.5 Mpx**, and 650.2-695.8 ms at
-    /// 26.0 Mpx, which is 170-182 per 6.8 Mpx.
+    /// Measured whole-buffer by `probe_lens` on an X-T4 frame: **729.6-736.3 ms at 26.0 Mpx**
+    /// over three runs, which is 190-192 per 6.8 Mpx; and 169.0 ms at 6.5 Mpx, which is 176.8.
     ///
-    /// ⚠ Ships at the bottom of that band, the conservative direction — a lower number makes a
-    /// step less likely to chain, and the gate must fail toward the CPU.
+    /// ⚠ Ships at the **bottom** of the two, the conservative direction — a lower number makes a
+    /// step less likely to chain, and the gate must fail toward the CPU. It clears
+    /// `TRANSFER_COST`'s 27.0 by nearly seven times either way, so the exact value is not
+    /// load-bearing here; what matters is that it was measured rather than guessed.
     fn cpu_cost(&self) -> f32 {
-        169.0
+        176.0
     }
 
     /// ⚠⚠ **Three, and it is the first stage here that needs them for CORRECTNESS rather than for

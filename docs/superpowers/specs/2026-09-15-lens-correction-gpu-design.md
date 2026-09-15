@@ -158,9 +158,19 @@ with a synthetic `b = -0.05`, each step's lattice error taken from `lens_grid`'s
 
 ⚠⚠ **That is about 1000 output levels per pixel of lattice error, where this spec estimated ~250.**
 A hard 0.1/0.9 edge resampled through a kernel that overshoots produces gradients far steeper than
-the 156 levels/px an edge naively suggests. Carried to the real XF16-80 — 0.0007 px at step 8 against
-0.0027 at step 16 — that is roughly **0.7 levels against 2.7**, on a chart far harsher than any
-photograph.
+the 156 levels/px an edge naively suggests.
+
+⚠⚠ **And on a REAL photograph the two steps are nearly the same — a correction to this section's own
+first draft, which claimed 0.0007 px at step 8.** `probe_lens` on the XF16-80 at 26.0 Mpx measures
+**0.0015 / 0.0020 / 0.0027 / 0.0093 / 0.0348 px at steps 4 / 8 / 16 / 32 / 64** — essentially
+**floored near 0.002 px below step 32**, because there the f32 precision of the field itself
+dominates rather than the interpolation. So step 8 buys about **1.35× over step 16 on this lens**,
+not 4×, and the measured end-to-end divergence at step 8 is **0.797 of a level**.
+
+**It ships at 8 anyway, for a reason about the *next* lens rather than this one:** the XF16-80 at
+19.2 mm is a mild correction, and on a fisheye or an ultrawide the quadratic term takes over sooner,
+where step 8 really is 4× better. At 10.9 MiB against 2.74 on a 298 MiB frame, and 4.8 ms against
+1.4 on a 730 ms stage, there is nothing to trade.
 
 ⚠ Step 8 costs **10.9 MiB and 2.6 ms** against step 16's 2.74 MiB and 1.4 ms. Both are noise against
 a 298 MiB image and a 650 ms stage, so there is nothing to trade.
@@ -237,6 +247,25 @@ plan 2 worth landing on its own merits even if plan 1 slipped.
    exported from the GUI before today.
 7. One machine, one adapter (Apple M2, Metal), one lens profile.
 
+## 5a. ✅ MEASURED — plan 1's own row
+
+`probe_lens` on `DSCF6296.RAF`, 6246×4170 = 26.0 Mpx, the real XF16-80 profile, three runs
+(⚠ load average **5.60–6.73**, so **not a quiet machine** — that biases the CPU column upward and the
+ratio optimistically):
+
+| | |
+|---|---|
+| `LensCorrectionStage` on the CPU | **729.6–736.3 ms** |
+| the same stage across the seam | **168.3–189.7 ms** |
+| | **3.88–4.37×** |
+| worst divergence | **0.797 of an 8-bit level over 59.9% of samples** |
+
+**About 550 ms a photo, on the stage every RAW pays.** ⚠ Quoted as a band rather than a figure:
+this file has had to retract a headline for quoting a point reading.
+
+⚠ That is the **stage**, not a session and not an export. What an export costs end to end is plan
+2's last task, and it is the row the milestone is actually judged by.
+
 ## 6. ⚠⚠ No speed-up is projected, deliberately
 
 Composing component measurements has missed in this crate **three times** — M8.3g over-predicted a
@@ -247,3 +276,7 @@ For scale only, and **as a projection rather than a result**: composing M8.3g's 
 costs to 26 Mpx suggests roughly **85–120 ms of round trip** against 671.6 ms of CPU work. That
 number is not a claim. **The last task of each plan measures the real thing**, and the spec carries no
 predicted ratio.
+
+⚠ For the record, since §5a now has the measurement: the stage came out at **168–190 ms**, against a
+projection of 85–120 ms of transfer plus whatever the shader costs. The projection was not wrong so
+much as incomplete — it priced the bridge and not the crossing.
