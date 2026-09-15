@@ -250,7 +250,20 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 > `survey.rs`) and `filmstrip.rs` contains no key handling at all, which follows from this file's
 > own rule that *digits cull in Library, select tools in Develop*. Corrected in the spec in place.
 >
-> **▶ NEXT ACTION: OFFER THE DEMOSAIC TIER BEFORE PROPOSING ANOTHER PORT.** ✅ **M8.9 is CONFIRMED BY USE (2026-09-15)** — *"works, confirmed by use, but I don't really notice it being that much faster with the gpu on"* — and **the reporter is right**. Measured on his machine: his stored export tier is **`Best`**, a **10.78 s** decode against `Fast`'s **2.82**, while the whole render is 0.58–0.61 s on the GPU against 1.13–1.15 on the CPU. **So the GPU saves ~550 ms of a ~11.4 s export, under 5%, and the decode is ~90% of it — entirely upstream of everything `wgpu` touches.**
+> **▶⚠⚠ MEASURED 2026-09-15, AND IT IS THE LARGEST NUMBER LEFT ANYWHERE: `batch_export` IS SEQUENTIAL BY DESIGN AND LIBRAW'S DECODE IS SINGLE-THREADED, SO A BATCH LEAVES SEVEN OF EIGHT CORES IDLE FOR 90% OF ITS RUN.** `probe_decode_parallel` (kept), four distinct X-T4 RAWs at the default `Better` tier, 8 threads (⚠ load 6.90, **not a quiet machine**):
+>
+> | | |
+> |---|---|
+> | one decode alone | **7.77 s** |
+> | four **sequentially** | **30.35 s** (7.59 s each) |
+> | four **concurrently** | **9.17 s** (2.29 s each) |
+> | | **3.31×** |
+>
+> ⚠⚠ **Compare what M8.9's whole GPU port bought: under 5% of an export.** This is 3.31× on the 90% that dominates one. ⚠ The cost is memory, and `batch_export`'s own comment says why it went sequential: **four concurrent decodes hold 4 × 298 MiB of buffers**, before their renders. Two- or three-wide is the safer trade, and the right shape may be **decode-ahead** (decode photo N+1 while rendering N) rather than N full pipelines, which gets most of it for one extra buffer. ⚠ **Measure the shapes before choosing one** — this number says the ceiling, not the design.
+>
+> ⚠ **The other lever is a dropdown and costs nothing to offer:** his stored export tier is `Best`, a **10.78 s** decode against `Fast`'s **2.82** — and M8.4's own validated comparison found `Better` and `Best` *"indistinguishable at 4× nearest-neighbour"*. The two compose: `Fast` plus four-wide would take a four-photo batch from ~45 s to under 4.
+>
+> ⚠ Superseded next action follows: **OFFER THE DEMOSAIC TIER BEFORE PROPOSING ANOTHER PORT.** ✅ **M8.9 is CONFIRMED BY USE (2026-09-15)** — *"works, confirmed by use, but I don't really notice it being that much faster with the gpu on"* — and **the reporter is right**. Measured on his machine: his stored export tier is **`Best`**, a **10.78 s** decode against `Fast`'s **2.82**, while the whole render is 0.58–0.61 s on the GPU against 1.13–1.15 on the CPU. **So the GPU saves ~550 ms of a ~11.4 s export, under 5%, and the decode is ~90% of it — entirely upstream of everything `wgpu` touches.**
 >
 > **⚠⚠ THE ONE-DROPDOWN LEVER IS WORTH ~8 s A PHOTO, FIFTEEN TIMES THIS MILESTONE**, and M8.4's own validated comparison found `Better` and `Best` *"indistinguishable at 4×"*. ⚠ Then **parallel export**, which would hide the render behind the decode entirely. ⚠⚠ **Do not propose a further GPU stage until those two have been put to him**: the tail is not even offered to `accelerate` in an export, and porting it would buy ~200 ms of an 11 s wait.
 >
