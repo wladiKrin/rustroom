@@ -377,6 +377,22 @@ pub struct Settings {
     /// ⚠ Applied to the **scan**, not to `entries`, which is what keeps a file's copies adjacent
     /// to it and in ascending copy order under every ordering. See `RustroomApp::rebuild_entries`.
     pub library_sort: catalog::SortOrder,
+    /// How many photos a batch export decodes at once.
+    ///
+    /// ⚠⚠ **A setting rather than a constant, because the binding constraint is RAM and nothing
+    /// here can read how much is free.** Measured on an X-T4 at the default demosaic tier over
+    /// eight files: **1.02 / 1.88 / 3.14 / 4.55x at widths 1 / 2 / 4 / 8**, holding **298 / 596 /
+    /// 1192 / 2385 MiB** of decode buffers. The curve has no knee, so there is no one number that
+    /// serves an 8 GB laptop and a 64 GB desktop — it is a straight memory-for-time trade.
+    ///
+    /// ⚠ Deriving it from the **core count** was rejected for a sharper reason than taste: it
+    /// scales with the wrong thing. libraw's decode is single-threaded, so cores decide the
+    /// ceiling and memory decides what is reachable.
+    ///
+    /// ⚠ `u32`, for the two reasons `library_cell` carries: `Settings` derives `Eq`, which no
+    /// float satisfies, and a NaN width is **unrepresentable** rather than guarded. Read through
+    /// [`Settings::export_width`], which repairs a hand-edited zero.
+    pub export_concurrency: u32,
     /// The Library grid's cell size in whole points — thumbnails and their names scale with it.
     ///
     /// ⚠ `u32`, not `f32`, for two reasons: `Settings` derives `Eq`, which no float can satisfy;
@@ -506,6 +522,13 @@ pub struct Settings {
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
+/// How many photos a batch export decodes at once, out of the box.
+///
+/// ⚠ **4, measured rather than chosen**: 3.14x against sequential for ~1.2 GB of decode buffers on
+/// a 26 Mpx camera. 8 reaches 4.55x for 2.4 GB, which is a fine trade on a desktop and a poor one
+/// on a laptop — hence a setting, and hence a default that errs toward the laptop.
+pub const DEFAULT_EXPORT_WIDTH: u32 = 4;
+
 pub const DEFAULT_CELL: u32 = 168;
 /// The smallest and largest cell the buttons will reach.
 pub const CELL_RANGE: (u32, u32) = (108, 320);
@@ -556,6 +579,23 @@ impl Settings {
             format: self.hidden_formats.clone(),
             ..Default::default()
         }
+    }
+
+    /// The batch-export width, repaired: at least 1, at most the machine's core count.
+    ///
+    /// ⚠⚠ **Repairs rather than trusts, and the two ends fail differently.** `settings.json` is
+    /// hand-editable: a **0** would spawn no workers and hang the export forever, and a **64**
+    /// would ask for nineteen gigabytes of decode buffers on a 26 Mpx camera. `panel_order`'s rule
+    /// — the safe state is the one you get by default, not one you have to maintain.
+    ///
+    /// ⚠ The ceiling is the **core count** rather than a constant, because libraw's decode is
+    /// single-threaded: beyond one worker per core there is nothing left to overlap, only memory
+    /// to spend.
+    pub fn export_width(&self) -> usize {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        (self.export_concurrency as usize).clamp(1, cores)
     }
 
     /// The grid cell size in points, guaranteed usable.
@@ -723,6 +763,7 @@ impl Default for Settings {
             auto_lens_correction: true,
             default_rendering: edit_model::Rendering::Camera,
             library_sort: catalog::SortOrder::default(),
+            export_concurrency: DEFAULT_EXPORT_WIDTH,
             library_cell: DEFAULT_CELL,
             survey_cell: DEFAULT_SURVEY_CELL,
             custom_aspect: DEFAULT_CUSTOM_ASPECT,
@@ -1076,6 +1117,51 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **It repairs rather than trusts**, `panel_order`'s rule and for a sharper reason here:
+    /// `settings.json` is hand-editable, so **0** must become 1 rather than spawn no workers and
+    /// hang the export forever, and **64** must become the core count rather than ask for nineteen
+    /// gigabytes of decode buffers.
+    #[test]
+    fn the_export_width_repairs_rather_than_trusting_the_file() {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let w = |v: u32| {
+            Settings {
+                export_concurrency: v,
+                ..Settings::default()
+            }
+            .export_width()
+        };
+        assert_eq!(
+            w(0),
+            1,
+            "zero must repair to one, or the run spawns nothing"
+        );
+        assert_eq!(w(1), 1);
+        assert_eq!(w(64), cores, "past the core count must clamp to it");
+        assert_eq!(w(2), 2.min(cores));
+    }
+
+    /// ⚠⚠ **A settings file written before this field must get 4, not 0.** The container-level
+    /// `#[serde(default)]` is what makes that true; a **field**-level one would give `u32`'s own
+    /// default of 0, which `export_width` repairs to 1 — the feature silently absent for everyone
+    /// who already has a file, which is most people. This asserts the **value**, so it catches
+    /// either way round.
+    #[test]
+    fn a_settings_file_from_before_the_export_width_still_gets_four() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.export_concurrency, DEFAULT_EXPORT_WIDTH);
+        assert_eq!(
+            s.export_width(),
+            4.min(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1)
+            )
+        );
+    }
+
     #[test]
     fn the_hidden_formats_survive_a_restart() {
         // ⚠ A standing preference — "I shoot RAW+JPEG and only want the RAWs" is true of every
@@ -1302,6 +1388,10 @@ mod tests {
         let f = TempFile::new("export_rt");
         let store = SettingsStore::new(f.0.clone());
         let s = Settings {
+            // ⚠ Not the default, so the round trip actually carries it — the whole point of this
+            // literal being exhaustive is that a new field lands here as a compile error and a
+            // decision rather than as a silently defaulted value.
+            export_concurrency: DEFAULT_EXPORT_WIDTH + 1,
             // Not the default, so the round trip actually carries it.
             hidden_formats: {
                 let mut f = crate::format_filter::FormatFilter::default();

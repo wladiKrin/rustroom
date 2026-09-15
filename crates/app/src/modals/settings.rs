@@ -16,6 +16,7 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut tier = app.settings.view_demosaic;
     let mut gpu_tail = app.settings.gpu_tail;
     let mut resampler = app.settings.resampler;
+    let mut export_width = app.settings.export_concurrency;
     let mut theme_choice = app.settings.theme;
     let mut accent = app.settings.accent;
     let mut pan_drag = app.settings.pan_drag;
@@ -238,6 +239,28 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             ui.separator();
 
             ui.horizontal(|ui| {
+                ui.label("Export at once");
+                // ⚠ The ceiling is the core count rather than a constant: libraw's decode is
+                // single-threaded, so beyond one photo per core there is nothing left to overlap
+                // and only memory to spend. `Settings::export_width` repairs the same way, so a
+                // hand-edited file cannot get past it either.
+                let cores = std::thread::available_parallelism()
+                    .map(|n| n.get() as u32)
+                    .unwrap_or(1);
+                ui.add(egui::Slider::new(&mut export_width, 1..=cores.max(1)).text("photos"));
+            });
+            theme::hint(
+                ui,
+                "How many photos a batch export works on at once. Decoding a RAW uses one core, \
+             so several at a time is much faster — measured at about 3x at four, and 4.5x at \
+             eight. ⚠ Each photo in flight holds its decoded pixels in memory: roughly 300 MB \
+             on a 26-megapixel camera, so four is about 1.2 GB. Turn it down if exporting makes \
+             the machine swap. Applies to the next export.",
+            );
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
                 ui.label("Resampling");
                 egui::ComboBox::from_id_salt("resampler_pick")
                     .selected_text(resampler.label())
@@ -380,6 +403,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     // thumbnails sixty times a second — the `apply_view_demosaic` rule.
     if resampler != app.settings.resampler {
         app.apply_resampler(resampler);
+    }
+    // ⚠ A change guard like its neighbours, though for a weaker reason: this has no side effect
+    // beyond the write, because `start_export` reads `settings.export_width()` afresh when a run
+    // begins. The guard is here so the settings file is not rewritten on every frame the dialog
+    // is open — the `apply_view_demosaic` rule.
+    if export_width != app.settings.export_concurrency {
+        app.settings.export_concurrency = export_width;
+        app.save_settings();
     }
     // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
     // rebuilds the thumbnail loader and re-renders, so an unguarded call would reload the whole
