@@ -1078,3 +1078,20 @@ to an AI assistant, not to a contributor**, and it is enormous.
    guess), how to run and regenerate the goldens, and the sabotage-testing discipline, which is
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
+
+## The camera rendering does not reach an export
+
+`batch_export::export_one` builds its tail with `pipeline::ProfileRendering::default()`, so the
+camera profile's **tone curve** and **baseline exposure** are absent from every exported file while
+the preview applies both. Inherited rather than introduced by M8.9 — `build_pipeline_spec`, which
+`export_one` used to go through, passed the same default.
+
+⚠⚠ **Deliberately not fixed alongside M8.9's lens-correction fix**, and the reason is about
+attribution rather than effort: both change the pixels of every exported RAW, and landing them
+together makes the resulting diff unattributable to either. The lens half is measured at worst 187
+of 255 levels; this half has **no measurement at all yet**, and taking one is the first task.
+
+⚠ What it needs: `decode_for_export` already has the metadata in hand (it is where `resolve_lens`
+runs), and `ExportSource` is the struct to carry the profile in — the same shape the lens shot now
+uses. The awkward half is that `ProfileRendering` borrows, so the owned parts have to live
+somewhere for the duration of the render.
