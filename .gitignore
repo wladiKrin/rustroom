@@ -21,3 +21,6 @@ Cargo.lock.orig
 # ⚠ The detector sweep's labels file names photographs on one machine — the RAW_FIXTURE
 # convention. See crates/app/examples/detect_probe.rs.
 *.labels
+
+# graphify knowledge-graph artefacts (regenerable; 27 MB)
+graphify-out/
