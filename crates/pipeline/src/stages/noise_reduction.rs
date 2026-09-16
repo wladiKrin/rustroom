@@ -408,7 +408,10 @@ mod tests {
             smoothness: 50.0,
         };
         let reach = kernel_reach(&params, RenderScale::FULL);
-        assert!(reach > 0, "a zero reach would make the margin below vacuous");
+        assert!(
+            reach > 0,
+            "a zero reach would make the margin below vacuous"
+        );
         let stage = NoiseReductionStage::new(&params, RenderScale::FULL);
 
         let side = 4 * reach + 64;

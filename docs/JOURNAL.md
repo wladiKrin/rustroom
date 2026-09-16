@@ -120,6 +120,100 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### M8.12 — the region-scoped locals did whole-frame work, and no test could see it (2026-09-17)
+
+`apply_region` for **noise reduction** and **dehaze** read `self.apply(src.buf.clone())` and
+cropped the answer out. Byte-correct, and full-frame work. `run_region_plan` hands its **first**
+step `RegionSrc::whole(src)`, so a local paid whole-buffer cost whenever it was first — and a
+**one-step plan, the common case for a drag, saved nothing at all.**
+
+**⚠⚠ THE DEFECT WAS VISIBLE IN THE DOC COMMENT FOR AS LONG AS IT EXISTED.** `noise_reduction.rs`
+said *"the clone is of the **margined region**, not the frame — far smaller than the buffer this
+exists to avoid processing, **which is the whole point**."* The code cloned the frame. Nobody read
+the two together.
+
+**⚠⚠ AND THE GUARD WAS A TAUTOLOGY.** `perspective` and `lens_correction`, the gathers, each carry
+a region-equivalence test. The two locals carried **none** — because with apply-whole-then-crop the
+test compares a computation with itself. This file's own line, *"the two paths agree byte for byte
+by construction — `apply` IS `apply_region`"*, recorded the tautology as a guarantee. **A guard
+that cannot fail is the shape this project already has a standing lesson about; this is the second
+species of it.**
+
+**The differential that proved it**, from per-step instrumentation added to `run_region_plan`: the
+same stage, the same 1041×695 output, the same 1.00× margin — **18 ms as step 1 of a two-step plan,
+101–105 ms as step 0 of a one-step plan.** Scoped NR measured 93–96 ms against whole-frame CPU NR's
+92.4–95.0: the same number, because it was the same work.
+
+**After:** NR step 0 **16.5–18.9**, dehaze step 0 **17.1–18.9**, two-step total **34.1–36.9**.
+Dehaze now costs ~18 ms whether it is step 0 or step 1 — the asymmetry is gone.
+
+**⚠⚠ THE SPEC ASSERTED BYTE-IDENTITY AND WAS WRONG, WHICH THIS FILE ALREADY RECORDS A PREVIOUS SPEC
+DOING.** `box_blur` keeps a running sum, so it reaches each position by a different history of adds
+and subtracts. The criterion is agreement **to within a rounding**, and the bounds were sized from
+measurement at both ends rather than copied: NR **4.8e-6** normal against **7.3e-4** with the margin
+deleted (150×), bound 1e-5; dehaze **9.9e-5** against **5.2e-2** (527×), bound 1e-3. Dehaze needs the
+looser one for a reason — it divides by `T_MIN` 0.1, amplifying a wobble ~10×.
+
+**⚠ A false finding was nearly shipped, and the fixture caused it.** A first margin sweep showed
+byte-identity at 2× `kernel_reach`, suggesting the margin was under-sized. It was an artifact: at 2×
+the margin reached the image edge, so the "slice" was the whole buffer. Re-run on a fixture large
+enough to keep 3× interior, the divergence **does not shrink as the margin widens** (NR 9.7e-6 /
+1.1e-5 / 8.8e-6; dehaze 2.4e-5 / 3.2e-5 / 4.0e-5). `kernel_reach` is correct for both.
+**A sweep whose largest setting exceeds the fixture measures the fixture.**
+
+⚠ Untouched: the scoped chain is still the **CPU's** — `gpu_prefix_steps` stays 0 because
+`accelerate_prefix_stage`'s twins run whole-buffer.
+
+The block this replaced:
+
+> ### State (2026-09-16)
+> 
+> **2529 tests, 63 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
+> tree. ⚠ `main` is **2 commits ahead of `origin/main`** (the CLAUDE.md split and a `.gitignore`
+> entry) — **not pushed; the user pushes himself.**
+> 
+> ✅ **M8.11 — a mask's coverage and blend on the GPU — is merged, green, and CONFIRMED BY USE
+> (2026-09-16)** — *"works, confirmed"*, with no defects found by using it. A whole mask is one
+> `GpuStage`: seed, coverage, sub-stages and blend in a single compute pass, with the composite
+> folded into one coverage dispatch.
+> 
+> ⚠ **Every GPU milestone in Phase 8 is now confirmed by use.**
+> 
+> ⚠ Journal sections: `M8.11 confirmed by use (2026-09-16)` and `M8.11 — a mask's coverage and
+> blend on the GPU (2026-09-16)`.
+> 
+> ### ▶ Next action — chase the 118 ms, and it is a ~10× gap on the path he actually edits through
+> 
+> **▶⚠⚠ A SCOPED 0.7 Mpx DEHAZE DRAG COSTS 118 ms AGAINST A 9–11 ms CACHE-HIT FRAME, AND NOTHING
+> EXPLAINS IT.** Found 2026-09-16 as a side-observation while re-measuring the post-NR checkpoint.
+> ⚠ **`RUSTROOM_DEBUG_RENDER` cannot explain it — it prints no per-step lines on the scoped path**, so
+> the first work is **instrumentation, not optimisation**: make the scoped path report its steps, then
+> decompose. ⚠ One observation from a loaded machine — **reproduce it idle before scoping anything.**
+> Full entry at the head of `## Performance` in `docs/BACKLOG.md`.
+> 
+> **⚠ Why this outranks the three caching items:** they are worth 12–30 ms each and **two of them are
+> export-side**; this is **~107 ms on an interactive gesture**.
+> 
+> **✅ A MEASUREMENT WAVE RAN 2026-09-16 — four agents, four probes, all committed and re-runnable.**
+> It is the reason the list below changed. What it found:
+> 
+> - **The coverage cache's ~2 ms ceiling missed by 4–8×** (upload 7.9–15.8, download 4.0–9.4). ⚠⚠ **But
+>   the cost is not transfer**: `write_buffer` is 0.75–1.16 ms, exactly as M8.3g said. It is
+>   `GpuMaskStage::pack`'s **serial per-byte u8→u32 repack, 10.6–13.8 ms on every encode**, plus a
+>   download that crosses the wire as **one u32 per sample** (85–90% inflation). **Both are mechanical
+>   and open no design question — do them before the cache.**
+> - **The post-NR checkpoint's ~26 ms is CONFIRMED, and it saves ~0 under a viewport** — M8.8's
+>   region-scoped path takes over and no GPU prefix runs. ⚠ **M8.6's retraction shape.** Price it as an
+>   export win.
+> - **The "per-gating `MIN_GPU_BOX_PX`" item rests on a premise the measurement CONTRADICTS** — gating
+>   is worse at every box size, both configurations cross at the same rows. **Delete the item.**
+> - **`MAX_TILE_DABS`: the cliff is at 2560, not 3584**, and 1024 is the lowest value on the plateau.
+>   Blocked on a **portability** question no M2 run can settle.
+> 
+> ⚠⚠ **A method lesson worth keeping: FOUR CONCURRENT TIMING AGENTS DEGRADE THEIR OWN MEASUREMENTS.**
+> Load hit 4.0–6.1; **4 of 7 checkpoint runs were unusable** and every `MIN_GPU_BOX_PX` crossover is an
+> upper bound. Reading parallelises; **timing does not**. Run probes serially, or on an idle machine.
+
 ### The measurement wave, and what it dissolved (2026-09-16)
 
 Four subagents, four new probes, no existing source touched. Run because three of the remaining

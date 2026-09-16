@@ -142,53 +142,48 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-16)
+### State (2026-09-17)
 
-**2529 tests, 63 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
-tree. ⚠ `main` is **2 commits ahead of `origin/main`** (the CLAUDE.md split and a `.gitignore`
-entry) — **not pushed; the user pushes himself.**
+**2531 tests, 74 goldens.** ⚠ This file said *"63 goldens"* for some time; the golden binary
+actually runs **74, 0 filtered out**. The 74 is measured — when that drifted is not known.
 
-✅ **M8.11 — a mask's coverage and blend on the GPU — is merged, green, and CONFIRMED BY USE
-(2026-09-16)** — *"works, confirmed"*, with no defects found by using it. A whole mask is one
-`GpuStage`: seed, coverage, sub-stages and blend in a single compute pass, with the composite
-folded into one coverage dispatch.
+On branch **`m8.12-scoped-locals`**, which holds **M8.12 — the region-scoped locals actually
+scope**, plus the per-step scoped instrumentation that found it. `main` is 4 commits ahead of
+`origin/main`; this branch is ahead of that. **Not merged, not pushed.**
 
-⚠ **Every GPU milestone in Phase 8 is now confirmed by use.**
+`fmt` / `clippy --all-targets --all-features -D warnings` / `test --workspace` green together,
+**each exit code read from its own command** — `FMT=0`, `CLIPPY=0`, `TEST=0`. **74 goldens ran and
+none moved**; `crates/pipeline/tests` unmodified. 2529 → 2531, exactly the two tests added.
 
-⚠ Journal sections: `M8.11 confirmed by use (2026-09-16)` and `M8.11 — a mask's coverage and
-blend on the GPU (2026-09-16)`.
+### ▶ Next action — CONFIRM M8.12 BY USE, and the check is a PAN, not a stopwatch
 
-### ▶ Next action — chase the 118 ms, and it is a ~10× gap on the path he actually edits through
+**▶⚠⚠ THE ONLY THING M8.12 CANNOT TEST IS THE ONE THAT MATTERS: a band or seam at the region's
+edge while panning.** Its failure mode is a **plausible photograph**, not an error, and a still
+frame cannot catch it — the two paths now differ by a rounding, and a margin bug differs by a band.
 
-**▶⚠⚠ A SCOPED 0.7 Mpx DEHAZE DRAG COSTS 118 ms AGAINST A 9–11 ms CACHE-HIT FRAME, AND NOTHING
-EXPLAINS IT.** Found 2026-09-16 as a side-observation while re-measuring the post-NR checkpoint.
-⚠ **`RUSTROOM_DEBUG_RENDER` cannot explain it — it prints no per-step lines on the scoped path**, so
-the first work is **instrumentation, not optimisation**: make the scoped path report its steps, then
-decompose. ⚠ One observation from a loaded machine — **reproduce it idle before scoping anything.**
-Full entry at the head of `## Performance` in `docs/BACKLOG.md`.
+**The check:** open a photo with **noise reduction and dehaze both active**, go to **1:1**, and
+**pan**. The picture must not band, seam or shimmer at the edges of the moving region. ⚠ Then drag
+**Dehaze** at 1:1 — it should be visibly quicker.
 
-**⚠ Why this outranks the three caching items:** they are worth 12–30 ms each and **two of them are
-export-side**; this is **~107 ms on an interactive gesture**.
+**What it bought** (same machine, comparable load, 14 frames each):
 
-**✅ A MEASUREMENT WAVE RAN 2026-09-16 — four agents, four probes, all committed and re-runnable.**
-It is the reason the list below changed. What it found:
+| | before | after | |
+|---|---|---|---|
+| NR as step 0 | 93–96 ms | **16.5–18.9 ms** | ~5.2× |
+| dehaze as step 0, one-step plan | 101–105 ms | **17.1–18.9 ms** | ~5.7× |
+| two-step plan total | 111–114 ms | **34.1–36.9 ms** | ~3.2× |
 
-- **The coverage cache's ~2 ms ceiling missed by 4–8×** (upload 7.9–15.8, download 4.0–9.4). ⚠⚠ **But
-  the cost is not transfer**: `write_buffer` is 0.75–1.16 ms, exactly as M8.3g said. It is
-  `GpuMaskStage::pack`'s **serial per-byte u8→u32 repack, 10.6–13.8 ms on every encode**, plus a
-  download that crosses the wire as **one u32 per sample** (85–90% inflation). **Both are mechanical
-  and open no design question — do them before the cache.**
-- **The post-NR checkpoint's ~26 ms is CONFIRMED, and it saves ~0 under a viewport** — M8.8's
-  region-scoped path takes over and no GPU prefix runs. ⚠ **M8.6's retraction shape.** Price it as an
-  export win.
-- **The "per-gating `MIN_GPU_BOX_PX`" item rests on a premise the measurement CONTRADICTS** — gating
-  is worse at every box size, both configurations cross at the same rows. **Delete the item.**
-- **`MAX_TILE_DABS`: the cliff is at 2560, not 3584**, and 1024 is the lowest value on the plateau.
-  Blocked on a **portability** question no M2 run can settle.
+⚠ The check that says it is really fixed: **dehaze now costs ~18 ms whether it is step 0 or step 1.**
+Before, the same stage on the same output rect cost 104 ms as step 0 and 18 as step 1.
 
-⚠⚠ **A method lesson worth keeping: FOUR CONCURRENT TIMING AGENTS DEGRADE THEIR OWN MEASUREMENTS.**
-Load hit 4.0–6.1; **4 of 7 checkpoint runs were unusable** and every `MIN_GPU_BOX_PX` crossover is an
-upper bound. Reading parallelises; **timing does not**. Run probes serially, or on an idle machine.
+**⚠⚠ What M8.12 did NOT touch, and it is the next lever on this path: the scoped chain is still the
+CPU's.** `gpu_prefix_steps` stays 0 on the scoped path because `accelerate_prefix_stage`'s twins run
+whole-buffer. A scoped drag now does the right *amount* of work, on the wrong processor — so M8.8's
+region scoping and M8.3o/M8.3q's GPU ports remain mutually exclusive.
+
+⚠ Also still open: a **GPU-resident base for `GpuBrushRaster`** (a global drag over a masked photo
+gains 1.00×, by construction); the **coverage cache's repack and 4×-inflated download wire**,
+measured and mechanical; **item 5, spot removal**, the only unported stage.
 
 ### The agreed systematic order (GPU port)
 

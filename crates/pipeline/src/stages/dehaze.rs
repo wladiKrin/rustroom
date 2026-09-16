@@ -459,7 +459,10 @@ mod tests {
     fn a_region_matches_the_same_part_of_the_whole() {
         let params = Dehaze { amount: 60.0 };
         let reach = kernel_reach(&params, RenderScale::FULL);
-        assert!(reach > 0, "a zero reach would make the margin below vacuous");
+        assert!(
+            reach > 0,
+            "a zero reach would make the margin below vacuous"
+        );
 
         let side = 4 * reach + 64;
         let clear = scene(side, side);

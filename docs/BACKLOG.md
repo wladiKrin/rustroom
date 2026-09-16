@@ -425,20 +425,43 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
-### ⚠⚠ A SCOPED 0.7 Mpx DEHAZE DRAG COSTS 118 ms AND NOTHING EXPLAINS IT (recorded 2026-09-16 — OBSERVED, UNDECOMPOSED)
+### ✅ EXPLAINED AND FIXED — a scoped dehaze drag cost 118 ms because the scoped locals did WHOLE-FRAME work (M8.12, 2026-09-17)
 
-Found as a side-observation while re-measuring the post-NR checkpoint. A dehaze drag on the
-**region-scoped** path, at **0.7 Mpx**, costs **118 ms** against a 9–11 ms cache-hit frame. That is
-a **~10× gap on the path the user actually edits through**, and it is not accounted for by anything
-in this file.
+**Root cause.** `apply_region` for **noise reduction** and **dehaze** read
+`self.apply(src.buf.clone())` and cropped the answer out of it — a full-buffer computation with a
+crop bolted on. `run_region_plan` hands its **first** step `RegionSrc::whole(src)`, so a local
+stage paid full-frame cost whenever it was first, and **a one-step plan saved nothing at all.**
+A drag resumes at the checkpoint immediately before the dragged stage, so one-step plans are the
+common case.
 
-**⚠ `RUSTROOM_DEBUG_RENDER` cannot currently explain it: it prints no per-step lines on the scoped
-path.** So the first work here is instrumentation, not optimisation — make the scoped path report
-its steps, then decompose. It was deliberately left undecomposed rather than guessed at.
+⚠⚠ **The proof was a differential the instrumentation made visible: the SAME stage, the SAME
+1041x695 output, the SAME 1.00x margin, cost 18 ms as step 1 of a two-step plan and 101-105 ms as
+step 0 of a one-step plan.** The only difference is the size of the buffer handed to it. Scoped NR
+measured 93-96 ms against whole-frame CPU NR's 92.4-95.0 — the same number, because it was the same
+work.
 
-⚠ **Worth triaging before any of the three caching items below.** Those are worth 12–30 ms each and
-two of them are export-side; this is ~107 ms on an interactive gesture. ⚠⚠ But it is one
-observation from a loaded machine — **reproduce it idle before scoping anything.**
+**Fixed** by cropping `src.buf` to `input_rect_for`'s rect before applying. Measured after, same
+machine, comparable load:
+
+| | before | after | |
+|---|---|---|---|
+| NR as step 0 | 93-96 ms | **16.5-18.9** | ~5.2x |
+| dehaze as step 0 (1-step plan) | 101-105 ms | **17.1-18.9** | ~5.7x |
+| 2-step plan total | 111-114 ms | **34.1-36.9** | ~3.2x |
+
+⚠ The check that says it is really fixed: **dehaze now costs ~18 ms whether it is step 0 or step 1.**
+The asymmetry is gone.
+
+**⚠⚠ AND NO TEST COULD HAVE SEEN IT.** `perspective` and `lens_correction` — the gathers — each
+carry a region-equivalence test. The two locals carried **none**, because with apply-whole-then-crop
+such a test compares a computation with itself and passes for that reason. The journal's own line
+*"the two paths agree byte for byte by construction — `apply` IS `apply_region`"* recorded the
+tautology as if it were a guarantee. Both stages now have a real one, each with a **sabotage-verified
+bound** (NR 4.8e-6 normal against 7.3e-4 with the margin deleted; dehaze 9.9e-5 against 5.2e-2).
+
+⚠ Still open, and untouched by this: **the scoped path is the CPU's** — `gpu_prefix_steps` stays 0
+because `accelerate_prefix_stage`'s twins run whole-buffer. A scoped drag now does the right amount
+of work, on the wrong processor.
 
 ### The two GPU constants nobody had swept — now swept, and one premise is BACKWARDS (recorded 2026-09-16 — MEASURED)
 
