@@ -12,9 +12,10 @@ use edit_model::{Geometry, MaskedAdjustment};
 use super::mask_coverage::{BaseFacts, Composite, CoverageSource, PixelCtx};
 
 pub struct MaskStage {
-    // ⚠ The `MaskedAdjustment` is still not retained whole: the coverage source and the sub-stage
-    // list are extracted at construction, and only the `LocalAdjustments` the sub-stages were
-    // built from is kept beside them — see `adjustments` below, and why.
+    // ⚠⚠ The `MaskedAdjustment` **is** retained whole now, and this comment used to say the
+    // opposite. It was accurate when written: the coverage source and the sub-stage list are
+    // still extracted at construction, and for a long time that was everything anyone needed.
+    // M8.3j needed the adjustments back, and M8.11 needed the *shape* — see `masked` below.
     /// The mask's coverage: its base shape plus every refinement, resolved once at construction.
     composite: Composite,
     stages: Vec<Box<dyn PipelineStage>>,
@@ -32,14 +33,39 @@ pub struct MaskStage {
     /// ⚠ An `Arc`, not a borrow: the stage outlives the builder's scope, so a lifetime here would
     /// infect the whole stage list.
     deposit: Option<(std::sync::Arc<crate::BrushCoverage>, usize)>,
-    /// The adjustments [`Self::stages`] was built from, kept so
-    /// [`PipelineStage::accelerate_inner`] can hand them to an accelerator.
+    /// The whole description this stage was built from, kept so
+    /// [`PipelineStage::accelerate_inner`] can hand the adjustments to an accelerator and so
+    /// [`Self::description`] can hand the *shape* to one.
     ///
-    /// ⚠⚠ **This field was deliberately dropped once and is deliberately back.** The old comment
-    /// said everything needed was extracted at construction — true until a GPU builder needed the
-    /// *parameters* a CPU stage does not expose. A `Box<dyn PipelineStage>` reports only `name`
-    /// and `apply`, so the only alternative was downcasting every stage in the workspace.
-    adjustments: edit_model::LocalAdjustments,
+    /// ⚠⚠ **This was deliberately dropped once and is deliberately back, twice over.** The
+    /// original comment said everything needed was extracted at construction — true until M8.3j,
+    /// when a GPU builder needed the *parameters* a CPU stage does not expose, and true of the
+    /// shape until M8.11, when a GPU builder needed that too. A `Box<dyn PipelineStage>` reports
+    /// only `name` and `apply`, so the only alternative was downcasting every stage in the
+    /// workspace.
+    ///
+    /// ⚠ It holds the **whole** `MaskedAdjustment` rather than the adjustments beside the shape.
+    /// A separate `adjustments` field would be a second copy of `masked.adjustments`, and two
+    /// facts that can disagree is the shape `render_max_dim`, `fit_image_size` and
+    /// `Session::geometry_mode` were each deleted for.
+    masked: MaskedAdjustment,
+    /// The geometry the coverage was resolved against.
+    ///
+    /// ⚠ Needed only by a brush, whose strokes are in pre-geometry source coordinates — but a GPU
+    /// twin has to rebuild the same `Composite`, so it needs what the CPU one was given.
+    geometry: Geometry,
+    /// The coverage maps the caller had already rasterized, one per component.
+    ///
+    /// ⚠⚠ **Kept so a GPU twin can reach them, and it is what makes a GATING brush accelerable at
+    /// all.** Such a brush decides its coverage from the photograph, which does not exist when the
+    /// pipeline is built — so a twin can only take one that is already rasterized. On a cache hit
+    /// `render_engine` supplies exactly that; on a miss there is none and the twin declines, which
+    /// leaves this stage to rasterize and deposit, warming the cache for the next frame.
+    ///
+    /// ⚠ Cloned rather than re-derived from `composite`: `CoverageSource` is private to this
+    /// module, and widening the description to expose it would leak that type across the crate
+    /// boundary for one consumer.
+    prebuilt: Vec<Option<std::sync::Arc<crate::brush::CoverageMap>>>,
     /// A GPU coverage rasteriser, when the app has offered one.
     ///
     /// ⚠⚠ **`None` for the CLI, every export and all 63 goldens** — none of which has a GPU
@@ -92,7 +118,9 @@ impl MaskStage {
             stages: adjustment_stages(&masked.adjustments, baseline, scale),
             region,
             deposit,
-            adjustments: masked.adjustments.clone(),
+            masked: masked.clone(),
+            geometry: *geometry,
+            prebuilt: prebuilt.to_vec(),
             scale,
             coverage_gpu: None,
         }
@@ -127,10 +155,26 @@ impl MaskStage {
             // ever were, `capture_stages` builds noise reduction and dehaze, neither of which is
             // in `REPLACEABLE`, so the list would come back unchanged. Safe by construction in
             // both directions, which beats safe by one caller remembering.
-            adjustments: masked.adjustments.clone(),
+            masked: masked.clone(),
+            geometry: *geometry,
+            prebuilt: prebuilt.to_vec(),
             scale,
             coverage_gpu: None,
         }
+    }
+
+    /// The description this stage was built from: the mask, the geometry and the region.
+    ///
+    /// ⚠⚠ **Deliberately whole rather than piecemeal.** A GPU twin needs the mask's *shape* as
+    /// well as its adjustments, and the geometry, and the region — and a builder that assembled
+    /// those from four separate accessors is four chances for one of them to be forgotten. The
+    /// failure would be a plausible photograph masked by the wrong shape, not an error.
+    ///
+    /// ⚠ Third time the *"a `Box<dyn PipelineStage>` reports only `name` and `apply`"* problem has
+    /// been answered by keeping the parameters beside the stage — after M8.3j's adjustments and
+    /// M8.9's `LensShot`. `accelerate` is still name-matching, and this does not change that.
+    pub fn description(&self) -> (&MaskedAdjustment, &Geometry, Option<Region>) {
+        (&self.masked, &self.geometry, self.region)
     }
 
     /// How this mask's coverage is obtained, shared by both constructors.
@@ -220,7 +264,7 @@ impl PipelineStage for MaskStage {
 
     fn accelerate_inner(&mut self, f: &crate::SubStageAccelerator<'_>) {
         let taken = std::mem::take(&mut self.stages);
-        self.stages = f(taken, &self.adjustments, self.scale);
+        self.stages = f(taken, &self.masked.adjustments, self.scale);
     }
 
     fn sub_stage_names(&self) -> Vec<&'static str> {
@@ -233,6 +277,18 @@ impl PipelineStage for MaskStage {
 
     fn has_coverage_rasterizer(&self) -> bool {
         self.coverage_gpu.is_some()
+    }
+
+    /// ⚠ One per component, index 0 being the base. Empty where the caller rasterizes nothing —
+    /// the CLI, every export and all 63 goldens.
+    fn prebuilt_coverage(&self) -> &[Option<std::sync::Arc<crate::brush::CoverageMap>>] {
+        &self.prebuilt
+    }
+
+    /// ⚠ Delegates to the inherent [`Self::description`], so there is one definition of what a
+    /// mask reports about itself rather than two that could drift.
+    fn mask_description(&self) -> Option<(&MaskedAdjustment, &Geometry, Option<crate::Region>)> {
+        Some(self.description())
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
@@ -453,6 +509,43 @@ mod tests {
     // now, so a module-level import would be unused in a non-test build.
     use super::super::mask_coverage::{hue_chroma, lightness};
     use edit_model::{LinearGradient, LocalAdjustments, Mask};
+
+    /// ⚠⚠ **The accessor a GPU twin is built from.** Without it `accelerate` sees only `name` and
+    /// `apply` on a `dyn PipelineStage` and cannot reconstruct the mask at all — the same wall
+    /// M8.3j hit for the adjustments and M8.9 for the `LensShot`.
+    ///
+    /// ⚠ It asserts on **all three** components. A test checking only the mask would pass against
+    /// a `description` that returned a default geometry, and a brush's strokes are in pre-geometry
+    /// source coordinates — so the wrong geometry is a mask painted onto the wrong pixels, which
+    /// is a plausible photograph rather than an error.
+    #[test]
+    fn a_mask_stage_reports_the_description_it_was_built_from() {
+        let m = MaskedAdjustment {
+            mask: Mask::Radial(edit_model::RadialGradient {
+                center: [0.25, 0.75],
+                radius: [0.1, 0.2],
+                feather: 30.0,
+                invert: true,
+            }),
+            adjustments: LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            },
+            refine: Vec::new(),
+        };
+        let geo = Geometry {
+            angle: 3.0,
+            ..Default::default()
+        };
+        let stage = MaskStage::new(&m, RenderScale::FULL, &geo);
+        let (got_mask, got_geo, got_region) = stage.description();
+        assert_eq!(got_mask, &m, "the mask must come back unchanged");
+        assert_eq!(got_geo, &geo, "the geometry must come back unchanged");
+        assert!(
+            got_region.is_none(),
+            "a whole-frame stage reports no region"
+        );
+    }
 
     /// ⚠⚠ **The carrier, and nothing else in the workspace can see this.** `begin_mask` changes
     /// no pixel by construction — it exists so an implementation can drop state — so deleting the

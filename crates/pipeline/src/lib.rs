@@ -247,6 +247,41 @@ pub trait PipelineStage: Send + Sync {
         false
     }
 
+    /// This stage's mask, geometry and region, when it **is** a mask. Default: it is not one.
+    ///
+    /// ⚠⚠ **This and [`Self::prebuilt_coverage`] exist because a `Box<dyn PipelineStage>` reports
+    /// only `name` and `apply`.** That wall has now been hit three times — M8.3j needed a mask's
+    /// adjustments, M8.9 needed a `LensShot`, and a GPU twin for the whole mask needs its *shape*.
+    /// Downcasting every stage in the workspace was the only alternative.
+    ///
+    /// ⚠ It reports **composition**, exactly as [`Self::sub_stage_names`] does, which is the
+    /// distinction M8.3g drew when it rejected a trait method for the byte-path question: that one
+    /// would have leaked an *output-encoding* concern into a seam deliberately free of them.
+    ///
+    /// ⚠ Whole rather than piecemeal: a builder assembling this from three accessors is three
+    /// chances to forget one, and the failure is a plausible photograph masked by the wrong shape.
+    fn mask_description(
+        &self,
+    ) -> Option<(
+        &edit_model::MaskedAdjustment,
+        &edit_model::Geometry,
+        Option<Region>,
+    )> {
+        None
+    }
+
+    /// Coverage maps this stage was handed already rasterized, one per component.
+    ///
+    /// ⚠⚠ **This is what makes a GATING brush accelerable.** Such a brush reads the photograph to
+    /// decide its own coverage, so a GPU twin — which is built before any pixel exists — can only
+    /// take a map somebody else already made. On a cache hit `render_engine` supplies one; on a
+    /// miss the twin declines and the CPU stage rasterizes and deposits, warming the cache.
+    ///
+    /// ⚠ Default empty: the CLI, every export and all 63 goldens rasterize on the fly.
+    fn prebuilt_coverage(&self) -> &[Option<std::sync::Arc<brush::CoverageMap>>] {
+        &[]
+    }
+
     /// This stage's output dimensions for an input of `w` x `h`. Default: unchanged.
     ///
     /// ⚠⚠ **The caller needs this BEFORE the stage runs.** A region-scoped render never produces
