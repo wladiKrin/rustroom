@@ -552,15 +552,16 @@ fn gpu_mask(
         let (_, build) = REPLACEABLE.iter().find(|(r, _)| r == n)?;
         subs.push(build(&e, scale, region, profile, spec, ctx)?);
     }
-    // ⚠ The BASE component's map, index 0. Refinements arrive with the composite fold.
-    let prebuilt = s.prebuilt_coverage().first().cloned().flatten();
+    // ⚠ The whole per-component slice, base first — `BrushCoverage`'s own `[mask][component]`
+    // shape, handed over as it stands rather than indexed here. Picking out index 0 is what this
+    // did before the fold, and doing it here would have put the chain's ordering in two places.
     Some(Box::new(crate::GpuMaskStage::new(
         masked,
         geometry,
         mask_region,
         scale,
         spec.baseline,
-        prebuilt,
+        s.prebuilt_coverage(),
         subs,
         ctx,
     )?))
@@ -1714,15 +1715,33 @@ mod tests {
         );
     }
 
-    /// A brush the GPU will rasterise but that needs **no base plane**, so it deposits nothing.
+    // ⚠⚠ **`plain_brush_mask` died at the composite fold, and its death is the finding — the
+    // second helper in this file to go that way, after `brush_mask` at the substitution.** It
+    // built a brush with `auto_mask: false`, which deposits nothing because without a gate
+    // `plan.gating_rows` is `None` and the rasteriser uploads no base. That made it the taker in
+    // `a_mask_that_deposits_nothing...`, but only while it ALSO declined — which it did solely
+    // because it carried a refinement. Once a composite is what the fold accelerates, a plain
+    // brush is substituted like any other and cannot be a wedge at all.
+    //
+    // ⚠ Clippy caught it while 209 tests were green, which is at least the twenty-fourth time in
+    // this project. A dead fixture is invisible to a passing suite by construction.
+
+    /// A gating brush whose box falls **below** `MIN_GPU_BOX_PX`.
     ///
-    /// ⚠ `auto_mask: false` is the whole of it: without a gate `plan.gating_rows` is `None`, and
-    /// the rasteriser uploads no base at all. That is also why the shared upload is worth nothing
-    /// to a plain brush — a real limit of this milestone rather than an oversight.
-    fn plain_brush_mask(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
+    /// ⚠⚠ **Declines the twin and deposits nothing, which after M8.11 is a combination only this
+    /// shape has.** The twin declines because the brush is gating with no cached map; the *gate*
+    /// deposits nothing because `GpuBrushRaster` refuses a box under 512 Ki px, so the coverage
+    /// never reaches the GPU and no base plane is uploaded. A full-size gating brush declines too
+    /// and **deposits**, which is the one thing the taker must not do.
+    ///
+    /// ⚠ The scene stays 1024x1024 — only the *stroke* shrinks. `SharedPlane` refuses a deposit
+    /// whose dimensions do not match, so a taker at a different image size could not take a stale
+    /// plane even if the clear were deleted, and the test would go quietly vacuous.
+    fn small_gating_brush_mask(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
         let mut m = gating_brush_mask(a);
         if let edit_model::Mask::Brush(b) = &mut m.mask {
-            b.strokes[0].auto_mask = false;
+            b.strokes[0].points = vec![[0.1, 0.1], [0.14, 0.1]];
+            b.strokes[0].radius = 0.03;
         }
         m
     }
@@ -1764,22 +1783,15 @@ mod tests {
             })],
             ..Edits::default()
         };
-        // ⚠⚠ A **plain** brush, so its gate never runs and it deposits nothing — but carrying a
-        // refinement, so M8.11's twin declines it and the chain this test is about still exists.
-        // A gating brush would decline too and would *deposit*, which is the one thing the
-        // fixture check below forbids.
+        // ⚠⚠ A gating brush too SMALL for the GPU rasteriser: it declines the twin, so the chain
+        // this test is about still exists, and its gate never reaches the GPU, so it deposits
+        // nothing. ⚠ It used to be a plain brush carrying a refinement — the twin declined any
+        // composite — and the fold retired that wedge; see `small_gating_brush_mask`.
         let taker = Edits {
-            masks: vec![{
-                let mut m = plain_brush_mask(edit_model::LocalAdjustments {
-                    hsl: with_hsl().hsl,
-                    ..Default::default()
-                });
-                m.refine.push(edit_model::Refinement {
-                    op: edit_model::MaskOp::Add,
-                    mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
-                });
-                m
-            }],
+            masks: vec![small_gating_brush_mask(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
             ..Edits::default()
         };
 
@@ -2241,17 +2253,15 @@ mod tests {
     #[test]
     fn a_declined_mask_keeps_its_inner_acceleration() {
         let Some(ctx) = ctx() else { return };
-        // A composite: `GpuMaskStage` declines any mask carrying refinements.
-        let mut m = mask_carrying(edit_model::LocalAdjustments {
-            hsl: with_hsl().hsl,
-            ..Default::default()
-        });
-        m.refine.push(edit_model::Refinement {
-            op: edit_model::MaskOp::Add,
-            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
-        });
+        // ⚠⚠ **This used to be a COMPOSITE, and that wedge died the day the fold landed.** The
+        // twin declined any mask carrying refinements, so "a mask with a refinement" was a
+        // decline; now a composite is exactly what the fold accelerates. A gating brush with no
+        // cached map is the wedge that is permanent — see `gating_brush_mask`'s own doc.
         let e = Edits {
-            masks: vec![m],
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                hsl: with_hsl().hsl,
+                ..Default::default()
+            })],
             ..Edits::default()
         };
         let after = accel(

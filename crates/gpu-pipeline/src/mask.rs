@@ -113,12 +113,42 @@ enum Component {
 }
 
 impl Component {
-    /// The WGSL expression that yields this component's coverage.
-    fn expr(&self) -> &'static str {
+    /// The WGSL expression that yields this component's coverage, reading `comps[j]`.
+    ///
+    /// ⚠ The index is threaded in rather than the kernel deriving it, because the same kernel
+    /// serves every component of its kind — which is what keeps the shader text one program per
+    /// composite *shape* rather than one per composite.
+    fn expr(&self, j: usize) -> String {
         match self {
-            Component::Painted { .. } | Component::Prebuilt { .. } => "painted_at(fx, fy)",
-            Component::Analytic { expr, .. } | Component::Range { expr, .. } => expr,
+            Component::Painted { .. } | Component::Prebuilt { .. } => {
+                format!("painted_at(fx, fy, {j}u)")
+            }
+            // ⚠ The stored expression carries a `{j}` placeholder rather than being assembled from
+            // a function name and an argument list here: the four kernels genuinely differ in
+            // their arguments — a range reads the hoisted facts where an analytic reads `u`/`v` —
+            // so a shared assembler would need a second match to decide which, in a second place.
+            Component::Analytic { expr, .. } | Component::Range { expr, .. } => {
+                expr.replace("{j}", &j.to_string())
+            }
         }
+    }
+
+    /// The scene facts this component's kernel reads.
+    ///
+    /// ⚠⚠ **Derived from the component rather than recorded beside it.** A `needs_oklab` flag set
+    /// where the component is built is a second fact that can disagree with the expression, and
+    /// the failure is a shader referencing `hue` that was never hoisted — a compile error at best,
+    /// and at worst a stale value if some other component happened to hoist it.
+    fn facts(&self) -> crate::mask_wgsl::Facts {
+        let mut f = crate::mask_wgsl::Facts::default();
+        if let Component::Range { expr, .. } = self {
+            if expr.starts_with("cov_luminance") {
+                f.luma = true;
+            } else {
+                f.oklab = true;
+            }
+        }
+        f
     }
 
     /// The CPU cost this component's coverage would have had, in ms per 6.8 Mpx.
@@ -141,6 +171,20 @@ impl Component {
     }
 }
 
+/// `MaskOp` as the shader's own fold.
+///
+/// ⚠⚠ **An exhaustive match, deliberately: a fourth `MaskOp` must be a compile error here.** A
+/// catch-all mapping an unknown op to `Add` would composite it plausibly and wrongly — the trap
+/// `CoverageSource`'s own `other =>` arm already sprang once, producing a mask covering nothing.
+fn fold_of(op: edit_model::MaskOp) -> crate::mask_wgsl::Fold {
+    use crate::mask_wgsl::Fold;
+    match op {
+        edit_model::MaskOp::Add => Fold::Add,
+        edit_model::MaskOp::Subtract => Fold::Subtract,
+        edit_model::MaskOp::Intersect => Fold::Intersect,
+    }
+}
+
 /// A masked group of adjustments, on the GPU.
 pub struct GpuMaskStage {
     /// The mask's own sub-stages, already accelerated by the caller.
@@ -150,8 +194,12 @@ pub struct GpuMaskStage {
     subs: Vec<Box<dyn GpuStage>>,
     /// The CPU twin, which is also this stage's equivalence reference.
     cpu: pipeline::MaskStage,
-    /// The mask's base component. Refinements arrive with the composite fold.
+    /// The mask's base component, and the refinements folded onto it **in list order**.
+    ///
+    /// ⚠ Two fields rather than one `Vec` with an `Option<Fold>` per entry, so "a refinement in
+    /// position zero" and "a base carrying an op" are both unrepresentable. `Composite`'s shape.
     base: Component,
+    refine: Vec<(crate::mask_wgsl::Fold, Component)>,
     region: Option<Region>,
     cost: f32,
 }
@@ -163,9 +211,15 @@ impl GpuMaskStage {
     /// wrong answer costs milliseconds and never pixels. `accelerate` leaves the `MaskStage` in
     /// place when this returns `None`.
     ///
-    /// ⚠ Today it declines anything but a single, non-gating brush. The other kinds and the
-    /// composite fold arrive in their own tasks; a **gating** brush needs base pixels, which only
-    /// exist at encode time, and is `GpuBrushRaster`'s territory.
+    /// ⚠ It declines a **gating** brush in any position, base or refinement: such a brush needs
+    /// base pixels, which only exist at encode time, and without a map already in hand there is
+    /// nothing to upload. One declining component declines the whole mask — a composite is a
+    /// single coverage plane, so there is no half of it to accelerate.
+    ///
+    /// ⚠⚠ `prebuilt` is indexed **per component, base first**, which is `BrushCoverage`'s own
+    /// `[mask][component]` shape. A shorter slice is not an error — it is what every caller that
+    /// has no cache at all passes — so a missing entry reads as "nothing prebuilt" rather than
+    /// panicking on the render worker.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         masked: &MaskedAdjustment,
@@ -173,18 +227,26 @@ impl GpuMaskStage {
         region: Option<Region>,
         scale: RenderScale,
         baseline: color::wb::Illuminant,
-        prebuilt: Option<std::sync::Arc<pipeline::brush::CoverageMap>>,
+        prebuilt: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>],
         subs: Vec<Box<dyn GpuStage>>,
         _ctx: &Arc<GpuContext>,
     ) -> Option<Self> {
-        if !masked.refine.is_empty() {
-            return None;
-        }
-        let base = Self::component(&masked.mask, geometry, prebuilt)?;
+        let at = |k: usize| prebuilt.get(k).cloned().flatten();
+        let base = Self::component(&masked.mask, geometry, at(0))?;
+        let refine = masked
+            .refine
+            .iter()
+            .enumerate()
+            .map(|(k, r)| Self::component(&r.mask, geometry, at(k + 1)).map(|c| (fold_of(r.op), c)))
+            .collect::<Option<Vec<_>>>()?;
 
+        // ⚠ Every component's coverage is charged, because the CPU evaluates every one of them per
+        // pixel — `Composite::at` folds the whole chain and has no early-out. The blend and the
+        // clone are charged once, because there is one of each however long the chain is.
         let cost = CLONE_COST
             + BLEND_COST
             + base.coverage_cost()
+            + refine.iter().map(|(_, c)| c.coverage_cost()).sum::<f32>()
             + subs.iter().map(|s| s.cpu_cost()).sum::<f32>();
 
         Some(Self {
@@ -199,6 +261,7 @@ impl GpuMaskStage {
                 None,
             ),
             base,
+            refine,
             region,
             cost,
         })
@@ -240,27 +303,27 @@ impl GpuMaskStage {
                 })
             }
             edit_model::Mask::Linear(g) => Some(Component::Analytic {
-                expr: "cov_linear(u, v, params.aspect)",
+                expr: "cov_linear(u, v, params.aspect, {j}u)",
                 a: [g.from[0], g.from[1], g.to[0], g.to[1]],
                 feather: 0.0,
                 invert: g.invert,
             }),
             edit_model::Mask::Radial(g) => Some(Component::Analytic {
                 // ⚠ No aspect argument, matching the CPU exactly. See `ANALYTIC`'s doc.
-                expr: "cov_radial(u, v)",
+                expr: "cov_radial(u, v, {j}u)",
                 a: [g.center[0], g.center[1], g.radius[0], g.radius[1]],
                 feather: g.feather,
                 invert: g.invert,
             }),
             edit_model::Mask::Luminance(r) => Some(Component::Range {
-                expr: "cov_luminance(px)",
+                expr: "cov_luminance(lum, {j}u)",
                 a: [r.low, r.high, 0.0, 0.0],
                 feather: r.feather,
                 invert: r.invert,
                 cost: LUMINANCE_COVERAGE_COST,
             }),
             edit_model::Mask::Colour(r) => Some(Component::Range {
-                expr: "cov_colour(px)",
+                expr: "cov_colour(hue, chroma, {j}u)",
                 // ⚠ `a2` is `min_chroma`, the gate's own threshold — a per-mask value, not a
                 // constant, because a saturated sign and a pastel wall need different answers.
                 a: [r.low, r.high, r.min_chroma, 0.0],
@@ -286,59 +349,119 @@ impl GpuMaskStage {
             crate::mask_wgsl::ANALYTIC,
             crate::mask_wgsl::RANGES,
             crate::mask_wgsl::SEED,
-            crate::mask_wgsl::coverage_entry(self.base.expr()),
+            crate::mask_wgsl::coverage_entry(
+                &self.base.expr(0),
+                &self.refine_exprs(),
+                self.facts()
+            ),
             crate::mask_wgsl::BLEND,
         )
     }
 
-    fn params(
-        &self,
-        img: &GpuImage,
-        row_groups: u32,
-        map: Option<&pipeline::brush::CoverageMap>,
-    ) -> [u8; 96] {
-        let (x0, y0, fw, fh) = match self.region {
-            Some(r) => (r.x0 as u32, r.y0 as u32, r.full_w as u32, r.full_h as u32),
-            None => (0, 0, img.width() as u32, img.height() as u32),
-        };
-        let mut p = [0u8; 96];
-        {
-            let mut put = |off: usize, v: u32| p[off..off + 4].copy_from_slice(&v.to_le_bytes());
-            put(0, img.pixels());
-            put(4, row_groups);
-            put(8, img.width() as u32);
-            put(16, x0);
-            put(20, y0);
-            put(24, fw);
-            put(28, fh);
-            match &self.base {
-                Component::Painted { .. } | Component::Prebuilt { .. } => {
-                    if let Some(m) = map {
-                        put(32, m.x0 as u32);
-                        put(36, m.y0 as u32);
-                        put(40, m.w as u32);
-                        put(44, m.h as u32);
-                        put(48, m.outside as u32);
-                    }
+    /// The base and every refinement, in chain order.
+    ///
+    /// ⚠ One iterator both the shader builder and the component buffer read, so the index a
+    /// component is *compiled* against and the slot it is *uploaded* to cannot disagree. Written
+    /// twice they would drift silently: the mask would simply fold the wrong shapes.
+    fn components(&self) -> impl Iterator<Item = &Component> {
+        std::iter::once(&self.base).chain(self.refine.iter().map(|(_, c)| c))
+    }
+
+    fn refine_exprs(&self) -> Vec<(crate::mask_wgsl::Fold, String)> {
+        self.refine
+            .iter()
+            .enumerate()
+            .map(|(k, (op, c))| (*op, c.expr(k + 1)))
+            .collect()
+    }
+
+    /// The union of every component's scene facts.
+    ///
+    /// ⚠⚠ **The union, which is what makes three colour components cost ONE Oklab round trip.**
+    /// `BaseFacts` reaches the same result on the CPU by memoising per pixel; here the chain is
+    /// known when the shader is built, so the conversion is simply emitted once above it — and
+    /// emitted not at all for a mask that needs no pixel, which the CPU's lazy memo also manages
+    /// but only by checking an `Option` per pixel per component.
+    fn facts(&self) -> crate::mask_wgsl::Facts {
+        self.components()
+            .map(Component::facts)
+            .fold(crate::mask_wgsl::Facts::default(), |a, b| {
+                crate::mask_wgsl::Facts {
+                    luma: a.luma || b.luma,
+                    oklab: a.oklab || b.oklab,
                 }
-                Component::Analytic { invert, .. } | Component::Range { invert, .. } => {
-                    put(52, u32::from(*invert))
-                }
-            }
-        }
-        let mut putf = |off: usize, v: f32| p[off..off + 4].copy_from_slice(&v.to_le_bytes());
-        if let Component::Analytic { a, feather, .. } | Component::Range { a, feather, .. } =
-            &self.base
-        {
-            for (k, v) in a.iter().enumerate() {
-                putf(64 + k * 4, *v);
-            }
-            putf(80, *feather);
-        }
+            })
+    }
+
+    /// The frame-wide uniform: what every component shares.
+    fn params(&self, img: &GpuImage, row_groups: u32) -> [u8; 48] {
+        let (x0, y0, fw, fh) = self.frame(img);
+        let mut p = [0u8; 48];
+        let mut put = |off: usize, v: u32| p[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        put(0, img.pixels());
+        put(4, row_groups);
+        put(8, img.width() as u32);
+        put(16, x0);
+        put(20, y0);
+        put(24, fw);
+        put(28, fh);
         // ⚠ The FRAME's aspect, `fw / fh`, exactly as `MaskStage::apply` derives it. A region's
         // own aspect is a different number and would skew a diagonal gradient's iso-lines.
-        putf(84, fw as f32 / fh as f32);
+        p[32..36].copy_from_slice(&(fw as f32 / fh as f32).to_le_bytes());
         p
+    }
+
+    /// Where this buffer sits in the frame, and how big the frame is.
+    fn frame(&self, img: &GpuImage) -> (u32, u32, u32, u32) {
+        match self.region {
+            Some(r) => (r.x0 as u32, r.y0 as u32, r.full_w as u32, r.full_h as u32),
+            None => (0, 0, img.width() as u32, img.height() as u32),
+        }
+    }
+
+    /// One 64-byte `Comp` per component, in chain order.
+    ///
+    /// ⚠ `maps` is indexed by the same chain order, so a painted component's box and its word
+    /// offset come from the very entry `pack` concatenated — the two are built from one walk.
+    fn comps(&self, maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>]) -> Vec<u8> {
+        const STRIDE: usize = 64;
+        let mut out = vec![0u8; STRIDE * (1 + self.refine.len())];
+        let mut off_words = 0u32;
+        for (j, c) in self.components().enumerate() {
+            let b = j * STRIDE;
+            let put = |p: &mut Vec<u8>, at: usize, v: u32| {
+                p[b + at..b + at + 4].copy_from_slice(&v.to_le_bytes())
+            };
+            let putf = |p: &mut Vec<u8>, at: usize, v: f32| {
+                p[b + at..b + at + 4].copy_from_slice(&v.to_le_bytes())
+            };
+            match c {
+                Component::Painted { .. } | Component::Prebuilt { .. } => {
+                    if let Some(m) = maps.get(j).and_then(|m| m.as_ref()) {
+                        put(&mut out, 28, m.outside as u32);
+                        put(&mut out, 32, m.x0 as u32);
+                        put(&mut out, 36, m.y0 as u32);
+                        put(&mut out, 40, m.w as u32);
+                        put(&mut out, 44, m.h as u32);
+                        put(&mut out, 48, off_words);
+                        off_words += words_for(m);
+                    }
+                }
+                Component::Analytic {
+                    a, feather, invert, ..
+                }
+                | Component::Range {
+                    a, feather, invert, ..
+                } => {
+                    for (k, v) in a.iter().enumerate() {
+                        putf(&mut out, k * 4, *v);
+                    }
+                    putf(&mut out, 16, *feather);
+                    put(&mut out, 24, u32::from(*invert));
+                }
+            }
+        }
+        out
     }
 
     /// Rasterise a painted component over the frame, or `None` for the other kinds.
@@ -349,32 +472,52 @@ impl GpuMaskStage {
     fn rasterize(
         &self,
         frame: (usize, usize),
-    ) -> Option<std::sync::Arc<pipeline::brush::CoverageMap>> {
-        match &self.base {
-            // ⚠ Already rasterised, and at the same `fw`/`fh` by construction — the coverage
-            // cache's key carries them, which is why it must never lose them.
-            Component::Prebuilt { map } => Some(map.clone()),
-            Component::Painted { brush, geometry } => Some(std::sync::Arc::new(
-                pipeline::brush::rasterize(brush, geometry, frame.0, frame.1),
-            )),
-            Component::Analytic { .. } | Component::Range { .. } => None,
-        }
+    ) -> Vec<Option<std::sync::Arc<pipeline::brush::CoverageMap>>> {
+        self.components()
+            .map(|c| match c {
+                // ⚠ Already rasterised, and at the same `fw`/`fh` by construction — the coverage
+                // cache's key carries them, which is why it must never lose them.
+                Component::Prebuilt { map } => Some(map.clone()),
+                Component::Painted { brush, geometry } => Some(std::sync::Arc::new(
+                    pipeline::brush::rasterize(brush, geometry, frame.0, frame.1),
+                )),
+                Component::Analytic { .. } | Component::Range { .. } => None,
+            })
+            .collect()
     }
 
-    /// The coverage samples as `u32` words, four per word.
+    /// Every painted component's coverage, concatenated into one buffer of `u32` words.
     ///
     /// ⚠ WGSL has no `u8`. ⚠ `.max(1)` so the buffer is never zero-sized, which wgpu refuses — the
-    /// guard `Dispatch` and `GpuImage::scratch` already carry. An unpainted brush has no box at
-    /// all and is described entirely by its `outside` value; the other kinds upload one zero word
-    /// that the shader never reads, because the binding still has to exist.
-    fn pack(map: Option<&pipeline::brush::CoverageMap>) -> Vec<u32> {
-        let Some(m) = map else { return vec![0] };
-        let mut packed = vec![0u32; (m.w * m.h).div_ceil(4).max(1)];
-        for (k, v) in m.data.iter().enumerate() {
-            packed[k >> 2] |= (*v as u32) << ((k & 3) * 8);
+    /// guard `Dispatch` and `GpuImage::scratch` already carry. A mask with no painted component at
+    /// all uploads one zero word that the shader never reads, because the binding still has to
+    /// exist.
+    ///
+    /// ⚠⚠ **It walks the components in the same order `comps` does**, which is what makes the
+    /// offsets it hands out and the offsets uploaded beside the boxes the same numbers.
+    fn pack(&self, maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>]) -> Vec<u32> {
+        let mut packed: Vec<u32> = Vec::new();
+        for m in maps.iter().flatten() {
+            let start = packed.len();
+            packed.resize(start + words_for(m) as usize, 0);
+            for (k, v) in m.data.iter().enumerate() {
+                packed[start + (k >> 2)] |= (*v as u32) << ((k & 3) * 8);
+            }
+        }
+        if packed.is_empty() {
+            packed.push(0);
         }
         packed
     }
+}
+
+/// How many `u32` words one coverage map occupies.
+///
+/// ⚠ **One definition, read by `pack` when it lays a map down and by `comps` when it records the
+/// next component's offset.** Two derivations of this is how a composite of brushes comes to read
+/// its neighbour's coverage — a plausible mask, not an error.
+fn words_for(m: &pipeline::brush::CoverageMap) -> u32 {
+    (m.w * m.h).div_ceil(4) as u32
 }
 
 impl GpuStage for GpuMaskStage {
@@ -449,6 +592,7 @@ impl GpuStage for GpuMaskStage {
                 entry(4, rw),
                 entry(5, rw),
                 entry(6, ro),
+                entry(7, ro),
             ],
             &["seed", "coverage", "blend"],
         );
@@ -459,17 +603,21 @@ impl GpuStage for GpuMaskStage {
             Some(r) => (r.full_w, r.full_h),
             None => (img.width(), img.height()),
         };
-        let map = self.rasterize(frame);
-        let words = Self::pack(map.as_deref());
+        // ⚠ Rasterised, packed and described from ONE walk of the chain, so a component's box,
+        // its word offset and the bytes at that offset cannot disagree about which brush they be-
+        // long to.
+        let maps = self.rasterize(frame);
+        let words = self.pack(&maps);
+        let comps = self.comps(&maps);
 
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mask-params"),
-            size: 96,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         ctx.queue
-            .write_buffer(&uniform, 0, &self.params(img, row_groups, map.as_deref()));
+            .write_buffer(&uniform, 0, &self.params(img, row_groups));
 
         let packed = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mask-coverage"),
@@ -480,6 +628,14 @@ impl GpuStage for GpuMaskStage {
         ctx.queue
             .write_buffer(&packed, 0, bytemuck::cast_slice(&words));
 
+        let comp_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mask-components"),
+            size: comps.len() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        ctx.queue.write_buffer(&comp_buf, 0, &comps);
+
         let bound = [
             img.buffer.as_entire_binding(),
             uniform.as_entire_binding(),
@@ -488,6 +644,7 @@ impl GpuStage for GpuMaskStage {
             scratch[2].as_entire_binding(),
             scratch[3].as_entire_binding(),
             packed.as_entire_binding(),
+            comp_buf.as_entire_binding(),
         ];
         let entries: Vec<wgpu::BindGroupEntry<'_>> = bound
             .into_iter()
@@ -624,7 +781,7 @@ mod tests {
             None,
             RenderScale::FULL,
             color::wb::Illuminant::default(),
-            None,
+            &[],
             subs,
             ctx,
         )
@@ -732,7 +889,7 @@ mod tests {
             None,
             RenderScale::FULL,
             color::wb::Illuminant::default(),
-            None,
+            &[],
             subs,
             &ctx,
         )
@@ -1060,6 +1217,211 @@ mod tests {
 
     /// ⚠ A gating brush reads the photograph, which does not exist at construction. Declining is
     /// the gate's own rule — fail toward the CPU — and `accelerate` leaves the `MaskStage` alone.
+    /// A base with refinements folded onto it, in list order.
+    fn composite(base: Mask, refine: &[(edit_model::MaskOp, Mask)]) -> MaskedAdjustment {
+        let mut m = with_mask(base);
+        m.refine = refine
+            .iter()
+            .map(|(op, mask)| edit_model::Refinement {
+                op: *op,
+                mask: mask.clone(),
+            })
+            .collect();
+        m
+    }
+
+    fn a_gradient() -> Mask {
+        Mask::Linear(edit_model::LinearGradient {
+            from: [0.15, 0.2],
+            to: [0.8, 0.75],
+            invert: false,
+        })
+    }
+
+    fn an_ellipse() -> Mask {
+        Mask::Radial(edit_model::RadialGradient {
+            center: [0.45, 0.5],
+            radius: [0.3, 0.26],
+            feather: 45.0,
+            invert: false,
+        })
+    }
+
+    /// ⚠⚠ **The fold, against `Composite::at` itself.** Each op is compared with the CPU's own
+    /// `MaskOp::combine`, which is the brush raster's algebra — so a fold spelled `min`/`max`
+    /// here, which agrees at 0 and 1 and differs at every partial coverage, fails.
+    #[test]
+    fn every_fold_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        for op in edit_model::MaskOp::ALL {
+            let m = composite(a_gradient(), &[(op, an_ellipse())]);
+            let (want, got, src) = both(&ctx, &m, 64, 48);
+            assert_agrees(&format!("{op:?}"), &want, &got, &src);
+        }
+    }
+
+    /// ⚠⚠ **Three folds rendering alike would pass the test above**, because each side would use
+    /// the same wrong op. The grading goldens' rule, applied before the equivalence is believed.
+    #[test]
+    fn the_three_folds_render_three_different_pictures() {
+        let Some(ctx) = ctx() else { return };
+        let out: Vec<ImageBuf> = edit_model::MaskOp::ALL
+            .iter()
+            .map(|op| {
+                both(
+                    &ctx,
+                    &composite(a_gradient(), &[(*op, an_ellipse())]),
+                    64,
+                    48,
+                )
+                .1
+            })
+            .collect();
+        for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+            let d = crate::compare(&out[a], &out[b]);
+            assert!(
+                d.worst_levels > 8.0,
+                "fixture check: {:?} and {:?} must differ, worst {}",
+                edit_model::MaskOp::ALL[a],
+                edit_model::MaskOp::ALL[b],
+                d.worst_levels
+            );
+        }
+    }
+
+    /// ⚠⚠ **The test the concatenated coverage buffer exists for.** Two painted components share
+    /// one binding and are told apart by their word offsets; an offset applied in samples rather
+    /// than words, or dropped entirely, makes the second read the first's coverage — a plausible
+    /// mask, and of the wrong shape.
+    #[test]
+    fn a_composite_of_two_brushes_reads_each_ones_own_coverage() {
+        let Some(ctx) = ctx() else { return };
+        let mut second = painted(false);
+        if let Mask::Brush(b) = &mut second.mask {
+            // ⚠ Deliberately a different box from the first: two identical brushes would read the
+            // same bytes whatever the offsets, which is exactly the blind spot being avoided.
+            b.strokes[0].points = (0..10).map(|i| [0.5, 0.2 + i as f32 * 0.05]).collect();
+            b.strokes[0].radius = 0.08;
+        }
+        let m = composite(
+            painted(false).mask,
+            &[(edit_model::MaskOp::Add, second.mask)],
+        );
+        let (want, got, src) = both(&ctx, &m, 64, 48);
+        assert_agrees("two brushes", &want, &got, &src);
+    }
+
+    /// ⚠ Three colour ranges end to end: the hoist is asserted on the generated text by
+    /// `three_colour_components_hoist_one_oklab_round_trip`, and this says the picture it produces
+    /// is still the CPU's.
+    #[test]
+    fn a_composite_of_three_colour_ranges_renders_the_same_picture() {
+        let Some(ctx) = ctx() else { return };
+        let range = |low: f32, high: f32| {
+            Mask::Colour(edit_model::ColourRange {
+                low,
+                high,
+                feather: 30.0,
+                min_chroma: 0.02,
+                invert: false,
+            })
+        };
+        let m = composite(
+            range(0.0, 60.0),
+            &[
+                (edit_model::MaskOp::Add, range(100.0, 160.0)),
+                (edit_model::MaskOp::Subtract, range(200.0, 260.0)),
+            ],
+        );
+        let (want, got, src) = both(&ctx, &m, 64, 48);
+        assert_agrees("three colour ranges", &want, &got, &src);
+    }
+
+    /// ⚠⚠ **The test `facts()`'s union exists for, and four other composite tests could not see
+    /// it.** Every one of them mixes components of a single *kind*, so "the union over the chain"
+    /// and "the base's own facts" agree on all of them — taking the base's alone left them green.
+    /// Found by running the sabotage, not by reading.
+    ///
+    /// ⚠ Here the base is a shape, which reads no pixel, and the refinement is a range, which
+    /// reads two. A hoist driven by the base alone emits nothing, and the chain then references a
+    /// `hue` that was never declared.
+    #[test]
+    fn a_shape_refined_by_a_range_hoists_what_the_refinement_needs() {
+        let Some(ctx) = ctx() else { return };
+        let m = composite(
+            a_gradient(),
+            &[(
+                edit_model::MaskOp::Intersect,
+                Mask::Colour(edit_model::ColourRange {
+                    low: 90.0,
+                    high: 200.0,
+                    feather: 30.0,
+                    min_chroma: 0.02,
+                    invert: false,
+                }),
+            )],
+        );
+        let stage = gpu_stage(&ctx, &m).expect("builds");
+        let src = stage.shader();
+        assert!(
+            src.contains("let hue"),
+            "fixture check: the refinement's fact must be hoisted:\n{src}"
+        );
+        let (want, got, source) = both(&ctx, &m, 64, 48);
+        assert_agrees("shape refined by a range", &want, &got, &source);
+    }
+
+    /// ⚠ Both facts at once, from two different kinds. A union that took only the *first* fact it
+    /// saw would hoist the luma and leave the colour component's `hue` undeclared.
+    #[test]
+    fn a_luminance_and_a_colour_component_hoist_both_facts() {
+        let Some(ctx) = ctx() else { return };
+        let m = composite(
+            Mask::Luminance(edit_model::LuminanceRange {
+                low: 20.0,
+                high: 80.0,
+                feather: 25.0,
+                invert: false,
+            }),
+            &[(
+                edit_model::MaskOp::Add,
+                Mask::Colour(edit_model::ColourRange {
+                    low: 0.0,
+                    high: 90.0,
+                    feather: 30.0,
+                    min_chroma: 0.02,
+                    invert: false,
+                }),
+            )],
+        );
+        let stage = gpu_stage(&ctx, &m).expect("builds");
+        let src = stage.shader();
+        assert!(src.contains("let lum"), "{src}");
+        assert!(src.contains("let hue"), "{src}");
+        let (want, got, source) = both(&ctx, &m, 64, 48);
+        assert_agrees("luminance + colour", &want, &got, &source);
+    }
+
+    /// ⚠ A gating brush in a REFINEMENT declines the whole mask, not just that component. A
+    /// composite is one coverage plane, so there is no half of it to accelerate.
+    #[test]
+    fn a_gating_brush_in_a_refinement_declines_the_whole_mask() {
+        let Some(ctx) = ctx() else { return };
+        let mut gating = painted(false);
+        if let Mask::Brush(b) = &mut gating.mask {
+            b.strokes[0].auto_mask = true;
+        }
+        let m = composite(a_gradient(), &[(edit_model::MaskOp::Add, gating.mask)]);
+        assert!(
+            gpu_stage(&ctx, &m).is_none(),
+            "a gating refinement with no cached map must decline the mask"
+        );
+        assert!(
+            gpu_stage(&ctx, &composite(a_gradient(), &[])).is_some(),
+            "fixture check: the same base alone must still build"
+        );
+    }
+
     #[test]
     fn a_gating_brush_is_declined() {
         let Some(ctx) = ctx() else { return };
