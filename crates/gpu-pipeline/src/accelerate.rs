@@ -462,9 +462,28 @@ fn walk(
         // offers neither. That is sound for the same reason the depth bound is: a mask's
         // sub-stages can never contain a mask, so they build no coverage and offering into them
         // would be machinery for a case that cannot arise.
+        // ⚠⚠ **Captured BEFORE `accelerate_inner`, which rewrites the list into a `gpu_chain`.**
+        // The GPU twin needs to know which sub-stages a mask carries, in order, and after the hook
+        // has run `sub_stage_names` reports one name that says nothing about what is inside it.
+        let mask_subs: Option<Vec<&'static str>> =
+            (s.name() == "mask").then(|| s.sub_stage_names());
         if let Some(f) = inner {
             s.accelerate_inner(f);
             s.set_coverage_rasterizer(&coverage);
+        }
+        // ⚠⚠ **Deliberately AFTER the hooks, so a decline costs nothing.** If the twin cannot be
+        // built, `s` goes on exactly as it did before this milestone — inner chain, coverage
+        // rasteriser and all. Trying first and skipping the hooks would make every decline a
+        // regression against M8.3j.
+        //
+        // ⚠ Not a `REPLACEABLE` row: that table's builders take an `&Edits`, a mask needs its own
+        // `MaskedAdjustment`, and `the_replaceable_names_occur_at_most_once_in_a_tail` rests on
+        // each name appearing once — while a tail legitimately holds several masks.
+        if let Some(names) = mask_subs {
+            if let Some(g) = gpu_mask(s.as_ref(), &names, scale, region, profile, spec, ctx) {
+                run.push((g, s));
+                continue;
+            }
         }
         match REPLACEABLE
             .iter()
@@ -500,6 +519,51 @@ fn walk(
         }
         None => (Pipeline::new(out), None),
     }
+}
+
+/// Build a GPU twin for a mask, or decline.
+///
+/// ⚠⚠ **Every sub-stage must have a GPU twin, or the whole mask declines.** A `GpuMaskStage` runs
+/// its sub-stages inside its own compute pass, so it has no way to drop back to the CPU for one of
+/// them halfway through. That is not a limitation in practice: M8.3n ported the last of the ten,
+/// so a mask's sub-stages are all replaceable today — and `a_mask_carrying_every_ported_stage...`
+/// is what says so. If that ever stops being true, this declines and the CPU `MaskStage` runs,
+/// which is the gate's own rule: fail toward the CPU.
+///
+/// ⚠ The sub-stage list is built from the **names the mask reported**, in order, through the same
+/// `REPLACEABLE` table `walk` uses — so the GPU mask and the CPU mask cannot disagree about what a
+/// mask contains or in what order.
+#[allow(clippy::too_many_arguments)]
+fn gpu_mask(
+    s: &dyn PipelineStage,
+    names: &[&'static str],
+    scale: RenderScale,
+    region: Option<Region>,
+    profile: ProfileRendering<'_>,
+    spec: RenderSpec,
+    ctx: &Arc<GpuContext>,
+) -> Option<Box<dyn GpuStage>> {
+    let (masked, geometry, mask_region) = s.mask_description()?;
+    // ⚠ The mask's own adjustments projected onto an `Edits`, which is what a `REPLACEABLE`
+    // builder reads. `sub_edits`' exhaustive destructure is what stops a field being forgotten.
+    let e = sub_edits(&masked.adjustments);
+    let mut subs: Vec<Box<dyn GpuStage>> = Vec::with_capacity(names.len());
+    for n in names {
+        let (_, build) = REPLACEABLE.iter().find(|(r, _)| r == n)?;
+        subs.push(build(&e, scale, region, profile, spec, ctx)?);
+    }
+    // ⚠ The BASE component's map, index 0. Refinements arrive with the composite fold.
+    let prebuilt = s.prebuilt_coverage().first().cloned().flatten();
+    Some(Box::new(crate::GpuMaskStage::new(
+        masked,
+        geometry,
+        mask_region,
+        scale,
+        spec.baseline,
+        prebuilt,
+        subs,
+        ctx,
+    )?))
 }
 
 /// Put a chain back on the end of a pipeline.
@@ -1355,32 +1419,10 @@ mod tests {
             .expect("fixture check: the pipeline must contain a mask stage")
     }
 
-    /// ⚠⚠ **The carrier: a mask's sub-stages really do become a chain.** Every equivalence test in
-    /// this file compares an accelerated render against a CPU one, and a hook that never fired
-    /// makes the two trivially identical — so something has to assert the chain was **built**. That
-    /// is the W5 failure mode (creative LUTs shipped fully tested and 100% dead) as a test.
-    /// A brush mask, because only a **painted** mask rasterises coverage at all — an analytic one
-    /// answers from its own position, so offering it a rasteriser is a no-op and this test would
-    /// be vacuous.
-    fn brush_mask() -> edit_model::MaskedAdjustment {
-        let mut m = mask_carrying(edit_model::LocalAdjustments {
-            exposure: 0.5,
-            ..Default::default()
-        });
-        m.mask = edit_model::Mask::Brush(edit_model::Brush {
-            strokes: vec![edit_model::BrushStroke {
-                points: (0..10).map(|i| [0.3 + i as f32 * 0.03, 0.5]).collect(),
-                radius: 0.05,
-                hardness: 50.0,
-                flow: 100.0,
-                auto_mask: false,
-                tolerance: 25.0,
-                erase: false,
-            }],
-            invert: false,
-        });
-        m
-    }
+    // ⚠⚠ **`brush_mask` was deleted at M8.11, and its going dead is itself the finding.** It
+    // built a *plain* brush mask, and every such mask is now substituted for a GPU twin — so
+    // nothing in this file could still use it. What is left as a wedge is `gating_brush_mask`;
+    // see its doc for why that case is permanent.
 
     /// ⚠⚠ **The carrier: `accelerate` really offers the rasteriser.** Everything else in this file
     /// would pass with the offer deleted — the mask would build its coverage on the CPU and render
@@ -1391,7 +1433,10 @@ mod tests {
     fn accelerate_offers_a_coverage_rasterizer_to_a_mask() {
         let Some(ctx) = ctx() else { return };
         let e = Edits {
-            masks: vec![brush_mask()],
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
+                exposure: 0.5,
+                ..Default::default()
+            })],
             ..Edits::default()
         };
         assert!(
@@ -1443,6 +1488,16 @@ mod tests {
     /// the base plane is uploaded **only when a stroke is auto-masked**, since a positional brush
     /// needs no pixels to rasterise. A fixture missing either one deposits nothing and makes every
     /// assertion below vacuous — which is why each test asserts on `deposits()` first.
+    /// ⚠⚠ **A GATING BRUSH IS THE WEDGE NOW, AND THAT IS A CONSEQUENCE OF M8.11.** Substituting a
+    /// mask for its GPU twin means the CPU `MaskStage` is no longer in the accelerated pipeline at
+    /// all — so every test that inspects a mask's *inner* structure needs a mask the twin
+    /// **declines**. A gating brush with no cached coverage map is that case, permanently: it
+    /// decides its coverage from the photograph, which does not exist when the twin is built, and
+    /// it is what every fresh render looks like before the cache warms.
+    ///
+    /// ⚠ This is the sixth time a property here became unconstructible by being fixed — after
+    /// M8.3e's "a tail with nothing replaceable", M8.3h's "a trailing run refused", M8.3n's "a
+    /// chain behind a CPU stage" and M8.3p's vignette. It used to be `mask_carrying(..)`.
     fn gating_brush_mask(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
         let mut m = mask_carrying(a);
         m.mask = edit_model::Mask::Brush(edit_model::Brush {
@@ -1709,11 +1764,22 @@ mod tests {
             })],
             ..Edits::default()
         };
+        // ⚠⚠ A **plain** brush, so its gate never runs and it deposits nothing — but carrying a
+        // refinement, so M8.11's twin declines it and the chain this test is about still exists.
+        // A gating brush would decline too and would *deposit*, which is the one thing the
+        // fixture check below forbids.
         let taker = Edits {
-            masks: vec![plain_brush_mask(edit_model::LocalAdjustments {
-                hsl: with_hsl().hsl,
-                ..Default::default()
-            })],
+            masks: vec![{
+                let mut m = plain_brush_mask(edit_model::LocalAdjustments {
+                    hsl: with_hsl().hsl,
+                    ..Default::default()
+                });
+                m.refine.push(edit_model::Refinement {
+                    op: edit_model::MaskOp::Add,
+                    mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+                });
+                m
+            }],
             ..Edits::default()
         };
 
@@ -1861,7 +1927,7 @@ mod tests {
             ..Default::default()
         };
         let e = Edits {
-            masks: vec![mask_carrying(a)],
+            masks: vec![gating_brush_mask(a)],
             ..Edits::default()
         };
         let subs = mask_sub_stages(&tail_of(&e));
@@ -1904,7 +1970,7 @@ mod tests {
     fn a_masked_hsl_becomes_a_chain_inside_the_mask() {
         let Some(ctx) = ctx() else { return };
         let e = Edits {
-            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
                 hsl: with_hsl().hsl,
                 ..Default::default()
             })],
@@ -1939,7 +2005,7 @@ mod tests {
     fn a_mask_carrying_only_exposure_is_not_worth_a_chain() {
         let Some(ctx) = ctx() else { return };
         let e = Edits {
-            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
                 exposure: -3.6,
                 ..Default::default()
             })],
@@ -1968,7 +2034,7 @@ mod tests {
     fn accelerating_the_tail_leaves_the_prefixs_mask_alone() {
         let Some(ctx) = ctx() else { return };
         let e = Edits {
-            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+            masks: vec![gating_brush_mask(edit_model::LocalAdjustments {
                 hsl: with_hsl().hsl,
                 noise_reduction: edit_model::NoiseReduction {
                     luminance: 40.0,
@@ -2118,6 +2184,94 @@ mod tests {
                 "{n} is in the tail and is neither replaceable nor a mask: {names:?}"
             );
         }
+    }
+
+    /// ⚠⚠⚠ **THE CARRIER FOR M8.11, AND IT IS WHAT STOPS THE MILESTONE SHIPPING GREEN AND DEAD.**
+    ///
+    /// An accelerated mask and a CPU mask produce the same picture **by design**, so every
+    /// equivalence test in this crate — and all 63 goldens, which have no GPU context at all —
+    /// passes with the whole substitution deleted. That is precisely how creative LUTs (W5) shipped
+    /// fully tested and 100% non-functional, and how M8.7 plan 1 shipped inert.
+    ///
+    /// ⚠⚠ **One assertion carries both halves**: that the mask ran on the GPU *and* that it no
+    /// longer ends a run. Before this milestone `every_tail_stage_is_replaceable_or_a_mask`
+    /// recorded that a mask was the only thing left in the tail that could split it, so a tail with
+    /// a mask in the middle produced **two** chains. One is the whole claim.
+    #[test]
+    fn a_tail_with_a_mask_in_the_middle_is_one_chain() {
+        let Some(ctx) = ctx() else { return };
+        // exposure -> mask -> output_transform: the mask sits between two replaceable stages, so
+        // before M8.11 it split them into two runs.
+        let e = Edits {
+            exposure: 0.5,
+            masks: vec![mask_carrying(edit_model::LocalAdjustments {
+                exposure: 1.0,
+                ..Default::default()
+            })],
+            ..Edits::default()
+        };
+        let before = tail_of(&e).stage_names();
+        assert!(
+            before.contains(&"mask"),
+            "fixture check: the tail must actually contain a mask: {before:?}"
+        );
+        let after = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .stage_names();
+        assert!(
+            !after.contains(&"mask"),
+            "the CPU MaskStage must have been substituted: {after:?}"
+        );
+        assert_eq!(
+            chains(&after),
+            1,
+            "a mask must no longer split the tail: {after:?}"
+        );
+    }
+
+    /// ⚠ A mask the twin cannot build must leave the **fully accelerated** CPU stage in place —
+    /// inner chain and coverage rasteriser and all — not a bare one. Trying the twin before the
+    /// hooks run would make every decline a regression against M8.3j.
+    #[test]
+    fn a_declined_mask_keeps_its_inner_acceleration() {
+        let Some(ctx) = ctx() else { return };
+        // A composite: `GpuMaskStage` declines any mask carrying refinements.
+        let mut m = mask_carrying(edit_model::LocalAdjustments {
+            hsl: with_hsl().hsl,
+            ..Default::default()
+        });
+        m.refine.push(edit_model::Refinement {
+            op: edit_model::MaskOp::Add,
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+        });
+        let e = Edits {
+            masks: vec![m],
+            ..Edits::default()
+        };
+        let after = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        );
+        assert!(
+            after.stage_names().contains(&"mask"),
+            "a declined mask must stay a CPU MaskStage: {:?}",
+            after.stage_names()
+        );
+        assert_eq!(
+            mask_sub_stages(&after),
+            vec!["gpu_chain"],
+            "and it must still carry M8.3j's inner chain"
+        );
     }
 
     /// ⚠⚠ **And its consequence: an unmasked tail is now exactly ONE chain and one round trip.**
@@ -2299,7 +2453,10 @@ mod tests {
         // unconstructible by being fixed.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+        // ⚠ A GATING brush: M8.11 substitutes every mask its twin can build, so an ordinary mask
+        // is no longer a CPU stage at all. One that decides its coverage from the photograph
+        // cannot be built before the photograph exists, so it declines and keeps its position.
+        e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
             exposure: 0.4,
             ..Default::default()
         })];
@@ -2332,7 +2489,10 @@ mod tests {
         // at M8.3p, for the reason written out on the test above.
         let Some(ctx) = ctx() else { return };
         let mut e = with_sharpening(with_hsl());
-        e.masks = vec![mask_carrying(edit_model::LocalAdjustments {
+        // ⚠ A GATING brush: M8.11 substitutes every mask its twin can build, so an ordinary mask
+        // is no longer a CPU stage at all. One that decides its coverage from the photograph
+        // cannot be built before the photograph exists, so it declines and keeps its position.
+        e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
             exposure: 0.4,
             ..Default::default()
         })];
