@@ -41,6 +41,7 @@ mod quantize;
 mod saturation;
 mod shared_plane;
 mod sharpen;
+mod srgb_wgsl;
 mod tone_curve;
 mod tone_regions;
 mod vignette;

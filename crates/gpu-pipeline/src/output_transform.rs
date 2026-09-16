@@ -36,20 +36,28 @@ struct Params {
 @group(0) @binding(0) var<storage, read_write> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 
-// ⚠⚠ **Clamp FIRST.** WGSL's `pow` returns NaN for a negative base, and out-of-gamut colour
-// reaches this stage with negative components BY DESIGN -- that is the point of a wide working
-// space, and `OutputSpace::from_working`'s own doc says so. The CPU's `encode` clamps before its
-// `powf` for exactly this reason, so the clamp is load-bearing rather than tidy. ⚠ An in-gamut
-// fixture cannot see a missing one: after the matrix every component is already positive.
+// ⚠⚠ **Clamp FIRST.** Out-of-gamut colour reaches this stage with negative components BY DESIGN
+// -- that is the point of a wide working space, and `OutputSpace::from_working`'s own doc says so.
+// The CPU's `encode` clamps before its `powf` for exactly this reason, so the clamp is
+// load-bearing rather than tidy. ⚠ An in-gamut fixture cannot see a missing one: after the matrix
+// every component is already positive.
+//
+// ⚠⚠ **What an unclamped `pow` actually does was MEASURED, 2026-09-15, and this comment used to
+// be wrong about it.** It said WGSL's `pow` "returns NaN for a negative base". The spec says the
+// result is **indeterminate**, and on this adapter (Apple M2, Metal) it returns a finite, wrong
+// number -- `-6.46` for an input of `-0.5`. That is strictly worse than NaN, which would at least
+// propagate visibly to black. See `srgb_wgsl`'s `a_negative_sample_encodes_to_exactly_zero`.
+//
+// ⚠ The sRGB branch is SUBSTITUTED from `srgb_wgsl` rather than written here, so this stage and a
+// luminance-range mask cannot come to disagree about the transfer curve -- the failure `color`'s
+// own doc records six copies of. Note it clamps again internally, which is harmless and is what
+// lets the rule live in exactly one place.
 fn encode_channel(v: f32, mode: u32) -> f32 {
+    // ⚠ sRGB and Display P3 share this curve. Using gamma 2.2 for P3 is a common error and an
+    // invisible one -- it is wrong by a few percent in the shadows, which reads as a contrast
+    // preference rather than a bug.
+    if (mode == 0u) { return linear_to_srgb(v); }
     let c = clamp(v, 0.0, 1.0);
-    if (mode == 0u) {
-        // ⚠ sRGB and Display P3 share this curve. Using gamma 2.2 for P3 is a common error and an
-        // invisible one -- it is wrong by a few percent in the shadows, which reads as a contrast
-        // preference rather than a bug.
-        if (c <= 0.0031308) { return c * 12.92; }
-        return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
-    }
     if (mode == 1u) { return pow(c, 1.0 / params.adobe_gamma); }
     if (c < params.prophoto_toe_end) { return c * 16.0; }
     return pow(c, 1.0 / 1.8);
@@ -145,7 +153,10 @@ impl GpuStage for GpuOutputTransformStage {
 
         crate::dispatch::Dispatch {
             label: "output_transform",
-            shader: SHADER.to_string(),
+            // ⚠ The sRGB prelude is concatenated the way `luma_wgsl` and `OKLAB_WGSL` already are
+            // by their consumers, so `encode_channel`'s mode-0 branch calls a function this crate
+            // defines exactly once.
+            shader: format!("{}{}", crate::srgb_wgsl::SRGB_WGSL, SHADER),
             params: params.to_vec(),
             storages: &[],
         }
