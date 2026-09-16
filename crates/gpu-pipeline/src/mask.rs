@@ -663,15 +663,18 @@ impl GpuStage for GpuMaskStage {
         // 1. seed — the clone, on the GPU.
         // 2. coverage — reads `img`, which is still the BASE at this point.
         //
-        // ⚠⚠ **The order is the data dependency, and TODAY it is not yet observable.** Sabotaged
-        // by moving `coverage` after the sub-stages, all five tests stayed green — and that is a
-        // property of the sabotage, not a hole in them: `painted_at` reads the uploaded map and
-        // `params` and never touches `img`, so for a painted mask the position provably cannot
-        // matter. It becomes live the moment a **pixel-dependent** component exists (a luminance
-        // or colour range), where reading `img` after the sub-stages keys the mask on its own
-        // output — lifting the shadows moves them out of the band that selected them, which is
-        // what `Composite::at`'s `base_px` parameter exists to prevent. **Re-run that sabotage
-        // when the range kinds land.**
+        // ⚠⚠ **The order is the data dependency, and it IS observable now.** This comment used to
+        // say the opposite and to ask for the sabotage to be re-run once the range kinds landed;
+        // that has been done. Moving `coverage` after the sub-stages fails four tests — both range
+        // masks, the composite of three colour ranges, and the mixed luminance/colour composite —
+        // because reading `img` after the sub-stages keys the mask on its own output, and lifting
+        // the shadows moves them out of the band that selected them. That is exactly what
+        // `Composite::at`'s `base_px` parameter exists to prevent on the CPU.
+        //
+        // ⚠ It was genuinely inert when first written, and that was a property of the *fixtures*
+        // rather than a hole in them: `painted_at` reads the uploaded map and never touches `img`,
+        // so for a painted or analytic mask the position provably cannot matter. Such a mask emits
+        // no `img` read at all today — see `a_chain_that_needs_no_pixel_never_reads_the_image`.
         for compute in pipelines.iter().take(2) {
             pass.set_pipeline(compute);
             pass.set_bind_group(0, &bind, &[]);
@@ -767,14 +770,18 @@ mod tests {
         ImageBuf::from_vec(w, h, v)
     }
 
-    fn gpu_stage(ctx: &Arc<GpuContext>, m: &MaskedAdjustment) -> Option<GpuMaskStage> {
-        // ⚠ The sub-stage list must match what the CPU twin builds from the same adjustments, or
-        // the comparison is between two different masks. `accelerate` maintains that invariant in
-        // production; here it is one exposure either side.
-        let subs: Vec<Box<dyn GpuStage>> = vec![Box::new(crate::GpuExposureStage::new(
+    /// ⚠ The sub-stage list must match what the CPU twin builds from the same adjustments, or the
+    /// comparison is between two different masks. `accelerate` maintains that invariant in
+    /// production; here it is one exposure either side — written once so the whole-image and
+    /// region fixtures cannot drift apart on it.
+    fn subs_for(ctx: &Arc<GpuContext>, m: &MaskedAdjustment) -> Vec<Box<dyn GpuStage>> {
+        vec![Box::new(crate::GpuExposureStage::new(
             m.adjustments.exposure,
             ctx.clone(),
-        ))];
+        ))]
+    }
+
+    fn gpu_stage(ctx: &Arc<GpuContext>, m: &MaskedAdjustment) -> Option<GpuMaskStage> {
         GpuMaskStage::new(
             m,
             &Geometry::default(),
@@ -782,7 +789,7 @@ mod tests {
             RenderScale::FULL,
             color::wb::Illuminant::default(),
             &[],
-            subs,
+            subs_for(ctx, m),
             ctx,
         )
     }
@@ -1400,6 +1407,107 @@ mod tests {
         assert!(src.contains("let hue"), "{src}");
         let (want, got, source) = both(&ctx, &m, 64, 48);
         assert_agrees("luminance + colour", &want, &got, &source);
+    }
+
+    /// ⚠⚠ **Every component's coverage is charged, and the sabotage that found this was caught by
+    /// nothing else.** `Composite::at` folds the whole chain per pixel with no early-out, so a
+    /// refinement's coverage is work the CPU really does.
+    ///
+    /// ⚠ Undercounting is wrong in the SAFE direction — the gate must fail toward the CPU — which
+    /// is exactly why nothing else sees it: the picture is identical and only the speed is lost.
+    /// What it strands is a cheap base refined by an expensive range, which is the shape the fold
+    /// exists for.
+    ///
+    /// ⚠⚠ **It asserts on `cpu_cost` rather than on whether the mask was substituted, because a
+    /// mask's own cost is NOT observable at the gate.** `worth_a_chain` sums a whole run, and
+    /// every tail ends in `output_transform` at 28.6 ms — which clears the 27.0 ms bar on its own,
+    /// M8.3h's finding. A decision-level test would pass whatever this stage reported, and its
+    /// fixture check is what said so.
+    #[test]
+    fn a_refinements_coverage_is_charged_too() {
+        let Some(ctx) = ctx() else { return };
+        let range = Mask::Colour(edit_model::ColourRange {
+            low: 0.0,
+            high: 90.0,
+            feather: 30.0,
+            min_chroma: 0.02,
+            invert: false,
+        });
+        let bare = gpu_stage(&ctx, &composite(a_gradient(), &[])).expect("builds");
+        let refined = gpu_stage(
+            &ctx,
+            &composite(a_gradient(), &[(edit_model::MaskOp::Intersect, range)]),
+        )
+        .expect("builds");
+        let d = refined.cpu_cost() - bare.cpu_cost();
+        assert!(
+            (d - COLOUR_COVERAGE_COST).abs() < 0.01,
+            "a colour-range refinement must add its own coverage cost: {d} vs {COLOUR_COVERAGE_COST}"
+        );
+    }
+
+    /// ⚠⚠ **The only test in this crate that can see the mask's region handling, and its absence
+    /// let a sabotage through.** Taking the aspect from the *rendered buffer* instead of the frame
+    /// is a no-op whenever the buffer IS the frame — which every other fixture here is — so the
+    /// whole-image tests are structurally blind to it. `VignetteStage` needed exactly this test
+    /// for exactly this reason.
+    ///
+    /// ⚠ The mask is a **diagonal** gradient: an axis-aligned one has a zero component in its
+    /// direction vector, and the aspect correction is what stops the iso-lines skewing, so an
+    /// axis-aligned fixture could not witness a wrong aspect either.
+    #[test]
+    fn a_region_is_masked_as_that_part_of_the_whole() {
+        let Some(ctx) = ctx() else { return };
+        let (fw, fh) = (64usize, 48usize);
+        // ⚠⚠ **The region's own aspect must DIFFER from the frame's, and the first version of this
+        // test had 24x18 against 64x48 — both exactly 4:3.** The sabotage that takes the aspect
+        // from the rendered buffer instead of the frame was still not caught, because on that
+        // fixture the two numbers are equal. A blind spot of the same family as an axis-aligned
+        // gradient, and one a real region almost never has.
+        let (x0, y0, rw, rh) = (20usize, 12usize, 30usize, 12usize);
+        assert!(
+            ((rw as f32 / rh as f32) - (fw as f32 / fh as f32)).abs() > 0.5,
+            "fixture check: the region's aspect must differ from the frame's, or this test cannot \
+             see an aspect taken from the wrong one"
+        );
+        let m = with_mask(a_gradient());
+        let src = scene(fw, fh);
+
+        // The whole frame on the CPU, then the same rectangle cut out of it.
+        let whole = pipeline::MaskStage::new(&m, RenderScale::FULL, &Geometry::default())
+            .apply(src.clone());
+        let cut = |img: &ImageBuf| {
+            let mut o = ImageBuf::new(rw, rh);
+            for y in 0..rh {
+                for x in 0..rw {
+                    o.set_pixel(x, y, img.pixel(x + x0, y + y0));
+                }
+            }
+            o
+        };
+        let want = cut(&whole);
+
+        // The same rectangle rendered as a region of that frame.
+        let region = Region {
+            full_w: fw,
+            full_h: fh,
+            x0,
+            y0,
+        };
+        let stage = GpuMaskStage::new(
+            &m,
+            &Geometry::default(),
+            Some(region),
+            RenderScale::FULL,
+            color::wb::Illuminant::default(),
+            &[],
+            subs_for(&ctx, &m),
+            &ctx,
+        )
+        .expect("builds");
+        let got = crate::GpuChain::new(ctx.clone(), vec![Box::new(stage)]).apply(cut(&src));
+
+        assert_agrees("region", &want, &got, &cut(&src));
     }
 
     /// ⚠ A gating brush in a REFINEMENT declines the whole mask, not just that component. A
