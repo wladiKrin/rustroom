@@ -384,6 +384,50 @@ mod tests {
         NoiseReductionStage::new(&params, RenderScale::FULL).apply(img)
     }
 
+    /// ⚠⚠ **The test this stage did not have, and could not have had while `apply_region`
+    /// computed the whole buffer and cropped** — it would have compared a computation with
+    /// itself and passed for that reason. `perspective` and `lens_correction`, the gathers, have
+    /// carried the equivalent all along.
+    #[test]
+    fn a_region_matches_the_same_part_of_the_whole() {
+        let params = NoiseReduction {
+            luminance: 40.0,
+            detail: 50.0,
+            color: 40.0,
+            smoothness: 50.0,
+        };
+        let reach = kernel_reach(&params, RenderScale::FULL);
+        assert!(reach > 0, "a zero reach would make the margin below vacuous");
+        let stage = NoiseReductionStage::new(&params, RenderScale::FULL);
+
+        let side = 4 * reach + 64;
+        let src = noisy_rect(side, side, [0.45, 0.5, 0.55], 0.06);
+        let whole = stage.apply(src.clone());
+        // Fixture check: a stage that moved nothing would make the comparison vacuous.
+        assert_ne!(whole.data(), src.data(), "the stage must move pixels");
+
+        // ⚠⚠ INTERIOR by more than `reach` on every side. A rect touching the frame edge would
+        // pass even with the margin deleted, because there the whole-buffer path clamps its own
+        // window too — so an edge rect tests nothing about the margin.
+        let rect = Rect {
+            x: 2 * reach,
+            y: 2 * reach,
+            w: 64,
+            h: 64,
+        };
+        let got = stage
+            .apply_region(&crate::RegionSrc::whole(&src), rect)
+            .expect("a region inside the buffer must be produced");
+        let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
+        assert_eq!(got.width(), rect.w);
+        assert_eq!(got.height(), rect.h);
+        assert_eq!(
+            got.data(),
+            want.data(),
+            "a region must be byte-identical to that part of the whole"
+        );
+    }
+
     #[test]
     fn zero_strengths_are_an_exact_identity() {
         let src = noisy_patch([0.4, 0.4, 0.4], 0.02);
