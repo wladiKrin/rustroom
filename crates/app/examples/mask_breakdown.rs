@@ -53,6 +53,16 @@ fn auto_brush() -> Mask {
 fn colour_range() -> Mask {
     Mask::Colour(ColourRange::default())
 }
+/// ⚠ A band over the midtones, so a real photograph's pixels actually cross both shoulders. A
+/// default range would select almost everything and make the ramp branch nearly unreachable.
+fn luminance_range() -> Mask {
+    Mask::Luminance(edit_model::LuminanceRange {
+        low: 25.0,
+        high: 75.0,
+        feather: 50.0,
+        invert: false,
+    })
+}
 fn exposure() -> LocalAdjustments {
     LocalAdjustments {
         exposure: 0.5,
@@ -135,6 +145,10 @@ fn main() {
         (
             "1 masked exposure (colour range)",
             masked(1, colour_range, exposure),
+        ),
+        (
+            "1 masked exposure (luminance range)",
+            masked(1, luminance_range, exposure),
         ),
         (
             "1 masked exposure (brush) uncached",
