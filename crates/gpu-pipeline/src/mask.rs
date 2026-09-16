@@ -1510,6 +1510,71 @@ mod tests {
         assert_agrees("region", &want, &got, &cut(&src));
     }
 
+    /// How far each mask kind's GPU twin diverges from its CPU one, in 8-bit levels.
+    ///
+    /// ⚠ `#[ignore]`d and kept, the `probe_box` / `probe_rt` precedent: a number nobody can
+    /// re-measure is a number nobody can defend. The equivalence tests assert a bound of one
+    /// level; this says where each kind actually sits inside it, which is what makes tightening
+    /// that bound later a decision rather than a guess.
+    ///
+    /// `cargo test --release -p gpu-pipeline probe_divergence -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn probe_divergence() {
+        let Some(ctx) = ctx() else { return };
+        let colour = |low: f32, high: f32| {
+            Mask::Colour(edit_model::ColourRange {
+                low,
+                high,
+                feather: 30.0,
+                min_chroma: 0.02,
+                invert: false,
+            })
+        };
+        let cases: Vec<(&str, MaskedAdjustment)> = vec![
+            ("painted brush", painted(false)),
+            ("linear gradient", with_mask(a_gradient())),
+            ("radial", with_mask(an_ellipse())),
+            (
+                "luminance range",
+                with_mask(Mask::Luminance(edit_model::LuminanceRange {
+                    low: 20.0,
+                    high: 80.0,
+                    feather: 25.0,
+                    invert: false,
+                })),
+            ),
+            ("colour range", with_mask(colour(0.0, 90.0))),
+            (
+                "COMPOSITE 3 colour ranges",
+                composite(
+                    colour(0.0, 60.0),
+                    &[
+                        (edit_model::MaskOp::Add, colour(100.0, 160.0)),
+                        (edit_model::MaskOp::Subtract, colour(200.0, 260.0)),
+                    ],
+                ),
+            ),
+            (
+                "COMPOSITE gradient n range",
+                composite(
+                    a_gradient(),
+                    &[(edit_model::MaskOp::Intersect, colour(150.0, 260.0))],
+                ),
+            ),
+        ];
+        println!("\n  mask kind                    worst levels   % of samples");
+        for (label, m) in &cases {
+            let (want, got, _) = both(&ctx, m, 128, 96);
+            let d = crate::compare(&want, &got);
+            println!(
+                "  {label:<28} {:>8.5}   {:>8.4}%",
+                d.worst_levels,
+                d.differing_percent()
+            );
+        }
+    }
+
     /// ⚠ A gating brush in a REFINEMENT declines the whole mask, not just that component. A
     /// composite is one coverage plane, so there is no half of it to accelerate.
     #[test]

@@ -184,6 +184,59 @@ fn main() {
         })],
         ..Edits::default()
     };
+    // ⚠⚠ **The only rows that can see M8.11's composite fold.** Every other masked row carries a
+    // bare base, which the twin already accelerated before the fold landed — so a bench without a
+    // composite would report the fold as worth nothing, the asymmetry M8.3j recorded when its own
+    // bench could only see fixtures.
+    //
+    // ⚠ Three colour ranges specifically: that is the shape the hoist is for, since the CPU pays
+    // an Oklab round trip per component per pixel and the GPU pays one for the chain.
+    let colour_range = |low: f32, high: f32| {
+        edit_model::Mask::Colour(edit_model::ColourRange {
+            low,
+            high,
+            feather: 30.0,
+            min_chroma: 0.02,
+            invert: false,
+        })
+    };
+    let composite_ranges = Edits {
+        masks: vec![{
+            let mut m = masked(edit_model::LocalAdjustments {
+                exposure: 0.8,
+                ..Default::default()
+            });
+            m.mask = colour_range(0.0, 60.0);
+            m.refine = vec![
+                edit_model::Refinement {
+                    op: edit_model::MaskOp::Add,
+                    mask: colour_range(100.0, 160.0),
+                },
+                edit_model::Refinement {
+                    op: edit_model::MaskOp::Subtract,
+                    mask: colour_range(200.0, 260.0),
+                },
+            ];
+            m
+        }],
+        ..Edits::default()
+    };
+    // ⚠ A shape refined by a range, which is the ordinary authoring gesture: darken the sky with a
+    // gradient, then keep only the blues.
+    let composite_mixed = Edits {
+        masks: vec![{
+            let mut m = masked(edit_model::LocalAdjustments {
+                hsl: hsl(),
+                ..Default::default()
+            });
+            m.refine = vec![edit_model::Refinement {
+                op: edit_model::MaskOp::Intersect,
+                mask: colour_range(150.0, 260.0),
+            }];
+            m
+        }],
+        ..Edits::default()
+    };
     let masked_hsl_x3 = Edits {
         masks: (0..3)
             .map(|_| {
@@ -355,6 +408,8 @@ fn main() {
         ("hsl + grade + sharpening", &three),
         ("1 masked HSL (gradient)", &masked_hsl),
         ("3 masked HSL (gradient)", &masked_hsl_x3),
+        ("COMPOSITE: 3 colour ranges", &composite_ranges),
+        ("COMPOSITE: gradient ∩ colour range", &composite_mixed),
         ("1 masked exposure — the control", &masked_exposure),
         ("vignette -60 (elliptical)", &vignette_elliptical),
         ("vignette -60 roundness -60", &vignette_superellipse),
