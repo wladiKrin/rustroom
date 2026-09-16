@@ -158,25 +158,45 @@ folded into one coverage dispatch.
 ⚠ Journal sections: `M8.11 confirmed by use (2026-09-16)` and `M8.11 — a mask's coverage and
 blend on the GPU (2026-09-16)`.
 
-### ▶ Next action — the dropdown first, and it is still not code
+### ▶ Next action — the demosaic tier is SETTLED; a GPU-resident brush base is next
 
-**▶⚠⚠ OFFER THE DEMOSAIC TIER BEFORE SCOPING ANOTHER PORT. Owed for four milestones now.**
-His stored export tier is **`Best`**: a **10.78 s** decode against `Fast`'s **2.82**, while the
-whole render is ~0.58 s on the GPU. M8.4's own validated comparison found `Better` and `Best`
-*"indistinguishable at 4× nearest-neighbour"*. **That is ~8 s a photo from a setting he already
-has** — against M8.9's entire lens-correction port, which bought under 5% of an export. ⚠ It is a
-conversation, not a milestone: **measure one real export at both tiers on his machine and put the
-crops side by side**, rather than quoting M8.4's numbers a fifth time.
+✅ **MEASURED AND ACTED ON (2026-09-16). `export.demosaic` is now `Better`** in the user's stored
+settings (`~/Library/Application Support/rustroom/settings.json`); `view_demosaic` was already
+`Better` and is untouched.
 
-**Then item 5 — spot removal — which is the ONLY genuinely unported stage left.** Verified against
-the tree on 2026-09-16: **18 of 23 pipeline stages have GPU twins**; the three without are
-`geometry`, `perspective` and `spot_removal`, and the first two were deliberately answered by
-M8.8's region scoping rather than a shader.
+**⚠⚠ AND THE FIGURE THIS FILE QUOTED FOR FOUR MILESTONES WAS WRONG BY MORE THAN 2×.** It said
+*"~8 s a photo"*. That is the `Best`→**`Fast`** gap — and `Fast` is the tier M8.4 **rejected**
+(*"a thin twig that `Better` resolves comes back as a smeared blob"*). The change actually being
+recommended was `Best`→`Better`. Measured end-to-end on his machine, `DSCF6296.RAF`, two runs each:
 
-⚠ **The obvious piece of work on the mask path, if a port is wanted sooner:** a global slider drag
-over a masked photo gains **nothing (1.00×, by construction)** — it changes the base the auto-mask
-gate reads, so the coverage cache misses every frame and the twin declines. Fixing it needs
-`GpuBrushRaster` to take a **GPU-resident base**, which is real work rather than a tweak.
+| Tier | Decode | Full export | |
+|---|---|---|---|
+| `Fast` (rejected by M8.4) | 1,998 ms | — | |
+| **`Better`** | **6,786 ms** | **8.30 / 9.17 s** | ← now stored |
+| `Best` | 11,342 ms | 12.19 / 12.56 s | |
+
+**The real saving is ~3.7 s a photo, not ~8.** At `export_concurrency = 4` a 40-photo export saves
+~37 s of wall clock, not ~80.
+
+⚠ **The picture half, whole frame rather than the probe's centre crop** — `Better` vs `Best` is
+**mean 0.116 of an 8-bit level, p99 2.0, max 51**; 15.6% of pixels differ at all, 1.62% by more
+than two levels. The difference is invisible without ~12× amplification. ⚠⚠ **`demosaic_probe`
+writes a 600×400 CENTRE CROP, not the frame** — valid at 1:1, but it samples one spot of 26 Mpx
+and under-reports. Compare full renders from `rustroom render --demosaic`.
+
+⚠ **Unverified, worth one run:** `user_qual` 4 measured **890 ms faster** than 3 (10,452 vs 11,342)
+while producing **byte-identical** output (same MD5 — the doc comment's identity claim holds). If
+that reproduces, `Best` could map to `user_qual` 4 for free. One sample, so it may be noise.
+
+**▶ What is next, and it is a choice rather than an order:**
+
+- **A GPU-resident base for `GpuBrushRaster`** — the one measured hole left in the mask path. A
+  global slider drag over a masked photo gains **nothing (1.00×, by construction)**: it changes the
+  base the auto-mask gate reads, the coverage cache misses every frame, and the twin declines.
+  ⚠ Its sibling, the **GPU-side mask coverage cache**, is now unblocked too (M8.11 is in use).
+- **Item 5 — spot removal**, the only genuinely unported stage (18 of 23 have GPU twins).
+- **The resident GPU buffer across the prefix→tail seam** — ~26 ms of an 88.9 ms dehaze-drag frame,
+  a zero-work round trip paid twice; its "not before the prefix is mostly ported" condition now holds.
 
 ### The agreed systematic order (GPU port)
 
@@ -243,8 +263,11 @@ asking then rather than now.
 - **⚠⚠ Measure the drag through `RUSTROOM_DEBUG_RENDER`, never a probe row.** M8.6's 12.5–13.3×
   headline was retracted because `probe_resamplers` priced a *stage* against a resume the real chain
   never took — it shipped and did nothing on the reporter's chain.
-- **⚠⚠ A blocker restated three times is still not a checked blocker.** "NR and dehaze run before
-  geometry" propagated through four documents and was simply false. Check any
-  *"blocked on a design question"* note in `docs/BACKLOG.md` against the code before trusting it.
+- **⚠⚠ A CLAIM RESTATED OFTEN ENOUGH STOPS BEING CHECKED — and it happens to numbers, not just
+  blockers.** "NR and dehaze run before geometry" propagated through four documents and was simply
+  false. So did the demosaic tier's *"~8 s a photo"*: that was the `Best`→`Fast` gap, quoted for
+  four milestones in support of `Best`→`Better`, which measures at **~3.7 s**. ⚠ **Before requoting
+  a figure, check which two configurations it compares** — and check any *"blocked on a design
+  question"* note in `docs/BACKLOG.md` against the code before trusting it.
 - **⚠ Almost every GUI-wiring defect in this repo was found by USE, not by a test.** A milestone is
   not closed when it is green; it is closed when it has been seen.

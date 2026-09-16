@@ -120,6 +120,50 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### The demosaic tier, measured and settled (2026-09-16)
+
+The recommendation this file carried for four milestones was **overstated by more than 2×**, and
+it took measuring it to notice. It quoted *"~8 s a photo"* for changing the export demosaic tier.
+That is the `Best`→`Fast` gap. `Fast` is the tier M8.4 **rejected** on foliage. The change being
+recommended was `Best`→`Better`, which measures at **~3.7 s**.
+
+⚠⚠ **The lesson is the one already in this file under a different name: a number quoted often
+enough stops being checked.** It survived four restatements, each one citing M8.4 rather than the
+tiers actually being compared — the same shape as the *"NR and dehaze run before geometry"* error
+that propagated through four documents.
+
+⚠ **`demosaic_probe` writes a 600×400 centre crop, not the frame.** Valid at 1:1, but it samples
+one spot of 26 Mpx and under-reported the difference (0.056 vs 0.116 levels mean). The full-frame
+comparison came from two `rustroom render --demosaic` runs diffed directly.
+
+⚠ `user_qual` 3 and 4 confirmed **byte-identical** (same MD5) on `DSCF6296.RAF`, upholding the doc
+comment — but qual 4 measured 890 ms *faster*. One sample; unverified.
+
+**Outcome:** `export.demosaic` switched `Best` → `Better` in the user's stored settings, on his
+call, after seeing 4× crops. `view_demosaic` was already `Better`.
+
+The block this replaced:
+
+> ### ▶ Next action — the dropdown first, and it is still not code
+> 
+> **▶⚠⚠ OFFER THE DEMOSAIC TIER BEFORE SCOPING ANOTHER PORT. Owed for four milestones now.**
+> His stored export tier is **`Best`**: a **10.78 s** decode against `Fast`'s **2.82**, while the
+> whole render is ~0.58 s on the GPU. M8.4's own validated comparison found `Better` and `Best`
+> *"indistinguishable at 4× nearest-neighbour"*. **That is ~8 s a photo from a setting he already
+> has** — against M8.9's entire lens-correction port, which bought under 5% of an export. ⚠ It is a
+> conversation, not a milestone: **measure one real export at both tiers on his machine and put the
+> crops side by side**, rather than quoting M8.4's numbers a fifth time.
+> 
+> **Then item 5 — spot removal — which is the ONLY genuinely unported stage left.** Verified against
+> the tree on 2026-09-16: **18 of 23 pipeline stages have GPU twins**; the three without are
+> `geometry`, `perspective` and `spot_removal`, and the first two were deliberately answered by
+> M8.8's region scoping rather than a shader.
+> 
+> ⚠ **The obvious piece of work on the mask path, if a port is wanted sooner:** a global slider drag
+> over a masked photo gains **nothing (1.00×, by construction)** — it changes the base the auto-mask
+> gate reads, so the coverage cache misses every frame and the twin declines. Fixing it needs
+> `GpuBrushRaster` to take a **GPU-resident base**, which is real work rather than a tweak.
+
 ### M8.11 confirmed by use (2026-09-16)
 
 ✅ **Reported working on a photograph — *"works, confirmed"* — with no defects found by using it.**
