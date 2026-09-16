@@ -105,10 +105,24 @@ path does there too, so the two still agree.
 ## Done when
 
 1. Both locals crop to `need` before applying.
-2. **A real region-equivalence test exists for each** — `apply_region` over an interior rect is
-   **byte-identical** to `apply` over the whole buffer cropped to the same rect. ⚠ The rect must be
-   **interior**, far enough from the frame edge that the margin is not clamped, or the test proves
-   nothing about the margin.
+2. **A real region-equivalence test exists for each** — `apply_region` over an interior rect agrees
+   with `apply` over the whole buffer cropped to the same rect. ⚠ The rect must be **interior**, far
+   enough from the frame edge that the margin is not clamped, or the test proves nothing about it.
+
+   ⚠⚠ **CORRECTED DURING EXECUTION: "byte-identical" above was WRONG, and this spec made the error
+   the journal already records a previous spec making.** `box_blur` keeps a running sum, so it
+   reaches each position by a different history of adds and subtracts depending on where the row
+   starts — see `a_chain_with_a_local_agrees_to_within_a_rounding`. **The criterion is agreement to
+   within a rounding**, with the bound sized per stage from measurement at both ends:
+
+   | stage | measured normal | margin deleted | bound | why |
+   |---|---|---|---|---|
+   | noise reduction | 4.8e-6 | 7.3e-4 (150x) | 1e-5 | the sibling test's bound |
+   | dehaze | 9.9e-5 | 5.2e-2 (527x) | 1e-3 | divides by `T_MIN` 0.1, amplifying a wobble ~10x |
+
+   ⚠ Measured against a **larger** fixture the divergence does **not shrink as the margin widens**
+   (NR 9.7e-6 / 1.1e-5 / 8.8e-6 at 1x/2x/3x), which is what rules out an under-sized `kernel_reach`
+   and leaves rounding as the explanation.
 3. **A sabotage step:** deleting the `kernel_reach` growth from `input_rect_for` must make those new
    tests FAIL. A test that passes with the margin removed is testing nothing.
 4. `fmt` / `clippy --all-targets --all-features -D warnings` / `test --workspace` green together,
