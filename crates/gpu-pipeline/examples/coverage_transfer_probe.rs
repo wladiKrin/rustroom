@@ -147,7 +147,9 @@ fn upload_ab(
             mapped_at_creation: false,
         });
         queue.write_buffer(&buf, 0, bytemuck::cast_slice(&words));
-        queue.submit(Some(device.create_command_encoder(&Default::default()).finish()));
+        queue.submit(Some(
+            device.create_command_encoder(&Default::default()).finish(),
+        ));
         wait(device);
         with.push(t.elapsed().as_secs_f64() * 1000.0);
         drop(buf);
@@ -160,7 +162,9 @@ fn upload_ab(
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.submit(Some(device.create_command_encoder(&Default::default()).finish()));
+        queue.submit(Some(
+            device.create_command_encoder(&Default::default()).finish(),
+        ));
         wait(device);
         without.push(t.elapsed().as_secs_f64() * 1000.0);
         drop(buf);
@@ -237,7 +241,9 @@ fn download_ab(
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        queue.submit(Some(device.create_command_encoder(&Default::default()).finish()));
+        queue.submit(Some(
+            device.create_command_encoder(&Default::default()).finish(),
+        ));
         wait(device);
         without.push(t.elapsed().as_secs_f64() * 1000.0);
         drop(readback);
@@ -405,7 +411,10 @@ fn main() {
     // (a) in-situ — the real GpuMaskStage through GpuChain, full box against 16x16.
     if let Some(ctx) = &ctx {
         println!("── (a) in-situ: GpuChain::apply on a Prebuilt mask, full box vs 16x16 box");
-        for (label, w, h) in [("1600x1068", 1600usize, 1068usize), ("3200x2137", 3200, 2137)] {
+        for (label, w, h) in [
+            ("1600x1068", 1600usize, 1068usize),
+            ("3200x2137", 3200, 2137),
+        ] {
             let img = scene(w, h);
             let full = Arc::new(a_map(w, h));
             let tiny = Arc::new(a_map(16, 16));
@@ -428,7 +437,10 @@ fn main() {
         // (c) the rasterise the cache avoids.
         println!("── (c) GpuBrushRaster::rasterize — the work a cache hit avoids");
         let raster = gpu_pipeline::GpuBrushRaster::new(ctx);
-        for (label, w, h) in [("1600x1068", 1600usize, 1068usize), ("3200x2137", 3200, 2137)] {
+        for (label, w, h) in [
+            ("1600x1068", 1600usize, 1068usize),
+            ("3200x2137", 3200, 2137),
+        ] {
             let img = scene(w, h);
             let base = ImgBase(&img);
             for gating in [false, true] {
@@ -439,7 +451,11 @@ fn main() {
                     w,
                     h,
                     None,
-                    if gating { Some(&base as &dyn BasePixels) } else { None },
+                    if gating {
+                        Some(&base as &dyn BasePixels)
+                    } else {
+                        None
+                    },
                 ) else {
                     println!("    no plan for {label} gating={gating}");
                     continue;
@@ -455,7 +471,8 @@ fn main() {
                 let mut v = Vec::new();
                 for _ in 0..runs {
                     let t = Instant::now();
-                    let got = raster.rasterize(&plan, false, if gating { Some(bref) } else { None });
+                    let got =
+                        raster.rasterize(&plan, false, if gating { Some(bref) } else { None });
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                     assert!(got.is_some(), "the rasteriser declined");
                 }

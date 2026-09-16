@@ -198,12 +198,22 @@ fn main() {
                 frame_ms(&engine, &base_edits(), spec);
             }
 
-            let a = drag(&engine, spec, "A: `noise_reduction` (the stage ITSELF)", |e, k| {
-                e.noise_reduction.luminance = 40.0 + k as f32 + sa;
-            });
-            let b = drag(&engine, spec, "B: `dehaze` (DOWNSTREAM, in the prefix)", |e, k| {
-                e.dehaze.amount = 50.0 + k as f32 + sa;
-            });
+            let a = drag(
+                &engine,
+                spec,
+                "A: `noise_reduction` (the stage ITSELF)",
+                |e, k| {
+                    e.noise_reduction.luminance = 40.0 + k as f32 + sa;
+                },
+            );
+            let b = drag(
+                &engine,
+                spec,
+                "B: `dehaze` (DOWNSTREAM, in the prefix)",
+                |e, k| {
+                    e.dehaze.amount = 50.0 + k as f32 + sa;
+                },
+            );
             let c = drag(&engine, spec, "C: `exposure` (a TAIL slider)", |e, k| {
                 e.exposure = 0.3 + 0.02 * k as f32 + sa * 0.001;
             });
@@ -254,8 +264,14 @@ fn main() {
         let b = drag(&engine, spec, "B(scoped): `dehaze`", |e, k| {
             e.dehaze.amount = 50.0 + k as f32 + sa;
         });
-        eprintln!("  A  drag noise_reduction            {:7.1} {:9.1} {:8.1} ms", a.0, a.1, a.2);
-        eprintln!("  B  drag dehaze                     {:7.1} {:9.1} {:8.1} ms", b.0, b.1, b.2);
+        eprintln!(
+            "  A  drag noise_reduction            {:7.1} {:9.1} {:8.1} ms",
+            a.0, a.1, a.2
+        );
+        eprintln!(
+            "  B  drag dehaze                     {:7.1} {:9.1} {:8.1} ms",
+            b.0, b.1, b.2
+        );
     }
 
     // ── Part 2: what the checkpoint COSTS to keep, priced as exactly one round trip ──────────
@@ -276,7 +292,8 @@ fn main() {
         // ⚠ The CPU stage supplies the image the dehaze twin estimates its airlight from, so both
         // configurations construct an identical dehaze stage. Construction is outside every timed
         // region in both, so the airlight estimate is priced in neither.
-        let post_nr = pipeline::NoiseReductionStage::new(&e.noise_reduction, sc).apply(base.clone());
+        let post_nr =
+            pipeline::NoiseReductionStage::new(&e.noise_reduction, sc).apply(base.clone());
 
         let nr = || {
             Box::new(gpu_pipeline::GpuNoiseReductionStage::new(
@@ -298,7 +315,10 @@ fn main() {
         // download. The transfer floor, beside the difference above.
         let floor = gpu_pipeline::GpuChain::new(
             ctx.clone(),
-            vec![Box::new(gpu_pipeline::GpuExposureStage::new(0.0, ctx.clone()))],
+            vec![Box::new(gpu_pipeline::GpuExposureStage::new(
+                0.0,
+                ctx.clone(),
+            ))],
         );
 
         let mut s = Vec::new();
@@ -345,10 +365,22 @@ fn main() {
             (base.width() * base.height()) as f64 / 1e6
         );
         eprintln!("  row                                     min     median      max");
-        eprintln!("  NR + dehaze, SPLIT (checkpoint kept){:7.1} {:9.1} {:8.1} ms", s0, s1, s2);
-        eprintln!("  NR + dehaze, FUSED (no checkpoint) {:8.1} {:9.1} {:8.1} ms", f0, f1, f2);
-        eprintln!("  `noise_reduction` chain ALONE      {:8.1} {:9.1} {:8.1} ms", n0, n1, n2);
-        eprintln!("  zero-work round trip (floor)       {:8.1} {:9.1} {:8.1} ms", z0, z1, z2);
+        eprintln!(
+            "  NR + dehaze, SPLIT (checkpoint kept){:7.1} {:9.1} {:8.1} ms",
+            s0, s1, s2
+        );
+        eprintln!(
+            "  NR + dehaze, FUSED (no checkpoint) {:8.1} {:9.1} {:8.1} ms",
+            f0, f1, f2
+        );
+        eprintln!(
+            "  `noise_reduction` chain ALONE      {:8.1} {:9.1} {:8.1} ms",
+            n0, n1, n2
+        );
+        eprintln!(
+            "  zero-work round trip (floor)       {:8.1} {:9.1} {:8.1} ms",
+            z0, z1, z2
+        );
         eprintln!(
             "  SPLIT - FUSED = {:+.1} ms median — the download+upload the checkpoint costs",
             s1 - f1

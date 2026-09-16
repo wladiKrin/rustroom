@@ -662,6 +662,20 @@ pub fn run_region_plan(
     if n == 0 || start + n != steps.len() {
         return None;
     }
+    // ⚠⚠ Kept permanently, the `RUSTROOM_DEBUG_MASK` / `RUSTROOM_DEBUG_BRUSH` precedent, and added
+    // because this path was a blind spot: `render_engine` prints a whole-render figure and a plan
+    // summary for a scoped render, but its per-step decomposition sits in the WHOLE-BUFFER branch,
+    // so a scoped drag reported a total with nothing under it. A scoped 0.7 Mpx dehaze drag
+    // measured 118 ms against a 9-11 ms cache-hit frame (2026-09-16) and no line said where it
+    // went.
+    //
+    // ⚠ The `margin` column is the point of it. `region_plan` grows the request by each stage's
+    // `input_rect_for` on EVERY side and propagates that backward through the whole chain, so the
+    // earliest rect is the largest and the work is NOT the visible region's area. Dehaze alone
+    // reaches `2 * REFINE_RADIUS + PATCH_RADIUS` per side.
+    let debug = std::env::var_os("RUSTROOM_DEBUG_RENDER").is_some();
+    let t_all = std::time::Instant::now();
+    let visible = plan.out_rects[n - 1];
     let mut carried: Option<ImageBuf> = None;
     for i in 0..n {
         let region_src = match &carried {
@@ -672,10 +686,42 @@ pub fn run_region_plan(
                 full: plan.dims[i],
             },
         };
+        let t = std::time::Instant::now();
         carried = Some(
             steps[start + i]
                 .stage
                 .apply_region(&region_src, plan.out_rects[i])?,
+        );
+        if debug {
+            let r = plan.out_rects[i];
+            let px = r.w as f64 * r.h as f64;
+            eprintln!(
+                "    scoped step {:>2} {:<18} out {:>5}x{:<5} {:6.3} Mpx  margin {:5.2}x  {:8.2} ms",
+                start + i,
+                steps[start + i].stage.name(),
+                r.w,
+                r.h,
+                px / 1e6,
+                px / (visible.w as f64 * visible.h as f64).max(1.0),
+                t.elapsed().as_secs_f64() * 1e3,
+            );
+        }
+    }
+    if debug {
+        let first = plan.out_rects[0];
+        eprintln!(
+            "    scoped TOTAL {} step(s)  visible {}x{} ({:.3} Mpx)  widest {}x{} ({:.3} Mpx, {:.2}x)  frame {}x{}  {:.2} ms",
+            n,
+            visible.w,
+            visible.h,
+            (visible.w as f64 * visible.h as f64) / 1e6,
+            first.w,
+            first.h,
+            (first.w as f64 * first.h as f64) / 1e6,
+            (first.w as f64 * first.h as f64) / (visible.w as f64 * visible.h as f64).max(1.0),
+            plan.frame.0,
+            plan.frame.1,
+            t_all.elapsed().as_secs_f64() * 1e3,
         );
     }
     carried
