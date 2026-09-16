@@ -120,6 +120,63 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### M8.11 confirmed by use (2026-09-16)
+
+✅ **Reported working on a photograph — *"works, confirmed"* — with no defects found by using it.**
+M8.11 is therefore closed in the strong sense: merged, green, *and* seen. The GUI was launched
+`--release` and exercised against the checklist below.
+
+⚠ The report did not enumerate which checklist items were exercised, so **the luminance-range
+case is confirmed only as part of the whole** rather than named. It is the one whose failure mode
+is a *plausible photograph* rather than an error — see `crates/gpu-pipeline/src/mask.rs:104`,
+where the coverage dispatch's position is called load-bearing. If a range mask is ever seen to
+drift while its own sub-stage moves, start there.
+
+⚠ This milestone is also the first whose handoff was recorded under the new rule that **a
+superseded block moves here rather than accumulating in `CLAUDE.md`**. The block it replaced:
+
+> ### State (2026-09-16)
+> 
+> **2529 tests, 63 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean tree.
+> 
+> **M8.11 — a mask's coverage and blend on the GPU — is merged fast-forward and its branch deleted.**
+> A whole mask is now one `GpuStage`: seed, coverage, sub-stages and blend in a single compute pass,
+> with the composite folded into one coverage dispatch. `fmt` / `clippy --all-targets --all-features
+> -D warnings` / `test --workspace` green together, **each exit code read from its own command**;
+> **63 goldens ran and none moved**; `crates/pipeline/tests` unmodified.
+> 
+> ⚠ Journal section: `M8.11 — a mask's coverage and blend on the GPU (2026-09-16)`.
+> 
+> ### ▶ Next action — two things, neither of them code
+> 
+> **1. CONFIRM M8.11 BY USE. The check is that the picture does not change, not a stopwatch.**
+> 
+> With **Settings → Rendering → "Use the GPU"** on, open the photo carrying the real sidecar and drag
+> that mask's sliders: visibly quicker, and **the picture must not change**. Then build a **composite**
+> — a mask plus a Subtract or Intersect refinement — the shape that was not accelerated at all before.
+> 
+> > **⚠⚠ THE HALF A STILL FRAME CANNOT CATCH IS A RANGE MASK KEYED ON ITS OWN OUTPUT.** The coverage
+> > dispatch is recorded *before* the sub-stages precisely so a luminance or colour range selects on
+> > the **base** pixel; get that wrong and lifting the shadows moves them out of the band that
+> > selected them — a plausible photograph, not an error. So exercise **a luminance-range mask
+> > carrying a large exposure lift**, where the selection must stay put as the slider moves.
+> 
+> ⚠ Then **pan at 1:1 with a mask selected**: coverage is defined over the FRAME, so a mask that
+> slides across the photograph as you pan is the region half — guarded by
+> `a_region_is_masked_as_that_part_of_the_whole` and by nothing else.
+> 
+> ⚠ **Do not expect a global slider drag over a masked photo to gain anything (1.00×, by
+> construction).** Such a drag changes the base the auto-mask gate reads, so the coverage cache misses
+> every frame; a gating brush then has no prebuilt map and the twin declines. Fixing it needs
+> `GpuBrushRaster` to take a GPU-resident base — real work, and the obvious next item on this path.
+> 
+> **2. ⚠⚠ OFFER THE DEMOSAIC TIER BEFORE PROPOSING ANOTHER PORT.** Owed for three milestones now.
+> His stored export tier is **`Best`**: a **10.78 s** decode against `Fast`'s **2.82**, while the whole
+> render is ~0.58 s on the GPU. M8.4's own validated comparison found `Better` and `Best`
+> *"indistinguishable at 4× nearest-neighbour"*. **That is ~8 s a photo from a dropdown he already
+> has** — against M8.9's entire lens-correction port, which bought under 5% of an export. It is a
+> conversation, not a milestone.
+
 
 > **▶ RESUME HERE (fresh session).**
 >

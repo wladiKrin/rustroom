@@ -144,45 +144,39 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-16)
 
-**2529 tests, 63 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean tree.
+**2529 tests, 63 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
+tree. ⚠ `main` is **2 commits ahead of `origin/main`** (the CLAUDE.md split and a `.gitignore`
+entry) — **not pushed; the user pushes himself.**
 
-**M8.11 — a mask's coverage and blend on the GPU — is merged fast-forward and its branch deleted.**
-A whole mask is now one `GpuStage`: seed, coverage, sub-stages and blend in a single compute pass,
-with the composite folded into one coverage dispatch. `fmt` / `clippy --all-targets --all-features
--D warnings` / `test --workspace` green together, **each exit code read from its own command**;
-**63 goldens ran and none moved**; `crates/pipeline/tests` unmodified.
+✅ **M8.11 — a mask's coverage and blend on the GPU — is merged, green, and CONFIRMED BY USE
+(2026-09-16)** — *"works, confirmed"*, with no defects found by using it. A whole mask is one
+`GpuStage`: seed, coverage, sub-stages and blend in a single compute pass, with the composite
+folded into one coverage dispatch.
 
-⚠ Journal section: `M8.11 — a mask's coverage and blend on the GPU (2026-09-16)`.
+⚠ **Every GPU milestone in Phase 8 is now confirmed by use.**
 
-### ▶ Next action — two things, neither of them code
+⚠ Journal sections: `M8.11 confirmed by use (2026-09-16)` and `M8.11 — a mask's coverage and
+blend on the GPU (2026-09-16)`.
 
-**1. CONFIRM M8.11 BY USE. The check is that the picture does not change, not a stopwatch.**
+### ▶ Next action — the dropdown first, and it is still not code
 
-With **Settings → Rendering → "Use the GPU"** on, open the photo carrying the real sidecar and drag
-that mask's sliders: visibly quicker, and **the picture must not change**. Then build a **composite**
-— a mask plus a Subtract or Intersect refinement — the shape that was not accelerated at all before.
+**▶⚠⚠ OFFER THE DEMOSAIC TIER BEFORE SCOPING ANOTHER PORT. Owed for four milestones now.**
+His stored export tier is **`Best`**: a **10.78 s** decode against `Fast`'s **2.82**, while the
+whole render is ~0.58 s on the GPU. M8.4's own validated comparison found `Better` and `Best`
+*"indistinguishable at 4× nearest-neighbour"*. **That is ~8 s a photo from a setting he already
+has** — against M8.9's entire lens-correction port, which bought under 5% of an export. ⚠ It is a
+conversation, not a milestone: **measure one real export at both tiers on his machine and put the
+crops side by side**, rather than quoting M8.4's numbers a fifth time.
 
-> **⚠⚠ THE HALF A STILL FRAME CANNOT CATCH IS A RANGE MASK KEYED ON ITS OWN OUTPUT.** The coverage
-> dispatch is recorded *before* the sub-stages precisely so a luminance or colour range selects on
-> the **base** pixel; get that wrong and lifting the shadows moves them out of the band that
-> selected them — a plausible photograph, not an error. So exercise **a luminance-range mask
-> carrying a large exposure lift**, where the selection must stay put as the slider moves.
+**Then item 5 — spot removal — which is the ONLY genuinely unported stage left.** Verified against
+the tree on 2026-09-16: **18 of 23 pipeline stages have GPU twins**; the three without are
+`geometry`, `perspective` and `spot_removal`, and the first two were deliberately answered by
+M8.8's region scoping rather than a shader.
 
-⚠ Then **pan at 1:1 with a mask selected**: coverage is defined over the FRAME, so a mask that
-slides across the photograph as you pan is the region half — guarded by
-`a_region_is_masked_as_that_part_of_the_whole` and by nothing else.
-
-⚠ **Do not expect a global slider drag over a masked photo to gain anything (1.00×, by
-construction).** Such a drag changes the base the auto-mask gate reads, so the coverage cache misses
-every frame; a gating brush then has no prebuilt map and the twin declines. Fixing it needs
-`GpuBrushRaster` to take a GPU-resident base — real work, and the obvious next item on this path.
-
-**2. ⚠⚠ OFFER THE DEMOSAIC TIER BEFORE PROPOSING ANOTHER PORT.** Owed for three milestones now.
-His stored export tier is **`Best`**: a **10.78 s** decode against `Fast`'s **2.82**, while the whole
-render is ~0.58 s on the GPU. M8.4's own validated comparison found `Better` and `Best`
-*"indistinguishable at 4× nearest-neighbour"*. **That is ~8 s a photo from a dropdown he already
-has** — against M8.9's entire lens-correction port, which bought under 5% of an export. It is a
-conversation, not a milestone.
+⚠ **The obvious piece of work on the mask path, if a port is wanted sooner:** a global slider drag
+over a masked photo gains **nothing (1.00×, by construction)** — it changes the base the auto-mask
+gate reads, so the coverage cache misses every frame and the twin declines. Fixing it needs
+`GpuBrushRaster` to take a **GPU-resident base**, which is real work rather than a tweak.
 
 ### The agreed systematic order (GPU port)
 
@@ -194,22 +188,34 @@ milestones leaned on that scan; it must not be cited as a prioritisation argumen
 |---|---|---|
 | 1 | Finish the per-pixel tail | ✅ done (M8.3m–p) |
 | 2 | Noise reduction on the GPU | ✅ done, M8.3q — an NR drag ~207 → ~142 ms, 1.45–1.46× |
-| 3 | Port **lens correction** | 🟡 **re-priced, not retired** — see below |
+| 3 | Port **lens correction** | ✅ **done, M8.9** — ⚠ its *value* was re-priced, not the work; see below |
 | 4 | Mask coverage + the blend | ✅ done, M8.11 |
 | 5 | **Spot removal** | ⬜ not started |
 
-**⚠ Item 3, re-scoped 2026-09-15 by M8.8, which took the other route first.** Giving the stage an
+**⚠⚠ ITEM 3 IS DONE, AND THIS LIST SAID OTHERWISE FOR A DAY.** `crates/gpu-pipeline/src/lens_correction.rs`
+is 722 lines, wired at `accelerate.rs:320`, gated by `lens_correction_is_accelerated_only_when_a_profile_is_in_hand`
+— M8.9 shipped it and it is confirmed by use. **The 🟡 this row used to carry meant its *value* was
+re-priced, and was read as unfinished work.** A status column must say whether the code exists, and
+nothing else.
+
+**⚠ What was re-priced, 2026-09-15 by M8.8, which took the other route first.** Giving the stage an
 `input_rect_for`/`apply_region` pair took a cold 1:1 entry's prefix from **1689–1869 → 218–225 ms**
-without a line of shader; lens correction is then 118 ms of that 221. **So the port's value moved to
-EXPORT**, which is whole-buffer and sequential and still pays 650–696 ms a photo — but M8.10 now
-runs those photos four-wide, so it attacks a wall clock already ~3× shorter than when it was
-proposed. **Re-measure an export before scoping it.**
+without a line of shader; lens correction is then 118 ms of that 221. **So the port's value had
+already moved to EXPORT** — whole-buffer, sequential, still paying 650–696 ms a photo — and M8.10
+then made those photos run four-wide, against a wall clock ~3× shorter than when it was proposed.
+Measured after the fact: the port saves ~550 ms of a ~11.4 s export, **under 5%**.
+
+**✅ Verified against the tree, 2026-09-16: 18 of 23 pipeline stages have GPU twins.** The three
+without are `geometry`, `perspective` and `spot_removal` — and the first two were answered by M8.8's
+region scoping rather than a shader, deliberately. **So item 5 is the only genuine port left.**
 
 ### Open items
 
 - **The camera rendering does not reach an export** (`ProfileRendering::default()`) — `docs/BACKLOG.md`.
-- **A GPU-side mask coverage cache** — backlogged at M8.11's brainstorm; worth re-measuring once M8.11 is in use.
-- **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠⚠ **Do not start it before the prefix is mostly ported.**
+- **A GPU-side mask coverage cache** — backlogged at M8.11's brainstorm. ⚠ **M8.11 is now in use, so
+  the precondition this was waiting on is met: re-measure it.** Its sibling is the `GpuBrushRaster`
+  GPU-resident base, which is what a global drag over a masked photo needs (see the next action).
+- **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 23 stages ported that condition now holds, so this is live rather than blocked.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
