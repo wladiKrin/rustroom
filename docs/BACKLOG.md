@@ -159,7 +159,8 @@ validates on. The machinery is shared: a LookTable is the same 3-D HSV table as 
 
 ## Colour management follow-ups
 
-Seeded from the recorded follow-ups in `CLAUDE.md`; see the sections there for detail.
+Seeded from the recorded follow-ups formerly in `CLAUDE.md`; **the sections are now in
+`docs/JOURNAL.md`** (split out 2026-09-16) — `grep -n '^### ' docs/JOURNAL.md` for the index.
 
 - **C2/C3 have no independent oracle.** `rawtherapee-cli` is installed but crashes on this machine
   (exit 133, SIGTRAP, no output). The dual-illuminant interpolation is therefore **bounded but not
@@ -816,7 +817,7 @@ photo. A uniform 138 ms would read as lag; a 2.5× spread reads as stutter. Not 
 secondary to a mean of 7.2 fps.
 
 **▶⚠⚠ THE FIX IS AN INTERACTIVE RUNG, AND THIS PROJECT HAS BUILT IT BEFORE AND REMOVED IT — READ
-`CLAUDE.md`'s "progressive fit resolution" SECTION BEFORE RE-DERIVING ANY OF IT.** That feature
+the "progressive fit resolution" SECTION IN `docs/JOURNAL.md` BEFORE RE-DERIVING ANY OF IT.** That feature
 rendered at 1600 while interacting and re-rendered at the higher rung ~200 ms after; it was shipped,
 debugged three times and deleted on 2026-08-13, and **its three bugs are recorded there** —
 an oscillating gate (the condition went false the frame the sharp render landed), sharpening the
@@ -942,9 +943,9 @@ is the only thing to trust here.
 
 ---
 
-⚠ **This file was seeded from the follow-ups already recorded in `CLAUDE.md` and is not a complete
+⚠ **This file was seeded from the follow-ups already recorded in the journal and is not a complete
 sweep of that document.** When something is deferred, add it here *and* leave the detail in its
-CLAUDE.md section.
+`docs/JOURNAL.md` section.
 
 ## EXIF/IPTC metadata editing (deferred 2026-08-26 — blocked on a DESIGN question)
 
