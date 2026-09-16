@@ -808,7 +808,11 @@ impl Default for RadialGradient {
 impl RadialGradient {
     /// Below this the ramp is treated as a hard edge. The only thing between feather 0 and a
     /// division by zero — the same role `WIDTH_EPS` plays in the vignette.
-    const FEATHER_EPS: f32 = 1e-4;
+    ///
+    /// ⚠ `pub` so a GPU twin can **substitute** it into its shader rather than transcribe it, the
+    /// rule `pipeline::SATURATION_EPS` already follows. A substituted constant cannot disagree; a
+    /// transcribed one is merely checked for agreeing.
+    pub const FEATHER_EPS: f32 = 1e-4;
 
     /// Coverage at `(u, v)` in normalised frame coordinates, in `0.0..=1.0`.
     ///
@@ -1017,7 +1021,10 @@ impl LuminanceRange {
     ///
     /// Half the full 0..=100 range, so feather 100 reaches from one end of the scale to the other
     /// and the mask degenerates gracefully into "everything, weighted" rather than clipping.
-    const FEATHER_SCALE: f32 = 50.0;
+    ///
+    /// ⚠ `pub` so a GPU twin substitutes it rather than transcribing it — the rule
+    /// `pipeline::SATURATION_EPS` already follows.
+    pub const FEATHER_SCALE: f32 = 50.0;
 
     /// Below this the ramp is treated as a hard edge.
     ///
@@ -1033,7 +1040,9 @@ impl LuminanceRange {
     /// is a **zero-width band probed exactly on itself** — `low == high == l` at feather 0, which
     /// is two slider drags away. Unguarded, coverage is NaN, `MaskStage`'s blend propagates it,
     /// and the selected tones quantize to **black**.
-    const FEATHER_EPS: f32 = 1e-4;
+    ///
+    /// ⚠ `pub` so a GPU twin substitutes it rather than transcribing it.
+    pub const FEATHER_EPS: f32 = 1e-4;
 
     /// Coverage for a pixel whose display-referred lightness is `lightness`, in `0.0..=1.0`.
     ///
@@ -1137,7 +1146,9 @@ impl ColourRange {
     /// Half a turn, so feather 100 reaches all the way round from either edge and the mask
     /// degenerates gracefully into "everything, weighted" rather than clipping — the analogue of
     /// [`LuminanceRange::FEATHER_SCALE`] being half its 0..=100 scale.
-    const FEATHER_SCALE: f32 = 180.0;
+    ///
+    /// ⚠ `pub` so a GPU twin substitutes it rather than transcribing it.
+    pub const FEATHER_SCALE: f32 = 180.0;
 
     /// Below this the ramp is treated as a hard edge.
     ///
@@ -1145,7 +1156,9 @@ impl ColourRange {
     /// the same two slider drags: with `w == 0` the shoulders are `0.0/0.0`, and a zero-width
     /// band probed exactly on itself has no non-NaN operand for `f32::min` to fall back on.
     /// `MaskStage`'s blend then propagates the NaN and the selected colours quantize to black.
-    const FEATHER_EPS: f32 = 1e-4;
+    ///
+    /// ⚠ `pub` so a GPU twin substitutes it rather than transcribing it.
+    pub const FEATHER_EPS: f32 = 1e-4;
 
     /// The chroma over which coverage fades in, above `min_chroma`.
     ///
@@ -1153,7 +1166,9 @@ impl ColourRange {
     /// a hard threshold puts a visible edge through a smooth gradient wherever the photograph
     /// happens to cross it, in exactly the near-neutral region where the hue driving that edge is
     /// noise. Its own `CHROMA_FADE` is this width.
-    const CHROMA_FADE: f32 = 0.02;
+    ///
+    /// ⚠ `pub` so a GPU twin substitutes it rather than transcribing it.
+    pub const CHROMA_FADE: f32 = 0.02;
 
     /// Coverage for a pixel of Oklab hue `hue_degrees` and Oklab chroma `chroma`, in `0.0..=1.0`.
     ///
