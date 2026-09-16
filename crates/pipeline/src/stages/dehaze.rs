@@ -438,6 +438,57 @@ mod tests {
         DehazeStage::new(&Dehaze { amount }, RenderScale::FULL).apply(img)
     }
 
+    /// ⚠⚠ **The test this stage did not have**, for the same reason noise reduction did not:
+    /// while `apply_region` computed the whole buffer and cropped, this compared a computation
+    /// with itself and passed for that reason.
+    ///
+    /// ⚠ To within a rounding, NOT byte-for-byte — `a_chain_with_a_local_agrees_to_within_a_
+    /// rounding` records why, and the same bound is used here.
+    #[test]
+    fn a_region_matches_the_same_part_of_the_whole() {
+        let params = Dehaze { amount: 60.0 };
+        let reach = kernel_reach(&params, RenderScale::FULL);
+        assert!(reach > 0, "a zero reach would make the margin below vacuous");
+
+        let side = 4 * reach + 64;
+        let clear = scene(side, side);
+        let a = [0.72, 0.76, 0.80];
+        let hazy = add_haze(&clear, a);
+        // ⚠ The airlight is SUPPLIED, exactly as `prefix_airlight` supplies it in the engine.
+        // Estimated per-call it would differ between the whole buffer and a slice, and this would
+        // measure that rather than the margin.
+        let stage = DehazeStage::with_airlight(&params, RenderScale::FULL, a);
+
+        let whole = stage.apply(hazy.clone());
+        // Fixture check: a stage that moved nothing would make the comparison vacuous.
+        assert_ne!(whole.data(), hazy.data(), "the stage must move pixels");
+
+        // ⚠⚠ INTERIOR by more than `reach` on every side — an edge rect would pass with the
+        // margin deleted, because the whole-buffer path clamps its window there too.
+        let rect = Rect {
+            x: 2 * reach,
+            y: 2 * reach,
+            w: 64,
+            h: 64,
+        };
+        let got = stage
+            .apply_region(&crate::RegionSrc::whole(&hazy), rect)
+            .expect("a region inside the buffer, with an airlight, must be produced");
+        let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
+        assert_eq!(got.width(), rect.w);
+        assert_eq!(got.height(), rect.h);
+        let worst = got
+            .data()
+            .iter()
+            .zip(want.data())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 1e-5,
+            "a running sum may wobble in the last bits; a margin bug may not. worst {worst:e}"
+        );
+    }
+
     fn run_with_tolerance(amount: f32, img: ImageBuf, tolerance: f32) -> ImageBuf {
         DehazeStage::new(&Dehaze { amount }, RenderScale::FULL).apply_with(img, tolerance)
     }
