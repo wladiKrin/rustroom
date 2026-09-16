@@ -124,13 +124,24 @@ impl PipelineStage for NoiseReductionStage {
         if out.w == 0 || out.h == 0 {
             return None;
         }
-        let ox = out.x.checked_sub(src.origin.0)?;
-        let oy = out.y.checked_sub(src.origin.1)?;
-        if ox + out.w > src.buf.width() || oy + out.h > src.buf.height() {
+        // ⚠⚠ **Crop to what the kernel actually reaches BEFORE applying.** Until 2026-09-16 this
+        // cloned the whole buffer and cropped the answer out, which is byte-correct and does
+        // full-frame work: a scoped 0.7 Mpx drag measured 93-96 ms, the same as the whole 6.5 Mpx
+        // frame, because it WAS the whole frame. The doc comment above already said "the clone is
+        // of the margined region"; the code did not.
+        let need = self.input_rect_for(out, src.full.0, src.full.1)?;
+        let lx = need.x.checked_sub(src.origin.0)?;
+        let ly = need.y.checked_sub(src.origin.1)?;
+        if lx + need.w > src.buf.width() || ly + need.h > src.buf.height() {
             return None;
         }
-        let done = self.apply(src.buf.clone());
-        Some(done.crop(ox, oy, out.w, out.h))
+        // ⚠ `out` is inside `need` by construction — `input_rect_for` grows it — so these cannot
+        // underflow. `checked_sub` anyway: a future `input_rect_for` that under-asks should fail
+        // loudly here rather than produce a shifted band.
+        let ix = out.x.checked_sub(need.x)?;
+        let iy = out.y.checked_sub(need.y)?;
+        let done = self.apply(src.buf.crop(lx, ly, need.w, need.h));
+        Some(done.crop(ix, iy, out.w, out.h))
     }
 
     /// ⚠ Grows by [`kernel_reach`] on every side. This stage preserves dimensions, so `out` and
@@ -421,10 +432,22 @@ mod tests {
         let want = whole.crop(rect.x, rect.y, rect.w, rect.h);
         assert_eq!(got.width(), rect.w);
         assert_eq!(got.height(), rect.h);
-        assert_eq!(
-            got.data(),
-            want.data(),
-            "a region must be byte-identical to that part of the whole"
+
+        // ⚠⚠ **To within a rounding, NOT byte-for-byte** — `a_chain_with_a_local_agrees_to_within_
+        // a_rounding` records why, and this milestone's own spec asserted byte-identity and was
+        // wrong for the same reason a previous one was: `box_blur` keeps a running sum, so it
+        // reaches each position by a different history of adds and subtracts depending on where
+        // the row starts. The bound is that test's, for the same reason: ~28x a measured ULP, and
+        // a margin bug reads as a BAND AT ONE EDGE that blows it by orders of magnitude.
+        let worst = got
+            .data()
+            .iter()
+            .zip(want.data())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 1e-5,
+            "a running sum may wobble in the last bits; a margin bug may not. worst {worst:e}"
         );
     }
 
