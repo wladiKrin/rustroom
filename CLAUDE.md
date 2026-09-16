@@ -158,45 +158,37 @@ folded into one coverage dispatch.
 ⚠ Journal sections: `M8.11 confirmed by use (2026-09-16)` and `M8.11 — a mask's coverage and
 blend on the GPU (2026-09-16)`.
 
-### ▶ Next action — the demosaic tier is SETTLED; a GPU-resident brush base is next
+### ▶ Next action — chase the 118 ms, and it is a ~10× gap on the path he actually edits through
 
-✅ **MEASURED AND ACTED ON (2026-09-16). `export.demosaic` is now `Better`** in the user's stored
-settings (`~/Library/Application Support/rustroom/settings.json`); `view_demosaic` was already
-`Better` and is untouched.
+**▶⚠⚠ A SCOPED 0.7 Mpx DEHAZE DRAG COSTS 118 ms AGAINST A 9–11 ms CACHE-HIT FRAME, AND NOTHING
+EXPLAINS IT.** Found 2026-09-16 as a side-observation while re-measuring the post-NR checkpoint.
+⚠ **`RUSTROOM_DEBUG_RENDER` cannot explain it — it prints no per-step lines on the scoped path**, so
+the first work is **instrumentation, not optimisation**: make the scoped path report its steps, then
+decompose. ⚠ One observation from a loaded machine — **reproduce it idle before scoping anything.**
+Full entry at the head of `## Performance` in `docs/BACKLOG.md`.
 
-**⚠⚠ AND THE FIGURE THIS FILE QUOTED FOR FOUR MILESTONES WAS WRONG BY MORE THAN 2×.** It said
-*"~8 s a photo"*. That is the `Best`→**`Fast`** gap — and `Fast` is the tier M8.4 **rejected**
-(*"a thin twig that `Better` resolves comes back as a smeared blob"*). The change actually being
-recommended was `Best`→`Better`. Measured end-to-end on his machine, `DSCF6296.RAF`, two runs each:
+**⚠ Why this outranks the three caching items:** they are worth 12–30 ms each and **two of them are
+export-side**; this is **~107 ms on an interactive gesture**.
 
-| Tier | Decode | Full export | |
-|---|---|---|---|
-| `Fast` (rejected by M8.4) | 1,998 ms | — | |
-| **`Better`** | **6,786 ms** | **8.30 / 9.17 s** | ← now stored |
-| `Best` | 11,342 ms | 12.19 / 12.56 s | |
+**✅ A MEASUREMENT WAVE RAN 2026-09-16 — four agents, four probes, all committed and re-runnable.**
+It is the reason the list below changed. What it found:
 
-**The real saving is ~3.7 s a photo, not ~8.** At `export_concurrency = 4` a 40-photo export saves
-~37 s of wall clock, not ~80.
+- **The coverage cache's ~2 ms ceiling missed by 4–8×** (upload 7.9–15.8, download 4.0–9.4). ⚠⚠ **But
+  the cost is not transfer**: `write_buffer` is 0.75–1.16 ms, exactly as M8.3g said. It is
+  `GpuMaskStage::pack`'s **serial per-byte u8→u32 repack, 10.6–13.8 ms on every encode**, plus a
+  download that crosses the wire as **one u32 per sample** (85–90% inflation). **Both are mechanical
+  and open no design question — do them before the cache.**
+- **The post-NR checkpoint's ~26 ms is CONFIRMED, and it saves ~0 under a viewport** — M8.8's
+  region-scoped path takes over and no GPU prefix runs. ⚠ **M8.6's retraction shape.** Price it as an
+  export win.
+- **The "per-gating `MIN_GPU_BOX_PX`" item rests on a premise the measurement CONTRADICTS** — gating
+  is worse at every box size, both configurations cross at the same rows. **Delete the item.**
+- **`MAX_TILE_DABS`: the cliff is at 2560, not 3584**, and 1024 is the lowest value on the plateau.
+  Blocked on a **portability** question no M2 run can settle.
 
-⚠ **The picture half, whole frame rather than the probe's centre crop** — `Better` vs `Best` is
-**mean 0.116 of an 8-bit level, p99 2.0, max 51**; 15.6% of pixels differ at all, 1.62% by more
-than two levels. The difference is invisible without ~12× amplification. ⚠⚠ **`demosaic_probe`
-writes a 600×400 CENTRE CROP, not the frame** — valid at 1:1, but it samples one spot of 26 Mpx
-and under-reports. Compare full renders from `rustroom render --demosaic`.
-
-⚠ **Unverified, worth one run:** `user_qual` 4 measured **890 ms faster** than 3 (10,452 vs 11,342)
-while producing **byte-identical** output (same MD5 — the doc comment's identity claim holds). If
-that reproduces, `Best` could map to `user_qual` 4 for free. One sample, so it may be noise.
-
-**▶ What is next, and it is a choice rather than an order:**
-
-- **A GPU-resident base for `GpuBrushRaster`** — the one measured hole left in the mask path. A
-  global slider drag over a masked photo gains **nothing (1.00×, by construction)**: it changes the
-  base the auto-mask gate reads, the coverage cache misses every frame, and the twin declines.
-  ⚠ Its sibling, the **GPU-side mask coverage cache**, is now unblocked too (M8.11 is in use).
-- **Item 5 — spot removal**, the only genuinely unported stage (18 of 23 have GPU twins).
-- **The resident GPU buffer across the prefix→tail seam** — ~26 ms of an 88.9 ms dehaze-drag frame,
-  a zero-work round trip paid twice; its "not before the prefix is mostly ported" condition now holds.
+⚠⚠ **A method lesson worth keeping: FOUR CONCURRENT TIMING AGENTS DEGRADE THEIR OWN MEASUREMENTS.**
+Load hit 4.0–6.1; **4 of 7 checkpoint runs were unusable** and every `MIN_GPU_BOX_PX` crossover is an
+upper bound. Reading parallelises; **timing does not**. Run probes serially, or on an idle machine.
 
 ### The agreed systematic order (GPU port)
 
@@ -232,14 +224,21 @@ region scoping rather than a shader, deliberately. **So item 5 is the only genui
 ### Open items
 
 - **The camera rendering does not reach an export** (`ProfileRendering::default()`) — `docs/BACKLOG.md`.
-- **A GPU-side mask coverage cache** — backlogged at M8.11's brainstorm. ⚠ **M8.11 is now in use, so
-  the precondition this was waiting on is met: re-measure it.** Its sibling is the `GpuBrushRaster`
-  GPU-resident base, which is what a global drag over a masked photo needs (see the next action).
+- **A GPU-side mask coverage cache** — ✅ **measured 2026-09-16; the ceiling missed 4–8×.** ⚠⚠ But the
+  cost is **not transfer**: a serial u8→u32 repack (10.6–13.8 ms per encode) and a 4×-inflated download
+  wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
+- **A GPU-resident base for `GpuBrushRaster`** — still open, still unmeasured: a global drag over a masked
+  photo gains **1.00×, by construction**.
 - **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 23 stages ported that condition now holds, so this is live rather than blocked.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
-- A per-gating `MIN_GPU_BOX_PX`; Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
+- ⛔ ~~A per-gating `MIN_GPU_BOX_PX`~~ — **DELETED 2026-09-16: measured, and its premise is backwards.**
+  Both configurations cross at the same rows; see `docs/BACKLOG.md`. The floor itself may want raising
+  2–6×, but only after an idle re-run of `crates/app/examples/box_floor_sweep.rs`.
+- **`MAX_TILE_DABS`** — swept; the cliff is at **2560, not 3584**. ⚠ Blocked on a **portability**
+  question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run settles.
+- Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
 - ⚠ **M7.3b is DEFERRED, not done.**
 - ⚠ Two oversized files grew again: `crates/app/src/batch_export.rs` (**2,298**, largest in the crate) and `crates/lens-profile/src/lib.rs` (949).
 

@@ -425,7 +425,108 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⚠⚠ A SCOPED 0.7 Mpx DEHAZE DRAG COSTS 118 ms AND NOTHING EXPLAINS IT (recorded 2026-09-16 — OBSERVED, UNDECOMPOSED)
+
+Found as a side-observation while re-measuring the post-NR checkpoint. A dehaze drag on the
+**region-scoped** path, at **0.7 Mpx**, costs **118 ms** against a 9–11 ms cache-hit frame. That is
+a **~10× gap on the path the user actually edits through**, and it is not accounted for by anything
+in this file.
+
+**⚠ `RUSTROOM_DEBUG_RENDER` cannot currently explain it: it prints no per-step lines on the scoped
+path.** So the first work here is instrumentation, not optimisation — make the scoped path report
+its steps, then decompose. It was deliberately left undecomposed rather than guessed at.
+
+⚠ **Worth triaging before any of the three caching items below.** Those are worth 12–30 ms each and
+two of them are export-side; this is ~107 ms on an interactive gesture. ⚠⚠ But it is one
+observation from a loaded machine — **reproduce it idle before scoping anything.**
+
+### The two GPU constants nobody had swept — now swept, and one premise is BACKWARDS (recorded 2026-09-16 — MEASURED)
+
+Both probes are committed and re-runnable. ⚠⚠ **Both runs were on a machine at load 4.0–6.1 with
+three sibling agents building, so every crossover below is an UPPER bound — re-run idle before
+changing either constant.** Neither was changed.
+
+**`MIN_GPU_BOX_PX`** (`crates/gpu-pipeline/src/brush_raster.rs:526`, the **brush coverage
+rasteriser** floor — *not* a box-blur floor; the box-blur crossover is `RUNNING_SUM_MIN_RADIUS` in
+`box_wgsl.rs:36` and is already swept). Sweep: `crates/app/examples/box_floor_sweep.rs`.
+
+⚠⚠ **THE PREMISE BEHIND "A PER-GATING FLOOR" IS NOT SUPPORTED — IT IS BACKWARDS.**
+`brush_raster.rs:526` predicts a gating brush's crossover is *"several times lower"*. Measured,
+**gating is worse than non-gating at every box size**, because the GPU uploads the whole **78 MB**
+frame base whenever anything gates — a flat **7.4–8.9 ms, independent of box size** — while the
+CPU's gating penalty is only ~1.4–2.0×. **Both configurations cross at the same rows**, so there is
+no case for splitting the constant in two. Remove that item rather than scheduling it.
+
+| Box | non-gating | gating |
+|---|---|---|
+| 503,004 px (≈ the shipped 512 Ki floor) | **0.47–0.66×** | **0.43–0.60×** |
+| 1,129,504 px | parity | parity |
+| 3,130,000 px | 1.04–1.62× | 1.29–1.67× |
+
+So at the shipped floor the GPU is **about 2× slower in both configurations**. Coverage agreed
+everywhere (worst 0–1 level, ≤0.004% of samples). The data would support raising 512 Ki by **2–6×**;
+no value is proposed until the sweep is re-run idle. ⚠ Two open questions, undecided: a box-*pixel*
+floor cannot express a cost that scales with the **frame**, and charging the whole 78 MB upload to
+the rasteriser may overstate it, since M8.3j's shared upload amortises that `GpuImage` downstream.
+
+**`MAX_TILE_DABS`** (`crates/gpu-pipeline/src/brush_wgsl.rs:49`, = 1024). Sweep:
+`crates/gpu-pipeline/examples/max_tile_dabs_sweep.rs`. **It is two bounds at once** — the length of
+the per-tile `var<workgroup>` shared list (overflow → every pixel in that tile re-scans the *whole*
+dab list) and `4·CAP + 1032` bytes of workgroup storage, which throttles resident workgroups.
+
+Capacity plateau **512…2048** (56.5–60.5 ms, flat); occupancy cliff at **2560** —
+**277.8–292.0 ms, 4.8×**. That **narrows the recorded "between 2048 and 3584" by a rung**. The
+mechanism is `⌊32768 B ÷ storage⌋` dropping from **3 resident workgroups to 2**, and 3 already
+saturates. ⚠ **This M2 reports 32768 B — twice the `Limits::default()` 16384 the original 3584 was
+sized from.**
+
+Below the capacity **there is no knee: the curve is linear**, `ms ≈ 11.0 + 0.1385 × (dabs in the
+busiest tile)` over 40/80/164/330/659. The only knee is the overflow wall — 659→1318 dabs/tile costs
+**13.5×**, not 2×. **Risk is asymmetric: too small is a 7–13× cliff, too large is flat until 2560.**
+At 1318 dabs/tile, 1024 costs **1431–1457 ms against 205.6–206.3 at 1536 — 7.0×.** The shipped 1024
+is the lowest value on the plateau, i.e. the least headroom that costs nothing.
+
+⚠ **Blocked on a portability question, not a measurement:** 1024 is exactly the largest capacity
+keeping **3 workgroups resident on a 16 KB device** (2048 would leave one), and **no M2 measurement
+can settle that** — this project is Linux-first and ships to unknown GPUs.
+⚠⚠ **And the evidence base for the constant is gone: the 229-dab brush that justified it no longer
+exists — all 40 sidecars in `~/Pictures/fuji` now hold ONE `Luminance` mask between them.** The
+330-dab fixture used here is synthetic; sizing real headroom needs a real brush.
+
+
 ### A GPU-side mask coverage cache — worth re-measuring once M8.11 is in use (recorded 2026-09-15, at M8.11 — user's call)
+
+> **✅ MEASURED DIRECTLY 2026-09-16 (`crates/gpu-pipeline/examples/coverage_transfer_probe.rs`).
+> THE ~2 ms CEILING BELOW DID NOT HOLD FOR EITHER TRANSFER** — upload **7.9–15.8 ms** (4–8×),
+> download **4.0–9.4 ms** (2–5×), together **12–25 ms** against the ~4 implied. That makes the
+> transfers **27–58% of the work the cache avoids, not the ~9%** this entry's "order of magnitude"
+> claims. M8.3k's rasterise reproduced cleanly (43.1–45.5 ms gating at 3200), so the comparison is
+> sound. Two independent methods agreed: parts summed 11.3–15.0, an in-situ `GpuChain::apply`
+> differential read 11.8–15.7.
+>
+> **⚠⚠ AND THE REASON IT MISSED IS THAT NEITHER TRANSFER IS ONLY A TRANSFER — WHICH POINTS AT A
+> CHEAPER FIX THAN THIS ENTRY.** The `write_buffer` itself is **0.75–1.16 ms**, exactly where
+> M8.3g's borrowed decomposition put it; that figure was never wrong for what it described. The
+> cost is elsewhere:
+> - `GpuMaskStage::pack` does a **serial per-byte u8→u32 repack** (WGSL has no `u8`) costing
+>   **10.6–13.8 ms — ~90% of the upload — on EVERY encode**, not once.
+> - The download crosses the wire as **one u32 per sample** (`cov_bytes = w*h*4`, so 27.35 MB
+>   rather than 6.84) and is narrowed back to u8 on the CPU. A u8 wire would be **0.55–0.79 ms**,
+>   so **85–90% of the download is inflation and narrowing.**
+>
+> **▶ So most of the 12–25 ms is reachable WITHOUT answering this entry's design question** (whether
+> such a cache follows `GpuCache`'s *outlive the render* rule or `PrefixCache`'s opposite one).
+> Parallelising or GPU-siding the repack and narrowing the wire to u8 are mechanical. Do those
+> first and re-price this afterwards.
+>
+> **⚠ A region render CLIPS the coverage map** (`crates/pipeline/src/stages/mask.rs` ~line 344), so
+> the 6.5 MB whole-frame plane priced below occurs at **export**, not in normal 1:1 use. Interactive
+> rungs are smaller: fit/1600 pair **3.2–6.9 ms**, a real brush box (1510×2019) **6.2–10.9 ms**.
+> Export at 6246 with no region is **~63–140 ms per photo**.
+>
+> ⚠ Load was 4.5–5.1 during the run (three sibling agents building), and the CPU-bound rows are the
+> contended ones — **read the bottoms of the bands**; the verdict holds on those alone.
+
 
 **What it is.** M8.11 puts a mask's coverage and blend on the GPU but **keeps the existing CPU-side
 coverage cache**, so a cache hit *uploads* the stored `CoverageMap` and a miss rasterises on the GPU
@@ -489,6 +590,35 @@ strictly better. It is recorded so that a later report of *"the haze changes as 
 met with a measurement rather than a search.
 
 ### ⚠⚠ A GPU buffer resident across the prefix→tail seam (recorded 2026-09-13, at M8.3o's merge — MEASURED, not estimated)
+
+> **✅ RE-MEASURED 2026-09-16 through the real engine** (`RenderEngine` + `RUSTROOM_DEBUG_RENDER`,
+> `crates/app/examples/bench_nr_checkpoint.rs`), now that both NR and dehaze are ported — the
+> condition M8.3o named. **The ~26 ms below is CONFIRMED**: an independent zero-work round trip at
+> the same resolution measured **26.5–26.8 ms** (7.5–7.6 at 1.7 Mpx).
+>
+> **⚠⚠ BUT AT A NATIVE RUNG *WITH A VIEWPORT* THE CHECKPOINT SAVES ~0, BECAUSE M8.8's REGION-SCOPED
+> PATH TAKES OVER AND NO GPU PREFIX RUNS AT ALL.** An NR drag measures **118.3–125.3 ms** against a
+> dehaze drag's **118.3–122.0** — indistinguishable. ⚠ **This is M8.6's retraction shape**: the
+> saving below is real, but it belongs to whole-frame renders rather than to the 1:1 editing the
+> acceleration exists for. **Price this as an EXPORT-side win, or measure the path the gesture
+> actually takes first.**
+>
+> **The post-NR checkpoint, priced both ways at 6.5 Mpx** (1.7 Mpx in brackets): it **saves**
+> 64–71 ms on the GPU path and 95–97 on the CPU path per downstream frame [21–23 / 25], and **costs**
+> **23.5–23.7 ms** to write on the GPU path [6.8–6.9] and *nothing* on the CPU path. ⚠ The download
+> half alone (~12 ms) is an **inference, not a measurement** — isolating it needs a `gpu-pipeline`
+> change.
+>
+> **The asymmetry, which is the thing to decide on:** dragging **NR** pays 23.5–23.7 ms (13% of the
+> frame) and saves 0; dragging **dehaze** pays 0 and saves 64–71; dragging a **tail** slider pays 0
+> and saves 0, because the final checkpoint serves that. As a trade, fusing would save an NR drag
+> 23.5–23.7 ms and cost a dehaze drag 34.1–36.7 — **arithmetic break-even ≈ 1.5 NR drags per dehaze
+> drag.** ⚠⚠ Which side of that the user is on is **his call**, and the catalogue's 40 sidecars must
+> not be used to answer it.
+>
+> ⚠ 4 of 7 runs were unusable — sibling build agents made GPU steps come back 20–40× slow. GPU bands
+> are over the two cleanest runs' minima, CPU bands over 65 stable frames.
+
 
 **What it is.** A dehaze drag at a native rung renders in **88.9 ms with both the prefix step and
 the tail accelerated**, against 128.4 all-CPU. Of that 88.9, roughly **26 ms is a zero-work GPU

@@ -120,6 +120,73 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### The measurement wave, and what it dissolved (2026-09-16)
+
+Four subagents, four new probes, no existing source touched. Run because three of the remaining
+GPU-port items were scoped on **borrowed** numbers rather than measured ones.
+
+**⚠⚠ Two of the four items dissolved rather than resolving.** The per-gating `MIN_GPU_BOX_PX` rests
+on a prediction in `brush_raster.rs:526` that the measurement contradicts — gating is *worse* at
+every box size, not better. And the post-NR checkpoint saves ~0 under a viewport, because M8.8's
+region-scoped path takes over: **the same shape as M8.6's retraction, a real number for a path the
+gesture never takes.**
+
+**⚠ Of the two borrowed figures tested, one held exactly and one missed by 4–8×.** M8.3g's
+`write_buffer` decomposition was right (0.75–1.16 ms); the ~26 ms round trip was right
+(26.5–26.8 measured). The coverage cache's ~2 ms ceiling was not, because it priced a *transfer*
+and neither operation is only a transfer. So *"composing component measurements misses"* is true
+unevenly — an argument for testing each borrowed number, not for distrusting all of them.
+
+**⚠⚠ THE METHOD LESSON: FOUR CONCURRENT TIMING AGENTS DEGRADE THEIR OWN RESULTS.** Load reached
+4.0–6.1; **4 of 7 checkpoint runs were unusable** (GPU steps 20–40× slow) and every
+`MIN_GPU_BOX_PX` crossover became an upper bound. The graphify run earlier the same day proved
+**reading** parallelises across 36 agents; **timing does not**. Dispatch probes serially.
+
+⚠ A constant's evidence can expire: the **229-dab brush that justified `MAX_TILE_DABS` is gone** —
+all 40 sidecars now hold one `Luminance` mask between them.
+
+The block this replaced:
+
+> ### ▶ Next action — the demosaic tier is SETTLED; a GPU-resident brush base is next
+> 
+> ✅ **MEASURED AND ACTED ON (2026-09-16). `export.demosaic` is now `Better`** in the user's stored
+> settings (`~/Library/Application Support/rustroom/settings.json`); `view_demosaic` was already
+> `Better` and is untouched.
+> 
+> **⚠⚠ AND THE FIGURE THIS FILE QUOTED FOR FOUR MILESTONES WAS WRONG BY MORE THAN 2×.** It said
+> *"~8 s a photo"*. That is the `Best`→**`Fast`** gap — and `Fast` is the tier M8.4 **rejected**
+> (*"a thin twig that `Better` resolves comes back as a smeared blob"*). The change actually being
+> recommended was `Best`→`Better`. Measured end-to-end on his machine, `DSCF6296.RAF`, two runs each:
+> 
+> | Tier | Decode | Full export | |
+> |---|---|---|---|
+> | `Fast` (rejected by M8.4) | 1,998 ms | — | |
+> | **`Better`** | **6,786 ms** | **8.30 / 9.17 s** | ← now stored |
+> | `Best` | 11,342 ms | 12.19 / 12.56 s | |
+> 
+> **The real saving is ~3.7 s a photo, not ~8.** At `export_concurrency = 4` a 40-photo export saves
+> ~37 s of wall clock, not ~80.
+> 
+> ⚠ **The picture half, whole frame rather than the probe's centre crop** — `Better` vs `Best` is
+> **mean 0.116 of an 8-bit level, p99 2.0, max 51**; 15.6% of pixels differ at all, 1.62% by more
+> than two levels. The difference is invisible without ~12× amplification. ⚠⚠ **`demosaic_probe`
+> writes a 600×400 CENTRE CROP, not the frame** — valid at 1:1, but it samples one spot of 26 Mpx
+> and under-reports. Compare full renders from `rustroom render --demosaic`.
+> 
+> ⚠ **Unverified, worth one run:** `user_qual` 4 measured **890 ms faster** than 3 (10,452 vs 11,342)
+> while producing **byte-identical** output (same MD5 — the doc comment's identity claim holds). If
+> that reproduces, `Best` could map to `user_qual` 4 for free. One sample, so it may be noise.
+> 
+> **▶ What is next, and it is a choice rather than an order:**
+> 
+> - **A GPU-resident base for `GpuBrushRaster`** — the one measured hole left in the mask path. A
+>   global slider drag over a masked photo gains **nothing (1.00×, by construction)**: it changes the
+>   base the auto-mask gate reads, the coverage cache misses every frame, and the twin declines.
+>   ⚠ Its sibling, the **GPU-side mask coverage cache**, is now unblocked too (M8.11 is in use).
+> - **Item 5 — spot removal**, the only genuinely unported stage (18 of 23 have GPU twins).
+> - **The resident GPU buffer across the prefix→tail seam** — ~26 ms of an 88.9 ms dehaze-drag frame,
+>   a zero-work round trip paid twice; its "not before the prefix is mostly ported" condition now holds.
+
 ### The demosaic tier, measured and settled (2026-09-16)
 
 The recommendation this file carried for four milestones was **overstated by more than 2×**, and
