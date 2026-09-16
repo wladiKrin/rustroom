@@ -307,10 +307,18 @@ mod tests {
 
     /// A 64x64 patch of `base` plus per-channel noise.
     fn noisy_patch(base: [f32; 3], amp: f32) -> ImageBuf {
+        noisy_rect(64, 64, base, amp)
+    }
+
+    /// A `w`x`h` patch of `base` plus per-channel noise.
+    ///
+    /// ⚠ The RNG is seeded identically to `noisy_patch`, so a region comparison is between two
+    /// runs over the SAME pixels rather than over two different noises.
+    fn noisy_rect(w: usize, h: usize, base: [f32; 3], amp: f32) -> ImageBuf {
         let mut rng = Rng(0x1234_5678);
-        let mut img = ImageBuf::new(64, 64);
-        for y in 0..64 {
-            for x in 0..64 {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
                 // ⚠ The patch is authored in **sRGB** and converted into the working space,
                 // exactly as the golden charts are. Writing these numbers straight in would
                 // have them read as ProPhoto — a different, more saturated colour, whose
