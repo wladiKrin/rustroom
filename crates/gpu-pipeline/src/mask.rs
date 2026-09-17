@@ -495,15 +495,27 @@ impl GpuMaskStage {
     ///
     /// ⚠⚠ **It walks the components in the same order `comps` does**, which is what makes the
     /// offsets it hands out and the offsets uploaded beside the boxes the same numbers.
-    fn pack(&self, maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>]) -> Vec<u32> {
+    /// The words for a list of maps, laid down back to back.
+    ///
+    /// ⚠ Separated from [`Self::pack`] so it can be tested without a GPU: `pack`'s input is
+    /// `&[Option<..>]` shaped by the mask's components, and the packing itself has nothing to do
+    /// with that shape.
+    fn pack_maps(maps: &[std::sync::Arc<pipeline::brush::CoverageMap>]) -> Vec<u32> {
         let mut packed: Vec<u32> = Vec::new();
-        for m in maps.iter().flatten() {
+        for m in maps {
             let start = packed.len();
             packed.resize(start + words_for(m) as usize, 0);
             for (k, v) in m.data.iter().enumerate() {
                 packed[start + (k >> 2)] |= (*v as u32) << ((k & 3) * 8);
             }
         }
+        packed
+    }
+
+    fn pack(&self, maps: &[Option<std::sync::Arc<pipeline::brush::CoverageMap>>]) -> Vec<u32> {
+        let owned: Vec<std::sync::Arc<pipeline::brush::CoverageMap>> =
+            maps.iter().flatten().cloned().collect();
+        let mut packed = Self::pack_maps(&owned);
         if packed.is_empty() {
             packed.push(0);
         }
@@ -709,6 +721,58 @@ mod tests {
     use super::*;
     use core_image::ImageBuf;
     use edit_model::{Brush, BrushStroke, LocalAdjustments, Mask};
+
+    /// ⚠⚠ Sizes that are **not** multiples of 4, so the trailing partial word is exercised. A size
+    /// that divided evenly would not test the padding `words_for`'s `div_ceil(4)` provides, and a
+    /// dropped trailing word is a plausible mask rather than an error.
+    #[test]
+    fn packing_a_coverage_map_is_little_endian_and_pads_the_last_word() {
+        fn reference(m: &pipeline::brush::CoverageMap) -> Vec<u32> {
+            let mut out = vec![0u32; (m.w * m.h).div_ceil(4)];
+            for (k, v) in m.data.iter().enumerate() {
+                out[k >> 2] |= (*v as u32) << ((k & 3) * 8);
+            }
+            out
+        }
+        for (w, h) in [(1usize, 1usize), (3, 3), (5, 7), (16, 16), (13, 9)] {
+            let m = pipeline::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: (0..w * h).map(|i| (i * 37 % 256) as u8).collect(),
+                outside: 0,
+            };
+            let got = GpuMaskStage::pack_maps(std::slice::from_ref(&std::sync::Arc::new(m.clone())));
+            assert_eq!(got, reference(&m), "{w}x{h}");
+            assert_eq!(got.len(), (w * h).div_ceil(4), "{w}x{h} word count");
+        }
+    }
+
+    /// ⚠ Two maps land back to back, and the second must start on a whole-word boundary — the
+    /// offset `comps` records. A short first map that ran into the second's words would give a
+    /// composite mask reading its neighbour's coverage.
+    #[test]
+    fn two_maps_are_laid_down_without_overlapping() {
+        let m = |w: usize, h: usize, fill: u8| {
+            std::sync::Arc::new(pipeline::brush::CoverageMap {
+                x0: 0,
+                y0: 0,
+                w,
+                h,
+                data: vec![fill; w * h],
+                outside: 0,
+            })
+        };
+        let a = m(3, 3, 0x11);
+        let b = m(2, 2, 0x22);
+        let got = GpuMaskStage::pack_maps(&[a.clone(), b.clone()]);
+        assert_eq!(got.len(), 9usize.div_ceil(4) + 4usize.div_ceil(4));
+        assert_eq!(got[0], 0x1111_1111);
+        // The 9th byte is the last of `a`, alone in its word; `b` starts at the next word.
+        assert_eq!(got[2], 0x0000_0011);
+        assert_eq!(got[3], 0x2222_2222);
+    }
 
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {
