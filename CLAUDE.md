@@ -168,10 +168,11 @@ clippy's `too_many_arguments` fired at 8, which was a fair signal.
 ✅ **BOTH CONTENDED SWEEPS WERE RE-RUN CLEAN 2026-09-17** (load 2.11), and one overturned a
 recorded finding:
 
-- **`MIN_GPU_BOX_PX`** — the quiet run **confirms** the contended one. Both configurations cross at
-  **3,130,000 px**; at the shipped 512 Ki floor the GPU is **~2× slower in both**. ⚠⚠ **The floor
-  wants raising and the value is the user's call**: 2.2× (1,129,504 px, where it starts winning on
-  average but the band still straddles parity) or 6× (3,130,000 px, whole band above). Unchanged.
+- **`MIN_GPU_BOX_PX`** — the quiet run **confirms** the contended one: both configurations cross at
+  **3,130,000 px** and at the shipped 512 Ki floor the GPU is ~2× slower in both. ⛔ **DECIDED: left
+  at 512 Ki, the user's call, on use** — *"it felt fine while using."* ⚠⚠ **Do not re-propose this
+  from the measurement**; it costs ~2 ms on a coverage-cache MISS for boxes between 512 Ki and
+  ~1.1 M px, which is the magnitude nobody noticed. `docs/BACKLOG.md` carries the numbers.
 - **⚠⚠ The post-NR checkpoint no longer saves ~0 on the scoped path — M8.12 changed that.** It was
   ~0 because an NR drag and a dehaze drag were *both* ~118 ms, doing whole-frame work. Now a 2-step
   scoped plan is **30.5–35.6 ms** against a 1-step's **15.3–15.9**, so it **saves ~15–20 ms**.

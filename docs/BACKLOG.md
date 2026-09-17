@@ -477,9 +477,18 @@ Both probes are committed and re-runnable.
 > rayon-parallel, so the sweep loads the machine itself. A truly idle timing run is not available
 > here; what matters is that both configurations meet the same conditions.
 >
-> ⚠⚠ **The floor wants raising and the value is a judgement, not a measurement.** 2.2×
-> (1,129,504 px) is where the GPU starts winning on average but the band still straddles parity;
-> 6× (3,130,000 px) is where the whole band is above it. Neither was changed.
+> **⛔ DECIDED 2026-09-17: LEAVE THE FLOOR AT 512 Ki — the user's call, on use.** *"It felt fine
+> while using."* ⚠⚠ **This is a decision, not an unexamined gap, and it should not be re-proposed
+> from the measurement alone.** The two candidates were 2.2× (1,129,504 px, where the GPU starts
+> winning on average but the band still straddles parity) and 6× (3,130,000 px, whole band above).
+>
+> **What leaving it costs, so the decision can be revisited on evidence rather than re-derived:**
+> for a brush box between ~512 Ki and ~1.1 M px the GPU is taken and loses — at 503,004 px, CPU
+> **2.5–3.7 ms** against GPU **5.3 ms**, so roughly **2 ms**, and only on a coverage-cache MISS.
+> A cache hit pays none of it. That is the magnitude a reporter would have to notice, and did not.
+>
+> ⚠ Revisit if the coverage cache's hit rate drops, or if a future sweep moves the crossover — not
+> because the numbers below say the floor is low, which they will go on saying.
 
 **`MIN_GPU_BOX_PX`** (`crates/gpu-pipeline/src/brush_raster.rs:526`, the **brush coverage
 rasteriser** floor — *not* a box-blur floor; the box-blur crossover is `RUNNING_SUM_MIN_RADIUS` in
