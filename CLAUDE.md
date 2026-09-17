@@ -144,50 +144,55 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-17)
 
-**2536 tests, 74 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
-tree. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the user pushes.** (No count here: it went stale within one merge of being written. Run the command at the top of this section.)
+**2538 tests, 74 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
+tree. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the user pushes.** (No count: it goes
+stale within a merge. Run the command at the top of this section.)
 
-✅ **M8.12 — the region-scoped locals actually scope — merged and CONFIRMED BY USE**, including the
-pan at 1:1 that was the only check able to see its failure mode.
+✅ **M8.12 — the region-scoped locals actually scope** — merged, confirmed by use.
+✅ **A one-format folder shows its one format** — merged, confirmed by use.
+✅ **The coverage repack and the narrowing** — merged and **CONFIRMED BY USE**, composite mask
+included. `GpuMaskStage::pack_maps` is a chunked scan instead of a bounds-checked read-modify-write
+per byte, and the download narrows straight from the mapped range instead of copying **27.35 MB**
+into a `Vec<u32>` that existed only to be narrowed one line later.
 
-✅ **A one-format folder shows its one format — merged and CONFIRMED BY USE.** Reported by using it:
-hiding `jpg` and opening a JPEG-only folder gave an empty grid **and no chip to undo it**. The rule
-*"this folder has fewer than two formats"* now lives once, in
-`format_filter::folder_overrides_hidden`, and both the filtering and the chip row read it. Applied
-inside `LibraryState::refilter` — one choke point rather than its 12 call sites. ⚠ The stored set is
-**read, never written**, so a mixed folder still remembers the setting.
+**Measured at rung 3200 (6.84 Mpx), load ~4, the probe calling the real code:**
 
-`fmt` / `clippy --all-targets --all-features -D warnings` / `test --workspace` green together, **each
-exit code read from its own command**; **74 goldens ran and none moved**; the gated commit was
-verified to BE the tip.
+| | before | after |
+|---|---|---|
+| `pack()` alone | 10.6–13.8 ms | **0.17–1.32 ms** (median 0.18, **~60×**) |
+| upload (pack + write) | ~11–15 ms | **~1.0–3.5 ms** |
+| download | ~2.9 ms median | ~2.6 ms median (~12%) |
 
-### ▶ Next action — a choice, and M8.12 re-priced one of the candidates downward
+⚠ **`rayon` was NOT added to `gpu-pipeline`.** The chunked scan made it unnecessary; the plan left
+that to the numbers rather than assuming it.
 
-⚠⚠ **M8.12 CHANGED THE ORDER: a scoped drag went 118 → ~18 ms, so "the scoped chain runs on the
-CPU" is now worth AT MOST ~18 ms, not ~100.** `gpu_prefix_steps` still stays 0 on that path and the
-coupling is still real — but it stopped being the big lever the moment the work got small. **Do not
-scope it on the pre-M8.12 number.**
+### ▶ Next action — and the coverage cache is now worth LESS, because this milestone worked
 
-**The measured candidates, honestly ranked:**
+**⚠⚠ RE-PRICE THE GPU-SIDE MASK COVERAGE CACHE BEFORE SCOPING IT.** Its case rested on transfers
+being **27–58%** of the 43.1–45.5 ms rasterise a cache hit avoids. With the upload down from ~11–15
+to **~1.0–3.5 ms**, that share is now roughly **10–23%** — and the design question it needs
+(*does it follow `GpuCache`'s "outlive the render" rule or `PrefixCache`'s opposite one?*) has not
+got any cheaper. **Doing the mechanical halves first was supposed to re-price it, and it did.**
 
-1. **The coverage cache's repack and download wire** — the best measured value per unit of risk, and
-   it opens **no design question**. `GpuMaskStage::pack` does a **serial per-byte u8→u32 repack,
-   10.6–13.8 ms on EVERY encode**, and the download crosses the wire as **one u32 per sample**
-   (85–90% inflation; a u8 wire would be 0.55–0.79 ms). Both are mechanical. ⚠ Doing these first
-   also **re-prices the GPU-side coverage cache**, which is the item that needs the design question
-   the backlog reserves.
-2. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
-   **1.00×, by construction**. ⚠ The size of the win is **not measured**; only the zero is.
-3. **Item 5, spot removal** — the only genuinely unported stage (18 of 23 have twins). ⚠ Its value
-   is unmeasured too, and M8.4's lesson applies: measure the alternatives to zero first.
-4. **⚠ Not performance — a live defect nobody has reported:** `dehaze::airlight` takes the mean of
-   the haziest 0.1% of pixels, an **order statistic over the frame**, so it moves whenever the frame
-   moves. Measured at **21 of 255 levels across an ordinary Straighten drag** on `DSCF6291.RAF`.
-   **Today's shipped app wobbles during that gesture.** M8.7 already built the replay-airlight
-   machinery that would fix it.
+⚠ **The download did NOT improve much, and that is informative.** Removing a 27.35 MB `to_vec`
+saved ~12%, far less than the traffic maths predicts — so **the mapped-range read dominates**, not
+the copy. Anyone attacking the u8 wire should know that part of what is left is slow mapped memory
+rather than transfer. The probe's own `(b')` row prices the hypothetical u8 wire at **0.56–0.70 ms
+against an actual 3.55–6.35** at rung 3200, and **3.4 against 15.3 ms** at export size. ⚠⚠ It stays
+deliberately undone: the shader writes one `u32` per sample because *"packing four samples into one
+word would mean four threads read-modify-writing the same address — a race"*. **That is a considered
+trade, not an oversight**; shrinking it needs one thread per four samples, or a second pack pass.
 
-⚠ Also open and unglamorous: **`crates/app/src/batch_export.rs` is 2,298 lines**, the largest in the
-crate and well past this file's own ~600 marker.
+**The remaining candidates:**
+
+1. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
+   **1.00×, by construction**. ⚠ Only the zero is measured; the size of the win is not.
+2. **Item 5, spot removal** — the only unported stage (18 of 23 have twins). Unmeasured.
+3. **⚠ A live defect nobody has reported:** `dehaze::airlight` is an **order statistic over the
+   frame**, so it moves whenever the frame moves — **21 of 255 levels across an ordinary Straighten
+   drag** on `DSCF6291.RAF`. Today's shipped app wobbles during that gesture; M8.7 already built the
+   replay-airlight machinery that fixes it.
+4. **`crates/app/src/batch_export.rs` is 2,298 lines**, well past this file's own ~600 marker.
 
 ### The agreed systematic order (GPU port)
 

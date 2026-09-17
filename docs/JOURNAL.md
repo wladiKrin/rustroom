@@ -120,6 +120,91 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### The coverage repack and the narrowing (2026-09-17)
+
+`GpuMaskStage::pack` did a **bounds-checked read-modify-write per byte** — 10.6–13.8 ms on every
+encode at rung 3200, ~90% of the upload. The shifts it spelled out were exactly little-endian
+order, so the same number written as a chunked `from_le_bytes` scan is memcpy-shaped: **0.17–1.32
+ms, median 0.18, roughly 60×.** The download separately copied **27.35 MB** into a `Vec<u32>` whose
+only use was the narrowing a few lines later; nobody had counted that, and it was found while
+reading for the spec rather than by the measurement wave.
+
+**⚠⚠ THE PROBE WAS TIMING A COPY OF THE CODE, AND THE FIRST READING WAS THEREFORE 'NO CHANGE'.**
+`coverage_transfer_probe` carried the packing loop *"verbatim for a single component"*, so after
+the rewrite it went on measuring the old implementation. **That is M8.6's failure exactly** — a
+probe pricing something the real chain does not run — and *"neither change moved the numbers"* was
+one step from being reported as the finding. ⚠ The root shape is the one this project keeps
+meeting: **a rule written twice**. A measurement helper that duplicates production code is a second
+definition. `pack_maps` is now `pub` so the probe calls it. ⚠ Its `words_for` went dead the moment
+the replica left, which is the evidence that the copy shared nothing with production.
+
+**⚠ AND A UNIT ERROR NEARLY BECAME A REGRESSION REPORT.** The first comparison put the **export**
+rung's `pack` (42 ms) against the **rung 3200** baseline (10.6–13.8) and looked like a 3–4× loss.
+Four samples pack into one word, so the packed output is the **same size as the input**, not four
+times it — a fact I had backwards while reasoning about whether 0.18 ms was even physically
+possible. **Check which two configurations a figure compares** — the standing lesson, again.
+
+⚠ **`clippy` came back red twice while `FMT=0` and `TEST=0`** — `chunks_exact` with a constant
+size, then a dead function — with 2538 tests and 74 goldens green both times. And once while
+*verifying* a clippy fix I piped it through `grep | head` and read **head's** exit code as clippy's,
+getting a bogus `CLIPPY=0`. **Each exit code from its own command, including when you are checking
+the check.**
+
+⚠ `rayon` was **not** added to `gpu-pipeline`. The chunked scan made it unnecessary, and the plan
+deliberately left that decision to the measurement.
+
+⚠ The u8 wire stays undone on purpose: the shader writes one `u32` per sample because packing four
+into a word would race. **A considered trade, not an oversight.**
+
+The block this replaced:
+
+> ### State (2026-09-17)
+> 
+> **2536 tests, 74 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
+> tree. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the user pushes.** (No count here: it went stale within one merge of being written. Run the command at the top of this section.)
+> 
+> ✅ **M8.12 — the region-scoped locals actually scope — merged and CONFIRMED BY USE**, including the
+> pan at 1:1 that was the only check able to see its failure mode.
+> 
+> ✅ **A one-format folder shows its one format — merged and CONFIRMED BY USE.** Reported by using it:
+> hiding `jpg` and opening a JPEG-only folder gave an empty grid **and no chip to undo it**. The rule
+> *"this folder has fewer than two formats"* now lives once, in
+> `format_filter::folder_overrides_hidden`, and both the filtering and the chip row read it. Applied
+> inside `LibraryState::refilter` — one choke point rather than its 12 call sites. ⚠ The stored set is
+> **read, never written**, so a mixed folder still remembers the setting.
+> 
+> `fmt` / `clippy --all-targets --all-features -D warnings` / `test --workspace` green together, **each
+> exit code read from its own command**; **74 goldens ran and none moved**; the gated commit was
+> verified to BE the tip.
+> 
+> ### ▶ Next action — a choice, and M8.12 re-priced one of the candidates downward
+> 
+> ⚠⚠ **M8.12 CHANGED THE ORDER: a scoped drag went 118 → ~18 ms, so "the scoped chain runs on the
+> CPU" is now worth AT MOST ~18 ms, not ~100.** `gpu_prefix_steps` still stays 0 on that path and the
+> coupling is still real — but it stopped being the big lever the moment the work got small. **Do not
+> scope it on the pre-M8.12 number.**
+> 
+> **The measured candidates, honestly ranked:**
+> 
+> 1. **The coverage cache's repack and download wire** — the best measured value per unit of risk, and
+>    it opens **no design question**. `GpuMaskStage::pack` does a **serial per-byte u8→u32 repack,
+>    10.6–13.8 ms on EVERY encode**, and the download crosses the wire as **one u32 per sample**
+>    (85–90% inflation; a u8 wire would be 0.55–0.79 ms). Both are mechanical. ⚠ Doing these first
+>    also **re-prices the GPU-side coverage cache**, which is the item that needs the design question
+>    the backlog reserves.
+> 2. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
+>    **1.00×, by construction**. ⚠ The size of the win is **not measured**; only the zero is.
+> 3. **Item 5, spot removal** — the only genuinely unported stage (18 of 23 have twins). ⚠ Its value
+>    is unmeasured too, and M8.4's lesson applies: measure the alternatives to zero first.
+> 4. **⚠ Not performance — a live defect nobody has reported:** `dehaze::airlight` takes the mean of
+>    the haziest 0.1% of pixels, an **order statistic over the frame**, so it moves whenever the frame
+>    moves. Measured at **21 of 255 levels across an ordinary Straighten drag** on `DSCF6291.RAF`.
+>    **Today's shipped app wobbles during that gesture.** M8.7 already built the replay-airlight
+>    machinery that would fix it.
+> 
+> ⚠ Also open and unglamorous: **`crates/app/src/batch_export.rs` is 2,298 lines**, the largest in the
+> crate and well past this file's own ~600 marker.
+
 ### A one-format folder shows its one format (2026-09-17)
 
 Reported by using it: *"I turned off the view for jpg files. Then I opened a folder which only had
