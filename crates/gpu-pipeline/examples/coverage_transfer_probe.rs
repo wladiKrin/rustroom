@@ -90,11 +90,6 @@ fn wait(device: &wgpu::Device) {
 // (a) upload
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// `GpuMaskStage::words_for`, verbatim.
-fn words_for(m: &CoverageMap) -> usize {
-    (m.w * m.h).div_ceil(4)
-}
-
 /// The REAL `GpuMaskStage::pack_maps` — the u8 → u32 repack a cache hit pays before a single byte
 /// reaches the queue.
 ///
