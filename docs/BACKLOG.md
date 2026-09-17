@@ -576,7 +576,42 @@ also needs the deposit/lookup seam, which today lives in `render_engine` and key
 `SharedPlane` was shaped to avoid. ⚠⚠ And the failure mode is the dangerous one: a stale coverage
 plane renders a **plausible photograph with the wrong mask**, not an error.
 
-### ⚠⚠ The dehaze airlight estimator is UNSTABLE UNDER GEOMETRY, and it always has been (recorded 2026-09-14, at M8.7 — MEASURED)
+### ✅ FIXED 2026-09-17 — the dehaze airlight is now invariant to geometry, on both paths
+
+> **⚠⚠ AND THIS ENTRY'S CENTRAL CLAIM WAS WRONG, IN ONE WORD.** It said below that M8.7's replay
+> airlight *"does not move during a drag at all"*. **Deterministic is not invariant.** It is a
+> deterministic function of the **edits**, and a Straighten drag changes an edit on every frame —
+> `prefix_airlight` replayed the prefix **including geometry**, so the angle fed straight into it.
+> Measured across a 0–6° drag: **6.06–6.81 levels** on `DSCF6291`, **1.47–1.71** on `DSCF6296`,
+> 0.03–0.08 on `DSCF6509`. M8.7 took the wobble from ~21 levels to ~6. It did not remove it.
+>
+> ⚠ That sentence is what sent the 2026-09-17 investigation looking on the wrong path for an hour.
+>
+> **Three things were wrong, and each was found by a different means:**
+>
+> 1. **The global replay ran geometry.** `prefix_airlight` now **skips the resampling family**
+>    (`LensCorrection`, `Perspective`, `Geometry`); spot removal and noise reduction stay, since
+>    neither reframes. Measured after: **0.00 levels across ±40°.**
+> 2. **A mask's capture half got no airlight at all** — `capture_stages` called `DehazeStage::new`,
+>    so it estimated per frame and moved **9.4–12.1 levels**, worse than the global path. It is now
+>    handed the same value.
+> 3. **⚠⚠ The GPU dehaze estimated its own, and THAT is what the user actually saw.**
+>    `GpuDehazeStage::new` called `pipeline::airlight(image)` on the frame the seam handed over —
+>    the **rotated** one. Reported by use: *"it does not breathe for the masked one, but it does
+>    slightly for the global one, especially for straighten values above 25 or below -25."* Every
+>    clause of that report named a mechanism: masked stages run in the **prefix** and `accelerate`
+>    is only called on the **tail**, so the masked one was already fixed; bigger angles mean bigger
+>    empty corners; and it re-estimates on every construction, so it moves during a drag *and*
+>    between settled positions.
+>
+> ⚠ **Three probes were written against the CPU path before anyone asked which path was rendering
+> the screen.** All three found nothing, correctly — on `DSCF6227` the CPU counterfactual moves
+> 0.08–0.44 levels. **Ask which path renders before measuring one.**
+>
+> ⚠ **The trade, permanent:** a crop no longer re-estimates the airlight. Hazy sky and clear
+> foreground share one value. That *is* invariance, and a crop drag is continuous too.
+
+### ⚠ The original entry, kept because its measurements are still the record (recorded 2026-09-14, at M8.7 — MEASURED)
 
 **What it is.** `dehaze::airlight` takes the mean of the haziest 0.1% of pixels. That is an **order
 statistic over the frame**, so it moves whenever the frame's content moves — and a Straighten drag
@@ -588,8 +623,9 @@ an ordinary Straighten drag. So **today's shipped app already wobbles during tha
 any of M8.7's work, and nobody has reported it.
 
 **⚠⚠ This is not M8.7's doing and M8.7 did not make it worse — it made it smaller.** The replay
-airlight M8.7 ships is a deterministic function of the edits, so it does not move during a drag at
-all; what it costs is a **5.6-level** one-off shift against what the old code computed, measured and
+airlight M8.7 ships is a deterministic function of the edits, ~~so it does not move during a drag at
+all~~ — **struck through 2026-09-17: a drag changes an edit every frame, and the replay ran
+geometry, so it moved 6.06–6.81 levels on `DSCF6291`** — what it costs is a **5.6-level** one-off shift against what the old code computed, measured and
 accepted at the time. The three candidates measured then:
 
 | definition | worst shift against today | stable during a drag? |
