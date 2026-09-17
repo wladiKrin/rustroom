@@ -42,7 +42,10 @@ use edit_model::{Dehaze, Edits, Mask, MaskedAdjustment};
 use pipeline::{PrefixStepKey, RenderScale, Resampler};
 
 /// The angles an ordinary Straighten drag passes through.
-const ANGLES: [f32; 11] = [0.0, 0.6, 1.2, 1.8, 2.4, 3.0, 3.6, 4.2, 4.8, 5.4, 6.0];
+const ANGLES: [f32; 17] = [
+    -40.0, -35.0, -30.0, -27.0, -25.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 25.0, 27.0, 30.0,
+    35.0, 40.0,
+];
 
 fn main() {
     let path = std::env::args()
