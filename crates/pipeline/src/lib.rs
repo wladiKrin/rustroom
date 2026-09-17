@@ -765,6 +765,28 @@ pub fn prefix_airlight(
         .unwrap_or(steps.len());
     let mut cur = small;
     for s in &steps[..upto] {
+        // ⚠⚠ **The resampling family is SKIPPED, and that is the whole point.** The airlight is an
+        // order statistic over the frame, so replaying geometry made it a function of the ANGLE —
+        // measured at 6.06-6.81 levels across an ordinary Straighten drag on DSCF6291, and
+        // 1.47-1.71 on DSCF6296. `docs/BACKLOG.md` said M8.7's replay "does not move during a drag
+        // at all"; that conflates DETERMINISTIC with INVARIANT, because a drag changes an edit on
+        // every frame.
+        //
+        // ⚠ Spot removal and noise reduction stay: neither reframes, and both are part of what
+        // dehaze actually sees.
+        //
+        // ⚠⚠ The consequence, stated rather than discovered: **a crop no longer re-estimates.** A
+        // crop into a hazy sky and one into a clear foreground share one value. That IS what
+        // invariance means — and a crop drag is continuous too, so re-estimating there would
+        // reintroduce the defect in the gesture most likely to expose it.
+        if matches!(
+            s.key,
+            PrefixStepKey::LensCorrection(..)
+                | PrefixStepKey::Perspective(..)
+                | PrefixStepKey::Geometry(..)
+        ) {
+            continue;
+        }
         cur = s.stage.apply(cur);
     }
     stages::dehaze::airlight(&cur)
