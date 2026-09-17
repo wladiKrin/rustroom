@@ -165,10 +165,17 @@ clippy's `too_many_arguments` fired at 8, which was a fair signal.
 
 ### ▶ Next action — a choice, and the machine is finally quiet
 
-⚠ **Load has been 3–4 rather than 43, so two items resting on contended upper bounds are now cheap
-to settle** — both probes are committed and each is one command:
-`crates/app/examples/box_floor_sweep.rs` (`MIN_GPU_BOX_PX`, which the data says may want raising
-2–6×) and `bench_nr_checkpoint` (M8.12's bands, taken when 4 of 7 runs were unusable).
+✅ **BOTH CONTENDED SWEEPS WERE RE-RUN CLEAN 2026-09-17** (load 2.11), and one overturned a
+recorded finding:
+
+- **`MIN_GPU_BOX_PX`** — the quiet run **confirms** the contended one. Both configurations cross at
+  **3,130,000 px**; at the shipped 512 Ki floor the GPU is **~2× slower in both**. ⚠⚠ **The floor
+  wants raising and the value is the user's call**: 2.2× (1,129,504 px, where it starts winning on
+  average but the band still straddles parity) or 6× (3,130,000 px, whole band above). Unchanged.
+- **⚠⚠ The post-NR checkpoint no longer saves ~0 on the scoped path — M8.12 changed that.** It was
+  ~0 because an NR drag and a dehaze drag were *both* ~118 ms, doing whole-frame work. Now a 2-step
+  scoped plan is **30.5–35.6 ms** against a 1-step's **15.3–15.9**, so it **saves ~15–20 ms**.
+  Clean whole-frame bands: rung 3200 **95.1 ms** CPU-tail, **57.8** GPU-tail.
 
 **The candidates:**
 

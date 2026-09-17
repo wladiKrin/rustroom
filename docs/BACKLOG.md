@@ -465,9 +465,21 @@ of work, on the wrong processor.
 
 ### The two GPU constants nobody had swept — now swept, and one premise is BACKWARDS (recorded 2026-09-16 — MEASURED)
 
-Both probes are committed and re-runnable. ⚠⚠ **Both runs were on a machine at load 4.0–6.1 with
-three sibling agents building, so every crossover below is an UPPER bound — re-run idle before
-changing either constant.** Neither was changed.
+Both probes are committed and re-runnable.
+
+> **✅ RE-RUN ON A QUIET MACHINE 2026-09-17 (load 2.11 at start), AND THE CONTENDED NUMBERS HELD.**
+> Both configurations put the whole band above parity at **3,130,000 px** — non-gating 1.42–1.45×,
+> gating 1.28–1.65× — and at the shipped 512 Ki floor the GPU is **~2× slower in both**
+> (non-gating 0.48–0.70×, gating 0.56–0.60×). ⚠ **So the per-gating premise stays refuted**, and
+> the earlier caveat that every crossover was an upper bound turned out not to change the verdict.
+>
+> ⚠ The probe prints its own load, and it went **2.11 → 7.18 as the sweep began**: the CPU side is
+> rayon-parallel, so the sweep loads the machine itself. A truly idle timing run is not available
+> here; what matters is that both configurations meet the same conditions.
+>
+> ⚠⚠ **The floor wants raising and the value is a judgement, not a measurement.** 2.2×
+> (1,129,504 px) is where the GPU starts winning on average but the band still straddles parity;
+> 6× (3,130,000 px) is where the whole band is above it. Neither was changed.
 
 **`MIN_GPU_BOX_PX`** (`crates/gpu-pipeline/src/brush_raster.rs:526`, the **brush coverage
 rasteriser** floor — *not* a box-blur floor; the box-blur crossover is `RUNNING_SUM_MIN_RADIUS` in
@@ -655,9 +667,14 @@ met with a measurement rather than a search.
 > condition M8.3o named. **The ~26 ms below is CONFIRMED**: an independent zero-work round trip at
 > the same resolution measured **26.5–26.8 ms** (7.5–7.6 at 1.7 Mpx).
 >
-> **⚠⚠ BUT AT A NATIVE RUNG *WITH A VIEWPORT* THE CHECKPOINT SAVES ~0, BECAUSE M8.8's REGION-SCOPED
-> PATH TAKES OVER AND NO GPU PREFIX RUNS AT ALL.** An NR drag measures **118.3–125.3 ms** against a
-> dehaze drag's **118.3–122.0** — indistinguishable. ⚠ **This is M8.6's retraction shape**: the
+> **⚠⚠ THAT "SAVES ~0 UNDER A VIEWPORT" FINDING IS STALE — M8.12 OVERTURNED IT.** It was measured
+> when an NR drag read **118.3–125.3 ms** against a dehaze drag's **118.3–122.0**, indistinguishable
+> — because *both* were doing whole-frame work, which is the defect M8.12 fixed. Re-measured on a
+> quiet machine 2026-09-17: a 2-step scoped plan is **30.5–35.6 ms** and a 1-step **15.3–15.9**, so
+> **the checkpoint saves ~15–20 ms on the scoped path.** It went from worthless to worth having,
+> and the reason is that the first step stopped doing the whole frame.
+>
+> ⚠ Original text follows, kept because its numbers are the record of the pre-M8.12 state. ⚠ **This is M8.6's retraction shape**: the
 > saving below is real, but it belongs to whole-frame renders rather than to the 1:1 editing the
 > acceleration exists for. **Price this as an EXPORT-side win, or measure the path the gesture
 > actually takes first.**
@@ -677,6 +694,11 @@ met with a measurement rather than a search.
 >
 > ⚠ 4 of 7 runs were unusable — sibling build agents made GPU steps come back 20–40× slow. GPU bands
 > are over the two cleanest runs' minima, CPU bands over 65 stable frames.
+>
+> **✅ RE-MEASURED CLEAN 2026-09-17** (load 2.11, `DSCF6296`), what the checkpoint saves per
+> downstream frame: rung 1600 **23.6 ms** CPU-tail / **17.8** GPU-tail; rung 3200 **95.1** /
+> **57.8**. ⚠ The CPU figure matches the contended run exactly (95–97); the GPU one is lower than
+> the 64–71 reported then, which is what 4 unusable runs buys you.
 
 
 **What it is.** A dehaze drag at a native rung renders in **88.9 ms with both the prefix step and
