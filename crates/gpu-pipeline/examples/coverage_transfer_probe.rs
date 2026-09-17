@@ -95,14 +95,18 @@ fn words_for(m: &CoverageMap) -> usize {
     (m.w * m.h).div_ceil(4)
 }
 
-/// `GpuMaskStage::pack`, verbatim for a single component — the u8 → u32 bit-twiddle a hit pays
-/// before a single byte reaches the queue.
-fn pack(m: &CoverageMap) -> Vec<u32> {
-    let mut packed: Vec<u32> = vec![0; words_for(m)];
-    for (k, v) in m.data.iter().enumerate() {
-        packed[k >> 2] |= (*v as u32) << ((k & 3) * 8);
-    }
-    packed
+/// The REAL `GpuMaskStage::pack_maps` — the u8 → u32 repack a cache hit pays before a single byte
+/// reaches the queue.
+///
+/// ⚠⚠ **Calls production code rather than copying it.** This used to hold the loop *"verbatim for
+/// a single component"*, so when the implementation changed on 2026-09-17 the probe went on timing
+/// the old one and reported no change — a probe pricing something the real chain does not run,
+/// which is what got M8.6's headline retracted.
+///
+/// ⚠ The `Arc` is built by the caller, outside the timed region: wrapping it here would put an
+/// allocation and a full `CoverageMap` clone inside the measurement.
+fn pack(m: &std::sync::Arc<CoverageMap>) -> Vec<u32> {
+    gpu_pipeline::GpuMaskStage::pack_maps(std::slice::from_ref(m))
 }
 
 fn a_map(w: usize, h: usize) -> CoverageMap {
@@ -122,7 +126,7 @@ fn a_map(w: usize, h: usize) -> CoverageMap {
 fn upload_ab(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    map: &CoverageMap,
+    map: &std::sync::Arc<CoverageMap>,
     runs: usize,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let words = pack(map);
@@ -221,9 +225,18 @@ fn download_ab(
         rx.recv().unwrap().unwrap();
         let t_cpu = Instant::now();
         if bytes_per_sample == 4 {
-            let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
-            let data: Vec<u8> = words.iter().map(|&v| v.min(255) as u8).collect();
+            // ⚠ Mirrors `brush_raster.rs` as it stands after 2026-09-17: narrowed straight from the
+            // mapped range, with no intermediate `Vec<u32>`. ⚠⚠ Still a mirror rather than a call,
+            // because the real one is inside `rasterize` around a live GPU submission — so it must
+            // be re-checked against that function whenever it changes.
+            let mapped = slice.get_mapped_range();
+            let (cov_words, _) = mapped.as_chunks::<4>();
+            let data: Vec<u8> = cov_words
+                .iter()
+                .map(|c| u32::from_le_bytes(*c).min(255) as u8)
+                .collect();
             std::hint::black_box(&data);
+            drop(mapped);
         } else {
             let data: Vec<u8> = slice.get_mapped_range().to_vec();
             std::hint::black_box(&data);
@@ -387,7 +400,7 @@ fn main() {
         );
 
         // (a) upload, direct
-        let map = a_map(w, h);
+        let map = std::sync::Arc::new(a_map(w, h));
         let (with, without, packing) = upload_ab(&device, &queue, &map, runs);
         show("(a) pack() alone, CPU", packing.clone());
         show("(a) alloc+write_buffer+submit+wait", with.clone());

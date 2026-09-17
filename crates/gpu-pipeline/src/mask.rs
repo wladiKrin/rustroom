@@ -500,7 +500,13 @@ impl GpuMaskStage {
     /// ⚠ Separated from [`Self::pack`] so it can be tested without a GPU: `pack`'s input is
     /// `&[Option<..>]` shaped by the mask's components, and the packing itself has nothing to do
     /// with that shape.
-    fn pack_maps(maps: &[std::sync::Arc<pipeline::brush::CoverageMap>]) -> Vec<u32> {
+    ///
+    /// ⚠⚠ **`pub` so `coverage_transfer_probe` can time THIS rather than a copy of it.** That probe
+    /// used to carry the loop *"verbatim for a single component"*, which meant it went on measuring
+    /// the old implementation after this one replaced it — the M8.6 failure exactly, a probe
+    /// pricing something the real chain does not run. A measurement helper that duplicates the code
+    /// it measures is a second definition, with all the drift that implies.
+    pub fn pack_maps(maps: &[std::sync::Arc<pipeline::brush::CoverageMap>]) -> Vec<u32> {
         let total: usize = maps.iter().map(|m| words_for(m) as usize).sum();
         let mut packed: Vec<u32> = Vec::with_capacity(total);
         for m in maps {
