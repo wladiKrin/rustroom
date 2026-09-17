@@ -141,10 +141,13 @@ impl MaskStage {
         scale: RenderScale,
         geometry: &Geometry,
         prebuilt: &[Option<std::sync::Arc<crate::brush::CoverageMap>>],
+        airlight: Option<[f32; 3]>,
     ) -> Self {
         Self {
             composite: Self::composite(masked, geometry, prebuilt),
-            stages: crate::capture_stages(&masked.adjustments, scale),
+            // ⚠ The frame-global airlight, threaded so a mask's dehaze is built exactly as the
+            // global one is. `build_prefix_steps` already holds it at the call site.
+            stages: crate::capture_stages(&masked.adjustments, scale, airlight),
             region: None,
             // ⚠ The capture half runs in the **prefix**, which always renders whole-buffer and is
             // cached by `PrefixCache` at a coarser grain. There is nothing for a coverage cache to
@@ -1199,6 +1202,9 @@ mod tests {
             RenderScale::FULL,
             &edit_model::Geometry::default(),
             &[],
+            // ⚠ `None` keeps this test's subject the stage's own estimate, which is what it
+            // asserts about; the supplied-airlight path is covered where it is supplied.
+            None,
         )
         .apply(src.clone());
 

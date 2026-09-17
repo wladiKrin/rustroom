@@ -956,7 +956,13 @@ pub fn build_prefix_steps(
             // `region: None` that is the whole frame at exactly the right size. **It costs
             // nothing per frame because this whole step is cached**: the rasterization happens
             // when the mask's shape or its capture sliders change, not on every render.
-            stage: Box::new(MaskStage::new_capture(&p, scale, &edits.geometry, &[])),
+            stage: Box::new(MaskStage::new_capture(
+                &p,
+                scale,
+                &edits.geometry,
+                &[],
+                airlight,
+            )),
         });
     }
 
@@ -1191,6 +1197,7 @@ fn adjustment_stages(
 fn capture_stages(
     a: &edit_model::LocalAdjustments,
     scale: RenderScale,
+    airlight: Option<[f32; 3]>,
 ) -> Vec<Box<dyn PipelineStage>> {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
     if a.noise_reduction.is_active() {
@@ -1200,7 +1207,13 @@ fn capture_stages(
         )));
     }
     if a.dehaze.is_active() {
-        out.push(Box::new(DehazeStage::new(&a.dehaze, scale)));
+        // ⚠⚠ **The same frame-global value the global dehaze gets.** Without one this called
+        // `DehazeStage::new`, which estimates from the stage's own input on every frame — measured
+        // at 9.19-11.13 levels across a Straighten drag, WORSE than the global path beside it.
+        out.push(match airlight {
+            Some(air) => Box::new(DehazeStage::with_airlight(&a.dehaze, scale, air)),
+            None => Box::new(DehazeStage::new(&a.dehaze, scale)),
+        });
     }
     out
 }
@@ -2435,9 +2448,53 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ The property this milestone exists for: **reframing must not move the airlight.**
+    ///
+    /// Before 2026-09-17 the replay ran geometry, so the airlight was a function of the ANGLE —
+    /// measured at 6.06-6.81 levels across an ordinary Straighten drag on `DSCF6291`.
+    #[test]
+    fn the_airlight_does_not_move_when_the_frame_is_reframed() {
+        let img = structured(220, 180);
+        let base = Edits {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Default::default()
+        };
+        let want = super::prefix_airlight(&base, &img, crate::resample::Resampler::CatmullRom, None);
+
+        let mut angled = base.clone();
+        angled.geometry.angle = 6.0;
+        let mut cropped = base.clone();
+        cropped.geometry.crop = edit_model::CropRect {
+            left: 0.5,
+            top: 0.5,
+            right: 1.0,
+            bottom: 1.0,
+        };
+        let mut both = angled.clone();
+        both.geometry.crop = cropped.geometry.crop;
+
+        for (name, e) in [("angle", &angled), ("crop", &cropped), ("both", &both)] {
+            let got = super::prefix_airlight(e, &img, crate::resample::Resampler::CatmullRom, None);
+            for c in 0..3 {
+                assert!(
+                    (got[c] - want[c]).abs() < 1e-6,
+                    "{name} moved the airlight on ch{c}: {} vs {}",
+                    got[c],
+                    want[c]
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_replay_moves_when_an_upstream_edit_moves() {
         // The discriminating other half: a constant would pass the test above.
+        //
+        // ⚠⚠ **This used to crop to a different quarter, and that stopped discriminating on
+        // 2026-09-17** — `prefix_airlight` now skips the resampling family, so a crop is
+        // deliberately unable to move the airlight. Noise reduction is the replacement because it
+        // is upstream of dehaze and is *not* a reframe. ⚠ If this ever fails again, check whether
+        // the skip list has grown rather than assuming the estimator broke.
         let img = structured(220, 180);
         let e = Edits {
             dehaze: edit_model::Dehaze { amount: 60.0 },
@@ -2445,16 +2502,16 @@ mod tests {
         };
         let base = super::prefix_airlight(&e, &img, crate::resample::Resampler::CatmullRom, None);
         let mut f = e.clone();
-        f.geometry.crop = edit_model::CropRect {
-            left: 0.5,
-            top: 0.5,
-            right: 1.0,
-            bottom: 1.0,
+        f.noise_reduction = edit_model::NoiseReduction {
+            luminance: 80.0,
+            detail: 50.0,
+            color: 80.0,
+            smoothness: 80.0,
         };
         assert_ne!(
             super::prefix_airlight(&f, &img, crate::resample::Resampler::CatmullRom, None),
             base,
-            "cropping to a different quarter must change what the brightest pixels are"
+            "an upstream edit that is not a reframe must still move the airlight"
         );
     }
 
@@ -3895,7 +3952,7 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 50.0 },
             ..Default::default()
         };
-        let names: Vec<&'static str> = capture_stages(&a, RenderScale::FULL)
+        let names: Vec<&'static str> = capture_stages(&a, RenderScale::FULL, None)
             .iter()
             .map(|s| s.name())
             .collect();
@@ -3907,7 +3964,7 @@ mod tests {
     #[test]
     fn the_two_mask_builders_do_not_overlap() {
         let a = all_edits().masks[0].adjustments.clone();
-        let cap: Vec<&'static str> = capture_stages(&a, RenderScale::FULL)
+        let cap: Vec<&'static str> = capture_stages(&a, RenderScale::FULL, None)
             .iter()
             .map(|s| s.name())
             .collect();
