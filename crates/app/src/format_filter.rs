@@ -31,6 +31,21 @@ pub fn formats_present(entries: &[PhotoEntry]) -> Vec<(String, usize)> {
     counts.into_iter().collect()
 }
 
+/// Whether a folder's own contents override the stored hidden-set.
+///
+/// ⚠⚠ **The ONE place this rule is written.** `shell.rs::format_bullets` draws no chips for such a
+/// folder and [`crate::library_filter::LibraryFilter::effective_for`] hides nothing in it; before
+/// 2026-09-17 only the first of those existed, and hiding `jpg` then opening a JPEG-only folder
+/// gave an empty grid **with no control to undo it** — reported in use. Two callers reading one
+/// predicate is what stops them drifting back apart into a chip that does nothing, or filtering
+/// with no chip.
+///
+/// ⚠ Fewer than *two* rather than exactly one: an empty folder, and a folder of extension-less
+/// files, both have nothing to choose between either.
+pub fn folder_overrides_hidden(entries: &[PhotoEntry]) -> bool {
+    formats_present(entries).len() < 2
+}
+
 /// Which formats are hidden from the browser.
 ///
 /// ⚠ It stores what is **hidden**, not what is shown. With a shown-set, a format that appeared
@@ -133,6 +148,22 @@ mod tests {
 
     fn folder() -> Vec<PhotoEntry> {
         entries(&["a.RAF", "a.JPG", "b.raf", "b.jpg", "c.raf", "notes"])
+    }
+
+    #[test]
+    fn a_folder_with_one_format_overrides_the_hidden_set() {
+        assert!(folder_overrides_hidden(&entries(&["a.jpg", "b.JPG", "c.jpg"])));
+        assert!(folder_overrides_hidden(&entries(&[])));
+        // ⚠ Extension-less files contribute no format, so a folder of them has nothing to choose.
+        assert!(folder_overrides_hidden(&entries(&["notes", "readme"])));
+    }
+
+    #[test]
+    fn a_mixed_folder_does_not_override() {
+        assert!(!folder_overrides_hidden(&folder()));
+        assert!(!folder_overrides_hidden(&entries(&["a.jpg", "b.raf"])));
+        // ⚠ Case-folded, so `.JPG` and `.jpg` are ONE format and this folder still overrides.
+        assert!(folder_overrides_hidden(&entries(&["a.JPG", "b.jpg"])));
     }
 
     #[test]
