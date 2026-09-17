@@ -182,7 +182,7 @@ recorded finding:
 
 1. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
    **1.00×, by construction**. ⚠ Only the zero is measured.
-2. **Item 5, spot removal** — the only unported stage (18 of 23 have twins). Unmeasured.
+2. **Item 5, spot removal** — the only unported stage (**18 of 21** have twins). Unmeasured.
 3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Needs a shader restructure: the shader writes one `u32` per
    sample because packing four into a word would race. **A considered trade, not an oversight.**
@@ -218,9 +218,16 @@ already moved to EXPORT** — whole-buffer, sequential, still paying 650–696 m
 then made those photos run four-wide, against a wall clock ~3× shorter than when it was proposed.
 Measured after the fact: the port saves ~550 ms of a ~11.4 s export, **under 5%**.
 
-**✅ Verified against the tree, 2026-09-16: 18 of 23 pipeline stages have GPU twins.** The three
-without are `geometry`, `perspective` and `spot_removal` — and the first two were answered by M8.8's
-region scoping rather than a shader, deliberately. **So item 5 is the only genuine port left.**
+**✅ Re-verified against the tree 2026-09-17: 18 of 21 pipeline stages have GPU twins**, and only
+**three** lack one: `geometry`, `perspective` and `spot_removal`. The first two were answered by
+M8.8's region scoping rather than a shader, deliberately, **so item 5 is the only genuine port left.**
+
+⚠⚠ **This said "18 of 23" until 2026-09-17, which invited the wrong subtraction** — 23 − 18 = 5, and
+only three are unported. `crates/pipeline/src/stages/` holds **23 files**, of which **21 implement
+`PipelineStage`**: `hue_table` and `mask_coverage` implement none and are helpers folded into `hsl`
+and `mask`. ⚠ Two twins are also renamed rather than missing — `color_grading` → `grading.rs`,
+`sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
+`impl PipelineStage for`, not by file.**
 
 ### Open items
 
@@ -230,7 +237,7 @@ region scoping rather than a shader, deliberately. **So item 5 is the only genui
   wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
 - **A GPU-resident base for `GpuBrushRaster`** — still open, still unmeasured: a global drag over a masked
   photo gains **1.00×, by construction**.
-- **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 23 stages ported that condition now holds, so this is live rather than blocked.
+- **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 21 stages ported that condition now holds, so this is live rather than blocked.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
