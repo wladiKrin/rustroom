@@ -144,55 +144,44 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-17)
 
-**2538 tests, 74 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
-tree. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the user pushes.** (No count: it goes
-stale within a merge. Run the command at the top of this section.)
+**2542 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
+`origin/main`** — **not pushed; the user pushes.** (No count: it goes stale within a merge.)
 
-✅ **M8.12 — the region-scoped locals actually scope** — merged, confirmed by use.
-✅ **A one-format folder shows its one format** — merged, confirmed by use.
-✅ **The coverage repack and the narrowing** — merged and **CONFIRMED BY USE**, composite mask
-included. `GpuMaskStage::pack_maps` is a chunked scan instead of a bounds-checked read-modify-write
-per byte, and the download narrows straight from the mapped range instead of copying **27.35 MB**
-into a `Vec<u32>` that existed only to be narrowed one line later.
+✅ **The dehaze airlight is invariant to geometry, on all three paths — merged and CONFIRMED BY USE.**
+Straightening, cropping, perspective and a lens profile no longer move it.
 
-**Measured at rung 3200 (6.84 Mpx), load ~4, the probe calling the real code:**
-
-| | before | after |
+| path | was | now |
 |---|---|---|
-| `pack()` alone | 10.6–13.8 ms | **0.17–1.32 ms** (median 0.18, **~60×**) |
-| upload (pack + write) | ~11–15 ms | **~1.0–3.5 ms** |
-| download | ~2.9 ms median | ~2.6 ms median (~12%) |
+| global replay (`prefix_airlight`) | 6.06–6.81 levels across a drag | **0.00 across ±40°** |
+| a mask's capture half | 9.4–12.1, estimated per frame | given the same value |
+| **the GPU twin** | estimated from the **rotated** frame | given the same value |
 
-⚠ **`rayon` was NOT added to `gpu-pipeline`.** The chunked scan made it unnecessary; the plan left
-that to the numbers rather than assuming it.
+⚠ **The trade, permanent:** a crop no longer re-estimates the airlight — hazy sky and clear
+foreground share one value. That *is* invariance, and a crop drag is continuous too. Dehazed
+photographs render a one-off shift differently, in the family of M8.7's accepted 5.6 levels.
 
-### ▶ Next action — and the coverage cache is now worth LESS, because this milestone worked
+⚠ `accelerate_prefix_stage` now takes **`SeamFacts { lens, resampler, airlight }`** — grouped when
+clippy's `too_many_arguments` fired at 8, which was a fair signal.
 
-**⚠⚠ RE-PRICE THE GPU-SIDE MASK COVERAGE CACHE BEFORE SCOPING IT.** Its case rested on transfers
-being **27–58%** of the 43.1–45.5 ms rasterise a cache hit avoids. With the upload down from ~11–15
-to **~1.0–3.5 ms**, that share is now roughly **10–23%** — and the design question it needs
-(*does it follow `GpuCache`'s "outlive the render" rule or `PrefixCache`'s opposite one?*) has not
-got any cheaper. **Doing the mechanical halves first was supposed to re-price it, and it did.**
+### ▶ Next action — a choice, and the machine is finally quiet
 
-⚠ **The download did NOT improve much, and that is informative.** Removing a 27.35 MB `to_vec`
-saved ~12%, far less than the traffic maths predicts — so **the mapped-range read dominates**, not
-the copy. Anyone attacking the u8 wire should know that part of what is left is slow mapped memory
-rather than transfer. The probe's own `(b')` row prices the hypothetical u8 wire at **0.56–0.70 ms
-against an actual 3.55–6.35** at rung 3200, and **3.4 against 15.3 ms** at export size. ⚠⚠ It stays
-deliberately undone: the shader writes one `u32` per sample because *"packing four samples into one
-word would mean four threads read-modify-writing the same address — a race"*. **That is a considered
-trade, not an oversight**; shrinking it needs one thread per four samples, or a second pack pass.
+⚠ **Load has been 3–4 rather than 43, so two items resting on contended upper bounds are now cheap
+to settle** — both probes are committed and each is one command:
+`crates/app/examples/box_floor_sweep.rs` (`MIN_GPU_BOX_PX`, which the data says may want raising
+2–6×) and `bench_nr_checkpoint` (M8.12's bands, taken when 4 of 7 runs were unusable).
 
-**The remaining candidates:**
+**The candidates:**
 
 1. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
-   **1.00×, by construction**. ⚠ Only the zero is measured; the size of the win is not.
+   **1.00×, by construction**. ⚠ Only the zero is measured.
 2. **Item 5, spot removal** — the only unported stage (18 of 23 have twins). Unmeasured.
-3. **⚠ A live defect nobody has reported:** `dehaze::airlight` is an **order statistic over the
-   frame**, so it moves whenever the frame moves — **21 of 255 levels across an ordinary Straighten
-   drag** on `DSCF6291.RAF`. Today's shipped app wobbles during that gesture; M8.7 already built the
-   replay-airlight machinery that fixes it.
+3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
+   **3.4 against 15.3** at export. ⚠⚠ Needs a shader restructure: the shader writes one `u32` per
+   sample because packing four into a word would race. **A considered trade, not an oversight.**
 4. **`crates/app/src/batch_export.rs` is 2,298 lines**, well past this file's own ~600 marker.
+
+⚠ The **GPU-side coverage cache** is re-priced **downward**: transfers were 27–58% of the rasterise
+a hit avoids and are now ~10–23%, because the repack fix landed first.
 
 ### The agreed systematic order (GPU port)
 
