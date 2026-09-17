@@ -120,6 +120,62 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### M8.12 confirmed by use (2026-09-17)
+
+✅ *"works, confirmed"* — including the **pan at 1:1 with noise reduction and dehaze both active**,
+which was the only check able to see the failure mode. The two paths differ by a rounding; a margin
+bug would have shown as a band at the region's edge. None appeared.
+
+⚠ Gated at the tip rather than at the last code commit: `cargo fmt` output had been swept into a
+later docs commit by a `git add -A`, so the first gate described a tree nobody shipped — caught by
+running `git diff <gated> HEAD -- crates/`, which this file's standing lesson prescribes and which
+came back **non-empty**. Re-gated at `f351577`: FMT=0, CLIPPY=0, TEST=0, 74 goldens, 0 filtered.
+
+The block this replaced:
+
+> ### State (2026-09-17)
+> 
+> **2531 tests, 74 goldens.** ⚠ This file said *"63 goldens"* for some time; the golden binary
+> actually runs **74, 0 filtered out**. The 74 is measured — when that drifted is not known.
+> 
+> On branch **`m8.12-scoped-locals`**, which holds **M8.12 — the region-scoped locals actually
+> scope**, plus the per-step scoped instrumentation that found it. `main` is 4 commits ahead of
+> `origin/main`; this branch is ahead of that. **Not merged, not pushed.**
+> 
+> `fmt` / `clippy --all-targets --all-features -D warnings` / `test --workspace` green together,
+> **each exit code read from its own command** — `FMT=0`, `CLIPPY=0`, `TEST=0`. **74 goldens ran and
+> none moved**; `crates/pipeline/tests` unmodified. 2529 → 2531, exactly the two tests added.
+> 
+> ### ▶ Next action — CONFIRM M8.12 BY USE, and the check is a PAN, not a stopwatch
+> 
+> **▶⚠⚠ THE ONLY THING M8.12 CANNOT TEST IS THE ONE THAT MATTERS: a band or seam at the region's
+> edge while panning.** Its failure mode is a **plausible photograph**, not an error, and a still
+> frame cannot catch it — the two paths now differ by a rounding, and a margin bug differs by a band.
+> 
+> **The check:** open a photo with **noise reduction and dehaze both active**, go to **1:1**, and
+> **pan**. The picture must not band, seam or shimmer at the edges of the moving region. ⚠ Then drag
+> **Dehaze** at 1:1 — it should be visibly quicker.
+> 
+> **What it bought** (same machine, comparable load, 14 frames each):
+> 
+> | | before | after | |
+> |---|---|---|---|
+> | NR as step 0 | 93–96 ms | **16.5–18.9 ms** | ~5.2× |
+> | dehaze as step 0, one-step plan | 101–105 ms | **17.1–18.9 ms** | ~5.7× |
+> | two-step plan total | 111–114 ms | **34.1–36.9 ms** | ~3.2× |
+> 
+> ⚠ The check that says it is really fixed: **dehaze now costs ~18 ms whether it is step 0 or step 1.**
+> Before, the same stage on the same output rect cost 104 ms as step 0 and 18 as step 1.
+> 
+> **⚠⚠ What M8.12 did NOT touch, and it is the next lever on this path: the scoped chain is still the
+> CPU's.** `gpu_prefix_steps` stays 0 on the scoped path because `accelerate_prefix_stage`'s twins run
+> whole-buffer. A scoped drag now does the right *amount* of work, on the wrong processor — so M8.8's
+> region scoping and M8.3o/M8.3q's GPU ports remain mutually exclusive.
+> 
+> ⚠ Also still open: a **GPU-resident base for `GpuBrushRaster`** (a global drag over a masked photo
+> gains 1.00×, by construction); the **coverage cache's repack and 4×-inflated download wire**,
+> measured and mechanical; **item 5, spot removal**, the only unported stage.
+
 ### M8.12 — the region-scoped locals did whole-frame work, and no test could see it (2026-09-17)
 
 `apply_region` for **noise reduction** and **dehaze** read `self.apply(src.buf.clone())` and
