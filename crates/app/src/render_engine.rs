@@ -1229,10 +1229,15 @@ fn render_cached(
                         edits,
                         scale,
                         &img,
-                        // ⚠ Two facts `Edits` cannot carry — the matched profile and the kernel —
-                        // and lens correction is the first stage across this seam that needs both.
-                        lens.as_ref(),
-                        resampler,
+                        // ⚠ The facts `Edits` cannot carry — the matched profile, the kernel, and
+                        // ⚠⚠ since 2026-09-17 the airlight. `GpuDehazeStage` used to estimate that
+                        // from `img`, which under a Straighten drag is the ROTATED frame, so the
+                        // dehazed tone breathed as the angle moved. Found by use.
+                        gpu_pipeline::SeamFacts {
+                            lens: lens.as_ref(),
+                            resampler,
+                            airlight,
+                        },
                         ctx,
                     )
                 })

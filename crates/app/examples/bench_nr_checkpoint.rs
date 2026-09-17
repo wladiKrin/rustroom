@@ -303,8 +303,13 @@ fn main() {
             )) as Box<dyn gpu_pipeline::GpuStage>
         };
         let dz = || {
+            // ⚠ The airlight is supplied rather than estimated from `post_nr`, matching the
+            // engine after 2026-09-17. Estimating here would price a stage the app no longer builds.
             Box::new(gpu_pipeline::GpuDehazeStage::new(
-                &e.dehaze, sc, &post_nr, ctx,
+                &e.dehaze,
+                sc,
+                pipeline::prefix_airlight(&e, &post_nr, pipeline::Resampler::default(), None),
+                ctx,
             )) as Box<dyn gpu_pipeline::GpuStage>
         };
 

@@ -174,7 +174,7 @@ fn apply_dehaze(@builtin(global_invocation_id) id: vec3<u32>) {{
 
 /// Dehaze, on the GPU.
 pub struct GpuDehazeStage {
-    /// ⚠ The CPU's own estimate, from `dehaze::airlight` on its fixed 256 px downscale.
+    /// ⚠ The frame-global replay airlight, supplied by the caller — never estimated here.
     airlight: [f32; 3],
     mag: f32,
     remove: bool,
@@ -184,23 +184,35 @@ pub struct GpuDehazeStage {
 }
 
 impl GpuDehazeStage {
-    /// ⚠⚠ Takes the image, because the airlight is a property of **this photograph** and is
-    /// estimated CPU-side. That makes this the one `REPLACEABLE`-style builder that cannot be
-    /// constructed from `Edits` alone — which is why the prefix seam hands the buffer over.
+    /// ⚠⚠ **Takes the airlight rather than the image, and that is the fix for a defect found by
+    /// use on 2026-09-17.** This used to call `pipeline::airlight(image)` — estimating from the
+    /// frame it was handed, which under a Straighten drag is the ROTATED frame, so the angle fed
+    /// straight into the estimate. The reporter saw the dehazed tone breathe past ±25°, and only
+    /// on the global dehaze: a mask's capture stages run in the prefix, `accelerate` is only ever
+    /// called on the tail, so the masked one stayed on the CPU and was already invariant.
+    ///
+    /// ⚠ The module header's claim that the two paths are *"identical by construction"* is true
+    /// for SCALE — the estimate is taken on a fixed 256 px downscale — and was false for GEOMETRY.
+    /// Supplying the value is what makes it true for both.
+    ///
+    /// ⚠⚠ **Required rather than `Option`.** A `None` arm would be a silent fallback to
+    /// estimating, which is exactly how this survived. Unrepresentable beats documented.
     pub fn new(
         params: &Dehaze,
         scale: RenderScale,
-        image: &core_image::ImageBuf,
+        airlight: [f32; 3],
         _ctx: &Arc<GpuContext>,
     ) -> Self {
         let k = (params.amount / 100.0).clamp(-1.0, 1.0);
         Self {
-            airlight: pipeline::airlight(image),
+            airlight,
             mag: k.abs(),
             remove: k > 0.0,
             patch_r: pipeline::scaled_radius(pipeline::PATCH_RADIUS_FULL, scale),
             refine_r: pipeline::scaled_radius(pipeline::REFINE_RADIUS_FULL, scale),
-            cpu: pipeline::DehazeStage::new(params, scale),
+            // ⚠ The twin takes the SAME supplied value, so the fallback cannot disagree with
+            // the shader about what colour the haze is.
+            cpu: pipeline::DehazeStage::with_airlight(params, scale, airlight),
         }
     }
 
@@ -428,7 +440,7 @@ mod tests {
     }
 
     fn chained(ctx: &Arc<GpuContext>, p: &Dehaze, img: ImageBuf) -> ImageBuf {
-        let stage = GpuDehazeStage::new(p, scale(), &img, ctx);
+        let stage = GpuDehazeStage::new(p, scale(), pipeline::airlight(&img), ctx);
         crate::GpuChain::new(ctx.clone(), vec![Box::new(stage)]).apply(img)
     }
 
@@ -452,20 +464,62 @@ mod tests {
         }
     }
 
-    /// ⚠⚠ **The airlight must be the CPU's own, and this is the only test that can see a second
+    /// ⚠⚠ **The airlight must be the SUPPLIED one, and this is the only test that can see a second
     /// estimate.** Two readings of "what colour is the haze" would render a different photograph
-    /// rather than fail — and the whole reason the estimate runs on a fixed 256 px downscale is
-    /// that it must not vary with the render scale.
+    /// rather than fail.
+    ///
+    /// ⚠⚠ **Re-expressed 2026-09-17, because its old form pinned a defect.** It asserted the stage
+    /// carried `pipeline::airlight(&img)` — the frame's own estimate — which is exactly what made
+    /// the dehazed tone breathe under a Straighten drag: the frame handed over is the ROTATED one.
+    /// Its intent was always right; only its expression named the wrong source.
+    ///
+    /// ⚠ The value below is deliberately **not** the frame's own estimate. Feeding the stage
+    /// `airlight(&img)` and then asserting it holds `airlight(&img)` is a tautology that passes
+    /// whether the stage stores the argument or re-derives it.
     #[test]
-    fn the_airlight_is_the_cpus_own() {
+    fn the_airlight_is_the_supplied_one() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(200, 160);
-        let stage = GpuDehazeStage::new(&params(60.0), scale(), &img, &ctx);
-        assert_eq!(
-            stage.airlight,
+        let supplied = [0.11, 0.22, 0.33];
+        assert_ne!(
+            supplied,
             pipeline::airlight(&img),
-            "the GPU stage must carry `dehaze::airlight`'s own estimate"
+            "fixture check: the supplied value must differ from the frame's own estimate, or this \
+             test cannot tell them apart"
         );
+        let stage = GpuDehazeStage::new(&params(60.0), scale(), supplied, &ctx);
+        assert_eq!(
+            stage.airlight, supplied,
+            "the GPU stage must carry the airlight it was given, never one of its own"
+        );
+    }
+
+    /// ⚠⚠ The property the report was about: **the angle must not move the GPU stage's airlight.**
+    ///
+    /// Reported in use 2026-09-17 with the GPU on — the global dehaze breathed past ±25° while the
+    /// masked one did not, because a mask's capture stages run in the prefix and `accelerate` is
+    /// only ever called on the tail.
+    #[test]
+    fn the_angle_does_not_move_the_gpu_airlight() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(200, 160);
+        let mut want: Option<[f32; 3]> = None;
+        for angle in [0.0f32, 10.0, 25.0, 30.0, 40.0] {
+            let mut e = edit_model::Edits {
+                dehaze: params(60.0),
+                ..Default::default()
+            };
+            e.geometry.angle = angle;
+            let air = pipeline::prefix_airlight(&e, &img, pipeline::Resampler::default(), None);
+            let stage = GpuDehazeStage::new(&e.dehaze, scale(), air, &ctx);
+            match want {
+                None => want = Some(stage.airlight),
+                Some(w) => assert_eq!(
+                    stage.airlight, w,
+                    "{angle} deg moved the GPU stage's airlight"
+                ),
+            }
+        }
     }
 
     /// ⚠ Bounded in 8-bit levels, not bit-identical: dehaze is full of divides and multiply-adds,
@@ -522,7 +576,7 @@ mod tests {
         let Some(ctx) = ctx() else { return };
         let img = hazy(64, 64);
         assert_eq!(
-            GpuDehazeStage::new(&params(50.0), scale(), &img, &ctx).name(),
+            GpuDehazeStage::new(&params(50.0), scale(), pipeline::airlight(&img), &ctx).name(),
             pipeline::DehazeStage::new(&params(50.0), scale()).name()
         );
     }

@@ -75,7 +75,7 @@ pub(crate) fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
     }
 }
 
-pub use accelerate::{accelerate, accelerate_prefix_stage, rejoin};
+pub use accelerate::{accelerate, accelerate_prefix_stage, rejoin, SeamFacts};
 pub use brush_raster::GpuBrushRaster;
 
 /// How many dabs one 16×16 tile's shared list holds before the rasteriser re-scans.

@@ -466,8 +466,13 @@ pub fn export_one(
                     edits,
                     scale,
                     &img,
-                    source.lens.as_ref(),
-                    render.resampler,
+                    gpu_pipeline::SeamFacts {
+                        lens: source.lens.as_ref(),
+                        resampler: render.resampler,
+                        // ⚠ The same frame-global value the CPU prefix was built with, so the twin
+                        // cannot disagree with the shader about what colour the haze is.
+                        airlight,
+                    },
                     ctx,
                 )
             })

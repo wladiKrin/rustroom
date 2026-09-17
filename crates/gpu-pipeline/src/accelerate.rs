@@ -286,25 +286,50 @@ fn sub_edits(a: &edit_model::LocalAdjustments) -> Edits {
 /// as NR in this catalogue. ⚠ Chaining wins an **NR** drag (~113 against ~139), recorded rather
 /// than hidden: it becomes the right answer if NR is ever ported *and* the checkpoint's value is
 /// re-measured.
+/// The facts a prefix stage needs that [`Edits`] cannot carry.
+///
+/// ⚠⚠ **Grouped when the third arrived**, because `too_many_arguments` fired at 8 and it was a fair
+/// signal rather than a nuisance: three loose parameters threaded through six call sites is how one
+/// of them comes to be passed wrongly, which is exactly the defect the `airlight` field fixes.
+/// `pipeline::RenderSpec` is the same shape one layer up.
+pub struct SeamFacts<'a> {
+    /// ⚠ From the file's own metadata matched against the bundled database.
+    pub lens: Option<&'a lens_profile::LensShot>,
+    /// ⚠ A `RenderSpec` field — a property of the **render** rather than of the photograph, which
+    /// is exactly why it is not an `ExportOptions` field either.
+    pub resampler: pipeline::Resampler,
+    /// The frame-global dehaze airlight, from `pipeline::prefix_airlight`.
+    ///
+    /// ⚠⚠ **Added 2026-09-17 for a defect found by use.** `GpuDehazeStage` estimated it from the
+    /// image the seam hands over — which under a Straighten drag is the ROTATED frame — so the
+    /// dehazed tone breathed as the angle moved. ⚠ Not an `Option`: a `None` arm would be a silent
+    /// fallback to estimating, which is how it survived.
+    pub airlight: [f32; 3],
+}
+
 pub fn accelerate_prefix_stage(
     name: &str,
     edits: &Edits,
     scale: RenderScale,
     image: &core_image::ImageBuf,
-    // ⚠⚠ **Two facts `Edits` cannot carry, and a stage needing either could not be built from this
-    // seam's old signature.** The `LensShot` comes from the file's own metadata matched against the
-    // bundled database; the `Resampler` is a `RenderSpec` field, a property of the *render* rather
-    // than of the photograph — which is exactly why it is not an `ExportOptions` field either.
-    // Both are in hand at every call site.
-    lens: Option<&lens_profile::LensShot>,
-    resampler: pipeline::Resampler,
+    facts: SeamFacts<'_>,
     ctx: &Arc<GpuContext>,
 ) -> Option<Box<dyn PipelineStage>> {
+    let SeamFacts {
+        lens,
+        resampler,
+        airlight,
+    } = facts;
     // ⚠ Name-matched, exactly as `REPLACEABLE` is, and for the same reason: a `dyn PipelineStage`
     // exposes only `name()` and `apply()`, while the caller still holds the `Edits` it was built
     // from.
     let gpu: Box<dyn GpuStage> = match name {
-        "dehaze" => Box::new(crate::GpuDehazeStage::new(&edits.dehaze, scale, image, ctx)),
+        "dehaze" => Box::new(crate::GpuDehazeStage::new(
+            &edits.dehaze,
+            scale,
+            airlight,
+            ctx,
+        )),
         // ⚠ Takes no image — noise reduction estimates nothing from the photograph, where dehaze's
         // airlight is a property of *this* frame. The buffer is handed over regardless, because
         // one signature serves both.
@@ -999,9 +1024,61 @@ mod tests {
     fn a_dehaze_prefix_step_becomes_a_chain() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(200, 160);
-        let g = accelerate_prefix_stage("dehaze", &hazed_edits(60.0), SCALE, &img, None, RES, &ctx)
-            .expect("dehaze must be replaceable");
+        let g = accelerate_prefix_stage(
+            "dehaze",
+            &hazed_edits(60.0),
+            SCALE,
+            &img,
+            SeamFacts {
+                lens: None,
+                resampler: RES,
+                airlight: pipeline::airlight(&img),
+            },
+            &ctx,
+        )
+        .expect("dehaze must be replaceable");
         assert_eq!(g.name(), "gpu_chain");
+    }
+
+    /// ⚠⚠ **The guard for the SEAM, and it did not exist until 2026-09-17 — which is how the defect
+    /// shipped.** `GpuDehazeStage` estimated its own airlight from the image the seam handed over,
+    /// which under a Straighten drag is the ROTATED frame, so the dehazed tone breathed as the
+    /// angle moved. Found by use, with the GPU on.
+    ///
+    /// ⚠ Every other test here builds `GpuDehazeStage` directly, so **re-introducing the defect at
+    /// the seam failed none of them** — verified by sabotage. A stage-level guard cannot see a
+    /// caller that passes the wrong argument.
+    ///
+    /// ⚠ Observed through the PICTURE rather than the field: the seam returns a
+    /// `Box<dyn PipelineStage>`, which exposes `name()` and `apply()` and nothing else.
+    #[test]
+    fn the_seam_hands_dehaze_the_supplied_airlight() {
+        let Some(ctx) = ctx() else { return };
+        let img = hazy(200, 160);
+        let e = hazed_edits(60.0);
+        let run = |air: [f32; 3]| {
+            accelerate_prefix_stage(
+                "dehaze",
+                &e,
+                SCALE,
+                &img,
+                SeamFacts {
+                    lens: None,
+                    resampler: RES,
+                    airlight: air,
+                },
+                &ctx,
+            )
+            .expect("dehaze must be replaceable")
+            .apply(img.clone())
+        };
+        let hi = run([0.9; 3]);
+        let lo = run([0.5; 3]);
+        assert_ne!(
+            hi.data(),
+            lo.data(),
+            "the seam must pass the supplied airlight through to the shader"
+        );
     }
 
     fn denoised_edits(luminance: f32, color: f32) -> Edits {
@@ -1026,8 +1103,11 @@ mod tests {
             &denoised_edits(60.0, 60.0),
             SCALE,
             &img,
-            None,
-            RES,
+            SeamFacts {
+                lens: None,
+                resampler: RES,
+                airlight: pipeline::airlight(&img),
+            },
             &ctx,
         )
         .expect("noise reduction must be replaceable");
@@ -1048,9 +1128,20 @@ mod tests {
             .find(|s| s.stage.name() == "noise_reduction")
             .expect("fixture check: there must be a noise_reduction step");
         let cpu = step.stage.apply(img.clone());
-        let gpu = accelerate_prefix_stage("noise_reduction", &e, SCALE, &img, None, RES, &ctx)
-            .expect("noise reduction must be replaceable")
-            .apply(img.clone());
+        let gpu = accelerate_prefix_stage(
+            "noise_reduction",
+            &e,
+            SCALE,
+            &img,
+            SeamFacts {
+                lens: None,
+                resampler: RES,
+                airlight: pipeline::airlight(&img),
+            },
+            &ctx,
+        )
+        .expect("noise reduction must be replaceable")
+        .apply(img.clone());
         assert!(
             !crate::compare(&img, &cpu).is_exact(),
             "fixture check: the step must actually change the picture"
@@ -1080,8 +1171,19 @@ mod tests {
         let img = hazy(64, 64);
         for name in ["geometry", "perspective"] {
             assert!(
-                accelerate_prefix_stage(name, &hazed_edits(60.0), SCALE, &img, None, RES, &ctx)
-                    .is_none(),
+                accelerate_prefix_stage(
+                    name,
+                    &hazed_edits(60.0),
+                    SCALE,
+                    &img,
+                    SeamFacts {
+                        lens: None,
+                        resampler: RES,
+                        airlight: pipeline::airlight(&img),
+                    },
+                    &ctx
+                )
+                .is_none(),
                 "`{name}` has no GPU twin and must be left alone"
             );
         }
@@ -1095,13 +1197,36 @@ mod tests {
         let img = hazy(200, 160);
         let e = lens_edits();
         assert!(
-            accelerate_prefix_stage("lens_correction", &e, SCALE, &img, None, RES, &ctx).is_none(),
+            accelerate_prefix_stage(
+                "lens_correction",
+                &e,
+                SCALE,
+                &img,
+                SeamFacts {
+                    lens: None,
+                    resampler: RES,
+                    airlight: pipeline::airlight(&img),
+                },
+                &ctx
+            )
+            .is_none(),
             "with no matched profile there is nothing to accelerate"
         );
         let lens = lens_fixture();
         assert!(
-            accelerate_prefix_stage("lens_correction", &e, SCALE, &img, Some(&lens), RES, &ctx)
-                .is_some(),
+            accelerate_prefix_stage(
+                "lens_correction",
+                &e,
+                SCALE,
+                &img,
+                SeamFacts {
+                    lens: Some(&lens),
+                    resampler: RES,
+                    airlight: pipeline::airlight(&img),
+                },
+                &ctx
+            )
+            .is_some(),
             "with a profile the seam must fire"
         );
     }
@@ -1144,9 +1269,20 @@ mod tests {
             .find(|s| s.stage.name() == "dehaze")
             .expect("fixture check: there must be a dehaze step");
         let cpu = step.stage.apply(img.clone());
-        let gpu = accelerate_prefix_stage("dehaze", &e, SCALE, &img, None, RES, &ctx)
-            .expect("dehaze must be replaceable")
-            .apply(img.clone());
+        let gpu = accelerate_prefix_stage(
+            "dehaze",
+            &e,
+            SCALE,
+            &img,
+            SeamFacts {
+                lens: None,
+                resampler: RES,
+                airlight: pipeline::airlight(&img),
+            },
+            &ctx,
+        )
+        .expect("dehaze must be replaceable")
+        .apply(img.clone());
         assert!(
             !crate::compare(&img, &cpu).is_exact(),
             "fixture check: the step must actually change the picture"

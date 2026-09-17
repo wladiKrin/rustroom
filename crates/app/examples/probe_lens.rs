@@ -487,8 +487,19 @@ fn main() {
             &edits,
             pipeline::RenderScale::FULL,
             &image,
-            Some(&shot),
-            Resampler::default(),
+            gpu_pipeline::SeamFacts {
+                lens: Some(&shot),
+                resampler: Resampler::default(),
+                // ⚠ This probe accelerates lens correction, not dehaze, so the airlight is inert
+                // here — but the seam takes it for every stage, so it is supplied honestly rather
+                // than faked.
+                airlight: pipeline::prefix_airlight(
+                    &edits,
+                    &image,
+                    Resampler::default(),
+                    Some(shot.clone()),
+                ),
+            },
             ctx,
         ) {
             None => println!("           —    the seam declined (no corrector, or below the gate)"),

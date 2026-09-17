@@ -427,8 +427,18 @@ fn main() {
                     // ⚠ No lens profile here: these fixtures carry no camera metadata, so
                     // `lens_correction` is not among the steps and the seam is never asked
                     // about it. `probe_lens` is what prices that stage.
-                    None,
-                    pipeline::Resampler::Bilinear,
+                    gpu_pipeline::SeamFacts {
+                        lens: None,
+                        resampler: pipeline::Resampler::Bilinear,
+                        // ⚠ The replay airlight, as the engine supplies it — not an estimate from
+                        // the checkpoint, which is the defect fixed on 2026-09-17.
+                        airlight: pipeline::prefix_airlight(
+                            &heavy,
+                            &checkpoints[i],
+                            pipeline::Resampler::Bilinear,
+                            None,
+                        ),
+                    },
                     ctx,
                 ) else {
                     println!("           —    `{name}` has no GPU twin");
@@ -461,8 +471,18 @@ fn main() {
                         &heavy,
                         sc,
                         &checkpoints[i],
-                        None,
-                        pipeline::Resampler::Bilinear,
+                        gpu_pipeline::SeamFacts {
+                            lens: None,
+                            resampler: pipeline::Resampler::Bilinear,
+                            // ⚠ The replay airlight, as the engine supplies it — not an estimate from
+                            // the checkpoint, which is the defect fixed on 2026-09-17.
+                            airlight: pipeline::prefix_airlight(
+                                &heavy,
+                                &checkpoints[i],
+                                pipeline::Resampler::Bilinear,
+                                None,
+                            ),
+                        },
                         ctx,
                     )
                     .map(|g| (i, g))
@@ -524,8 +544,18 @@ fn main() {
                             &heavy,
                             sc,
                             &img,
-                            None,
-                            pipeline::Resampler::Bilinear,
+                            gpu_pipeline::SeamFacts {
+                                lens: None,
+                                resampler: pipeline::Resampler::Bilinear,
+                                // ⚠ The replay airlight, as the engine supplies it — not an estimate from
+                                // the checkpoint, which is the defect fixed on 2026-09-17.
+                                airlight: pipeline::prefix_airlight(
+                                    &heavy,
+                                    &img,
+                                    pipeline::Resampler::Bilinear,
+                                    None,
+                                ),
+                            },
                             ctx,
                         ) {
                             Some(g) => g.apply(img),
