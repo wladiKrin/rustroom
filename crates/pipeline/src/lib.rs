@@ -2386,7 +2386,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// ⚠⚠ The guard for the MASKED half, and it is the only thing that can see it regress.
     ///
     /// Before 2026-09-17 `capture_stages` called `DehazeStage::new`, so a mask's dehaze estimated
