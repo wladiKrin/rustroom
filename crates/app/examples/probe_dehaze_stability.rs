@@ -106,9 +106,7 @@ fn main() {
         }
         let mean: Vec<f64> = (0..3).map(|z| sum[z] / n[z] as f64 * 255.0).collect();
         if i == 0 {
-            for z in 0..3 {
-                base[z] = mean[z];
-            }
+            base.copy_from_slice(&mean[..3]);
         }
         println!(
             "  {angle:5.1} | {:7.3} {:7.3} {:7.3}   (vs 0 deg: {:+6.3} {:+6.3} {:+6.3})",
