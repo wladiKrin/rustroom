@@ -120,6 +120,77 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### A one-format folder shows its one format (2026-09-17)
+
+Reported by using it: *"I turned off the view for jpg files. Then I opened a folder which only had
+jpegs, and it didn't show anything, and there was also no option to turn on the view for jpegs."*
+
+**⚠⚠ TWO INDIVIDUALLY REASONABLE DECISIONS PRODUCED AN UNRECOVERABLE STATE WHERE THEY MET.**
+`FormatFilter` is global and persisted; `format_bullets` drew no chips for a folder with fewer than
+two formats, which is sensible on its own — filtering a single-format folder by that format is
+pointless. Together: an empty grid with no control, escapable only by opening another folder or
+editing `settings.json`.
+
+**⚠⚠ AND THE COMMENT BELOW THAT EARLY RETURN ARGUED THE CASE THE RETURN DEFEATED** — *"Unticking
+everything is recoverable in one click **because the boxes are still there**."* They were not there
+in the `< 2` case. A justification written next to one branch does not cover the branch above it.
+
+**The fix is a single predicate**, `format_filter::folder_overrides_hidden`, read by both the
+filtering and the chip row, so they cannot drift apart again into a chip that does nothing or
+filtering with no chip. Applied inside `LibraryState::refilter` rather than at its **12 call
+sites** — the same argument that function's own comment makes for `visible` being one derived list.
+⚠ The stored set is **read, never written**: overriding by editing would silently unhide the format
+everywhere.
+
+**⚠ A design question was put to the user on a FALSE PREMISE, and it is worth not re-deriving.**
+*"Should the Filter button still report an active filter while the format half is overridden?"* —
+but `mark_filter_label` never reads the format filter, and `LibraryFilter::is_active()` has **no
+production caller at all**. The chosen semantics (report inactive) turned out to fall out of
+`effective_for` for free. **Check that a symptom manifests before asking anyone to adjudicate it.**
+
+Sabotage: disabling the predicate fails **4** tests, one more than predicted — the extra is the
+case-folding assertion that `a.JPG` + `b.jpg` is ONE format and therefore still overrides.
+
+The block this replaced:
+
+> ### State (2026-09-17)
+> 
+> **2531 tests, 74 goldens.** ⚠ This file said *"63 goldens"* for some time; the golden binary
+> actually runs **74, 0 filtered out**. The 74 is measured — when that drifted is not known.
+> 
+> ✅ **M8.12 — the region-scoped locals actually scope — is CONFIRMED BY USE (2026-09-17)**, *"works,
+> confirmed"*, including the pan at 1:1 that was the only check able to see its failure mode. It sits
+> on branch **`m8.12-scoped-locals`**, 8 commits ahead of `main`, gated **at the tip**: `FMT=0`,
+> `CLIPPY=0`, `TEST=0` each read from its own command, **74 goldens ran and none moved**,
+> `crates/pipeline/tests` unmodified. **Not merged, not pushed.**
+> 
+> `main` is 4 commits ahead of `origin/main`. **The user pushes.**
+> 
+> ### ▶ Next action — a Library trap the user found by use: a one-format folder can hide itself
+> 
+> **▶⚠⚠ REPORTED 2026-09-17 AND REPRODUCED IN THE CODE.** Hide `jpg` in Library, then open a folder
+> containing **only** JPEGs: no photos, **and no checkbox to turn them back on.** The folder is
+> unrecoverable from its own screen.
+> 
+> **The cause is two correct-looking decisions meeting.** `FormatFilter` is **global and persisted**
+> (`settings.hidden_formats`), while `shell.rs::format_bullets` returns early when
+> `formats_present().len() < 2` — sensibly, since filtering a single-format folder by that format is
+> pointless. Together they produce an empty grid with no control.
+> 
+> ⚠ **And the comment immediately below that early return argues the case that the return defeats:**
+> *"Every box stays enabled, including the last ticked one … Unticking everything is recoverable in
+> one click **because the boxes are still there**."* They are not there in the `< 2` case.
+> 
+> **The user's call on the behaviour:** a folder with **one** file type always shows it — the stored
+> hidden-set is **overridden for that folder**, with no toggle offered — and returning to a mixed
+> folder uses the remembered setting again. ⚠ The stored set must not be *edited* by this, or the
+> override would silently unhide the format everywhere.
+> 
+> ⚠ **Sub-question this raises and that a spec must answer:** should the **Filter** button still report
+> an active filter while the format half is being overridden? `the_filter_button_reports_an_active_filter`
+> pins the current answer, and a button claiming a filter that is hiding nothing is the invisible-state
+> problem the crop aspect lock was fixed for.
+
 ### M8.12 confirmed by use (2026-09-17)
 
 ✅ *"works, confirmed"* — including the **pan at 1:1 with noise reduction and dehaze both active**,

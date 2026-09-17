@@ -144,41 +144,50 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-17)
 
-**2531 tests, 74 goldens.** ⚠ This file said *"63 goldens"* for some time; the golden binary
-actually runs **74, 0 filtered out**. The 74 is measured — when that drifted is not known.
+**2536 tests, 74 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
+tree. ⚠ `main` is **15 commits ahead of `origin/main`** — **not pushed; the user pushes.**
 
-✅ **M8.12 — the region-scoped locals actually scope — is CONFIRMED BY USE (2026-09-17)**, *"works,
-confirmed"*, including the pan at 1:1 that was the only check able to see its failure mode. It sits
-on branch **`m8.12-scoped-locals`**, 8 commits ahead of `main`, gated **at the tip**: `FMT=0`,
-`CLIPPY=0`, `TEST=0` each read from its own command, **74 goldens ran and none moved**,
-`crates/pipeline/tests` unmodified. **Not merged, not pushed.**
+✅ **M8.12 — the region-scoped locals actually scope — merged and CONFIRMED BY USE**, including the
+pan at 1:1 that was the only check able to see its failure mode.
 
-`main` is 4 commits ahead of `origin/main`. **The user pushes.**
+✅ **A one-format folder shows its one format — merged and CONFIRMED BY USE.** Reported by using it:
+hiding `jpg` and opening a JPEG-only folder gave an empty grid **and no chip to undo it**. The rule
+*"this folder has fewer than two formats"* now lives once, in
+`format_filter::folder_overrides_hidden`, and both the filtering and the chip row read it. Applied
+inside `LibraryState::refilter` — one choke point rather than its 12 call sites. ⚠ The stored set is
+**read, never written**, so a mixed folder still remembers the setting.
 
-### ▶ Next action — a Library trap the user found by use: a one-format folder can hide itself
+`fmt` / `clippy --all-targets --all-features -D warnings` / `test --workspace` green together, **each
+exit code read from its own command**; **74 goldens ran and none moved**; the gated commit was
+verified to BE the tip.
 
-**▶⚠⚠ REPORTED 2026-09-17 AND REPRODUCED IN THE CODE.** Hide `jpg` in Library, then open a folder
-containing **only** JPEGs: no photos, **and no checkbox to turn them back on.** The folder is
-unrecoverable from its own screen.
+### ▶ Next action — a choice, and M8.12 re-priced one of the candidates downward
 
-**The cause is two correct-looking decisions meeting.** `FormatFilter` is **global and persisted**
-(`settings.hidden_formats`), while `shell.rs::format_bullets` returns early when
-`formats_present().len() < 2` — sensibly, since filtering a single-format folder by that format is
-pointless. Together they produce an empty grid with no control.
+⚠⚠ **M8.12 CHANGED THE ORDER: a scoped drag went 118 → ~18 ms, so "the scoped chain runs on the
+CPU" is now worth AT MOST ~18 ms, not ~100.** `gpu_prefix_steps` still stays 0 on that path and the
+coupling is still real — but it stopped being the big lever the moment the work got small. **Do not
+scope it on the pre-M8.12 number.**
 
-⚠ **And the comment immediately below that early return argues the case that the return defeats:**
-*"Every box stays enabled, including the last ticked one … Unticking everything is recoverable in
-one click **because the boxes are still there**."* They are not there in the `< 2` case.
+**The measured candidates, honestly ranked:**
 
-**The user's call on the behaviour:** a folder with **one** file type always shows it — the stored
-hidden-set is **overridden for that folder**, with no toggle offered — and returning to a mixed
-folder uses the remembered setting again. ⚠ The stored set must not be *edited* by this, or the
-override would silently unhide the format everywhere.
+1. **The coverage cache's repack and download wire** — the best measured value per unit of risk, and
+   it opens **no design question**. `GpuMaskStage::pack` does a **serial per-byte u8→u32 repack,
+   10.6–13.8 ms on EVERY encode**, and the download crosses the wire as **one u32 per sample**
+   (85–90% inflation; a u8 wire would be 0.55–0.79 ms). Both are mechanical. ⚠ Doing these first
+   also **re-prices the GPU-side coverage cache**, which is the item that needs the design question
+   the backlog reserves.
+2. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
+   **1.00×, by construction**. ⚠ The size of the win is **not measured**; only the zero is.
+3. **Item 5, spot removal** — the only genuinely unported stage (18 of 23 have twins). ⚠ Its value
+   is unmeasured too, and M8.4's lesson applies: measure the alternatives to zero first.
+4. **⚠ Not performance — a live defect nobody has reported:** `dehaze::airlight` takes the mean of
+   the haziest 0.1% of pixels, an **order statistic over the frame**, so it moves whenever the frame
+   moves. Measured at **21 of 255 levels across an ordinary Straighten drag** on `DSCF6291.RAF`.
+   **Today's shipped app wobbles during that gesture.** M8.7 already built the replay-airlight
+   machinery that would fix it.
 
-⚠ **Sub-question this raises and that a spec must answer:** should the **Filter** button still report
-an active filter while the format half is being overridden? `the_filter_button_reports_an_active_filter`
-pins the current answer, and a button claiming a filter that is hiding nothing is the invisible-state
-problem the crop aspect lock was fixed for.
+⚠ Also open and unglamorous: **`crates/app/src/batch_export.rs` is 2,298 lines**, the largest in the
+crate and well past this file's own ~600 marker.
 
 ### The agreed systematic order (GPU port)
 
