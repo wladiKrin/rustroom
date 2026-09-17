@@ -9,10 +9,18 @@
 //! measured, it moves **6.06–6.81 levels** on `DSCF6291` and **1.47–1.71** on `DSCF6296`.
 //! M8.7 took the wobble from ~21 levels to ~6. It did not remove it.
 //!
-//! **What is NOT supplied is a mask's capture half.** `MaskStage::new_capture` builds its stages
-//! through `capture_stages`, which constructs `DehazeStage::new` — no airlight — so a masked
-//! dehaze estimates from its own input on every frame. Its input is the whole frame at that point
-//! in the prefix, and a Straighten drag moves the whole frame.
+//! ⚠⚠ **FIXED 2026-09-17, and the second row is now a COUNTERFACTUAL rather than a measurement.**
+//! A mask's capture half used to get no airlight at all: `MaskStage::new_capture` built through
+//! `capture_stages`, which called `DehazeStage::new`, so a masked dehaze estimated from its own
+//! input on every frame. It is now handed the frame-global value, exactly as the global stage is.
+//!
+//! This probe computes that second row by calling `dehaze_airlight` itself, so it still reports
+//! **what an UNSUPPLIED stage would estimate** — which no longer describes the shipped code.
+//! ⚠ Kept, labelled, and not deleted: it is the size of the defect that was removed, which is
+//! worth being able to reproduce. **The guard that the fix holds is
+//! `a_masks_capture_dehaze_uses_the_supplied_airlight`, not this row** — a probe cannot see a
+//! supplied value, and measuring the alternative is how a probe comes to describe code that no
+//! longer exists.
 //!
 //! This prices that, and decides nothing. ⚠⚠ The airlight is an **order statistic** (the mean of
 //! the haziest 0.1%), so it is **strongly scene-dependent** — measured across a 0-6 degree drag:
@@ -108,7 +116,7 @@ fn main() {
         ANGLES.len()
     );
     spread(&global, "GLOBAL (replay, M8.7)");
-    spread(&masked, "MASKED (estimated per frame)");
+    spread(&masked, "IF UNSUPPLIED (counterfactual)");
     println!(
         "\n⚠⚠ The GLOBAL rows are NOT zero, and that is this probe's sharpest finding.\n\
          docs/BACKLOG.md says M8.7's replay airlight \"does not move during a drag at all\". That\n\

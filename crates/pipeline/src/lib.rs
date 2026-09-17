@@ -2387,6 +2387,43 @@ mod tests {
     }
 
     #[test]
+    /// ⚠⚠ The guard for the MASKED half, and it is the only thing that can see it regress.
+    ///
+    /// Before 2026-09-17 `capture_stages` called `DehazeStage::new`, so a mask's dehaze estimated
+    /// from its own input on every frame — 9.39-12.09 levels of movement across a Straighten drag,
+    /// worse than the global path beside it. ⚠ A probe cannot show this any more: measuring what an
+    /// *unsupplied* stage would estimate is a counterfactual once the stage is supplied. Two
+    /// different supplied airlights producing two different pictures is the observable.
+    #[test]
+    fn a_masks_capture_dehaze_uses_the_supplied_airlight() {
+        let img = structured(64, 48);
+        let a = edit_model::LocalAdjustments {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Default::default()
+        };
+        let run = |air: Option<[f32; 3]>| {
+            let mut out = img.clone();
+            for st in capture_stages(&a, RenderScale::FULL, air) {
+                out = st.apply(out);
+            }
+            out
+        };
+        let hi = run(Some([0.9; 3]));
+        let lo = run(Some([0.5; 3]));
+        assert_ne!(
+            hi.data(),
+            lo.data(),
+            "the supplied airlight must reach a mask's pixels"
+        );
+        // ⚠ And `None` must still estimate, which is what the test call sites rely on.
+        assert_ne!(
+            run(None).data(),
+            hi.data(),
+            "None must estimate rather than reuse a supplied value"
+        );
+    }
+
+    #[test]
     fn a_supplied_airlight_is_used_verbatim_rather_than_re_estimated() {
         // ⚠⚠ The only test that can see the stage falling back to its own estimate. Two renders of
         // the SAME image with different supplied airlights must differ; if the stage re-estimates,
@@ -2459,7 +2496,8 @@ mod tests {
             dehaze: edit_model::Dehaze { amount: 60.0 },
             ..Default::default()
         };
-        let want = super::prefix_airlight(&base, &img, crate::resample::Resampler::CatmullRom, None);
+        let want =
+            super::prefix_airlight(&base, &img, crate::resample::Resampler::CatmullRom, None);
 
         let mut angled = base.clone();
         angled.geometry.angle = 6.0;
