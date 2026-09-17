@@ -757,7 +757,8 @@ mod tests {
                 data: (0..w * h).map(|i| (i * 37 % 256) as u8).collect(),
                 outside: 0,
             };
-            let got = GpuMaskStage::pack_maps(std::slice::from_ref(&std::sync::Arc::new(m.clone())));
+            let got =
+                GpuMaskStage::pack_maps(std::slice::from_ref(&std::sync::Arc::new(m.clone())));
             assert_eq!(got, reference(&m), "{w}x{h}");
             assert_eq!(got.len(), (w * h).div_ceil(4), "{w}x{h} word count");
         }
