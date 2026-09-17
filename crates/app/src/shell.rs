@@ -792,7 +792,14 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|lib| format_filter::formats_present(&lib.entries))
         .unwrap_or_default();
-    if formats.len() < 2 {
+    // ⚠⚠ The SAME predicate the filtering uses, not a second copy of the rule. When these were two
+    // independent conditions, hiding `jpg` and opening a JPEG-only folder drew no chips AND hid
+    // every photo — an empty grid with no way back, reported in use 2026-09-17.
+    if app
+        .library
+        .as_ref()
+        .is_some_and(|lib| format_filter::folder_overrides_hidden(&lib.entries))
+    {
         return;
     }
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here

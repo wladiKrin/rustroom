@@ -34,6 +34,11 @@ impl Library {
     /// selection holding photos that are not on screen, which a sync or a paste would then
     /// write to.
     pub(crate) fn refilter(&mut self, filter: &rustroom_app::library_filter::LibraryFilter) {
+        // ⚠⚠ Applied HERE rather than at the callers: `refilter` has 12 call sites across `shell`,
+        // `library`, `library_state`, `sources`, `multi::compare` and `test_app`, and the override
+        // has to hold at every one. One choke point cannot be bypassed; twelve are twelve chances
+        // to forget — the same argument the comment below makes for `visible` being one list.
+        let filter = filter.effective_for(&self.entries);
         // ⚠ One derived `visible` list, composed from one filter — **not** a second filtering
         // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
         // bug, and `visible` staying the single derived list is the mitigation that has held.

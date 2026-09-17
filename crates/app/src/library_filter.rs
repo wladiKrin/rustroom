@@ -206,6 +206,28 @@ impl LibraryFilter {
             || !self.lenses.is_empty()
     }
 
+    /// This filter as it actually applies to `entries`.
+    ///
+    /// ⚠⚠ **A folder with fewer than two formats shows them all** — the stored hidden-set is
+    /// overridden for that folder and **never edited**, so returning to a mixed folder uses the
+    /// remembered setting unchanged. Editing it instead would silently unhide the format
+    /// everywhere, which is not what "this folder has only JPEGs" means.
+    ///
+    /// ⚠ Reported in use on 2026-09-17: hiding `jpg` and opening a JPEG-only folder showed an
+    /// empty grid **and no chip to undo it**, because `format_bullets` draws none for a
+    /// single-format folder. The predicate now lives once, in
+    /// [`crate::format_filter::folder_overrides_hidden`], and both sides read it.
+    ///
+    /// ⚠ Every other half of the filter is left alone. A one-format folder can still be filtered
+    /// to empty by rating or flag, and that is recoverable because those controls are always drawn.
+    pub fn effective_for(&self, entries: &[PhotoEntry]) -> Self {
+        let mut out = self.clone();
+        if crate::format_filter::folder_overrides_hidden(entries) {
+            out.format = FormatFilter::default();
+        }
+        out
+    }
+
     /// Clear the marks and the text, leaving the format filter alone.
     ///
     /// ⚠ The format filter answers a different question and is reset by *loading a source*. A
@@ -241,6 +263,50 @@ mod tests {
             flag,
             label,
         }
+    }
+
+    #[test]
+    fn a_one_format_folder_shows_everything_it_holds() {
+        // The reported trap: hide jpg, then open a folder of nothing but jpg.
+        let mut f = LibraryFilter::default();
+        f.format.toggle("jpg");
+        let only_jpg = [entry("a.jpg", 0, None), entry("b.JPG", 0, None)];
+        let eff = f.effective_for(&only_jpg);
+        for e in &only_jpg {
+            assert!(
+                eff.matches(e, Marks::default(), &Capture::default()),
+                "a one-format folder must show its one format"
+            );
+        }
+        // ⚠ And the stored set is untouched, so the setting survives the visit.
+        assert!(
+            f.format.is_hidden("jpg"),
+            "the override must not EDIT the stored set"
+        );
+    }
+
+    #[test]
+    fn a_mixed_folder_still_honours_the_hidden_set() {
+        let mut f = LibraryFilter::default();
+        f.format.toggle("jpg");
+        let mixed = [entry("a.jpg", 0, None), entry("b.raf", 0, None)];
+        let eff = f.effective_for(&mixed);
+        assert!(!eff.matches(&mixed[0], Marks::default(), &Capture::default()));
+        assert!(eff.matches(&mixed[1], Marks::default(), &Capture::default()));
+    }
+
+    #[test]
+    fn an_overridden_filter_reports_itself_inactive() {
+        // ⚠ `is_active` has no production caller today; this pins the semantics for its first one.
+        // A filter hiding nothing must not claim to be on — the inverse of the invisible state the
+        // crop aspect lock was fixed for.
+        let mut f = LibraryFilter::default();
+        f.format.toggle("jpg");
+        assert!(f.is_active(), "the stored filter is on");
+        assert!(!f.effective_for(&[entry("a.jpg", 0, None)]).is_active());
+        assert!(f
+            .effective_for(&[entry("a.jpg", 0, None), entry("b.raf", 0, None)])
+            .is_active());
     }
 
     #[test]
