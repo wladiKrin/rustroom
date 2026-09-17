@@ -509,14 +509,10 @@ impl GpuMaskStage {
             // rung 3200, ~90% of the upload, measured 2026-09-16. The shifts it spelled out are
             // exactly little-endian order, so `from_le_bytes` over 4-byte chunks is the same
             // number written the short way, and it vectorises.
-            let mut it = m.data.chunks_exact(4);
-            packed.extend(
-                it.by_ref()
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
-            );
+            let (whole, rest) = m.data.as_chunks::<4>();
+            packed.extend(whole.iter().map(|c| u32::from_le_bytes(*c)));
             // ⚠ The trailing partial word is PADDED, never dropped: `words_for` rounds up with
             // `div_ceil(4)` and the shader reads whole words.
-            let rest = it.remainder();
             if !rest.is_empty() {
                 let mut last = [0u8; 4];
                 last[..rest.len()].copy_from_slice(rest);

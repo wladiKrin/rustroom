@@ -436,11 +436,13 @@ impl GpuBrushRaster {
         // into a `Vec<u32>` — **27.35 MB at rung 3200** — whose only use was the narrowing a few
         // lines below. The mapped range is borrowed until `unmap`, so the narrowing has to happen
         // here rather than after it, which is the reason the old code copied at all.
-        let data: Vec<u8> = slice
-            .get_mapped_range()
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]).min(255) as u8)
+        let mapped = slice.get_mapped_range();
+        let (cov_words, _) = mapped.as_chunks::<4>();
+        let data: Vec<u8> = cov_words
+            .iter()
+            .map(|c| u32::from_le_bytes(*c).min(255) as u8)
             .collect();
+        drop(mapped);
         let counts: Vec<u32> = bytemuck::cast_slice(&cslice.get_mapped_range()).to_vec();
         readback.unmap();
         counter_read.unmap();
