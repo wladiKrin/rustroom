@@ -501,12 +501,26 @@ impl GpuMaskStage {
     /// `&[Option<..>]` shaped by the mask's components, and the packing itself has nothing to do
     /// with that shape.
     fn pack_maps(maps: &[std::sync::Arc<pipeline::brush::CoverageMap>]) -> Vec<u32> {
-        let mut packed: Vec<u32> = Vec::new();
+        let total: usize = maps.iter().map(|m| words_for(m) as usize).sum();
+        let mut packed: Vec<u32> = Vec::with_capacity(total);
         for m in maps {
-            let start = packed.len();
-            packed.resize(start + words_for(m) as usize, 0);
-            for (k, v) in m.data.iter().enumerate() {
-                packed[start + (k >> 2)] |= (*v as u32) << ((k & 3) * 8);
+            // ⚠⚠ **A chunked scan, not a byte-by-byte OR.** The old loop did a bounds-checked
+            // read-modify-write of `packed[k >> 2]` for every sample — 10.6-13.8 ms per encode at
+            // rung 3200, ~90% of the upload, measured 2026-09-16. The shifts it spelled out are
+            // exactly little-endian order, so `from_le_bytes` over 4-byte chunks is the same
+            // number written the short way, and it vectorises.
+            let mut it = m.data.chunks_exact(4);
+            packed.extend(
+                it.by_ref()
+                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+            );
+            // ⚠ The trailing partial word is PADDED, never dropped: `words_for` rounds up with
+            // `div_ceil(4)` and the shader reads whole words.
+            let rest = it.remainder();
+            if !rest.is_empty() {
+                let mut last = [0u8; 4];
+                last[..rest.len()].copy_from_slice(rest);
+                packed.push(u32::from_le_bytes(last));
             }
         }
         packed
