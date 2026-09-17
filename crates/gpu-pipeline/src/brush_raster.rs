@@ -432,7 +432,15 @@ impl GpuBrushRaster {
 
         let d_gpu = t_submit.elapsed();
         let t_read = std::time::Instant::now();
-        let words: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        // ⚠⚠ Narrowed straight from the mapped range. This used to `to_vec()` the whole readback
+        // into a `Vec<u32>` — **27.35 MB at rung 3200** — whose only use was the narrowing a few
+        // lines below. The mapped range is borrowed until `unmap`, so the narrowing has to happen
+        // here rather than after it, which is the reason the old code copied at all.
+        let data: Vec<u8> = slice
+            .get_mapped_range()
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]).min(255) as u8)
+            .collect();
         let counts: Vec<u32> = bytemuck::cast_slice(&cslice.get_mapped_range()).to_vec();
         readback.unmap();
         counter_read.unmap();
@@ -454,9 +462,11 @@ impl GpuBrushRaster {
             ctx.shared_plane().deposit(img.width(), img.height(), img);
         }
 
-        // ⚠ Narrowed here rather than in the shader, because packing four samples into one word
-        // would mean four threads read-modify-writing the same address — a race. See the shader.
-        let data: Vec<u8> = words.iter().map(|&v| v.min(255) as u8).collect();
+        // ⚠ Coverage crosses the wire as one `u32` per sample, and that is DELIBERATE: packing
+        // four samples into one word in the shader would mean four threads read-modify-writing the
+        // same address — a race. See the shader. Narrowing it on the CPU is the cost of that
+        // choice; ⚠⚠ it is a considered trade rather than an oversight, and shrinking the wire
+        // needs a restructured dispatch (one thread per four samples) or a second pack pass.
         let d_read = t_read.elapsed();
 
         // ⚠⚠ Kept, the `RUSTROOM_DEBUG_MASK` / `RUSTROOM_DEBUG_BRUSH` precedent. The split it
