@@ -152,7 +152,9 @@ mod tests {
 
     #[test]
     fn a_folder_with_one_format_overrides_the_hidden_set() {
-        assert!(folder_overrides_hidden(&entries(&["a.jpg", "b.JPG", "c.jpg"])));
+        assert!(folder_overrides_hidden(&entries(&[
+            "a.jpg", "b.JPG", "c.jpg"
+        ])));
         assert!(folder_overrides_hidden(&entries(&[])));
         // ⚠ Extension-less files contribute no format, so a folder of them has nothing to choose.
         assert!(folder_overrides_hidden(&entries(&["notes", "readme"])));
