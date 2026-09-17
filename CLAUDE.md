@@ -145,7 +145,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-09-17)
 
 **2536 tests, 74 goldens.** The repo is **`main` alone** — no other branches, no worktrees, clean
-tree. ⚠ `main` is **15 commits ahead of `origin/main`** — **not pushed; the user pushes.**
+tree. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the user pushes.** (No count here: it went stale within one merge of being written. Run the command at the top of this section.)
 
 ✅ **M8.12 — the region-scoped locals actually scope — merged and CONFIRMED BY USE**, including the
 pan at 1:1 that was the only check able to see its failure mode.
