@@ -100,9 +100,13 @@ fn main() {
             tail,
             &e,
             scale,
-            None,
-            ProfileRendering::default(),
-            spec,
+            gpu_pipeline::TailFacts {
+                region: None,
+                profile: ProfileRendering::default(),
+                spec,
+                // ⚠ This probe builds no prefix at all — it asks about a MASK's producer.
+                prefix_offered: false,
+            },
             ctx,
         );
         let names: Vec<&str> = after.stage_names();
@@ -140,9 +144,12 @@ fn main() {
                     tail,
                     &e,
                     scale,
-                    None,
-                    ProfileRendering::default(),
-                    spec,
+                    gpu_pipeline::TailFacts {
+                        region: None,
+                        profile: ProfileRendering::default(),
+                        spec,
+                        prefix_offered: false,
+                    },
                     ctx,
                 );
                 let t = std::time::Instant::now();

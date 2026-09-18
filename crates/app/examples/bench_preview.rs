@@ -1,6 +1,7 @@
 //! Times the preview render path (the same `render_once` the GUI worker calls) for a
 //! handful of edit sets. Run: `cargo run --release -p app --example bench_preview <raw>`.
 use edit_model::{Edits, NoiseReduction};
+use pipeline::PipelineStage;
 use rustroom_app::render_engine::render_once;
 use std::time::Instant;
 
@@ -492,9 +493,13 @@ fn main() {
                     build_pipeline_split_in_region(&heavy, sc, None).1,
                     &heavy,
                     sc,
-                    None,
-                    pipeline::ProfileRendering::default(),
-                    pipeline::RenderSpec::default(),
+                    gpu_pipeline::TailFacts {
+                        region: None,
+                        profile: pipeline::ProfileRendering::default(),
+                        spec: pipeline::RenderSpec::default(),
+                        // ⚠ The bench applies its prefix stage by hand, without offering.
+                        prefix_offered: false,
+                    },
                     ctx,
                 );
                 let t2 = gpu_pipeline::rejoin(t2, chain);
@@ -525,9 +530,13 @@ fn main() {
                     build_pipeline_split_in_region(&heavy, sc, None).1,
                     &heavy,
                     sc,
-                    None,
-                    pipeline::ProfileRendering::default(),
-                    pipeline::RenderSpec::default(),
+                    gpu_pipeline::TailFacts {
+                        region: None,
+                        profile: pipeline::ProfileRendering::default(),
+                        spec: pipeline::RenderSpec::default(),
+                        // ⚠ The bench applies its prefix stage by hand, without offering.
+                        prefix_offered: false,
+                    },
                     ctx,
                 );
                 let t2 = gpu_pipeline::rejoin(t2, chain);

@@ -69,6 +69,22 @@ enum Download {
     Rgba8,
 }
 
+/// Which hand-off slot a chain means.
+///
+/// ⚠⚠ **Two slots, and they must never be merged.** `Mask` is the plane a mask's gate uploaded,
+/// offered to that mask's first sub-stage; `Prefix` is one GPU prefix step's output, offered to
+/// the next step or to the tail's first chain. Merging them would let the outer tail's chain take
+/// a mask's leftover, which is exactly what
+/// `the_outer_tails_own_chain_never_takes_a_masks_leftover_plane` was written — and sabotaged — to
+/// prevent. See `GpuContext::prefix_plane`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    /// A mask gate's base plane, living for one `MaskStage::apply`.
+    Mask,
+    /// A GPU prefix step's output, living until a CPU step clears it.
+    Prefix,
+}
+
 /// A run of GPU stages sharing one upload and one download.
 pub struct GpuChain {
     stages: Vec<Box<dyn GpuStage>>,
@@ -92,8 +108,8 @@ pub struct GpuChain {
     /// whatever index 0 produced, and taking the deposit there would render a picture that is
     /// plausible and wrong. Opt-in means the rule is decided where the position is known — at the
     /// push — and nowhere else.
-    take_shared: bool,
-    offer_output: bool,
+    take_shared: Option<Slot>,
+    offer_output: Option<Slot>,
 }
 
 impl GpuChain {
@@ -103,8 +119,8 @@ impl GpuChain {
             ctx,
             uploads: AtomicUsize::new(0),
             downloads: AtomicUsize::new(0),
-            take_shared: false,
-            offer_output: false,
+            take_shared: None,
+            offer_output: None,
         }
     }
 
@@ -117,16 +133,16 @@ impl GpuChain {
     /// chain in the tail, most of which nobody takes.
     ///
     /// ⚠ Called by `accelerate::walk` and by nothing else, like [`Self::allow_shared_input`].
-    pub fn offer_output(&mut self) {
-        self.offer_output = true;
+    pub fn offer_output(&mut self, slot: Slot) {
+        self.offer_output = Some(slot);
     }
 
     /// Allow this chain to take a base plane deposited by a mask's gate, instead of uploading
     /// its own input.
     ///
     /// ⚠ Called by `accelerate::walk` and by nothing else — see [`Self::take_shared`].
-    pub fn allow_shared_input(&mut self) {
-        self.take_shared = true;
+    pub fn allow_shared_input(&mut self, slot: Slot) {
+        self.take_shared = Some(slot);
     }
 
     /// Whether `mark_shared` let this chain take a deposited plane.
@@ -138,7 +154,21 @@ impl GpuChain {
     /// through a render, which is **stronger** than what it replaces: it needs no deposit, no GPU
     /// run and no inference from a pixel.
     pub fn shares_input(&self) -> bool {
+        self.take_shared.is_some()
+    }
+
+    /// Which slot this chain would take from, if any.
+    ///
+    /// ⚠ Separate from [`Self::shares_input`] so a test can pin **which** slot without a render —
+    /// cross-wiring the two is the sabotage the slot guards are written against, and it changes no
+    /// pixel in a fixture where only one slot is ever occupied.
+    pub fn takes_from(&self) -> Option<Slot> {
         self.take_shared
+    }
+
+    /// Which slot this chain deposits into, if any.
+    pub fn offers_to(&self) -> Option<Slot> {
+        self.offer_output
     }
 
     /// Transfers **this chain** has performed, as `(uploads, downloads)`.
@@ -217,11 +247,9 @@ impl GpuChain {
         // host memcpy and a device copy of the whole frame: ~2.1 ms and ~6-10 ms respectively at
         // rung 3200. `take` refuses anything that is not this thread's deposit at these exact
         // dimensions, and a refusal costs only the lock.
-        let shared = if self.take_shared {
-            ctx.shared_plane().take(image.width(), image.height())
-        } else {
-            None
-        };
+        let shared = self
+            .take_shared
+            .and_then(|slot| ctx.plane(slot).take(image.width(), image.height()));
         let shared_taken = shared.is_some();
         let img = match shared {
             Some(img) => img,
@@ -247,6 +275,13 @@ impl GpuChain {
         // staging buffer to ask the pool for. The counter moves with it: a chain that shared its
         // input has genuinely uploaded nothing, and `transfer_counts` must say so or the claim
         // this milestone makes is unobservable.
+        // ⚠⚠ **In situ, because the decomposition below prices a SYNTHETIC split.** That harness
+        // gives each phase its own submit, which is not what ships: here the device-side upload
+        // copy, every dispatch and the download copy share one submit, so only the host halves and
+        // the fused GPU half are separable without changing what is measured. The backlog entry
+        // for the prefix->tail seam says in as many words that isolating the download "needs a
+        // `gpu-pipeline` change" — this is that change, and it is a print, not a path.
+        let t_memcpy = std::time::Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
         let staging = if shared_taken {
             None
@@ -307,6 +342,8 @@ impl GpuChain {
         // 6.33 ms of copy+map plus a 6.87 ms `to_vec`, against 2.59 + 2.19 for RGBA8 — so **8.4 ms**,
         // which is a **2.8x** saving rather than the 4x the size ratio suggests, because a download
         // carries a **1.28 ms fixed cost** that no size reduction touches.
+        let d_memcpy = t_memcpy.elapsed();
+        let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
             Some(p) => (p, (image.width() * image.height() * 4) as u64),
             None => (&img.buffer, bytes),
@@ -330,6 +367,8 @@ impl GpuChain {
             timeout: None,
         });
         rx.recv().ok()?.ok()?;
+        let d_submit = t_submit.elapsed();
+        let t_read = std::time::Instant::now();
         // ⚠⚠ **Deposited HERE and nowhere earlier**, after `poll(Wait)` has confirmed the
         // submission finished — the GPU writes this buffer during the submit, so offering it any
         // sooner would hand a consumer pixels that are still being written. The same rule that
@@ -341,13 +380,31 @@ impl GpuChain {
         //
         // ⚠ A deposit nobody takes is cleared by the enclosing mask's `end_mask`, which stops it
         // outliving its frame.
-        if self.offer_output {
-            ctx.shared_plane()
-                .deposit(image.width(), image.height(), img);
+        if let Some(slot) = self.offer_output {
+            ctx.plane(slot).deposit(image.width(), image.height(), img);
         }
         let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);
+        if std::env::var("RUSTROOM_DEBUG_XFER").is_ok() {
+            eprintln!(
+                "CHAIN {:>26} {}x{} in={:.1}MB out={:.1}MB took={} memcpy={:.2} submit={:.2} \
+                 tovec={:.2}",
+                self.stages
+                    .iter()
+                    .map(|s| s.name())
+                    .collect::<Vec<_>>()
+                    .join("+"),
+                image.width(),
+                image.height(),
+                bytes as f64 / 1.0e6,
+                out_bytes as f64 / 1.0e6,
+                shared_taken,
+                d_memcpy.as_secs_f64() * 1e3,
+                d_submit.as_secs_f64() * 1e3,
+                t_read.elapsed().as_secs_f64() * 1e3,
+            );
+        }
         // ⚠ Returned only **here**, after `poll(Wait)` has confirmed the submission finished —
         // the GPU reads this buffer during the submit, so handing it back any earlier would let
         // the next render map a buffer still being read. On the `?` paths above it is simply
