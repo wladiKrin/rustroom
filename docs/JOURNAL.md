@@ -120,6 +120,93 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### M8.13 — a GPU-resident base for `GpuBrushRaster` (2026-09-18). ✅ CONFIRMED BY USE
+
+**What it does.** A `GpuChain` sitting immediately before a mask downloads its output so the CPU
+`MaskStage` can hand the auto-mask gate a `BaseRef`. Those bytes are still on the device.
+`GpuChain::offer_output` now deposits that buffer into the `SharedPlane`, and `GpuBrushRaster`
+takes it instead of memcpying the same plane back up.
+
+**Measured on `DSCF6509.RAF` (3123×2085), the REALISTIC edit set, warm frames 2–5.** The baseline
+is the same build with the take forced to miss, so the only difference is the hand-off.
+
+| warm frames 2–5 | take forced to miss | taking |
+|---|---|---|
+| `stage=` (host memcpy) | 2.23–2.86 ms | **0.00** |
+| `gpu=` | 10.02–19.09 ms | **5.14–6.77 ms** |
+| whole frame | 88.1–109.7 ms | **78.2–80.7 ms** |
+
+⚠⚠ **The win is about twice what the plan predicted, and for a reason the plan did not name.** The
+spec priced the host memcpy (~2.2 ms). Deleting the staging buffer also deletes the
+`copy_buffer_to_buffer` that pushed those **78.1 MB** across the device, which is most of the
+`gpu=` column's collapse. **Do not requote the 2.2 ms as the win** — it is one of two halves.
+
+⚠ Frame-level saving ≈ **10–29 ms of ~90**, i.e. **1.13–1.36×**. Quote the band; the baseline's
+`gpu=` column is genuinely noisy (10.0 to 19.1 across four frames of the same work).
+
+#### ⚠⚠ The plan's hand-off could never have fired, and only a test found it
+
+`CoverageRasterizer::begin_mask` cleared the shared slot at the **top** of every mask's `apply` —
+which is to say *after* the preceding chain had already deposited. Built exactly as planned, the
+take would have missed on every frame forever: no wrong pixels, no failing test, a mechanism that
+is green, fully documented and dead. **That is the W5 failure mode**, and the thing that caught it
+was a pre-existing wedge (`the_outer_tails_own_chain_never_takes_a_masks_leftover_plane`) failing
+on a *deposit count*, not any reasoning about the design.
+
+The hook is now `end_mask`, called from an RAII guard so every early return **and a panic** clear
+the slot. That is also **strictly tighter** than the old placement: a deposit can no longer outlive
+the apply that made it, where a top-clear let one sit in the slot across the whole gap between two
+masks.
+
+**Both placements are pinned, and neither sabotage alone does it:**
+
+| sabotage | result |
+|---|---|
+| `end_mask` body emptied | **3** tests fail; the sibling reports **243 levels** |
+| the clear moved back to the top | **2** tests fail — pixels unchanged, mechanism dead |
+
+#### The band was measured at both ends, and the first one was borrowed wrongly
+
+`a_gate_that_takes_the_chains_plane_still_renders_the_cpus_picture` first asserted `< 0.02` levels,
+borrowed from a **one-stage** chain's test, and failed at 0.088. Forcing the take to miss gives
+`worst_levels: 0.088246465, differing: 2207405` — **the same figures to the last digit.** The 0.088
+is accumulated hsl-chain-and-mask divergence this file already lives with, and the identity across
+the toggle is itself the evidence that the taken plane is the uploaded plane. Band set to 0.1 with
+the measurement written beside it.
+
+#### The second wedge's first fixture was wrong in a way the journal had already recorded
+
+To leave a chain's offer unclaimed the first mask must not take it. An `auto_mask: false` brush has
+no gating rows and takes nothing — which looks like the wedge and is not: **M8.11 substitutes such
+a mask for its GPU twin**, so it is folded *into* the preceding chain and the offer is simply made
+to the next mask, whose input it correctly is. Measured shape `["gpu_chain", "mask", "gpu_chain"]`,
+one take, and the take was right. This is the same trap that killed `plain_brush_mask`. Rebuilt
+with a **gating** brush (which the twin permanently declines) whose box is **under
+`MIN_GPU_BOX_PX`**, so `rasterize` returns at the floor before it can take.
+
+#### A reporting fix that came out of the measurement
+
+`base_mb` is derived from `staging`, so once a base could be *taken* it printed `0.0` for both "the
+memcpy is gone" and "there was never a gate at all". The debug line now reads
+`base=taken/0.0MB` or `base=staged/78.1MB`. **A measurement that cannot tell those two apart is how
+this project has mispriced three things.**
+
+#### Where the producer fires, measured before anything was built
+
+| globals | tail after `accelerate` | offer |
+|---|---|---|
+| none | `["mask"]` | ⛔ nothing to offer |
+| exposure + contrast | `["exposure","contrast","mask"]` | ⛔ `worth_a_chain` refuses a run that cheap |
+| the catalogue's shape | `["gpu_chain","mask"]` | ✅ fires |
+
+⚠ So this milestone helps a **global drag over a masked photograph with a real edit set**, and
+nothing else. A light edit set builds no chain at all.
+
+**Gates:** FMT=0, CLIPPY=0, TEST=0 — each exit code read from its own command — **2544 tests, 74
+goldens.**
+
+---
+
 ### The dehaze airlight becomes invariant to geometry (2026-09-17)
 
 Three separate places estimated it from the frame in hand. Straightening moves the frame, so the

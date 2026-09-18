@@ -709,6 +709,14 @@ met with a measurement rather than a search.
 
 ### ⚠⚠ A GPU buffer resident across the prefix→tail seam (recorded 2026-09-13, at M8.3o's merge — MEASURED, not estimated)
 
+> **✅ CORROBORATED IN AN ADJACENT PLACE, M8.13 (2026-09-18).** Not this seam, but the same class of
+> win one stage over: a `GpuChain` before a mask now hands its output buffer straight to the gate
+> instead of the gate re-uploading the downloaded plane. Measured against the same build with the
+> take forced to miss — host memcpy **2.23–2.86 ms → 0.00**, and the `gpu=` column **10.0–19.1 →
+> 5.1–6.8 ms**, because the 78.1 MB device-side copy goes with it. ⚠⚠ **The device half was about
+> as large as the host half and the spec had not priced it** — worth remembering when this entry
+> gets scoped, since it prices a round trip the same way.
+>
 > **✅ RE-MEASURED 2026-09-16 through the real engine** (`RenderEngine` + `RUSTROOM_DEBUG_RENDER`,
 > `crates/app/examples/bench_nr_checkpoint.rs`), now that both NR and dehaze are ported — the
 > condition M8.3o named. **The ~26 ms below is CONFIRMED**: an independent zero-work round trip at

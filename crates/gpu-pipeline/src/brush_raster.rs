@@ -244,6 +244,11 @@ impl GpuBrushRaster {
         // ⚠⚠ **Carried beside the binding rather than produced by the match, because the no-gate
         // arm has no image to produce** — and a `GpuImage` at a dummy size would be a lie the
         // dimension check in `SharedPlane::take` is there to catch.
+        // ⚠⚠ **Reported, because `base_mb` alone became ambiguous the moment a base could be
+        // TAKEN.** It is derived from `staging`, so a taken base and no base at all both print
+        // `base_mb=0.0` — and a measurement that cannot tell "the memcpy is gone" from "there was
+        // never a gate" is exactly how this project has mispriced three things.
+        let mut base_src = "none";
         let mut resident: Option<crate::GpuImage> = None;
         let (base_buf, img_w, img_h, bx0, by0, has_base) = match (base, plan.gating_rows) {
             (Some(b), Some(_)) => {
@@ -261,15 +266,40 @@ impl GpuBrushRaster {
                 if plane.len() != b.w.checked_mul(b.h)?.checked_mul(3)? {
                     return None;
                 }
-                let img = crate::GpuImage::new(ctx, b.w, b.h)?;
-                let t_stage = std::time::Instant::now();
-                let st = ctx.cache.take_staging(device, bytes)?;
-                st.slice(..bytes)
-                    .get_mapped_range_mut()
-                    .copy_from_slice(bytemuck::cast_slice(plane));
-                st.unmap();
-                d_stage = t_stage.elapsed();
-                staging = Some((st, bytes));
+                // ⚠⚠ **Take a resident plane before staging one.** When a `GpuChain` ran
+                // immediately before this mask, the bytes it downloaded to make `plane` are still
+                // on the device — `GpuChain::offer_output` deposits that buffer. Taking it deletes
+                // the host memcpy below, measured at **2.04-2.23 ms** for a 78 MB frame and paid on
+                // **every frame of a global drag**, because such a drag invalidates the coverage
+                // cache's key and every frame is a miss.
+                //
+                // ⚠ A miss here is the ORDINARY case, not a failure: the mask may be the tail's
+                // first stage, or `worth_a_chain` may have refused the run — measured, a light edit
+                // set of exposure and contrast builds no chain at all. Staging then is correct.
+                //
+                // ⚠⚠ `take` matches on DIMENSIONS and on the depositing THREAD, and that is the
+                // whole safety argument: a plane from another frame at another size cannot be
+                // taken, and `end_mask` clears one that nobody took. A plane taken by the wrong
+                // frame renders a **plausible photograph, not an error**.
+                let img = match ctx.shared_plane().take(b.w, b.h) {
+                    Some(resident_base) => {
+                        base_src = "taken";
+                        resident_base
+                    }
+                    None => {
+                        base_src = "staged";
+                        let img = crate::GpuImage::new(ctx, b.w, b.h)?;
+                        let t_stage = std::time::Instant::now();
+                        let st = ctx.cache.take_staging(device, bytes)?;
+                        st.slice(..bytes)
+                            .get_mapped_range_mut()
+                            .copy_from_slice(bytemuck::cast_slice(plane));
+                        st.unmap();
+                        d_stage = t_stage.elapsed();
+                        staging = Some((st, bytes));
+                        img
+                    }
+                };
                 let buf = img.buffer.clone();
                 resident = Some(img);
                 (buf, b.w as u32, b.h as u32, b.x0 as u32, b.y0 as u32, 1u32)
@@ -458,7 +488,7 @@ impl GpuBrushRaster {
         // to the pool one line above. The GPU reads this buffer during the submit, so handing it
         // on any earlier would let the sub-stage chain mutate a plane still being read.
         //
-        // ⚠ Whoever does not take it simply drops it at the next `begin_mask`; nothing downstream
+        // ⚠ Whoever does not take it simply drops it at this mask's `end_mask`; nothing downstream
         // is obliged to want it, which is what keeps this an offer rather than a contract.
         if let Some(img) = resident {
             ctx.shared_plane().deposit(img.width(), img.height(), img);
@@ -477,7 +507,8 @@ impl GpuBrushRaster {
         // project has been wrong about exactly that kind of subtraction three times.
         if std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
             eprintln!(
-                "BRUSHGPU box={}x{} dabs={} base_mb={:.1} stage={:.2} gpu={:.2} read={:.2}",
+                "BRUSHGPU box={}x{} dabs={} base={base_src}/{:.1}MB stage={:.2} gpu={:.2} \
+                 read={:.2}",
                 w,
                 h,
                 dabs.len(),
@@ -543,9 +574,15 @@ impl pipeline::CoverageRasterizer for GpuBrushRaster {
     /// ⚠⚠ **Guard 2 of the shared upload, and without it a cached-coverage frame renders the
     /// PREVIOUS frame's pixels.** Such a frame rasterises nothing, so it deposits nothing — and a
     /// sub-stage chain finding the last apply's plane still resident would take it, producing a
-    /// plausible photograph rather than an error. Clearing at the top of every apply bounds a
+    /// plausible photograph rather than an error. Clearing as every apply *ends* bounds a
     /// deposit's life to the mask that made it.
-    fn begin_mask(&self) {
+    ///
+    /// ⚠⚠ It also bounds the **incoming** hand-off, which is the one the end-placement exists for:
+    /// a preceding `GpuChain` deposits its output for this gate to take, and a gate that declines
+    /// (a box under the floor, or no gating rows at all) must not leave that plane for the *next*
+    /// mask — whose base is this mask's output, not its input. Same dimensions, same thread, a
+    /// plausible photograph.
+    fn end_mask(&self) {
         self.ctx.shared_plane().clear();
     }
 
