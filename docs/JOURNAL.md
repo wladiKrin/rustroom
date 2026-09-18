@@ -120,6 +120,58 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### `batch_export.rs` split into a directory module (2026-09-18)
+
+**2,335 lines → six files**, the largest 1,127. A **pure move** on `prefix_cache.rs`'s precedent:
+**2547 tests before and after**, no golden moved, not one `⚠` comment reworded.
+
+| file | lines | holds |
+|---|---|---|
+| `mod.rs` | 25 | docs + re-exports |
+| `fixtures.rs` | 127 | the shared test helpers |
+| `destination.rs` | 183 | `Collision`, `Decision`, `dest_for`/`dest_named`, readiness |
+| `options.rs` | 296 | `ExportJob`, `ExportOptions`, `Delivery`, `banding_warning` |
+| `render.rs` | 668 | `export_one`, `file_metadata`, `scale_for`, `ExportSource`/`Render` |
+| `worker.rs` | 1,127 | `ExportWorker`, `plan`, `run` |
+
+#### ⚠⚠ It was verified to be a move, not asserted to be one
+
+Comparing every meaningful line (blank lines, module headers and `use`/`mod` lines excluded) against
+`HEAD:batch_export.rs` leaves **only**: 10 `pub(crate)` visibility additions — the items that now
+cross a module boundary — four new `#[cfg(test)]` attributes with their closing braces, **one** line
+rustfmt rejoined after the fixtures were de-indented by four, and `mod.rs`'s own comment. **No logic
+line changed.** That check took a few minutes and is the difference between believing it was a move
+and knowing.
+
+#### ⚠⚠ The extraction script ate the last test's closing brace
+
+The first version stripped *every* trailing `}` from the test half, intending to remove the
+`mod tests` brace — and removed the final test's brace with it. **Caught by the compiler**
+(`unclosed delimiter`), not by review. The script now strips only a `}` at **column 0** and asserts
+what it finds at each step. ⚠ The line-count check would **not** have caught this; it only catches a
+dropped or duplicated *test*, and this was a dropped *brace*.
+
+#### What was measured rather than guessed
+
+Which helpers are shared: `opts` had **24** uses across the original test module, `source` **14**,
+`flat` **11**, and `run_export`/`jobs`/`ok_decode` are used by both the render tests and the worker
+tests. Those seven plus `TempDir` went to `fixtures`; every other helper is local to one subject and
+travelled with it.
+
+⚠ The items are **not contiguous by subject** — `ExportEvent`/`ExportReport` sat at lines 208/225
+but belong to `worker`, while `ExportSource`/`ExportRender` sat at 548/569 and belong to `render`.
+Slicing by line range would have mis-assigned them silently; the partition is keyed by item **name**.
+
+#### Accepted, and said out loud
+
+⚠ **`worker.rs` is 1,127 lines**, over the project's ~600 marker: ~190 of code and ~940 of its own
+tests. Splitting a worker's tests away from the worker to reach a number would be worse than the
+number, and the module header says so rather than leaving a future reader to wonder.
+
+**Gates:** FMT=0, CLIPPY=0, TEST=0, each from its own command — **2547 tests, 74 goldens.**
+
+---
+
 ### M8.14 — a GPU buffer resident across the prefix seams (2026-09-18). ✅ CONFIRMED BY USE
 
 **What it does.** Consecutive GPU-accelerated prefix steps, and the last one and the tail's first

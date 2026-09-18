@@ -215,7 +215,8 @@ recorded finding:
 3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Needs a shader restructure: the shader writes one `u32` per
    sample because packing four into a word would race. **A considered trade, not an oversight.**
-4. **`crates/app/src/batch_export.rs` is 2,298 lines**, well past this file's own ~600 marker.
+4. ✅ ~~**`crates/app/src/batch_export.rs` is 2,298 lines**~~ — **SPLIT 2026-09-18** into a directory
+   module of six files, largest 1,127. A pure move, 2547 tests unchanged.
 
 ⚠ The **GPU-side coverage cache** is re-priced **downward**: transfers were 27–58% of the rasterise
 a hit avoids and are now ~10–23%, because the repack fix landed first.
@@ -286,7 +287,9 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
   question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run settles.
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
 - ⚠ **M7.3b is DEFERRED, not done.**
-- ⚠ Two oversized files grew again: `crates/app/src/batch_export.rs` (**2,298**, largest in the crate) and `crates/lens-profile/src/lib.rs` (949).
+- ⚠ `crates/lens-profile/src/lib.rs` is **949** lines. (`batch_export.rs` was split 2026-09-18;
+  its `worker.rs` is **1,127**, deliberately — ~190 of code and ~940 of its own tests, and the
+  module header says so.)
 
 ### The open question M8.11 did not settle
 
