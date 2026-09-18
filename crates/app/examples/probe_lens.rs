@@ -559,6 +559,7 @@ fn main() {
                         lens: lens.clone(),
                         curve: None,
                         baseline_ev: None,
+                        scene_referred: true,
                     },
                     &edits,
                     &dest,

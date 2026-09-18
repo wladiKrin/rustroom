@@ -250,6 +250,8 @@ pub(crate) fn decode_for_export(
                 image: d.image,
                 curve,
                 baseline_ev,
+                // ⚠ A RAW decode is scene-referred by construction — `DecodeOptions::linear_scene`.
+                scene_referred: true,
             }
         })
         .map_err(|e| e.to_string())
@@ -266,6 +268,10 @@ pub(crate) fn decode_for_export(
                 // produced it, and applying ours would render it twice.
                 curve: None,
                 baseline_ev: None,
+                // ⚠⚠ **False, and this is the whole point of the flag.** This file has already
+                // been rendered; `export_one` strips the camera rendering for it exactly as
+                // `render_cached` does, so the two paths agree.
+                scene_referred: false,
             })
             .map_err(|e| e.to_string())
     }

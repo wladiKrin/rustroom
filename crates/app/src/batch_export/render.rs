@@ -114,6 +114,24 @@ pub fn export_one(
     // in one slot. `export_one` does no file I/O of its own.
     look: Option<&std::sync::Arc<pipeline::lut::Cube>>,
 ) -> Result<(), String> {
+    // ⚠⚠ **The same strip `render_cached`'s worker does, and for the same reason**: a JPEG, a PNG
+    // or a TIFF has been through whatever produced it, so applying our rendering on top renders
+    // the photograph twice. Done here rather than at the call sites so no caller can forget —
+    // which is exactly the sentence `render_cached` uses, and exactly what went wrong when only
+    // one of the two paths had it.
+    //
+    // ⚠ `rendering: None` is **undecided**, not decided off: a stripped copy is a render input,
+    // not a choice anyone made, so it must never be written back to a sidecar.
+    let stripped;
+    let edits = if source.scene_referred {
+        edits
+    } else {
+        stripped = Edits {
+            rendering: None,
+            ..edits.clone()
+        };
+        &stripped
+    };
     let source_long = source.image.width().max(source.image.height());
     let scaled = match opts.max_edge {
         Some(max) => source.image.downscale_to(max),
@@ -286,6 +304,16 @@ pub struct ExportSource {
     /// ⚠ `None` is not `Some(0.0)`: a profile that declares no shift has made a statement and one
     /// that says nothing has not — `ProfileRendering::baseline_ev`'s own rule.
     pub baseline_ev: Option<f32>,
+    /// Whether this buffer holds **scene-referred** light — true for a RAW, false for a JPEG, PNG
+    /// or TIFF that has already been rendered by whatever produced it.
+    ///
+    /// ⚠⚠ **Without this an already-rendered photograph is rendered TWICE at export, and it was.**
+    /// `render_cached`'s worker strips `Edits.rendering` for a non-scene-referred buffer — *"a
+    /// source that is already rendered never renders again"* — and the export path had no way to
+    /// know, so the preview stripped it and the export did not. **Measured at 119.32 levels with
+    /// 100% of samples differing**, which is what a preview/export divergence reported by use
+    /// looked like. `examples/probe_jpeg_rendering_gap.rs`.
+    pub scene_referred: bool,
 }
 
 /// What the *render* needs that [`ExportOptions`] deliberately does not carry.
@@ -349,6 +377,7 @@ mod tests {
                 lens: None,
                 curve,
                 baseline_ev,
+                scene_referred: true,
             },
             &e,
             &dest,
@@ -389,6 +418,84 @@ mod tests {
         assert_ne!(
             without, with,
             "a profile's baseline exposure must change the exported pixels"
+        );
+    }
+
+    /// ⚠⚠ **An already-rendered source must not be rendered again at export — FOUND BY USE.**
+    /// `render_cached`'s worker strips `Edits.rendering` for a non-scene-referred buffer; the
+    /// export path could not, because `ExportSource` carried no such flag. So a JPEG with the
+    /// camera rendering switched on looked one way on screen and another in the file — **measured
+    /// at 119.32 levels, 100% of samples**, which is what the divergence reported by use looked
+    /// like.
+    ///
+    /// ⚠ Sabotage: make `export_one` use `edits` unconditionally instead of the stripped copy.
+    #[test]
+    fn an_already_rendered_source_is_not_rendered_again_at_export() {
+        let e = Edits {
+            rendering: Some(edit_model::Rendering::Camera),
+            ..Default::default()
+        };
+        let write = |tag: &str, scene_referred: bool| {
+            let d = TempDir::new(tag);
+            let mut o = opts(&d, None);
+            o.format = ExportFormat::Tiff8;
+            let dest = d.0.join("out.tif");
+            export_one(
+                ExportSource {
+                    image: edged(160, 120),
+                    baseline: color::wb::Illuminant::default(),
+                    lens: None,
+                    curve: None,
+                    baseline_ev: None,
+                    scene_referred,
+                },
+                &e,
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+                None,
+            )
+            .unwrap();
+            std::fs::read(&dest).unwrap()
+        };
+        // ⚠ The fixture check: with a scene-referred source the rendering DOES run, so the two
+        // differ. Without it, "already-rendered exports unrendered" would be vacuously true for a
+        // build that never renders at all.
+        let raw_like = write("strip_raw", true);
+        let already = write("strip_jpeg", false);
+        assert_ne!(
+            raw_like, already,
+            "fixture check: the camera rendering must actually do something here"
+        );
+
+        // And what an already-rendered source exports must equal what it exports with the
+        // rendering simply switched off — which is what the preview shows.
+        let d = TempDir::new("strip_off");
+        let mut o = opts(&d, None);
+        o.format = ExportFormat::Tiff8;
+        let dest = d.0.join("off.tif");
+        export_one(
+            ExportSource {
+                image: edged(160, 120),
+                baseline: color::wb::Illuminant::default(),
+                lens: None,
+                curve: None,
+                baseline_ev: None,
+                scene_referred: false,
+            },
+            &Edits::default(),
+            &dest,
+            &o,
+            CPU,
+            &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            already,
+            std::fs::read(&dest).unwrap(),
+            "an already-rendered source must export exactly as the preview renders it"
         );
     }
 
@@ -441,6 +548,7 @@ mod tests {
                     lens: None,
                     curve: None,
                     baseline_ev: None,
+                    scene_referred: true,
                 },
                 &e,
                 &dest,
@@ -595,6 +703,7 @@ mod tests {
                     lens,
                     curve: None,
                     baseline_ev: None,
+                    scene_referred: true,
                 },
                 &lens_on(),
                 &dest,

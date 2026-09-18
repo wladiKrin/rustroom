@@ -83,6 +83,7 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                 // ⚠ The bench prices wall clock, not colour; a profile would only add a stage.
                 curve: None,
                 baseline_ev: None,
+                scene_referred: true,
             }
         })
         .map_err(|e| e.to_string())
@@ -94,6 +95,7 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                 lens: None,
                 curve: None,
                 baseline_ev: None,
+                scene_referred: true,
             })
             .map_err(|e| e.to_string())
     }

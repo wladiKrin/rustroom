@@ -82,6 +82,7 @@ fn main() {
                 lens: None,
                 curve: None,
                 baseline_ev: None,
+                scene_referred: true,
             },
             &edit_model::Edits::default(),
             &dest,

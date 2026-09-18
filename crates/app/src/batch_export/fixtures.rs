@@ -57,6 +57,7 @@ pub(crate) fn source(image: ImageBuf) -> ExportSource {
         // and a fixture using it would pass with the fix reverted.
         curve: None,
         baseline_ev: None,
+        scene_referred: true,
     }
 }
 
