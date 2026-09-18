@@ -120,7 +120,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
-### M8.14 — a GPU buffer resident across the prefix seams (2026-09-18)
+### M8.14 — a GPU buffer resident across the prefix seams (2026-09-18). ✅ CONFIRMED BY USE
 
 **What it does.** Consecutive GPU-accelerated prefix steps, and the last one and the tail's first
 chain, hand the device buffer over instead of a download-and-re-upload of the whole frame.

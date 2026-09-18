@@ -144,11 +144,10 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-18)
 
-**2547 tests, 74 goldens.** ⚠ On branch **`prefix-tail-resident-seam`**, NOT merged, NOT pushed.
-`main` is also still ahead of `origin/main`.
+**2547 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
+`origin/main`** — **not pushed; the user pushes.**
 
-🟡 **M8.14 — a GPU buffer resident across the prefix seams. Built and measured; NOT YET CONFIRMED BY
-USE.** Consecutive GPU prefix steps, and the last one and the tail's first chain, hand the device
+✅ **M8.14 — a GPU buffer resident across the prefix seams. Merged and CONFIRMED BY USE.** Consecutive GPU prefix steps, and the last one and the tail's first chain, hand the device
 buffer over instead of downloading and re-uploading the whole frame. `DSCF6509.RAF` (312.5 MB
 plane), quiet machine, warm frames:
 
@@ -274,8 +273,8 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
   wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
 - ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE, M8.13 (2026-09-18): 1.13–1.36× on a
   masked global drag, measured against a forced miss. Merged and confirmed by use.**
-- 🟡 ~~**The resident GPU buffer across the prefix→tail seam**~~ — **BUILT AND MEASURED 2026-09-18
-  (M8.14): 43.3–49.4 ms, 5.6–6.3% of a whole-frame render.** ⚠ Not merged, not confirmed by use.
+- ✅ ~~**The resident GPU buffer across the prefix→tail seam**~~ — **DONE, M8.14 (2026-09-18):
+  43.3–49.4 ms, 5.6–6.3% of a whole-frame render. Merged and confirmed by use.**
   ⚠⚠ Its *download* half remains open and is the larger one — declined at 11–13%, see `docs/BACKLOG.md`.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
