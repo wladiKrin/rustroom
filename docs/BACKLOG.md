@@ -425,6 +425,44 @@ above. Only *anchoring* wants the forward map.
 
 ## Performance
 
+### ⛔ CLOSED 2026-09-18 — spot removal on the GPU is NOT worth doing, and this is why (MEASURED)
+
+Item 5 of the agreed GPU-port order, closed **without being built**. `crates/app/examples/probe_spot_cost.rs`
+is committed and re-runnable.
+
+**Measured on a 6.5 Mpx frame.** ⚠ `apply` consumes its input, so a **1.95 ms buffer clone** is
+inside every raw figure; the numbers below have it subtracted, and it is paid by the real chain too.
+
+| radius | 1 spot | 5 | 20 | 100 |
+|---|---|---|---|---|
+| **12 px** (a dust speck) | 0.05 | 0.07 | 0.19 | 0.69 ms |
+| **47 px** (a sensor blob) | 0.07 | 0.39 | 1.67 | 7.95 ms |
+| 156 px (a bird) | 0.92 | 4.38 | 17.10 | 83.30 ms |
+
+`Clone` and `Heal` cost the same to within noise. **Realistic retouching is 0.05–0.4 ms.**
+
+**⚠⚠ TWO THINGS MAKE IT UNLIKE EVERY STAGE PORTED BEFORE IT, AND BOTH CUT THE SAME WAY.**
+
+1. **It is a PREFIX stage.** `PrefixCache` holds its output, so the cost is paid when the **spot
+   list** changes — placing or dragging a spot — not on every frame. Every stage ported so far was
+   paid per frame, which is where their value came from.
+2. **Its work scales with the spots' own disc area, not with the frame** — roughly `2.25·π·r²` per
+   spot. The others touch all 6.5 Mpx; this touches a few thousand pixels.
+
+**⚠⚠ AND THE ROUND TRIP COSTS MORE THAN THE WORK.** `GpuBrushRaster` measures a **~1.6 ms floor
+whatever the size**, of which M8.3g decomposed **1.28 ms as a fixed download** no size reduction
+touches. Against 0.05–0.4 ms of actual work, **a port would very likely make it slower.**
+
+⚠ **Do not re-propose this from the agreed order alone.** The order is structural and spot removal
+is genuinely the last unported stage — but "last" is not "worth doing", and that list was written
+before anyone priced this one.
+
+⚠ **What is NOT measured, and would reopen it:** the fixture spreads spots so none reads another's
+output. Heavily overlapping spots are unmeasured; the algorithm is per-spot so it should scale the
+same, but that is reasoning rather than evidence. ⚠ Also unmeasured at **export** resolution, where
+the frame is 4× larger — though the disc area scales with the frame, so the ratio should hold.
+
+
 ### ✅ EXPLAINED AND FIXED — a scoped dehaze drag cost 118 ms because the scoped locals did WHOLE-FRAME work (M8.12, 2026-09-17)
 
 **Root cause.** `apply_region` for **noise reduction** and **dehaze** read

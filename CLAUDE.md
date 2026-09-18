@@ -182,7 +182,8 @@ recorded finding:
 
 1. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
    **1.00×, by construction**. ⚠ Only the zero is measured.
-2. **Item 5, spot removal** — the only unported stage (**18 of 21** have twins). Unmeasured.
+2. ⛔ ~~**Item 5, spot removal**~~ — **CLOSED 2026-09-18, measured and not worth doing.** 0.05–0.4 ms
+   for realistic use on a cached prefix stage, against a ~1.6 ms GPU floor.
 3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Needs a shader restructure: the shader writes one `u32` per
    sample because packing four into a word would race. **A considered trade, not an oversight.**
@@ -203,7 +204,7 @@ milestones leaned on that scan; it must not be cited as a prioritisation argumen
 | 2 | Noise reduction on the GPU | ✅ done, M8.3q — an NR drag ~207 → ~142 ms, 1.45–1.46× |
 | 3 | Port **lens correction** | ✅ **done, M8.9** — ⚠ its *value* was re-priced, not the work; see below |
 | 4 | Mask coverage + the blend | ✅ done, M8.11 |
-| 5 | **Spot removal** | ⬜ not started |
+| 5 | **Spot removal** | ⛔ **CLOSED 2026-09-18 — measured, not worth doing.** See below |
 
 **⚠⚠ ITEM 3 IS DONE, AND THIS LIST SAID OTHERWISE FOR A DAY.** `crates/gpu-pipeline/src/lens_correction.rs`
 is 722 lines, wired at `accelerate.rs:320`, gated by `lens_correction_is_accelerated_only_when_a_profile_is_in_hand`
@@ -219,8 +220,15 @@ then made those photos run four-wide, against a wall clock ~3× shorter than whe
 Measured after the fact: the port saves ~550 ms of a ~11.4 s export, **under 5%**.
 
 **✅ Re-verified against the tree 2026-09-17: 18 of 21 pipeline stages have GPU twins**, and only
-**three** lack one: `geometry`, `perspective` and `spot_removal`. The first two were answered by
-M8.8's region scoping rather than a shader, deliberately, **so item 5 is the only genuine port left.**
+**three** lack one: `geometry`, `perspective` and `spot_removal`.
+
+**⛔ ALL THREE ARE NOW DELIBERATE RATHER THAN PENDING, so the GPU port is effectively COMPLETE.**
+`geometry` and `perspective` were answered by M8.8's region scoping rather than a shader. And
+**spot removal was measured on 2026-09-18 and closed without being built**: realistic retouching is
+**0.05–0.4 ms** on a **cached prefix stage**, against `GpuBrushRaster`'s measured **~1.6 ms floor**
+(1.28 of it a fixed download), so a port would very likely make it *slower*. ⚠ **Do not re-propose
+it from the agreed order alone** — "last unported" is not "worth doing". `docs/BACKLOG.md` carries
+the table and the two caveats that would reopen it.
 
 ⚠⚠ **This said "18 of 23" until 2026-09-17, which invited the wrong subtraction** — 23 − 18 = 5, and
 only three are unported. `crates/pipeline/src/stages/` holds **23 files**, of which **21 implement
