@@ -14,6 +14,7 @@ use crate::photo_id::PhotoId;
 use core_image::ImageBuf;
 use edit_model::Edits;
 use export::ExportFormat;
+use pipeline::PipelineStage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -446,6 +447,24 @@ pub fn export_one(
         pipeline::ProfileRendering::default(),
     );
 
+    // ⚠ Resolved once and only when the setting is on: `shared()` acquires an adapter on first
+    // call, and the CPU arm below would otherwise ask for it per step.
+    let prefix_ctx = if render.gpu_tail {
+        gpu_pipeline::shared().cloned()
+    } else {
+        None
+    };
+    // ⚠⚠ **A deposit must not outlive its render, and in a BATCH EXPORT that is not theoretical.**
+    // The last prefix step parks its output for a consumer that may not exist — this export path
+    // runs its tail on the CPU — so the plane survives the photograph. The next photo in the batch
+    // is from the same camera, so it has the *same dimensions*, and it is rendered on the *same
+    // thread*: `SharedPlane::take` would hand the previous photograph's pixels to the first step of
+    // the next one. **A plausible photograph, in an exported file.** Clearing at the top of the
+    // loop bounds a deposit to one render, which is `end_mask`'s rule one level up.
+    if let Some(ctx) = &prefix_ctx {
+        ctx.prefix_plane().clear();
+    }
+
     let mut img = scaled;
     for step in &steps {
         // ⚠⚠ **Per step and at apply time, exactly as `render_cached` does it** — never over the
@@ -480,11 +499,24 @@ pub fn export_one(
             None
         };
         img = match accelerated {
-            Some(gpu) => {
+            Some(mut gpu) => {
+                // ⚠ The resident prefix seam — see `render_cached`'s loop, which carries the
+                // reasoning. Consecutive accelerated steps hand the buffer over instead of a
+                // download-and-re-upload of the whole frame.
+                gpu.allow_shared_input(gpu_pipeline::Slot::Prefix);
+                gpu.offer_output(gpu_pipeline::Slot::Prefix);
                 accelerated_steps_bump();
                 gpu.apply(img)
             }
-            None => step.stage.apply(img),
+            None => {
+                // ⚠⚠ A CPU step makes the parked plane two stages stale while its dimensions and
+                // thread still match, so `take` would accept it. Clearing is what makes that
+                // unrepresentable rather than merely unlikely.
+                if let Some(ctx) = &prefix_ctx {
+                    ctx.prefix_plane().clear();
+                }
+                step.stage.apply(img)
+            }
         };
     }
     let mut rendered = tail.run(img);

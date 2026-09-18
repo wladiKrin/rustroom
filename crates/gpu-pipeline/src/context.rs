@@ -26,6 +26,26 @@ pub struct GpuContext {
     /// the end through `CoverageRasterizer::end_mask`. Folding it in would invite someone to
     /// treat a stale plane as a cache hit, and a stale plane renders the previous frame's pixels.
     shared_plane: crate::SharedPlane<crate::GpuImage>,
+    /// The output plane one GPU prefix step offers to the next, and the last one to the tail's
+    /// first chain.
+    ///
+    /// ⚠⚠ **A SECOND SLOT RATHER THAN A SECOND USE OF THE FIRST, AND MERGING THEM WOULD UNDO A
+    /// GUARD THIS PROJECT PAID FOR WITH A SABOTAGE.** `accelerate`'s
+    /// `the_outer_tails_own_chain_never_takes_a_masks_leftover_plane` exists to stop the outer
+    /// tail's chain taking a plane a mask left behind: a mask whose own chain sits behind a CPU
+    /// stage leaves its deposit unclaimed, and the outer tail's chain runs *before* any mask, so
+    /// on the next frame it would find that plane at matching dimensions on the same thread and
+    /// render the previous frame's pixels. Letting the tail take from [`Self::shared_plane`] would
+    /// contradict that test directly.
+    ///
+    /// With two slots a mask's leftover cannot reach a prefix consumer and a prefix offer cannot
+    /// reach a mask's sub-chain **by construction** rather than by checking — the posture
+    /// `SharedPlane`'s own thread stamp was chosen for.
+    ///
+    /// ⚠ Its life is one render rather than one `MaskStage::apply`: `render_cached`'s prefix loop
+    /// clears it whenever a step runs on the **CPU**, because such a step makes the parked plane
+    /// no longer the next step's input.
+    prefix_plane: crate::SharedPlane<crate::GpuImage>,
     adapter_name: String,
     backend: String,
     /// The largest resident image this device will accept, in bytes.
@@ -87,6 +107,7 @@ impl GpuContext {
             queue,
             cache: Default::default(),
             shared_plane: Default::default(),
+            prefix_plane: Default::default(),
             adapter_name: info.name,
             backend: format!("{:?}", info.backend),
             max_image_bytes,
@@ -98,6 +119,24 @@ impl GpuContext {
     /// ⚠ See the field: a deposit lives only for the duration of one `MaskStage::apply`.
     pub fn shared_plane(&self) -> &crate::SharedPlane<crate::GpuImage> {
         &self.shared_plane
+    }
+
+    /// The slot one GPU prefix step parks its output in, for the next step or the tail.
+    ///
+    /// ⚠ See the field for why this is not [`Self::shared_plane`].
+    pub fn prefix_plane(&self) -> &crate::SharedPlane<crate::GpuImage> {
+        &self.prefix_plane
+    }
+
+    /// The slot a [`crate::Slot`] names.
+    ///
+    /// ⚠ One accessor so a chain never picks a slot by an `if`: the two are chosen at the wiring
+    /// site, where the position is known, and carried from there.
+    pub fn plane(&self, slot: crate::Slot) -> &crate::SharedPlane<crate::GpuImage> {
+        match slot {
+            crate::Slot::Mask => &self.shared_plane,
+            crate::Slot::Prefix => &self.prefix_plane,
+        }
     }
 
     /// The adapter's name, for the probe and for a future Settings readout.

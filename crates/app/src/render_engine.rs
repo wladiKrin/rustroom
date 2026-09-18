@@ -4,7 +4,7 @@
 use crate::prefix_cache::{PrefixCache, Tier};
 use core_image::ImageBuf;
 use edit_model::Edits;
-use pipeline::{build_prefix_steps, PrefixKey, Region, RenderScale};
+use pipeline::{build_prefix_steps, PipelineStage, PrefixKey, Region, RenderScale};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -1083,6 +1083,18 @@ fn render_cached(
 
     // Resume from the deepest checkpoint still held. `n == 0` is the bare downscale.
     let mut gpu_prefix_steps = 0usize;
+    // ⚠⚠ Whether the prefix left a resident plane for the tail's first chain to take. See the
+    // loop below: it goes **false** the moment a CPU step runs, because the parked plane is then
+    // no longer the tail's input.
+    let mut prefix_offered = false;
+    // ⚠ Resolved ONCE, and only when the setting is on. `shared()` acquires an adapter on first
+    // call — ~42 s in a debug build — and the `None` arm of the loop below would otherwise ask for
+    // it on every CPU step of every render, including renders with the GPU switched off.
+    let prefix_ctx = if gpu_tail {
+        gpu_pipeline::shared().cloned()
+    } else {
+        None
+    };
     let mut resumed = None;
     for n in (0..=steps.len()).rev() {
         if let Some(img) = cache.get(&key_at(n)) {
@@ -1211,6 +1223,15 @@ fn render_cached(
                 steps.len()
             );
         }
+        // ⚠⚠ **A deposit must not outlive its render.** The tail may decline to take — it runs on
+        // the CPU whenever the setting is off, and an export's tail always does — leaving the plane
+        // parked. The next render is the same photograph at the same rung on the same worker
+        // thread, so every check `SharedPlane::take` makes would pass and the *previous frame's*
+        // pixels would be handed to the first prefix step. Clearing at the top bounds a deposit to
+        // one render, which is `CoverageRasterizer::end_mask`'s rule one level up.
+        if let Some(ctx) = &prefix_ctx {
+            ctx.prefix_plane().clear();
+        }
         for (i, step) in steps.iter().enumerate().skip(start) {
             let t_step = std::time::Instant::now();
             // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
@@ -1245,11 +1266,39 @@ fn render_cached(
                 None
             };
             img = Arc::new(match accelerated {
-                Some(g) => {
+                Some(mut g) => {
+                    // ⚠⚠ **Take from the previous step and offer to the next — the whole of the
+                    // resident prefix seam.** Consecutive accelerated steps are safe by
+                    // construction: step *i+1*'s input **is** step *i*'s output, so the plane the
+                    // previous step parked is exactly the one this step would otherwise upload.
+                    // Measured at rung 6246: 17.9-23.5 ms a seam, all of it host memcpy and
+                    // allocation, because `SharedPlane::take` refuses anything that is not this
+                    // thread's deposit at these exact dimensions.
+                    //
+                    // ⚠ `Slot::Prefix`, never `Slot::Mask` — see `GpuContext::prefix_plane` for
+                    // the guard that separation preserves.
+                    g.allow_shared_input(gpu_pipeline::Slot::Prefix);
+                    g.offer_output(gpu_pipeline::Slot::Prefix);
                     gpu_prefix_steps += 1;
+                    prefix_offered = true;
                     g.apply((*img).clone())
                 }
-                None => step.stage.apply((*img).clone()),
+                None => {
+                    // ⚠⚠ **THE CLEAR, AND WITHOUT IT THIS RENDERS A PLAUSIBLE PHOTOGRAPH.** A CPU
+                    // step between two accelerated ones breaks the "its input is the previous
+                    // output" invariant the take rests on: the parked plane is now two stages
+                    // stale, at the *same* dimensions on the *same* thread, so `take` would
+                    // happily hand it over. Nothing downstream can tell — it is a picture, not an
+                    // error, which is the failure mode this project has recorded more than any
+                    // other.
+                    //
+                    // ⚠ `prefix_offered` goes false with it, so the tail does not try either.
+                    if let Some(ctx) = &prefix_ctx {
+                        ctx.prefix_plane().clear();
+                    }
+                    prefix_offered = false;
+                    step.stage.apply((*img).clone())
+                }
             });
             if debug_steps {
                 eprintln!(
@@ -1376,9 +1425,19 @@ fn render_cached(
         // one-second wait. With the setting off nothing GPU-related may be touched at all.
         if gpu_tail {
             match gpu_pipeline::shared() {
-                Some(ctx) => {
-                    gpu_pipeline::accelerate(tail, edits, scale, region, profile, render_spec, ctx)
-                }
+                Some(ctx) => gpu_pipeline::accelerate(
+                    tail,
+                    edits,
+                    scale,
+                    gpu_pipeline::TailFacts {
+                        region,
+                        profile,
+                        spec: render_spec,
+                        // ⚠ Only the loop above knows this, and only for the step that ran last.
+                        prefix_offered,
+                    },
+                    ctx,
+                ),
                 None => (tail, None),
             }
         } else {

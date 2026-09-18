@@ -32,9 +32,13 @@ fn accel(
         tail,
         edits,
         scale,
-        None,
-        Default::default(),
-        Default::default(),
+        gpu_pipeline::TailFacts {
+            region: None,
+            profile: Default::default(),
+            spec: Default::default(),
+            // ⚠ This bench builds no prefix, so there is never a plane to take.
+            prefix_offered: false,
+        },
         ctx,
     );
     gpu_pipeline::rejoin(p, c)

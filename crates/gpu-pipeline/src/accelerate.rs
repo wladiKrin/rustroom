@@ -314,7 +314,7 @@ pub fn accelerate_prefix_stage(
     image: &core_image::ImageBuf,
     facts: SeamFacts<'_>,
     ctx: &Arc<GpuContext>,
-) -> Option<Box<dyn PipelineStage>> {
+) -> Option<GpuChain> {
     let SeamFacts {
         lens,
         resampler,
@@ -363,7 +363,12 @@ pub fn accelerate_prefix_stage(
     if !worth_a_chain(&[gpu.cpu_cost()]) {
         return None;
     }
-    Some(Box::new(GpuChain::new(ctx.clone(), vec![gpu])))
+    // ⚠⚠ **The concrete chain, not a `Box<dyn PipelineStage>`, and the difference is the point.**
+    // `GpuChain` implements `PipelineStage`, so every caller's `.apply()` is unchanged — but a
+    // boxed trait object hides `offer_output`/`allow_shared_input` from the ONE caller that knows
+    // the step order, which is `render_cached`'s prefix loop. Hiding it there is what left the
+    // prefix seams paying a full round trip per step.
+    Some(GpuChain::new(ctx.clone(), vec![gpu]))
 }
 
 /// A stage that could be replaced, beside the CPU stage it would replace.
@@ -398,15 +403,43 @@ fn worth_a_chain(costs: &[f32]) -> bool {
 /// practice `MaskStage`, which the tail still sees as one opaque stage named `"mask"`. That is
 /// what makes masked HSL reachable at all; before it, the case reported in use as slow was the one
 /// thing the whole GPU tail could not touch.
+/// What the tail's accelerator needs besides the edits and the scale.
+///
+/// ⚠⚠ **Grouped rather than passed flat, because the eighth argument is where clippy draws the
+/// line and it drew it on this function's sibling.** `accelerate_prefix_stage` reached 8 and
+/// `too_many_arguments` fired, which was a fair signal; `SeamFacts` was the answer there and this
+/// is the same answer here. Silencing the lint would have been the other option and a worse one.
+pub struct TailFacts<'a> {
+    /// The viewport region this render is scoped to, if any.
+    pub region: Option<Region>,
+    /// The camera rendering in force.
+    pub profile: ProfileRendering<'a>,
+    /// What the render is producing.
+    pub spec: RenderSpec,
+    /// Whether the last GPU **prefix** step deposited its output for this tail to take.
+    ///
+    /// ⚠⚠ **The caller decides this, and only the caller can.** It is true exactly when the final
+    /// prefix step ran on the GPU *and* nothing since has invalidated the plane — which is
+    /// knowledge that lives in `render_cached`'s loop and in `batch_export`'s, where the step
+    /// order is. A default of `true` would be a silent correctness bug rather than a slow path:
+    /// the tail would take a plane that is not its input, at matching dimensions on the same
+    /// thread, and render **a plausible photograph**.
+    pub prefix_offered: bool,
+}
+
 pub fn accelerate(
     tail: Pipeline,
     edits: &Edits,
     scale: RenderScale,
-    region: Option<Region>,
-    profile: ProfileRendering<'_>,
-    spec: RenderSpec,
+    facts: TailFacts<'_>,
     ctx: &Arc<GpuContext>,
 ) -> (Pipeline, Option<GpuChain>) {
+    let TailFacts {
+        region,
+        profile,
+        spec,
+        ..
+    } = facts;
     // ⚠⚠ **Depth one, and it is structural rather than a bolted-on limit.** The accelerator handed
     // to the outer walk recurses into a mask; the walk it starts is handed **no** accelerator. That
     // is sound because `adjustment_stages` is exhaustive over `LocalAdjustments`, which has no
@@ -431,9 +464,9 @@ pub fn accelerate(
             spec,
             ctx,
             None,
-            // ⚠⚠ **True only here.** A mask's first sub-stage is the one place in the workspace
+            // ⚠⚠ **`Mask` only here.** A mask's first sub-stage is the one place in the workspace
             // that receives the very plane a coverage rasteriser was handed — see `mark_shared`.
-            true,
+            Some(crate::Slot::Mask),
         );
         rejoin(p, c).into_stages()
     };
@@ -448,9 +481,16 @@ pub fn accelerate(
         spec,
         ctx,
         Some(&inner as &pipeline::SubStageAccelerator<'_>),
-        // ⚠ Nothing in the outer tail stands in a mask's relationship to a coverage rasteriser, so
-        // there is never a deposit for its chain to take.
-        false,
+        // ⚠⚠ **`Prefix`, never `Mask`, and that distinction is a guard rather than bookkeeping.**
+        // Nothing in the outer tail stands in a mask's relationship to a coverage rasteriser, so
+        // its chain must never take from the mask slot — `the_outer_tails_own_chain_never_takes_a_masks_leftover_plane`
+        // is the sabotage-pinned test that says so. What it *may* take is the plane the last GPU
+        // **prefix** step deposited, which is its input by construction: the prefix loop clears
+        // that slot the moment a CPU step runs.
+        //
+        // ⚠ `None` when the prefix offered nothing — a tail that is not preceded by an accelerated
+        // prefix step, which is every region-scoped render.
+        facts.prefix_offered.then_some(crate::Slot::Prefix),
     )
 }
 
@@ -468,7 +508,7 @@ fn walk(
     spec: RenderSpec,
     ctx: &Arc<GpuContext>,
     inner: Option<&pipeline::SubStageAccelerator<'_>>,
-    share_input: bool,
+    share_input: Option<crate::Slot>,
 ) -> (Pipeline, Option<GpuChain>) {
     let mut out: Vec<Box<dyn PipelineStage>> = Vec::new();
     // ⚠⚠ **Both halves.** A run that turns out not to be worth the transfer has to be put back,
@@ -530,7 +570,7 @@ fn walk(
                     //
                     // ⚠ `s.name()` rather than `mask_subs`, which was consumed above.
                     if s.name() == "mask" {
-                        c.offer_output();
+                        c.offer_output(crate::Slot::Mask);
                     }
                     out.push(Box::new(c));
                 }
@@ -627,9 +667,9 @@ pub fn rejoin(p: Pipeline, chain: Option<GpuChain>) -> Pipeline {
 /// property this rests on is `MaskStage::apply`'s: it clones the image and pipes it through its
 /// sub-stages in order, so only the first receives the plane the gate was handed. A chain at index
 /// 1 gets whatever index 0 produced, and taking the deposit there is a plausible wrong picture.
-fn mark_shared(c: &mut GpuChain, share_input: bool, is_first: bool) {
-    if share_input && is_first {
-        c.allow_shared_input();
+fn mark_shared(c: &mut GpuChain, share_input: Option<crate::Slot>, is_first: bool) {
+    if let (Some(slot), true) = (share_input, is_first) {
+        c.allow_shared_input(slot);
     }
 }
 
@@ -1306,6 +1346,198 @@ mod tests {
         );
     }
 
+    /// A prefix of two GPU-able steps, as `render_cached`'s loop builds it.
+    ///
+    /// ⚠⚠ **Two, because one has no step-to-step seam at all.** A fixture with a single
+    /// accelerated prefix step measures the floor, which is the error the probe for this milestone
+    /// made first and had to be re-run for.
+    fn two_step_prefix_edits() -> Edits {
+        let mut e = Edits {
+            dehaze: edit_model::Dehaze { amount: 45.0 },
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 40.0,
+                detail: 50.0,
+                color: 35.0,
+                smoothness: 50.0,
+            },
+            ..Default::default()
+        };
+        e.exposure = 0.4;
+        e.contrast = 25.0;
+        e.saturation = 20.0;
+        e
+    }
+
+    /// Run the prefix steps, optionally with the resident seam wired.
+    ///
+    /// Returns the prefix output and **how many uploads each accelerated step performed**.
+    ///
+    /// ⚠⚠ **The upload count, not `SharedPlane::takes()`, and finding that out took a sabotage.**
+    /// A take that is then *discarded* still increments `takes()` — so a version of `run_with` that
+    /// called `take` and threw the plane away read as `takes() == 1` while uploading anyway, and
+    /// **every test here stayed green**: the picture is correct on that path, because uploading is
+    /// what it fell back to. `transfer_counts().0 == 0` is the only observable that separates
+    /// *took and used it* from *took and dropped it*. This is the W5 failure mode, caught by
+    /// sabotage rather than by review.
+    fn run_prefix(
+        e: &Edits,
+        ctx: &Arc<GpuContext>,
+        resident: bool,
+        img: core_image::ImageBuf,
+    ) -> (core_image::ImageBuf, Vec<usize>) {
+        let airlight = pipeline::prefix_airlight(e, &img, pipeline::Resampler::default(), None);
+        let steps = pipeline::build_prefix_steps(
+            e,
+            SCALE,
+            None,
+            pipeline::Resampler::default(),
+            Some(airlight),
+        );
+        let mut out = img;
+        let mut uploads: Vec<usize> = Vec::new();
+        for step in &steps {
+            let g = accelerate_prefix_stage(
+                step.stage.name(),
+                e,
+                SCALE,
+                &out,
+                SeamFacts {
+                    lens: None,
+                    resampler: pipeline::Resampler::default(),
+                    airlight,
+                },
+                ctx,
+            );
+            out = match g {
+                Some(mut g) => {
+                    if resident {
+                        g.allow_shared_input(crate::Slot::Prefix);
+                        g.offer_output(crate::Slot::Prefix);
+                    }
+                    let done = g.apply(out);
+                    uploads.push(g.transfer_counts().0);
+                    done
+                }
+                None => {
+                    ctx.prefix_plane().clear();
+                    step.stage.apply(out)
+                }
+            };
+        }
+        assert_eq!(
+            uploads.len(),
+            2,
+            "fixture check: both prefix steps must be accelerated, or this proves nothing"
+        );
+        (out, uploads)
+    }
+
+    /// ⚠⚠ **THE test of the resident prefix seam: the same picture, one fewer round trip.**
+    /// Every other assertion about this hand-off is a counter, and a counter cannot tell a correct
+    /// plane from a plausible one.
+    #[test]
+    fn a_resident_prefix_seam_renders_the_same_picture() {
+        let Some(ctx) = private_ctx() else { return };
+        let e = two_step_prefix_edits();
+        let (plain, plain_uploads) = run_prefix(&e, &ctx, false, big_scene());
+        assert_eq!(
+            plain_uploads,
+            vec![1, 1],
+            "fixture check: unwired, every step uploads its own input"
+        );
+        let (resident, resident_uploads) = run_prefix(&e, &ctx, true, big_scene());
+        // ⚠⚠ **This is the claim, and it is the one a counter cannot make.** The first step has
+        // nothing to take and uploads; the second takes and uploads **nothing at all**. A `takes()`
+        // assertion passes even when the plane is taken and thrown away — see `run_prefix`.
+        assert_eq!(
+            resident_uploads,
+            vec![1, 0],
+            "the second step must upload NOTHING — it was handed the first's buffer"
+        );
+        // ⚠ The band is measured at both ends rather than borrowed: this is a same-shader,
+        // same-input comparison where only the buffer's provenance differs, so it is EXACT. M8.13's
+        // 0.088 came from comparing a GPU chain against the CPU, which is a different question.
+        let d = crate::compare(&plain, &resident);
+        assert!(
+            d.is_exact(),
+            "a taken plane must be the bytes the upload would have carried: {d:?}"
+        );
+    }
+
+    /// ⚠⚠ **The slots must not be cross-wired, and nothing else in the workspace would notice.**
+    /// A chain allowed on one slot that read the other would still render *a* photograph — the
+    /// wrong one — and in a fixture where only one slot is ever occupied it would simply upload
+    /// and every equivalence test would stay green. This asserts the refusal directly.
+    ///
+    /// ⚠ Sabotage: make `GpuContext::plane` return `shared_plane` for both arms.
+    #[test]
+    fn a_chain_allowed_on_one_slot_never_takes_from_the_other() {
+        let Some(ctx) = private_ctx() else { return };
+        let scene = big_scene();
+        let (w, h) = (scene.width(), scene.height());
+        for (offered, allowed) in [
+            (crate::Slot::Mask, crate::Slot::Prefix),
+            (crate::Slot::Prefix, crate::Slot::Mask),
+        ] {
+            ctx.plane(crate::Slot::Mask).clear();
+            ctx.plane(crate::Slot::Prefix).clear();
+            let before = ctx.plane(allowed).takes();
+            let plane = crate::GpuImage::new(&ctx, w, h).expect("a plane");
+            ctx.plane(offered).deposit(w, h, plane);
+
+            let mut c = GpuChain::new(
+                ctx.clone(),
+                vec![Box::new(GpuExposureStage::new(0.5, ctx.clone())) as Box<dyn GpuStage>],
+            );
+            c.allow_shared_input(allowed);
+            let _ = c.apply(scene.clone());
+            assert_eq!(
+                ctx.plane(allowed).takes(),
+                before,
+                "a chain on {allowed:?} must not take a plane deposited in {offered:?}"
+            );
+            assert_eq!(
+                c.transfer_counts().0,
+                1,
+                "and it must have uploaded instead: {offered:?} -> {allowed:?}"
+            );
+        }
+    }
+
+    /// ⚠⚠ **A cleared slot must be untakeable, and this pins the primitive the loop leans on.**
+    /// `render_cached`'s prefix loop clears whenever a step runs on the CPU, because the parked
+    /// plane is then no longer the next step's input — same dimensions, same thread, **a plausible
+    /// photograph**.
+    ///
+    /// ⚠ The `[GPU, CPU, GPU]` arrangement that makes the mid-loop clear *live* needs a matched
+    /// lens: the prefix order is lens correction, perspective, spot removal, geometry, noise
+    /// reduction, dehaze, and the only twins are lens correction, NR and dehaze — so without a
+    /// profile every CPU step falls *before* both GPU ones and nothing can sit between them. This
+    /// test therefore pins the primitive and the reachability is reasoned, which is stated here
+    /// rather than left for a reader to assume it was tested.
+    #[test]
+    fn a_cleared_prefix_slot_is_not_taken() {
+        let Some(ctx) = private_ctx() else { return };
+        let scene = big_scene();
+        let (w, h) = (scene.width(), scene.height());
+        let plane = crate::GpuImage::new(&ctx, w, h).expect("a plane");
+        ctx.prefix_plane().deposit(w, h, plane);
+        ctx.prefix_plane().clear();
+
+        let mut c = GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuExposureStage::new(0.5, ctx.clone())) as Box<dyn GpuStage>],
+        );
+        c.allow_shared_input(crate::Slot::Prefix);
+        let _ = c.apply(scene);
+        assert_eq!(
+            ctx.prefix_plane().takes(),
+            0,
+            "a cleared slot has nothing to give"
+        );
+        assert_eq!(c.transfer_counts().0, 1, "so the chain must upload");
+    }
+
     fn ctx() -> Option<Arc<GpuContext>> {
         match crate::shared() {
             Some(c) => Some(c.clone()),
@@ -1329,7 +1561,21 @@ mod tests {
         spec: RenderSpec,
         ctx: &Arc<GpuContext>,
     ) -> Pipeline {
-        let (p, c) = accelerate(tail, e, scale, None, profile, spec, ctx);
+        let (p, c) = accelerate(
+            tail,
+            e,
+            scale,
+            TailFacts {
+                region: None,
+                profile,
+                spec,
+                // ⚠ The helper models a tail with **no** accelerated prefix before it, which is
+                // what every test in this file that predates the resident prefix seam assumed.
+                // A test that wants the take writes its own call.
+                prefix_offered: false,
+            },
+            ctx,
+        );
         rejoin(p, c)
     }
 
@@ -1338,9 +1584,12 @@ mod tests {
             tail,
             e,
             SCALE,
-            None,
-            ProfileRendering::default(),
-            RenderSpec::default(),
+            TailFacts {
+                region: None,
+                profile: ProfileRendering::default(),
+                spec: RenderSpec::default(),
+                prefix_offered: false,
+            },
             ctx,
         )
     }
@@ -1775,13 +2024,18 @@ mod tests {
             )
         };
         for (share_input, is_first, want) in [
-            (true, true, true),
+            (Some(crate::Slot::Mask), true, true),
             // ⚠ The case the whole mechanism exists for: offered, but not at index 0.
-            (true, false, false),
-            // ⚠ And the outer tail, which is never offered — it has no rasteriser of its own, so
-            // any plane it found would be a *previous frame's* leftover.
-            (false, true, false),
-            (false, false, false),
+            (Some(crate::Slot::Mask), false, false),
+            // ⚠ And an unoffered walk, which is what the outer tail is when no accelerated prefix
+            // step ran before it — any plane it found would be a *previous frame's* leftover.
+            (None, true, false),
+            (None, false, false),
+            // ⚠⚠ **Since the resident prefix seam, `share_input` names WHICH slot, and that is the
+            // guard rather than a detail.** The outer tail is offered `Prefix` and must never be
+            // offered `Mask`; the two cannot be told apart by `shares_input()` alone, which is why
+            // `takes_from()` exists and is asserted below.
+            (Some(crate::Slot::Prefix), true, true),
         ] {
             let mut c = chain();
             assert!(
@@ -1792,7 +2046,15 @@ mod tests {
             assert_eq!(
                 c.shares_input(),
                 want,
-                "share_input={share_input} is_first={is_first}"
+                "share_input={share_input:?} is_first={is_first}"
+            );
+            // ⚠ The slot travels unchanged: `mark_shared` may refuse, but it must never SUBSTITUTE
+            // one slot for the other. Cross-wiring is the sabotage the slot separation is written
+            // against, and it moves no pixel in a fixture where only one slot is occupied.
+            assert_eq!(
+                c.takes_from(),
+                if want { share_input } else { None },
+                "the slot must be carried, not chosen: {share_input:?} is_first={is_first}"
             );
         }
     }
@@ -2622,9 +2884,12 @@ mod tests {
                 tail,
                 &e,
                 SCALE,
-                r,
-                ProfileRendering::default(),
-                RenderSpec::default(),
+                TailFacts {
+                    region: r,
+                    profile: ProfileRendering::default(),
+                    spec: RenderSpec::default(),
+                    prefix_offered: false,
+                },
                 &ctx,
             );
             rejoin(p, c).run(img())

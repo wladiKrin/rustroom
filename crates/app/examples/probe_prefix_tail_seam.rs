@@ -61,7 +61,6 @@ fn main() {
             detail: 50.0,
             color: 35.0,
             smoothness: 50.0,
-            ..Default::default()
         },
         ..Default::default()
     };
@@ -112,15 +111,22 @@ fn main() {
                     resampler,
                     airlight,
                 },
-                &ctx,
+                ctx,
             );
             let t = std::time::Instant::now();
             img = match g {
-                Some(g) => {
+                Some(mut g) => {
+                    // ⚠ The production wiring, so the step->step seam this probe reports is the
+                    // one that ships rather than one the probe arranged for itself.
+                    g.allow_shared_input(gpu_pipeline::Slot::Prefix);
+                    g.offer_output(gpu_pipeline::Slot::Prefix);
                     accelerated_steps += 1;
                     g.apply(img)
                 }
-                None => step.stage.apply(img),
+                None => {
+                    ctx.prefix_plane().clear();
+                    step.stage.apply(img)
+                }
             };
             eprintln!(
                 "   prefix {:>16} {:7.1} ms",
@@ -150,10 +156,16 @@ fn main() {
             tail,
             &e,
             scale,
-            None,
-            ProfileRendering::default(),
-            spec,
-            &ctx,
+            gpu_pipeline::TailFacts {
+                region: None,
+                profile: ProfileRendering::default(),
+                spec,
+                // ⚠⚠ **False on purpose, so run A below genuinely uploads.** This probe measures
+                // the seam by running the SAME chain both ways; letting `accelerate` wire the take
+                // would make run A and run B identical and the saving would read as zero.
+                prefix_offered: false,
+            },
+            ctx,
         );
         let mut trailing = trailing.expect("fixture check: this edit set must end in a chain");
         let t = std::time::Instant::now();
@@ -167,21 +179,18 @@ fn main() {
 
         // ── B: the same chain handed a resident plane ────────────────────────────────
         //
-        // ⚠⚠ **THE PIXELS ARE GARBAGE ON THIS RUN AND THAT IS FINE, BECAUSE NOTHING READS THEM.**
-        // The deposited plane is a freshly allocated `GpuImage` with undefined contents, not the
-        // prefix's output — this measures the COST of the two transfers a resident buffer deletes,
-        // which does not depend on what the bytes are. ⚠ Do not copy this pattern into anything
-        // that compares an image; `SharedPlane`'s dimension and thread checks exist precisely
-        // because a wrong plane renders a plausible photograph.
+        // ⚠⚠ **The plane is the REAL one — the last prefix step's output, still parked.** An
+        // earlier version of this probe deposited a freshly allocated `GpuImage` with undefined
+        // contents, which prices the transfers correctly but proves nothing about the pixels. Once
+        // the prefix loop above carries the production wiring there is a genuine plane in the slot,
+        // and `take` is one-shot, so run A above (which is not allowed to take) leaves it for
+        // run B.
         //
-        // ⚠ Both halves go at once and they cannot be separated in situ: the host memcpy AND the
-        // device-side `copy_buffer_to_buffer` are both skipped when a chain takes, and the device
-        // copy shares its submit with every dispatch. The backlog entry could only *infer* the
-        // device half; this measures the pair.
-        trailing.allow_shared_input();
-        let plane = gpu_pipeline::GpuImage::new(&ctx, mid.width(), mid.height())
-            .expect("a plane the size of the tail's input");
-        ctx.shared_plane().deposit(mid.width(), mid.height(), plane);
+        // ⚠ Both halves go at once and cannot be separated in situ: the host memcpy AND the
+        // device-side `copy_buffer_to_buffer` are skipped together when a chain takes, and the
+        // device copy shares its submit with every dispatch. The backlog entry could only *infer*
+        // the device half; this measures the pair.
+        trailing.allow_shared_input(gpu_pipeline::Slot::Prefix);
         let t = std::time::Instant::now();
         let _ = trailing.apply(mid);
         let d_resident = t.elapsed();
