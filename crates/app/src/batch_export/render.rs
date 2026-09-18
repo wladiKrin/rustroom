@@ -1,0 +1,668 @@
+//! Rendering and writing **one** exported photo.
+//!
+//! ⚠ Split out of `batch_export.rs` on 2026-09-18 as a **pure move** — the `prefix_cache.rs`
+//! precedent, with the test count unchanged and no golden moved. Every `⚠` below is the record of
+//! a decision or a bug; **do not reword one.**
+
+use super::*;
+use core_image::ImageBuf;
+use edit_model::Edits;
+use pipeline::PipelineStage;
+use std::path::Path;
+
+/// The render scale a `max_edge` cap implies for a source whose long edge is `source_long`.
+///
+/// Mirrors `render_engine::render_scale`, with `source_scale` fixed at 1.0 because an export
+/// always decodes at full resolution — never through `DecodeOptions::preview()`.
+pub fn scale_for(source_long: usize, max_edge: Option<usize>) -> pipeline::RenderScale {
+    let Some(max_edge) = max_edge else {
+        return pipeline::RenderScale::FULL;
+    };
+    if source_long == 0 || max_edge >= source_long {
+        // `downscale_to` never upscales, so neither does the scale.
+        return pipeline::RenderScale::FULL;
+    }
+    pipeline::RenderScale::new(max_edge as f32 / source_long as f32)
+}
+
+/// Render one decoded image through `edits` and write it as a JPEG.
+///
+/// ⚠ The downscale happens **before** the pipeline, not after. Rendering at full resolution
+/// and shrinking the result would resample **sRGB-encoded** pixels, which is gamma-incorrect;
+/// `downscale_to` here operates on the linear decode, where averaging is meaningful. It is
+/// also the path the preview already takes, and it is faster, since every stage then runs on
+/// fewer pixels.
+/// The unresolved payload a job carries, in the export crate's terms.
+///
+/// ⚠ This is the one place a catalog `Description`, `Marks` and keyword paths become the plain
+/// `FileMetadata` the packet is written from. `FileMetadata::resolve` then lays the preset's
+/// defaults under it and applies the scope.
+pub fn file_metadata(job: &ExportJob) -> export::FileMetadata {
+    export::FileMetadata {
+        title: job.description.title.clone(),
+        caption: job.description.caption.clone(),
+        copyright: job.description.copyright.clone(),
+        creator: job.description.creator.clone(),
+        rating: job.marks.rating,
+        label: crate::xmp_sync::label_to_xmp(job.marks.label).map(str::to_string),
+        keywords: job.keywords.clone(),
+        capture: job.capture.clone(),
+    }
+}
+
+// ⚠⚠ **A COUNTER, and it exists because an accelerated export and a CPU export produce the SAME
+// photograph by design** — so every correctness test in the workspace passes with the seam
+// deleted. That is the W5 failure mode, where creative LUTs shipped fully tested and 100%
+// non-functional. `RenderEngine::requests_issued` and `Ran { prefix_stages }` exist for the same
+// reason.
+//
+// ⚠ A **counter** rather than a flag: an observable describing the current state cannot see its
+// own absence. ⚠ And **thread-local**, because `cargo test` runs tests in parallel and a shared
+// count would report whatever the rest of the suite happened to be doing — the contamination
+// `GpuChain`'s transfer counters were made per chain to avoid.
+//
+// ⚠ Plain `//`, not `///`: a doc comment on a `thread_local!` invocation is `unused_doc_comments`,
+// which `-D warnings` rejects. This file's own history records that trap; it fired again here.
+#[cfg(test)]
+thread_local! {
+    static ACCELERATED_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn accelerated_steps_bump() {
+    ACCELERATED_STEPS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(not(test))]
+fn accelerated_steps_bump() {}
+
+/// Reset the counter and return what the closure's exports crossed the seam with.
+#[cfg(test)]
+fn accelerated_steps<T>(f: impl FnOnce() -> T) -> usize {
+    ACCELERATED_STEPS.with(|c| c.set(0));
+    f();
+    ACCELERATED_STEPS.with(|c| c.get())
+}
+
+/// Render one photo and write it out.
+///
+/// ⚠⚠ **The prefix runs as STEPS rather than as one pipeline, and that is what lets each of them
+/// be offered to the GPU seam** — the shape `render_cached` already uses, and for its reason:
+/// `accelerate_prefix_stage` substitutes a stage by name and has to see them one at a time.
+///
+/// ⚠⚠ **And it is what makes lens correction reach an export at all.** This used to build through
+/// `pipeline::build_pipeline_spec`, which hardcodes `lens: None` — so for the life of the export
+/// dialog every RAW was written out with no lens correction while the preview and the CLI both
+/// applied it. Measured on an X-T4 frame at a mild 19.2 mm f/8: **worst 187 of 255 levels, mean
+/// 6.95, 33.5% of samples differing by more than 4.** `a_lens_profile_reaches_the_exported_pixels`
+/// is the carrier; nothing in `pipeline` could ever have seen it, because the stage itself was
+/// never broken.
+///
+/// ⚠ The tail comes from `build_pipeline_split_in_region_with_brush` with its prefix **discarded**,
+/// deliberately: both halves then come from one builder, so they cannot drift about what belongs
+/// in which.
+pub fn export_one(
+    source: ExportSource,
+    edits: &Edits,
+    dest: &Path,
+    opts: &ExportOptions,
+    render: ExportRender,
+    meta: &export::FileMetadata,
+) -> Result<(), String> {
+    let source_long = source.image.width().max(source.image.height());
+    let scaled = match opts.max_edge {
+        Some(max) => source.image.downscale_to(max),
+        None => source.image,
+    };
+    let scale = scale_for(source_long, opts.max_edge);
+    // ⚠⚠ The export must use the SAME airlight definition as the preview, or a dehazed photo
+    // would render one way on screen and another in the file — by up to 5.6 of an 8-bit level,
+    // measured. `prefix_airlight` replays the prefix at a fixed 256 px, so it is a deterministic
+    // function of the edits and costs a 65k-pixel run.
+    //
+    // ⚠ And it is handed the **lens**, for the same reason: the replay walks the prefix, so a
+    // replay without the correction would estimate the airlight from a differently-shaped
+    // photograph than the one being exported.
+    let airlight = pipeline::prefix_airlight(edits, &scaled, render.resampler, source.lens.clone());
+    let spec = pipeline::RenderSpec {
+        space: opts.space,
+        resampler: render.resampler,
+        baseline: source.baseline,
+        airlight: Some(airlight),
+    };
+    let steps = pipeline::build_prefix_steps(
+        edits,
+        scale,
+        source.lens.clone(),
+        render.resampler,
+        Some(airlight),
+    );
+    // ⚠ `ProfileRendering::default()` is inherited from `build_pipeline_spec` rather than
+    // introduced here: the camera rendering's profile curve and baseline exposure do not reach an
+    // export today either. Deliberately **not** fixed in this change — it is a second bug with its
+    // own measurement, and mixing it in would make this diff unattributable. See `docs/BACKLOG.md`.
+    let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
+        edits,
+        scale,
+        None,
+        None,
+        spec,
+        source.lens.clone(),
+        pipeline::ProfileRendering::default(),
+    );
+
+    // ⚠ Resolved once and only when the setting is on: `shared()` acquires an adapter on first
+    // call, and the CPU arm below would otherwise ask for it per step.
+    let prefix_ctx = if render.gpu_tail {
+        gpu_pipeline::shared().cloned()
+    } else {
+        None
+    };
+    // ⚠⚠ **A deposit must not outlive its render, and in a BATCH EXPORT that is not theoretical.**
+    // The last prefix step parks its output for a consumer that may not exist — this export path
+    // runs its tail on the CPU — so the plane survives the photograph. The next photo in the batch
+    // is from the same camera, so it has the *same dimensions*, and it is rendered on the *same
+    // thread*: `SharedPlane::take` would hand the previous photograph's pixels to the first step of
+    // the next one. **A plausible photograph, in an exported file.** Clearing at the top of the
+    // loop bounds a deposit to one render, which is `end_mask`'s rule one level up.
+    if let Some(ctx) = &prefix_ctx {
+        ctx.prefix_plane().clear();
+    }
+
+    let mut img = scaled;
+    for step in &steps {
+        // ⚠⚠ **Per step and at apply time, exactly as `render_cached` does it** — never over the
+        // whole list up front. `dehaze::airlight` is estimated from the image the stage is HANDED,
+        // and geometry crops, so substituting up front would estimate it from the wrong pixels: a
+        // slightly different airlight is a different photograph, not an error.
+        //
+        // ⚠⚠ **`if` rather than `match (gpu_tail, shared())`** — a tuple scrutinee evaluates both
+        // elements, so with the setting off `shared()` would still acquire an adapter. That was a
+        // real bug when `gpu_tail` first landed and it cost ~42 s per debug test run.
+        //
+        // ⚠ An export decode is never cached, so there is no `PrefixStepKey` question here at all:
+        // the seam returns a **stage**, never a step, and nothing stores the result.
+        let accelerated = if render.gpu_tail {
+            gpu_pipeline::shared().and_then(|ctx| {
+                gpu_pipeline::accelerate_prefix_stage(
+                    step.stage.name(),
+                    edits,
+                    scale,
+                    &img,
+                    gpu_pipeline::SeamFacts {
+                        lens: source.lens.as_ref(),
+                        resampler: render.resampler,
+                        // ⚠ The same frame-global value the CPU prefix was built with, so the twin
+                        // cannot disagree with the shader about what colour the haze is.
+                        airlight,
+                    },
+                    ctx,
+                )
+            })
+        } else {
+            None
+        };
+        img = match accelerated {
+            Some(mut gpu) => {
+                // ⚠ The resident prefix seam — see `render_cached`'s loop, which carries the
+                // reasoning. Consecutive accelerated steps hand the buffer over instead of a
+                // download-and-re-upload of the whole frame.
+                gpu.allow_shared_input(gpu_pipeline::Slot::Prefix);
+                gpu.offer_output(gpu_pipeline::Slot::Prefix);
+                accelerated_steps_bump();
+                gpu.apply(img)
+            }
+            None => {
+                // ⚠⚠ A CPU step makes the parked plane two stages stale while its dimensions and
+                // thread still match, so `take` would accept it. Clearing is what makes that
+                // unrepresentable rather than merely unlikely.
+                if let Some(ctx) = &prefix_ctx {
+                    ctx.prefix_plane().clear();
+                }
+                step.stage.apply(img)
+            }
+        };
+    }
+    let mut rendered = tail.run(img);
+
+    // ⚠⚠ **THE ORDER OF THESE THREE IS THE FEATURE, NOT AN ARRANGEMENT.**
+    //
+    // Output sharpening goes **first**, because it exists to put back the edge the resize took
+    // and must therefore measure the photograph — a watermark laid down first would be a hard
+    // white edge for it to ring around. Both act on the display-encoded buffer, which is what
+    // the pipeline has just handed back; see each module for why that is right for it.
+    //
+    // The metadata goes **last**, after the encode, because it is surgery on the container
+    // rather than on the pixels. It cannot change what the photograph looks like.
+    export::output_sharpen::apply(&mut rendered, &opts.output_sharpening);
+    export::watermark::apply(&mut rendered, &opts.watermark);
+    export::save(&rendered, dest, opts.format, opts.quality, opts.space)
+        .map_err(|e| e.to_string())?;
+    export::metadata::embed(dest, opts.format, meta).map_err(|e| e.to_string())
+}
+
+/// What a decode hands the exporter.
+///
+/// ⚠⚠ **A struct rather than a growing tuple, and the third field is why it exists.** Until M8.9
+/// this was `(ImageBuf, Illuminant)` and the lens shot was simply **discarded** — which is how the
+/// GUI's export came to render every RAW with **no lens correction at all** while the preview and
+/// `rustroom render` both applied it. Measured on an X-T4 frame at a mild 19.2 mm f/8: worst 187
+/// of 255 levels, mean 6.95, and 33.5% of samples differing by more than 4. A named field is
+/// harder to drop than a tuple element.
+pub struct ExportSource {
+    pub image: ImageBuf,
+    /// The white-balance baseline the decode left the picture at. Drop it and every exported RAW
+    /// gets D65's gains where the preview used the camera's own.
+    pub baseline: color::wb::Illuminant,
+    /// The matched lens profile; `None` for a JPEG, or for a lens the database does not list.
+    pub lens: Option<lens_profile::LensShot>,
+}
+
+/// What the *render* needs that [`ExportOptions`] deliberately does not carry.
+///
+/// ⚠⚠ **Neither field may become an `ExportOptions` field, and the reason is already written down
+/// in [`ExportWorker::spawn`]'s own doc comment**: in `ExportOptions` they would be saved into
+/// every export preset, so a preset could disagree with the preview about how the photograph is
+/// rendered. Two facts that can disagree.
+///
+/// ⚠ `gpu_tail` is named for the *tail* and now governs three things — the tail, the preview's
+/// prefix seam, and this. That naming hazard was flagged and accepted (user's call, 2026-09-15);
+/// the Settings hint is what carries the correction, by describing the rule rather than
+/// enumerating what it reaches.
+#[derive(Clone, Copy)]
+pub struct ExportRender {
+    pub resampler: pipeline::Resampler,
+    pub gpu_tail: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch_export::fixtures::*;
+    use export::ExportFormat;
+
+    /// Read back a written JPEG's dimensions.
+    fn jpeg_size(path: &Path) -> (u32, u32) {
+        let img = image::open(path).expect("a readable jpeg");
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn export_one_writes_a_jpeg_at_full_size_without_a_cap() {
+        let d = TempDir::new("one_full");
+        let dest = d.0.join("a.jpg");
+        export_one(
+            source(flat(40, 20)),
+            &Edits::default(),
+            &dest,
+            &opts(&d, None),
+            CPU,
+            &export::FileMetadata::default(),
+        )
+        .unwrap();
+        assert_eq!(jpeg_size(&dest), (40, 20));
+    }
+
+    #[test]
+    fn the_long_edge_cap_is_honoured() {
+        let d = TempDir::new("one_cap");
+        let dest = d.0.join("a.jpg");
+        export_one(
+            source(flat(40, 20)),
+            &Edits::default(),
+            &dest,
+            &opts(&d, Some(10)),
+            CPU,
+            &export::FileMetadata::default(),
+        )
+        .unwrap();
+        assert_eq!(jpeg_size(&dest), (10, 5));
+    }
+
+    #[test]
+    fn a_cap_larger_than_the_image_does_not_upscale() {
+        // `downscale_to` never upscales; the export must not either.
+        let d = TempDir::new("one_big_cap");
+        let dest = d.0.join("a.jpg");
+        export_one(
+            source(flat(40, 20)),
+            &Edits::default(),
+            &dest,
+            &opts(&d, Some(999)),
+            CPU,
+            &export::FileMetadata::default(),
+        )
+        .unwrap();
+        assert_eq!(jpeg_size(&dest), (40, 20));
+    }
+
+    /// A hard vertical edge on a mid-grey field, big enough to hold a watermark.
+    fn edged(w: usize, h: usize) -> ImageBuf {
+        let mut img = ImageBuf::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.set_pixel(x, y, if x < w / 2 { [0.20; 3] } else { [0.55; 3] });
+            }
+        }
+        img
+    }
+
+    /// A synthetic lens with coefficients chosen here rather than read from the bundled database.
+    ///
+    /// ⚠ Copied from `pipeline`'s and `gpu-pipeline`'s own fixtures rather than shared: they live
+    /// in other crates' test modules, and exporting a fixture across a crate boundary is more
+    /// machinery than eight lines is worth.
+    fn lens_fixture() -> lens_profile::LensShot {
+        let xml = r#"<lensdatabase version="1">
+            <camera><maker>TestMaker</maker><model>TestCam</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor></camera>
+            <lens><maker>TestMaker</maker><model>TestLens 50mm</model>
+                <mount>TestMount</mount><cropfactor>1.0</cropfactor>
+                <calibration>
+                    <distortion model="ptlens" focal="50" a="0.0" b="-0.05" c="0.0"/>
+                    <tca model="poly3" focal="50" vr="1.004" vb="0.996"/>
+                    <vignetting model="pa" focal="50" aperture="2.8" distance="10"
+                        k1="-0.3" k2="0.0" k3="0.0"/>
+                </calibration></lens>
+        </lensdatabase>"#;
+        let db = lens_profile::Catalogue::from_xml(xml).unwrap();
+        lens_profile::LensShot {
+            profile: db.find("TestMaker", "TestCam", "TestLens 50mm").unwrap(),
+            shot: lens_profile::Shot {
+                focal: 50.0,
+                aperture: 2.8,
+            },
+        }
+    }
+
+    fn lens_on() -> Edits {
+        Edits {
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                tca: true,
+                vignetting: true,
+                scale: 0.0,
+            }),
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠⚠ **THE CARRIER FOR THE M8.9 FIX, and the bug it guards had shipped for the life of the
+    /// export dialog.** `export_one` used to build through `pipeline::build_pipeline_spec`, which
+    /// hardcodes `lens: None` — so every RAW was written out with **no lens correction** while the
+    /// preview and `rustroom render` both applied it. Measured through the shipped CLI on an X-T4
+    /// frame at a mild 19.2 mm f/8: **worst 187 of 255 levels, mean 6.95, and 33.5% of samples
+    /// differing by more than 4.**
+    ///
+    /// ⚠ Nothing in `pipeline` could ever have seen it, because the stage itself was never broken
+    /// — which is why this test has to go through `export_one` rather than through the pipeline.
+    /// The W5 failure mode: fully tested, and never reached.
+    #[test]
+    fn a_lens_profile_reaches_the_exported_pixels() {
+        let d = TempDir::new("one_lens");
+        let dest = d.0.join("a.png");
+        let o = ExportOptions {
+            format: ExportFormat::Png8,
+            ..opts(&d, None)
+        };
+        let write = |lens: Option<lens_profile::LensShot>| {
+            export_one(
+                ExportSource {
+                    image: edged(160, 120),
+                    baseline: color::wb::Illuminant::default(),
+                    lens,
+                },
+                &lens_on(),
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::default(),
+            )
+            .unwrap();
+            std::fs::read(&dest).unwrap()
+        };
+        let without = write(None);
+        let with = write(Some(lens_fixture()));
+        assert_ne!(
+            without, with,
+            "a matched lens profile must change the exported file"
+        );
+    }
+
+    /// ⚠⚠ **THE CARRIER FOR THE SEAM, and a picture test cannot be one.** An accelerated export and
+    /// a CPU export produce the same photograph **by design**, so every correctness test here
+    /// passes with the whole offer deleted. The observable is the count of steps that crossed.
+    ///
+    /// ⚠ The fixture drives **dehaze**, not lens correction, deliberately: dehaze is already
+    /// ported and needs no profile, so this says something about the **wiring** independently of
+    /// whether the lens shader exists at all. That is what makes this half of the milestone worth
+    /// landing on its own merits.
+    #[test]
+    fn an_accelerated_export_really_uses_the_seam() {
+        if gpu_pipeline::shared().is_none() {
+            eprintln!("SKIPPED: no GPU adapter on this machine");
+            return;
+        }
+        let d = TempDir::new("one_seam");
+        let dest = d.0.join("a.jpg");
+        let edits = Edits {
+            dehaze: edit_model::Dehaze { amount: 60.0 },
+            ..Edits::default()
+        };
+        let run = |gpu_tail: bool| {
+            accelerated_steps(|| {
+                export_one(
+                    source(edged(160, 120)),
+                    &edits,
+                    &dest,
+                    &opts(&d, None),
+                    ExportRender {
+                        resampler: pipeline::Resampler::CatmullRom,
+                        gpu_tail,
+                    },
+                    &export::FileMetadata::default(),
+                )
+                .unwrap();
+            })
+        };
+        // ⚠ Both halves: an offer that never fires and one that fires unconditionally are equally
+        // wrong, and only the pair distinguishes them.
+        assert_eq!(run(false), 0, "with the setting off nothing may cross");
+        assert!(
+            run(true) >= 1,
+            "with it on, dehaze — which is ported — must cross"
+        );
+    }
+
+    /// Export `edged` twice — once neutral, once with `tweak` applied to the options — and
+    /// report the written bytes of each.
+    ///
+    /// ⚠⚠ **THESE THREE TESTS EXIST BECAUSE THREE SABOTAGES WENT UNCAUGHT.** Deleting each of
+    /// `export_one`'s three new calls left the entire suite green: `export::metadata`,
+    /// `export::watermark` and `export::output_sharpen` are all thoroughly tested *in their own
+    /// crate*, and nothing anywhere asserted that the export path actually reaches them. That is
+    /// the "feature silently absent" failure this project has already shipped once, in
+    /// edit-accurate thumbnails.
+    fn exported_with(tag: &str, tweak: impl FnOnce(&mut ExportOptions)) -> (Vec<u8>, Vec<u8>) {
+        // ⚠ TIFF, not JPEG: a lossy encoder quantizes a faint watermark or a one-pixel sharpen
+        // halo into the same blocks, so "the bytes differ" would be measuring the encoder.
+        let d = TempDir::new(tag);
+        let mut base = opts(&d, None);
+        base.format = ExportFormat::Tiff8;
+        let plain = d.0.join("plain.tif");
+        export_one(
+            source(edged(160, 120)),
+            &Edits::default(),
+            &plain,
+            &base,
+            CPU,
+            &export::FileMetadata::resolve(&base.metadata, export::FileMetadata::default()),
+        )
+        .unwrap();
+        let mut changed = base.clone();
+        tweak(&mut changed);
+        let other = d.0.join("other.tif");
+        export_one(
+            source(edged(160, 120)),
+            &Edits::default(),
+            &other,
+            &changed,
+            CPU,
+            &export::FileMetadata::resolve(&changed.metadata, export::FileMetadata::default()),
+        )
+        .unwrap();
+        (
+            std::fs::read(&plain).unwrap(),
+            std::fs::read(&other).unwrap(),
+        )
+    }
+
+    /// The decoded pixels of a written file.
+    fn pixels(bytes: &[u8]) -> Vec<u8> {
+        image::load_from_memory(bytes).unwrap().to_rgb8().into_raw()
+    }
+
+    #[test]
+    fn an_export_carries_its_metadata() {
+        let (plain, tagged) = exported_with("e2e_meta", |o| {
+            o.metadata.copyright = "(c) 2026 Rustroom".into()
+        });
+        let needle = b"(c) 2026 Rustroom";
+        assert!(
+            !plain.windows(needle.len()).any(|w| w == needle),
+            "fixture check: the neutral export already carried it"
+        );
+        assert!(
+            tagged.windows(needle.len()).any(|w| w == needle),
+            "the copyright never reached the file"
+        );
+        // ⚠ And only the container moved: metadata is written after the encode, so it cannot
+        // change what the photograph looks like.
+        assert_eq!(
+            pixels(&plain),
+            pixels(&tagged),
+            "the metadata moved a pixel"
+        );
+    }
+
+    #[test]
+    fn a_photos_own_caption_reaches_the_file_and_beats_the_presets() {
+        // ⚠⚠ The carrier test W5 taught: the packet writer is thoroughly tested in its own
+        // crate, and nothing there proves the worker builds the payload from the job. Deleting
+        // the `file_metadata` call leaves `export` green and this red.
+        let d = TempDir::new("e2e_desc");
+        let mut opts = opts(&d, None);
+        opts.format = ExportFormat::Tiff8;
+        opts.metadata.caption = "preset caption".into();
+        opts.metadata.copyright = "(c) preset".into();
+        let mut job = jobs(&d, &["one.RAF"]).remove(0);
+        job.description = catalog::db::Description {
+            title: "Harbour at dusk".into(),
+            caption: "Boats returning".into(),
+            ..Default::default()
+        };
+        job.marks = catalog::db::Marks {
+            rating: 4,
+            label: 2,
+            ..Default::default()
+        };
+        job.keywords = vec![vec!["Europe".into(), "UK".into()]];
+        let (report, _) = run_export(vec![job], opts, Vec::new(), ok_decode());
+        assert_eq!(report.exported, 1, "{:?}", report.failed);
+        let bytes = std::fs::read(d.0.join("one.tif")).unwrap();
+        let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
+        assert!(has("Harbour at dusk"), "the title never reached the file");
+        assert!(
+            has("Boats returning"),
+            "the photo's caption never reached the file"
+        );
+        assert!(
+            !has("preset caption"),
+            "the preset's caption overrode the photo's"
+        );
+        assert!(
+            has("(c) preset"),
+            "the preset's copyright did not fill the blank"
+        );
+        assert!(has("<xmp:Rating>4</xmp:Rating>"), "the rating is missing");
+        assert!(has("<xmp:Label>Blue</xmp:Label>"), "label 2 is Blue");
+        assert!(has("Europe|UK"), "the keyword path is missing");
+    }
+
+    #[test]
+    fn copyright_only_strips_the_photos_own_words_at_export() {
+        let d = TempDir::new("e2e_scope");
+        let mut opts = opts(&d, None);
+        opts.format = ExportFormat::Tiff8;
+        opts.metadata.copyright = "(c) preset".into();
+        opts.metadata.scope = export::MetadataScope::CopyrightOnly;
+        let mut job = jobs(&d, &["one.RAF"]).remove(0);
+        job.description.caption = "Boats returning".into();
+        job.marks.rating = 5;
+        let (report, _) = run_export(vec![job], opts, Vec::new(), ok_decode());
+        assert_eq!(report.exported, 1);
+        let bytes = std::fs::read(d.0.join("one.tif")).unwrap();
+        let has = |s: &str| bytes.windows(s.len()).any(|w| w == s.as_bytes());
+        assert!(has("(c) preset"));
+        assert!(!has("Boats returning"), "the scope was not applied");
+        assert!(
+            !has("xmp:Rating"),
+            "the scope was not applied to the rating"
+        );
+    }
+
+    #[test]
+    fn an_export_carries_its_watermark() {
+        let (plain, marked) = exported_with("e2e_mark", |o| o.watermark.text = "Rustroom".into());
+        assert_ne!(
+            pixels(&plain),
+            pixels(&marked),
+            "the watermark never reached the pixels"
+        );
+    }
+
+    #[test]
+    fn an_export_carries_its_output_sharpening() {
+        let (plain, sharp) = exported_with("e2e_sharp", |o| o.output_sharpening.amount = 100);
+        let (a, b) = (pixels(&plain), pixels(&sharp));
+        assert_ne!(a, b, "output sharpening never reached the pixels");
+        // ⚠ And it is *sharpening*, not a global lift: the flat halves must be untouched while
+        // the edge moves. Without this the test would pass for any change at all — including a
+        // watermark, which is the other thing this call site could have been wired to.
+        let at = |v: &[u8], x: usize| v[(60 * 160 + x) * 3] as i32;
+        assert_eq!(at(&a, 5), at(&b, 5), "the flat left half moved");
+        assert_eq!(at(&a, 155), at(&b, 155), "the flat right half moved");
+        assert!(
+            at(&b, 80) > at(&a, 80) && at(&b, 79) < at(&a, 79),
+            "no overshoot/undershoot at the edge: {:?} vs {:?}",
+            (at(&a, 79), at(&a, 80)),
+            (at(&b, 79), at(&b, 80))
+        );
+    }
+
+    #[test]
+    fn an_unwritable_destination_is_an_error_not_a_panic() {
+        let d = TempDir::new("one_bad");
+        let dest = d.0.join("no_such_dir").join("a.jpg");
+        assert!(export_one(
+            source(flat(4, 4)),
+            &Edits::default(),
+            &dest,
+            &opts(&d, None),
+            CPU,
+            &export::FileMetadata::default(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn the_render_scale_follows_the_downscale() {
+        // ⚠ The reason the resize happens *before* the pipeline: the spatial stages have to
+        // be told the output resolution, or a resized export would apply full-resolution
+        // radii to a small image.
+        assert_eq!(scale_for(40, None).get(), 1.0);
+        assert_eq!(scale_for(40, Some(10)).get(), 0.25);
+        // No upscaling, so a cap above the source is still 1.0.
+        assert_eq!(scale_for(40, Some(999)).get(), 1.0);
+    }
+}
