@@ -1658,15 +1658,27 @@ pub fn build_pipeline_to(
 /// As [`build_pipeline_to`], with the whole [`RenderSpec`] — which is what an export of a RAW
 /// needs, since only it knows the file's white-balance baseline.
 pub fn build_pipeline_spec(edits: &Edits, scale: RenderScale, spec: RenderSpec) -> Pipeline {
-    let (prefix, tail) = build_pipeline_split_in_region_with_brush(
-        edits,
-        scale,
-        None,
-        None,
-        spec,
-        None,
-        ProfileRendering::default(),
-    );
+    build_pipeline_rendered(edits, scale, spec, ProfileRendering::default())
+}
+
+/// As [`build_pipeline_spec`], with the camera rendering and creative look spelled out.
+///
+/// ⚠⚠ **This exists because defaulting the rendering SILENTLY is how three call sites lost it.**
+/// Every whole-pipeline builder above hands `ProfileRendering::default()` to the split builder, so
+/// a caller that needs the profile's curve or the user's `.cube` gets neither and no warning —
+/// which is how an export rendered without the look until 2026-09-18, and how a **thumbnail** still
+/// did after that. A caller that has a rendering now has somewhere to put it.
+///
+/// ⚠ Additive with a delegating wrapper, the precedent [`build_pipeline_to`] records: no existing
+/// call site changes.
+pub fn build_pipeline_rendered(
+    edits: &Edits,
+    scale: RenderScale,
+    spec: RenderSpec,
+    profile: ProfileRendering<'_>,
+) -> Pipeline {
+    let (prefix, tail) =
+        build_pipeline_split_in_region_with_brush(edits, scale, None, None, spec, None, profile);
     let mut stages = prefix.into_stages();
     stages.extend(tail.into_stages());
     Pipeline::new(stages)

@@ -75,12 +75,44 @@ pub fn worker_count() -> usize {
 /// in the grid** — the headroom is gone before the pipeline sees it. Shadows compress the same
 /// way, and the thumbnail shows the camera's rendering plus your edits rather than Rustroom's own
 /// render.
+/// Every distinct `.cube` this folder's thumbnails have asked for.
+///
+/// ⚠⚠ **SHARED across threads, because thumbnails render on `worker_count()` of them.**
+/// `RenderEngine`'s worker caches one look in a plain local, which is right for a path that renders
+/// one photograph at a time and wrong here.
+///
+/// ⚠⚠ **The value is an `Option`, so a FAILED load is cached as a miss.** Without that, a preset
+/// naming a `.cube` this machine does not have would re-read the looks directory once per
+/// thumbnail — 830 times on an 830-photo folder, for a file that is not there.
+pub(crate) type LookCache =
+    Mutex<std::collections::HashMap<String, Option<Arc<pipeline::lut::Cube>>>>;
+
+/// The look a thumbnail should render through, loading it at most once per name.
+fn look_for(
+    edits: &Edits,
+    store: Option<&crate::looks::LookStore>,
+    cache: Option<&LookCache>,
+) -> Option<Arc<pipeline::lut::Cube>> {
+    // ⚠ `is_active()` for `build_pipeline_split_in_region_with_brush`'s reason: a look at zero
+    // strength must not suppress anything, and a name with no strength is not a look.
+    if !edits.look.is_active() {
+        return None;
+    }
+    let file = edits.look.file.as_deref()?;
+    let (store, cache) = (store?, cache?);
+    let mut g = cache.lock().ok()?;
+    g.entry(file.to_string())
+        .or_insert_with(|| store.load(file).ok().map(Arc::new))
+        .clone()
+}
+
 fn load_thumbnail(
     req: &ThumbRequest,
     resampler: pipeline::Resampler,
     store: Option<&crate::thumb_store::ThumbStore>,
+    looks: Option<(&crate::looks::LookStore, &LookCache)>,
 ) -> Option<Thumbnail> {
-    load_with(req, resampler, store, &extract_preview)
+    load_with(req, resampler, store, looks, &extract_preview)
 }
 
 /// Pull the source's own preview out of it, with no cache in sight.
@@ -109,6 +141,7 @@ fn load_with(
     req: &ThumbRequest,
     resampler: pipeline::Resampler,
     store: Option<&crate::thumb_store::ThumbStore>,
+    looks: Option<(&crate::looks::LookStore, &LookCache)>,
     extract: &dyn Fn(&std::path::Path) -> Option<Thumbnail>,
 ) -> Option<Thumbnail> {
     let path = req.id.path.as_path();
@@ -132,7 +165,13 @@ fn load_with(
         // than paying it 830 times for a no-op.
         return Some(thumb);
     }
-    Some(render_edits(thumb, &thumbnail_edits(&req.edits), resampler))
+    let look = look_for(&req.edits, looks.map(|l| l.0), looks.map(|l| l.1));
+    Some(render_edits(
+        thumb,
+        &thumbnail_edits(&req.edits),
+        resampler,
+        look.as_ref(),
+    ))
 }
 
 /// The edits a **thumbnail** renders through: the photo's, with the display rendering removed.
@@ -159,7 +198,12 @@ fn thumbnail_edits(edits: &Edits) -> Edits {
 ///
 /// ⚠ The output dimensions come from the rendered image, **not** from the input — a crop changes
 /// them, and reusing the input's would paint a cropped photo into the original's rect and skew it.
-fn render_edits(thumb: Thumbnail, edits: &Edits, resampler: pipeline::Resampler) -> Thumbnail {
+fn render_edits(
+    thumb: Thumbnail,
+    edits: &Edits,
+    resampler: pipeline::Resampler,
+    look: Option<&Arc<pipeline::lut::Cube>>,
+) -> Thumbnail {
     let mut buf = core_image::ImageBuf::new(thumb.width, thumb.height);
     {
         let d = buf.data_mut();
@@ -179,8 +223,28 @@ fn render_edits(thumb: Thumbnail, edits: &Edits, resampler: pipeline::Resampler)
     // ⚠ It bit only *edited* photos, because a neutral one takes the early return above and never
     // reaches the pipeline at all — which made the effect look arbitrary rather than systematic.
     let buf = buf.map_pixels(color::srgb_to_prophoto);
-    let out =
-        pipeline::build_pipeline_with(edits, pipeline::RenderScale::new(1.0), resampler).run(buf);
+    // ⚠⚠ **The look, and its absence was reported by use**: *"the look is not reflected or shown in
+    // any way in the thumbnail picture"*. `build_pipeline_with` takes no `ProfileRendering` at all,
+    // so every thumbnail rendered every edit **except** the user's `.cube` — the third path to lose
+    // it this way, after the preview kept it and the export lost it.
+    //
+    // ⚠ `curve` and `baseline_ev` stay `None` deliberately: `thumbnail_edits` has already stripped
+    // the rendering, because the source here is the camera's embedded JPEG and has been rendered
+    // once already. Supplying them would be inert at best and a double render at worst.
+    let out = pipeline::build_pipeline_rendered(
+        edits,
+        pipeline::RenderScale::new(1.0),
+        pipeline::RenderSpec {
+            resampler,
+            ..pipeline::RenderSpec::default()
+        },
+        pipeline::ProfileRendering {
+            curve: None,
+            baseline_ev: None,
+            look,
+        },
+    )
+    .run(buf);
     Thumbnail {
         width: out.width(),
         height: out.height(),
@@ -226,6 +290,12 @@ impl ThumbLoader {
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let store = crate::thumb_store::ThumbStore::user_default();
+        // ⚠ Captured here for the ThumbStore's own stated reason — it keeps `ThumbLoader::new`'s
+        // signature, and therefore its four call sites, untouched.
+        let looks = crate::looks::LookStore::user_default(
+            &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+        );
+        let look_cache: LookCache = Mutex::new(std::collections::HashMap::new());
         Self::with_loader(
             // ⚠⚠ Thumbnails always use the **default** resampler, deliberately, and do not follow
             // `Settings.resampler` (user's call, 2026-09-01). Honouring it was tried first and is
@@ -236,7 +306,12 @@ impl ThumbLoader {
             // ⚠ The store is captured here rather than passed to `ThumbLoader::new`, which keeps
             // that signature — and therefore its four call sites — untouched.
             Arc::new(move |r: &ThumbRequest| {
-                load_thumbnail(r, pipeline::Resampler::default(), Some(&store))
+                load_thumbnail(
+                    r,
+                    pipeline::Resampler::default(),
+                    Some(&store),
+                    Some((&looks, &look_cache)),
+                )
             }),
             worker_count(),
             display_space,
@@ -381,12 +456,128 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A flat mid-grey thumbnail.
+    fn grey_thumb(w: usize, h: usize) -> Thumbnail {
+        Thumbnail {
+            width: w,
+            height: h,
+            rgba: [128, 128, 128, 255].repeat(w * h),
+        }
+    }
+
+    /// A 2³ cube that **darkens everything to 40%**.
+    ///
+    /// ⚠⚠ **It has to move a NEUTRAL image, and the obvious "loud" cube does not.** A cube that
+    /// permutes channels looks dramatic and is a perfect no-op on grey — which is what every
+    /// fixture here is. That exact mistake cost a debugging round on the export's look test the
+    /// same day, so it is written down rather than rediscovered.
+    fn darkening_cube() -> Arc<pipeline::lut::Cube> {
+        let mut t = String::from("LUT_3D_SIZE 2\n");
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    let f = |v: usize| v as f32 * 0.4;
+                    t.push_str(&format!("{} {} {}\n", f(r), f(g), f(b)));
+                }
+            }
+        }
+        Arc::new(pipeline::lut::Cube::parse(&t).expect("a parseable cube"))
+    }
+
+    fn with_look(file: &str) -> Edits {
+        Edits {
+            look: edit_model::Look {
+                file: Some(file.into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Write `names` as `.cube` files into a fresh directory, and return it with a store.
+    fn look_store(tag: &str, names: &[&str]) -> (PathBuf, crate::looks::LookStore) {
+        let d = std::env::temp_dir().join(format!("rustroom_thumb_look_{tag}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for n in names {
+            let mut t = String::from("LUT_3D_SIZE 2\n");
+            for _ in 0..8 {
+                t.push_str("0 0 0\n");
+            }
+            std::fs::write(d.join(n), t).unwrap();
+        }
+        (d.clone(), crate::looks::LookStore::new(d))
+    }
+
+    /// ⚠⚠ **THE test of this fix, reported by use:** *"the look is not reflected or shown in any
+    /// way in the thumbnail picture"*. `render_edits` built its pipeline with
+    /// `build_pipeline_with`, which takes no `ProfileRendering`, so every thumbnail rendered every
+    /// edit except the user's `.cube`.
+    ///
+    /// ⚠ Sabotage: pass `None` for the look in `render_edits`.
+    #[test]
+    fn a_look_changes_a_rendered_thumbnail() {
+        let e = with_look("x.cube");
+        let without = render_edits(grey_thumb(8, 8), &e, pipeline::Resampler::default(), None);
+        let cube = darkening_cube();
+        let with = render_edits(
+            grey_thumb(8, 8),
+            &e,
+            pipeline::Resampler::default(),
+            Some(&cube),
+        );
+        assert_ne!(
+            without.rgba, with.rgba,
+            "a look must change the thumbnail's pixels"
+        );
+    }
+
+    /// ⚠⚠ **A failed load is cached as a MISS, and without that a missing `.cube` is re-read once
+    /// per thumbnail** — 830 times on an 830-photo folder, for a file that is not there.
+    ///
+    /// ⚠ Sabotage: drop the negative caching (`.or_insert_with` storing `None`), and the count
+    /// below becomes one per call.
+    #[test]
+    fn a_look_that_will_not_load_is_attempted_once() {
+        let (dir, store) = look_store("missing", &[]);
+        let cache: LookCache = Mutex::new(std::collections::HashMap::new());
+        let e = with_look("gone.cube");
+        for _ in 0..5 {
+            assert!(
+                look_for(&e, Some(&store), Some(&cache)).is_none(),
+                "a look this machine does not have resolves to nothing"
+            );
+        }
+        assert_eq!(
+            cache.lock().unwrap().len(),
+            1,
+            "the failure must be remembered, not retried per thumbnail"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⚠ A look at zero strength is not a look: it must not be loaded at all.
+    #[test]
+    fn an_inactive_look_resolves_to_nothing() {
+        let (dir, store) = look_store("inactive", &["x.cube"]);
+        let cache: LookCache = Mutex::new(std::collections::HashMap::new());
+        let mut e = with_look("x.cube");
+        e.look.strength = 0.0;
+        assert!(look_for(&e, Some(&store), Some(&cache)).is_none());
+        assert!(
+            cache.lock().unwrap().is_empty(),
+            "an inactive look must not even be looked up"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use std::sync::Mutex;
 
     /// `load_thumbnail` with the shipping kernel — the tests using it are about edits reaching
     /// the pixels, not about which kernel read them.
     fn load_thumbnail_default(req: &ThumbRequest) -> Option<Thumbnail> {
-        load_thumbnail(req, pipeline::Resampler::default(), None)
+        load_thumbnail(req, pipeline::Resampler::default(), None, None)
     }
 
     /// Collect results until `want` of them have arrived or the deadline passes.
@@ -781,6 +972,7 @@ mod tests {
             thumb.clone(),
             &Edits::default(),
             pipeline::Resampler::default(),
+            None,
         );
         assert_eq!(out.width, 2);
         assert_eq!(out.height, 1);
@@ -798,7 +990,7 @@ mod tests {
         };
         let mut edits = Edits::default();
         edits.geometry.crop.right = 0.5;
-        let out = render_edits(thumb, &edits, pipeline::Resampler::default());
+        let out = render_edits(thumb, &edits, pipeline::Resampler::default(), None);
         assert!(
             out.width < 40,
             "a half-width crop must narrow the thumbnail, got {}",
@@ -923,6 +1115,7 @@ mod tests {
                 ..Default::default()
             },
             pipeline::Resampler::default(),
+            None,
         );
         let after = spread(&after.rgba);
         assert!(
@@ -958,11 +1151,23 @@ mod tests {
             edits: Edits::default(),
         };
 
-        let first = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract);
+        let first = load_with(
+            &req,
+            pipeline::Resampler::default(),
+            Some(&store),
+            None,
+            &extract,
+        );
         assert!(first.is_some(), "the first load must produce a thumbnail");
         assert_eq!(n.load(Ordering::Relaxed), 1, "the first load extracts");
 
-        let second = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract);
+        let second = load_with(
+            &req,
+            pipeline::Resampler::default(),
+            Some(&store),
+            None,
+            &extract,
+        );
         assert!(second.is_some(), "the second load must produce a thumbnail");
         assert_eq!(
             n.load(Ordering::Relaxed),
@@ -992,8 +1197,8 @@ mod tests {
             id: PhotoId::original(photo),
             edits: Edits::default(),
         };
-        let _ = load_with(&req, pipeline::Resampler::default(), None, &extract);
-        let _ = load_with(&req, pipeline::Resampler::default(), None, &extract);
+        let _ = load_with(&req, pipeline::Resampler::default(), None, None, &extract);
+        let _ = load_with(&req, pipeline::Resampler::default(), None, None, &extract);
         assert_eq!(n.load(Ordering::Relaxed), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1020,7 +1225,13 @@ mod tests {
         image::RgbImage::from_fn(8, 6, |_, _| image::Rgb([10, 20, 30]))
             .save(&photo)
             .unwrap();
-        let _ = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract);
+        let _ = load_with(
+            &req,
+            pipeline::Resampler::default(),
+            Some(&store),
+            None,
+            &extract,
+        );
         assert_eq!(n.load(Ordering::Relaxed), 1);
 
         // ⚠ A different SIZE as well as a different time, so the test cannot pass merely because
@@ -1028,8 +1239,14 @@ mod tests {
         image::RgbImage::from_fn(24, 18, |x, y| image::Rgb([x as u8, y as u8, 200]))
             .save(&photo)
             .unwrap();
-        let got = load_with(&req, pipeline::Resampler::default(), Some(&store), &extract)
-            .expect("the changed file must still produce a thumbnail");
+        let got = load_with(
+            &req,
+            pipeline::Resampler::default(),
+            Some(&store),
+            None,
+            &extract,
+        )
+        .expect("the changed file must still produce a thumbnail");
         assert_eq!(
             n.load(Ordering::Relaxed),
             2,
