@@ -120,7 +120,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
-### M8.13 — a GPU-resident base for `GpuBrushRaster` (2026-09-18)
+### M8.13 — a GPU-resident base for `GpuBrushRaster` (2026-09-18). ✅ CONFIRMED BY USE
 
 **What it does.** A `GpuChain` sitting immediately before a mask downloads its output so the CPU
 `MaskStage` can hand the auto-mask gate a `BaseRef`. Those bytes are still on the device.

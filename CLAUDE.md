@@ -144,10 +144,10 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-18)
 
-**2544 tests, 74 goldens.** ⚠ On branch **`gpu-brush-resident-base`**, NOT merged, NOT pushed —
-the user merges and pushes. `main` is also still ahead of `origin/main`.
+**2544 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
+`origin/main`** — **not pushed; the user pushes.**
 
-🟡 **M8.13 — a GPU-resident base for `GpuBrushRaster`. Built and measured; NOT YET CONFIRMED BY USE.**
+✅ **M8.13 — a GPU-resident base for `GpuBrushRaster`. Merged and CONFIRMED BY USE.**
 A `GpuChain` before a mask deposits its output buffer; the gate takes it instead of memcpying the
 same plane back up. `DSCF6509.RAF`, REALISTIC edits, warm frames 2–5, against the same build with
 the take forced to miss:
@@ -188,8 +188,8 @@ recorded finding:
 
 **The candidates:**
 
-1. ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **BUILT AND MEASURED 2026-09-18 (M8.13),
-   1.13–1.36× on a masked global drag.** ⚠ Awaiting confirmation by use, on the branch.
+1. ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE 2026-09-18 (M8.13), 1.13–1.36× on a
+   masked global drag. Merged and confirmed by use.**
 2. ⛔ ~~**Item 5, spot removal**~~ — **CLOSED 2026-09-18, measured and not worth doing.** 0.05–0.4 ms
    for realistic use on a cached prefix stage, against a ~1.6 ms GPU floor.
 3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
@@ -252,7 +252,7 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
   cost is **not transfer**: a serial u8→u32 repack (10.6–13.8 ms per encode) and a 4×-inflated download
   wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
 - ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE, M8.13 (2026-09-18): 1.13–1.36× on a
-  masked global drag, measured against a forced miss.** ⚠ Not merged, not confirmed by use.
+  masked global drag, measured against a forced miss. Merged and confirmed by use.**
 - **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 21 stages ported that condition now holds, so this is live rather than blocked.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
