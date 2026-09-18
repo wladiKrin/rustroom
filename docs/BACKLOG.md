@@ -1392,6 +1392,24 @@ to an AI assistant, not to a contributor**, and it is enormous.
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
 
+## ✅ ~~The whole-pipeline builders default `ProfileRendering` SILENTLY~~ — CLOSED 2026-09-18
+
+> **The silent default is gone.** All six builders take the rendering as a required argument; 122
+> call sites across four crates now pass it, and `ProfileRendering::colorimetric()` is the name a
+> caller that wants none uses. Behaviour-preserving: **2557 tests, 74 goldens, no golden image on
+> disk changed.**
+>
+> ⚠⚠ **NOT "the class is closed" — "the silent default is gone".** A developer adding a call site
+> will type whatever compiles, and the compiler cannot know which rendering is right. What this
+> bought is a decision point and a name that looks wrong in review. A hard guarantee would need a
+> test asserting every user-facing render path passes a *resolved* rendering, which is a different
+> and harder piece of work and is **not** done.
+>
+> ⚠ A rename of `ProfileRendering` to `TailRendering` is still wanted — `look` is not a
+> camera-profile field — and is now a ~120-site diff. Its own change, never folded into another.
+>
+> ⚠ Original text follows, as the record of what the hole was.
+
 ## ⚠⚠ The whole-pipeline builders default `ProfileRendering` SILENTLY (recorded 2026-09-18)
 
 **Three call sites have lost the camera rendering and the creative look this way**, and the third
