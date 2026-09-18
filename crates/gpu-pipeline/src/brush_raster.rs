@@ -244,6 +244,11 @@ impl GpuBrushRaster {
         // ⚠⚠ **Carried beside the binding rather than produced by the match, because the no-gate
         // arm has no image to produce** — and a `GpuImage` at a dummy size would be a lie the
         // dimension check in `SharedPlane::take` is there to catch.
+        // ⚠⚠ **Reported, because `base_mb` alone became ambiguous the moment a base could be
+        // TAKEN.** It is derived from `staging`, so a taken base and no base at all both print
+        // `base_mb=0.0` — and a measurement that cannot tell "the memcpy is gone" from "there was
+        // never a gate" is exactly how this project has mispriced three things.
+        let mut base_src = "none";
         let mut resident: Option<crate::GpuImage> = None;
         let (base_buf, img_w, img_h, bx0, by0, has_base) = match (base, plan.gating_rows) {
             (Some(b), Some(_)) => {
@@ -277,8 +282,12 @@ impl GpuBrushRaster {
                 // taken, and `end_mask` clears one that nobody took. A plane taken by the wrong
                 // frame renders a **plausible photograph, not an error**.
                 let img = match ctx.shared_plane().take(b.w, b.h) {
-                    Some(resident_base) => resident_base,
+                    Some(resident_base) => {
+                        base_src = "taken";
+                        resident_base
+                    }
                     None => {
+                        base_src = "staged";
                         let img = crate::GpuImage::new(ctx, b.w, b.h)?;
                         let t_stage = std::time::Instant::now();
                         let st = ctx.cache.take_staging(device, bytes)?;
@@ -498,7 +507,8 @@ impl GpuBrushRaster {
         // project has been wrong about exactly that kind of subtraction three times.
         if std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
             eprintln!(
-                "BRUSHGPU box={}x{} dabs={} base_mb={:.1} stage={:.2} gpu={:.2} read={:.2}",
+                "BRUSHGPU box={}x{} dabs={} base={base_src}/{:.1}MB stage={:.2} gpu={:.2} \
+                 read={:.2}",
                 w,
                 h,
                 dabs.len(),

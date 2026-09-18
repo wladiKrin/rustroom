@@ -142,26 +142,34 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-17)
+### State (2026-09-18)
 
-**2542 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
-`origin/main`** — **not pushed; the user pushes.** (No count: it goes stale within a merge.)
+**2544 tests, 74 goldens.** ⚠ On branch **`gpu-brush-resident-base`**, NOT merged, NOT pushed —
+the user merges and pushes. `main` is also still ahead of `origin/main`.
 
-✅ **The dehaze airlight is invariant to geometry, on all three paths — merged and CONFIRMED BY USE.**
-Straightening, cropping, perspective and a lens profile no longer move it.
+🟡 **M8.13 — a GPU-resident base for `GpuBrushRaster`. Built and measured; NOT YET CONFIRMED BY USE.**
+A `GpuChain` before a mask deposits its output buffer; the gate takes it instead of memcpying the
+same plane back up. `DSCF6509.RAF`, REALISTIC edits, warm frames 2–5, against the same build with
+the take forced to miss:
 
-| path | was | now |
+| warm frames 2–5 | take forced to miss | taking |
 |---|---|---|
-| global replay (`prefix_airlight`) | 6.06–6.81 levels across a drag | **0.00 across ±40°** |
-| a mask's capture half | 9.4–12.1, estimated per frame | given the same value |
-| **the GPU twin** | estimated from the **rotated** frame | given the same value |
+| `stage=` (host memcpy) | 2.23–2.86 ms | **0.00** |
+| `gpu=` | 10.02–19.09 ms | **5.14–6.77 ms** |
+| whole frame | 88.1–109.7 ms | **78.2–80.7 ms** → **1.13–1.36×** |
 
-⚠ **The trade, permanent:** a crop no longer re-estimates the airlight — hazy sky and clear
-foreground share one value. That *is* invariance, and a crop drag is continuous too. Dehazed
-photographs render a one-off shift differently, in the family of M8.7's accepted 5.6 levels.
+⚠⚠ **About twice the plan's prediction, for a reason the plan did not name:** deleting the staging
+buffer also deletes the `copy_buffer_to_buffer` that pushed **78.1 MB** across the device. **Do not
+requote the ~2.2 ms memcpy as the win** — it is one of two halves.
 
-⚠ `accelerate_prefix_stage` now takes **`SeamFacts { lens, resampler, airlight }`** — grouped when
-clippy's `too_many_arguments` fired at 8, which was a fair signal.
+⚠ It helps a **global drag over a masked photograph with a real edit set**, and nothing else.
+Measured: no globals and a light set (exposure + contrast) build **no chain**, so there is nothing
+to offer.
+
+⚠⚠ **`CoverageRasterizer::begin_mask` is now `end_mask`, and that was forced by a defect.** The old
+hook cleared the shared slot at the *top* of a mask's apply — after the preceding chain had already
+deposited — so the hand-off could never have fired: green, documented and dead. It now runs from an
+RAII guard at the end, covering every early return and a panic, which is also strictly tighter.
 
 ### ▶ Next action — a choice, and the machine is finally quiet
 
@@ -180,8 +188,8 @@ recorded finding:
 
 **The candidates:**
 
-1. **A GPU-resident base for `GpuBrushRaster`** — a global slider drag over a masked photo gains
-   **1.00×, by construction**. ⚠ Only the zero is measured.
+1. ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **BUILT AND MEASURED 2026-09-18 (M8.13),
+   1.13–1.36× on a masked global drag.** ⚠ Awaiting confirmation by use, on the branch.
 2. ⛔ ~~**Item 5, spot removal**~~ — **CLOSED 2026-09-18, measured and not worth doing.** 0.05–0.4 ms
    for realistic use on a cached prefix stage, against a ~1.6 ms GPU floor.
 3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
@@ -243,8 +251,8 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 - **A GPU-side mask coverage cache** — ✅ **measured 2026-09-16; the ceiling missed 4–8×.** ⚠⚠ But the
   cost is **not transfer**: a serial u8→u32 repack (10.6–13.8 ms per encode) and a 4×-inflated download
   wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
-- **A GPU-resident base for `GpuBrushRaster`** — still open, still unmeasured: a global drag over a masked
-  photo gains **1.00×, by construction**.
+- ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE, M8.13 (2026-09-18): 1.13–1.36× on a
+  masked global drag, measured against a forced miss.** ⚠ Not merged, not confirmed by use.
 - **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 21 stages ported that condition now holds, so this is live rather than blocked.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
