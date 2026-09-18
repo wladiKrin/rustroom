@@ -557,6 +557,8 @@ fn main() {
                         image: image.clone(),
                         baseline: color::wb::Illuminant::default(),
                         lens: lens.clone(),
+                        curve: None,
+                        baseline_ev: None,
                     },
                     &edits,
                     &dest,
@@ -566,6 +568,7 @@ fn main() {
                         gpu_tail,
                     },
                     &export::FileMetadata::default(),
+                    None,
                 )
                 .expect("export")
             })

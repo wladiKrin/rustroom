@@ -80,6 +80,8 @@ fn main() {
                 image: image.clone(),
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
+                curve: None,
+                baseline_ev: None,
             },
             &edit_model::Edits::default(),
             &dest,
@@ -89,6 +91,7 @@ fn main() {
                 gpu_tail: false,
             },
             &export::FileMetadata::resolve(&o.metadata, described()),
+            None,
         ) {
             Ok(()) => println!("wrote {}", dest.display()),
             Err(e) => println!("FAILED {}: {e}", dest.display()),

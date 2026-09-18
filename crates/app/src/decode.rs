@@ -227,6 +227,9 @@ pub(crate) fn decode_for_export(
     profile: Option<std::path::PathBuf>,
 ) -> Result<rustroom_app::batch_export::ExportSource, String> {
     if catalog::is_raw(path) {
+        // ⚠ Cloned because `DecodeOptions` takes ownership below and the helper needs the path
+        // after the decode.
+        let profile_for_rendering = profile.clone();
         raw_decode::decode_raw(
             path,
             &raw_decode::DecodeOptions {
@@ -235,10 +238,19 @@ pub(crate) fn decode_for_export(
                 ..raw_decode::DecodeOptions::linear_scene()
             },
         )
-        .map(|d| rustroom_app::batch_export::ExportSource {
-            lens: resolve_lens(&d.metadata).shot,
-            baseline: d.metadata.as_shot.unwrap_or_default(),
-            image: d.image,
+        .map(|d| {
+            // ⚠⚠ **The SAME helper the preview's decode calls**, deliberately — one derivation of
+            // "what this profile renders with". Until 2026-09-18 the export derived nothing at all
+            // and rendered with the built-in curve while the preview consulted the profile, which
+            // is precisely the shape two derivations produce.
+            let (curve, baseline_ev) = profile_rendering(&profile_for_rendering);
+            rustroom_app::batch_export::ExportSource {
+                lens: resolve_lens(&d.metadata).shot,
+                baseline: d.metadata.as_shot.unwrap_or_default(),
+                image: d.image,
+                curve,
+                baseline_ev,
+            }
         })
         .map_err(|e| e.to_string())
     } else {
@@ -249,6 +261,11 @@ pub(crate) fn decode_for_export(
                 image: d.image,
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
+                // ⚠ A JPEG/PNG/TIFF has no camera profile, and `render_cached` strips the camera
+                // rendering from such a source anyway — it has already been rendered by whatever
+                // produced it, and applying ours would render it twice.
+                curve: None,
+                baseline_ev: None,
             })
             .map_err(|e| e.to_string())
     }

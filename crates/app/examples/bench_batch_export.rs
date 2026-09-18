@@ -80,6 +80,9 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                 lens,
                 baseline: d.metadata.as_shot.unwrap_or_default(),
                 image: d.image,
+                // ⚠ The bench prices wall clock, not colour; a profile would only add a stage.
+                curve: None,
+                baseline_ev: None,
             }
         })
         .map_err(|e| e.to_string())
@@ -89,6 +92,8 @@ fn decode(path: &Path, demosaic: raw_decode::Demosaic) -> Result<ExportSource, S
                 image: d.image,
                 baseline: color::wb::Illuminant::default(),
                 lens: None,
+                curve: None,
+                baseline_ev: None,
             })
             .map_err(|e| e.to_string())
     }
@@ -130,6 +135,7 @@ fn one_run(files: &[PathBuf], dest: &Path, width: usize, demosaic: raw_decode::D
         Arc::new(AtomicBool::new(false)),
         render,
         width,
+        None,
     );
     // Drain to completion. ⚠ A collision here would block forever — the fresh directory above is
     // what makes that unreachable rather than something to answer.

@@ -108,6 +108,11 @@ pub fn export_one(
     opts: &ExportOptions,
     render: ExportRender,
     meta: &export::FileMetadata,
+    // ⚠⚠ **Passed in rather than resolved here, and that is a per-batch/per-photo distinction.**
+    // A 64³ cube is 786 KB and one batch shares one look, so loading it here would be per-photo
+    // work for a per-batch fact — the same reasoning `RenderEngine`'s worker gives for caching it
+    // in one slot. `export_one` does no file I/O of its own.
+    look: Option<&std::sync::Arc<pipeline::lut::Cube>>,
 ) -> Result<(), String> {
     let source_long = source.image.width().max(source.image.height());
     let scaled = match opts.max_edge {
@@ -137,10 +142,16 @@ pub fn export_one(
         render.resampler,
         Some(airlight),
     );
-    // ⚠ `ProfileRendering::default()` is inherited from `build_pipeline_spec` rather than
-    // introduced here: the camera rendering's profile curve and baseline exposure do not reach an
-    // export today either. Deliberately **not** fixed in this change — it is a second bug with its
-    // own measurement, and mixing it in would make this diff unattributable. See `docs/BACKLOG.md`.
+    // ⚠⚠ **This was `ProfileRendering::default()` until 2026-09-18, and that was the bug**: an
+    // export rendered with the *built-in* curve and `BASELINE_EV` while the preview consulted the
+    // camera profile, and the creative look never ran at all. Measured before the fix — on the
+    // catalogue's own X-T4 the difference is **0.00 levels**, because that profile's
+    // `ProfileToneCurve` is exactly `[[0,0],[1,1]]` (which `effective_profile_curve` rejects) and
+    // it declares no `BaselineExposure`. A profile carrying a real curve diverges by up to
+    // **~157 of 255 levels**, which is what the fixture check in
+    // `examples/probe_export_rendering.rs` measures.
+    //
+    // ⚠ `curve` and `baseline_ev` travel on `ExportSource` because this struct **borrows** them.
     let (_, tail) = pipeline::build_pipeline_split_in_region_with_brush(
         edits,
         scale,
@@ -148,7 +159,11 @@ pub fn export_one(
         None,
         spec,
         source.lens.clone(),
-        pipeline::ProfileRendering::default(),
+        pipeline::ProfileRendering {
+            curve: source.curve.as_deref(),
+            baseline_ev: source.baseline_ev,
+            look,
+        },
     );
 
     // ⚠ Resolved once and only when the setting is on: `shared()` acquires an adapter on first
@@ -256,6 +271,21 @@ pub struct ExportSource {
     pub baseline: color::wb::Illuminant,
     /// The matched lens profile; `None` for a JPEG, or for a lens the database does not list.
     pub lens: Option<lens_profile::LensShot>,
+    /// The camera profile's `ProfileToneCurve`, when it has one.
+    ///
+    /// ⚠⚠ **Owned, because [`pipeline::ProfileRendering`] BORROWS** — the borrow has to outlive the
+    /// whole render, and this struct is what lives that long. The same shape `lens` above already
+    /// takes.
+    ///
+    /// ⚠ Derived by the *same* `decode::profile_rendering` helper the preview's decode uses. Two
+    /// derivations of "what this profile renders with" is how a preview and an export come to
+    /// disagree, which is the bug this field exists to close.
+    pub curve: Option<Vec<[f32; 2]>>,
+    /// The camera profile's `BaselineExposure` in stops.
+    ///
+    /// ⚠ `None` is not `Some(0.0)`: a profile that declares no shift has made a statement and one
+    /// that says nothing has not — `ProfileRendering::baseline_ev`'s own rule.
+    pub baseline_ev: Option<f32>,
 }
 
 /// What the *render* needs that [`ExportOptions`] deliberately does not carry.
@@ -281,6 +311,155 @@ mod tests {
     use crate::batch_export::fixtures::*;
     use export::ExportFormat;
 
+    /// A **non-identity** tone curve, for the camera-rendering tests.
+    ///
+    /// ⚠⚠ **Non-identity is the whole point, and an identity one is how this bug survived.** The
+    /// catalogue's own X-T4 profile carries exactly `[[0,0],[1,1]]`, which
+    /// `pipeline::effective_profile_curve` rejects in favour of the built-in curve — so a test
+    /// written against that profile passes with the fix **reverted**, and measures nothing. A fix
+    /// that changes every exported RAW cannot be guarded by a fixture that cannot see it.
+    fn real_curve() -> Vec<[f32; 2]> {
+        (0..=16)
+            .map(|i| {
+                let x = i as f32 / 16.0;
+                [x, x.powf(0.72)]
+            })
+            .collect()
+    }
+
+    /// Export one photo with a given rendering and return the file's bytes.
+    fn rendered(tag: &str, curve: Option<Vec<[f32; 2]>>, baseline_ev: Option<f32>) -> Vec<u8> {
+        let d = TempDir::new(tag);
+        let mut o = opts(&d, None);
+        // ⚠ TIFF for `exported_with`'s reason: a lossy encoder would quantize the difference.
+        o.format = ExportFormat::Tiff8;
+        let dest = d.0.join("out.tif");
+        // ⚠⚠ The rendering stage is gated on `edits.applied_rendering()`, which defaults to
+        // `Rendering::None` — so without this the pipeline builds NO stage and every variant below
+        // is byte-identical. That is exactly how the first run of `probe_export_rendering`
+        // measured 0.00 for everything and read like "no effect".
+        let e = Edits {
+            rendering: Some(edit_model::Rendering::Camera),
+            ..Default::default()
+        };
+        export_one(
+            ExportSource {
+                image: edged(160, 120),
+                baseline: color::wb::Illuminant::default(),
+                lens: None,
+                curve,
+                baseline_ev,
+            },
+            &e,
+            &dest,
+            &o,
+            CPU,
+            &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+            None,
+        )
+        .unwrap();
+        std::fs::read(&dest).unwrap()
+    }
+
+    /// ⚠⚠ **The test of this fix: the camera profile's tone curve reaches an exported file.**
+    /// Until 2026-09-18 `export_one` passed `ProfileRendering::default()`, so an export rendered
+    /// with the built-in curve while the preview consulted the profile.
+    ///
+    /// ⚠ Sabotage: put `curve: None` back into `export_one`'s `ProfileRendering`.
+    #[test]
+    fn the_profiles_tone_curve_reaches_an_exported_file() {
+        let without = rendered("render_curve_off", None, None);
+        let with = rendered("render_curve_on", Some(real_curve()), None);
+        assert_ne!(
+            without, with,
+            "a profile's tone curve must change the exported pixels"
+        );
+    }
+
+    /// ⚠⚠ **The other half, and it is a SEPARATE test on purpose.** Curve and baseline exposure
+    /// travel together through one struct, so one test asserting "the rendering reaches an export"
+    /// would pass with either half still withheld — the guard-that-enumerates failure this repo
+    /// records.
+    ///
+    /// ⚠ Sabotage: put `baseline_ev: None` back.
+    #[test]
+    fn the_profiles_baseline_exposure_reaches_an_exported_file() {
+        let without = rendered("render_base_off", Some(real_curve()), None);
+        let with = rendered("render_base_on", Some(real_curve()), Some(0.5));
+        assert_ne!(
+            without, with,
+            "a profile's baseline exposure must change the exported pixels"
+        );
+    }
+
+    /// A 2³ cube that **darkens everything to 40%**.
+    ///
+    /// ⚠⚠ **It must change a NEUTRAL image, and the first version did not.** A cube that swapped
+    /// green into red looks obviously "loud" and is a perfect no-op on grey — and `edged`, like
+    /// every fixture here, is grey (`[0.20; 3]` and `[0.55; 3]`). The test failed for the fixture's
+    /// reason rather than the wiring's, which is the same trap `real_curve` above documents: a
+    /// fixture that cannot see the thing under test proves nothing about it.
+    ///
+    /// ⚠ A uniform scale of the corners is exactly a uniform scale after trilinear interpolation,
+    /// so this is `out = 0.4 * in` everywhere rather than only at the corners.
+    fn loud_cube() -> std::sync::Arc<pipeline::lut::Cube> {
+        let mut t = String::from("LUT_3D_SIZE 2\n");
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    let f = |v: usize| v as f32 * 0.4;
+                    t.push_str(&format!("{} {} {}\n", f(r), f(g), f(b)));
+                }
+            }
+        }
+        std::sync::Arc::new(pipeline::lut::Cube::parse(&t).expect("a parseable cube"))
+    }
+
+    /// ⚠⚠ **The creative look reaches an exported file — and this half was NOT in the backlog
+    /// entry.** It was found while scoping the tone-curve fix: `ProfileRendering` carries three
+    /// things and `export_one` was defaulting all three, so a look never ran at export either.
+    ///
+    /// ⚠ Sabotage: pass `look: None` in `export_one`'s `ProfileRendering`.
+    #[test]
+    fn the_creative_look_reaches_an_exported_file() {
+        let d = TempDir::new("render_look");
+        let mut o = opts(&d, None);
+        o.format = ExportFormat::Tiff8;
+        let e = Edits {
+            look: edit_model::Look {
+                file: Some("loud.cube".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let write = |name: &str, look: Option<&std::sync::Arc<pipeline::lut::Cube>>| {
+            let dest = d.0.join(name);
+            export_one(
+                ExportSource {
+                    image: edged(160, 120),
+                    baseline: color::wb::Illuminant::default(),
+                    lens: None,
+                    curve: None,
+                    baseline_ev: None,
+                },
+                &e,
+                &dest,
+                &o,
+                CPU,
+                &export::FileMetadata::resolve(&o.metadata, export::FileMetadata::default()),
+                look,
+            )
+            .unwrap();
+            std::fs::read(&dest).unwrap()
+        };
+        let cube = loud_cube();
+        assert_ne!(
+            write("without.tif", None),
+            write("with.tif", Some(&cube)),
+            "a look handed to the export must change the exported pixels"
+        );
+    }
+
     /// Read back a written JPEG's dimensions.
     fn jpeg_size(path: &Path) -> (u32, u32) {
         let img = image::open(path).expect("a readable jpeg");
@@ -298,6 +477,7 @@ mod tests {
             &opts(&d, None),
             CPU,
             &export::FileMetadata::default(),
+            None,
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -314,6 +494,7 @@ mod tests {
             &opts(&d, Some(10)),
             CPU,
             &export::FileMetadata::default(),
+            None,
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (10, 5));
@@ -331,6 +512,7 @@ mod tests {
             &opts(&d, Some(999)),
             CPU,
             &export::FileMetadata::default(),
+            None,
         )
         .unwrap();
         assert_eq!(jpeg_size(&dest), (40, 20));
@@ -411,12 +593,15 @@ mod tests {
                     image: edged(160, 120),
                     baseline: color::wb::Illuminant::default(),
                     lens,
+                    curve: None,
+                    baseline_ev: None,
                 },
                 &lens_on(),
                 &dest,
                 &o,
                 CPU,
                 &export::FileMetadata::default(),
+                None,
             )
             .unwrap();
             std::fs::read(&dest).unwrap()
@@ -461,6 +646,7 @@ mod tests {
                         gpu_tail,
                     },
                     &export::FileMetadata::default(),
+                    None,
                 )
                 .unwrap();
             })
@@ -497,6 +683,7 @@ mod tests {
             &base,
             CPU,
             &export::FileMetadata::resolve(&base.metadata, export::FileMetadata::default()),
+            None,
         )
         .unwrap();
         let mut changed = base.clone();
@@ -509,6 +696,7 @@ mod tests {
             &changed,
             CPU,
             &export::FileMetadata::resolve(&changed.metadata, export::FileMetadata::default()),
+            None,
         )
         .unwrap();
         (
@@ -651,6 +839,7 @@ mod tests {
             &opts(&d, None),
             CPU,
             &export::FileMetadata::default(),
+            None,
         )
         .is_err());
     }

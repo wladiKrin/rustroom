@@ -17,15 +17,25 @@ use pipeline::{ProfileRendering, RenderScale, RenderSpec, Resampler};
 
 fn main() {
     let mut a = std::env::args().skip(1);
-    let raw = a.next().expect("usage: probe_export_rendering <raw> <profile.dcp>");
-    let dcp = a.next().expect("usage: probe_export_rendering <raw> <profile.dcp>");
+    let raw = a
+        .next()
+        .expect("usage: probe_export_rendering <raw> <profile.dcp>");
+    let dcp = a
+        .next()
+        .expect("usage: probe_export_rendering <raw> <profile.dcp>");
 
     let opts = raw_decode::DecodeOptions {
         camera_profile: Some(std::path::PathBuf::from(&dcp)),
         ..raw_decode::DecodeOptions::linear_scene()
     };
     let d = raw_decode::decode_raw(std::path::Path::new(&raw), &opts).expect("decode");
-    println!("{} {} — {}x{}", d.metadata.make, d.metadata.model, d.image.width(), d.image.height());
+    println!(
+        "{} {} — {}x{}",
+        d.metadata.make,
+        d.metadata.model,
+        d.image.width(),
+        d.image.height()
+    );
 
     let p = camera_profile::CameraProfile::from_file(std::path::Path::new(&dcp)).expect("profile");
     let curve = p.tone_curve;
@@ -37,7 +47,14 @@ fn main() {
     );
     if let Some(c) = &curve {
         let identity = c.len() < 2 || c.iter().all(|q| (q[0] - q[1]).abs() < 1e-4);
-        println!("  ⚠ the curve is {}", if identity { "THE IDENTITY — it renders nothing" } else { "a real curve" });
+        println!(
+            "  ⚠ the curve is {}",
+            if identity {
+                "THE IDENTITY — it renders nothing"
+            } else {
+                "a real curve"
+            }
+        );
     }
 
     // ⚠ A realistic edit set: the rendering interacts with the tone stages, so measuring it on a
@@ -99,15 +116,27 @@ fn main() {
     for (label, r) in [
         (
             "curve only",
-            ProfileRendering { curve: curve.as_deref(), baseline_ev: None, look: None },
+            ProfileRendering {
+                curve: curve.as_deref(),
+                baseline_ev: None,
+                look: None,
+            },
         ),
         (
             "baseline only",
-            ProfileRendering { curve: None, baseline_ev: baseline, look: None },
+            ProfileRendering {
+                curve: None,
+                baseline_ev: baseline,
+                look: None,
+            },
         ),
         (
             "BOTH (what the preview shows)",
-            ProfileRendering { curve: curve.as_deref(), baseline_ev: baseline, look: None },
+            ProfileRendering {
+                curve: curve.as_deref(),
+                baseline_ev: baseline,
+                look: None,
+            },
         ),
     ] {
         let got = render(r);
