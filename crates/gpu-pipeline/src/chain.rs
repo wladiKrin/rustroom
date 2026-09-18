@@ -247,6 +247,13 @@ impl GpuChain {
         // staging buffer to ask the pool for. The counter moves with it: a chain that shared its
         // input has genuinely uploaded nothing, and `transfer_counts` must say so or the claim
         // this milestone makes is unobservable.
+        // ⚠⚠ **In situ, because the decomposition below prices a SYNTHETIC split.** That harness
+        // gives each phase its own submit, which is not what ships: here the device-side upload
+        // copy, every dispatch and the download copy share one submit, so only the host halves and
+        // the fused GPU half are separable without changing what is measured. The backlog entry
+        // for the prefix->tail seam says in as many words that isolating the download "needs a
+        // `gpu-pipeline` change" — this is that change, and it is a print, not a path.
+        let t_memcpy = std::time::Instant::now();
         let mut enc = device.create_command_encoder(&Default::default());
         let staging = if shared_taken {
             None
@@ -307,6 +314,8 @@ impl GpuChain {
         // 6.33 ms of copy+map plus a 6.87 ms `to_vec`, against 2.59 + 2.19 for RGBA8 — so **8.4 ms**,
         // which is a **2.8x** saving rather than the 4x the size ratio suggests, because a download
         // carries a **1.28 ms fixed cost** that no size reduction touches.
+        let d_memcpy = t_memcpy.elapsed();
+        let t_submit = std::time::Instant::now();
         let (src, out_bytes) = match &packed {
             Some(p) => (p, (image.width() * image.height() * 4) as u64),
             None => (&img.buffer, bytes),
@@ -330,6 +339,8 @@ impl GpuChain {
             timeout: None,
         });
         rx.recv().ok()?.ok()?;
+        let d_submit = t_submit.elapsed();
+        let t_read = std::time::Instant::now();
         // ⚠⚠ **Deposited HERE and nowhere earlier**, after `poll(Wait)` has confirmed the
         // submission finished — the GPU writes this buffer during the submit, so offering it any
         // sooner would hand a consumer pixels that are still being written. The same rule that
@@ -348,6 +359,25 @@ impl GpuChain {
         let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);
+        if std::env::var("RUSTROOM_DEBUG_XFER").is_ok() {
+            eprintln!(
+                "CHAIN {:>26} {}x{} in={:.1}MB out={:.1}MB took={} memcpy={:.2} submit={:.2} \
+                 tovec={:.2}",
+                self.stages
+                    .iter()
+                    .map(|s| s.name())
+                    .collect::<Vec<_>>()
+                    .join("+"),
+                image.width(),
+                image.height(),
+                bytes as f64 / 1.0e6,
+                out_bytes as f64 / 1.0e6,
+                shared_taken,
+                d_memcpy.as_secs_f64() * 1e3,
+                d_submit.as_secs_f64() * 1e3,
+                t_read.elapsed().as_secs_f64() * 1e3,
+            );
+        }
         // ⚠ Returned only **here**, after `poll(Wait)` has confirmed the submission finished —
         // the GPU reads this buffer during the submit, so handing it back any earlier would let
         // the next render map a buffer still being read. On the `?` paths above it is simply
