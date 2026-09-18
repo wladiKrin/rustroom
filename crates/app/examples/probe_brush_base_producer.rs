@@ -124,5 +124,36 @@ fn main() {
                  be helped by a resident base, and the milestone must not claim it."
             ),
         }
+
+        // ⚠⚠ **Task 6: the shape above is not the win — run it.** `stage=` in the `BRUSHGPU` line
+        // is the host memcpy the resident base deletes, and it is the only number this milestone
+        // is allowed to claim. On the taking path it must read **0.00**; anything else means the
+        // take missed and the mechanism is dead while every test stays green.
+        //
+        // ⚠ Five frames, because the first carries a cold allocation and a warm drag is what a
+        // photographer holds. Read the BAND across frames 2-5, never frame 1 alone.
+        if weight == 2 && std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
+            eprintln!("  ── five frames of the REALISTIC config (read `stage=`):");
+            for _ in 0..5 {
+                let tail = pipeline::build_pipeline_split(&e, scale).1;
+                let (p, _) = gpu_pipeline::accelerate(
+                    tail,
+                    &e,
+                    scale,
+                    None,
+                    ProfileRendering::default(),
+                    spec,
+                    ctx,
+                );
+                let t = std::time::Instant::now();
+                let out = p.run(buffer.clone());
+                eprintln!(
+                    "     frame {:.1} ms -> {}x{}",
+                    t.elapsed().as_secs_f64() * 1e3,
+                    out.width(),
+                    out.height()
+                );
+            }
+        }
     }
 }

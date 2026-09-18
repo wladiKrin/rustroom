@@ -357,7 +357,7 @@ pub trait CoverageRasterizer: Send + Sync {
     /// this implementation does not handle all return `None` and cost only the attempt. **Fail
     /// toward the CPU** — `GpuStage::cpu_cost`'s rule and `PrefixKey`'s, because a wrong answer
     /// here is wrong pixels rather than lost milliseconds.
-    /// Called once at the top of every mask's `apply`, before any coverage is built.
+    /// Called once as every mask's `apply` finishes, on **every** exit path and on a panic.
     ///
     /// ⚠⚠ **This exists so an implementation can drop state scoped to ONE apply, and without it a
     /// shared GPU plane would be taken by the wrong frame.** A frame whose coverage comes from
@@ -365,11 +365,22 @@ pub trait CoverageRasterizer: Send + Sync {
     /// chain that then found a *previous* apply's plane still resident would render those pixels.
     /// The failure is a plausible photograph, not an error.
     ///
+    /// ⚠⚠ **It hangs off the END of the apply, and moving it there was forced by a defect rather
+    /// than chosen.** It used to run at the *top*, which reads as the safer place — clear first,
+    /// then work. But a plane deposited *for* this mask is deposited by the stage **before** it:
+    /// `GpuChain::offer_output` parks the very buffer the gate is about to need. A clear at the
+    /// top destroys that fresh deposit before its only consumer can ask for it, so the hand-off
+    /// silently never fires — no wrong pixels, just a permanently dead optimisation.
+    ///
+    /// ⚠ Clearing at the end is also **strictly tighter**, not merely different: a deposit can no
+    /// longer outlive the apply that made it even by one stage, where a top-clear let it sit in
+    /// the slot for the whole gap between two masks.
+    ///
     /// ⚠ Deliberately **not** folded into [`Self::rasterize`]: a mask calls this even when it goes
     /// on to rasterise nothing at all, which is exactly the case that makes it necessary.
     ///
     /// ⚠ Defaulted to nothing, so an implementation holding no per-apply state ignores it.
-    fn begin_mask(&self) {}
+    fn end_mask(&self) {}
 
     fn rasterize(
         &self,

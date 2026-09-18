@@ -523,6 +523,15 @@ fn walk(
                 // straight back into the pipeline and can never be a candidate for the byte path.
                 if let Some(mut c) = flush(&mut run, &mut out, ctx) {
                     mark_shared(&mut c, share_input, out.is_empty());
+                    // ⚠⚠ **Only before a MASK, and only a mask that declined.** A declining mask is
+                    // a gating brush: it rasterises through `GpuBrushRaster`, whose gate needs the
+                    // very bytes this chain just produced. Offering to any other CPU stage would
+                    // deposit for a consumer that does not exist.
+                    //
+                    // ⚠ `s.name()` rather than `mask_subs`, which was consumed above.
+                    if s.name() == "mask" {
+                        c.offer_output();
+                    }
                     out.push(Box::new(c));
                 }
                 out.push(s);
@@ -1700,7 +1709,7 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The test that fails when `begin_mask` is deleted, and nothing else does.** Render
+    /// ⚠⚠ **The test that fails when `end_mask` is deleted, and nothing else does.** Render
     /// twice through one pipeline: each render's gate deposits a fresh plane, so each take must be
     /// of that render's own. A slot that were never cleared would still hand out *a* plane — the
     /// previous render's — and the take count would look identical, so the assertion that
@@ -1833,10 +1842,21 @@ mod tests {
         );
 
         let first = p.run(big_scene());
+        // ⚠⚠ **These counts changed at the resident base, and the CHANGE is the point.** Each
+        // frame now makes two deposits and one take: the outer chain offers its output, the gate
+        // takes it instead of uploading, and the gate then re-offers that same allocation to a
+        // sub-stage chain — which this fixture deliberately does not have, so that second deposit
+        // is the one left unclaimed.
         assert_eq!(
-            ctx.shared_plane().deposits(),
-            1,
-            "fixture check: the mask's gate must have deposited a plane nobody took"
+            (
+                ctx.shared_plane().deposits(),
+                ctx.shared_plane().takes(),
+                format!("{:?}", ctx.shared_plane()).contains("occupied: false")
+            ),
+            (2, 1, true),
+            "fixture check: chain offers + gate re-offers = 2, the gate takes 1, and `end_mask` \
+             leaves the slot EMPTY — got {:?}",
+            ctx.shared_plane()
         );
         let second = p.run(big_scene());
         let d = crate::compare(&first, &second);
@@ -1846,8 +1866,124 @@ mod tests {
         );
         assert_eq!(
             ctx.shared_plane().takes(),
+            2,
+            "one take a frame and no more — a third would be somebody outside a gate taking one"
+        );
+    }
+
+    /// ⚠⚠ **THE test of the resident base: the gate must render the CPU's picture while taking a
+    /// buffer it never uploaded.** Every other assertion in this file about the hand-off is a
+    /// *counter*, and a counter cannot tell a correct plane from a plausible one — taking the
+    /// wrong allocation of the right size produces a photograph, not an error, which is the
+    /// failure this project has recorded more than any other.
+    ///
+    /// ⚠ The fixture check is not decoration: without the global hsl there is no chain to offer
+    /// anything, the gate uploads as it always did, and the comparison below passes while testing
+    /// nothing at all. Measured before writing this — a light edit set of exposure and contrast
+    /// builds **no chain**, because `worth_a_chain` refuses a run that cheap.
+    #[test]
+    fn a_gate_that_takes_the_chains_plane_still_renders_the_cpus_picture() {
+        let Some(ctx) = private_ctx() else { return };
+        let mut e = with_hsl();
+        e.masks = vec![gating_brush_mask(edit_model::LocalAdjustments {
+            exposure: 0.6,
+            ..Default::default()
+        })];
+        let cpu = tail_of(&e).run(big_scene());
+        let gpu = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .run(big_scene());
+        assert_eq!(
+            ctx.shared_plane().takes(),
+            1,
+            "fixture check: the gate must actually have TAKEN a plane, else this proves nothing"
+        );
+        // ⚠⚠ **The bound was MEASURED at both ends, not guessed, and the measurement is the
+        // finding: the take does not move this render by a single sample.** Forcing the take to
+        // miss gives `worst_levels: 0.088246465, differing: 2207405` — the same figures to the
+        // last digit as taking. The 0.088 is the accumulated hsl-chain-and-mask divergence this
+        // file already lives with; a bound of 0.02 borrowed from a one-stage chain would have
+        // failed here for a reason that has nothing to do with the hand-off.
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.1,
+            "a taken base must be the same pixels the upload carried: {d:?}"
+        );
+    }
+
+    /// ⚠⚠ **THE test the end-placement of `end_mask` exists for, and it is the hazard the resident
+    /// base newly creates.** A chain offers its output *for the mask that follows it*. When that
+    /// mask does not take it — a gate under the box floor, or, as here, a brush with no gating
+    /// rows at all — the plane is left in the slot. The *next* mask's gate would then find it at
+    /// matching dimensions on the same thread and take it as its base. But its base is the first
+    /// mask's **output**, and the leftover is the first mask's **input**: same size, same thread,
+    /// different pixels. A plausible photograph.
+    ///
+    /// ⚠⚠ Sabotage to check this guards: empty the body of `GpuBrushRaster::end_mask`. The take
+    /// count goes to 1 and the picture diverges. Clearing at the *top* of a mask instead — where
+    /// the hook used to live — passes this test but silently kills the hand-off entirely, which is
+    /// what `a_gate_that_takes_the_chains_plane_still_renders_the_cpus_picture` catches. **The two
+    /// together pin the placement; neither alone does.**
+    #[test]
+    fn a_chains_offer_never_survives_into_the_next_mask() {
+        let Some(ctx) = private_ctx() else { return };
+        let mut e = with_hsl();
+        // ⚠⚠ **Building the mask that leaves an offer unclaimed took two tries, and the first
+        // one's failure is worth more than the fixture.** A brush with `auto_mask: false` has no
+        // gating rows and so takes nothing — which looks like the wedge, and is not: M8.11
+        // substitutes such a mask for its GPU twin, so it is folded INTO the preceding chain and
+        // the offer is simply made to the *next* mask, whose input it correctly is. Measured
+        // shape: `["gpu_chain", "mask", "gpu_chain"]`, one take, and the take was right.
+        //
+        // ⚠ So the first mask has to be one the twin **declines** — a gating brush, permanently —
+        // whose box is nonetheless **under `MIN_GPU_BOX_PX`**, so `rasterize` returns at the floor
+        // before it can take. Exposure alone keeps its sub-stages too cheap for a chain, which is
+        // the second way it could have claimed the plane.
+        let mut small = gating_brush_mask(edit_model::LocalAdjustments {
+            exposure: 0.6,
+            ..Default::default()
+        });
+        if let edit_model::Mask::Brush(b) = &mut small.mask {
+            b.strokes[0].points = vec![[0.5, 0.5]];
+            b.strokes[0].radius = 0.05;
+        }
+        e.masks = vec![
+            small,
+            gating_brush_mask(edit_model::LocalAdjustments {
+                exposure: -0.4,
+                ..Default::default()
+            }),
+        ];
+        let cpu = tail_of(&e).run(big_scene());
+        let gpu = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .run(big_scene());
+        assert_eq!(
+            ctx.shared_plane().takes(),
             0,
-            "nothing outside a mask may take a deposited plane"
+            "the second mask's gate must NOT have taken the offer made to the first"
+        );
+        // ⚠ **The counter above is the wedge; this is corroboration, and the band is chain noise
+        // rather than a judgement.** Intact it measures 0.0549 levels — the same family as the
+        // 0.088 the sibling test lives with. The leak it guards against is not a near miss: the
+        // sibling `a_mask_that_deposits_nothing_never_takes_another_masks_plane` reports **243
+        // levels** under the same sabotage, three orders of magnitude clear of this bound.
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.1,
+            "the second mask rendered a plane meant for the first: {d:?}"
         );
     }
 
@@ -1894,9 +2030,9 @@ mod tests {
         )
     }
 
-    /// ⚠⚠ **THE test `begin_mask` exists for, and the obvious one could not see it.** A test that
+    /// ⚠⚠ **THE test `end_mask` exists for, and the obvious one could not see it.** A test that
     /// renders the same pipeline twice cannot: its chain *takes* the deposit every time, so the
-    /// slot is already empty at the next apply and clearing is a no-op. Deleting `begin_mask`'s
+    /// slot is already empty at the next apply and clearing is a no-op. Deleting `end_mask`'s
     /// body left that test green — found by running the sabotage, not by reading.
     ///
     /// ⚠ The discriminating case needs two different pipelines sharing one context: one that

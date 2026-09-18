@@ -23,7 +23,7 @@ pub struct GpuContext {
     ///
     /// ⚠⚠ **Deliberately NOT part of `cache`, whose rule is the opposite.** That one exists to
     /// outlive a render; this one must not outlive a single `MaskStage::apply`, which clears it at
-    /// the top through `CoverageRasterizer::begin_mask`. Folding it in would invite someone to
+    /// the end through `CoverageRasterizer::end_mask`. Folding it in would invite someone to
     /// treat a stale plane as a cache hit, and a stale plane renders the previous frame's pixels.
     shared_plane: crate::SharedPlane<crate::GpuImage>,
     adapter_name: String,

@@ -93,6 +93,7 @@ pub struct GpuChain {
     /// plausible and wrong. Opt-in means the rule is decided where the position is known — at the
     /// push — and nowhere else.
     take_shared: bool,
+    offer_output: bool,
 }
 
 impl GpuChain {
@@ -103,7 +104,21 @@ impl GpuChain {
             uploads: AtomicUsize::new(0),
             downloads: AtomicUsize::new(0),
             take_shared: false,
+            offer_output: false,
         }
+    }
+
+    /// Offer this chain's **output** buffer to a consumer that needs the same bytes next.
+    ///
+    /// ⚠⚠ **Opt-in, and set only on a chain flushed immediately before a mask that declined.**
+    /// `SharedPlane` is one-shot and thread-stamped for the reason its own docs give — a plane
+    /// taken by the wrong frame renders *a plausible photograph, not an error* — so the fewer
+    /// producers the slot has, the fewer ways that happens. Always-on would deposit for every
+    /// chain in the tail, most of which nobody takes.
+    ///
+    /// ⚠ Called by `accelerate::walk` and by nothing else, like [`Self::allow_shared_input`].
+    pub fn offer_output(&mut self) {
+        self.offer_output = true;
     }
 
     /// Allow this chain to take a base plane deposited by a mask's gate, instead of uploading
@@ -315,6 +330,21 @@ impl GpuChain {
             timeout: None,
         });
         rx.recv().ok()?.ok()?;
+        // ⚠⚠ **Deposited HERE and nowhere earlier**, after `poll(Wait)` has confirmed the
+        // submission finished — the GPU writes this buffer during the submit, so offering it any
+        // sooner would hand a consumer pixels that are still being written. The same rule that
+        // governs when the staging buffer goes back to the pool and when `GpuBrushRaster` deposits.
+        //
+        // ⚠ The consumer is a gating brush's gate in the CPU `MaskStage` that follows this chain:
+        // it needs exactly these bytes as its base and would otherwise stage a second copy —
+        // measured at 2.04-2.23 ms of host memcpy for a 78 MB frame.
+        //
+        // ⚠ A deposit nobody takes is cleared by the enclosing mask's `end_mask`, which stops it
+        // outliving its frame.
+        if self.offer_output {
+            ctx.shared_plane()
+                .deposit(image.width(), image.height(), img);
+        }
         let out: Vec<u8> = slice.get_mapped_range().to_vec();
         readback.unmap();
         self.downloads.fetch_add(1, Ordering::Relaxed);

@@ -295,15 +295,25 @@ impl PipelineStage for MaskStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        // ⚠⚠ **Above every early return, not after them.** An offered rasteriser may hold state
-        // scoped to one apply — `gpu-pipeline` parks the base plane it uploaded there — and a mask
-        // that returns early still has to let go of the previous apply's. Telling it only on the
-        // path that rasterises would leave a stale plane resident in exactly the case where this
-        // mask built no coverage of its own, which is the one case a later consumer must not be
-        // handed one.
-        if let Some(r) = &self.coverage_gpu {
-            r.begin_mask();
+        // ⚠⚠ **A guard rather than a call, because it has to cover every early return below —
+        // and a panic.** An offered rasteriser holds state scoped to one apply (`gpu-pipeline`
+        // parks the base plane it uploaded there), and a mask that returns early still has to let
+        // go of it. Telling it only on the path that rasterises would leave a stale plane resident
+        // in exactly the case where this mask built no coverage of its own, which is the one case
+        // a later consumer must not be handed one.
+        //
+        // ⚠⚠ **At the END, and that is load-bearing — see [`crate::CoverageRasterizer::end_mask`].**
+        // The plane a gate wants is deposited by the stage *before* this one, so clearing at the
+        // top would destroy it before its only consumer could ask.
+        struct EndMask<'a>(Option<&'a dyn crate::CoverageRasterizer>);
+        impl Drop for EndMask<'_> {
+            fn drop(&mut self) {
+                if let Some(r) = self.0 {
+                    r.end_mask();
+                }
+            }
         }
+        let _end = EndMask(self.coverage_gpu.as_deref());
         let (w, h) = (image.width(), image.height());
         if w == 0 || h == 0 || self.stages.is_empty() {
             return image;
@@ -550,7 +560,7 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The carrier, and nothing else in the workspace can see this.** `begin_mask` changes
+    /// ⚠⚠ **The carrier, and nothing else in the workspace can see this.** `end_mask` changes
     /// no pixel by construction — it exists so an implementation can drop state — so deleting the
     /// call leaves every render identical and every other test green. That is the W5 failure mode
     /// (creative LUTs shipped fully tested and 100% dead) as a test, and a counting stub is the
@@ -561,13 +571,13 @@ mod tests {
     /// mask that builds no coverage is a mask that deposits no plane and must still let go of the
     /// previous apply's.
     #[test]
-    fn every_mask_apply_begins_by_telling_its_rasterizer() {
+    fn every_mask_apply_ends_by_telling_its_rasterizer() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
         struct Counting(Arc<AtomicUsize>);
         impl crate::CoverageRasterizer for Counting {
-            fn begin_mask(&self) {
+            fn end_mask(&self) {
                 self.0.fetch_add(1, Ordering::Relaxed);
             }
             fn rasterize(
