@@ -172,6 +172,60 @@ number, and the module header says so rather than leaving a future reader to won
 
 ---
 
+### `ProfileRendering` becomes required, and the GPU tail defaults on (2026-09-18)
+
+**Closing the class behind the day's three rendering defects.** Six builders — `build_pipeline`,
+`_with`, `_to`, `_spec`, `build_pipeline_split`, `build_pipeline_split_in_region` — handed
+`ProfileRendering::default()` down without being asked. A call site therefore rendered without the
+camera profile and without the user's `.cube`, and **nothing said so**: no compile error, no
+warning, no failing test. An absence looked exactly like a decision.
+
+**122 call sites across four crates** now pass it, plus `ProfileRendering::colorimetric()` as the
+name for "no camera rendering, no look".
+
+⚠⚠ **The gate was the GOLDENS, not a new test.** A behaviour-preserving change's observable is that
+nothing moved: **2557 tests, 74 goldens, and zero golden images on disk changed.** A moved golden
+would have meant a call site was handed a rendering it did not have before. Adding a test that
+asserts "the argument exists" would be a compile-time fact dressed as a test.
+
+⚠⚠ **It is NOT a proof, and the spec said so before the work rather than after.** A developer adding
+a call site will type whatever compiles, and the compiler cannot know which rendering is right. What
+it buys is a decision point and a name that looks wrong in review. **Record it as "the silent
+default is gone", never as "the class is closed."**
+
+#### ⚠ Two doc comments went stale the moment it landed
+
+Both corrected in the same commit, because this repo's own standing lesson is that a claim restated
+often enough stops being checked:
+
+- `build_pipeline_rendered` still said *"every whole-pipeline builder above hands
+  `ProfileRendering::default()` to the split builder"* — false as of that commit.
+- `ProfileRendering`'s doc justified keeping its too-narrow name by *"~25 call sites in
+  `render_engine.rs`"*. It is now named at **~120 across four crates** — the number that justified
+  the decision was off by 5×.
+
+#### The GPU tail defaults to on — and the flip had a one-word trap
+
+User's call, after M8.3b through M8.14 were each confirmed by use. The old default of `false` was
+right when the GPU path was young (*"the CPU path is the oracle"*); the two now agree to ~0.01 of an
+8-bit level.
+
+⚠⚠ **The field's own doc described the trap and the flip walked into it.** It read: a field-level
+`#[serde(default)]` *"is safe here because `bool`'s default and the intended default are the same
+`false` — unlike `auto_advance`, where they differed and a field-level attribute would have shipped
+the feature disabled for everyone."* Making the intended default `true` makes that sentence describe
+**this** field: every settings file written before that day would have loaded `false`, silently, for
+everyone who already had one. The attribute was removed; the struct's container-level
+`#[serde(default)]` supplies the value.
+
+Two guards, and the first fails when the attribute is put back: a file with no `gpu_tail` gets
+`true`, and an explicit `"gpu_tail": false` is still honoured — a default that overrode an explicit
+choice would be worse than the wrong default.
+
+**Gates:** FMT=0, CLIPPY=0, TEST=0, each from its own command — **2559 tests, 74 goldens.**
+
+---
+
 ### The rendering seam reaches export and thumbnails (2026-09-18). ✅ CONFIRMED BY USE
 
 Three defects of **one shape**: `pipeline::ProfileRendering` — the camera profile's tone curve, its

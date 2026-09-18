@@ -144,88 +144,64 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-18)
 
-**2557 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
+**2559 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
 `origin/main`** — **not pushed; the user pushes.**
 
-✅ **M8.14 — a GPU buffer resident across the prefix seams. Merged and CONFIRMED BY USE.** Consecutive GPU prefix steps, and the last one and the tail's first chain, hand the device
-buffer over instead of downloading and re-uploading the whole frame. `DSCF6509.RAF` (312.5 MB
-plane), quiet machine, warm frames:
+⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
+outcome; the measurements, the retractions and the things that went wrong live in
+`docs/JOURNAL.md`. This section reached a full screen of per-milestone tables twice — that is the
+1.2 MB failure in miniature. **Overwrite it; do not append to it.**
 
-| warm frames | before | after |
-|---|---|---|
-| step→step (the dehaze step) | 312.7–313.0 ms | **294.2–297.9** → saved **14.8–18.8** |
-| step→tail (direct A/B) | — | saved **28.5–30.6** |
-| **both seams** | | **43.3–49.4 ms ≈ 5.6–6.3% of a ~790 ms frame** |
+**Landed 2026-09-18, all merged and confirmed by use:**
 
-⚠ NR is the control and did not move (243.4–245.5 vs 244.7): it is the first GPU step, so it has
-nothing to take. The pre-build prediction of 4.5–6% held, at the top of its range.
+| | outcome |
+|---|---|
+| **M8.13** GPU-resident base for `GpuBrushRaster` | **1.13–1.36×** on a global drag over a masked photo |
+| **M8.14** resident buffer across the prefix seams | **43.3–49.4 ms**, 5.6–6.3% of a whole-frame render — **export/cold only** |
+| `batch_export.rs` split | 2,335 lines → six files, a pure move |
+| the rendering seam reaches export **and** thumbnails | three defects of one shape; an already-rendered source was rendered **twice** (119.32 levels) |
+| `ProfileRendering` is a **required** argument | 122 call sites, behaviour-preserving, 74 goldens unmoved |
+| **the GPU tail is ON by default** | user's call; required removing a field-level `#[serde(default)]` |
 
-⚠⚠ **An export and cold-whole-frame win, NOT a drag win.** The region-scoped path runs no GPU prefix
-step at all, so it has no seam. Do not re-read this expecting a drag improvement.
+⚠⚠ **The GPU default flip had a one-word trap**: the field's own doc said `#[serde(default)]` was
+safe *because* the intended default matched `bool`'s. Flipping it to `true` would have loaded
+**`false`** for every existing settings file. Pinned by a test that fails when the attribute returns.
 
-⚠⚠ **The two downloads are the larger half and were DECLINED** — they need `PrefixCache` to hold a
-`GpuImage` (11–13%, user's call 2026-09-18). `GpuContext` now has **two** `SharedPlane` slots
-(`Mask`, `Prefix`) and merging them would undo a sabotage-pinned guard.
+### ▶ Next action — the GPU port is finished; what is left is not GPU work
 
-✅ **M8.13 — a GPU-resident base for `GpuBrushRaster`. Merged and CONFIRMED BY USE.**
-A `GpuChain` before a mask deposits its output buffer; the gate takes it instead of memcpying the
-same plane back up. `DSCF6509.RAF`, REALISTIC edits, warm frames 2–5, against the same build with
-the take forced to miss:
+⚠⚠ **Everything on the agreed GPU order is done, declined with numbers, or blocked on a considered
+trade.** Do not go looking for the next port; there isn't one.
 
-| warm frames 2–5 | take forced to miss | taking |
-|---|---|---|
-| `stage=` (host memcpy) | 2.23–2.86 ms | **0.00** |
-| `gpu=` | 10.02–19.09 ms | **5.14–6.77 ms** |
-| whole frame | 88.1–109.7 ms | **78.2–80.7 ms** → **1.13–1.36×** |
+**Live candidates, none urgent:**
 
-⚠⚠ **About twice the plan's prediction, for a reason the plan did not name:** deleting the staging
-buffer also deletes the `copy_buffer_to_buffer` that pushed **78.1 MB** across the device. **Do not
-requote the ~2.2 ms memcpy as the win** — it is one of two halves.
+1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
+   **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
+   per sample because packing four into a word would race. **A considered trade, not an oversight.**
+2. **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. Now a
+   ~120-site diff. ⚠ Its own change, never folded into another.
+3. **`crates/lens-profile/src/lib.rs` is 949 lines**; `batch_export/worker.rs` is 1,127 (accepted —
+   ~190 of code, the rest its own tests).
+4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
 
-⚠ It helps a **global drag over a masked photograph with a real edit set**, and nothing else.
-Measured: no globals and a light set (exposure + contrast) build **no chain**, so there is nothing
-to offer.
+⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
+list alone:** the prefix seams' *download* half (11–13%, needs `PrefixCache` to hold a `GpuImage`),
+spot removal on the GPU (0.05–0.4 ms against a ~1.6 ms floor), `MIN_GPU_BOX_PX` (user's call, on
+use), the GPU-side coverage cache (re-priced downward).
 
-⚠⚠ **`CoverageRasterizer::begin_mask` is now `end_mask`, and that was forced by a defect.** The old
-hook cleared the shared slot at the *top* of a mask's apply — after the preceding chain had already
-deposited — so the hand-off could never have fired: green, documented and dead. It now runs from an
-RAII guard at the end, covering every early return and a panic, which is also strictly tighter.
-
-### ▶ Next action — a choice, and the machine is finally quiet
-
-✅ **BOTH CONTENDED SWEEPS WERE RE-RUN CLEAN 2026-09-17** (load 2.11), and one overturned a
-recorded finding:
-
-- **`MIN_GPU_BOX_PX`** — the quiet run **confirms** the contended one: both configurations cross at
-  **3,130,000 px** and at the shipped 512 Ki floor the GPU is ~2× slower in both. ⛔ **DECIDED: left
-  at 512 Ki, the user's call, on use** — *"it felt fine while using."* ⚠⚠ **Do not re-propose this
-  from the measurement**; it costs ~2 ms on a coverage-cache MISS for boxes between 512 Ki and
-  ~1.1 M px, which is the magnitude nobody noticed. `docs/BACKLOG.md` carries the numbers.
-- **⚠⚠ The post-NR checkpoint no longer saves ~0 on the scoped path — M8.12 changed that.** It was
-  ~0 because an NR drag and a dehaze drag were *both* ~118 ms, doing whole-frame work. Now a 2-step
-  scoped plan is **30.5–35.6 ms** against a 1-step's **15.3–15.9**, so it **saves ~15–20 ms**.
-  Clean whole-frame bands: rung 3200 **95.1 ms** CPU-tail, **57.8** GPU-tail.
-
-**The candidates:**
-
-1. ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE 2026-09-18 (M8.13), 1.13–1.36× on a
-   masked global drag. Merged and confirmed by use.**
-2. ⛔ ~~**Item 5, spot removal**~~ — **CLOSED 2026-09-18, measured and not worth doing.** 0.05–0.4 ms
-   for realistic use on a cached prefix stage, against a ~1.6 ms GPU floor.
-3. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
-   **3.4 against 15.3** at export. ⚠⚠ Needs a shader restructure: the shader writes one `u32` per
-   sample because packing four into a word would race. **A considered trade, not an oversight.**
-4. ✅ ~~**`crates/app/src/batch_export.rs` is 2,298 lines**~~ — **SPLIT 2026-09-18** into a directory
-   module of six files, largest 1,127. A pure move, 2547 tests unchanged.
-
-⚠ The **GPU-side coverage cache** is re-priced **downward**: transfers were 27–58% of the rasterise
-a hit avoids and are now ~10–23%, because the repack fix landed first.
+⚠ **`MAX_TILE_DABS`** — swept; the cliff is at **2560, not 3584**. Blocked on a **portability**
+question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run
+settles.
 
 ### The agreed systematic order (GPU port)
 
-⚠ **Structural, not popularity-driven.** The user **has not been using Rustroom yet**, so the
-catalogue's 40 sidecars describe those folders and **not** what a photographer does. Three
-milestones leaned on that scan; it must not be cited as a prioritisation argument again.
+⚠ **Structural, not popularity-driven.** The catalogue's 40 sidecars describe those folders and
+**not** what a photographer does; three milestones leaned on that scan and it must not be cited as
+a prioritisation argument again.
+
+⚠⚠ **But "the user has not been using Rustroom yet" is NO LONGER TRUE, and that line sat here
+unchallenged for days.** On 2026-09-18 alone, use found the export/preview divergence, the
+already-rendered double render **and** the missing thumbnail look — none of which any test caught.
+**Real use is now the best signal this project has**; the sidecar scan is still not.
 
 | # | Item | State |
 |---|---|---|
@@ -234,6 +210,9 @@ milestones leaned on that scan; it must not be cited as a prioritisation argumen
 | 3 | Port **lens correction** | ✅ **done, M8.9** — ⚠ its *value* was re-priced, not the work; see below |
 | 4 | Mask coverage + the blend | ✅ done, M8.11 |
 | 5 | **Spot removal** | ⛔ **CLOSED 2026-09-18 — measured, not worth doing.** See below |
+
+✅ **THE ORDER IS FULLY RESOLVED. There is no next item on it.** Rows 1–4 are built and confirmed;
+row 5 is closed on a measurement. Anything further is in `docs/BACKLOG.md` with numbers attached.
 
 **⚠⚠ ITEM 3 IS DONE, AND THIS LIST SAID OTHERWISE FOR A DAY.** `crates/gpu-pipeline/src/lens_correction.rs`
 is 722 lines, wired at `accelerate.rs:320`, gated by `lens_correction_is_accelerated_only_when_a_profile_is_in_hand`
@@ -268,34 +247,26 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 
 ### Open items
 
-- ✅ ~~**The camera rendering does not reach an export**~~ — **DONE 2026-09-18, confirmed by use.**
-  It was three defects of one shape: the export lost the curve, the baseline **and the look**, a
-  thumbnail lost the look, and an already-rendered source was rendered **twice** at export
-  (119.32 levels). ✅ **The root cause is closed too (2026-09-18): `ProfileRendering` is now a
-  required argument** on all six builders, 122 call sites, behaviour-preserving. ⚠⚠ That means
-  *"the silent default is gone"*, **not** *"the class is closed"* — a new call site still types
-  whatever compiles. See `docs/BACKLOG.md`.
-- **A GPU-side mask coverage cache** — ✅ **measured 2026-09-16; the ceiling missed 4–8×.** ⚠⚠ But the
-  cost is **not transfer**: a serial u8→u32 repack (10.6–13.8 ms per encode) and a 4×-inflated download
-  wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
-- ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE, M8.13 (2026-09-18): 1.13–1.36× on a
-  masked global drag, measured against a forced miss. Merged and confirmed by use.**
-- ✅ ~~**The resident GPU buffer across the prefix→tail seam**~~ — **DONE, M8.14 (2026-09-18):
-  43.3–49.4 ms, 5.6–6.3% of a whole-frame render. Merged and confirmed by use.**
-  ⚠⚠ Its *download* half remains open and is the larger one — declined at 11–13%, see `docs/BACKLOG.md`.
+⚠⚠ **Live items only.** A finished item is deleted from here, not struck through — its record is in
+`docs/JOURNAL.md` and its numbers in `docs/BACKLOG.md`. Four ✅ entries had stacked up here by
+2026-09-18, which is the 1.2 MB failure starting again.
+
+- **A GPU-side mask coverage cache** — ✅ measured 2026-09-16; the ceiling missed 4–8×. ⚠⚠ The cost
+  is **not transfer**: a serial u8→u32 repack and a 4×-inflated download wire. **Fix those two
+  first** — mechanical, no design question. Re-price after.
+- **The u8 coverage wire** — 0.56–0.70 ms against an actual 3.55–6.35 at rung 3200. ⚠⚠ Blocked on a
+  shader restructure; **a considered trade, not an oversight.**
+- **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. A ~120-site
+  diff since 2026-09-18. ⚠ Its own change.
+- **`MAX_TILE_DABS`** — the cliff is at **2560, not 3584**. ⚠ Blocked on a **portability** question
+  (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) no M2 run settles.
 - The prefix-cache eviction fix's **picture** half.
-- The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
-- Move `PrefixCache`'s tests into `prefix_cache.rs`.
-- ⛔ ~~A per-gating `MIN_GPU_BOX_PX`~~ — **DELETED 2026-09-16: measured, and its premise is backwards.**
-  Both configurations cross at the same rows; see `docs/BACKLOG.md`. The floor itself may want raising
-  2–6×, but only after an idle re-run of `crates/app/examples/box_floor_sweep.rs`.
-- **`MAX_TILE_DABS`** — swept; the cliff is at **2560, not 3584**. ⚠ Blocked on a **portability**
-  question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run settles.
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
+- Move `PrefixCache`'s tests into `prefix_cache.rs`.
 - ⚠ **M7.3b is DEFERRED, not done.**
-- ⚠ `crates/lens-profile/src/lib.rs` is **949** lines. (`batch_export.rs` was split 2026-09-18;
-  its `worker.rs` is **1,127**, deliberately — ~190 of code and ~940 of its own tests, and the
-  module header says so.)
+- ⚠ `crates/lens-profile/src/lib.rs` is **949** lines. (`batch_export/worker.rs` is 1,127
+  deliberately — ~190 of code, the rest its own tests, and its module header says so.)
+- The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
 
 ### The open question M8.11 did not settle
 
