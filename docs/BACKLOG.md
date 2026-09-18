@@ -1392,6 +1392,30 @@ to an AI assistant, not to a contributor**, and it is enormous.
    this project's most distinctive practice and completely invisible from outside.
 3. **Small labelled issues.** Several already exist in this file.
 
+## ⚠⚠ The whole-pipeline builders default `ProfileRendering` SILENTLY (recorded 2026-09-18)
+
+**Three call sites have lost the camera rendering and the creative look this way**, and the third
+was reported by use rather than caught by a test:
+
+| path | had it |
+|---|---|
+| the preview (`render_cached`) | ✅ always |
+| the **export** (`export_one`) | ⛔ until 2026-09-18 — curve, baseline **and** the look |
+| a **thumbnail** (`render_edits`) | ⛔ until 2026-09-18 — the look |
+
+**The mechanism.** `build_pipeline`, `_with`, `_to` and `_spec` all hand
+`ProfileRendering::default()` to the split builder. A new call site therefore renders without the
+profile and without the user's `.cube`, **and nothing says so** — not a compile error, not a
+warning, not a failing test. The default is indistinguishable from a deliberate choice.
+
+`build_pipeline_rendered` was added 2026-09-18 so a caller that *has* a rendering has somewhere to
+put it, but the silent defaults remain on the four older wrappers.
+
+**What would actually fix it:** make the rendering a required argument and let callers that genuinely
+want none pass `ProfileRendering::default()` explicitly. ⚠ That is four builders and every call site
+in the workspace, which is why it was not folded into the fix that found it — the same attribution
+argument M8.9 used. **Do it as its own change, and expect the diff to be wide and shallow.**
+
 ## The camera rendering does not reach an export
 
 `batch_export::export_one` builds its tail with `pipeline::ProfileRendering::default()`, so the

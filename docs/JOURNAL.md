@@ -172,6 +172,91 @@ number, and the module header says so rather than leaving a future reader to won
 
 ---
 
+### The rendering seam reaches export and thumbnails (2026-09-18). ✅ CONFIRMED BY USE
+
+Three defects of **one shape**: `pipeline::ProfileRendering` — the camera profile's tone curve, its
+baseline exposure, and the creative look — failed to reach a render path, silently.
+
+| path | had it |
+|---|---|
+| the preview (`render_cached`) | ✅ always |
+| the **export** (`export_one`) | ⛔ all three |
+| a **thumbnail** (`render_edits`) | ⛔ the look |
+
+#### ⚠⚠ The measurement said "inert", and it was right — but only for this catalogue
+
+`examples/probe_export_rendering.rs`, `DSCF6509.RAF` with the catalogue's X-T4 DCP:
+
+| configuration | worst |
+|---|---|
+| fixture check: a synthetic curve + 0.5 EV | **156.96 levels** |
+| the profile's curve only | **0.00** |
+| its baseline exposure only | **0.00** |
+| both | **0.00** |
+
+The X-T4's `ProfileToneCurve` is exactly `[[0,0],[1,1]]`, which `effective_profile_curve` rejects in
+favour of the built-in curve, and it declares no `BaselineExposure`. Preview and export already
+agreed **by coincidence of what that one profile contains.**
+
+⚠⚠ **The first run of that probe reported 0.00 for every row and was VACUOUS.** The rendering stage
+is gated on `edits.applied_rendering()`, which defaults to `Rendering::None`, so a default `Edits`
+built no stage at all. **A zero meaning "no measurement" is indistinguishable from one meaning "no
+effect"** — only the fixture check separated them. That check is the single most valuable line in
+the probe.
+
+#### ⚠⚠ The backlog entry was incomplete, and the missing half was the one that mattered
+
+It named the tone curve and the baseline exposure. `ProfileRendering` carries **three** things, and
+`export_one` was defaulting all three — so **a creative look had never reached an export.** That was
+found while scoping, not from the entry.
+
+⚠⚠ **And it is what the user's report turned out to be.** Two screenshots: the preview dark and
+cool, the export bright and warm. **I diagnosed it wrongly first** — attributing it to the
+double-render bug below — and the user's one-line correction (*"it was a raf"*) overturned that,
+because the double-render bug only affects already-rendered sources. The preview was showing a look
+the export was not.
+
+#### ⚠⚠ A second bug, found by the same report: an already-rendered source was rendered TWICE
+
+`render_cached`'s worker strips `Edits.rendering` when the buffer is not scene-referred — *"a JPEG,
+a PNG or a TIFF has been through whatever produced it."* `ExportSource` carried no such flag, so the
+export path could not strip it. **Measured at 119.32 levels, 100% of samples**
+(`examples/probe_jpeg_rendering_gap.rs`).
+
+⚠⚠ **It was written in this milestone's OWN SPEC and then not built.** Under Testing: *"A
+JPEG/PNG/TIFF source is already rendered and must not be rendered again — `render_cached` strips
+this for that reason. The export path must agree."* Listed, never implemented, no test.
+**A line in a spec is not a guard.**
+
+#### The thumbnail half, reported by use
+
+*"the look is not reflected or shown in any way in the thumbnail picture."* `render_edits` used
+`build_pipeline_with`, which takes no `ProfileRendering`. Fixed with `build_pipeline_rendered`, a
+delegating wrapper on `build_pipeline_to`'s recorded precedent.
+
+⚠ **A SHARED look cache**, because thumbnails render on `worker_count()` threads —
+`RenderEngine`'s one-slot cache is right for one photo at a time and wrong here. ⚠ Its value is an
+`Option` so a **failed** load is cached: otherwise a missing `.cube` is re-read once per thumbnail,
+830 times on an 830-photo folder.
+
+#### The root cause, recorded rather than fixed
+
+The four whole-pipeline builders hand `ProfileRendering::default()` down **silently** — no error, no
+warning, a default indistinguishable from a choice. Making it required is four builders and every
+call site in the workspace, so it is `docs/BACKLOG.md`'s own entry, by M8.9's attribution argument.
+
+#### Two fixtures that could not see what they tested
+
+- `real_curve` must be **non-identity** — a test using the catalogue's own profile passes with the
+  fix reverted.
+- `loud_cube` first permuted green into red: visually dramatic, a perfect **no-op on grey**, and
+  every fixture here is grey. It cost a debugging round, and the thumbnail test's cube carries the
+  warning.
+
+**Gates:** FMT=0, CLIPPY=0, TEST=0, each from its own command — **2557 tests, 74 goldens.**
+
+---
+
 ### M8.14 — a GPU buffer resident across the prefix seams (2026-09-18). ✅ CONFIRMED BY USE
 
 **What it does.** Consecutive GPU-accelerated prefix steps, and the last one and the tail's first

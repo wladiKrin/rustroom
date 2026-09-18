@@ -52,6 +52,12 @@ pub(crate) fn source(image: ImageBuf) -> ExportSource {
         image,
         baseline: color::wb::Illuminant::default(),
         lens: None,
+        // ⚠ No profile: the tests that care about the camera rendering build their own source
+        // with a NON-IDENTITY curve, because the catalogue's own profile curve is `[[0,0],[1,1]]`
+        // and a fixture using it would pass with the fix reverted.
+        curve: None,
+        baseline_ev: None,
+        scene_referred: true,
     }
 }
 
@@ -82,7 +88,17 @@ pub(crate) fn run_export(
 ) -> (ExportReport, Vec<ExportEvent>) {
     // ⚠ Width 1 by default here, so every pre-existing test keeps its exact meaning; the
     // carrier below drives the wide path explicitly.
-    let worker = ExportWorker::spawn(jobs, opts, decode, Arc::new(AtomicBool::new(false)), CPU, 1);
+    // ⚠ `None` looks directory: these tests exercise naming, collisions and cancellation, none of
+    // which involve a `.cube`. The camera-rendering tests build their own worker.
+    let worker = ExportWorker::spawn(
+        jobs,
+        opts,
+        decode,
+        Arc::new(AtomicBool::new(false)),
+        CPU,
+        1,
+        None,
+    );
     let mut answers = answer.into_iter();
     let mut events = Vec::new();
     let mut report = ExportReport::default();

@@ -79,11 +79,17 @@ impl ExportWorker {
         // ⚠ From `Settings::export_width`, already repaired — see its doc for why the ceiling is
         // the core count and why this is a setting rather than a constant.
         width: usize,
+        // ⚠ Where creative looks are read from. `None` means none are available, and every photo
+        // then exports as though its `.cube` were missing — the documented fallback.
+        looks_dir: Option<std::path::PathBuf>,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
         let flag = cancel.clone();
         std::thread::spawn(move || {
+            // ⚠⚠ **Resolved on the WORKER thread, not in `spawn`.** A 64³ cube is 786 KB read from
+            // disk; doing it in `spawn` would block the UI thread that starts the export.
+            let looks = resolve_looks(&jobs, looks_dir);
             run(
                 jobs,
                 opts,
@@ -93,6 +99,7 @@ impl ExportWorker {
                 flag,
                 render,
                 width,
+                &looks,
             );
         });
         Self {
@@ -265,6 +272,39 @@ fn plan(
     Some(out)
 }
 
+/// Load every distinct `.cube` the jobs name, once.
+///
+/// ⚠⚠ **A map rather than one slot, because a selection is not one photograph.** `RenderEngine`'s
+/// worker caches a single look and is right to — it renders one photo at a time. An export runs a
+/// *selection*, whose jobs each carry their own `Edits`, so a one-slot cache would hand some
+/// photographs another's look. The load is still paid once per distinct name.
+///
+/// ⚠ A name that will not load is simply absent from the map, and the photograph then exports
+/// **without the look and with its rendering intact** — `build_pipeline_split_in_region_with_brush`
+/// documents that as the rule for a `.cube` this machine does not have. Never an error that fails
+/// the photo.
+fn resolve_looks(
+    jobs: &[ExportJob],
+    dir: Option<std::path::PathBuf>,
+) -> std::collections::HashMap<String, Arc<pipeline::lut::Cube>> {
+    let mut out = std::collections::HashMap::new();
+    let Some(store) = dir.map(crate::looks::LookStore::new) else {
+        return out;
+    };
+    for j in jobs {
+        let Some(f) = j.edits.look.file.as_deref() else {
+            continue;
+        };
+        if out.contains_key(f) {
+            continue;
+        }
+        if let Ok(cube) = store.load(f) {
+            out.insert(f.to_string(), Arc::new(cube));
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     jobs: Vec<ExportJob>,
@@ -275,6 +315,7 @@ fn run(
     cancel: Arc<AtomicBool>,
     render: ExportRender,
     width: usize,
+    looks: &std::collections::HashMap<String, Arc<pipeline::lut::Cube>>,
 ) {
     let mut report = ExportReport::default();
     // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
@@ -351,8 +392,23 @@ fn run(
                     return;
                 }
 
-                let outcome = decoded
-                    .and_then(|src| export_one(src, &p.edits, &p.dest, opts, render, &p.meta));
+                // ⚠⚠ **Per JOB, not per batch, and that distinction is the general case.** Every
+                // job carries its own `Edits`, so a selection can name several different `.cube`s
+                // — a batch-wide look would silently render some photographs with another's. The
+                // *loading* is still per batch: `resolve_looks` read each distinct name once.
+                //
+                // ⚠ `is_active()` gates it for `build_pipeline_split_in_region_with_brush`'s own
+                // reason: a look at zero strength must not suppress the camera rendering.
+                let look = p
+                    .edits
+                    .look
+                    .file
+                    .as_deref()
+                    .filter(|_| p.edits.look.is_active())
+                    .and_then(|f| looks.get(f));
+                let outcome = decoded.and_then(|src| {
+                    export_one(src, &p.edits, &p.dest, opts, render, &p.meta, look)
+                });
                 {
                     // ⚠ `failed` is now in **completion** order, which is nondeterministic. Any
                     // test comparing it must sort or compare as a set.
@@ -387,6 +443,82 @@ mod tests {
     use crate::batch_export::fixtures::*;
     use crate::photo_id::PhotoId;
     use export::ExportFormat;
+
+    /// Write `n` `.cube` files into a fresh directory and return it.
+    fn looks_dir(tag: &str, names: &[&str]) -> TempDir {
+        let d = TempDir::new(tag);
+        for n in names {
+            std::fs::write(
+                d.0.join(n),
+                "LUT_3D_SIZE 2\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n1 1 1\n",
+            )
+            .unwrap();
+        }
+        d
+    }
+
+    fn job_wanting(dir: &TempDir, name: &str, look: Option<&str>) -> ExportJob {
+        let mut j = jobs(dir, &[name]).pop().unwrap();
+        j.edits.look.file = look.map(|s| s.to_string());
+        j
+    }
+
+    /// ⚠⚠ **Each job's OWN look, and a one-slot cache would get this wrong.** `RenderEngine`'s
+    /// worker caches a single look and is right to — it renders one photograph at a time. An
+    /// export runs a *selection*, whose jobs each carry their own `Edits`, so a batch-wide look
+    /// would render some photographs with another's.
+    #[test]
+    fn every_distinct_look_a_selection_names_is_loaded() {
+        let looks = looks_dir("looks_many", &["a.cube", "b.cube"]);
+        let files = TempDir::new("looks_many_src");
+        let js = vec![
+            job_wanting(&files, "p0.RAF", Some("a.cube")),
+            job_wanting(&files, "p1.RAF", Some("b.cube")),
+            // ⚠ A repeat: it must not be loaded twice, and it must still be present.
+            job_wanting(&files, "p2.RAF", Some("a.cube")),
+            job_wanting(&files, "p3.RAF", None),
+        ];
+        let got = resolve_looks(&js, Some(looks.0.clone()));
+        let mut names: Vec<&str> = got.keys().map(|k| k.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["a.cube", "b.cube"]);
+    }
+
+    /// ⚠⚠ **A `.cube` this machine does not have exports WITHOUT THE LOOK, never without the
+    /// rendering and never as an error.** That is
+    /// `build_pipeline_split_in_region_with_brush`'s documented rule — *"a preset naming a file
+    /// this machine does not have must render without the look, not without a rendering"* — and
+    /// the export path has to agree with it.
+    ///
+    /// ⚠ Sabotage: make `resolve_looks` insert a default cube on a load failure, or propagate the
+    /// error. Either turns a missing file into a wrong photograph or a failed export.
+    #[test]
+    fn a_look_this_machine_does_not_have_is_simply_absent() {
+        let looks = looks_dir("looks_missing", &["present.cube"]);
+        let files = TempDir::new("looks_missing_src");
+        let js = vec![
+            job_wanting(&files, "p0.RAF", Some("present.cube")),
+            job_wanting(&files, "p1.RAF", Some("gone.cube")),
+        ];
+        let got = resolve_looks(&js, Some(looks.0.clone()));
+        assert!(
+            got.contains_key("present.cube"),
+            "the one that exists loads"
+        );
+        assert!(
+            !got.contains_key("gone.cube"),
+            "the one that does not must be ABSENT — the photo then renders without the look"
+        );
+    }
+
+    /// ⚠ No looks directory at all is the same answer as an empty one: every photo exports as
+    /// though its `.cube` were missing.
+    #[test]
+    fn no_looks_directory_resolves_nothing() {
+        let files = TempDir::new("looks_nodir");
+        let js = vec![job_wanting(&files, "p0.RAF", Some("a.cube"))];
+        assert!(resolve_looks(&js, None).is_empty());
+    }
 
     /// Jobs carrying capture metadata, for the tokens that come from the catalog.
     fn jobs_with(dir: &TempDir, files: &[(&str, core_image::Capture)]) -> Vec<ExportJob> {
@@ -653,6 +785,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 CPU,
                 width,
+                None,
             );
             let report = finished(&worker);
             assert_eq!(
@@ -694,6 +827,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
+            None,
         );
         let mut collisions = 0;
         let mut report = ExportReport::default();
@@ -919,6 +1053,7 @@ mod tests {
             Arc::new(AtomicBool::new(true)),
             CPU,
             1,
+            None,
         );
         let report = finished(&worker);
         assert!(report.cancelled);
@@ -954,6 +1089,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
+            None,
         );
 
         started_rx.recv().expect("worker never reached a decode");
@@ -994,6 +1130,7 @@ mod tests {
             flag,
             CPU,
             1,
+            None,
         );
 
         let mut report = ExportReport::default();

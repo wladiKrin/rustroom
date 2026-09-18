@@ -130,6 +130,18 @@ impl RustroomApp {
             // rather than spawning nothing, and a 64 becomes the core count rather than asking for
             // nineteen gigabytes of decode buffers.
             self.settings.export_width(),
+            // ⚠⚠ **Derived the same way `open_photo` derives it**, rather than read off the open
+            // photo's `ProfileParts`: an export can run over a selection that includes photos
+            // never opened, so "where looks live" has to be a session fact here too. ⚠ It is the
+            // *directory*, not a loaded table — which look each photo wants is in its own `Edits`,
+            // and the worker resolves every distinct name once.
+            Some(
+                rustroom_app::looks::LookStore::user_default(
+                    &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+                )
+                .dir()
+                .to_path_buf(),
+            ),
         ));
     }
 
