@@ -120,6 +120,85 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ---
 
+### M8.14 — a GPU buffer resident across the prefix seams (2026-09-18)
+
+**What it does.** Consecutive GPU-accelerated prefix steps, and the last one and the tail's first
+chain, hand the device buffer over instead of a download-and-re-upload of the whole frame.
+
+**Measured on `DSCF6509.RAF` (6246×4170, a 312.5 MB plane), quiet machine (load 2.40–2.74), warm
+frames**, NR + dehaze in the prefix and a six-stage tail.
+
+| warm frames | before | after |
+|---|---|---|
+| step→step (the dehaze step) | 312.7–313.0 ms | **294.2–297.9** → saved **14.8–18.8** |
+| step→tail (direct A/B in one run) | — | saved **28.5–30.6** |
+| **both seams** | | **43.3–49.4 ms ≈ 5.6–6.3% of a ~790 ms frame** |
+
+⚠ **Noise reduction is the control and it did not move** — 243.4–245.5 against 244.7 before. It is
+the *first* GPU step, so it has nothing to take; that is what makes the dehaze delta attributable
+rather than drift. The consumer's `memcpy` reads **0.21–0.23 ms** against 8.69–9.22.
+
+✅ **The pre-build prediction (4.5–6%) held, at the top of its range.** Recorded because this
+project has mispriced composed measurements five times; this one did not.
+
+#### ⚠⚠ The sabotage passed, and the GUARD was what was broken
+
+Sabotaging the take to always miss left **every test green**. `SharedPlane::takes()` counts a take
+that is then *discarded* exactly like one that is used — so a `run_with` that took the plane and
+threw it away read as `takes() == 1` while uploading anyway, and uploading is a **correct
+fallback**, so the picture was right too. The observable that separates *took and used it* from
+*took and dropped it* is **`GpuChain::transfer_counts().0 == 0`**.
+
+⚠⚠ **This is the W5 failure mode wearing a counter as a disguise.** A counter that increments on the
+path you are trying to forbid is not an observable. Re-run with the upload count, the sabotage is
+caught immediately.
+
+#### ⚠⚠ The export path runs its tail on the CPU, which the plan had not noticed
+
+`batch_export` accelerates its prefix steps but runs `tail.run(img)` on the CPU. So the last prefix
+step's deposit is **never taken** and survives the photograph — and the next photo in a batch is the
+same camera (**same dimensions**) on the **same thread**, so every check `SharedPlane::take` makes
+would pass and it would hand over the previous photograph's pixels **into an exported file**.
+
+Both prefix loops now clear at the **top**, bounding a deposit to one render. That is
+`CoverageRasterizer::end_mask`'s rule one level up, and it is the second time in two milestones that
+a deposit's *lifetime* was the defect rather than its contents.
+
+#### The slots must not be merged
+
+`GpuContext` gained a **second** `SharedPlane`. Letting the tail take from the mask's slot would
+contradict `the_outer_tails_own_chain_never_takes_a_masks_leftover_plane` directly — that test
+exists because a mask whose chain sits behind a CPU stage leaves a deposit, and the outer tail's
+chain runs *before* any mask. `walk`'s `share_input: bool` became `Option<Slot>`: `Mask` for a
+mask's first sub-stage, `Prefix` for the outer tail.
+
+Sabotages caught: slots cross-wired (**2** tests), take always misses (**1**, after the guard was
+fixed), `clear` made a no-op (**6**).
+
+#### ⚠ A structural limit, stated rather than implied
+
+**Without a matched lens no CPU step can sit between two GPU prefix steps.** The prefix order is
+lens correction, perspective, spot removal, geometry, noise reduction, dehaze, and only lens
+correction, NR and dehaze have twins — so without a profile every CPU step falls *before* both GPU
+ones. The mid-loop clear is therefore pinned as a **primitive**, and its reachability is *reasoned*.
+The test says so in as many words rather than leaving a reader to assume it was measured.
+
+#### What was deliberately not taken
+
+The two **downloads** (`tovec`, 25.0–29.5 ms each) are the larger half and need `PrefixCache` to
+hold a `GpuImage` — priced at **11–13%** and declined by the user on 2026-09-18, because it would
+make `MID_BUDGET_BYTES` describe VRAM and force an answer from the region crop, the brush cache's
+sizing and `render_cached`'s tail seeding.
+
+⚠⚠ **Interactive drags gain nothing and that is not a defect.** `render_engine.rs` keeps
+`gpu_prefix_steps` at 0 on the region-scoped path — *"a scoped chain is the CPU's"* — so there is no
+GPU prefix step, and no seam, on the path M8.12 made the interactive one. **This is an export and
+cold-whole-frame win.**
+
+**Gates:** FMT=0, CLIPPY=0, TEST=0, each from its own command — **2547 tests, 74 goldens.**
+
+---
+
 ### M8.13 — a GPU-resident base for `GpuBrushRaster` (2026-09-18). ✅ CONFIRMED BY USE
 
 **What it does.** A `GpuChain` sitting immediately before a mask downloads its output so the CPU

@@ -707,6 +707,25 @@ larger sample where the 0.1% is less sensitive to which pixels are present.
 strictly better. It is recorded so that a later report of *"the haze changes as I straighten"* is
 met with a measurement rather than a search.
 
+### 🟡 A GPU buffer resident across the prefix→tail seam — UPLOAD HALF DONE (M8.14, 2026-09-18), DOWNLOAD HALF DECLINED
+
+> **✅ THE UPLOAD HALF SHIPPED 2026-09-18 as M8.14.** Consecutive GPU prefix steps, and the last one
+> and the tail's first chain, hand the device buffer over. Measured at rung 6246 on a quiet machine:
+> step→step **14.8–18.8 ms**, step→tail **28.5–30.6**, together **43.3–49.4 ms ≈ 5.6–6.3%** of a
+> ~790 ms whole-frame render. `crates/app/examples/probe_prefix_tail_seam.rs`.
+>
+> **⛔ THE DOWNLOAD HALF WAS PRICED AND DECLINED (user's call, 2026-09-18).** The two `tovec` costs
+> are **25.0–29.5 ms each** — the larger half — and removing them means `PrefixCache` holding a
+> `GpuImage`: `MID_BUDGET_BYTES` would start describing VRAM, and the region crop, the brush cache's
+> sizing and `render_cached`'s tail seeding would each need an answer. Priced at **11–13%**.
+>
+> ⚠⚠ **This entry's own warning turned out to be right, and the numbers below describe a path the
+> gesture does not take.** `render_engine.rs` keeps `gpu_prefix_steps` at 0 on the region-scoped
+> path, so an interactive drag has **no GPU prefix step and therefore no seam**. Everything here is
+> an export / cold-whole-frame win. Do not requote the 88.9 ms dehaze-drag frame as a drag saving.
+>
+> ⚠ Original text follows, kept as the record of what was believed before M8.14 measured it.
+
 ### ⚠⚠ A GPU buffer resident across the prefix→tail seam (recorded 2026-09-13, at M8.3o's merge — MEASURED, not estimated)
 
 > **✅ CORROBORATED IN AN ADJACENT PLACE, M8.13 (2026-09-18).** Not this seam, but the same class of

@@ -144,8 +144,29 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-18)
 
-**2544 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
-`origin/main`** — **not pushed; the user pushes.**
+**2547 tests, 74 goldens.** ⚠ On branch **`prefix-tail-resident-seam`**, NOT merged, NOT pushed.
+`main` is also still ahead of `origin/main`.
+
+🟡 **M8.14 — a GPU buffer resident across the prefix seams. Built and measured; NOT YET CONFIRMED BY
+USE.** Consecutive GPU prefix steps, and the last one and the tail's first chain, hand the device
+buffer over instead of downloading and re-uploading the whole frame. `DSCF6509.RAF` (312.5 MB
+plane), quiet machine, warm frames:
+
+| warm frames | before | after |
+|---|---|---|
+| step→step (the dehaze step) | 312.7–313.0 ms | **294.2–297.9** → saved **14.8–18.8** |
+| step→tail (direct A/B) | — | saved **28.5–30.6** |
+| **both seams** | | **43.3–49.4 ms ≈ 5.6–6.3% of a ~790 ms frame** |
+
+⚠ NR is the control and did not move (243.4–245.5 vs 244.7): it is the first GPU step, so it has
+nothing to take. The pre-build prediction of 4.5–6% held, at the top of its range.
+
+⚠⚠ **An export and cold-whole-frame win, NOT a drag win.** The region-scoped path runs no GPU prefix
+step at all, so it has no seam. Do not re-read this expecting a drag improvement.
+
+⚠⚠ **The two downloads are the larger half and were DECLINED** — they need `PrefixCache` to hold a
+`GpuImage` (11–13%, user's call 2026-09-18). `GpuContext` now has **two** `SharedPlane` slots
+(`Mask`, `Prefix`) and merging them would undo a sabotage-pinned guard.
 
 ✅ **M8.13 — a GPU-resident base for `GpuBrushRaster`. Merged and CONFIRMED BY USE.**
 A `GpuChain` before a mask deposits its output buffer; the gate takes it instead of memcpying the
@@ -253,7 +274,9 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
   wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
 - ✅ ~~**A GPU-resident base for `GpuBrushRaster`**~~ — **DONE, M8.13 (2026-09-18): 1.13–1.36× on a
   masked global drag, measured against a forced miss. Merged and confirmed by use.**
-- **The resident GPU buffer across the prefix→tail seam** (`docs/BACKLOG.md`, head of `## Performance`) — **measured, not estimated**: ~26 ms of an 88.9 ms dehaze-drag frame is a zero-work round trip paid **twice**. ⚠ Its own entry said not to start it **before the prefix is mostly ported** — with 18 of 21 stages ported that condition now holds, so this is live rather than blocked.
+- 🟡 ~~**The resident GPU buffer across the prefix→tail seam**~~ — **BUILT AND MEASURED 2026-09-18
+  (M8.14): 43.3–49.4 ms, 5.6–6.3% of a whole-frame render.** ⚠ Not merged, not confirmed by use.
+  ⚠⚠ Its *download* half remains open and is the larger one — declined at 11–13%, see `docs/BACKLOG.md`.
 - The prefix-cache eviction fix's **picture** half.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
