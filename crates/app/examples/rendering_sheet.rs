@@ -34,8 +34,12 @@ fn main() {
                 rendering: Some(r),
                 ..Default::default()
             };
-            let px = pipeline::build_pipeline(&edits, pipeline::RenderScale::new(1.0))
-                .run(small.clone());
+            let px = pipeline::build_pipeline(
+                &edits,
+                pipeline::RenderScale::new(1.0),
+                pipeline::ProfileRendering::colorimetric(),
+            )
+            .run(small.clone());
             let rgb = export::to_rgb8(&px);
             let img = image::RgbImage::from_raw(px.width() as u32, px.height() as u32, rgb)
                 .expect("panel");

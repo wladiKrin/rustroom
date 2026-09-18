@@ -429,7 +429,12 @@ fn main() {
     {
         use pipeline::{build_pipeline_split_in_region, Region, RenderScale};
         let sc = RenderScale::new(scale);
-        let (prefix, _) = build_pipeline_split_in_region(&Edits::default(), sc, None);
+        let (prefix, _) = build_pipeline_split_in_region(
+            &Edits::default(),
+            sc,
+            None,
+            pipeline::ProfileRendering::colorimetric(),
+        );
         let mid = prefix.run(buf.downscale_to(buffer_long));
         let (rw, rh) = (1400.min(mid.width()), 900.min(mid.height()));
         let region = Region {
@@ -442,7 +447,12 @@ fn main() {
         println!("\n  native region tail {rw}x{rh} (warm prefix)");
         let mut reg_neutral = 0.0;
         for (label, edits) in &cases {
-            let (_, tail) = build_pipeline_split_in_region(edits, sc, Some(region));
+            let (_, tail) = build_pipeline_split_in_region(
+                edits,
+                sc,
+                Some(region),
+                pipeline::ProfileRendering::colorimetric(),
+            );
             let ms = best_of(|| tail.run(sub.clone()));
             if *label == "neutral" {
                 reg_neutral = ms;
@@ -466,17 +476,32 @@ fn main() {
             };
             let sub = mid.crop(0, 0, w, h);
             let base = {
-                let (_, t) = build_pipeline_split_in_region(&Edits::default(), sc, Some(region));
+                let (_, t) = build_pipeline_split_in_region(
+                    &Edits::default(),
+                    sc,
+                    Some(region),
+                    pipeline::ProfileRendering::colorimetric(),
+                );
                 best_of(|| t.run(sub.clone()))
             };
             let cl = {
                 let e = masked(1, gradient, clarity);
-                let (_, t) = build_pipeline_split_in_region(&e, sc, Some(region));
+                let (_, t) = build_pipeline_split_in_region(
+                    &e,
+                    sc,
+                    Some(region),
+                    pipeline::ProfileRendering::colorimetric(),
+                );
                 best_of(|| t.run(sub.clone())) - base
             };
             let hs = {
                 let e = masked(1, gradient, hsl_adjust);
-                let (_, t) = build_pipeline_split_in_region(&e, sc, Some(region));
+                let (_, t) = build_pipeline_split_in_region(
+                    &e,
+                    sc,
+                    Some(region),
+                    pipeline::ProfileRendering::colorimetric(),
+                );
                 best_of(|| t.run(sub.clone())) - base
             };
             println!("           {label:>9}: clarity {cl:+6.1} ms   HSL {hs:+6.1} ms");
@@ -544,7 +569,12 @@ fn main() {
         let sc = RenderScale::new(scale);
         for rung in [PREVIEW_MAX_DIM, buffer_long] {
             let src = buf.downscale_to(rung);
-            let (prefix, _) = build_pipeline_split_in_region(&Edits::default(), sc, None);
+            let (prefix, _) = build_pipeline_split_in_region(
+                &Edits::default(),
+                sc,
+                None,
+                pipeline::ProfileRendering::colorimetric(),
+            );
             let mid = prefix.run(src);
             // At a native rung the app renders a *region*; with the whole photo visible that
             // region covers the whole frame, which is the case timed here.
@@ -569,7 +599,12 @@ fn main() {
                     masked(1, radial, exposure),
                 ),
             ] {
-                let (_, tail) = build_pipeline_split_in_region(&edits, sc, region);
+                let (_, tail) = build_pipeline_split_in_region(
+                    &edits,
+                    sc,
+                    region,
+                    pipeline::ProfileRendering::colorimetric(),
+                );
                 let tail_ms = best_of(|| tail.run(mid.clone())) - best_of(|| mid.clone());
                 let out = tail.run(mid.clone());
                 let pack_ms = best_of(|| out.to_rgba8());

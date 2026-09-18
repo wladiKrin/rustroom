@@ -1271,6 +1271,7 @@ pub fn build_pipeline_split_in_region(
     edits: &Edits,
     scale: RenderScale,
     region: Option<Region>,
+    profile: ProfileRendering<'_>,
 ) -> (Pipeline, Pipeline) {
     build_pipeline_split_in_region_with_brush(
         edits,
@@ -1279,7 +1280,7 @@ pub fn build_pipeline_split_in_region(
         None,
         RenderSpec::default(),
         None,
-        ProfileRendering::default(),
+        profile,
     )
 }
 
@@ -1290,10 +1291,10 @@ pub fn build_pipeline_split_in_region(
 /// and `RenderSpec` each gave. `Copy` despite holding references, because a shared reference is
 /// `Copy`, which is what lets it sit beside `RenderSpec` rather than inside it.
 ///
-/// ⚠ **The name is now narrower than the contents**, and that is a deliberate wave-scoping
-/// choice rather than a judgement: `look` is not a camera-profile field, but renaming the type
-/// would churn ~25 `ProfileRendering::default()` call sites in `render_engine.rs`, which another
-/// track is editing concurrently. Worth renaming to `TailRendering` once the wave merges.
+/// ⚠ **The name is narrower than the contents** — `look` is not a camera-profile field — and
+/// `TailRendering` would be the better one. Left alone deliberately: it is now named at ~120 call
+/// sites across four crates, and a rename would be a second wide, shallow diff on top of the one
+/// that made it required (2026-09-18). Worth doing on its own, never folded into something else.
 ///
 /// ⚠⚠ **Everything here is loaded by the CALLER**, because `pipeline` does no I/O. A caller that
 /// supplies nothing gets a render without it — which is exactly what a missing `.cube` must do.
@@ -1317,6 +1318,24 @@ pub struct ProfileRendering<'a> {
     /// preset naming a `.cube` that is not on this machine must render *without the look*, not
     /// without a rendering — see `a_look_with_no_table_leaves_the_camera_rendering_alone`.
     pub look: Option<&'a std::sync::Arc<lut::Cube>>,
+}
+
+impl ProfileRendering<'_> {
+    /// The primaries and the transfer curve, and nothing else: **no** camera rendering and **no**
+    /// creative look.
+    ///
+    /// ⚠⚠ **A NAME rather than `default()`, and the name is the point.** `ProfileRendering::default()`
+    /// at a call site reads as *"nothing special here"*; this reads as a statement a reviewer can
+    /// disagree with. The builders used to apply the default **silently**, and that cost three
+    /// defects in one day (2026-09-18): an export lost the profile's curve, its baseline exposure
+    /// **and** the user's `.cube`, and a thumbnail lost the look. None of them failed a test,
+    /// because an absence looks exactly like a decision.
+    ///
+    /// This is what the goldens, `rustroom render` and most tests genuinely want — and they should
+    /// say so.
+    pub fn colorimetric() -> Self {
+        Self::default()
+    }
 }
 
 /// Whether a profile's tone curve is the identity, and therefore no rendering at all.
@@ -1612,8 +1631,12 @@ pub fn build_pipeline_split_in_region_with_brush(
 }
 
 /// The develop pipeline in two halves, for a render covering the whole frame.
-pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pipeline) {
-    build_pipeline_split_in_region(edits, scale, None)
+pub fn build_pipeline_split(
+    edits: &Edits,
+    scale: RenderScale,
+    profile: ProfileRendering<'_>,
+) -> (Pipeline, Pipeline) {
+    build_pipeline_split_in_region(edits, scale, None, profile)
 }
 
 /// Build the ordered stage list for a set of edits, rendered at `scale` relative to the
@@ -1623,13 +1646,22 @@ pub fn build_pipeline_split(edits: &Edits, scale: RenderScale) -> (Pipeline, Pip
 /// ⚠ Resamples with [`Resampler::default`]. Every **production** render goes through
 /// [`build_pipeline_with`] instead, so the user's choice reaches it; this wrapper exists so the
 /// goldens, the examples and the debug tools compile untouched — the `Region` precedent.
-pub fn build_pipeline(edits: &Edits, scale: RenderScale) -> Pipeline {
-    build_pipeline_with(edits, scale, Resampler::default())
+pub fn build_pipeline(
+    edits: &Edits,
+    scale: RenderScale,
+    profile: ProfileRendering<'_>,
+) -> Pipeline {
+    build_pipeline_with(edits, scale, Resampler::default(), profile)
 }
 
 /// As [`build_pipeline`], resampling with the caller's chosen kernel.
-pub fn build_pipeline_with(edits: &Edits, scale: RenderScale, resampler: Resampler) -> Pipeline {
-    build_pipeline_to(edits, scale, color::OutputSpace::Srgb, resampler)
+pub fn build_pipeline_with(
+    edits: &Edits,
+    scale: RenderScale,
+    resampler: Resampler,
+    profile: ProfileRendering<'_>,
+) -> Pipeline {
+    build_pipeline_to(edits, scale, color::OutputSpace::Srgb, resampler, profile)
 }
 
 /// As [`build_pipeline`], writing to `space` rather than sRGB.
@@ -1643,6 +1675,7 @@ pub fn build_pipeline_to(
     scale: RenderScale,
     space: color::OutputSpace,
     resampler: Resampler,
+    profile: ProfileRendering<'_>,
 ) -> Pipeline {
     build_pipeline_spec(
         edits,
@@ -1652,25 +1685,34 @@ pub fn build_pipeline_to(
             resampler,
             ..RenderSpec::default()
         },
+        profile,
     )
 }
 
 /// As [`build_pipeline_to`], with the whole [`RenderSpec`] — which is what an export of a RAW
 /// needs, since only it knows the file's white-balance baseline.
-pub fn build_pipeline_spec(edits: &Edits, scale: RenderScale, spec: RenderSpec) -> Pipeline {
-    build_pipeline_rendered(edits, scale, spec, ProfileRendering::default())
+pub fn build_pipeline_spec(
+    edits: &Edits,
+    scale: RenderScale,
+    spec: RenderSpec,
+    profile: ProfileRendering<'_>,
+) -> Pipeline {
+    build_pipeline_rendered(edits, scale, spec, profile)
 }
 
-/// As [`build_pipeline_spec`], with the camera rendering and creative look spelled out.
+/// As [`build_pipeline_spec`], differing only in that it takes the whole [`RenderSpec`] **and** the
+/// rendering — which, since every builder above now requires the rendering too, makes this the one
+/// they all delegate to.
 ///
-/// ⚠⚠ **This exists because defaulting the rendering SILENTLY is how three call sites lost it.**
-/// Every whole-pipeline builder above hands `ProfileRendering::default()` to the split builder, so
-/// a caller that needs the profile's curve or the user's `.cube` gets neither and no warning —
-/// which is how an export rendered without the look until 2026-09-18, and how a **thumbnail** still
-/// did after that. A caller that has a rendering now has somewhere to put it.
+/// ⚠⚠ **It exists because defaulting the rendering SILENTLY cost three defects in one day.** Until
+/// 2026-09-18 every whole-pipeline builder handed `ProfileRendering::default()` down without being
+/// asked, so a call site that needed the profile's curve or the user's `.cube` got neither **and no
+/// warning** — which is how an export rendered without the look, and how a thumbnail still did
+/// after that was fixed. An absence looked exactly like a decision.
 ///
-/// ⚠ Additive with a delegating wrapper, the precedent [`build_pipeline_to`] records: no existing
-/// call site changes.
+/// ⚠ Those builders now take the rendering as a required argument, so the hole this was added to
+/// work around is closed at the source. See [`ProfileRendering::colorimetric`] for the name a
+/// caller that wants none should use.
 pub fn build_pipeline_rendered(
     edits: &Edits,
     scale: RenderScale,
@@ -2653,7 +2695,12 @@ mod tests {
     /// identity. Bit-exactness is the rule the entire golden harness rests on.
     #[test]
     fn the_default_rendering_inserts_no_stage() {
-        let names = build_pipeline(&Edits::default(), RenderScale::new(1.0)).stage_names();
+        let names = build_pipeline(
+            &Edits::default(),
+            RenderScale::new(1.0),
+            ProfileRendering::colorimetric(),
+        )
+        .stage_names();
         assert!(
             !names.contains(&"display_rendering"),
             "a neutral photo got a rendering stage: {names:?}"
@@ -2669,7 +2716,12 @@ mod tests {
             rendering: Some(edit_model::Rendering::Camera),
             ..Default::default()
         };
-        let names = build_pipeline(&edits, RenderScale::new(1.0)).stage_names();
+        let names = build_pipeline(
+            &edits,
+            RenderScale::new(1.0),
+            ProfileRendering::colorimetric(),
+        )
+        .stage_names();
         let r = names
             .iter()
             .position(|n| *n == "display_rendering")
@@ -3258,10 +3310,24 @@ mod tests {
             },
             ..Default::default()
         };
-        let with = |k| build_pipeline_with(&edits, RenderScale::FULL, k).run(src.clone());
+        let with = |k| {
+            build_pipeline_with(
+                &edits,
+                RenderScale::FULL,
+                k,
+                ProfileRendering::colorimetric(),
+            )
+            .run(src.clone())
+        };
         let to = |k| {
-            build_pipeline_to(&edits, RenderScale::FULL, color::OutputSpace::Srgb, k)
-                .run(src.clone())
+            build_pipeline_to(
+                &edits,
+                RenderScale::FULL,
+                color::OutputSpace::Srgb,
+                k,
+                ProfileRendering::colorimetric(),
+            )
+            .run(src.clone())
         };
         assert_ne!(
             with(Resampler::Bilinear).data(),
@@ -3370,8 +3436,14 @@ mod tests {
     #[test]
     fn a_none_region_split_is_identical_to_the_plain_split() {
         for edits in [Edits::default(), all_edits()] {
-            let (p1, t1) = build_pipeline_split(&edits, RenderScale::FULL);
-            let (p2, t2) = build_pipeline_split_in_region(&edits, RenderScale::FULL, None);
+            let (p1, t1) =
+                build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
+            let (p2, t2) = build_pipeline_split_in_region(
+                &edits,
+                RenderScale::FULL,
+                None,
+                ProfileRendering::colorimetric(),
+            );
             assert_eq!(p1.stage_names(), p2.stage_names());
             assert_eq!(t1.stage_names(), t2.stage_names());
         }
@@ -3380,11 +3452,13 @@ mod tests {
     #[test]
     fn build_pipeline_is_exactly_prefix_then_tail() {
         for edits in [Edits::default(), all_edits()] {
-            let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+            let (prefix, tail) =
+                build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
             let mut expected = prefix.stage_names();
             expected.extend(tail.stage_names());
             assert_eq!(
-                build_pipeline(&edits, RenderScale::FULL).stage_names(),
+                build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                    .stage_names(),
                 expected
             );
         }
@@ -3397,7 +3471,8 @@ mod tests {
     #[test]
     fn the_tapped_tail_concatenates_to_the_tail_and_splits_at_the_grade() {
         for edits in [Edits::default(), all_edits()] {
-            let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+            let (prefix, tail) =
+                build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
             let (tapped_prefix, halves) = build_pipeline_split_tapped(
                 &edits,
                 RenderScale::FULL,
@@ -3435,7 +3510,11 @@ mod tests {
         //
         // ⚠ No lens profile is supplied here, so `lens_correction` is absent by construction —
         // the prefix starts at perspective.
-        let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
+        let (prefix, tail) = build_pipeline_split(
+            &all_edits(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        );
         assert_eq!(
             prefix.stage_names(),
             vec![
@@ -3466,7 +3545,8 @@ mod tests {
         for edits in [Edits::default(), all_edits()] {
             let steps =
                 build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None);
-            let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
+            let (prefix, _) =
+                build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
             let from_steps: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
             assert_eq!(from_steps, prefix.stage_names());
         }
@@ -3658,8 +3738,10 @@ mod tests {
                 img.set_pixel(x, y, [x as f32 / 16.0, y as f32 / 12.0, 0.4]);
             }
         }
-        let whole = build_pipeline(&edits, RenderScale::FULL).run(img.clone());
-        let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+        let whole = build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            .run(img.clone());
+        let (prefix, tail) =
+            build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
         let split = tail.run(prefix.run(img));
         assert_eq!(whole.data(), split.data());
     }
@@ -3696,8 +3778,14 @@ mod tests {
                 img.set_pixel(x, y, [0.1 * x as f32, 0.2, 0.05 * y as f32]);
             }
         }
-        let full = build_pipeline(&edits, RenderScale::FULL).run(img.clone());
-        let quarter = build_pipeline(&edits, RenderScale::new(0.25)).run(img);
+        let full = build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            .run(img.clone());
+        let quarter = build_pipeline(
+            &edits,
+            RenderScale::new(0.25),
+            ProfileRendering::colorimetric(),
+        )
+        .run(img);
         assert_eq!(full.data(), quarter.data());
     }
 
@@ -3791,7 +3879,8 @@ mod tests {
             },
             ..Edits::default()
         };
-        let names = build_pipeline(&edits, RenderScale::FULL).stage_names();
+        let names = build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            .stage_names();
         for stage in [
             "local_contrast",
             "sharpening",
@@ -3963,7 +4052,8 @@ mod tests {
             masks: vec![masked(50.0), masked(70.0)],
             ..Edits::default()
         };
-        let (prefix, tail) = build_pipeline_split(&edits, RenderScale::FULL);
+        let (prefix, tail) =
+            build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
         assert_eq!(
             prefix.stage_names(),
             vec!["noise_reduction", "dehaze", "mask", "mask"],
@@ -3992,7 +4082,8 @@ mod tests {
             }],
             ..Edits::default()
         };
-        let (prefix, _) = build_pipeline_split(&edits, RenderScale::FULL);
+        let (prefix, _) =
+            build_pipeline_split(&edits, RenderScale::FULL, ProfileRendering::colorimetric());
         assert!(
             prefix.stage_names().is_empty(),
             "{:?}",
@@ -4050,7 +4141,8 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(
-            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names(),
             vec!["exposure", "saturation", "output_transform"]
         );
     }
@@ -4059,7 +4151,12 @@ mod tests {
     fn output_transform_encodes_linear_to_srgb() {
         let mut img = ImageBuf::new(1, 1);
         img.set_pixel(0, 0, [0.5, 0.5, 0.5]);
-        let out = build_pipeline(&Edits::default(), RenderScale::FULL).run(img);
+        let out = build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(img);
         let [r, g, b] = out.pixel(0, 0);
         let expected = color::linear_to_srgb(0.5);
         assert!((r - expected).abs() < 1e-4);
@@ -4069,7 +4166,11 @@ mod tests {
 
     #[test]
     fn default_pipeline_has_output_transform_last() {
-        let p = build_pipeline(&Edits::default(), RenderScale::FULL);
+        let p = build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        );
         assert_eq!(p.len(), 1);
     }
 
@@ -4080,7 +4181,10 @@ mod tests {
             contrast: 20.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 3);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            3
+        );
     }
 
     #[test]
@@ -4091,7 +4195,10 @@ mod tests {
             hsl,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            2
+        );
     }
 
     #[test]
@@ -4102,7 +4209,10 @@ mod tests {
             ..Edits::default()
         };
         // saturation stage + output transform only
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            2
+        );
     }
 
     #[test]
@@ -4111,7 +4221,10 @@ mod tests {
             saturation: 20.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            2
+        );
     }
 
     #[test]
@@ -4120,7 +4233,10 @@ mod tests {
             vibrance: -30.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            2
+        );
     }
 
     #[test]
@@ -4129,7 +4245,10 @@ mod tests {
             exposure: 1.0,
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            2
+        );
     }
 
     #[test]
@@ -4154,7 +4273,8 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(
-            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names(),
             vec![
                 "geometry",
                 "noise_reduction",
@@ -4176,7 +4296,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            1
+        );
     }
 
     #[test]
@@ -4192,7 +4315,8 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(
-            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names(),
             vec!["exposure", "saturation", "vignette", "output_transform"]
         );
     }
@@ -4208,7 +4332,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            1
+        );
     }
 
     #[test]
@@ -4228,7 +4355,8 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(
-            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names(),
             vec!["exposure", "vignette", "sharpening", "output_transform"]
         );
     }
@@ -4244,7 +4372,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            1
+        );
     }
 
     #[test]
@@ -4265,7 +4396,8 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(
-            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names(),
             vec![
                 "exposure",
                 "tone_curve",
@@ -4283,7 +4415,10 @@ mod tests {
             local_contrast: edit_model::LocalContrast::default(),
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 2);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            2
+        );
     }
 
     #[test]
@@ -4291,7 +4426,11 @@ mod tests {
         // It must not join the prefix: it has to be downstream of the tone curve, and
         // putting it upstream would also make every Texture drag invalidate the noise
         // reduction cache.
-        let (prefix, tail) = build_pipeline_split(&all_edits(), RenderScale::FULL);
+        let (prefix, tail) = build_pipeline_split(
+            &all_edits(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        );
         assert!(!prefix.stage_names().contains(&"local_contrast"));
         assert!(tail.stage_names().contains(&"local_contrast"));
     }
@@ -4361,7 +4500,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 3);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            3
+        );
     }
 
     #[test]
@@ -4401,7 +4543,8 @@ mod tests {
             ..Edits::default()
         };
         assert_eq!(
-            build_pipeline(&edits, RenderScale::FULL).stage_names(),
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names(),
             vec![
                 "hsl",
                 "color_grading",
@@ -4422,7 +4565,10 @@ mod tests {
             },
             ..Edits::default()
         };
-        assert_eq!(build_pipeline(&edits, RenderScale::FULL).len(), 1);
+        assert_eq!(
+            build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric()).len(),
+            1
+        );
     }
 
     /// A corrector built from a synthetic profile — no RAW file, no bundled database.
@@ -4514,9 +4660,11 @@ mod tests {
         let edits = Edits::default();
         let steps = build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None);
         assert!(steps.is_empty());
-        assert!(!build_pipeline(&edits, RenderScale::FULL)
-            .stage_names()
-            .contains(&"spot_removal"));
+        assert!(
+            !build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names()
+                .contains(&"spot_removal")
+        );
 
         // And an empty list on an otherwise busy edit set inserts nothing either.
         let busy = Edits {
@@ -4524,9 +4672,11 @@ mod tests {
             spots: Vec::new(),
             ..Edits::default()
         };
-        assert!(!build_pipeline(&busy, RenderScale::FULL)
-            .stage_names()
-            .contains(&"spot_removal"));
+        assert!(
+            !build_pipeline(&busy, RenderScale::FULL, ProfileRendering::colorimetric())
+                .stage_names()
+                .contains(&"spot_removal")
+        );
     }
 
     /// ⚠⚠ The property the placement exists for, in the shape of the brush's real-`.RAF`
@@ -4580,15 +4730,30 @@ mod tests {
             ..uncropped.clone()
         };
 
-        let whole = build_pipeline(&uncropped, RenderScale::FULL).run(img.clone());
-        let part = build_pipeline(&cropped, RenderScale::FULL).run(img.clone());
+        let whole = build_pipeline(
+            &uncropped,
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(img.clone());
+        let part = build_pipeline(
+            &cropped,
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(img.clone());
         let (x0, y0) = (W / 4, H / 4);
         let window = whole.crop(x0, y0, W / 2, H / 2);
         assert_eq!(window.width(), part.width());
         assert_eq!(window.height(), part.height());
 
         // Guard against passing trivially: the patch must genuinely change these pixels.
-        let neutral = build_pipeline(&Edits::default(), RenderScale::FULL).run(img);
+        let neutral = build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(img);
         assert_ne!(
             neutral.crop(x0, y0, W / 2, H / 2).data(),
             part.data(),

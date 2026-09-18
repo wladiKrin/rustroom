@@ -45,7 +45,12 @@ fn mean_sat(rgb: &[f32]) -> f32 {
 }
 
 fn render(buf: &core_image::ImageBuf, edits: &edit_model::Edits) -> (f32, f32) {
-    let out = pipeline::build_pipeline(edits, pipeline::RenderScale::new(1.0)).run(buf.clone());
+    let out = pipeline::build_pipeline(
+        edits,
+        pipeline::RenderScale::new(1.0),
+        pipeline::ProfileRendering::colorimetric(),
+    )
+    .run(buf.clone());
     (mean_luma(out.data()), mean_sat(out.data()))
 }
 

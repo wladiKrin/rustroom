@@ -71,6 +71,7 @@ fn main() {
         let rendered = pipeline::build_pipeline(
             &edit_model::Edits::default(),
             pipeline::RenderScale::new(0.5),
+            pipeline::ProfileRendering::colorimetric(),
         )
         .run(img.image.clone());
         export::save(

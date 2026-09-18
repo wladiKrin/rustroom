@@ -56,7 +56,8 @@ fn main() {
             baseline: as_shot,
             airlight: Some(air),
         };
-        pipeline::build_pipeline_spec(&e, scale, spec).run(buffer.clone())
+        pipeline::build_pipeline_spec(&e, scale, spec, pipeline::ProfileRendering::colorimetric())
+            .run(buffer.clone())
     };
 
     // ⚠ A disc of radius 0.30 * min(w,h) about the centre. A rotation of 40 degrees keeps a disc of

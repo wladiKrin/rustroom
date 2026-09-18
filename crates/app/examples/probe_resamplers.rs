@@ -283,7 +283,12 @@ fn main() {
             x0: 0,
             y0: 0,
         };
-        let (_, tail) = build_pipeline_split_in_region(&drag, sc, Some(region));
+        let (_, tail) = build_pipeline_split_in_region(
+            &drag,
+            sc,
+            Some(region),
+            pipeline::ProfileRendering::colorimetric(),
+        );
         println!("\n  a drag resumes at its own step; everything upstream stays cached:");
         for start in 0..=dsteps.len() {
             let label = if start == dsteps.len() {

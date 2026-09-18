@@ -26,7 +26,12 @@ fn luma(p: [f32; 3]) -> f32 {
 }
 
 fn render(buf: &core_image::ImageBuf, e: &edit_model::Edits) -> core_image::ImageBuf {
-    pipeline::build_pipeline(e, pipeline::RenderScale::new(1.0)).run(buf.clone())
+    pipeline::build_pipeline(
+        e,
+        pipeline::RenderScale::new(1.0),
+        pipeline::ProfileRendering::colorimetric(),
+    )
+    .run(buf.clone())
 }
 
 fn pixels(img: &core_image::ImageBuf) -> Vec<[f32; 3]> {

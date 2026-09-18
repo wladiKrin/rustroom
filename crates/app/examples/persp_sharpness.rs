@@ -37,7 +37,12 @@ fn main() {
 
     let run = |label: &str, e: &Edits| {
         let t = Instant::now();
-        let out = pipeline::build_pipeline(e, pipeline::RenderScale::FULL).run(src.clone());
+        let out = pipeline::build_pipeline(
+            e,
+            pipeline::RenderScale::FULL,
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .run(src.clone());
         let ms = t.elapsed().as_millis();
         println!("  {label:34} acutance {:.5}  ({ms} ms)", acutance(&out));
     };

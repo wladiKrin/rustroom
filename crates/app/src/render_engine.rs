@@ -1609,7 +1609,21 @@ pub fn render_once(
         airlight: Some(pipeline::prefix_airlight(edits, buffer, resampler, lens)),
     };
     let mut frame = pack(
-        Packed::Float(pipeline::build_pipeline_spec(edits, scale, spec).run(preview)),
+        Packed::Float(
+            // ⚠⚠ **`colorimetric()` on purpose, and it is now SAID rather than inherited.** This is
+            // the before/after baseline and the reference `render_cached` is tested against, so it
+            // must not move with a camera profile or a `.cube` — the same argument the `None` proof
+            // below makes about the view. It used to get this by default, which meant nobody could
+            // tell the choice from an omission; that ambiguity is what cost three defects on
+            // 2026-09-18.
+            pipeline::build_pipeline_spec(
+                edits,
+                scale,
+                spec,
+                pipeline::ProfileRendering::colorimetric(),
+            )
+            .run(preview),
+        ),
         // ⚠ Never proofed. This is the before/after baseline and the reference the cached path is
         // tested against; a proof is a property of the *view* and would make the reference move
         // with a menu setting.

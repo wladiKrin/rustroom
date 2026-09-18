@@ -748,7 +748,12 @@ mod tests {
             exposure: 0.45,
             ..Edits::default()
         };
-        let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
+        let (_, tail) = pipeline::build_pipeline_split_in_region(
+            &e,
+            SCALE,
+            None,
+            pipeline::ProfileRendering::colorimetric(),
+        );
         // ⚠⚠ **`output_transform` is filtered out, and M8.3h is what forced that.** Until then
         // this test read the whole tail `["exposure", "output_transform"]` — one run of 29.9 ms
         // — and passed because the *pair* was under a 34.0 ms bar. So it never measured exposure
@@ -826,7 +831,12 @@ mod tests {
     fn a_colorimetric_tail_builds_a_chain() {
         let Some(ctx) = ctx() else { return };
         let e = Edits::default();
-        let (_, tail) = pipeline::build_pipeline_split_in_region(&e, SCALE, None);
+        let (_, tail) = pipeline::build_pipeline_split_in_region(
+            &e,
+            SCALE,
+            None,
+            pipeline::ProfileRendering::colorimetric(),
+        );
         assert_eq!(
             tail.stage_names(),
             vec!["output_transform"],
@@ -1796,7 +1806,7 @@ mod tests {
     }
 
     fn tail_of(e: &Edits) -> Pipeline {
-        pipeline::build_pipeline_split(e, SCALE).1
+        pipeline::build_pipeline_split(e, SCALE, pipeline::ProfileRendering::colorimetric()).1
     }
 
     /// A mask carrying exactly what it is handed, under a full-frame linear gradient.
@@ -2591,7 +2601,8 @@ mod tests {
             })],
             ..Edits::default()
         };
-        let (prefix, tail) = pipeline::build_pipeline_split(&e, SCALE);
+        let (prefix, tail) =
+            pipeline::build_pipeline_split(&e, SCALE, pipeline::ProfileRendering::colorimetric());
         assert!(
             prefix.sub_stage_names_of("mask").is_some(),
             "fixture check: the prefix must carry a capture mask"
@@ -2879,7 +2890,13 @@ mod tests {
             core_image::ImageBuf::from_vec(20, 16, px)
         };
         let render = |r: Option<Region>| {
-            let tail = pipeline::build_pipeline_split_in_region(&e, SCALE, r).1;
+            let tail = pipeline::build_pipeline_split_in_region(
+                &e,
+                SCALE,
+                r,
+                pipeline::ProfileRendering::colorimetric(),
+            )
+            .1;
             let (p, c) = accelerate(
                 tail,
                 &e,
@@ -2894,9 +2911,14 @@ mod tests {
             );
             rejoin(p, c).run(img())
         };
-        let want = pipeline::build_pipeline_split_in_region(&e, SCALE, Some(region))
-            .1
-            .run(img());
+        let want = pipeline::build_pipeline_split_in_region(
+            &e,
+            SCALE,
+            Some(region),
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .1
+        .run(img());
         let with = render(Some(region));
         let without = render(None);
         // ⚠ The fixture check: the region must actually change the answer, or "it carries the

@@ -211,7 +211,8 @@ fn main() {
             exposure: 0.5,
             ..Edits::default()
         };
-        let (prefix, tail) = build_pipeline_split(&heavy, sc);
+        let (prefix, tail) =
+            build_pipeline_split(&heavy, sc, pipeline::ProfileRendering::colorimetric());
         let mid = prefix.run(buf.downscale_to(PREVIEW_MAX_DIM));
 
         let mut best = f64::MAX;
@@ -248,7 +249,12 @@ fn main() {
             ..Edits::default()
         };
         let t0 = Instant::now();
-        let (prefix, _) = build_pipeline_split_in_region(&heavy, sc, None);
+        let (prefix, _) = build_pipeline_split_in_region(
+            &heavy,
+            sc,
+            None,
+            pipeline::ProfileRendering::colorimetric(),
+        );
         let mid = prefix.run(buf.downscale_to(buffer_long));
         println!(
             "{:8.1} ms   native prefix, ONE-OFF ({}x{})",
@@ -265,7 +271,12 @@ fn main() {
             y0: 0,
         };
         let sub = mid.crop(0, 0, rw, rh);
-        let (_, tail) = build_pipeline_split_in_region(&heavy, sc, Some(region));
+        let (_, tail) = build_pipeline_split_in_region(
+            &heavy,
+            sc,
+            Some(region),
+            pipeline::ProfileRendering::colorimetric(),
+        );
         let mut best = f64::MAX;
         for _ in 0..5 {
             let t = Instant::now();
@@ -308,7 +319,12 @@ fn main() {
             ..Edits::default()
         };
         let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None);
-        let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
+        let (_, tail) = build_pipeline_split_in_region(
+            &heavy,
+            sc,
+            None,
+            pipeline::ProfileRendering::colorimetric(),
+        );
         println!("\n  prefix steps: {}", steps.len());
 
         // Build every checkpoint once.
@@ -372,7 +388,12 @@ fn main() {
             ..Edits::default()
         };
         let steps = build_prefix_steps(&heavy, sc, None, pipeline::Resampler::Bilinear, None);
-        let (_, tail) = build_pipeline_split_in_region(&heavy, sc, None);
+        let (_, tail) = build_pipeline_split_in_region(
+            &heavy,
+            sc,
+            None,
+            pipeline::ProfileRendering::colorimetric(),
+        );
         let base = buf.downscale_to(buffer_long);
         println!(
             "\n  prefix steps at a NATIVE rung ({}x{}, {:.1} Mpx): {}",
@@ -490,7 +511,13 @@ fn main() {
                 });
             if let Some((i, g)) = gpu_dehaze {
                 let (t2, chain) = gpu_pipeline::accelerate(
-                    build_pipeline_split_in_region(&heavy, sc, None).1,
+                    build_pipeline_split_in_region(
+                        &heavy,
+                        sc,
+                        None,
+                        pipeline::ProfileRendering::colorimetric(),
+                    )
+                    .1,
                     &heavy,
                     sc,
                     gpu_pipeline::TailFacts {
@@ -527,7 +554,13 @@ fn main() {
                 .filter(|_| !steps.is_empty());
             if let Some(from) = from {
                 let (t2, chain) = gpu_pipeline::accelerate(
-                    build_pipeline_split_in_region(&heavy, sc, None).1,
+                    build_pipeline_split_in_region(
+                        &heavy,
+                        sc,
+                        None,
+                        pipeline::ProfileRendering::colorimetric(),
+                    )
+                    .1,
                     &heavy,
                     sc,
                     gpu_pipeline::TailFacts {
@@ -760,7 +793,12 @@ fn main() {
                 x0: visible.x,
                 y0: visible.y,
             };
-            let (_, tail) = build_pipeline_split_in_region(&heavy, sc, Some(region));
+            let (_, tail) = build_pipeline_split_in_region(
+                &heavy,
+                sc,
+                Some(region),
+                pipeline::ProfileRendering::colorimetric(),
+            );
 
             let mut whole_ms = f64::MAX;
             for _ in 0..3 {
