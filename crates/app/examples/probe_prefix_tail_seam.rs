@@ -134,7 +134,8 @@ fn main() {
                 t.elapsed().as_secs_f64() * 1e3
             );
         }
-        let tail = pipeline::build_pipeline_split(&e, scale).1;
+        let tail =
+            pipeline::build_pipeline_split(&e, scale, pipeline::ProfileRendering::colorimetric()).1;
         // ⚠⚠ **A fixture check, because the first run of this probe reported a 0.0 ms tail and
         // that is not a measurement, it is an empty pipeline.** A seam has two sides; a probe that
         // silently prices only one is the thin-fixture error this session has already made twice.

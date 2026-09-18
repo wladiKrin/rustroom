@@ -42,7 +42,12 @@ fn render(small: &core_image::ImageBuf, amount: f32) -> core_image::ImageBuf {
         dehaze: edit_model::Dehaze { amount },
         ..Default::default()
     };
-    pipeline::build_pipeline(&edits, pipeline::RenderScale::new(1.0)).run(small.clone())
+    pipeline::build_pipeline(
+        &edits,
+        pipeline::RenderScale::new(1.0),
+        pipeline::ProfileRendering::colorimetric(),
+    )
+    .run(small.clone())
 }
 
 struct Row {

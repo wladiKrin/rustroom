@@ -115,7 +115,12 @@ fn render(lc: LocalContrast) -> ImageBuf {
         local_contrast: lc,
         ..Default::default()
     };
-    build_pipeline(&edits, RenderScale::FULL).run(chart())
+    build_pipeline(
+        &edits,
+        RenderScale::FULL,
+        pipeline::ProfileRendering::colorimetric(),
+    )
+    .run(chart())
 }
 
 fn main() {

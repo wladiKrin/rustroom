@@ -94,7 +94,8 @@ fn main() {
             e.shadows = 40.0;
         }
 
-        let tail = pipeline::build_pipeline_split(&e, scale).1;
+        let tail =
+            pipeline::build_pipeline_split(&e, scale, pipeline::ProfileRendering::colorimetric()).1;
         let before: Vec<&str> = tail.stage_names();
         let (after, trailing) = gpu_pipeline::accelerate(
             tail,
@@ -139,7 +140,12 @@ fn main() {
         if weight == 2 && std::env::var("RUSTROOM_DEBUG_MASK").is_ok() {
             eprintln!("  ── five frames of the REALISTIC config (read `stage=`):");
             for _ in 0..5 {
-                let tail = pipeline::build_pipeline_split(&e, scale).1;
+                let tail = pipeline::build_pipeline_split(
+                    &e,
+                    scale,
+                    pipeline::ProfileRendering::colorimetric(),
+                )
+                .1;
                 let (p, _) = gpu_pipeline::accelerate(
                     tail,
                     &e,

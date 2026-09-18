@@ -293,18 +293,25 @@ pub struct Settings {
     /// silently covers more than it claims is what the `Effects` edit group and the "Reset crop"
     /// hover text were each corrected for.
     ///
-    /// ⚠⚠ **Defaults to `false`, deliberately.** The CPU path is the oracle, and a wrong default
-    /// would make a rendering difference look like a Rustroom bug rather than a setting. The two
-    /// agree to ~0.01 of an 8-bit level.
+    /// ⚠⚠ **Defaults to `true` since 2026-09-18 — the user's call**, after M8.3b through M8.14 were
+    /// each confirmed by use. It defaulted to `false` while the GPU path was young, on the
+    /// reasoning that *"the CPU path is the oracle, and a wrong default would make a rendering
+    /// difference look like a Rustroom bug rather than a setting."* That reasoning was right then
+    /// and is spent now: the two paths agree to ~0.01 of an 8-bit level, and the GPU path is what
+    /// every measurement in `docs/JOURNAL.md` since M8.3 describes.
     ///
     /// ⚠ **The global tail only.** A mask's own stages live inside `MaskStage`, which
     /// `gpu_pipeline::accelerate` cannot reach — and masked HSL is the case reported in use as
     /// slow.
     ///
-    /// ⚠ A **field-level** `#[serde(default)]` is safe here because `bool`'s default and the
-    /// intended default are the same `false` — unlike `auto_advance`, where they differed and a
-    /// field-level attribute would have shipped the feature disabled for everyone.
-    #[serde(default, alias = "gpu_hsl")]
+    /// ⚠⚠ **NO field-level `#[serde(default)]`, and removing it was REQUIRED by the flip.** It used
+    /// to be safe precisely because `bool::default()` and the intended default were the same
+    /// `false`; the moment the intended default became `true` that attribute would have loaded
+    /// **`false`** for every settings file written before today — shipping the feature disabled for
+    /// everyone who already has one. That is the `auto_advance` trap verbatim, named in this very
+    /// comment, and it was one word away from being repeated. The struct's container-level
+    /// `#[serde(default)]` supplies the right value instead.
+    #[serde(alias = "gpu_hsl")]
     pub gpu_tail: bool,
     /// Which kernel the three resampling stages read pixels with — straighten, perspective and
     /// lens correction.
@@ -752,7 +759,7 @@ impl Default for Settings {
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
             view_demosaic: Demosaic::default(),
-            gpu_tail: false,
+            gpu_tail: true,
             resampler: Resampler::default(),
             camera_profiles: std::collections::BTreeMap::new(),
             display_space: color::OutputSpace::default(),
@@ -2221,6 +2228,35 @@ mod tests {
             PanelSection::ALL.to_vec(),
             "and an absent order must give the default"
         );
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_gpu_default_flipped_gets_the_new_default() {
+        // ⚠⚠ **The guard on the 2026-09-18 flip, and it is the `auto_advance` trap again.** While
+        // `gpu_tail` defaulted to `false` a field-level `#[serde(default)]` was safe, because
+        // `bool`'s own default matched. Flipping the intended default to `true` without removing
+        // that attribute would have loaded **`false`** for every settings file written before
+        // today — the feature shipped disabled for everyone who already has one, which is most
+        // people, and silently.
+        //
+        // ⚠ Asserts the **value**, not the mechanism, so it catches either way round.
+        let f = TempFile::new("gpu_tail_absent");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert!(
+            loaded.gpu_tail,
+            "a settings file with no `gpu_tail` must get the intended default, not `bool`'s"
+        );
+    }
+
+    #[test]
+    fn an_explicit_gpu_tail_false_is_still_honoured() {
+        // ⚠ The other half: a user who switched it OFF must stay off. A default that overrode an
+        // explicit choice would be worse than the wrong default.
+        let f = TempFile::new("gpu_tail_off");
+        std::fs::write(&f.0, r#"{"gpu_tail": false}"#).unwrap();
+        assert!(!SettingsStore::new(f.0.clone()).load().gpu_tail);
     }
 
     #[test]

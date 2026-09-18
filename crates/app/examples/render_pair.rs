@@ -71,7 +71,12 @@ fn main() {
         };
         let d = raw_decode::decode_raw(std::path::Path::new(&raw), &opts).expect("raw decode");
         let a = d.image.downscale_to(512);
-        let a = pipeline::build_pipeline(&edits, pipeline::RenderScale::new(1.0)).run(a);
+        let a = pipeline::build_pipeline(
+            &edits,
+            pipeline::RenderScale::new(1.0),
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .run(a);
         stats(
             &a,
             if named {
@@ -97,7 +102,12 @@ fn main() {
 
     let d = image_decode::decode(std::path::Path::new(&jpg)).expect("jpeg decode");
     let b = d.image.downscale_to(512);
-    let b = pipeline::build_pipeline(&edits, pipeline::RenderScale::new(1.0)).run(b);
+    let b = pipeline::build_pipeline(
+        &edits,
+        pipeline::RenderScale::new(1.0),
+        pipeline::ProfileRendering::colorimetric(),
+    )
+    .run(b);
     stats(&b, "JPEG -> pipeline");
     if let Some(dir) = std::env::args().nth(4) {
         let rgb = b.to_rgb8();

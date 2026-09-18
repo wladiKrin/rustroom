@@ -23,7 +23,10 @@ fn main() {
         baseline: color::wb::Illuminant::default(),
         airlight: None,
     };
-    let run = |e: &Edits| pipeline::build_pipeline_spec(e, scale, spec).run(img.clone());
+    let run = |e: &Edits| {
+        pipeline::build_pipeline_spec(e, scale, spec, pipeline::ProfileRendering::colorimetric())
+            .run(img.clone())
+    };
 
     let asked = Edits {
         rendering: Some(Rendering::Camera),

@@ -344,7 +344,12 @@ fn tile_rect(img: &ImageBuf, c: (usize, usize), side: usize) -> (usize, usize, u
 
 /// Apply the neutral pipeline — ProPhoto → sRGB, then encode. Consumes, like every stage.
 fn encoded(img: ImageBuf) -> ImageBuf {
-    pipeline::build_pipeline(&Edits::default(), RenderScale::FULL).run(img)
+    pipeline::build_pipeline(
+        &Edits::default(),
+        RenderScale::FULL,
+        pipeline::ProfileRendering::colorimetric(),
+    )
+    .run(img)
 }
 
 /// 8-bit level (0..255) of one encoded sample.

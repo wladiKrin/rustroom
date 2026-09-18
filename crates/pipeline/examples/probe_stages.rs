@@ -9,6 +9,7 @@
 //! per-pixel tail of an ordinary photograph is contiguous and can be one chain.
 use core_image::ImageBuf;
 use edit_model::Edits;
+use pipeline::ProfileRendering;
 use pipeline::{build_pipeline_split_in_region, RenderScale};
 use std::time::Instant;
 
@@ -26,16 +27,26 @@ fn scene(w: usize, h: usize) -> ImageBuf {
 
 /// Best of five, so a scheduling hiccup cannot be read as a cost.
 fn time(img: &ImageBuf, e: &Edits) -> (f64, Vec<&'static str>) {
-    let names = build_pipeline_split_in_region(e, RenderScale::new(1.0), None)
-        .1
-        .into_stages()
-        .iter()
-        .map(|s| s.name())
-        .collect();
+    let names = build_pipeline_split_in_region(
+        e,
+        RenderScale::new(1.0),
+        None,
+        ProfileRendering::colorimetric(),
+    )
+    .1
+    .into_stages()
+    .iter()
+    .map(|s| s.name())
+    .collect();
     let mut best = f64::MAX;
     for _ in 0..5 {
         let c = img.clone();
-        let (_, tail) = build_pipeline_split_in_region(e, RenderScale::new(1.0), None);
+        let (_, tail) = build_pipeline_split_in_region(
+            e,
+            RenderScale::new(1.0),
+            None,
+            ProfileRendering::colorimetric(),
+        );
         let t = Instant::now();
         let out = tail.run(c);
         best = best.min(t.elapsed().as_secs_f64() * 1000.0);

@@ -1,6 +1,6 @@
 //! Golden-image regression tests. Set `UPDATE_GOLDEN=1` to (re)write references.
 //!
-//! A fixed synthetic "chart" is rendered through `build_pipeline(&edits)`; the RGB8
+//! A fixed synthetic "chart" is rendered through `build_pipeline(&edits, ProfileRendering::colorimetric())`; the RGB8
 //! output must match the committed PNG within `TOL` per channel.
 
 use core_image::ImageBuf;
@@ -8,6 +8,7 @@ use edit_model::{
     ColorGrading, Dehaze, Edits, GradeWheel, LocalContrast, NoiseReduction, Sharpening, ToneCurve,
     Vignette, WhiteBalance,
 };
+use pipeline::ProfileRendering;
 use pipeline::{build_pipeline, RenderScale, Resampler};
 
 /// What every golden renders with — the shipping kernel.
@@ -315,7 +316,13 @@ fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
     };
     compare_or_update(
         name,
-        pipeline::build_pipeline_spec(edits, RenderScale::FULL, spec).run(input),
+        pipeline::build_pipeline_spec(
+            edits,
+            RenderScale::FULL,
+            spec,
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .run(input),
     );
 }
 
@@ -326,7 +333,14 @@ fn check_golden_with(name: &str, edits: &Edits, input: ImageBuf) {
 fn check_golden_in_space(name: &str, edits: &Edits, space: color::OutputSpace) {
     compare_or_update(
         name,
-        pipeline::build_pipeline_to(edits, RenderScale::FULL, space, RESAMPLER).run(chart()),
+        pipeline::build_pipeline_to(
+            edits,
+            RenderScale::FULL,
+            space,
+            RESAMPLER,
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .run(chart()),
     );
 }
 
@@ -888,7 +902,11 @@ fn golden_mask_add() {
 /// from the other two *and* from the base mask alone.
 #[test]
 fn the_three_composite_goldens_differ_from_one_another_and_from_the_base() {
-    let render = |e: &Edits| to_rgb8(&build_pipeline(e, RenderScale::FULL).run(chart()));
+    let render = |e: &Edits| {
+        to_rgb8(
+            &build_pipeline(e, RenderScale::FULL, ProfileRendering::colorimetric()).run(chart()),
+        )
+    };
     let sub = render(&composite_case(edit_model::MaskOp::Subtract));
     let int = render(&composite_case(edit_model::MaskOp::Intersect));
     let add = render(&composite_case(edit_model::MaskOp::Add));
@@ -915,11 +933,25 @@ fn the_composite_goldens_discriminate() {
     // something false about correct code — the trap this project has hit four times — so what is
     // asserted is that the composite adds none of its own.
     let clipped = |px: &[u8]| px.iter().filter(|&&v| v == 255).count();
-    let neutral = to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(chart()));
+    let neutral = to_rgb8(
+        &build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(chart()),
+    );
     let floor = clipped(&neutral);
 
     for op in edit_model::MaskOp::ALL {
-        let px = to_rgb8(&build_pipeline(&composite_case(op), RenderScale::FULL).run(chart()));
+        let px = to_rgb8(
+            &build_pipeline(
+                &composite_case(op),
+                RenderScale::FULL,
+                ProfileRendering::colorimetric(),
+            )
+            .run(chart()),
+        );
         let distinct: std::collections::HashSet<u8> = px.iter().copied().collect();
         assert_eq!(
             clipped(&px),
@@ -1063,8 +1095,18 @@ fn masked_clarity_edits() -> Edits {
 #[test]
 fn a_masked_clarity_leaves_uncovered_pixels_bit_identical() {
     let chart = local_contrast_chart();
-    let plain = build_pipeline(&Edits::default(), RenderScale::FULL).run(chart.clone());
-    let masked = build_pipeline(&masked_clarity_edits(), RenderScale::FULL).run(chart);
+    let plain = build_pipeline(
+        &Edits::default(),
+        RenderScale::FULL,
+        ProfileRendering::colorimetric(),
+    )
+    .run(chart.clone());
+    let masked = build_pipeline(
+        &masked_clarity_edits(),
+        RenderScale::FULL,
+        ProfileRendering::colorimetric(),
+    )
+    .run(chart);
 
     assert_eq!(
         plain.pixel(1, 1),
@@ -1214,8 +1256,18 @@ fn the_auto_masked_lift_is_confined_to_a_band_around_the_centres_hue() {
     // rather than trusted.
     let gated = auto_mask_edits();
     let neutral = Edits::default();
-    let a = to_rgb8(&build_pipeline(&gated, RenderScale::FULL).run(hue_sweep_chart()));
-    let b = to_rgb8(&build_pipeline(&neutral, RenderScale::FULL).run(hue_sweep_chart()));
+    let a = to_rgb8(
+        &build_pipeline(&gated, RenderScale::FULL, ProfileRendering::colorimetric())
+            .run(hue_sweep_chart()),
+    );
+    let b = to_rgb8(
+        &build_pipeline(
+            &neutral,
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(hue_sweep_chart()),
+    );
 
     let row = 8usize;
     let lifted: Vec<usize> = (0..W)
@@ -1259,8 +1311,14 @@ fn an_auto_masked_dab_really_refuses_part_of_its_own_disc() {
     if let edit_model::Mask::Brush(b) = &mut plain.masks[0].mask {
         b.strokes[0].auto_mask = false;
     }
-    let a = to_rgb8(&build_pipeline(&gated, RenderScale::FULL).run(hue_sweep_chart()));
-    let b = to_rgb8(&build_pipeline(&plain, RenderScale::FULL).run(hue_sweep_chart()));
+    let a = to_rgb8(
+        &build_pipeline(&gated, RenderScale::FULL, ProfileRendering::colorimetric())
+            .run(hue_sweep_chart()),
+    );
+    let b = to_rgb8(
+        &build_pipeline(&plain, RenderScale::FULL, ProfileRendering::colorimetric())
+            .run(hue_sweep_chart()),
+    );
     let moved = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
     assert!(
         moved > a.len() / 20,
@@ -1444,10 +1502,19 @@ fn golden_mask_luminance_inverted_highlights() {
 ///    from moving the Exposure slider.
 #[test]
 fn the_luminance_mask_goldens_discriminate() {
-    let neutral =
-        to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(luminance_chart()));
+    let neutral = to_rgb8(
+        &build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(luminance_chart()),
+    );
     for (name, edits) in luminance_mask_cases() {
-        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(luminance_chart()));
+        let bytes = to_rgb8(
+            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .run(luminance_chart()),
+        );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
         let lo = bytes.iter().filter(|&&c| c == 0).count();
         assert!(
@@ -1593,7 +1660,10 @@ fn grading_cases() -> Vec<(&'static str, Edits)> {
 #[test]
 fn the_grading_goldens_do_not_clip() {
     for (name, edits) in grading_cases() {
-        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(grade_ramp_chart()));
+        let bytes = to_rgb8(
+            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .run(grade_ramp_chart()),
+        );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
         let lo = bytes.iter().filter(|&&c| c == 0).count();
         let max = bytes.iter().max().copied().unwrap();
@@ -1614,7 +1684,10 @@ fn the_four_grading_goldens_differ_from_one_another() {
         .map(|(n, e)| {
             (
                 n,
-                to_rgb8(&build_pipeline(&e, RenderScale::FULL).run(grade_ramp_chart())),
+                to_rgb8(
+                    &build_pipeline(&e, RenderScale::FULL, ProfileRendering::colorimetric())
+                        .run(grade_ramp_chart()),
+                ),
             )
         })
         .collect();
@@ -1905,7 +1978,10 @@ fn golden_spot_heal() {
 fn the_spot_goldens_do_not_clip_and_differ() {
     let mut rendered: Vec<(&str, Vec<u8>)> = Vec::new();
     for (name, edits) in spot_cases() {
-        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(spot_chart()));
+        let bytes = to_rgb8(
+            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .run(spot_chart()),
+        );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
         let lo = bytes.iter().filter(|&&c| c == 0).count();
         assert!(
@@ -1949,7 +2025,14 @@ fn the_spot_goldens_do_not_clip_and_differ() {
     };
     // Well inside the patch, so the feathered rim cannot dilute the reading.
     let patch_mean = |bytes: &[u8]| region_mean(bytes, -1.0, SPOT_R * 0.6);
-    let neutral = to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(spot_chart()));
+    let neutral = to_rgb8(
+        &build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(spot_chart()),
+    );
     let surround = region_mean(&neutral, SPOT_R, SPOT_R * 1.5);
     let heal = patch_mean(&rendered[1].1);
     let clone = patch_mean(&rendered[0].1);
@@ -2035,10 +2118,19 @@ fn golden_mask_colour_reds_across_zero() {
 /// encodes what the mask did rather than what the encoder ran out of room for.
 #[test]
 fn the_colour_mask_golden_discriminates() {
-    let neutral =
-        to_rgb8(&build_pipeline(&Edits::default(), RenderScale::FULL).run(hue_sweep_chart()));
+    let neutral = to_rgb8(
+        &build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(hue_sweep_chart()),
+    );
     for (name, edits) in colour_mask_cases() {
-        let bytes = to_rgb8(&build_pipeline(&edits, RenderScale::FULL).run(hue_sweep_chart()));
+        let bytes = to_rgb8(
+            &build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+                .run(hue_sweep_chart()),
+        );
         let hi = bytes.iter().filter(|&&c| c == 255).count();
         let lo = bytes.iter().filter(|&&c| c == 0).count();
         assert!(
@@ -2279,8 +2371,14 @@ fn a_masked_capture_correction_really_changes_the_chart() {
     ];
 
     for (what, edits, chart) in cases {
-        let masked = build_pipeline(&edits, RenderScale::FULL).run(chart.clone());
-        let neutral = build_pipeline(&Edits::default(), RenderScale::FULL).run(chart);
+        let masked = build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
+            .run(chart.clone());
+        let neutral = build_pipeline(
+            &Edits::default(),
+            RenderScale::FULL,
+            ProfileRendering::colorimetric(),
+        )
+        .run(chart);
         let a = to_rgb8(&masked);
         let b = to_rgb8(&neutral);
         let moved = a.iter().zip(&b).filter(|(x, y)| x != y).count();

@@ -60,7 +60,8 @@ fn run(
     label: &str,
 ) {
     // End A: what `MaskStage` sees — the prefix output, which on neutral edits is the mask input.
-    let (prefix, tail) = pipeline::build_pipeline_split(edits, scale);
+    let (prefix, tail) =
+        pipeline::build_pipeline_split(edits, scale, pipeline::ProfileRendering::colorimetric());
     let mut base = img.clone();
     for stage in prefix.into_stages() {
         base = stage.apply(base);

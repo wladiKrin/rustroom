@@ -41,7 +41,9 @@ fn main() {
         baseline,
         airlight: Some(pipeline::prefix_airlight(&e, &pd.image, resampler, None)),
     };
-    let pv = pipeline::build_pipeline_spec(&e, scale, spec).run(preview);
+    let pv =
+        pipeline::build_pipeline_spec(&e, scale, spec, pipeline::ProfileRendering::colorimetric())
+            .run(preview);
     export::save(
         &pv,
         &out.join("preview.png"),

@@ -271,8 +271,10 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 - ✅ ~~**The camera rendering does not reach an export**~~ — **DONE 2026-09-18, confirmed by use.**
   It was three defects of one shape: the export lost the curve, the baseline **and the look**, a
   thumbnail lost the look, and an already-rendered source was rendered **twice** at export
-  (119.32 levels). ⚠⚠ The root cause is open: the four whole-pipeline builders default
-  `ProfileRendering` **silently**, so a new call site loses it with no warning — `docs/BACKLOG.md`.
+  (119.32 levels). ✅ **The root cause is closed too (2026-09-18): `ProfileRendering` is now a
+  required argument** on all six builders, 122 call sites, behaviour-preserving. ⚠⚠ That means
+  *"the silent default is gone"*, **not** *"the class is closed"* — a new call site still types
+  whatever compiles. See `docs/BACKLOG.md`.
 - **A GPU-side mask coverage cache** — ✅ **measured 2026-09-16; the ceiling missed 4–8×.** ⚠⚠ But the
   cost is **not transfer**: a serial u8→u32 repack (10.6–13.8 ms per encode) and a 4×-inflated download
   wire. **Fix those two first — they are mechanical and open no design question.** Re-price the cache after.
