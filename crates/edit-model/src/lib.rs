@@ -1756,6 +1756,19 @@ impl Edits {
             self.look = look.clone();
         }
     }
+
+    /// Whether `self` and `other` differ inside edit group `group`.
+    ///
+    /// ⚠ Defined *through* [`Self::merge_from`] rather than as a second field list, so it
+    /// cannot disagree with the partition: merge `self`'s group into a clone of `other` and
+    /// see whether anything moved. Costs one clone per call — the Develop panel asks six
+    /// times a frame, which is a few kilobytes; if a profile ever shows it, cache the six
+    /// answers on a change rather than inventing a second partition.
+    pub fn group_differs(&self, other: &Edits, group: usize) -> bool {
+        let mut probe = other.clone();
+        probe.merge_from(self, EditGroups::only(group));
+        probe != *other
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2707,6 +2720,32 @@ mod tests {
             !LocalAdjustments::default().is_active(),
             "the default must stay inert"
         );
+    }
+
+    #[test]
+    fn group_differs_names_exactly_the_group_that_moved() {
+        // ⚠ Both halves: "always true" fails the identity row, "always false" fails every
+        // moved row. Swept over every group via the exhaustive fixture, so a group whose
+        // fields never differ from neutral would surface here as a fixture gap.
+        let neutral = Edits::default();
+        let full = all_nonneutral();
+        for (g, moved) in EDIT_GROUP_NAMES.iter().enumerate() {
+            let mut one = neutral.clone();
+            one.merge_from(&full, EditGroups::only(g));
+            for (h, asked) in EDIT_GROUP_NAMES.iter().enumerate() {
+                assert_eq!(
+                    one.group_differs(&neutral, h),
+                    g == h,
+                    "moved group {g} ({moved}), asked about {h} ({asked})"
+                );
+            }
+        }
+        for h in 0..EDIT_GROUP_NAMES.len() {
+            assert!(
+                !neutral.group_differs(&neutral, h),
+                "identity differs in {h}"
+            );
+        }
     }
 
     fn all_nonneutral() -> Edits {
