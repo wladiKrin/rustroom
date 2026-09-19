@@ -126,8 +126,8 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 The restyle's first look in use, same day, produced three corrections — the standing lesson
 ("almost every GUI-wiring defect was found by USE") holding for chrome as well as wiring. Five
-commits on `develop-panel-restyle`, on top of the restyle's nine. Spec
-`2026-09-19-develop-panel-order-and-chrome-design.md`, plan of the same name. **2579 → 2583
+commits on `develop-panel-restyle`, on top of the restyle's nine, plus the growth fix below. Spec
+`2026-09-19-develop-panel-order-and-chrome-design.md`, plan of the same name. **2579 → 2584
 tests**, goldens unmoved, `pipeline` and `Edits` untouched.
 
 | reported | cause | fix |
@@ -162,6 +162,30 @@ The row is its own; the spec was corrected in place.
 
 `adjustments.rs` went 1,398 → 1,100 lines with the header and the rendering controls out of it;
 still over the marker. `masks.rs` 834, `color_wheel.rs` 714 (its tests), `theme.rs` 804.
+
+**Second look, same day: "the sidecar just keeps expanding whenever I move the mouse."** The
+panel widened **8 pt per frame** until it hit the window; egui repaints on input, so the mouse
+was only the clock. Reproduced headless in one test (the Profile header's centre drifting 4 pt a
+frame), then bisected with env-var skips over the panel's rows — one compile, five runs.
+
+- ⚠⚠ **Cause:** `sub_label` had been made a call to `sub_label_with` with nothing trailing,
+  which turned **every sub-label into a full-width row** (`horizontal` → label →
+  `with_layout(right_to_left)`). `tone_curve::show` nested one inside its own `horizontal` beside
+  a right-aligned Reset; that row came out one `item_spacing` wider than the panel; egui widened
+  the panel to fit; the row followed. A feedback loop with the window as its only stop.
+- **Fix:** a plain `sub_label` is a plain `Label` again; `sub_label_with` allocates its row at an
+  explicit size (`allocate_ui_with_layout` over the available width) and paints the label, so
+  nothing inside can ask for more; the tone curve's header goes through it. Pinned by
+  `the_panel_keeps_its_width_frame_over_frame`, which failed at 276 vs 280 before the fix.
+- ⚠ **Two wrong turns, both recorded because each was plausible:** the global reset row (it was
+  the first `with_layout(right_to_left)` written that day — skipping it changed nothing) and the
+  slider row's fixed 44 pt value cell (a wide value *could* overflow it the same way; it is now
+  sized from its text as a hardening, but it was not the cause).
+- ⚠⚠ **The lesson is about the hunt, not the layout:** the intended `sub_label` fix was applied
+  by a script whose anchor text had been reformatted by `cargo fmt`, the assertion tripped
+  *after* an earlier file in the same script had been written, and the run that "disproved" the
+  sub-label theory was testing the unfixed file. **Check `git diff --stat` before believing a
+  negative result.**
 
 ### The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)
 

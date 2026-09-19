@@ -147,16 +147,18 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 **2559 tests, 74 goldens** on `main`. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the
 user pushes.**
 
-⚠ **One branch, `develop-panel-restyle` (2026-09-19), fifteen commits ahead of `main`: the
+⚠ **One branch, `develop-panel-restyle` (2026-09-19), seventeen commits ahead of `main`: the
 Develop panel restyle** — A surfaces, B slider rows, C section chrome, D2 icon rail — **plus the
 corrections from its first look in use**: a Profile block (camera profile, camera rendering, look)
 above White Balance, `› NAME … reset` headers, a feathered wheel rim, the re-ordered sections and
-the global reset at the top. Gated green on its tip (**2583 tests**, goldens unmoved),
-**unmerged and unpushed**; the GUI was relaunched for a second look. Specs
+the global reset at the top, and the fix for the panel that **widened 8 pt every frame** (a
+sub-label made a full-width row, nested in the tone curve's header). Gated green on its tip
+(**2584 tests**, goldens unmoved), **unmerged and unpushed**; the GUI was relaunched for a third
+look. Specs
 `2026-09-18-develop-panel-restyle-design.md` and `2026-09-19-develop-panel-order-and-chrome-design.md`;
 `grep -n 'Develop panel' docs/JOURNAL.md` finds both sections, including the 77-failure named
-text style, the ~22 s first-launch stall every fresh test binary pays on this Mac, and the
-unbounded `with_layout` in a scroll area.
+text style, the ~22 s first-launch stall every fresh test binary pays on this Mac, the
+unbounded `with_layout` in a scroll area, and the growth hunt's wrong turns.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
