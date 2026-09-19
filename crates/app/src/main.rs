@@ -358,7 +358,6 @@ struct RustroomApp {
     /// ⚠ Tool state on the app rather than on the mask, the rule the brush settings already
     /// follow: it applies to the **next** thing added, exactly as a brush size applies to the
     /// next stroke.
-    mask_add_mode: Option<edit_model::MaskOp>,
     /// Which colour-grading range the wheel is showing. View state, like `hsl_channel`.
     grade_range: develop::panel::color_wheel::GradeRange,
     /// Scratch text for the new-collection field.
@@ -606,7 +605,6 @@ impl RustroomApp {
             hsl_channel: Default::default(),
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),
-            mask_add_mode: None,
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),

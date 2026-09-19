@@ -60,9 +60,10 @@ impl Tool {
 
     /// The heading shown above this tool's controls, or `None` for the adjustment stack.
     ///
-    /// ⚠ `Edit` returns `None` because its content **is** the five adjustment sections, which
+    /// ⚠ `Edit` returns `None` because its content **is** the adjustment sections, which
     /// carry their own edit-group headers — a heading above them would be a level of nesting
-    /// for nothing.
+    /// for nothing. `Masks` returns `None` for the same reason since 2026-09-19: its MASKS
+    /// section header is the heading, and carries the overlay toggle and the reset.
     ///
     /// ⚠ The panel is **exclusive**: exactly one tool's controls are shown at a time, so the
     /// global sliders are reachable only under `Edit`. An earlier design put the tool's
@@ -72,7 +73,7 @@ impl Tool {
         match self {
             Self::Edit => None,
             Self::Crop => Some("Crop & Geometry"),
-            Self::Masks => Some("Masks"),
+            Self::Masks => None,
             Self::Retouch => Some("Retouch"),
             Self::Presets => Some("Presets"),
         }
@@ -98,16 +99,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_edit_shows_the_adjustment_stack() {
-        // ⚠ Both halves matter. Edit being default is what makes the panel at rest the five
-        // adjustment sections; Edit being the *only* tool without a heading is what stops a
-        // future tool silently rendering untitled.
+    fn only_edit_and_masks_draw_their_own_headers() {
+        // ⚠ Both halves matter. Edit being default is what makes the panel at rest the
+        // adjustment sections; the unheaded set being exactly these two is what stops a future
+        // tool silently rendering untitled. Masks joined on 2026-09-19: its MASKS section
+        // header is the heading.
         assert_eq!(Tool::default(), Tool::Edit);
         let unheaded: Vec<Tool> = Tool::ALL
             .into_iter()
             .filter(|t| t.panel_heading().is_none())
             .collect();
-        assert_eq!(unheaded, vec![Tool::Edit]);
+        assert_eq!(unheaded, vec![Tool::Edit, Tool::Masks]);
     }
 
     #[test]

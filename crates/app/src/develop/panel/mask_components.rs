@@ -1,23 +1,25 @@
-//! A mask's components: the mode chips that decide whether a kind button creates a mask or
-//! refines one, and the indented list of the shapes a composite is built from.
+//! A mask's rows: the painted row the mask list and the component list share, the component
+//! rows under a refined mask, and the Refine row of op menus.
 //!
-//! ⚠ Its own module because `develop/panel/masks.rs` is past the ~600 marker before this
-//! milestone adds anything to it.
+//! ⚠ Its own module because `develop/panel/masks.rs` is past the ~600 marker.
+//!
+//! ⚠⚠ **Menus, not modes (2026-09-19).** The first composite UI armed an op with a chip and
+//! then routed the next kind button through it — invisible state, and an armed "Subtract"
+//! added a shape you did not mean. Now the op *is* the menu: `Add ▾ / Subtract ▾ / Intersect ▾`,
+//! each listing the five kinds, so the operation and the shape are one decision.
 
-use crate::develop::panel::Edited;
-use crate::{theme, Session};
+use crate::develop::panel::{mask_glyph, Edited};
+use crate::Session;
 use eframe::egui;
+use rustroom_app::mask_kind::MaskKind;
 use rustroom_app::mask_tool;
 
 /// The mask at component `j` — `0` is the base, `j > 0` the `j-1`th refinement.
 ///
-/// ⚠⚠ **One resolver, and the canvas will share it.** Two derivations of "which shape is
+/// ⚠⚠ **One resolver, and the canvas shares it.** Two derivations of "which shape is
 /// selected" is exactly how the sliders and the handles would come to move different things —
 /// the class of disagreement `render_max_dim`, `fit_image_size` and `Session::geometry_mode` were
 /// each fixed for by deriving rather than storing twice.
-///
-/// ⚠ The shared-borrow twin landed **with its caller**, the canvas: a `pub fn` with no production
-/// caller in a *binary* crate is dead code under `-D warnings`.
 pub fn component(m: &edit_model::MaskedAdjustment, j: usize) -> Option<&edit_model::Mask> {
     match j.checked_sub(1) {
         None => Some(&m.mask),
@@ -36,81 +38,191 @@ pub fn component_mut(
     }
 }
 
-/// Draw the mode chips. The chosen mode is `*mode`; `None` means "New mask".
-///
-/// ⚠ `selectable_label`s rather than buttons: a mode with no shown selection is **invisible
-/// state**, which is what the crop aspect lock was fixed for.
-pub fn chips(ui: &mut egui::Ui, s: &Session, mode: &mut Option<edit_model::MaskOp>) {
-    ui.horizontal_wrapped(|ui| {
-        if ui.selectable_label(mode.is_none(), "New mask").clicked() {
-            *mode = None;
-        }
-        // ⚠⚠ **Disabled without a selection rather than falling back to New.** Refining needs
-        // something to refine, and a control whose meaning depends on invisible selection state
-        // is the class of thing this project's record says bites. The chips say which one is
-        // armed; they never quietly do something else.
-        ui.add_enabled_ui(s.selected_mask.is_some(), |ui| {
-            for op in edit_model::MaskOp::ALL {
-                if ui
-                    .selectable_label(*mode == Some(op), op.chip_label())
-                    .on_disabled_hover_text("Select a mask first")
-                    .clicked()
-                {
-                    *mode = Some(op);
-                }
-            }
-        });
-    });
-    theme::hint(
-        ui,
-        "New mask starts a fresh mask. The other three add a shape to the \
-         selected mask instead: Add widens it, Subtract cuts out of it, \
-         Intersect keeps only where both reach.",
-    );
+/// Row height in points.
+pub const ROW_HEIGHT: f32 = 22.0;
+/// How far a component row sits in from its mask.
+pub const INDENT: f32 = 18.0;
+const GLYPH: f32 = 14.0;
+/// How much of the accent the selected mask's tint carries — the rail's value.
+const TINT: f32 = 0.18;
+
+/// The glyph a refinement's op shows in the row's first column.
+pub fn op_glyph(op: edit_model::MaskOp) -> &'static str {
+    match op {
+        edit_model::MaskOp::Add => "+",
+        edit_model::MaskOp::Subtract => "−",
+        edit_model::MaskOp::Intersect => "∩",
+    }
 }
 
-/// Draw the selected mask's component list.
+/// One painted row: an op column, a kind glyph, a name, a `×`.
+pub struct RowSpec<'a> {
+    pub kind: MaskKind,
+    /// The op column: `None` for a mask row (no column), `Some("")` for the base component.
+    pub op: Option<&'a str>,
+    /// The painted name.
+    pub name: &'a str,
+    /// The AccessKit name — what a screen reader says and the harnesses click.
+    pub accessible: &'a str,
+    /// The accent tint: the selected mask.
+    pub selected: bool,
+    /// The weak fill: the component being edited.
+    pub current: bool,
+    pub deletable: bool,
+    pub indent: f32,
+}
+
+pub struct RowOut {
+    pub clicked: bool,
+    pub delete: bool,
+}
+
+/// Draw one row.
 ///
-/// ⚠ Indented under the mask row and drawn **only for the selected mask**: a composite is one
-/// mask, so its parts belong inside it rather than beside it in the flat list.
+/// ⚠ The `×` is registered **after** the row so it wins the hit-test tie, and a click on it is
+/// not a click on the row.
+pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ROW_HEIGHT),
+        egui::Sense::click(),
+    );
+    let enabled = ui.is_enabled();
+    let lit = spec.selected || spec.current;
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            enabled,
+            lit,
+            spec.accessible,
+        )
+    });
+    let v = ui.visuals().clone();
+    let mut delete = false;
+    let mut right = rect.right();
+    let mut x_colour = v.weak_text_color();
+    if spec.deletable {
+        let cell =
+            egui::Rect::from_min_max(egui::pos2(rect.right() - ROW_HEIGHT, rect.top()), rect.max);
+        let r = ui
+            .interact(cell, resp.id.with("delete"), egui::Sense::click())
+            .on_hover_text("Delete");
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "×"));
+        delete = r.clicked();
+        if r.hovered() {
+            x_colour = v.strong_text_color();
+        }
+        right = cell.left();
+    }
+    let clicked = resp.clicked() && !delete;
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter_at(rect);
+        let fill = if spec.selected {
+            v.selection.bg_fill.gamma_multiply(TINT)
+        } else if spec.current {
+            v.widgets.inactive.weak_bg_fill
+        } else if resp.hovered() {
+            v.widgets.hovered.weak_bg_fill
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            painter.rect_filled(rect, 4.0, fill);
+        }
+        let text = if lit {
+            v.strong_text_color()
+        } else {
+            v.text_color()
+        };
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let mut x = rect.left() + spec.indent + 6.0;
+        if let Some(op) = spec.op {
+            painter.text(
+                egui::pos2(x + 5.0, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                op,
+                font.clone(),
+                v.weak_text_color(),
+            );
+            x += 14.0;
+        }
+        let glyph = egui::Rect::from_center_size(
+            egui::pos2(x + GLYPH / 2.0, rect.center().y),
+            egui::vec2(GLYPH, GLYPH),
+        );
+        mask_glyph::paint(&painter, glyph, spec.kind, text);
+        x += GLYPH + 6.0;
+        painter.text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            spec.name,
+            font.clone(),
+            text,
+        );
+        if spec.deletable {
+            painter.text(
+                egui::pos2(right + ROW_HEIGHT / 2.0, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                "×",
+                font,
+                x_colour,
+            );
+        }
+    }
+    RowOut { clicked, delete }
+}
+
+/// The component rows of mask `i`, if it has any refinements.
+///
+/// ⚠ A single-shape mask draws nothing here: its one row above is the shape, and a second row
+/// saying "Gradient" under "Gradient 1" would be noise.
 pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
     let Some(m) = s.edits.masks.get(i) else {
         return;
     };
-    // ⚠ Names built from `Mask::label` and `Refinement::label`, never written out here, so a row
-    // cannot name a kind the mask does not have.
-    let names: Vec<String> = std::iter::once(m.mask.label().to_string())
-        .chain(m.refine.iter().map(|r| r.label()))
-        .collect();
-    if names.len() == 1 {
-        // ⚠ A mask with no refinements is not a composite, and a one-row list saying so is chrome
-        // rather than information — the reasoning that hides the format chips below two formats.
+    if m.refine.is_empty() {
         return;
     }
-
+    let names: Vec<(MaskKind, &'static str, String, &'static str)> = std::iter::once((
+        MaskKind::of(&m.mask),
+        "",
+        m.mask.label().to_string(),
+        m.mask.label(),
+    ))
+    .chain(m.refine.iter().map(|r| {
+        (
+            MaskKind::of(&r.mask),
+            op_glyph(r.op),
+            r.label(),
+            r.mask.label(),
+        )
+    }))
+    .collect();
     let selected = s.component_index();
     let mut remove: Option<usize> = None;
     let mut pick: Option<usize> = None;
-    ui.indent("mask_components", |ui| {
-        for (j, name) in names.iter().enumerate() {
-            ui.horizontal(|ui| {
-                // ⚠ The base has no `×`: deleting it is deleting the **mask**, which is the mask
-                // row's own button. Two ways to delete one thing is how the two come to disagree.
-                if j == 0 {
-                    ui.add_space(BASE_ROW_INDENT);
-                } else if ui.button("×").on_hover_text("Remove this shape").clicked() {
-                    remove = Some(j);
-                }
-                if ui.selectable_label(selected == j, name).clicked() {
-                    pick = Some(j);
-                }
-            });
+    for (j, (kind, op, accessible, name)) in names.iter().enumerate() {
+        let out = row(
+            ui,
+            RowSpec {
+                kind: *kind,
+                op: Some(op),
+                name,
+                accessible,
+                selected: false,
+                current: selected == j,
+                deletable: j > 0,
+                indent: INDENT,
+            },
+        );
+        if out.delete {
+            remove = Some(j);
+        } else if out.clicked {
+            pick = Some(j);
         }
-    });
-
+    }
     if let Some(j) = pick {
         s.selected_component = j;
-        // ⚠ The handle was hit-tested against the component being left.
         s.active_mask_handle = None;
     }
     if let Some(j) = remove {
@@ -122,12 +234,53 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
     }
 }
 
-/// Space standing in for the `×` on the base's row, so its name lines up with the rows that
-/// carry one.
+/// The Refine row under mask `i`: `Add ▾ / Subtract ▾ / Intersect ▾`, each a menu of the kinds.
 ///
-/// ⚠ A constant rather than a magic number at the call site: it is a layout fact about this list,
-/// and the next person to change the button will look for it here.
-const BASE_ROW_INDENT: f32 = 22.0;
+/// ⚠ A pick appends a [`edit_model::Refinement`] and selects the new shape, or the sliders
+/// below would still be pointing at whatever was selected before it was added. One history
+/// entry.
+pub fn refine_row(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
+    let mut added: Option<(edit_model::MaskOp, MaskKind)> = None;
+    ui.horizontal(|ui| {
+        ui.add_space(INDENT + 6.0);
+        ui.label(egui::RichText::new("Refine").weak());
+        for op in edit_model::MaskOp::ALL {
+            ui.menu_button(op.label(), |ui| {
+                for k in MaskKind::ALL {
+                    if ui.button(k.menu_label()).clicked() {
+                        added = Some((op, k));
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text(format!(
+                "{} the selected mask: {}",
+                op.chip_label(),
+                op_help(op)
+            ));
+        }
+    });
+    if let Some((op, k)) = added {
+        if let Some(m) = s.edits.masks.get_mut(i) {
+            m.refine.push(edit_model::Refinement {
+                op,
+                mask: k.template(),
+            });
+            s.selected_component = m.refine.len();
+            s.active_mask_handle = None;
+            ed.discrete();
+        }
+    }
+}
+
+fn op_help(op: edit_model::MaskOp) -> &'static str {
+    match op {
+        edit_model::MaskOp::Add => "the new shape widens where it reaches",
+        edit_model::MaskOp::Subtract => "the new shape cuts out of it",
+        edit_model::MaskOp::Intersect => "only where both reach is kept",
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -138,7 +291,6 @@ mod tests {
         edit_model::Mask::Radial(edit_model::RadialGradient::default())
     }
 
-    /// A session holding one mask: a gradient base plus two refinements.
     fn composite_session() -> (egui::Context, crate::RustroomApp) {
         let ctx = test_ui::ctx();
         let mut app = test_app::for_test();
@@ -164,10 +316,8 @@ mod tests {
         (ctx, app)
     }
 
-    /// Every label one frame of `rows` draws.
-    ///
-    /// ⚠ `labelled_centres` is the real query — AccessKit only reports **interactive** widgets, so
-    /// a plain `ui.label` is invisible here. Every row is a `selectable_label`, which is one.
+    /// ⚠ Every row is a `SelectableLabel`, so it has an AccessKit node; a plain label would be
+    /// invisible here.
     fn row_labels(ctx: &egui::Context, app: &mut crate::RustroomApp) -> Vec<String> {
         let s = app.session.as_mut().expect("session");
         test_ui::labelled_centres(ctx, Vec::new(), |ui| {
@@ -181,6 +331,9 @@ mod tests {
 
     #[test]
     fn the_components_are_listed_under_their_mask() {
+        // ⚠ The accessible names are the *op and kind*, not the painted kind name alone: a
+        // screen reader (and this harness) must be able to tell "Subtract Radial" from a
+        // second radial added with Intersect.
         let (ctx, mut app) = composite_session();
         let labels = row_labels(&ctx, &mut app);
         for want in ["Gradient", "Subtract Radial", "Intersect Luminance"] {
@@ -193,8 +346,6 @@ mod tests {
 
     #[test]
     fn a_mask_with_no_refinements_draws_no_list() {
-        // ⚠ Both halves: a list that never draws and one that always draws are equally wrong, and
-        // only the pair distinguishes them.
         let (ctx, mut app) = composite_session();
         app.session.as_mut().unwrap().edits.masks[0].refine.clear();
         let labels = row_labels(&ctx, &mut app);
@@ -204,7 +355,6 @@ mod tests {
         );
     }
 
-    /// Click a component row by label and return the session it acted on.
     fn click_row(app: &mut crate::RustroomApp, ctx: &egui::Context, label: &str) {
         let s = app.session.as_mut().expect("session");
         test_ui::click(ctx, label, |ui| {
@@ -215,9 +365,6 @@ mod tests {
 
     #[test]
     fn clicking_a_component_selects_it_and_drops_the_drag_handle() {
-        // ⚠⚠ The handle must go. It was hit-tested against a different shape, so keeping it would
-        // let the next drag frame move the component you just left — the failure
-        // `selection_after_delete` already guards for a deleted *mask*, one level down.
         let (ctx, mut app) = composite_session();
         app.session.as_mut().unwrap().active_mask_handle =
             Some(rustroom_app::mask_tool::Handle::Center);
@@ -236,39 +383,14 @@ mod tests {
 
     #[test]
     fn deleting_a_component_removes_it_and_clamps_the_selection() {
+        // ⚠ The base row has no `×`, so the first one drawn belongs to the first refinement.
         let (ctx, mut app) = composite_session();
         app.session.as_mut().unwrap().selected_component = 2;
-        // The `×` on the middle row. ⚠ Both rows carry one, so this locates by position: the
-        // first `×` drawn is the first refinement's.
         let s = app.session.as_mut().expect("session");
-        let at = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+        test_ui::click(&ctx, "×", |ui| {
             let mut ed = Edited::default();
             rows(ui, s, 0, &mut ed);
-        })
-        .into_iter()
-        .filter(|(l, _)| l == "×")
-        .map(|(_, p)| p)
-        .next()
-        .expect("a remove button was drawn");
-        for pressed in [true, false] {
-            let mut ed = Edited::default();
-            let _ = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(test_ui::screen()),
-                    events: vec![
-                        egui::Event::PointerMoved(at),
-                        egui::Event::PointerButton {
-                            pos: at,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        },
-                    ],
-                    ..Default::default()
-                },
-                |ui| rows(ui, s, 0, &mut ed),
-            );
-        }
+        });
         assert_eq!(
             s.edits.masks[0].refine.len(),
             1,
@@ -282,24 +404,60 @@ mod tests {
     }
 
     #[test]
-    fn every_chip_is_drawn_and_named_from_the_op() {
-        // ⚠ Built from `MaskOp::ALL`, so a fourth op cannot ship with no chip — the rule
-        // `EDIT_GROUP_NAMES` and `Tool::ALL` already follow.
-        let (ctx, app) = composite_session();
-        let mut mode = None;
-        let s = app.session.as_ref().expect("session");
-        let labels: Vec<String> =
-            test_ui::labelled_centres(&ctx, Vec::new(), |ui| chips(ui, s, &mut mode))
-                .into_iter()
-                .map(|(l, _)| l)
-                .collect();
-        assert!(labels.iter().any(|l| l == "New mask"));
+    fn the_refine_row_offers_every_op_by_name() {
+        let (ctx, mut app) = composite_session();
+        let s = app.session.as_mut().expect("session");
+        let labels: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            let mut ed = Edited::default();
+            refine_row(ui, s, 0, &mut ed);
+        })
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
         for op in edit_model::MaskOp::ALL {
             assert!(
-                labels.iter().any(|l| l == op.chip_label()),
+                labels.iter().any(|l| l == op.label()),
                 "missing {}: {labels:?}",
-                op.chip_label()
+                op.label()
             );
         }
+    }
+
+    #[test]
+    fn picking_a_kind_from_an_op_menu_appends_that_refinement_and_selects_it() {
+        // ⚠⚠ Through the shipped menus: the op button opens, the kind item is clicked in the
+        // popup, and the refinement must carry *that* op — an always-Add fold would pass a test
+        // that only ever used Add.
+        let (ctx, mut app) = composite_session();
+        let s = app.session.as_mut().expect("session");
+        let mut ed = Edited::default();
+        test_ui::click(&ctx, "Intersect", |ui| {
+            refine_row(ui, s, 0, &mut Edited::default());
+        });
+        test_ui::click(&ctx, "Brush", |ui| {
+            ed = Edited::default();
+            refine_row(ui, s, 0, &mut ed);
+        });
+        assert_eq!(
+            s.edits.masks[0].refine.len(),
+            3,
+            "no refinement was appended"
+        );
+        let last = &s.edits.masks[0].refine[2];
+        assert_eq!(
+            last.op,
+            edit_model::MaskOp::Intersect,
+            "the menu's op is what it carries"
+        );
+        assert!(
+            matches!(last.mask, edit_model::Mask::Brush(_)),
+            "and the item's kind"
+        );
+        assert_eq!(
+            s.component_index(),
+            3,
+            "the new shape is the one the sliders edit"
+        );
+        assert!(ed.settled, "one pick, one history entry");
     }
 }

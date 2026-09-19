@@ -137,7 +137,6 @@ pub fn for_test() -> RustroomApp {
         hsl_channel: Default::default(),
         mask_hsl_channel: Default::default(),
         mask_grade_range: Default::default(),
-        mask_add_mode: None,
         grade_range: Default::default(),
         new_collection: String::new(),
         new_smart: String::new(),
