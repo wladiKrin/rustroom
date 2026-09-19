@@ -12,10 +12,13 @@ use rustroom_app::tool::Tool;
 /// ⚠ Icon-only since 2026-09-19: the labels the first rail was sized for ("Presets fits on
 /// one line" at 88 pt) are the tooltip now, and the width is what the glyph and its padding
 /// need.
-const RAIL_WIDTH: f32 = 44.0;
+const RAIL_WIDTH: f32 = 48.0;
 
 /// The glyph's point size.
-const GLYPH_SIZE: f32 = 22.0;
+///
+/// ⚠ 26, up from 22 (2026-09-19, user's call): the icons are the rail's only content and
+/// should read as its dominant element rather than as marks in a strip.
+const GLYPH_SIZE: f32 = 26.0;
 
 /// Padding around the glyph.
 const PAD: f32 = 6.0;
