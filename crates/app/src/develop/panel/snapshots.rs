@@ -49,6 +49,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
     let stored = app.settings.clamped_strip_height();
 
     let panel = egui::Panel::bottom(PANEL_ID)
+        .frame(theme::panel_frame(ui.style()))
         .resizable(true)
         .default_size(stored)
         .min_size(STRIP_HEIGHT_RANGE.0 as f32)

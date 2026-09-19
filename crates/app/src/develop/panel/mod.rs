@@ -110,6 +110,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let custom_before = app.settings.custom_aspect;
     egui::Panel::right("panel")
         .default_size(240.0)
+        .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
             if app.pending.is_some() {
                 ui.disable();

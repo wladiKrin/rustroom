@@ -97,11 +97,73 @@ pub fn apply(ctx: &egui::Context, settings: &Settings) {
         let accent = accent_color(settings.accent, dark);
         ctx.style_mut_of(theme, |style| {
             tune(style);
+            surfaces(style, dark);
             style.visuals.selection.bg_fill = accent;
             style.visuals.widgets.hovered.bg_fill = accent;
             style.visuals.widgets.active.bg_fill = accent;
         });
     }
+}
+
+/// The theme's surfaces: the panel, the popups, body text and hairlines.
+///
+/// ⚠ **Per theme, never in [`tune`]** — every value here is a pair, the visual identity
+/// spec's rule. Dark mode is the one that moves: egui's `gray(140)` body text on `gray(27)`
+/// is 4.6:1, readable but dim beside the `gray(180)` button text next to it, and every surface
+/// was the same `gray(27)` so nothing read as a panel. Light mode's `gray(80)` on `gray(248)`
+/// is already 7.5:1 and keeps its text; only its hairlines soften.
+///
+/// ⚠ Separators get *weaker*, not stronger: section headers carry the structure now, so the
+/// hairlines become guides rather than walls.
+fn surfaces(style: &mut egui::Style, dark: bool) {
+    let v = &mut style.visuals;
+    if dark {
+        let panel = egui::Color32::from_gray(32);
+        v.panel_fill = panel;
+        v.window_fill = panel;
+        v.widgets.noninteractive.bg_fill = panel;
+        v.widgets.noninteractive.weak_bg_fill = panel;
+        v.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(166);
+        v.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(46);
+    } else {
+        v.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(205);
+    }
+}
+
+/// The Develop canvas surround: darker than the panel in both themes.
+///
+/// ⚠ The panel is a surface the image is judged *from*; the canvas is the surround it is
+/// judged *against*, and the visual identity spec's argument — low chroma **near the image** —
+/// is what this serves. ⚠ Only the Develop canvas takes it; the Library grid is a browsing
+/// surface and keeps `panel_fill`.
+pub fn canvas_fill(dark: bool) -> egui::Color32 {
+    if dark {
+        egui::Color32::from_gray(22)
+    } else {
+        egui::Color32::from_gray(222)
+    }
+}
+
+/// The frame the Develop canvas is drawn in.
+pub fn canvas_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::central_panel(style).fill(canvas_fill(style.visuals.dark_mode))
+}
+
+/// The inner margin of the right panel and the snapshots strip.
+///
+/// ⚠ egui's `side_top_panel` frame has a much smaller one, which is what left content flush
+/// against the panel edge. Deliberately not applied through `tune`'s spacing, which every
+/// menu and popup shares.
+pub const PANEL_MARGIN: egui::Margin = egui::Margin {
+    left: 10,
+    right: 10,
+    top: 6,
+    bottom: 6,
+};
+
+/// The frame the right panel and the snapshots strip are drawn in.
+pub fn panel_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::side_top_panel(style).inner_margin(PANEL_MARGIN)
 }
 
 /// The theme-independent tweaks: the compact density.
@@ -122,6 +184,19 @@ fn tune(style: &mut egui::Style) {
     style.spacing.item_spacing.y = 2.0;
     style.spacing.interact_size.y = 16.0;
     style.spacing.slider_rail_height = 4.0;
+
+    // One radius for every widget state. egui ships 2/2/3/2/2 — hovered widgets change shape
+    // as well as colour, which reads as a flicker on a row of chips.
+    let w = &mut style.visuals.widgets;
+    for ws in [
+        &mut w.noninteractive,
+        &mut w.inactive,
+        &mut w.hovered,
+        &mut w.active,
+        &mut w.open,
+    ] {
+        ws.corner_radius = egui::CornerRadius::same(4);
+    }
 
     // ⚠ Both of these are **off by default in egui**, and their absence is why the shipped
     // sliders looked nothing like the mockups they were chosen from — a grey rectangle on a
@@ -372,17 +447,75 @@ mod tests {
         }
     }
 
-    /// egui's own panel fill, which is what an accent is judged against.
+    /// The panel fill each theme actually ends up with — what an accent is judged against.
     ///
-    /// ⚠ Read from `Visuals` rather than hardcoded: if egui changes its base in a future
-    /// release this notices, instead of silently checking against a number that is no longer
-    /// true. Lives in the test module because that is its only caller — production never asks
-    /// what the base is, it just lets egui paint it.
+    /// ⚠ Read through `apply`, not from `Visuals::dark()`: since the surfaces pass the panel
+    /// is no longer egui's default, and checking accents against a base nobody paints would
+    /// say nothing. Lives in the test module because that is its only caller — production
+    /// never asks what the base is, it just paints it.
     fn base_fill(dark: bool) -> egui::Color32 {
-        if dark {
-            egui::Visuals::dark().panel_fill
+        let ctx = egui::Context::default();
+        apply(&ctx, &Settings::default());
+        let theme = if dark {
+            egui::Theme::Dark
         } else {
-            egui::Visuals::light().panel_fill
+            egui::Theme::Light
+        };
+        ctx.style_of(theme).visuals.panel_fill
+    }
+
+    #[test]
+    fn body_text_is_readable_on_the_panel() {
+        // ⚠ 4.5:1 is WCAG AA for text, a stricter bar than the accents' 3:1: a slider label
+        // is read, an accent is only noticed. Dark text sat at 4.6:1 before this pass.
+        let ctx = egui::Context::default();
+        apply(&ctx, &Settings::default());
+        for (theme, dark) in [(egui::Theme::Dark, true), (egui::Theme::Light, false)] {
+            let v = ctx.style_of(theme).visuals.clone();
+            let c = contrast(v.widgets.noninteractive.fg_stroke.color, v.panel_fill);
+            assert!(
+                c >= 4.5,
+                "{} body text on its panel: {c:.2}:1 is below 4.5:1",
+                if dark { "dark" } else { "light" }
+            );
+        }
+    }
+
+    #[test]
+    fn the_canvas_is_darker_than_the_panel_in_both_themes() {
+        // ⚠ Pins the *direction* per theme, so a swapped pair — the mistake the accent pairs
+        // exist to prevent — cannot ship. The surround argument is the visual identity spec's:
+        // the darkest, most neutral surface is the one touching the photograph — in light mode
+        // too, where the spec's first draft said "lighter" and this test said otherwise.
+        for dark in [true, false] {
+            assert!(
+                luminance(canvas_fill(dark)) < luminance(base_fill(dark)),
+                "dark={dark}: the canvas must be darker than the panel"
+            );
+        }
+    }
+
+    #[test]
+    fn the_panel_frame_has_an_inner_margin() {
+        // A frame with egui's default margin is what left "Camera profile" flush against
+        // the panel edge.
+        let s = tuned();
+        let m = panel_frame(&s).inner_margin;
+        assert!(m.left >= 8 && m.right >= 8, "margin {m:?}");
+    }
+
+    #[test]
+    fn every_widget_state_shares_one_corner_radius() {
+        let s = tuned();
+        let w = &s.visuals.widgets;
+        for ws in [
+            &w.noninteractive,
+            &w.inactive,
+            &w.hovered,
+            &w.active,
+            &w.open,
+        ] {
+            assert_eq!(ws.corner_radius, egui::CornerRadius::same(4));
         }
     }
 

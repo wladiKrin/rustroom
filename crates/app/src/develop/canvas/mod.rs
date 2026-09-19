@@ -177,504 +177,519 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     if let Some(s) = app.session.as_mut() {
         s.readout = None;
     }
-    egui::CentralPanel::default().show(ui, |ui| {
-        if let Some(p) = &app.pending {
-            draw_pending_canvas(ui, p, app.session.as_ref());
-            return;
-        }
-        match &mut app.session {
-            Some(s) => {
-                if let Some(tex) = &s.texture {
-                    // ⚠ Always the rendered frame, never `s.baseline`. Before/after is a
-                    // property of *what is rendered* now — see `Session::view_edits` — so the
-                    // before image arrives at the current rung and region like any other, and
-                    // is sharp at 1:1 instead of a magnified preview-resolution texture.
-                    let shown = tex;
-                    let avail = ui.available_size();
+    egui::CentralPanel::default()
+        .frame(crate::theme::canvas_frame(ui.style()))
+        .show(ui, |ui| {
+            if let Some(p) = &app.pending {
+                draw_pending_canvas(ui, p, app.session.as_ref());
+                return;
+            }
+            match &mut app.session {
+                Some(s) => {
+                    if let Some(tex) = &s.texture {
+                        // ⚠ Always the rendered frame, never `s.baseline`. Before/after is a
+                        // property of *what is rendered* now — see `Session::view_edits` — so the
+                        // before image arrives at the current rung and region like any other, and
+                        // is sharp at 1:1 instead of a magnified preview-resolution texture.
+                        let shown = tex;
+                        let avail = ui.available_size();
 
-                    // fit/zoom are expressed against the post-geometry image at *fit*
-                    // resolution, which stays constant as the render mode changes.
-                    let full = s.fit_image_size;
-                    // ⚠ No `.min(1.0)`. That clamp meant "never magnify past 100%" — but
-                    // 100% of *what*? Of an arbitrary 1600 px preview, not of the image.
-                    // On a canvas wider than the fit texture it letterboxed the photo at
-                    // 1600 points inside a 2302-point window. Unclamped, the ladder climbs
-                    // a rung on its own and supplies the texels to fill it.
-                    let fit = (avail.x / full.x).min(avail.y / full.y);
-                    // ⚠ Recorded for `Command::ZoomActual`, which has no other way to learn it.
-                    s.fit_scale = fit;
-                    // Crop mode stays at fit resolution whatever the zoom: it is a framing
-                    // operation, the overlay is drawn against the whole image, and a
-                    // whole-image *native* render would be both expensive and placed by
-                    // the fit-mode maths the overlay assumes.
-                    // ⚠ The ladder's base is the *cap* a fit render is downscaled to, not
-                    // the size it comes out at. Geometry crops after the downscale, so the
-                    // two differ on any cropped photo — and feeding the rendered size back
-                    // in compounds the crop every frame. See `view_region::fit_cap`.
-                    // ⚠ Through `Session::fit_cap`, not derived again here — its doc carries
-                    // the rule, and a second derivation is how the two come to disagree.
-                    let fit_cap = s.fit_cap();
-                    // Geometry mode pins the fit rung: the crop overlay is drawn against the
-                    // whole image and placed by the fit-mode maths.
-                    //
-                    // ⚠⚠ **Guide Mode is the exception and unpins it**, because placing an
-                    // endpoint exactly on a building edge needs real pixels — at fit resolution
-                    // you are aiming at a blur. It can afford to: the guide overlay is anchored
-                    // to `frame_rect`, so it survives a region render, which is precisely what
-                    // the crop overlay cannot do.
-                    // ⚠⚠ **The fit rung is no longer pinned in Geometry mode.** It was, because
-                    // "the crop overlay is drawn against the whole image and placed by the
-                    // fit-mode maths", so a region render would misplace it. The crop overlay is
-                    // anchored to `frame_rect` now, like the guide and mask overlays, so it
-                    // survives a region render and the pin is unnecessary — which is what lets
-                    // the crop tool zoom and pan. Guide Mode was already the exception for
-                    // exactly this reason; there is no longer an exception to make.
-                    let rung = view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom);
-                    // ⚠⚠ **The interactive rung.** A live gesture renders `app_drag_drop` rungs
-                    // lower and the release restores full quality — measured at 137.9 ms against
-                    // 35.2 ms on the reporter's window. There is **no settle timer**: the
-                    // `max_dim != s.render_rung` disjunction below already re-requests on any
-                    // rung change, so the release edge triggers the full-quality render by
-                    // itself, one frame later rather than 200 ms.
-                    //
-                    // ⚠⚠ `native` is computed from the DROPPED `max_dim`, which is the *opposite*
-                    // of the 2026-08-13 spec's warning — and correct, because this override goes
-                    // DOWN where that one went up. Theirs could report native at fit zoom and make
-                    // the whole image vanish; this one cannot. At rung 1600 whole-image is right,
-                    // and a fitted view at a high rung is caught by `covers_whole_image` below.
-                    let max_dim =
-                        view_region::rung_below(rung, fit_cap, s.buffer_long, app_drag_drop);
-                    let native = view_region::is_native(max_dim, fit_cap);
+                        // fit/zoom are expressed against the post-geometry image at *fit*
+                        // resolution, which stays constant as the render mode changes.
+                        let full = s.fit_image_size;
+                        // ⚠ No `.min(1.0)`. That clamp meant "never magnify past 100%" — but
+                        // 100% of *what*? Of an arbitrary 1600 px preview, not of the image.
+                        // On a canvas wider than the fit texture it letterboxed the photo at
+                        // 1600 points inside a 2302-point window. Unclamped, the ladder climbs
+                        // a rung on its own and supplies the texels to fill it.
+                        let fit = (avail.x / full.x).min(avail.y / full.y);
+                        // ⚠ Recorded for `Command::ZoomActual`, which has no other way to learn it.
+                        s.fit_scale = fit;
+                        // Crop mode stays at fit resolution whatever the zoom: it is a framing
+                        // operation, the overlay is drawn against the whole image, and a
+                        // whole-image *native* render would be both expensive and placed by
+                        // the fit-mode maths the overlay assumes.
+                        // ⚠ The ladder's base is the *cap* a fit render is downscaled to, not
+                        // the size it comes out at. Geometry crops after the downscale, so the
+                        // two differ on any cropped photo — and feeding the rendered size back
+                        // in compounds the crop every frame. See `view_region::fit_cap`.
+                        // ⚠ Through `Session::fit_cap`, not derived again here — its doc carries
+                        // the rule, and a second derivation is how the two come to disagree.
+                        let fit_cap = s.fit_cap();
+                        // Geometry mode pins the fit rung: the crop overlay is drawn against the
+                        // whole image and placed by the fit-mode maths.
+                        //
+                        // ⚠⚠ **Guide Mode is the exception and unpins it**, because placing an
+                        // endpoint exactly on a building edge needs real pixels — at fit resolution
+                        // you are aiming at a blur. It can afford to: the guide overlay is anchored
+                        // to `frame_rect`, so it survives a region render, which is precisely what
+                        // the crop overlay cannot do.
+                        // ⚠⚠ **The fit rung is no longer pinned in Geometry mode.** It was, because
+                        // "the crop overlay is drawn against the whole image and placed by the
+                        // fit-mode maths", so a region render would misplace it. The crop overlay is
+                        // anchored to `frame_rect` now, like the guide and mask overlays, so it
+                        // survives a region render and the pin is unnecessary — which is what lets
+                        // the crop tool zoom and pan. Guide Mode was already the exception for
+                        // exactly this reason; there is no longer an exception to make.
+                        let rung = view_region::tier_max_dim(fit_cap, s.buffer_long, fit, s.zoom);
+                        // ⚠⚠ **The interactive rung.** A live gesture renders `app_drag_drop` rungs
+                        // lower and the release restores full quality — measured at 137.9 ms against
+                        // 35.2 ms on the reporter's window. There is **no settle timer**: the
+                        // `max_dim != s.render_rung` disjunction below already re-requests on any
+                        // rung change, so the release edge triggers the full-quality render by
+                        // itself, one frame later rather than 200 ms.
+                        //
+                        // ⚠⚠ `native` is computed from the DROPPED `max_dim`, which is the *opposite*
+                        // of the 2026-08-13 spec's warning — and correct, because this override goes
+                        // DOWN where that one went up. Theirs could report native at fit zoom and make
+                        // the whole image vanish; this one cannot. At rung 1600 whole-image is right,
+                        // and a fitted view at a high rung is caught by `covers_whole_image` below.
+                        let max_dim =
+                            view_region::rung_below(rung, fit_cap, s.buffer_long, app_drag_drop);
+                        let native = view_region::is_native(max_dim, fit_cap);
 
-                    // Screen pixels per rendered pixel. `k` compares the two *caps*, so
-                    // the crop factor cancels — it applies equally to both.
-                    let full_long = full.x.max(full.y);
-                    let k = max_dim as f32 / fit_cap as f32;
-                    let (iw, ih) = ((full.x * k).round() as usize, (full.y * k).round() as usize);
-                    let scale = fit * s.zoom / k;
+                        // Screen pixels per rendered pixel. `k` compares the two *caps*, so
+                        // the crop factor cancels — it applies equally to both.
+                        let full_long = full.x.max(full.y);
+                        let k = max_dim as f32 / fit_cap as f32;
+                        let (iw, ih) =
+                            ((full.x * k).round() as usize, (full.y * k).round() as usize);
+                        let scale = fit * s.zoom / k;
 
-                    // Which part of the image the view needs, and whether what is already
-                    // rendered still covers it.
-                    // ⚠ Decided by *visibility*, not by the rung. Once `fit` may exceed 1.0
-                    // the whole image can be visible at a higher rung, and cropping to it
-                    // would gain nothing while starving `fit_image_size` — which is only
-                    // taken from whole-image frames — of any refresh.
-                    // ⚠⚠ Computed **once** and used for both the margin and the request. The
-                    // region must be large enough for the reach of the edits it will be rendered
-                    // with, so deriving the margin from a different value than the render uses is
-                    // exactly the two-facts-that-disagree failure — and a silent one, showing as
-                    // a subtly wrong band at the edge of the visible area.
-                    let shown_edits = s.view_edits(tool);
-                    let (vis, want) = if native {
-                        let v = view_region::visible_rect(
-                            iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
-                        );
-                        if view_region::covers_whole_image(v, iw, ih) {
-                            (None, None)
-                        } else {
-                            let margined = view_region::with_margin(
-                                v,
-                                iw,
-                                ih,
-                                // ⚠ Derived per render, not a constant: masks chain, so N masked
-                                // clarities reach N x 120 px and no fixed number covers an
-                                // unbounded stack. See `Session::render_margin`.
-                                s.render_margin(&shown_edits, max_dim),
+                        // Which part of the image the view needs, and whether what is already
+                        // rendered still covers it.
+                        // ⚠ Decided by *visibility*, not by the rung. Once `fit` may exceed 1.0
+                        // the whole image can be visible at a higher rung, and cropping to it
+                        // would gain nothing while starving `fit_image_size` — which is only
+                        // taken from whole-image frames — of any refresh.
+                        // ⚠⚠ Computed **once** and used for both the margin and the request. The
+                        // region must be large enough for the reach of the edits it will be rendered
+                        // with, so deriving the margin from a different value than the render uses is
+                        // exactly the two-facts-that-disagree failure — and a silent one, showing as
+                        // a subtly wrong band at the edge of the visible area.
+                        let shown_edits = s.view_edits(tool);
+                        let (vis, want) = if native {
+                            let v = view_region::visible_rect(
+                                iw, ih, avail.x, avail.y, scale, s.pan.x, s.pan.y,
                             );
-                            (Some(v), Some(margined))
+                            if view_region::covers_whole_image(v, iw, ih) {
+                                (None, None)
+                            } else {
+                                let margined = view_region::with_margin(
+                                    v,
+                                    iw,
+                                    ih,
+                                    // ⚠ Derived per render, not a constant: masks chain, so N masked
+                                    // clarities reach N x 120 px and no fixed number covers an
+                                    // unbounded stack. See `Session::render_margin`.
+                                    s.render_margin(&shown_edits, max_dim),
+                                );
+                                (Some(v), Some(margined))
+                            }
+                        } else {
+                            (None, None)
+                        };
+                        // ⚠⚠ **Against the VISIBLE rect, never the margined one — and comparing the
+                        // margined one meant the margin had never worked.** `with_margin`'s own doc
+                        // says why it exists: "small pans reuse the existing texture instead of
+                        // re-rendering". But `want` and `rendered_region` are both `visible + 2 ×
+                        // margin`, so they are the same size, and one rectangle contains another of
+                        // equal size only when they are identical — **any pan at all made this
+                        // false**. The margin made every render bigger and reduced the re-render rate
+                        // by nothing.
+                        //
+                        // ⚠ Measured, not reasoned: `RUSTROOM_DEBUG_RENDER` over one pan showed **81
+                        // consecutive renders, one per frame**, their regions drifting by a pixel at a
+                        // time, 21 ms each. Reported as panning being smooth but "very sluggish".
+                        //
+                        // ⚠ Asking whether what is rendered still covers what is on screen is also
+                        // the only question that means anything here: the margin is headroom, not part
+                        // of the requirement.
+                        let covered = match (vis, s.rendered_region) {
+                            (None, None) => true,
+                            (Some(v), Some(r)) => view_region::contains(r, v),
+                            _ => false,
+                        };
+                        // ⚠ A change of *rung* must re-request even when the region is
+                        // unchanged — otherwise moving between rungs, or an upgraded buffer
+                        // arriving, would leave the old texture on screen.
+                        // ⚠ Consumed here, and only here: one frame in which a deliberately softer
+                        // render is left alone. The next frame sees the rung still changed and asks
+                        // for full quality, which is what makes the sharpening need no timer.
+                        let soft_frame = std::mem::take(&mut s.soft_next);
+                        if (!covered && s.requested_region != want)
+                            || (max_dim != s.render_rung && !soft_frame)
+                        {
+                            s.requested_region = want;
+                            s.render_rung = max_dim;
+                            s.request(shown_edits, max_dim, want);
                         }
-                    } else {
-                        (None, None)
-                    };
-                    // ⚠⚠ **Against the VISIBLE rect, never the margined one — and comparing the
-                    // margined one meant the margin had never worked.** `with_margin`'s own doc
-                    // says why it exists: "small pans reuse the existing texture instead of
-                    // re-rendering". But `want` and `rendered_region` are both `visible + 2 ×
-                    // margin`, so they are the same size, and one rectangle contains another of
-                    // equal size only when they are identical — **any pan at all made this
-                    // false**. The margin made every render bigger and reduced the re-render rate
-                    // by nothing.
-                    //
-                    // ⚠ Measured, not reasoned: `RUSTROOM_DEBUG_RENDER` over one pan showed **81
-                    // consecutive renders, one per frame**, their regions drifting by a pixel at a
-                    // time, 21 ms each. Reported as panning being smooth but "very sluggish".
-                    //
-                    // ⚠ Asking whether what is rendered still covers what is on screen is also
-                    // the only question that means anything here: the margin is headroom, not part
-                    // of the requirement.
-                    let covered = match (vis, s.rendered_region) {
-                        (None, None) => true,
-                        (Some(v), Some(r)) => view_region::contains(r, v),
-                        _ => false,
-                    };
-                    // ⚠ A change of *rung* must re-request even when the region is
-                    // unchanged — otherwise moving between rungs, or an upgraded buffer
-                    // arriving, would leave the old texture on screen.
-                    // ⚠ Consumed here, and only here: one frame in which a deliberately softer
-                    // render is left alone. The next frame sees the rung still changed and asks
-                    // for full quality, which is what makes the sharpening need no timer.
-                    let soft_frame = std::mem::take(&mut s.soft_next);
-                    if (!covered && s.requested_region != want)
-                        || (max_dim != s.render_rung && !soft_frame)
-                    {
-                        s.requested_region = want;
-                        s.render_rung = max_dim;
-                        s.request(shown_edits, max_dim, want);
-                    }
 
-                    // Place using the *texture's* own render resolution, not the current
-                    // mode's: a frame from the other mode may still be on screen while a
-                    // new one is in flight.
-                    // ⚠ No before/after special case any more: the before frame is rendered
-                    // with the *same* geometry, rung and region as the after frame, so it
-                    // places identically. Holding the framing fixed is what lets the toggle be
-                    // a comparison rather than a jump.
-                    let (place_region, place_long) = (s.rendered_region, s.rendered_long.max(1.0));
-                    let pk = place_long / full_long;
-                    let pscale = fit * s.zoom / pk;
+                        // Place using the *texture's* own render resolution, not the current
+                        // mode's: a frame from the other mode may still be on screen while a
+                        // new one is in flight.
+                        // ⚠ No before/after special case any more: the before frame is rendered
+                        // with the *same* geometry, rung and region as the after frame, so it
+                        // places identically. Holding the framing fixed is what lets the toggle be
+                        // a comparison rather than a jump.
+                        let (place_region, place_long) =
+                            (s.rendered_region, s.rendered_long.max(1.0));
+                        let pk = place_long / full_long;
+                        let pscale = fit * s.zoom / pk;
 
-                    let img_rect = match place_region {
-                        Some(r) => {
-                            let origin = ui.max_rect().center() + s.pan
-                                - egui::vec2(full.x * pk, full.y * pk) * pscale * 0.5;
-                            egui::Rect::from_min_size(
-                                origin + egui::vec2(r.x as f32, r.y as f32) * pscale,
+                        let img_rect = match place_region {
+                            Some(r) => {
+                                let origin = ui.max_rect().center() + s.pan
+                                    - egui::vec2(full.x * pk, full.y * pk) * pscale * 0.5;
+                                egui::Rect::from_min_size(
+                                    origin + egui::vec2(r.x as f32, r.y as f32) * pscale,
+                                    shown.size_vec2() * pscale,
+                                )
+                            }
+                            // `pscale` rather than `fit * zoom`: the texture's own size
+                            // already carries its render resolution, so this stays right
+                            // even for a whole-image frame from the other mode.
+                            None => egui::Rect::from_center_size(
+                                ui.max_rect().center() + s.pan,
                                 shown.size_vec2() * pscale,
-                            )
-                        }
-                        // `pscale` rather than `fit * zoom`: the texture's own size
-                        // already carries its render resolution, so this stays right
-                        // even for a whole-image frame from the other mode.
-                        None => egui::Rect::from_center_size(
-                            ui.max_rect().center() + s.pan,
-                            shown.size_vec2() * pscale,
-                        ),
-                    };
-                    // ⚠ Where the **whole frame** sits on screen, which is *not* `img_rect`
-                    // once a region render is on: `img_rect` then covers only the rendered
-                    // slice. A mask is defined in whole-frame normalised coordinates, so its
-                    // overlay must be placed against this rect or it drifts with the region —
-                    // appearing to follow the view as you pan, which is exactly how the bug
-                    // showed up. `origin` is the same whole-image corner the region placement
-                    // above derives from, so the two agree by construction.
-                    let frame_rect =
-                        canvas_geom::frame_rect(ui.max_rect().center(), s.pan, full, pk, pscale);
+                            ),
+                        };
+                        // ⚠ Where the **whole frame** sits on screen, which is *not* `img_rect`
+                        // once a region render is on: `img_rect` then covers only the rendered
+                        // slice. A mask is defined in whole-frame normalised coordinates, so its
+                        // overlay must be placed against this rect or it drifts with the region —
+                        // appearing to follow the view as you pan, which is exactly how the bug
+                        // showed up. `origin` is the same whole-image corner the region placement
+                        // above derives from, so the two agree by construction.
+                        let frame_rect = canvas_geom::frame_rect(
+                            ui.max_rect().center(),
+                            s.pan,
+                            full,
+                            pk,
+                            pscale,
+                        );
 
-                    // ⚠ Env-gated instrumentation, the `RUSTROOM_DEBUG_BRUSH` precedent: this
-                    // file's own record says reasoning about placement has been wrong twice, and
-                    // one print settled each of them in a run. `RUSTROOM_DEBUG_PLACE=1` logs every
-                    // input the placement is derived from, so a rung transition can be read off a
-                    // pair of consecutive lines rather than argued about.
-                    if *DEBUG_PLACE {
-                        let r = s.rendered_region;
-                        eprintln!(
-                            "place rung={max_dim} native={native} fit_cap={fit_cap} \
+                        // ⚠ Env-gated instrumentation, the `RUSTROOM_DEBUG_BRUSH` precedent: this
+                        // file's own record says reasoning about placement has been wrong twice, and
+                        // one print settled each of them in a run. `RUSTROOM_DEBUG_PLACE=1` logs every
+                        // input the placement is derived from, so a rung transition can be read off a
+                        // pair of consecutive lines rather than argued about.
+                        if *DEBUG_PLACE {
+                            let r = s.rendered_region;
+                            eprintln!(
+                                "place rung={max_dim} native={native} fit_cap={fit_cap} \
                              full=({:.3},{:.3}) fit={fit:.6} zoom={:.4} pan=({:.2},{:.2}) \
                              place_long={place_long:.1} pk={pk:.6} pscale={pscale:.6} \
                              tex=({},{}) region={:?} img_min=({:.2},{:.2}) \
                              frame_min=({:.2},{:.2}) frame_size=({:.2},{:.2}) avail=({:.1},{:.1})",
-                            full.x,
-                            full.y,
-                            s.zoom,
-                            s.pan.x,
-                            s.pan.y,
-                            shown.size()[0],
-                            shown.size()[1],
-                            r.map(|r| (r.x, r.y, r.w, r.h)),
-                            img_rect.min.x,
-                            img_rect.min.y,
-                            frame_rect.min.x,
-                            frame_rect.min.y,
-                            frame_rect.width(),
-                            frame_rect.height(),
-                            avail.x,
-                            avail.y,
-                        );
-                    }
+                                full.x,
+                                full.y,
+                                s.zoom,
+                                s.pan.x,
+                                s.pan.y,
+                                shown.size()[0],
+                                shown.size()[1],
+                                r.map(|r| (r.x, r.y, r.w, r.h)),
+                                img_rect.min.x,
+                                img_rect.min.y,
+                                frame_rect.min.x,
+                                frame_rect.min.y,
+                                frame_rect.width(),
+                                frame_rect.height(),
+                                avail.x,
+                                avail.y,
+                            );
+                        }
 
-                    let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
-                    // ⚠⚠ **The backdrop, painted at `frame_rect` UNDER the region texture.** A
-                    // region render covers only `img_rect`; everything outside it used to be
-                    // unpainted, so panning revealed black rectangles that snapped to image when
-                    // the next region landed. The last whole-image texture covers the entire
-                    // frame, so a revealed edge is a soft but correct picture that snaps sharp.
-                    //
-                    // ⚠ Only while a region is on screen. With a whole-image frame the two would
-                    // coincide exactly and the backdrop would be a wasted draw of the same pixels.
-                    //
-                    // ⚠ Only when its `fit_size` still matches: a crop or an orientation change
-                    // moves the frame, and a backdrop from before it would be stretched across
-                    // the new one at the wrong scale — visible, because it spans the whole rect.
-                    if place_region.is_some() {
-                        if let Some((tex, size)) = &s.backdrop {
-                            if (size.0 - full.x).abs() < 0.5 && (size.1 - full.y).abs() < 0.5 {
-                                egui::Image::new(tex).paint_at(ui, frame_rect);
+                        let resp = ui.allocate_rect(img_rect, egui::Sense::drag());
+                        // ⚠⚠ **The backdrop, painted at `frame_rect` UNDER the region texture.** A
+                        // region render covers only `img_rect`; everything outside it used to be
+                        // unpainted, so panning revealed black rectangles that snapped to image when
+                        // the next region landed. The last whole-image texture covers the entire
+                        // frame, so a revealed edge is a soft but correct picture that snaps sharp.
+                        //
+                        // ⚠ Only while a region is on screen. With a whole-image frame the two would
+                        // coincide exactly and the backdrop would be a wasted draw of the same pixels.
+                        //
+                        // ⚠ Only when its `fit_size` still matches: a crop or an orientation change
+                        // moves the frame, and a backdrop from before it would be stretched across
+                        // the new one at the wrong scale — visible, because it spans the whole rect.
+                        if place_region.is_some() {
+                            if let Some((tex, size)) = &s.backdrop {
+                                if (size.0 - full.x).abs() < 0.5 && (size.1 - full.y).abs() < 0.5 {
+                                    egui::Image::new(tex).paint_at(ui, frame_rect);
+                                }
                             }
                         }
-                    }
-                    egui::Image::new(shown).paint_at(ui, resp.rect);
-                    // ⚠ The grade range view, over the photograph and under every tool overlay.
-                    // `resp.rect` is `img_rect` — the rendered slice — and this texture covers
-                    // exactly that, whether the frame was whole or a region; the readout's
-                    // exception, for the readout's reason. Every other overlay is frame-relative.
-                    if let Some(tint) = &s.grade_view_texture {
-                        egui::Image::new(tint).paint_at(ui, resp.rect);
-                    }
+                        egui::Image::new(shown).paint_at(ui, resp.rect);
+                        // ⚠ The grade range view, over the photograph and under every tool overlay.
+                        // `resp.rect` is `img_rect` — the rendered slice — and this texture covers
+                        // exactly that, whether the frame was whole or a region; the readout's
+                        // exception, for the readout's reason. Every other overlay is frame-relative.
+                        if let Some(tint) = &s.grade_view_texture {
+                            egui::Image::new(tint).paint_at(ui, resp.rect);
+                        }
 
-                    // ⚠ A behaviour change, and an intended one: mask handles and brush
-                    // painting now belong to the Masks tool rather than to "any mode that is
-                    // not Geometry". A stray drag in Edit can no longer paint a stroke.
-                    //
-                    // ⚠ An exhaustive match, not `_ => {}`: a fifth tool must force a
-                    // decision about what the canvas does under it.
-                    match tool {
-                        Tool::Crop => {
-                            // ⚠⚠ **Exclusive**: while Guides is on the crop overlay is neither
-                            // drawn nor interactive. The Geometry tool gives every drag to the
-                            // crop rectangle, so without this the two would fight over one
-                            // gesture — and the crop rectangle is invisible here anyway, since
-                            // the preview resets the crop.
-                            //
-                            // ⚠⚠ **Precedence, and it is a three-way decision now.** Guide Mode
-                            // stays first and stays exclusive; the straighten line is next; the
-                            // crop rectangle is the default. Without an order the three would
-                            // fight over one gesture.
-                            //
-                            // ⚠ `show_guides` is **read** here and never written by the
-                            // straighten gesture. Mutual exclusion is by gating — the panel
-                            // disables the toggle while guides are in force — which keeps that
-                            // track out of `Session.guides` entirely.
-                            if s.show_guides {
-                                // ⚠ Guide Mode shows the muted crop rectangle for the same reason
-                                // the straighten mode does: the preview strips the crop, so
-                                // without it there is nothing on screen saying what will actually
-                                // be kept. ⚠ This is **not** the composition-guide rule below,
-                                // which stays — those divide the photograph-to-be, and under
-                                // Guide Mode there is no crop rect *they* may divide.
-                                crop_overlay::draw_crop_marks(
-                                    ui,
-                                    crop_overlay::crop_screen_rect(s, frame_rect),
-                                    img_rect,
-                                    crop_overlay::Marks::Muted,
-                                );
-                                let d = draw_guide_overlay(ui, s, &resp, frame_rect, img_rect);
-                                if d != GuideDrag::None {
-                                    guide_drag = d;
+                        // ⚠ A behaviour change, and an intended one: mask handles and brush
+                        // painting now belong to the Masks tool rather than to "any mode that is
+                        // not Geometry". A stray drag in Edit can no longer paint a stroke.
+                        //
+                        // ⚠ An exhaustive match, not `_ => {}`: a fifth tool must force a
+                        // decision about what the canvas does under it.
+                        match tool {
+                            Tool::Crop => {
+                                // ⚠⚠ **Exclusive**: while Guides is on the crop overlay is neither
+                                // drawn nor interactive. The Geometry tool gives every drag to the
+                                // crop rectangle, so without this the two would fight over one
+                                // gesture — and the crop rectangle is invisible here anyway, since
+                                // the preview resets the crop.
+                                //
+                                // ⚠⚠ **Precedence, and it is a three-way decision now.** Guide Mode
+                                // stays first and stays exclusive; the straighten line is next; the
+                                // crop rectangle is the default. Without an order the three would
+                                // fight over one gesture.
+                                //
+                                // ⚠ `show_guides` is **read** here and never written by the
+                                // straighten gesture. Mutual exclusion is by gating — the panel
+                                // disables the toggle while guides are in force — which keeps that
+                                // track out of `Session.guides` entirely.
+                                if s.show_guides {
+                                    // ⚠ Guide Mode shows the muted crop rectangle for the same reason
+                                    // the straighten mode does: the preview strips the crop, so
+                                    // without it there is nothing on screen saying what will actually
+                                    // be kept. ⚠ This is **not** the composition-guide rule below,
+                                    // which stays — those divide the photograph-to-be, and under
+                                    // Guide Mode there is no crop rect *they* may divide.
+                                    crop_overlay::draw_crop_marks(
+                                        ui,
+                                        crop_overlay::crop_screen_rect(s, frame_rect),
+                                        img_rect,
+                                        crop_overlay::Marks::Muted,
+                                    );
+                                    let d = draw_guide_overlay(ui, s, &resp, frame_rect, img_rect);
+                                    if d != GuideDrag::None {
+                                        guide_drag = d;
+                                    }
+                                } else if s.straighten_armed {
+                                    // ⚠ The crop rectangle stays on screen while the straighten mode
+                                    // is armed, muted and non-interactive. It used to vanish — the
+                                    // dispatch replaced `draw_crop_overlay` entirely, as Guide Mode
+                                    // does — which left the composition guides dividing a rectangle
+                                    // nobody could see. Lightroom keeps it visible too.
+                                    crop_overlay::draw_crop_marks(
+                                        ui,
+                                        crop_overlay::crop_screen_rect(s, frame_rect),
+                                        img_rect,
+                                        crop_overlay::Marks::Muted,
+                                    );
+                                    photo_edited |= draw_straighten_overlay(
+                                        ui, s, &resp, frame_rect, img_rect, tool,
+                                    );
+                                } else {
+                                    photo_edited |= draw_crop_overlay(
+                                        ui,
+                                        s,
+                                        &resp,
+                                        frame_rect,
+                                        img_rect,
+                                        app.crop_aspect,
+                                    );
                                 }
-                            } else if s.straighten_armed {
-                                // ⚠ The crop rectangle stays on screen while the straighten mode
-                                // is armed, muted and non-interactive. It used to vanish — the
-                                // dispatch replaced `draw_crop_overlay` entirely, as Guide Mode
-                                // does — which left the composition guides dividing a rectangle
-                                // nobody could see. Lightroom keeps it visible too.
-                                crop_overlay::draw_crop_marks(
-                                    ui,
-                                    crop_overlay::crop_screen_rect(s, frame_rect),
-                                    img_rect,
-                                    crop_overlay::Marks::Muted,
-                                );
-                                photo_edited |= draw_straighten_overlay(
-                                    ui, s, &resp, frame_rect, img_rect, tool,
-                                );
-                            } else {
-                                photo_edited |= draw_crop_overlay(
+                            }
+                            Tool::Masks => {
+                                photo_edited |= draw_mask_overlay(
                                     ui,
                                     s,
                                     &resp,
+                                    img_rect,
                                     frame_rect,
-                                    img_rect,
-                                    app.crop_aspect,
+                                    BrushTool {
+                                        size: app_brush_size,
+                                        hardness: app_brush_hardness,
+                                        flow: app.brush_flow,
+                                        erase: app_brush_erase,
+                                        show_tint: app.show_mask_tint,
+                                        auto_mask: app_brush_auto_mask,
+                                        tolerance: app_brush_tolerance,
+                                        base: app_tint_frame.as_ref(),
+                                        pan_drag: app_pan_drag,
+                                        erase_drag: app_erase_drag,
+                                    },
+                                    tool,
                                 );
                             }
-                        }
-                        Tool::Masks => {
-                            photo_edited |= draw_mask_overlay(
-                                ui,
-                                s,
-                                &resp,
-                                img_rect,
-                                frame_rect,
-                                BrushTool {
-                                    size: app_brush_size,
-                                    hardness: app_brush_hardness,
-                                    flow: app.brush_flow,
-                                    erase: app_brush_erase,
-                                    show_tint: app.show_mask_tint,
-                                    auto_mask: app_brush_auto_mask,
-                                    tolerance: app_brush_tolerance,
-                                    base: app_tint_frame.as_ref(),
-                                    pan_drag: app_pan_drag,
-                                    erase_drag: app_erase_drag,
-                                },
-                                tool,
-                            );
-                        }
-                        Tool::Edit if s.picking_wb => {
-                            // ⚠⚠ **A second, click-sensing interaction rather than changing the
-                            // canvas's own sense.** Making `resp` `click_and_drag` does give
-                            // `clicked()`, and it also changes when egui promotes a press to a
-                            // drag — which broke both mask-drag tests outright. This one exists
-                            // only while the eyedropper is armed, so no other gesture can see it.
-                            //
-                            // ⚠ Registered *after* the canvas response, which is what makes it
-                            // win the click: egui breaks a hit-test tie by registration order,
-                            // taking the last one as the one on top.
-                            //
-                            // ⚠ `Crosshair` because egui's `CursorIcon` has no pipette — the
-                            // set maps onto the OS cursors, and neither winit nor CSS defines
-                            // one. Crosshair is the conventional stand-in for a colour pick and
-                            // is what makes the armed state visible where the pointer actually
-                            // is, rather than only in the panel.
-                            let pick = ui
-                                .interact(
+                            Tool::Edit if s.picking_wb => {
+                                // ⚠⚠ **A second, click-sensing interaction rather than changing the
+                                // canvas's own sense.** Making `resp` `click_and_drag` does give
+                                // `clicked()`, and it also changes when egui promotes a press to a
+                                // drag — which broke both mask-drag tests outright. This one exists
+                                // only while the eyedropper is armed, so no other gesture can see it.
+                                //
+                                // ⚠ Registered *after* the canvas response, which is what makes it
+                                // win the click: egui breaks a hit-test tie by registration order,
+                                // taking the last one as the one on top.
+                                //
+                                // ⚠ `Crosshair` because egui's `CursorIcon` has no pipette — the
+                                // set maps onto the OS cursors, and neither winit nor CSS defines
+                                // one. Crosshair is the conventional stand-in for a colour pick and
+                                // is what makes the armed state visible where the pointer actually
+                                // is, rather than only in the panel.
+                                let pick = ui
+                                    .interact(
+                                        img_rect,
+                                        ui.id().with("wb_eyedropper"),
+                                        egui::Sense::click(),
+                                    )
+                                    .on_hover_cursor(egui::CursorIcon::Crosshair);
+                                photo_edited |= pick_white_balance(s, &pick, frame_rect, tool);
+                            }
+                            Tool::Retouch => {
+                                // ⚠ Built here rather than inside the overlay so the shared borrow of
+                                // `s` it holds ends before the overlay takes `&mut s`.
+                                let sample = sampler_for(s);
+                                photo_edited |= draw_spot_overlay(
+                                    ui,
+                                    s,
+                                    &resp,
                                     img_rect,
-                                    ui.id().with("wb_eyedropper"),
-                                    egui::Sense::click(),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::Crosshair);
-                            photo_edited |= pick_white_balance(s, &pick, frame_rect, tool);
+                                    frame_rect,
+                                    &mut app_spot_tool,
+                                    app_show_spots,
+                                    &sample,
+                                );
+                            }
+                            Tool::Edit | Tool::Presets => {}
                         }
-                        Tool::Retouch => {
-                            // ⚠ Built here rather than inside the overlay so the shared borrow of
-                            // `s` it holds ends before the overlay takes `&mut s`.
-                            let sample = sampler_for(s);
-                            photo_edited |= draw_spot_overlay(
-                                ui,
-                                s,
-                                &resp,
-                                img_rect,
-                                frame_rect,
-                                &mut app_spot_tool,
-                                app_show_spots,
-                                &sample,
-                            );
-                        }
-                        Tool::Edit | Tool::Presets => {}
-                    }
 
-                    // ⚠⚠ **One rule: the guides divide what will be the final photograph.** Under
-                    // Crop the preview strips the crop, so the crop rect *is* that photograph;
-                    // everywhere else the crop is applied, so the frame is. It only looks like two
-                    // behaviours because Crop is the one place the two differ.
-                    //
-                    // ⚠ Guide Mode is the exception: there the preview strips the crop **and** no
-                    // crop rect is drawn, so a guide would divide a rectangle nobody keeps. A guide
-                    // that divides the wrong rectangle is worse than no guide, because it is
-                    // trusted.
-                    //
-                    // ⚠ `frame_rect`, never `img_rect`, for the reason the mask and perspective
-                    // overlays both record: once a region render is on, `img_rect` covers only the
-                    // rendered *slice*, and guides must divide the whole photograph. `img_rect`
-                    // survives as the clip — widened by `overlay_clip`, because a diagonal reaches
-                    // the corners and a tight clip would shave half the stroke off there.
-                    let guide_rect = match tool {
-                        Tool::Crop if s.show_guides => None,
-                        Tool::Crop => Some(crop_overlay::crop_screen_rect(s, frame_rect)),
-                        _ => Some(frame_rect),
-                    };
-                    if let Some(r) = guide_rect {
-                        let p = ui.painter_at(canvas_geom::overlay_clip(img_rect));
-                        crop_overlay::draw_guides(&p, r, app_guide);
-                    }
-                    // ⚠ Not in geometry mode. The crop overlay is drawn against the whole
-                    // image and placed by the fit-mode maths (see the rung pin above), so
-                    // zooming or panning underneath it would misplace it. This gate was
-                    // previously the `else` of the geometry branch; it must survive the
-                    // change to a per-tool match.
-                    // ⚠ Guide Mode zooms and pans like the ordinary tools; only the crop
-                    // rectangle needs the view held still.
-                    // ⚠ Every tool zooms and pans now. This was gated off for Geometry because
-                    // the crop overlay was placed by fit-mode maths; see the rung above.
-                    {
-                        // Zoom first, then pan: the anchor correction below depends on the
-                        // new zoom, and the other order would anchor against a stale factor.
+                        // ⚠⚠ **One rule: the guides divide what will be the final photograph.** Under
+                        // Crop the preview strips the crop, so the crop rect *is* that photograph;
+                        // everywhere else the crop is applied, so the frame is. It only looks like two
+                        // behaviours because Crop is the one place the two differ.
                         //
-                        // ⚠ `zoom_delta()` is a multiplicative factor that is 1.0 when idle,
-                        // and it folds trackpad pinch together with ctrl+scroll — so mouse
-                        // users keep a zoom gesture without plain scroll being consumed by it.
-                        let zoom_factor = ui.input(|i| i.zoom_delta());
-                        if zoom_factor != 1.0 && resp.hovered() {
-                            let old = s.zoom;
-                            s.zoom = view_region::zoom_step(old, zoom_factor);
-                            // Zoom about the cursor, not the centre: keep whatever the
-                            // pointer is over fixed on screen.
-                            if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
-                                let anchor = ui.max_rect().center() + s.pan;
-                                let (dx, dy) = view_region::zoom_anchor_shift(
-                                    (p.x, p.y),
-                                    (anchor.x, anchor.y),
-                                    old,
-                                    s.zoom,
-                                );
-                                s.pan += egui::vec2(dx, dy);
+                        // ⚠ Guide Mode is the exception: there the preview strips the crop **and** no
+                        // crop rect is drawn, so a guide would divide a rectangle nobody keeps. A guide
+                        // that divides the wrong rectangle is worse than no guide, because it is
+                        // trusted.
+                        //
+                        // ⚠ `frame_rect`, never `img_rect`, for the reason the mask and perspective
+                        // overlays both record: once a region render is on, `img_rect` covers only the
+                        // rendered *slice*, and guides must divide the whole photograph. `img_rect`
+                        // survives as the clip — widened by `overlay_clip`, because a diagonal reaches
+                        // the corners and a tight clip would shave half the stroke off there.
+                        let guide_rect = match tool {
+                            Tool::Crop if s.show_guides => None,
+                            Tool::Crop => Some(crop_overlay::crop_screen_rect(s, frame_rect)),
+                            _ => Some(frame_rect),
+                        };
+                        if let Some(r) = guide_rect {
+                            let p = ui.painter_at(canvas_geom::overlay_clip(img_rect));
+                            crop_overlay::draw_guides(&p, r, app_guide);
+                        }
+                        // ⚠ Not in geometry mode. The crop overlay is drawn against the whole
+                        // image and placed by the fit-mode maths (see the rung pin above), so
+                        // zooming or panning underneath it would misplace it. This gate was
+                        // previously the `else` of the geometry branch; it must survive the
+                        // change to a per-tool match.
+                        // ⚠ Guide Mode zooms and pans like the ordinary tools; only the crop
+                        // rectangle needs the view held still.
+                        // ⚠ Every tool zooms and pans now. This was gated off for Geometry because
+                        // the crop overlay was placed by fit-mode maths; see the rung above.
+                        {
+                            // Zoom first, then pan: the anchor correction below depends on the
+                            // new zoom, and the other order would anchor against a stale factor.
+                            //
+                            // ⚠ `zoom_delta()` is a multiplicative factor that is 1.0 when idle,
+                            // and it folds trackpad pinch together with ctrl+scroll — so mouse
+                            // users keep a zoom gesture without plain scroll being consumed by it.
+                            let zoom_factor = ui.input(|i| i.zoom_delta());
+                            if zoom_factor != 1.0 && resp.hovered() {
+                                let old = s.zoom;
+                                s.zoom = view_region::zoom_step(old, zoom_factor);
+                                // Zoom about the cursor, not the centre: keep whatever the
+                                // pointer is over fixed on screen.
+                                if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                                    let anchor = ui.max_rect().center() + s.pan;
+                                    let (dx, dy) = view_region::zoom_anchor_shift(
+                                        (p.x, p.y),
+                                        (anchor.x, anchor.y),
+                                        old,
+                                        s.zoom,
+                                    );
+                                    s.pan += egui::vec2(dx, dy);
+                                }
+                            }
+
+                            // ⚠ Read and release the input lock *before* `pan_delta`, which calls
+                            // `Response::dragged_by` — that takes the same lock internally, and a
+                            // nested borrow panics in epaint's mutex the moment a drag is live.
+                            let scroll = ui.input(|i| i.smooth_scroll_delta);
+                            let space_down = ui.input(|i| i.key_down(egui::Key::Space));
+                            let text_focused = ui.ctx().memory(|m| m.focused().is_some());
+                            s.pan +=
+                                pan_delta(&resp, scroll, space_down, app_pan_drag, text_focused);
+
+                            // ⚠ Unconditional, where the old code reset only inside the scroll
+                            // branch — so a left-drag at fit really could push a fitting image
+                            // off-centre into grey and nothing put it back until the next scroll.
+                            // At fit the whole image is on screen and there is nothing to reveal.
+                            if s.zoom <= view_region::MIN_ZOOM {
+                                s.pan = egui::Vec2::ZERO;
                             }
                         }
 
-                        // ⚠ Read and release the input lock *before* `pan_delta`, which calls
-                        // `Response::dragged_by` — that takes the same lock internally, and a
-                        // nested borrow panics in epaint's mutex the moment a drag is live.
-                        let scroll = ui.input(|i| i.smooth_scroll_delta);
-                        let space_down = ui.input(|i| i.key_down(egui::Key::Space));
-                        let text_focused = ui.ctx().memory(|m| m.focused().is_some());
-                        s.pan += pan_delta(&resp, scroll, space_down, app_pan_drag, text_focused);
-
-                        // ⚠ Unconditional, where the old code reset only inside the scroll
-                        // branch — so a left-drag at fit really could push a fitting image
-                        // off-centre into grey and nothing put it back until the next scroll.
-                        // At fit the whole image is on screen and there is nothing to reveal.
-                        if s.zoom <= view_region::MIN_ZOOM {
-                            s.pan = egui::Vec2::ZERO;
+                        // ⚠⚠ **`img_rect`, NOT `frame_rect` — and this is the one place in this
+                        // canvas where that is true.** `draw_loupe` records the rule and its
+                        // exception together: "`img_rect` is where the texture is actually painted,
+                        // so this stays exact whether the frame was rendered whole or as a region."
+                        // The readout indexes the *rendered bytes*, and those cover the rendered
+                        // slice — exactly what `img_rect` spans. Every other overlay here is
+                        // frame-relative, so this needs its own comment or the next reader will
+                        // "fix" it.
+                        //
+                        // ⚠ No inverse mapping anywhere: cursor → UV → index. That is what makes
+                        // reading the rendered frame the cheap choice.
+                        //
+                        // ⚠ Placed after the per-tool match and senses nothing at all, so it never
+                        // competes for a gesture.
+                        //
+                        // ⚠ `s.readout` was cleared at the top of `show`, so leaving the image —
+                        // or landing on a pixel that reads nothing — blanks it.
+                        if let (Some(p), Some((bytes, bw, bh))) = (
+                            ui.input(|i| i.pointer.hover_pos()),
+                            s.readout_bytes.as_ref(),
+                        ) {
+                            if img_rect.contains(p)
+                                && img_rect.width() > 0.0
+                                && img_rect.height() > 0.0
+                            {
+                                let u = (p.x - img_rect.left()) / img_rect.width();
+                                let v = (p.y - img_rect.top()) / img_rect.height();
+                                let x = ((u * *bw as f32) as usize).min(bw.saturating_sub(1));
+                                let y = ((v * *bh as f32) as usize).min(bh.saturating_sub(1));
+                                // ⚠ Computed into a local first: `bytes` is a shared borrow of `s`
+                                // and writing `s.readout` needs a mutable one. Never a clone of the
+                                // bytes.
+                                let sampled =
+                                    rustroom_app::color_readout::mean_at(bytes, *bw, *bh, x, y);
+                                s.readout = sampled;
+                            }
                         }
+                    } else {
+                        ui.centered_and_justified(|ui| {
+                            ui.spinner();
+                        });
                     }
-
-                    // ⚠⚠ **`img_rect`, NOT `frame_rect` — and this is the one place in this
-                    // canvas where that is true.** `draw_loupe` records the rule and its
-                    // exception together: "`img_rect` is where the texture is actually painted,
-                    // so this stays exact whether the frame was rendered whole or as a region."
-                    // The readout indexes the *rendered bytes*, and those cover the rendered
-                    // slice — exactly what `img_rect` spans. Every other overlay here is
-                    // frame-relative, so this needs its own comment or the next reader will
-                    // "fix" it.
-                    //
-                    // ⚠ No inverse mapping anywhere: cursor → UV → index. That is what makes
-                    // reading the rendered frame the cheap choice.
-                    //
-                    // ⚠ Placed after the per-tool match and senses nothing at all, so it never
-                    // competes for a gesture.
-                    //
-                    // ⚠ `s.readout` was cleared at the top of `show`, so leaving the image —
-                    // or landing on a pixel that reads nothing — blanks it.
-                    if let (Some(p), Some((bytes, bw, bh))) = (
-                        ui.input(|i| i.pointer.hover_pos()),
-                        s.readout_bytes.as_ref(),
-                    ) {
-                        if img_rect.contains(p) && img_rect.width() > 0.0 && img_rect.height() > 0.0
-                        {
-                            let u = (p.x - img_rect.left()) / img_rect.width();
-                            let v = (p.y - img_rect.top()) / img_rect.height();
-                            let x = ((u * *bw as f32) as usize).min(bw.saturating_sub(1));
-                            let y = ((v * *bh as f32) as usize).min(bh.saturating_sub(1));
-                            // ⚠ Computed into a local first: `bytes` is a shared borrow of `s`
-                            // and writing `s.readout` needs a mutable one. Never a clone of the
-                            // bytes.
-                            let sampled =
-                                rustroom_app::color_readout::mean_at(bytes, *bw, *bh, x, y);
-                            s.readout = sampled;
-                        }
-                    }
-                } else {
+                }
+                None => {
                     ui.centered_and_justified(|ui| {
-                        ui.spinner();
+                        crate::theme::empty_state(
+                            ui,
+                            "Open an image to begin (Open file… button).",
+                        );
                     });
                 }
             }
-            None => {
-                ui.centered_and_justified(|ui| {
-                    crate::theme::empty_state(ui, "Open an image to begin (Open file… button).");
-                });
-            }
-        }
-    });
+        });
     // ⚠ Solved on **release only**, so the image is frozen for the whole drag. One gesture, one
     // Ctrl+Z, the rule every drag here follows.
     if guide_drag == GuideDrag::Settled && app.solve_guides() {

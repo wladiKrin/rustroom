@@ -46,7 +46,7 @@ Everything else in the app inherits.
 ### A.1 Two surfaces, not one
 
 The panel is a surface the image is judged *from*; the canvas is the surround the image is judged
-*against*. Today both are `panel_fill = gray(27)`. The canvas becomes darker than the panel:
+*against*. Today both are `panel_fill = gray(27)`. The canvas becomes darker than the panel, in both themes:
 
 | | dark | light |
 |---|---|---|
@@ -98,7 +98,7 @@ it is cheap and every later option is drawn on these surfaces.
   through `apply` on a fresh `Context`.
 - New: `body_text_is_readable_on_the_panel` — noninteractive `fg_stroke` against `panel_fill`,
   ≥ 4.5:1 (WCAG AA for text), both themes.
-- New: `the_canvas_is_darker_than_the_panel_in_dark_mode_and_lighter_in_light_mode` — pins the
+- New: `the_canvas_is_darker_than_the_panel_in_both_themes` — pins the
   direction per theme, so a swapped pair cannot ship.
 
 ## B · The slider row
