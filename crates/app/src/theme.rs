@@ -393,6 +393,12 @@ pub const SEGMENTED_HEIGHT: f32 = 18.0;
 /// A segmented control at a given height and font. The Masks panel's mode control is drawn
 /// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
 /// the panel's primary control).
+///
+/// ⚠⚠ **It never lets a label overflow its cell.** The columns are the most that still hold
+/// the widest label at this font; when the panel is too narrow for one row the items wrap onto
+/// as many rows as that takes (four items at the panel's default 240 pt become a 2 × 2 block).
+/// The first version drew four body-face labels into one row and they overlapped at the
+/// default width — seen in use, 2026-09-19.
 pub fn segmented_sized<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     current: &mut T,
@@ -400,20 +406,44 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     height: f32,
     font: egui::FontId,
 ) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    );
+    /// Horizontal room around a label inside its cell.
+    const PAD: f32 = 10.0;
+    const GAP: f32 = 2.0;
+    let n = items.len().max(1);
+    let width = ui.available_width();
+    let widest = ui.fonts_mut(|f| {
+        items
+            .iter()
+            .map(|(_, l, _)| {
+                f.layout_no_wrap((*l).to_owned(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max)
+    });
+    let inner_w = (width - 4.0).max(1.0);
+    let cols = (1..=n)
+        .rev()
+        .find(|&c| inner_w / c as f32 >= widest + PAD)
+        .unwrap_or(1);
+    let rows = n.div_ceil(cols);
+    let total = rows as f32 * height + (rows as f32 - 1.0) * GAP;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, total), egui::Sense::hover());
     let v = ui.visuals().clone();
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, v.extreme_bg_color);
     let inner = rect.shrink(2.0);
-    let w = inner.width() / items.len().max(1) as f32;
+    let w = inner.width() / cols as f32;
+    let row_h = (inner.height() - (rows as f32 - 1.0) * GAP) / rows as f32;
     let mut all = resp.clone();
     for (i, (item, label, hover)) in items.iter().enumerate() {
+        let (col, row) = (i % cols, i / cols);
         let cell = egui::Rect::from_min_size(
-            egui::pos2(inner.left() + w * i as f32, inner.top()),
-            egui::vec2(w, inner.height()),
+            egui::pos2(
+                inner.left() + w * col as f32,
+                inner.top() + (row_h + GAP) * row as f32,
+            ),
+            egui::vec2(w, row_h),
         );
         let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
         let r = if hover.is_empty() {
@@ -727,6 +757,38 @@ mod tests {
             segmented(ui, &mut cur, &items);
         });
         assert_eq!(cur, C::B);
+    }
+
+    #[test]
+    fn a_segmented_control_wraps_rather_than_overlapping_its_labels() {
+        // ⚠ Both widths: a control that always wrapped would pass the narrow half, one that
+        // never wrapped the wide half — and the wide half is the panel at a comfortable size.
+        let items = [
+            (0u8, "New mask", ""),
+            (1, "Add", ""),
+            (2, "Subtract", ""),
+            (3, "Intersect", ""),
+        ];
+        let rows_at = |width: f32| {
+            let ctx = crate::test_ui::ctx();
+            let mut cur = 0u8;
+            let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                ui.allocate_ui(egui::vec2(width, 200.0), |ui| {
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    segmented_sized(ui, &mut cur, &items, 28.0, font);
+                });
+            });
+            let mut ys: Vec<i32> = found.iter().map(|(_, p)| p.y.round() as i32).collect();
+            ys.sort_unstable();
+            ys.dedup();
+            (found.len(), ys.len())
+        };
+        assert_eq!(rows_at(600.0), (4, 1), "wide: one row");
+        assert_eq!(
+            rows_at(220.0),
+            (4, 2),
+            "the panel's default width: two rows of two"
+        );
     }
 
     #[test]

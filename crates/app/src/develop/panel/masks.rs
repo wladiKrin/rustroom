@@ -306,22 +306,44 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     }
 }
 
-/// The selected component's own controls: Invert, its ranges, or the brush tool's settings.
+/// The selected component's own controls: its ranges, or the brush tool's settings, and
+/// Invert.
+///
+/// ⚠ For a brush the sliders come first and the three checkboxes sit together, Tolerance
+/// straight under the Auto mask it belongs to (user's call, 2026-09-19: a checkbox, three
+/// sliders and two more checkboxes read as a jumble). Every explanation is a hover on its own
+/// control, never a line of small print under the block.
 fn shape_block(
     ui: &mut egui::Ui,
     shape: &mut edit_model::Mask,
     brush: &mut BrushTool<'_>,
     ed: &mut Edited,
 ) {
-    // ⚠ Every explanation is a hover on its own control, never a line of small print under
-    // the block (user's call, 2026-09-19).
-    if ui
-        .checkbox(shape.invert_mut(), "Invert")
-        .on_hover_text("Flips the shape: where it reached becomes where it does not.")
-        .changed()
-    {
-        ed.discrete();
+    if matches!(shape, edit_model::Mask::Brush(_)) {
+        ed.slider(ui, &mut *brush.size, 4.0..=300.0, "Size")
+            .on_hover_text(
+                "Brush diameter, in pixels of the full-resolution photo. Drag on the image to \
+                 paint.",
+            );
+        ed.slider(ui, &mut *brush.hardness, 0.0..=100.0, "Hardness")
+            .on_hover_text("Shapes the edge: hard is a crisp stroke, soft fades out.");
+        ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow")
+            .on_hover_text("Strength of one pass; repeated passes build up.");
+        invert_box(ui, shape, ed);
+        ui.checkbox(&mut *brush.erase, "Erase")
+            .on_hover_text("Strokes remove coverage instead of adding it.");
+        ui.checkbox(&mut *brush.auto_mask, "Auto mask")
+            .on_hover_text(
+                "Paints only what matches the pixel under the brush centre. Applies to new \
+                 strokes.",
+            );
+        ui.add_enabled_ui(*brush.auto_mask, |ui| {
+            ed.slider(ui, &mut *brush.tolerance, 0.0..=100.0, "Tolerance")
+                .on_hover_text("How far from the centre pixel's colour auto mask still paints.");
+        });
+        return;
     }
+    invert_box(ui, shape, ed);
     if let edit_model::Mask::Radial(r) = shape {
         ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
             .on_hover_text("How softly the edge falls off.");
@@ -351,27 +373,16 @@ fn shape_block(
                  hue, only sensor noise.",
             );
     }
-    if matches!(shape, edit_model::Mask::Brush(_)) {
-        ed.slider(ui, &mut *brush.size, 4.0..=300.0, "Size")
-            .on_hover_text(
-                "Brush diameter, in pixels of the full-resolution photo. Drag on the image to \
-                 paint.",
-            );
-        ed.slider(ui, &mut *brush.hardness, 0.0..=100.0, "Hardness")
-            .on_hover_text("Shapes the edge: hard is a crisp stroke, soft fades out.");
-        ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow")
-            .on_hover_text("Strength of one pass; repeated passes build up.");
-        ui.checkbox(&mut *brush.erase, "Erase")
-            .on_hover_text("Strokes remove coverage instead of adding it.");
-        ui.checkbox(&mut *brush.auto_mask, "Auto mask")
-            .on_hover_text(
-                "Paints only what matches the pixel under the brush centre. Applies to new \
-                 strokes.",
-            );
-        ui.add_enabled_ui(*brush.auto_mask, |ui| {
-            ed.slider(ui, &mut *brush.tolerance, 0.0..=100.0, "Tolerance")
-                .on_hover_text("How far from the centre pixel's colour auto mask still paints.");
-        });
+}
+
+/// The Invert checkbox, one for every kind.
+fn invert_box(ui: &mut egui::Ui, shape: &mut edit_model::Mask, ed: &mut Edited) {
+    if ui
+        .checkbox(shape.invert_mut(), "Invert")
+        .on_hover_text("Flips the shape: where it reached becomes where it does not.")
+        .changed()
+    {
+        ed.discrete();
     }
 }
 
