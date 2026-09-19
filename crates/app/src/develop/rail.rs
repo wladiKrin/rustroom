@@ -1,4 +1,4 @@
-//! The Develop tool rail: Edit, Crop, Masks, Presets.
+//! The Develop tool rail: one icon per tool, its name on hover.
 //!
 //! ⚠ **Outermost on the right.** egui allocates side panels in call order, so this must be
 //! shown *before* the adjustments panel or it lands between the panel and the canvas. The
@@ -9,23 +9,22 @@ use rustroom_app::tool::Tool;
 
 /// Rail width in points.
 ///
-/// ⚠ Sized so **"Presets" fits on one line** at [`LABEL_SIZE`]. At 64.0 it wrapped across two
-/// lines, which is what made the rail look broken rather than merely narrow.
-const RAIL_WIDTH: f32 = 88.0;
+/// ⚠ Icon-only since 2026-09-19: the labels the first rail was sized for ("Presets fits on
+/// one line" at 88 pt) are the tooltip now, and the width is what the glyph and its padding
+/// need.
+const RAIL_WIDTH: f32 = 44.0;
 
-/// The glyph's point size — deliberately much larger than the label, so the rail reads as an
-/// icon strip rather than as two lines of text.
+/// The glyph's point size.
 const GLYPH_SIZE: f32 = 22.0;
 
-/// The label's point size. Larger than `theme`'s compact body text: the rail is a primary
-/// navigation control, and the compact density exists for panels of sliders, not for this.
-const LABEL_SIZE: f32 = 13.0;
-
-/// Vertical padding above the glyph and below the label.
+/// Padding around the glyph.
 const PAD: f32 = 6.0;
 
-/// The gap between glyph and label.
-const GAP: f32 = 2.0;
+/// How much of the accent the selected entry's tint carries.
+///
+/// ⚠ A tint, not a solid block and not a bar: the accent should not shout beside the image —
+/// the visual identity spec's "low chroma near the image". The bar was drafted and rejected.
+const TINT: f32 = 0.18;
 
 /// Draw the rail.
 ///
@@ -36,6 +35,7 @@ pub fn show(ui: &mut egui::Ui, tool: &mut Tool) {
     egui::Panel::right("rail")
         .resizable(false)
         .default_size(RAIL_WIDTH)
+        .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(4))
         .show(ui, |ui| {
             for t in Tool::ALL {
                 if entry(ui, t, *tool == t).clicked() {
@@ -45,56 +45,43 @@ pub fn show(ui: &mut egui::Ui, tool: &mut Tool) {
         });
 }
 
-/// One rail entry: the glyph centred over the label, in a full-width clickable frame.
+/// One rail entry: the glyph centred in a full-width clickable frame, its name on hover.
 ///
-/// ⚠ **Painted by hand rather than built as a `Button` with a two-line label**, and the two
-/// failed attempts are worth knowing. A `"{glyph}\n{label}"` string leaves the rows
-/// left-aligned against each other, so a one-character glyph sits hard left of a
-/// seven-character word. Fixing that with a `LayoutJob { halign: Center }` centres the *rows*
-/// but positions them about x = 0, so the galley's own rect starts negative and the whole
-/// block then sits left inside the button frame. Painting each line at the frame's centre with
-/// `Align2::CENTER_TOP` has neither problem and needs no assumptions about how egui aligns
-/// widget content.
+/// ⚠ The name is set **twice**, and both matter: `on_hover_text` is what a sighted user gets,
+/// `widget_info` is what a screen reader and `test_ui` get. Dropping either leaves one of them
+/// with an unlabelled button.
+///
+/// ⚠ Painted by hand rather than built as a `Button`: a button's frame follows the widget
+/// visuals, and the selected state here is a *tint* of the accent rather than any of them.
 fn entry(ui: &mut egui::Ui, t: Tool, picked: bool) -> egui::Response {
-    let height = PAD * 2.0 + GLYPH_SIZE + GAP + LABEL_SIZE;
+    let height = PAD * 2.0 + GLYPH_SIZE;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
     );
+    let resp = resp.on_hover_text(t.label());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, t.label()));
 
-    let visuals = ui.style().interact_selectable(&resp, picked);
-    let fill = if picked {
-        ui.visuals().selection.bg_fill
+    let v = ui.visuals();
+    let accent = v.selection.bg_fill;
+    let (fill, colour) = if picked {
+        (accent.gamma_multiply(TINT), accent)
     } else if resp.hovered() {
-        visuals.bg_fill
+        (v.widgets.hovered.weak_bg_fill, v.text_color())
     } else {
-        egui::Color32::TRANSPARENT
+        (egui::Color32::TRANSPARENT, v.text_color())
     };
-    if fill != egui::Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, visuals.corner_radius, fill);
-    }
-
-    // Selected entries sit on the accent fill, where the ordinary body colour is low contrast.
-    let color = if picked {
-        ui.visuals().strong_text_color()
-    } else {
-        ui.visuals().text_color()
-    };
-    let cx = rect.center().x;
     let painter = ui.painter();
+    if fill != egui::Color32::TRANSPARENT {
+        painter.rect_filled(rect.shrink(2.0), 4.0, fill);
+    }
     painter.text(
-        egui::pos2(cx, rect.top() + PAD),
-        egui::Align2::CENTER_TOP,
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
         t.glyph(),
         egui::FontId::proportional(GLYPH_SIZE),
-        color,
-    );
-    painter.text(
-        egui::pos2(cx, rect.top() + PAD + GLYPH_SIZE + GAP),
-        egui::Align2::CENTER_TOP,
-        t.label(),
-        egui::FontId::proportional(LABEL_SIZE),
-        color,
+        colour,
     );
     resp
 }
@@ -191,5 +178,25 @@ mod tests {
         assert_eq!(click_rail(Tool::Crop), Tool::Crop);
         assert_eq!(click_rail(Tool::Masks), Tool::Masks);
         assert_eq!(click_rail(Tool::Presets), Tool::Presets);
+    }
+
+    #[test]
+    fn every_rail_entry_is_labelled_for_accessibility() {
+        // ⚠ The rail paints no text any more; the tool's name reaches a sighted user as a
+        // tooltip and everyone else — a screen reader, this harness — as the accessible name.
+        // Sabotage: drop `widget_info` and every label vanishes.
+        let ctx = crate::test_ui::ctx();
+        let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            for t in Tool::ALL {
+                let _ = entry(ui, t, false);
+            }
+        });
+        for t in Tool::ALL {
+            assert!(
+                found.iter().any(|(l, _)| l == t.label()),
+                "{} has no accessible name: {found:?}",
+                t.label()
+            );
+        }
     }
 }
