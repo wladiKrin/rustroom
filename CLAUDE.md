@@ -144,15 +144,14 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-19)
 
-**2599 tests** on `main` (goldens unmoved since 2026-09-18).
+**2604 tests** on `main` (goldens unmoved since 2026-09-18).
 
-✅ **The Masks panel rework is merged and confirmed by use (2026-09-19)** — a segmented mode
-control that wraps rather than overlaps, a row of kind icons, painted rows with an **eye per
-mask** (the overlay, any number at once; `Session::mask_shown`, `suppressed_masks` derived from
-it), Show all / Hide all, a Shape section, the mask's adjustments under the Edit panel's four
-sections (`edit_model::LocalGroup`), hovers instead of hints, and larger rail icons. Spec
-`2026-09-19-masks-panel-design.md` (option A was built first and superseded by C at the user's
-request; the spec records both); `grep -n 'Masks panel' docs/JOURNAL.md`.
+✅ **The Crop & Geometry panel rework is merged and confirmed by use (2026-09-19)** — four
+sections (Crop with a segmented aspect, a composition dropdown and the orientation glyphs with
+Swap; Straighten with the level tool beside the angle; Perspective with the guides on one row;
+Lens), a dot and reset per section through `edit_model::GeoGroup`. Spec
+`2026-09-19-geometry-panel-design.md`; `grep -n 'Geometry panel' docs/JOURNAL.md`. ⚠ egui gives
+a `ComboBox` no accessible label, only its selected text as a value; `test_ui` falls back to it.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in

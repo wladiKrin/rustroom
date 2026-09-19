@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Crop & Geometry panel: four sections (2026-09-19)](#the-crop--geometry-panel-four-sections-2026-09-19)
 - [The Masks panel: icon rows, sectioned (2026-09-19)](#the-masks-panel-icon-rows-sectioned-2026-09-19)
 - [The Develop panel, seen in use: order of controls, header chrome, wheel rim (2026-09-19)](#the-develop-panel-seen-in-use-order-of-controls-header-chrome-wheel-rim-2026-09-19)
 - [The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)](#the-develop-panel-restyle-surfaces-slider-rows-section-chrome-icon-rail-2026-09-19)
@@ -119,7 +120,35 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Masks panel: icon rows, sectioned (2026-09-19)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Crop & Geometry panel: four sections (2026-09-19)
+
+Option A of a three-option canvas ("Rustroom Geometry Panel"), the user's pick, on
+`geometry-panel`. Spec `2026-09-19-geometry-panel-design.md`. **2599 → 2604 tests**,
+goldens unmoved; the canvas and the pipeline untouched.
+
+| what landed | where |
+|---|---|
+| CROP, STRAIGHTEN, PERSPECTIVE, LENS as `section::header`s; `Tool::Crop.panel_heading()` is `None` | `geometry.rs`, `tool.rs` |
+| a dot and reset per section from a `GeoGroup` partition (Crop = crop + orientation, Straighten = angle, Perspective = perspective), through one exhaustive destructure of `Geometry`; "Reset geometry" is gone | `edit-model/geo_group.rs` |
+| the aspect as `segmented_sized` over `Option<Chip>` — the lit segment derived from the lock as the chips were, nothing lit for a lock that matches nothing; "Custom" is "W:H"; the custom fields right-aligned while it is lit | `geometry::crop` |
+| the composition guide as a `ComboBox::from_label`; the orientation glyphs at 28 pt with Swap right-aligned; the level tool a hand-painted toggle beside the angle, accessible as "Straighten by drawing a line"; the guides on one row under the perspective sliders, the small print folded into hovers | `geometry.rs` |
+| LENS always drawn, the lens in its header, the body saying why there is nothing to scale when there is not; "Lens scale" keeps its name because Perspective has a "Scale" | `geometry::lens` |
+
+**Worth keeping:**
+
+- ⚠ **egui gives a `ComboBox` no accessible label at all** — only its selected text, as the
+  node's *value* (`combo_box.rs`, `current_text_value`), and `from_id_salt` leaves even a
+  screen reader with nothing. `test_ui::labelled_centres` now falls back to a node's value when
+  it has no label, so a combo is reachable by its current text — which is also what a screen
+  reader says for it. `from_label` gives it a visible label too, drawn to its left in a
+  right-to-left row.
+- ⚠ A derived "current" for a segmented control: `Option<Chip>` with `None` lighting nothing,
+  compared before and after the frame — the control writes the value, the panel turns the
+  change into `lock_to`.
+
+`geometry.rs` is 1,456 lines, over the marker; about 850 of them are its tests.
+
+### The Masks panel: icon rows, sectioned (2026-09-19)
 
 Three options on a design canvas ("Rustroom Masks Panel"); the user chose **A** ("menus, not
 modes"), it was built and gated, and while the gate ran he changed his mind to **C** ("icon rows,
