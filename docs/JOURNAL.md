@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)](#the-develop-panel-restyle-surfaces-slider-rows-section-chrome-icon-rail-2026-09-19)
 - [M8.11 — a mask's coverage and blend on the GPU (2026-09-16)](#m811-a-masks-coverage-and-blend-on-the-gpu-2026-09-16)
 - [M8.10 — a parallel batch export (2026-09-15)](#m810-a-parallel-batch-export-2026-09-15)
 - [M8.9 — lens correction on the GPU, and the export bug it uncovered (2026-09-15). ✅ CONFIRMED BY USE](#m89-lens-correction-on-the-gpu-and-the-export-bug-it-uncovered-2026-09-15-confirmed-by-use)
@@ -119,6 +120,78 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
 ---
+
+### The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)
+
+Four approved options from a design canvas, landed as eight commits on the branch
+`develop-panel-restyle` — **unmerged, unpushed, not yet seen in use**. Spec
+`2026-09-18-develop-panel-restyle-design.md`, plan `2026-09-18-develop-panel-restyle.md`.
+**2559 → 2579 tests**, `golden_` count unchanged; `pipeline`, `Edits` and the sidecar untouched.
+
+| | what landed | where |
+|---|---|---|
+| **A** | panel `gray(32)` over a `gray(22)` canvas (light: `gray(248)` / `gray(222)`), body text 140 → 166, hairlines 60 → 46, one 4 pt radius, a 10/6 pt panel margin | `theme.rs` (`surfaces`, `canvas_frame`, `panel_frame`), three frames |
+| **B** | a hand-painted slider row — label │ rail │ value, fill **from zero**, zero tick, value as frameless `DragValue` | `slider_map.rs` (lib), `develop/panel/slider.rs` (bin), `Edited::slider` + 4 bypass sites |
+| **C** | uppercase section headers over `CollapsingState` with a modified dot and a per-section `reset`; `sub_label`; one `segmented` control; a framed histogram with clipping marks; the curve's ghost | `theme.rs`, `adjustments.rs`, `hsl_bands.rs`, `mask_adjust.rs`, `geometry.rs`, `tone_curve.rs`, `histogram.rs`, `panel/mod.rs`, `edit-model` (`group_differs`) |
+| **D2** | a 44 pt icon-only rail, the selected tool tinted (`accent.gamma_multiply(0.18)`), the name as tooltip **and** accessible name | `rail.rs` |
+
+#### ⚠⚠ A test caught the spec contradicting itself
+
+The spec's table gave the light canvas `gray(222)` against a `gray(248)` panel — darker — while
+its prose said "lighter in light mode", and the first test asserted the prose. The surround
+argument wants the canvas darker than the panel in **both** themes; the table was right, the
+prose and the test were fixed, and the test is now `the_canvas_is_darker_than_the_panel_in_both_themes`.
+
+#### ⚠⚠ Seventy-seven failures from one named text style
+
+`TextStyle::Name("section")` is installed by `tune`, and `TextStyle::resolve` **panics** on a
+name the style does not carry. Every headless harness builds a bare `egui::Context` that never
+runs `theme::apply`, so the first C build failed 77 panel tests with one message. The fix is at
+the source, not in 77 tests: `theme::section_font(style)` resolves the face with a fallback to
+the same 11 pt `FontId`, so production is unchanged and a bare context still draws. ⚠ Any future
+named style must go through the same shape.
+
+#### ⚠ Two harness findings, both about labels
+
+- **`GradeRange::label` now says "Highlights", and so does the Tone slider above it.** `test_ui`
+  clicks the first match, so the grade-range view test collapses Tone first. A sighted user tells
+  the two apart by position; a label query cannot. The same collision exists for "Shadows".
+- **`click_segment` was testing egui, not the panel.** It re-declared the `selectable_value`
+  loop instead of calling `hsl_bands::show`; it drives the shipped selector now through
+  `test_ui::click`.
+
+#### ⚠⚠ Environment: a fresh binary's first launch waits ~22 s at 0 % CPU
+
+Measured on this Mac on 2026-09-19: a newly built test binary sits in `_dyld_start` for about 22
+seconds (once for over two minutes) before `main`, and the same binary's second launch takes
+4 ms — macOS's launch assessment, outside the sandbox too. A full `cargo test --all` is ~17 test
+binaries, so a gate costs 10–20 minutes of pure waiting on top of the build. ⚠ Not a code
+problem and not fixable from here; budget for it, and prefer one gate per series to many
+partial reruns.
+
+#### egui 0.35 facts, learned from the compiler
+
+- `ui.style()` returns an `Arc<Style>` that derefs; `&ui.style()` is `needless_borrow` under
+  `-D warnings`, and it bit three times in one commit.
+- `CollapsingState::show_body_unindented` plus a hand-drawn row is the way to a header with
+  custom chrome; `show_header` always paints egui's triangle.
+- `egui::emath::Rot2::from_angle(a) * vec2` rotates a chevron's points; `Shape::mesh` takes a
+  `Mesh` by value here.
+- `WidgetInfo::slider(enabled, value, label)` on the **rail** response is what keeps every
+  existing drag harness passing unchanged — the label is what they find, the rail centre is
+  where they press.
+
+#### Accepted caveats
+
+1. **Two slider idioms** — modals keep egui's stock `Slider`; the row is for the panel.
+2. **`LABEL_WIDTH` is 78 pt**; a wider label truncates with the full text on hover.
+3. **`group_differs` clones an `Edits` six times a frame.** Bounded and small; cache on change
+   if a profile ever disagrees.
+4. **The rail's labels are gone**; the tooltip and the accessible name replace them.
+5. **Light mode was contrast-checked, not seen.** Every value is a pair; the pair is what to look
+   at first.
+6. `adjustments.rs` is **1,398** lines (from 1,165: the header, the harness helper and two tests), `masks.rs` 834
+   untouched, `color_wheel.rs` 624 — all past the ~600 marker.
 
 ### `batch_export.rs` split into a directory module (2026-09-18)
 

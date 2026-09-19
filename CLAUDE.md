@@ -144,8 +144,15 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-18)
 
-**2559 tests, 74 goldens.** The repo is **`main` alone** — clean tree. ⚠ `main` is **ahead of
-`origin/main`** — **not pushed; the user pushes.**
+**2559 tests, 74 goldens** on `main`. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the
+user pushes.**
+
+⚠ **One branch, `develop-panel-restyle` (2026-09-19), eight commits ahead of `main`: the Develop
+panel restyle** — A surfaces, B slider rows, C section chrome, D2 icon rail. Gated green on its tip
+(**2579 tests**, goldens unmoved), **unmerged, unpushed, and not yet seen in use** — the GUI was
+launched for a look. Spec `2026-09-18-develop-panel-restyle-design.md`; the journal section
+`grep -n 'panel restyle' docs/JOURNAL.md` carries the findings, including the 77-failure named
+text style and the ~22 s first-launch stall every fresh test binary pays on this Mac.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
