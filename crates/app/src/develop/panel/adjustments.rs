@@ -4,6 +4,7 @@ use crate::develop::panel::color_wheel;
 use crate::develop::panel::hsl_bands;
 use crate::develop::panel::tone_curve;
 use crate::develop::panel::Edited;
+use crate::theme;
 use edit_model::HslBand;
 use eframe::egui;
 use rustroom_app::wb_tool::{self, WbPreset};
@@ -141,6 +142,9 @@ pub struct SourceInfo<'a> {
     /// ⚠ Read-only here: discovery happens once per photo in `session_flow`, never in this body,
     /// which runs sixty times a second.
     pub looks: &'a rustroom_app::looks::LooksState,
+    /// The rendered frame's histogram, for the ghost behind the tone curve. `None` in a
+    /// harness that has no render.
+    pub hist: Option<&'a [[u32; 256]; 3]>,
 }
 
 /// The white-balance controls: a temperature, a tint, and the named illuminants.
@@ -248,6 +252,7 @@ pub(crate) fn tone(
     buffer: &core_image::ImageBuf,
     baseline_ev: Option<f32>,
     looks: &rustroom_app::looks::LooksState,
+    hist: Option<&[[u32; 256]; 3]>,
     ed: &mut Edited,
 ) {
     // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
@@ -302,10 +307,10 @@ pub(crate) fn tone(
     ed.slider(ui, &mut edits.shadows, -100.0..=100.0, "Shadows");
     ed.slider(ui, &mut edits.whites, -100.0..=100.0, "Whites");
     ed.slider(ui, &mut edits.blacks, -100.0..=100.0, "Blacks");
-    // ⚠ A hairline, not a header. These are Lightroom's "Presence" block and they are
+    // ⚠ A sub-label, not a header. These are Lightroom's "Presence" block and they are
     // local-contrast tools rather than tonal ones — but they belong to the `Tone` edit
     // group, and a header here would put the panel and the Sync dialog out of step.
-    ui.separator();
+    theme::sub_label(ui, "Presence");
     ed.slider(
         ui,
         &mut edits.local_contrast.texture,
@@ -320,13 +325,12 @@ pub(crate) fn tone(
         "Clarity",
     );
     ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze");
-    // ⚠ Last in the section, and a hairline rather than a header — `tone_curve` belongs to
+    // ⚠ Last in the section, and a sub-label rather than a header — `tone_curve` belongs to
     // the `Tone` edit group, and a header here would put the panel and the Sync dialog out
     // of step, which is the ambiguity this section structure exists to remove. It comes
     // after the sliders because that is the order the decisions are made in: set the tone
-    // broadly, then refine its shape.
-    ui.separator();
-    tone_curve::show(ui, &mut edits.tone_curve, ed);
+    // broadly, then refine its shape. The curve draws its own sub-label row.
+    tone_curve::show(ui, &mut edits.tone_curve, ed, hist);
 }
 
 /// The colour-grading block's view state: the `Shad │ Mid │ High │ Global` selector and the
@@ -364,18 +368,19 @@ pub fn show(
         baseline_ev,
         buffer,
         looks,
+        hist,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
     // that opens with 30 sliders showing is the problem this section structure removes.
-    section(ui, SECTIONS[0], true, |ui| {
+    section(ui, SECTIONS[0], true, edits, ed, |ui, edits, ed| {
         white_balance(ui, &mut edits.white_balance, baseline, picking, ed);
     });
 
-    section(ui, SECTIONS[1], true, |ui| {
-        tone(ui, edits, buffer, baseline_ev, looks, ed);
+    section(ui, SECTIONS[1], true, edits, ed, |ui, edits, ed| {
+        tone(ui, edits, buffer, baseline_ev, looks, hist, ed);
     });
 
-    section(ui, SECTIONS[2], false, |ui| {
+    section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
         // ⚠ Vibrance first: Adobe's order, and the gentler control. Saturation clips
         // already-saturated colour far more readily, so it is the one offered second.
         ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance");
@@ -384,16 +389,15 @@ pub fn show(
         // ⚠ Shared with a mask's own HSL block — see `hsl_bands`. One layout learned once.
         hsl_bands::show(ui, &mut edits.hsl, hsl_channel, ed);
 
-        // ⚠ A hairline and a plain label, not a nested CollapsingHeader — the idiom already
-        // used for the Presence block inside Tone. Colour grading belongs to the `Color` edit
-        // group, and a header here would put the panel and the Sync dialog out of step.
-        ui.separator();
-        ui.label("Color Grading");
-        ui.horizontal(|ui| {
-            for r in color_wheel::GradeRange::ALL {
-                ui.selectable_value(grade_range, r, r.label());
-            }
-        });
+        // ⚠ A sub-label, not a nested CollapsingHeader — the idiom already used for the
+        // Presence block inside Tone. Colour grading belongs to the `Color` edit group, and a
+        // header here would put the panel and the Sync dialog out of step.
+        theme::sub_label(ui, "Color Grading");
+        theme::segmented(
+            ui,
+            grade_range,
+            &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
+        );
         let diameter = ui.available_width().min(188.0);
         {
             // Scoped so the borrow of `color_grading` ends before Blending and Balance,
@@ -434,18 +438,17 @@ pub fn show(
         }
     });
 
-    section(ui, SECTIONS[3], false, |ui| {
+    section(ui, SECTIONS[3], false, edits, ed, |ui, edits, ed| {
         // ⚠ Noise Reduction above Sharpening: you must denoise before you can judge
         // sharpening, and it is the pipeline's own order. A deliberate divergence from
         // Lightroom, which puts Sharpening first.
-        ui.label("Noise Reduction");
+        theme::sub_label(ui, "Noise Reduction");
         let nr = &mut edits.noise_reduction;
         ed.slider(ui, &mut nr.luminance, 0.0..=100.0, "Luminance");
         ed.slider(ui, &mut nr.detail, 0.0..=100.0, "Detail");
         ed.slider(ui, &mut nr.color, 0.0..=100.0, "Color");
         ed.slider(ui, &mut nr.smoothness, 0.0..=100.0, "Smoothness");
-        ui.separator();
-        ui.label("Sharpening");
+        theme::sub_label(ui, "Sharpening");
         let sh = &mut edits.sharpening;
         ed.slider(ui, &mut sh.amount, 0.0..=100.0, "Amount");
         // The one slider not on a 0..100 scale: a physical quantity in full-resolution
@@ -463,7 +466,7 @@ pub fn show(
     // ⚠ Placed after Detail, not first, despite running first in the pipeline: it is on by
     // default and visited only to turn something *off*, so depth costs nothing. Panel follows
     // workflow, pipeline follows maths — the rule `SECTIONS`' own doc comment states.
-    section(ui, SECTIONS[4], false, |ui| {
+    section(ui, SECTIONS[4], false, edits, ed, |ui, edits, ed| {
         ui.label(
             egui::RichText::new(lens_status(lens, lens_profile_found))
                 .small()
@@ -500,7 +503,7 @@ pub fn show(
         });
     });
 
-    section(ui, SECTIONS[5], false, |ui| {
+    section(ui, SECTIONS[5], false, edits, ed, |ui, edits, ed| {
         let v = &mut edits.vignette;
         ed.slider(ui, &mut v.amount, -100.0..=100.0, "Amount");
         ed.slider(ui, &mut v.midpoint, 0.0..=100.0, "Midpoint");
@@ -510,10 +513,129 @@ pub fn show(
 }
 
 /// One collapsible section, headed by its edit group's name.
-fn section(ui: &mut egui::Ui, s: Section, open_by_default: bool, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(s.name())
-        .default_open(open_by_default)
-        .show(ui, body);
+///
+/// ⚠ A hand-drawn header over `CollapsingState`, not a `CollapsingHeader`: that widget draws
+/// egui's triangle and indents its body, and has no slot for the two things this row carries —
+/// an accent dot while the group differs from neutral, and a `reset` for exactly that group.
+/// The body goes through `show_body_unindented`, so the left-hand gap under every section is
+/// gone with the indent that made it.
+///
+/// ⚠ The AccessKit label is `s.name()` as written, not the uppercased text the row paints:
+/// the harnesses click sections by name ("Color"), and the name is what a screen reader wants.
+///
+/// ⚠ `edits` and `ed` are passed *through* to the body rather than captured by it, because
+/// the header reads `edits` for the dot before the body runs and writes it for the reset after
+/// — a closure capturing `&mut edits` for its whole lifetime would be `E0499` against both.
+fn section(
+    ui: &mut egui::Ui,
+    s: Section,
+    open_by_default: bool,
+    edits: &mut edit_model::Edits,
+    ed: &mut Edited,
+    body: impl FnOnce(&mut egui::Ui, &mut edit_model::Edits, &mut Edited),
+) {
+    const HEIGHT: f32 = 22.0;
+    const CHEVRON_W: f32 = 14.0;
+    let id = ui.make_persistent_id(s.name());
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        open_by_default,
+    );
+    let modified = edits.group_differs(&edit_model::Edits::default(), s.index());
+
+    ui.add_space(6.0);
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), HEIGHT),
+        egui::Sense::click(),
+    );
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, s.name())
+    });
+
+    // ⚠ Registered after the row, so it wins the hit-test tie — egui takes the last widget
+    // registered at a point, the rule the Library's rubber band relies on.
+    let mut reset = false;
+    let mut right = rect.right() - CHEVRON_W;
+    let font = theme::section_font(ui.style());
+    if modified {
+        let weak = ui.visuals().weak_text_color();
+        let galley = ui
+            .painter()
+            .layout_no_wrap("reset".to_owned(), font.clone(), weak);
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(right - galley.size().x - 8.0, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        );
+        let r = ui
+            .interact(cell, id.with("reset"), egui::Sense::click())
+            .on_hover_text(format!("Reset {} and nothing else", s.name()));
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "reset"));
+        reset = r.clicked();
+        let colour = if r.hovered() {
+            ui.visuals().strong_text_color()
+        } else {
+            weak
+        };
+        ui.painter().galley(
+            egui::pos2(cell.left() + 4.0, cell.center().y - galley.size().y / 2.0),
+            galley,
+            colour,
+        );
+        right = cell.left() - 6.0;
+    }
+    if resp.clicked() && !reset {
+        state.toggle(ui);
+    }
+
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals().clone();
+        let painter = ui.painter_at(rect);
+        let text_rect = painter.text(
+            egui::pos2(rect.left(), rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            s.name().to_uppercase(),
+            font,
+            v.strong_text_color(),
+        );
+        if modified {
+            painter.circle_filled(
+                egui::pos2(text_rect.right() + 8.0, rect.center().y),
+                2.5,
+                v.selection.bg_fill,
+            );
+        }
+        // The chevron: '›' closed, rotated to '⌄' as the section opens.
+        let openness = state.openness(ui.ctx());
+        let rot = egui::emath::Rot2::from_angle(std::f32::consts::FRAC_PI_2 * openness);
+        let c = egui::pos2(right + CHEVRON_W / 2.0, rect.center().y);
+        let pts = [
+            egui::vec2(-2.0, -3.5),
+            egui::vec2(1.5, 0.0),
+            egui::vec2(-2.0, 3.5),
+        ]
+        .map(|p| c + rot * p)
+        .to_vec();
+        painter.add(egui::Shape::line(
+            pts,
+            egui::Stroke::new(1.4, v.weak_text_color()),
+        ));
+        painter.line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
+        );
+    }
+
+    state.show_body_unindented(ui, |ui| body(ui, edits, ed));
+
+    if reset {
+        edits.merge_from(
+            &edit_model::Edits::default(),
+            edit_model::EditGroups::only(s.index()),
+        );
+        ed.discrete();
+    }
 }
 
 #[cfg(test)]
@@ -578,7 +700,15 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Auto", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
+            tone(
+                ui,
+                &mut edits,
+                &buf,
+                None,
+                &Default::default(),
+                None,
+                &mut ed,
+            );
         });
         assert!(ed.changed, "the click must request a render");
         assert!(ed.settled, "the click must push exactly one history entry");
@@ -604,7 +734,15 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
+            tone(
+                ui,
+                &mut edits,
+                &buf,
+                None,
+                &Default::default(),
+                None,
+                &mut ed,
+            );
         });
         assert_eq!(
             edits.rendering,
@@ -615,7 +753,15 @@ mod tests {
 
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
+            tone(
+                ui,
+                &mut edits,
+                &buf,
+                None,
+                &Default::default(),
+                None,
+                &mut ed,
+            );
         });
         assert_eq!(
             edits.rendering,
@@ -638,7 +784,15 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Camera rendering", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
+            tone(
+                ui,
+                &mut edits,
+                &buf,
+                None,
+                &Default::default(),
+                None,
+                &mut ed,
+            );
         });
         assert_eq!(edits.rendering, Some(edit_model::Rendering::None));
         assert_ne!(
@@ -691,6 +845,7 @@ mod tests {
                     baseline_ev: None,
                     buffer: &buf,
                     looks: &looks,
+                    hist: None,
                 },
                 None,
                 &mut ed,
@@ -763,12 +918,92 @@ mod tests {
                         baseline_ev: None,
                         buffer: buf,
                         looks,
+                        hist: None,
                     },
                     None,
                     ed,
                 );
             });
         }
+
+        /// Lay the panel out once; `f` sees every AccessKit label drawn.
+        fn draw(&mut self, ctx: &egui::Context, f: impl FnOnce(&[(String, egui::Pos2)])) {
+            let Self {
+                edits,
+                channel,
+                grade,
+                show_range,
+                view,
+                ed,
+                buf,
+                looks,
+            } = self;
+            let labels = crate::test_ui::labelled_centres(ctx, Vec::new(), |ui| {
+                *ed = Edited::default();
+                show(
+                    ui,
+                    edits,
+                    channel,
+                    GradeUi {
+                        range: grade,
+                        show_range,
+                        view,
+                    },
+                    SourceInfo {
+                        lens: None,
+                        lens_profile_found: false,
+                        wb_baseline: color::wb::Illuminant::default(),
+                        baseline_ev: None,
+                        buffer: buf,
+                        looks,
+                        hist: None,
+                    },
+                    None,
+                    ed,
+                );
+            });
+            f(&labels);
+        }
+    }
+
+    #[test]
+    fn a_modified_section_shows_its_reset_and_a_neutral_one_does_not() {
+        // ⚠ Both halves: a reset that always shows and one that never shows are equally wrong,
+        // and only the pair distinguishes them. Found by the `reset` label through AccessKit.
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(false);
+        let resets = |p: &mut RangePanel, ctx: &egui::Context| {
+            let mut n = 0;
+            p.draw(ctx, |labels| {
+                n = labels.iter().filter(|(l, _)| l == "reset").count()
+            });
+            n
+        };
+        assert_eq!(resets(&mut p, &ctx), 0, "a neutral panel offered a reset");
+        p.edits.contrast = 30.0;
+        assert_eq!(
+            resets(&mut p, &ctx),
+            1,
+            "exactly the Tone section should offer a reset"
+        );
+    }
+
+    #[test]
+    fn resetting_a_section_leaves_the_other_sections_alone() {
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(false);
+        p.edits.contrast = 30.0;
+        p.edits.vibrance = 20.0;
+        // ⚠ Both Tone and Color are modified, so two `reset`s are drawn and the harness clicks
+        // whichever it finds first. The property is scoping, not which: exactly one of the two
+        // groups goes back to neutral and the other is untouched.
+        p.click(&ctx, "reset");
+        let (c, v) = (p.edits.contrast, p.edits.vibrance);
+        assert!(
+            (c == 0.0 && v == 20.0) || (c == 30.0 && v == 0.0),
+            "a reset must clear exactly its own section: contrast {c}, vibrance {v}"
+        );
+        assert!(p.ed.settled, "one click, one history entry");
     }
 
     /// A context whose collapsing headers open on the click, not over an animation.
@@ -823,8 +1058,12 @@ mod tests {
     fn the_selector_drives_the_view_and_global_carries_none() {
         let ctx = instant_ctx();
         let mut p = RangePanel::new(true);
+        // ⚠ Tone is collapsed first: its Highlights slider carries the same label as the
+        // grading chip below it, and the harness clicks the first match it finds. A
+        // sighted user tells the two apart by where they sit; the label query cannot.
+        p.click(&ctx, "Tone");
         p.click(&ctx, "Color");
-        p.click(&ctx, "Mid");
+        p.click(&ctx, "Midtones");
         assert_eq!(
             p.view,
             Some(rustroom_app::grade_view::GradeRangeView::Midtones),
@@ -834,7 +1073,7 @@ mod tests {
         p.click(&ctx, "Global");
         assert_eq!(p.view, None, "Global must carry no view");
         assert!(p.ed.changed, "leaving a range asked for no render");
-        p.click(&ctx, "High");
+        p.click(&ctx, "Highlights");
         assert!(p.show_range, "Global unticked the box");
         assert_eq!(
             p.view,
@@ -865,7 +1104,15 @@ mod tests {
             let mut ed = Edited::default();
             crate::test_ui::click(&ctx, "Auto", |ui| {
                 ed = Edited::default();
-                tone(ui, &mut edits, &buf, baseline, &Default::default(), &mut ed);
+                tone(
+                    ui,
+                    &mut edits,
+                    &buf,
+                    baseline,
+                    &Default::default(),
+                    None,
+                    &mut ed,
+                );
             });
             assert!(ed.changed, "the click did not take");
             exposures.push(edits.exposure);
@@ -891,7 +1138,15 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    tone(ui, &mut edits, &buf, None, &Default::default(), &mut ed);
+                    tone(
+                        ui,
+                        &mut edits,
+                        &buf,
+                        None,
+                        &Default::default(),
+                        None,
+                        &mut ed,
+                    );
                     assert!(!ed.changed, "drawing the panel reported an edit");
                     assert!(!ed.settled, "drawing the panel pushed a history entry");
                 },
@@ -986,37 +1241,15 @@ mod tests {
     /// single-pass harness reads zeros and passes vacuously. That exact harness bug made
     /// `a_left_drag_does_not_pan` inert once already.
     fn click_segment(want: HslChannel) -> HslChannel {
-        let ctx = egui::Context::default();
+        // ⚠ Drives the shipped selector through `hsl_bands::show`, not a re-declared loop —
+        // a harness that rebuilds the widget tests egui, not the panel.
+        let ctx = crate::test_ui::ctx();
         let mut channel = HslChannel::Hue;
-        let mut target = egui::Pos2::ZERO;
-        for pass in 0..3 {
-            let mut input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(400.0, 400.0),
-                )),
-                ..Default::default()
-            };
-            input.events.push(egui::Event::PointerMoved(target));
-            if pass == 1 || pass == 2 {
-                input.events.push(egui::Event::PointerButton {
-                    pos: target,
-                    button: egui::PointerButton::Primary,
-                    pressed: pass == 1,
-                    modifiers: Default::default(),
-                });
-            }
-            let _ = ctx.run_ui(input, |ui| {
-                ui.horizontal(|ui| {
-                    for c in HslChannel::ALL {
-                        let r = ui.selectable_value(&mut channel, c, c.label());
-                        if c == want && pass == 0 {
-                            target = r.rect.center();
-                        }
-                    }
-                });
-            });
-        }
+        let mut hsl = edit_model::Hsl::default();
+        let mut ed = Edited::default();
+        crate::test_ui::click(&ctx, want.label(), |ui| {
+            hsl_bands::show(ui, &mut hsl, &mut channel, &mut ed);
+        });
         channel
     }
 
@@ -1115,7 +1348,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             ed = Edited::default();
-            tone(ui, edits, &buf, None, looks, &mut ed);
+            tone(ui, edits, &buf, None, looks, None, &mut ed);
         })
         .into_iter()
         .map(|(l, _)| l)

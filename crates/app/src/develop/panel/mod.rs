@@ -188,6 +188,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     // where a closure capturing `s` twice would be `E0499`.
                                     buffer: &s.buffer,
                                     looks: &app.looks,
+                                    hist: Some(&s.hist),
                                 },
                                 Some(&mut s.picking_wb),
                                 &mut ed,
@@ -332,6 +333,37 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     photo_edited
 }
 
+/// The histogram well's height.
+const HIST_HEIGHT: f32 = 72.0;
+
+/// The histogram's channel colours. ⚠ Hand-painted constants outside the accent system, as
+/// everything painted by hand is (visual identity spec, caveat 7).
+const CHANNEL_COLOURS: [egui::Color32; 3] = [
+    egui::Color32::from_rgb(220, 80, 80),
+    egui::Color32::from_rgb(80, 200, 80),
+    egui::Color32::from_rgb(90, 120, 230),
+];
+
+/// A filled area under a 256-bin curve, as one mesh of 255 quads. Shared with the tone
+/// curve's ghost, so the two draw the same shape from the same bins.
+pub(crate) fn area_mesh(rect: egui::Rect, bins: &[f32; 256], colour: egui::Color32) -> egui::Mesh {
+    let mut mesh = egui::Mesh::default();
+    let x = |i: usize| rect.left() + rect.width() * (i as f32 / 255.0);
+    let y = |v: f32| rect.bottom() - rect.height() * v.clamp(0.0, 1.0);
+    for i in 0..255 {
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(egui::pos2(x(i), rect.bottom()), colour);
+        mesh.colored_vertex(egui::pos2(x(i), y(bins[i])), colour);
+        mesh.colored_vertex(egui::pos2(x(i + 1), rect.bottom()), colour);
+        mesh.colored_vertex(egui::pos2(x(i + 1), y(bins[i + 1])), colour);
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base + 1, base + 3, base + 2);
+    }
+    mesh
+}
+
+/// The histogram: three filled channels in a well, with a clipping mark at either top corner
+/// when an edge bin holds more than `histogram::CLIP_FRACTION` of the frame.
 fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
     let max = hist
         .iter()
@@ -340,26 +372,42 @@ fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
         .max()
         .unwrap_or(1)
         .max(1) as f32;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), HIST_HEIGHT),
+        egui::Sense::hover(),
+    );
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let v = ui.visuals().clone();
     let painter = ui.painter_at(rect);
-    let colors = [
-        egui::Color32::from_rgb(220, 80, 80),
-        egui::Color32::from_rgb(80, 200, 80),
-        egui::Color32::from_rgb(90, 120, 230),
-    ];
+    painter.rect_filled(rect, 4.0, v.extreme_bg_color);
+    let plot = rect.shrink2(egui::vec2(0.0, 4.0));
     for (ci, chan) in hist.iter().enumerate() {
-        for (i, &count) in chan.iter().enumerate() {
-            let x = rect.left() + rect.width() * (i as f32 / 255.0);
-            let h = rect.height() * (count as f32 / max);
-            painter.line_segment(
-                [
-                    egui::pos2(x, rect.bottom()),
-                    egui::pos2(x, rect.bottom() - h),
-                ],
-                egui::Stroke::new(1.0, colors[ci].linear_multiply(0.5)),
-            );
-        }
+        let bins: [f32; 256] = std::array::from_fn(|i| chan[i] as f32 / max);
+        painter.add(egui::Shape::mesh(area_mesh(
+            plot,
+            &bins,
+            CHANNEL_COLOURS[ci].linear_multiply(0.55),
+        )));
+    }
+    let (left, right) = rustroom_app::histogram::clipped_edges(hist);
+    let mark = |corner: egui::Pos2, dir: f32| {
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                corner,
+                corner + egui::vec2(6.0 * dir, 0.0),
+                corner + egui::vec2(0.0, 6.0),
+            ],
+            v.strong_text_color(),
+            egui::Stroke::NONE,
+        ));
+    };
+    if left {
+        mark(rect.left_top() + egui::vec2(1.0, 1.0), 1.0);
+    }
+    if right {
+        mark(rect.right_top() + egui::vec2(-1.0, 1.0), -1.0);
     }
 }
 

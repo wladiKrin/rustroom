@@ -37,9 +37,14 @@ const GRID: usize = 4;
 /// point on the curve, and the alternative is hardcoding a screen coordinate — brittle in the
 /// worst way, because a layout change then moves the target while the test keeps passing and
 /// grabbing nothing. `test_ui`'s module doc records that fault happening twice.
-pub fn show(ui: &mut egui::Ui, curve: &mut ToneCurve, ed: &mut Edited) -> egui::Rect {
+pub fn show(
+    ui: &mut egui::Ui,
+    curve: &mut ToneCurve,
+    ed: &mut Edited,
+    hist: Option<&[[u32; 256]; 3]>,
+) -> egui::Rect {
     ui.horizontal(|ui| {
-        ui.label("Tone Curve");
+        theme::sub_label(ui, "Tone Curve");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // ⚠ Disabled rather than hidden on a neutral curve: a control that appears and
             // disappears is harder to learn than one that greys out.
@@ -169,7 +174,26 @@ pub fn show(ui: &mut egui::Ui, curve: &mut ToneCurve, ed: &mut Edited) -> egui::
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, v.extreme_bg_color);
+        painter.rect_filled(rect, 4.0, v.extreme_bg_color);
+        // The ghost: the tonal distribution under the curve you are shaping, the convention
+        // of every curve editor. The per-bin maximum over the channels, so a saturated
+        // colour is not hidden by its dark siblings.
+        if let Some(h) = hist {
+            let max = h
+                .iter()
+                .flat_map(|c| c.iter())
+                .copied()
+                .max()
+                .unwrap_or(1)
+                .max(1) as f32;
+            let bins: [f32; 256] =
+                std::array::from_fn(|i| h.iter().map(|c| c[i]).max().unwrap_or(0) as f32 / max);
+            painter.add(egui::Shape::mesh(super::area_mesh(
+                rect,
+                &bins,
+                v.weak_text_color().linear_multiply(0.15),
+            )));
+        }
 
         let faint = v.weak_text_color().gamma_multiply(0.4);
         for i in 1..GRID {
@@ -208,13 +232,6 @@ pub fn show(ui: &mut egui::Ui, curve: &mut ToneCurve, ed: &mut Edited) -> egui::
                 },
             );
         }
-
-        painter.rect_stroke(
-            rect,
-            egui::CornerRadius::ZERO,
-            egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
-            egui::StrokeKind::Inside,
-        );
     }
 
     // ⚠ One line either way, so the panel below it does not jump as the pointer crosses a
@@ -303,7 +320,7 @@ mod tests {
             // a test asks is "did *any* frame of this gesture report it", which is what a
             // production caller reads too.
             let _ = ctx.run_ui(input, |ui| {
-                rect = show(ui, &mut curve, &mut ed);
+                rect = show(ui, &mut curve, &mut ed, None);
             });
         }
         (curve, ed)
@@ -462,7 +479,7 @@ mod tests {
         };
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
-            show(ui, &mut curve, &mut ed);
+            show(ui, &mut curve, &mut ed, None);
         });
         assert!(curve.points.is_empty(), "{:?}", curve.points);
         assert!(ed.settled);
@@ -471,7 +488,7 @@ mod tests {
         // not tell a working Reset from one that clears on every frame.
         let mut ed2 = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
-            show(ui, &mut curve, &mut ed2);
+            show(ui, &mut curve, &mut ed2, None);
         });
         assert!(!ed2.changed && !ed2.settled, "a neutral curve was 'reset'");
     }

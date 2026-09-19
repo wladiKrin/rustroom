@@ -198,6 +198,11 @@ fn tune(style: &mut egui::Style) {
         ws.corner_radius = egui::CornerRadius::same(4);
     }
 
+    // The section header and sub-label face: smaller than body, uppercased by its callers.
+    style
+        .text_styles
+        .insert(section_style(), egui::FontId::proportional(SECTION_PT));
+
     // ⚠ Both of these are **off by default in egui**, and their absence is why the shipped
     // sliders looked nothing like the mockups they were chosen from — a grey rectangle on a
     // grey rail rather than a coloured track with a dot.
@@ -269,6 +274,112 @@ pub fn committed(ui: &egui::Ui, resp: &egui::Response) -> bool {
 /// look alike is how a design system loses the distinctions it exists to hold.
 pub fn caption(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small());
+}
+
+/// The named text style section headers and sub-labels use.
+///
+/// ⚠ A named style rather than `Small`: `Small` is the hint face at 9 pt, and a header at hint
+/// size is not a header.
+pub fn section_style() -> egui::TextStyle {
+    egui::TextStyle::Name("section".into())
+}
+
+/// The section face's size in points.
+const SECTION_PT: f32 = 11.0;
+
+/// The section face, resolved against `style` — or the same face by value when the style
+/// was never tuned.
+///
+/// ⚠⚠ **The fallback is load-bearing, and 77 tests said so.** `TextStyle::resolve` panics on
+/// a name the style does not carry, and every headless harness builds a bare
+/// `egui::Context` that never runs [`apply`]. Resolving through this means a widget drawn in
+/// a harness gets the same 11 pt face production gets, rather than a panic that reads as
+/// seventy-seven unrelated failures.
+pub fn section_font(style: &egui::Style) -> egui::FontId {
+    style
+        .text_styles
+        .get(&section_style())
+        .cloned()
+        .unwrap_or_else(|| egui::FontId::proportional(SECTION_PT))
+}
+
+/// A sub-label: the name of a block of controls inside a section — Presence, Noise Reduction,
+/// Color Grading. Uppercased, in the section face, in the weak text colour, with a little air
+/// above and no hairline: the hairline was the old idiom and the name replaces it.
+///
+/// ⚠ Not for a value ("No presets yet.") and not for a control's own text; those stay
+/// `label`s. Plain labels produce no AccessKit node, so nothing in the tests reaches these.
+pub fn sub_label(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(4.0);
+    let colour = ui.visuals().weak_text_color();
+    let font = section_font(ui.style());
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text.to_uppercase())
+                .font(font)
+                .color(colour),
+        )
+        .selectable(false),
+    );
+}
+
+/// A segmented control: one full-width well, `items.len()` equal columns, exactly one lit.
+///
+/// ⚠ For a **view switch** over a fixed small set — the HSL channel, the grading range — not
+/// for a list of options with its own reasons to be `selectable_label`s (aspect presets, looks,
+/// composition guides). Each column carries `WidgetInfo::selected` with its label, so
+/// `test_ui::click(ctx, "Saturation", ..)` reaches it exactly as it reached the chips.
+pub fn segmented<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[(T, &str)],
+) -> egui::Response {
+    const HEIGHT: f32 = 18.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), HEIGHT),
+        egui::Sense::hover(),
+    );
+    let v = ui.visuals().clone();
+    let font = section_font(ui.style());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, v.extreme_bg_color);
+    let inner = rect.shrink(2.0);
+    let w = inner.width() / items.len().max(1) as f32;
+    let mut all = resp.clone();
+    for (i, (item, label)) in items.iter().enumerate() {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(inner.left() + w * i as f32, inner.top()),
+            egui::vec2(w, inner.height()),
+        );
+        let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
+        let enabled = ui.is_enabled();
+        let selected = *current == *item;
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, selected, *label)
+        });
+        if r.clicked() {
+            *current = *item;
+        }
+        let lit = *current == *item;
+        if lit {
+            painter.rect_filled(cell, 3.0, v.widgets.inactive.bg_fill);
+        } else if r.hovered() {
+            painter.rect_filled(cell, 3.0, v.widgets.hovered.weak_bg_fill);
+        }
+        painter.text(
+            cell.center(),
+            egui::Align2::CENTER_CENTER,
+            *label,
+            font.clone(),
+            if lit {
+                v.strong_text_color()
+            } else {
+                v.text_color()
+            },
+        );
+        all = all.union(r);
+    }
+    all
 }
 
 /// How wide a dialog wants to be.
@@ -502,6 +613,51 @@ mod tests {
         let s = tuned();
         let m = panel_frame(&s).inner_margin;
         assert!(m.left >= 8 && m.right >= 8, "margin {m:?}");
+    }
+
+    #[test]
+    fn the_section_style_is_installed_in_both_themes() {
+        let ctx = egui::Context::default();
+        apply(&ctx, &Settings::default());
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let s = ctx.style_of(theme);
+            let section = s.text_styles.get(&section_style()).map(|f| f.size);
+            let body = s.text_styles[&egui::TextStyle::Body].size;
+            assert!(
+                section.is_some_and(|x| x < body),
+                "{theme:?}: section {section:?} vs body {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_segment_is_reachable_by_its_label_and_a_click_selects_only_it() {
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum C {
+            A,
+            B,
+            D,
+        }
+        let items = [(C::A, "Hue"), (C::B, "Saturation"), (C::D, "Luminance")];
+        let ctx = crate::test_ui::ctx();
+        let mut cur = C::A;
+        let found = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            segmented(ui, &mut cur, &items);
+        });
+        for (_, l) in items {
+            assert!(
+                found.iter().any(|(f, _)| f == l),
+                "{l} not reachable: {found:?}"
+            );
+        }
+        crate::test_ui::click(&ctx, "Luminance", |ui| {
+            segmented(ui, &mut cur, &items);
+        });
+        assert_eq!(cur, C::D);
+        crate::test_ui::click(&ctx, "Saturation", |ui| {
+            segmented(ui, &mut cur, &items);
+        });
+        assert_eq!(cur, C::B);
     }
 
     #[test]

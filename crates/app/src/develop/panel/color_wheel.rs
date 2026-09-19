@@ -42,9 +42,9 @@ impl GradeRange {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Shadows => "Shad",
-            Self::Midtones => "Mid",
-            Self::Highlights => "High",
+            Self::Shadows => "Shadows",
+            Self::Midtones => "Midtones",
+            Self::Highlights => "Highlights",
             Self::Global => "Global",
         }
     }

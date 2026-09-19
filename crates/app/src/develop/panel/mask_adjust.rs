@@ -5,6 +5,7 @@
 //! The rest of that file is shape properties and brush settings, which is a different job.
 
 use crate::develop::panel::{adjustments, color_wheel, hsl_bands, tone_curve, Edited};
+use crate::theme;
 use edit_model::LocalAdjustments;
 use eframe::egui;
 
@@ -61,7 +62,7 @@ pub fn show(
         .show(ui, |ui| {
             // The same widget the global panel draws, unchanged — `hsl_bands`' rule, and
             // `adjustments.rs`' own "One layout learned once".
-            curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed);
+            curve_rect = tone_curve::show(ui, &mut a.tone_curve, ed, None);
         });
 
     // ⚠ The same order as the global panel: White Balance, then Tone, then
@@ -97,11 +98,11 @@ pub fn show(
         .id_salt("mask_color_grading")
         .default_open(false)
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for r in color_wheel::GradeRange::ALL {
-                    ui.selectable_value(grade, r, r.label());
-                }
-            });
+            theme::segmented(
+                ui,
+                grade,
+                &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
+            );
             let diameter = ui.available_width().min(188.0);
             {
                 // Scoped so the borrow of `color_grading` ends before Blending and Balance,
@@ -131,7 +132,7 @@ pub fn show(
     // the same adjacency the global Detail section already ships — the sub-labels are what tell
     // them apart. Parity with the global panel wins over uniqueness here; the alternative would
     // be naming the same control differently in two places.
-    ui.label("Noise Reduction");
+    theme::sub_label(ui, "Noise Reduction");
     ed.slider(
         ui,
         &mut a.noise_reduction.luminance,
@@ -147,8 +148,7 @@ pub fn show(
         "Smoothness",
     );
 
-    ui.separator();
-    ui.label("Sharpening");
+    theme::sub_label(ui, "Sharpening");
     // ⚠⚠ Full parity with the global control, `Masking` included — which here is a second gate
     // inside a gate, since the mask has already answered *where*. Kept deliberately (2026-09-04)
     // rather than trimmed: parity costs nothing, and an edge gate is defensible for a loose mask

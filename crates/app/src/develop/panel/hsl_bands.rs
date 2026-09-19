@@ -8,6 +8,7 @@
 
 use crate::develop::panel::adjustments::HslChannel;
 use crate::develop::panel::Edited;
+use crate::theme;
 use eframe::egui;
 
 /// Draw the channel selector and the eight band sliders for `hsl`.
@@ -23,11 +24,7 @@ pub fn show(
 ) {
     // ⚠ A selector, not three nested CollapsingHeaders. Nesting cost a third level *and*
     // put a "Saturation" header under a "Saturation" slider meaning something else.
-    ui.horizontal(|ui| {
-        for c in HslChannel::ALL {
-            ui.selectable_value(channel, c, c.label());
-        }
-    });
+    theme::segmented(ui, channel, &HslChannel::ALL.map(|c| (c, c.label())));
     for (i, name) in edit_model::HSL_BAND_NAMES.iter().enumerate() {
         ed.slider(
             ui,

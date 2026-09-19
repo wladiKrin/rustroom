@@ -5,6 +5,7 @@
 //! selection cannot disagree.
 
 use crate::develop::panel::Edited;
+use crate::theme;
 use crate::Session;
 use eframe::egui;
 use rustroom_app::composition_guides::CompositionGuide;
@@ -99,7 +100,7 @@ pub fn show(
     // It is one field, relevant to two different decisions, edited from whichever view can see
     // its effect.
     if lens_profile_found && s.edits.applied_lens_correction().distortion {
-        ui.label("Lens");
+        theme::sub_label(ui, "Lens");
         // ⚠ "Lens scale" here, plain "Scale" in the Edit panel's Lens section — the same field,
         // labelled to disambiguate only in the one view where a *second* Scale slider (the
         // perspective one below) is on screen at the same time. Two adjacent sliders both called
@@ -112,7 +113,7 @@ pub fn show(
         ui.separator();
     }
 
-    ui.label("Geometry");
+    theme::sub_label(ui, "Geometry");
     // Quarter turns and mirroring. ⚠ Each button moves the crop by the
     // *same* transform, or the crop lands on different content — see
     // `CropRect::rotated_cw`. Keep the two in step.
@@ -269,7 +270,7 @@ pub fn show(
     // already scrolls, and a permanent line of prose for a chord the View menu and the generated
     // Keyboard-shortcuts dialog both list is not worth a row of it — the perspective sliders
     // below carry their explanations the same way.
-    ui.label("Composition");
+    theme::sub_label(ui, "Composition");
     ui.horizontal_wrapped(|ui| {
         for g in CompositionGuide::ALL {
             if ui
@@ -338,7 +339,7 @@ pub fn show(
     // ⚠ "Scale" therefore appears twice when a lens profile is present — once under Lens, once
     // here. They are different corrections with different autoscales, disambiguated by their
     // headings, and Lightroom likewise has one in Lens Corrections and one in Transform.
-    ui.label("Perspective");
+    theme::sub_label(ui, "Perspective");
     // ⚠⚠ Captured before the sliders so an *manual* edit to one of the three values a guide solve
     // owns can be told from the solve's own write. The panel is drawn **before** the canvas, so
     // this frame's solve has not happened yet and cannot be mistaken for a hand edit.
@@ -392,7 +393,7 @@ pub fn show(
     }
 
     ui.separator();
-    ui.label("Guides");
+    theme::sub_label(ui, "Guides");
     ui.horizontal(|ui| {
         // ⚠ The toggle deliberately does **not** disable the sliders above. They are the *output*
         // of a solve, and watching them move is what explains where the numbers came from.
