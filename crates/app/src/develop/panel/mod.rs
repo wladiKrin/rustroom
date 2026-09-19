@@ -10,6 +10,7 @@ pub mod mask_components;
 pub mod masks;
 pub mod presets;
 pub mod retouch;
+pub mod slider;
 pub mod snapshots;
 pub mod tone_curve;
 
@@ -51,7 +52,7 @@ impl Edited {
         range: std::ops::RangeInclusive<f32>,
         label: &str,
     ) -> egui::Response {
-        let r = ui.add(egui::Slider::new(value, range).text(label));
+        let r = ui.add(slider::Slider::new(value, range).text(label));
         self.changed |= r.changed();
         self.settled |= r.drag_stopped();
         // ⚠ Returned so a caller can attach hover text. Every existing call site ignores it,

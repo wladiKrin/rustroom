@@ -176,8 +176,9 @@ pub(crate) fn white_balance(
     // reads warm-on-the-left the way every other temperature control does.
     let mut mired = 1.0e6 / wb_tool::effective_kelvin(wb, baseline);
     let r = ui.add(
-        egui::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
-            .custom_formatter(|m, _| format!("{:.0} K", 1.0e6 / m))
+        super::slider::Slider::new(&mut mired, MIRED_MIN..=MIRED_MAX)
+            .text("Temp")
+            .custom_formatter(|m| format!("{:.0} K", 1.0e6 / m))
             .custom_parser(|s| {
                 s.trim()
                     .trim_end_matches(['K', 'k', ' '])
@@ -185,8 +186,7 @@ pub(crate) fn white_balance(
                     .ok()
                     .filter(|k| *k > 0.0)
                     .map(|k| 1.0e6 / k)
-            })
-            .text("Temp"),
+            }),
     );
     if r.changed() {
         wb.kelvin = Some(1.0e6 / mired);

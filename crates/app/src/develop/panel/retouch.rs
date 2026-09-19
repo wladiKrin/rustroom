@@ -65,13 +65,13 @@ pub(crate) fn show(
             // ⚠⚠ **Logarithmic**, because the range spans 50x and the useful zone sits at the
             // bottom of it. On a linear slider 0.1–0.5% — where this tool is actually used —
             // occupied the first 8% of the travel, which is the "cramped" half of the same report.
-            egui::Slider::new(
+            super::slider::Slider::new(
                 &mut px,
                 spot_tool::radius_px(MIN_RADIUS, long)..=spot_tool::radius_px(MAX_RADIUS, long),
             )
             .logarithmic(true)
             .text("Size")
-            .custom_formatter(|v, _| format!("{v:.0} px")),
+            .custom_formatter(|v| format!("{v:.0} px")),
         )
         .on_hover_text(
             "The patch's radius in pixels of the full-resolution image. Dragging out on the \
@@ -95,7 +95,7 @@ pub(crate) fn show(
         .as_mut()
         .map_or(&mut tool.feather, |sp| &mut sp.feather);
     let r = ui
-        .add(egui::Slider::new(feather, 0.0..=100.0).text("Feather"))
+        .add(super::slider::Slider::new(feather, 0.0..=100.0).text("Feather"))
         .on_hover_text("0 is a hard edge; 100 ramps from the centre to the rim.");
     touched |= r.changed();
     settled |= r.drag_stopped();
@@ -212,7 +212,7 @@ pub(crate) fn show(
         // a control that does nothing, and the absence *is* the off state.
         let r = ui
             .add(
-                egui::Slider::new(
+                super::slider::Slider::new(
                     t,
                     rustroom_app::visualize::MIN_THRESHOLD..=rustroom_app::visualize::MAX_THRESHOLD,
                 )
