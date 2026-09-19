@@ -126,6 +126,9 @@ pub fn show(
     super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, mask_grade, ed);
 }
 
+/// The mode control's height, matching the kind buttons under it.
+const MODE_HEIGHT: f32 = 28.0;
+
 /// The mode control and the row of kind buttons.
 ///
 /// ⚠ The mode is **visible state** — a segmented control, never a hidden flag — and it is
@@ -167,8 +170,11 @@ fn add_controls(
             "Keeps only where the selected mask and the next shape both reach.",
         ),
     ];
+    // ⚠ Taller and in the body face: this is the panel's primary control, and the compact
+    // selector the HSL bands use read too small here (user's call, 2026-09-19).
+    let font = egui::TextStyle::Body.resolve(ui.style());
     ui.add_enabled_ui(can_refine, |ui| {
-        theme::segmented_with_hover(ui, mode, &items)
+        theme::segmented_sized(ui, mode, &items, MODE_HEIGHT, font)
     })
     .response
     .on_disabled_hover_text("Select a mask to refine it");

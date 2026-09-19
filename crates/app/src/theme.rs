@@ -383,13 +383,28 @@ pub fn segmented_with_hover<T: PartialEq + Copy>(
     current: &mut T,
     items: &[(T, &str, &str)],
 ) -> egui::Response {
-    const HEIGHT: f32 = 18.0;
+    let font = section_font(ui.style());
+    segmented_sized(ui, current, items, SEGMENTED_HEIGHT, font)
+}
+
+/// The compact segmented control's height: the HSL and grading selectors.
+pub const SEGMENTED_HEIGHT: f32 = 18.0;
+
+/// A segmented control at a given height and font. The Masks panel's mode control is drawn
+/// taller and in the body face (user's call, 2026-09-19: the compact one read too small for
+/// the panel's primary control).
+pub fn segmented_sized<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[(T, &str, &str)],
+    height: f32,
+    font: egui::FontId,
+) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), HEIGHT),
+        egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
     );
     let v = ui.visuals().clone();
-    let font = section_font(ui.style());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, v.extreme_bg_color);
     let inner = rect.shrink(2.0);
