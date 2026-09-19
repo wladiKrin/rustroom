@@ -310,17 +310,29 @@ pub fn section_font(style: &egui::Style) -> egui::FontId {
 /// ⚠ Not for a value ("No presets yet.") and not for a control's own text; those stay
 /// `label`s. Plain labels produce no AccessKit node, so nothing in the tests reaches these.
 pub fn sub_label(ui: &mut egui::Ui, text: &str) {
+    sub_label_with(ui, text, |_| {});
+}
+
+/// A sub-label with `trailing` content right-aligned on the same row — a view toggle that
+/// belongs to the block, such as Color Grading's "Show range".
+///
+/// ⚠ The trailing closure runs in a right-to-left layout, so its first widget lands at the
+/// right edge.
+pub fn sub_label_with(ui: &mut egui::Ui, text: &str, trailing: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(4.0);
     let colour = ui.visuals().weak_text_color();
     let font = section_font(ui.style());
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(text.to_uppercase())
-                .font(font)
-                .color(colour),
-        )
-        .selectable(false),
-    );
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(text.to_uppercase())
+                    .font(font)
+                    .color(colour),
+            )
+            .selectable(false),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), trailing);
+    });
 }
 
 /// A segmented control: one full-width well, `items.len()` equal columns, exactly one lit.

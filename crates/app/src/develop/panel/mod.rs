@@ -147,8 +147,59 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 //
                 // ⚠ A plain heading, not a `CollapsingHeader`. Now that the tool's controls
                 // are the *only* thing in the panel, collapsing them would leave it empty.
+                // ⚠ Hoisted above the reset row and the Profile block, which record clicks
+                // into it before the session borrow below reads it.
+                let mut ed = Edited::default();
                 if let Some(title) = tool.panel_heading() {
                     ui.heading(title);
+                }
+                // ⚠ At the top of the stack, not under forty sliders (2026-09-19): every section
+                // carries its own reset now, and the one for all of them must be reachable
+                // without scrolling. Its own right-aligned row, because `Edit` has no heading
+                // to share — `panel_heading` says why.
+                //
+                // ⚠ **Scoped to the sections, not to everything.** Under an exclusive panel each
+                // tool owns its own domain, so this must not throw away a crop or a painted mask
+                // the user cannot even see from here. The group set is *derived* from `SECTIONS`,
+                // so it resets exactly what is on screen; the tooltip is derived the same way,
+                // because a written-out list went stale the moment a section was added.
+                //
+                // ⚠ Consequence, accepted: geometry and masks have no reset of their own yet.
+                // Crop is undone by the "Free" aspect preset and a zero angle; a mask by deleting
+                // it.
+                //
+                // ⚠ Inside a `horizontal`, which bounds the row's height. A bare
+                // `with_layout(right_to_left(Center))` in a scroll area centres over an unbounded
+                // height and pushed the whole stack below it out of reach (caught by
+                // `the_sessions_baseline_reaches_the_auto_solve`).
+                if tool == Tool::Edit {
+                    if let Some(s) = &mut app.session {
+                        ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .small_button("Reset adjustments")
+                                        .on_hover_text(format!(
+                                            "Resets {}. Leaves the crop and any masks alone.",
+                                            adjustments::SECTIONS
+                                                .iter()
+                                                .map(|s| s.name())
+                                                .collect::<Vec<_>>()
+                                                .join(", ")
+                                        ))
+                                        .clicked()
+                                    {
+                                        s.edits.merge_from(
+                                            &Edits::default(),
+                                            adjustments::edit_groups(),
+                                        );
+                                        ed.discrete();
+                                    }
+                                },
+                            );
+                        });
+                    }
                 }
                 // ⚠ Presets is drawn outside the mutable session borrow, because it is the one
                 // tool that edits neither `Session` nor `Edits` — it applies to the whole
@@ -161,9 +212,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 // ⚠ Drawn here, outside the session borrow below, for the same reason
                 // `presets::show` is: it needs `&mut app` for the settings and the re-decode,
                 // which is not disjoint from `&mut app.session`.
-                // ⚠ Hoisted above the Profile block, which records the rendering click into it
-                // before the session borrow below reads it.
-                let mut ed = Edited::default();
                 if tool == Tool::Edit {
                     // ⚠⚠ **The Profile block: the three controls that decide how the raw data
                     // becomes a picture**, gathered above every adjustment because they establish
@@ -221,36 +269,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                 Some(&mut s.picking_wb),
                                 &mut ed,
                             );
-                            ui.separator();
-                            // ⚠ **Scoped to the five sections above, not to everything.**
-                            // Under an exclusive panel each tool owns its own domain, so this
-                            // must not throw away a crop or a painted mask the user cannot
-                            // even see from here. The group set is *derived* from `SECTIONS`,
-                            // so it resets exactly what is on screen.
-                            //
-                            // ⚠ Consequence, accepted: geometry and masks have no reset of
-                            // their own yet. Crop is undone by the "Free" aspect preset and a
-                            // zero angle; a mask by deleting it.
-                            if ui
-                                .button("Reset adjustments")
-                                // ⚠ Derived from `SECTIONS`, not written out: this string said
-                                // "White Balance, Tone, Color, Detail and Effects" and went stale
-                                // the moment a section was added. The button's group set is
-                                // already derived; its description now is too.
-                                .on_hover_text(format!(
-                                    "Resets {}. Leaves the crop and any masks alone.",
-                                    adjustments::SECTIONS
-                                        .iter()
-                                        .map(|s| s.name())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                ))
-                                .clicked()
-                            {
-                                s.edits
-                                    .merge_from(&Edits::default(), adjustments::edit_groups());
-                                ed.discrete();
-                            }
                         }
                         Tool::Crop => {
                             let found = s.lens.shot.is_some();
@@ -547,6 +565,31 @@ mod tests {
             (exposures[0] - exposures[1]).abs() > 0.1,
             "the session's baseline never reached the solve: {exposures:?}"
         );
+    }
+
+    /// ⚠ The button moved to the top of the stack on 2026-09-19; this pins that it is still on
+    /// screen with a session open, still scoped (the crop survives), and still one history entry.
+    #[test]
+    fn reset_adjustments_sits_at_the_top_and_resets_the_sliders_only() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        {
+            let s = app.session.as_mut().expect("session");
+            s.edits.exposure = 2.0;
+            s.edits.geometry.crop.left = 0.25;
+        }
+        assert!(
+            !app.session.as_ref().unwrap().history.can_undo(),
+            "a fresh session has nothing to undo"
+        );
+        crate::test_ui::click(&ctx, "Reset adjustments", |ui| {
+            show(&mut app, ui);
+        });
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.edits.exposure, 0.0, "the sliders were not reset");
+        assert_eq!(s.edits.geometry.crop.left, 0.25, "the crop must survive");
+        assert!(s.history.can_undo(), "one click, one history entry");
     }
 
     #[test]

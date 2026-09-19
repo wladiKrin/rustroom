@@ -65,7 +65,7 @@ DETAIL / LENS / VIGNETTE
 ### Agreed
 
 ```
-Histogram · "Edit" heading ………………………… [Reset adjustments]
+Histogram ……………………………………………………… [Reset adjustments]
 › PROFILE       Camera profile ▾ (RAW only) · ☐ Camera rendering · Look ▾ (when any)
 › WHITE BALANCE Temp, Tint · one row: [Pick a neutral] [Presets ▾]
 › TONE          [Auto] · Exposure, Contrast, Highlights, Shadows, Whites, Blacks
@@ -110,8 +110,9 @@ selector → `grade_view`) is unchanged.
 
 **Detail, Lens, Vignette.** Unchanged. NR before Sharpening is a documented divergence.
 
-**Reset adjustments.** Moves from the bottom of the stack to the right of the "Edit" heading, a
-small button, so it is reachable without scrolling past forty sliders. Its group set and tooltip
+**Reset adjustments.** Moves from the bottom of the stack to a right-aligned row at the top of
+it, under the histogram, as a small button, so it is reachable without scrolling past forty
+sliders. (The Edit tool has no heading by design, so the row is its own.) Its group set and tooltip
 are unchanged. The bottom button and its separator go.
 
 ## Out of scope
@@ -123,7 +124,7 @@ Crop, Masks, Retouch or Presets panels.
 
 - new `crates/app/src/develop/panel/section.rs` (header), `profile.rs` (rendering + look)
 - `adjustments.rs`: `section` wrapper, `tone` order and signature, WB row, Color changes
-- `panel/mod.rs`: heading row with the reset, Profile block, hoisted `Edited`
+- `panel/mod.rs`: the reset row, the Profile block, hoisted `Edited`
 - `color_wheel.rs`: feather ring, `SEGMENTS`
 - `theme.rs`: `sub_label_with`
 - `edit-model/src/lib.rs`: `RENDERING_GROUP` doc names the Profile block

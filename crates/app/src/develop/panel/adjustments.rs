@@ -193,42 +193,47 @@ pub(crate) fn white_balance(
     ed.absorb(&r);
     ed.slider(ui, &mut wb.tint, -100.0..=100.0, "Tint");
 
-    if let Some(picking) = picking {
-        // ⚠ A toggle, not a button: an armed eyedropper changes what a click on the canvas does,
-        // and a mode you cannot see is the complaint the crop aspect lock was fixed for. The
-        // canvas puts a crosshair under the pointer while it is on, which is the other half of
-        // saying so.
-        if ui
-            .selectable_label(*picking, "Pick a neutral")
-            .on_hover_text("Click something in the photo that should be grey")
-            .clicked()
-        {
-            *picking = !*picking;
-        }
-    }
-
-    // ⚠⚠ **A menu, not a row of chips.** The presets used to sit above the sliders, which made
-    // the *named* illuminants look like the primary control and the temperature like a detail —
-    // backwards. They are shortcuts that move the slider, so they belong behind one word.
-    ui.menu_button("Presets", |ui| {
-        for p in WbPreset::ALL {
-            // ⚠ `selectable_label`, not a button: which preset a photo is sitting on is real
-            // state, and a menu that gives no sign of it makes you guess.
-            //
-            // ⚠ The match is on the **effective** temperature, so a slider dragged onto a
-            // preset's value lights that preset up. That is honest — the two are the same edit.
-            let on = match p.kelvin() {
-                None => wb.kelvin.is_none(),
-                Some(k) => wb.kelvin.is_some_and(|v| (v - k).abs() < 0.5),
-            };
-            if ui.selectable_label(on, p.label()).clicked() {
-                wb_tool::apply_preset(wb, p);
-                ed.mark_changed();
+    // ⚠ One row for the two shortcuts (2026-09-19): both move the sliders above, and two
+    // full-width rows of buttons under two sliders was heavy for what they are. A mask has
+    // no eyedropper, and then the row holds Presets alone.
+    ui.horizontal(|ui| {
+        if let Some(picking) = picking {
+            // ⚠ A toggle, not a button: an armed eyedropper changes what a click on the canvas does,
+            // and a mode you cannot see is the complaint the crop aspect lock was fixed for. The
+            // canvas puts a crosshair under the pointer while it is on, which is the other half of
+            // saying so.
+            if ui
+                .selectable_label(*picking, "Pick a neutral")
+                .on_hover_text("Click something in the photo that should be grey")
+                .clicked()
+            {
+                *picking = !*picking;
             }
         }
-    })
-    .response
-    .on_hover_text("Named illuminants — each one just moves the Temp slider");
+
+        // ⚠⚠ **A menu, not a row of chips.** The presets used to sit above the sliders, which made
+        // the *named* illuminants look like the primary control and the temperature like a detail —
+        // backwards. They are shortcuts that move the slider, so they belong behind one word.
+        ui.menu_button("Presets", |ui| {
+            for p in WbPreset::ALL {
+                // ⚠ `selectable_label`, not a button: which preset a photo is sitting on is real
+                // state, and a menu that gives no sign of it makes you guess.
+                //
+                // ⚠ The match is on the **effective** temperature, so a slider dragged onto a
+                // preset's value lights that preset up. That is honest — the two are the same edit.
+                let on = match p.kelvin() {
+                    None => wb.kelvin.is_none(),
+                    Some(k) => wb.kelvin.is_some_and(|v| (v - k).abs() < 0.5),
+                };
+                if ui.selectable_label(on, p.label()).clicked() {
+                    wb_tool::apply_preset(wb, p);
+                    ed.mark_changed();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Named illuminants — each one just moves the Temp slider");
+    });
 }
 
 /// 2000 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
@@ -276,9 +281,15 @@ pub(crate) fn tone(
     ed.slider(ui, &mut edits.shadows, -100.0..=100.0, "Shadows");
     ed.slider(ui, &mut edits.whites, -100.0..=100.0, "Whites");
     ed.slider(ui, &mut edits.blacks, -100.0..=100.0, "Blacks");
+    // ⚠ The curve directly after the six sliders, because it refines the tone they set; a
+    // sub-label rather than a header, since `tone_curve` belongs to the `Tone` edit group and a
+    // header here would put the panel and the Sync dialog out of step. The curve draws its own
+    // sub-label row. (It closed the section until 2026-09-19.)
+    tone_curve::show(ui, &mut edits.tone_curve, ed, hist);
     // ⚠ A sub-label, not a header. These are Lightroom's "Presence" block and they are
-    // local-contrast tools rather than tonal ones — but they belong to the `Tone` edit
-    // group, and a header here would put the panel and the Sync dialog out of step.
+    // local-contrast tools rather than tonal ones — a different kind of decision, which is why
+    // they close the section — but they belong to the `Tone` edit group, and a header here would
+    // put the panel and the Sync dialog out of step.
     theme::sub_label(ui, "Presence");
     ed.slider(
         ui,
@@ -294,12 +305,6 @@ pub(crate) fn tone(
         "Clarity",
     );
     ed.slider(ui, &mut edits.dehaze.amount, -100.0..=100.0, "Dehaze");
-    // ⚠ Last in the section, and a sub-label rather than a header — `tone_curve` belongs to
-    // the `Tone` edit group, and a header here would put the panel and the Sync dialog out
-    // of step, which is the ambiguity this section structure exists to remove. It comes
-    // after the sliders because that is the order the decisions are made in: set the tone
-    // broadly, then refine its shape. The curve draws its own sub-label row.
-    tone_curve::show(ui, &mut edits.tone_curve, ed, hist);
 }
 
 /// The colour-grading block's view state: the `Shad │ Mid │ High │ Global` selector and the
@@ -360,7 +365,17 @@ pub fn show(
         // ⚠ A sub-label, not a nested CollapsingHeader — the idiom already used for the
         // Presence block inside Tone. Colour grading belongs to the `Color` edit group, and a
         // header here would put the panel and the Sync dialog out of step.
-        theme::sub_label(ui, "Color Grading");
+        // ⚠⚠ "Show range" is A VIEW MODE, not an edit — `visualize`'s rule. It writes two
+        // session fields and never `Edits`, so it re-renders (`ed.changed`) without a history
+        // entry. On the sub-label row, right-aligned, because it is a toggle for exactly the
+        // range selector under it (2026-09-19; it sat below Balance before, next to nothing it
+        // belonged to).
+        theme::sub_label_with(ui, "Color Grading", |ui| {
+            ui.checkbox(show_grade_range, "Show range").on_hover_text(
+                "Tints the photograph where the selected range reaches. Affects only what you \
+                 see — never the render, the export or the histogram.",
+            );
+        });
         theme::segmented(
             ui,
             grade_range,
@@ -387,15 +402,8 @@ pub fn show(
         // ⚠ Separated because without it they sit flush against Hue/Saturation/Luminance, which
         // *are* per-wheel. A caption saying so was tried and removed (user's call, 2026-09-02) —
         // the hairline carries it.
-        ui.separator();
         ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
         ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
-        // ⚠⚠ A VIEW MODE, not an edit — `visualize`'s rule. It writes two session fields and
-        // never `Edits`, so it re-renders (`ed.changed`) without a history entry.
-        ui.checkbox(show_grade_range, "Show range").on_hover_text(
-            "Tints the photograph where the selected range reaches. Affects only what you see — \
-             never the render, the export or the histogram.",
-        );
         // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
         // checkbox and the selector are both in scope. Change-guarded: this body runs every
         // frame, and an unguarded write would request a render sixty times a second.
