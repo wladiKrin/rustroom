@@ -1,10 +1,16 @@
-//! The geometry-mode block: rotate and flip, aspect presets, Straighten.
+//! The Crop & Geometry panel: four sections — Crop, Straighten, Perspective, Lens.
+//!
+//! ⚠ Option A of the 2026-09-19 canvas ("Rustroom Geometry Panel"): the Edit and Masks panels'
+//! chrome, the aspect as one segmented control that wraps rather than clips, the composition
+//! guide as a dropdown, the level tool beside the angle, the guides on one row under the
+//! perspective sliders they feed, and a dot and reset per section through
+//! `edit_model::GeoGroup`.
 //!
 //! ⚠ Shown only while the **Crop** tool is selected on the rail. There is no stored
 //! `geometry_mode` flag any more — it is derived from `Tool::is_geometry`, so the mode and the
 //! selection cannot disagree.
 
-use crate::develop::panel::Edited;
+use crate::develop::panel::{section, Edited};
 use crate::theme;
 use crate::Session;
 use eframe::egui;
@@ -82,7 +88,7 @@ pub struct AspectLock<'a> {
 pub fn show(
     ui: &mut egui::Ui,
     s: &mut Session,
-    aspect: AspectLock<'_>,
+    mut aspect: AspectLock<'_>,
     composition_guide: &mut CompositionGuide,
     lens_profile_found: bool,
     ed: &mut Edited,
@@ -90,54 +96,130 @@ pub fn show(
     // the button itself for why.
     auto: &mut bool,
 ) {
-    // ⚠ The lens **Scale** appears here as well as in the Lens section, and this is the one place
-    // it can actually be judged: crop mode previews the *uncropped* frame, which is where the
-    // empty corners that pincushion correction leaves are visible at all. In the Edit panel the
-    // crop is applied, so if you have cropped even slightly the gaps are already outside it and
-    // the slider looks inert.
-    //
-    // ⚠ Not a second *feature* with two homes — the Presets panel was removed for being that.
-    // It is one field, relevant to two different decisions, edited from whichever view can see
-    // its effect.
-    if lens_profile_found && s.edits.applied_lens_correction().distortion {
-        theme::sub_label(ui, "Lens");
-        // ⚠ "Lens scale" here, plain "Scale" in the Edit panel's Lens section — the same field,
-        // labelled to disambiguate only in the one view where a *second* Scale slider (the
-        // perspective one below) is on screen at the same time. Two adjacent sliders both called
-        // "Scale" is ambiguous once the headings have scrolled out of view.
-        // ⚠ `if let Some`: drawn only while distortion is on, which means the field is already
-        // decided — binding through `get_or_insert` would turn drawing into deciding.
-        if let Some(l) = &mut s.edits.lens_correction {
-            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Lens scale");
-        }
-        ui.separator();
+    use edit_model::GeoGroup;
+
+    // ── CROP ──
+    let mut out = geo_header(ui, s, GeoGroup::Crop);
+    out.state
+        .show_body_unindented(ui, |ui| crop(ui, s, &mut aspect, composition_guide, ed));
+    if out.reset {
+        s.edits.reset_geo_group(GeoGroup::Crop);
+        // ⚠ The lock is view state on the app, and a full-frame crop under a lock would snap
+        // straight back; a reset crop is a free crop.
+        *aspect.lock = None;
+        ed.discrete();
     }
 
-    theme::sub_label(ui, "Geometry");
-    // Quarter turns and mirroring. ⚠ Each button moves the crop by the
-    // *same* transform, or the crop lands on different content — see
-    // `CropRect::rotated_cw`. Keep the two in step.
+    // ── STRAIGHTEN ──
+    let mut out = geo_header(ui, s, GeoGroup::Straighten);
+    out.state
+        .show_body_unindented(ui, |ui| straighten(ui, s, ed));
+    if out.reset {
+        s.edits.reset_geo_group(GeoGroup::Straighten);
+        clear_guides(s);
+        ed.discrete();
+    }
+
+    // ── PERSPECTIVE ──
+    let mut out = geo_header(ui, s, GeoGroup::Perspective);
+    out.state
+        .show_body_unindented(ui, |ui| perspective(ui, s, ed, auto));
+    if out.reset {
+        s.edits.reset_geo_group(GeoGroup::Perspective);
+        // ⚠ As editing the sliders by hand does: guides that solved to a correction that is
+        // now gone would claim a tilt the picture no longer shows.
+        clear_guides(s);
+        ed.discrete();
+    }
+
+    // ── LENS ──
+    // ⚠ Always drawn, with the lens in the header, so the section does not appear and vanish
+    // with the profile; the body says why there is nothing to scale when there is not.
+    let lens_label: String = match (&s.lens.name, lens_profile_found) {
+        (Some(name), _) => name.clone(),
+        (None, _) => "no lens recorded".to_owned(),
+    };
+    let mut out = section::header(
+        ui,
+        ui.make_persistent_id(("geo", "Lens")),
+        true,
+        section::Header::new("Lens").trailing(&lens_label),
+    );
+    out.state
+        .show_body_unindented(ui, |ui| lens(ui, s, lens_profile_found, ed));
+}
+
+/// One of the three resettable headers, its dot from `GeoGroup`.
+fn geo_header(ui: &mut egui::Ui, s: &Session, g: edit_model::GeoGroup) -> section::HeaderOut {
+    section::header(
+        ui,
+        ui.make_persistent_id(("geo", g.name())),
+        true,
+        section::Header::new(g.name())
+            .modified(s.edits.geo_group_differs(g))
+            .resettable(true),
+    )
+}
+
+fn clear_guides(s: &mut Session) {
+    s.guides.clear();
+    s.active_guide = None;
+}
+
+/// Height of the Crop section's button rows and its aspect control.
+const CROP_ROW: f32 = 28.0;
+
+/// The Crop section: orientation, the aspect, the custom ratio, the composition guide.
+fn crop(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    aspect: &mut AspectLock<'_>,
+    composition_guide: &mut CompositionGuide,
+    ed: &mut Edited,
+) {
+    let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
+    let custom_ratio = {
+        let [w, h] = *aspect.custom;
+        let r = rustroom_app::settings::CUSTOM_ASPECT_RANGE;
+        w.clamp(r.0, r.1) as f32 / h.clamp(r.0, r.1) as f32
+    };
+    let custom_lit = chip_state(Chip::Custom, *aspect.lock, custom_ratio);
+
+    // ── orientation, and Swap at the right ──
+    // ⚠ The glyphs the panel has always used: they are known to render in the bundled font,
+    // and a codepoint from the icon font that is not is a tofu box. The AccessKit label is the
+    // glyph too, which the tests click by.
+    let glyph_button = |ui: &mut egui::Ui, glyph: &str, hover: &str| -> bool {
+        ui.add(
+            egui::Button::new(egui::RichText::new(glyph).size(18.0))
+                .min_size(egui::vec2(CROP_ROW, CROP_ROW)),
+        )
+        .on_hover_text(hover)
+        .clicked()
+    };
+    let mut swap = false;
     ui.horizontal(|ui| {
         let g = &mut s.edits.geometry;
         let mut turned = false;
-        if ui.button("⟲").on_hover_text("Rotate left").clicked() {
+        if glyph_button(ui, "⟲", "Rotate left") {
             g.orientation.rotate_ccw();
             for _ in 0..3 {
                 g.crop = g.crop.rotated_cw();
             }
             turned = true;
         }
-        if ui.button("⟳").on_hover_text("Rotate right").clicked() {
+        if glyph_button(ui, "⟳", "Rotate right") {
             g.orientation.rotate_cw();
             g.crop = g.crop.rotated_cw();
             turned = true;
         }
-        if ui.button("⬌").on_hover_text("Flip horizontal").clicked() {
+        ui.add_space(6.0);
+        if glyph_button(ui, "⬌", "Flip horizontal") {
             g.orientation.flip_h();
             g.crop = g.crop.flipped_h();
             turned = true;
         }
-        if ui.button("⬍").on_hover_text("Flip vertical").clicked() {
+        if glyph_button(ui, "⬍", "Flip vertical") {
             g.orientation.flip_v();
             g.crop = g.crop.flipped_h();
             g.crop = g.crop.rotated_cw();
@@ -145,204 +227,191 @@ pub fn show(
             turned = true;
         }
         if turned {
-            // ⚠ `settled` too: a button press is a discrete act, so it
-            // is one history entry and one Ctrl+Z — unlike a slider,
-            // which pushes only on `drag_stopped`.
             ed.discrete();
         }
+        // ⚠ Pinned to its width, never a bare `with_layout(right_to_left)` — the 2026-09-19
+        // growth bug.
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), CROP_ROW),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                swap = ui
+                    .add(egui::Button::new("Swap").min_size(egui::vec2(0.0, CROP_ROW)))
+                    .on_hover_text("Turn the crop between landscape and portrait")
+                    .clicked();
+            },
+        );
     });
-    let img_aspect = s.baseline.size_vec2().x / s.baseline.size_vec2().y;
-    let custom_ratio = {
-        let [w, h] = *aspect.custom;
-        let r = rustroom_app::settings::CUSTOM_ASPECT_RANGE;
-        w.clamp(r.0, r.1) as f32 / h.clamp(r.0, r.1) as f32
-    };
-    // ⚠ `selectable_label`, not `button`: the lock is otherwise **invisible state**. Without a
-    // shown selection there is no way to tell a locked crop from a free one until you drag a
-    // handle and it refuses to move the way you expected.
-    //
-    // ⚠ Which chip is lit is `chip_state`'s decision, pure and tested, including the rule that
-    // a preset stays lit after a swap to its inverse.
-    ui.horizontal(|ui| {
-        if ui
-            .selectable_label(chip_state(Chip::Free, *aspect.lock, custom_ratio), "Free")
-            .clicked()
-        {
-            // ⚠ "Free" merely unlocks, leaving the crop where it is — it used to reset to the
-            // full frame, which made unlocking destructive and is now "Reset geometry"'s job.
-            *aspect.lock = None;
+    if swap {
+        s.edits.geometry.crop = crop_tool::swap_orientation(s.edits.geometry.crop, img_aspect);
+        *aspect.lock = aspect.lock.map(|a| 1.0 / a);
+        if custom_lit {
+            let [w, h] = *aspect.custom;
+            *aspect.custom = [h, w];
         }
-        for (label, ratio) in PRESETS {
-            if ui
-                .selectable_label(
-                    chip_state(Chip::Preset(ratio), *aspect.lock, custom_ratio),
-                    label,
-                )
-                .clicked()
-            {
-                lock_to(ratio, img_aspect, s, aspect.lock, ed);
-            }
-        }
-        let custom_lit = chip_state(Chip::Custom, *aspect.lock, custom_ratio);
-        if ui
-            .selectable_label(custom_lit, "Custom")
-            .on_hover_text("Lock to the ratio below")
-            .clicked()
-        {
-            lock_to(custom_ratio, img_aspect, s, aspect.lock, ed);
-        }
-        // ⚠ A text label, not a glyph: `⬍`/`⬌` already mean *flip* two rows up, and a swap
-        // that looks like a flip is the wrong model.
-        if ui
-            .button("Swap")
-            .on_hover_text("Turn the crop between landscape and portrait")
-            .clicked()
-        {
-            s.edits.geometry.crop = crop_tool::swap_orientation(s.edits.geometry.crop, img_aspect);
-            // ⚠ A free crop stays free and merely turns; a lock inverts. The custom pair is
-            // exchanged only when Custom is the lit chip, so the numbers on screen agree with
-            // the lock — under a preset the chip keeps its label and stays lit by `chip_state`.
-            *aspect.lock = aspect.lock.map(|a| 1.0 / a);
-            if custom_lit {
-                let [w, h] = *aspect.custom;
-                *aspect.custom = [h, w];
-            }
-            ed.discrete();
-        }
-    });
-    if chip_state(Chip::Custom, *aspect.lock, custom_ratio) {
-        // ⚠ Drawn only while Custom is lit: two number fields under a preset would be state
-        // that edits nothing, which is worse than absent.
-        ui.horizontal(|ui| {
-            let r = rustroom_app::settings::CUSTOM_ASPECT_RANGE;
-            let field = |ui: &mut egui::Ui, v: &mut u32| -> egui::Response {
-                ui.add(egui::DragValue::new(v).range(r.0..=r.1))
-            };
-            let [w, h] = &mut *aspect.custom;
-            let rw = field(ui, w);
-            ui.label(":");
-            let rh = field(ui, h);
-            // ⚠ Re-lock on any change so the crop follows as you drag or type. A drag settles
-            // on release and a typed value settles on commit — `changed()` with no drag in
-            // progress — so either way one edit is one Ctrl+Z. `ed.absorb` alone would never
-            // settle a typed value, since a `TextEdit` commit stops no drag.
-            let changed = rw.changed() || rh.changed();
-            if changed {
-                let ratio = {
-                    let [w, h] = *aspect.custom;
-                    w.clamp(r.0, r.1) as f32 / h.clamp(r.0, r.1) as f32
-                };
-                *aspect.lock = Some(ratio);
-                s.edits.geometry.crop = crop_tool::snap_to_aspect(ratio / img_aspect);
-                ed.changed = true;
-            }
-            let dragging = rw.dragged() || rh.dragged();
-            if rw.drag_stopped() || rh.drag_stopped() || (changed && !dragging) {
-                ed.settled = true;
-            }
-        });
-    }
-    // ⚠⚠ Labelled **Composition**, never "Guide" — this panel already has a "Guide Mode" toggle
-    // further down for the *perspective* guides you trace onto a building, and two unrelated
-    // controls sharing a word in one panel is how someone learns the wrong model. The menu item
-    // and the shortcuts dialog say "Composition guide" for the same reason.
-    //
-    // ⚠⚠ **`selectable_label`s, not a `ComboBox` — and the deciding reason was found by writing
-    // the test.** A `ComboBox` allocates raw space and paints its selected text by hand
-    // (`combo_box.rs`: `allocate_space` then `ui.interact`), so it **sets no AccessKit label at
-    // all** and `test_ui` cannot see it — an *interactive* widget that is nonetheless
-    // unfindable, which is a different hole from the documented "a plain `ui.label` produces no
-    // node". That would have left the one control this feature adds untestable, so the guard
-    // against it shipping absent could not exist. It is also the boundary CLAUDE.md names for
-    // adopting `egui_kittest` rather than reimplementing.
-    //
-    // ⚠ Independently the better control: chips are the idiom the aspect row directly above
-    // already uses, every option is visible without opening anything, and picking one is a
-    // single click where a combo costs two. `horizontal_wrapped` is what lets the full names
-    // stay — a 240 pt panel takes them over two lines rather than forcing a second, shorter
-    // vocabulary for the same five things.
-    //
-    // ⚠ It changes no `Edits`, so it must **not** touch `ed`: the guide is a view preference,
-    // not part of the photograph, so it neither re-renders nor pushes a history entry. The
-    // caller persists it, guarded on an actual change.
-    //
-    // ⚠ The shortcut is **hover text on the row**, not a `theme::hint` line under it. This panel
-    // already scrolls, and a permanent line of prose for a chord the View menu and the generated
-    // Keyboard-shortcuts dialog both list is not worth a row of it — the perspective sliders
-    // below carry their explanations the same way.
-    theme::sub_label(ui, "Composition");
-    ui.horizontal_wrapped(|ui| {
-        for g in CompositionGuide::ALL {
-            if ui
-                .selectable_label(*composition_guide == g, g.label())
-                .clicked()
-            {
-                *composition_guide = g;
-            }
-        }
-    })
-    .response
-    .on_hover_text("Drawn inside the crop rectangle. Press O to cycle.");
-    ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Straighten");
-    // ⚠⚠ **An armed toggle, not a modifier-drag.** `shell.rs`'s `mode_switch` records the rule:
-    // "a feature reachable only by a key nothing on screen mentions is a feature nobody finds."
-    // The ⌥-drag in `spot_overlay.rs` is the counter-precedent and is a *refinement* of a gesture
-    // that already works unmodified; a straighten line has no unmodified form to refine. It is
-    // also Lightroom's own primary affordance — the ruler button inside the crop panel.
-    //
-    // ⚠ Text, not a glyph. The Guide Mode toggle below is text, and four separate features in
-    // this project have picked a glyph that turned out to be absent from the bundled fonts and
-    // would have shipped a tofu box. A probe is available if an icon is ever wanted; it is not
-    // wanted for a control that sits beside a text-labelled sibling.
-    //
-    // ⚠⚠ **Gated on Guide Mode being off AND no guides existing, and both halves matter.** A
-    // straighten line writes `geometry.angle`, one of the three values a guide solve owns, so
-    // drawn guides would be left describing a solve that no longer holds — and the hand-edit
-    // check ~50 lines below structurally **cannot** catch it, because it captures `solved_before`
-    // within this frame and an angle written by the canvas on the *previous* frame is already in
-    // `s.edits`. ⚠ That is still true, and it is why `settle` clears the guides itself rather than
-    // relying on this file to notice.
-    //
-    // ⚠⚠ **It deliberately does NOT touch `ed`.** Arming changes no `Edits` *and* changes nothing
-    // about the render, so `ed.discrete()` here would issue a redundant whole-frame request every
-    // time the mode is armed or disarmed. The Composition chips above carry the rule outright —
-    // "it changes no `Edits`, so it must not touch `ed`" — and `picking_wb`'s own toggle in
-    // `adjustments.rs` follows it. **Guide Mode below is the exception rather than the model:**
-    // it re-renders because `show_guides` unpins the fit rung in `canvas::show`, which this does
-    // not.
-    // ⚠⚠ **Always enabled.** This was gated on `!s.show_guides && s.guides.is_empty()` when it
-    // shipped, which was reported in use as the button being mysteriously greyed out after any
-    // guide work. The gate existed because a straighten line writes `geometry.angle` and would
-    // leave drawn guides describing a solve that no longer holds — a real problem with the wrong
-    // fix. `straighten_overlay::settle` **clears the guides** instead, which is the rule this file
-    // already applies to the Straighten slider ~30 lines below. One rule, two affordances.
-    if ui
-        .add(egui::Button::new("Straighten by drawing a line").selected(s.straighten_armed))
-        .on_hover_text(
-            "Drag along something that should be level — a horizon, a roofline. The photo \
-             rotates when you let go. Any perspective guides are cleared, as editing Straighten \
-             by hand does.",
-        )
-        .clicked()
-    {
-        s.straighten_armed = !s.straighten_armed;
-        // Re-arming discards the previous line: it described a correction that is no longer the
-        // one being drawn.
-        s.straighten_line = None;
+        ed.discrete();
     }
 
-    ui.separator();
-    // ⚠ Here rather than in the Edit panel because this is the only view that can judge it: crop
-    // mode previews the *uncropped* frame, which is where the empty corners a keystone opens are
-    // visible at all. The Lens `Scale` slider above is here for the identical reason.
-    //
-    // ⚠ "Scale" therefore appears twice when a lens profile is present — once under Lens, once
-    // here. They are different corrections with different autoscales, disambiguated by their
-    // headings, and Lightroom likewise has one in Lens Corrections and one in Transform.
-    theme::sub_label(ui, "Perspective");
-    // ⚠⚠ Captured before the sliders so an *manual* edit to one of the three values a guide solve
-    // owns can be told from the solve's own write. The panel is drawn **before** the canvas, so
-    // this frame's solve has not happened yet and cannot be mistaken for a hand edit.
+    // ── the aspect ──
+    // ⚠ One segmented control, never a row of chips: seven chips clipped at the panel's width.
+    // The lit segment is *derived* from the lock each frame, as the chips were; a lock that
+    // matches nothing lights nothing.
+    let mut items: Vec<(Option<Chip>, &str, &str)> = vec![(Some(Chip::Free), "Free", "")];
+    for (label, ratio) in PRESETS {
+        items.push((Some(Chip::Preset(ratio)), label, ""));
+    }
+    items.push((Some(Chip::Custom), "W:H", "Lock to the ratio below"));
+    let mut cur: Option<Chip> = items
+        .iter()
+        .map(|(c, _, _)| c.expect("every item is Some"))
+        .find(|c| chip_state(*c, *aspect.lock, custom_ratio));
+    let before = cur;
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    theme::segmented_sized(ui, &mut cur, &items, CROP_ROW, font);
+    if cur != before {
+        match cur {
+            Some(Chip::Free) => *aspect.lock = None,
+            Some(Chip::Preset(ratio)) => lock_to(ratio, img_aspect, s, aspect.lock, ed),
+            Some(Chip::Custom) => lock_to(custom_ratio, img_aspect, s, aspect.lock, ed),
+            None => {}
+        }
+    }
+
+    // ── the custom ratio, only while W:H is lit ──
+    if chip_state(Chip::Custom, *aspect.lock, custom_ratio) {
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let r = rustroom_app::settings::CUSTOM_ASPECT_RANGE;
+                let field = |ui: &mut egui::Ui, v: &mut u32| -> egui::Response {
+                    ui.add(egui::DragValue::new(v).range(r.0..=r.1))
+                };
+                // ⚠ Right to left: the height field lands first, at the right edge.
+                let [w, h] = &mut *aspect.custom;
+                let rh = field(ui, h);
+                ui.label(":");
+                let rw = field(ui, w);
+                ui.label(egui::RichText::new("Custom").weak());
+                let changed = rw.changed() || rh.changed();
+                if changed {
+                    let ratio = {
+                        let [w, h] = *aspect.custom;
+                        w.clamp(r.0, r.1) as f32 / h.clamp(r.0, r.1) as f32
+                    };
+                    *aspect.lock = Some(ratio);
+                    s.edits.geometry.crop = crop_tool::snap_to_aspect(ratio / img_aspect);
+                    ed.changed = true;
+                }
+                let dragging = rw.dragged() || rh.dragged();
+                if rw.drag_stopped() || rh.drag_stopped() || (changed && !dragging) {
+                    ed.settled = true;
+                }
+            },
+        );
+    }
+
+    // ── the composition guide ──
+    // ⚠ `from_label`, not an id salt: the label is the combo's accessible name (an id salt
+    // leaves it nameless, which the harness found first), and in a right-to-left row egui
+    // draws it to the combo's left — "Composition guide  [Rule of thirds ▾]".
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                egui::ComboBox::from_label("Composition guide")
+                    .selected_text(composition_guide.label())
+                    .show_ui(ui, |ui| {
+                        for g in CompositionGuide::ALL {
+                            ui.selectable_value(composition_guide, g, g.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text("Drawn inside the crop rectangle. Press O to cycle.");
+            },
+        );
+    });
+}
+
+/// The Straighten section: the angle, and the draw-a-line tool beside it.
+fn straighten(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
+    ui.horizontal(|ui| {
+        let w = ui.available_width() - CROP_ROW - ui.spacing().item_spacing.x;
+        ui.allocate_ui_with_layout(
+            egui::vec2(w.max(60.0), ui.spacing().interact_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ed.slider(ui, &mut s.edits.geometry.angle, -45.0..=45.0, "Angle")
+                    .on_hover_text("Degrees. Editing it by hand clears any perspective guides.");
+            },
+        );
+        if level_button(ui, s.straighten_armed).clicked() {
+            s.straighten_armed = !s.straighten_armed;
+            s.straighten_line = None;
+        }
+    });
+}
+
+/// The level tool's toggle: a hand-painted level glyph, lit while the tool is armed.
+///
+/// ⚠ The accessible name is the old button's text, so a screen reader — and the harness — still
+/// gets a sentence rather than a picture.
+fn level_button(ui: &mut egui::Ui, armed: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(CROP_ROW, CROP_ROW), egui::Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            enabled,
+            armed,
+            "Straighten by drawing a line",
+        )
+    });
+    let resp = resp.on_hover_text(
+        "Drag along something that should be level — a horizon, a roofline. The photo rotates \
+         when you let go. Any perspective guides are cleared, as editing the angle by hand does.",
+    );
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let accent = v.selection.bg_fill;
+        let (fill, colour) = if armed {
+            (accent.gamma_multiply(0.18), accent)
+        } else if resp.hovered() {
+            (v.widgets.hovered.weak_bg_fill, v.strong_text_color())
+        } else {
+            (
+                v.widgets.inactive.weak_bg_fill,
+                v.widgets.inactive.fg_stroke.color,
+            )
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, 4.0, fill);
+        let r = rect.shrink(7.0);
+        let stroke = egui::Stroke::new(1.6, colour);
+        painter.line_segment(
+            [
+                egui::pos2(r.left(), r.bottom() - r.height() * 0.2),
+                egui::pos2(r.right(), r.top() + r.height() * 0.2),
+            ],
+            stroke,
+        );
+        painter.circle_filled(
+            egui::pos2(r.left() + r.width() * 0.2, r.bottom() - r.height() * 0.28),
+            2.0,
+            colour,
+        );
+        painter.circle_filled(
+            egui::pos2(r.right() - r.width() * 0.2, r.top() + r.height() * 0.28),
+            2.0,
+            colour,
+        );
+    }
+    resp
+}
+
+/// The Perspective section: the four sliders, then the guides on one row.
+fn perspective(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited, auto: &mut bool) {
     let solved_before = (
         s.edits.perspective.vertical,
         s.edits.perspective.horizontal,
@@ -355,19 +424,6 @@ pub fn show(
         );
     ed.slider(ui, &mut p.horizontal, -100.0..=100.0, "Horizontal")
         .on_hover_text("Keystone about the vertical axis — for a subject turned left or right.");
-    // ⚠⚠ The glyphs are the whole point of this label. A single bipolar Aspect slider was
-    // reported as confusing precisely because "Aspect" says nothing about which end does what,
-    // and `⬍ ⬌` names both ends at a glance — the same two glyphs the flip buttons above use, so
-    // they already mean "vertical" and "horizontal" in this panel.
-    //
-    // ⚠ It stays ONE slider rather than two: the two directions are `diag(s, 1/s)`, inverses of
-    // one quantity rather than independent axes. Two sliders would be `diag(a, b)`, which factors
-    // into a uniform scale × an aspect ratio — so the extra freedom **is** the Scale slider below,
-    // and the same look would be reachable two ways. `Orientation`'s single `mirror` flag exists
-    // for exactly that reason.
-    //
-    // ⚠ `↔` and `↕` are ABSENT from every bundled font and would render as tofu boxes — probed,
-    // not assumed. `⬌ ⬍ ‹ › « »` are present.
     ed.slider(ui, &mut p.aspect, -100.0..=100.0, "Aspect ⬍ ⬌")
         .on_hover_text("Stretches the frame: negative taller ⬍, positive wider ⬌. Counteracts the squashing a keystone correction causes.");
     ed.slider(ui, &mut p.scale, -100.0..=100.0, "Scale")
@@ -376,11 +432,6 @@ pub fn show(
              clips whatever the correction pushes off the edges; +100 zooms in until no black \
              corners remain.",
         );
-
-    // ⚠⚠ **Editing by hand throws the guides away, because the solve no longer describes what
-    // you see.** Only the three values a solve *writes* count — Vertical, Horizontal and
-    // Straighten. Aspect and Scale are untouched by a solve, so adjusting them keeps the guides,
-    // which is the difference between "you overrode the answer" and "you framed it differently".
     if (
         s.edits.perspective.vertical,
         s.edits.perspective.horizontal,
@@ -388,46 +439,24 @@ pub fn show(
     ) != solved_before
         && !s.guides.is_empty()
     {
-        s.guides.clear();
-        s.active_guide = None;
+        clear_guides(s);
     }
 
-    ui.separator();
-    theme::sub_label(ui, "Guides");
+    // ── the guides, one row ──
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        // ⚠ The toggle deliberately does **not** disable the sliders above. They are the *output*
-        // of a solve, and watching them move is what explains where the numbers came from.
         if ui
-            .toggle_value(&mut s.show_guides, "Guide Mode")
+            .toggle_value(&mut s.show_guides, "Guide mode")
             .on_hover_text(
                 "Draw a line along something that should be vertical or horizontal — a door \
-                 frame, a roofline. Two of a kind solve the tilt when you let go. Right-click a \
-                 line to remove it.",
+                 frame, a roofline. Two lines of a kind solve the tilt when you let go; \
+                 right-click a line to remove it. Editing Vertical, Horizontal or the angle by \
+                 hand clears them.",
             )
             .changed()
         {
             ed.discrete();
         }
-        let any = !s.guides.is_empty();
-        if ui
-            .add_enabled(any, egui::Button::new("Clear"))
-            .on_hover_text("Remove all guides. The sliders they produced are left alone.")
-            .clicked()
-        {
-            s.guides.clear();
-            s.active_guide = None;
-        }
-        // ⚠ In the Guides block beside Clear, because what it produces *is* guides — the same
-        // objects the overlay draws and the same ones Clear removes. Not beside the perspective
-        // sliders, which are the solve's output rather than its input.
-        //
-        // ⚠ The click is reported outward rather than acted on here: `show` takes `&mut Session`
-        // and `auto_guides` needs `&mut RustroomApp`, which are not disjoint. `panel/mod.rs`
-        // already applies `rename` after the panel closes for exactly that reason.
-        // ⚠⚠ **The label reports which of the two jobs the click will do**, because the behaviour
-        // depends on whether guides exist and nothing else on screen says so. One button doing two
-        // things silently is the shape that produced the greyed-out straighten-button confusion,
-        // whose lesson is "a rule the user cannot see is one they cannot correct."
         let refining = !s.guides.is_empty();
         let label = if refining { "Refine guides" } else { "Auto" };
         let hint = if refining {
@@ -440,33 +469,43 @@ pub fn show(
         if ui.button(label).on_hover_text(hint).clicked() {
             *auto = true;
         }
+        if ui
+            .add_enabled(refining, egui::Button::new("Clear"))
+            .on_hover_text("Remove all guides. The sliders they produced are left alone.")
+            .clicked()
+        {
+            clear_guides(s);
+        }
     });
-    crate::theme::hint(
-        ui,
-        "Two lines of a kind set the tilt. Editing Vertical, Horizontal or Straighten by hand \
-         clears them.",
-    );
+}
 
-    ui.separator();
-    // ⚠ Scoped to the Geometry group, the same rule the Edit tool's reset follows: under an
-    // exclusive panel each tool resets its own domain and nothing else. Targeted by the named
-    // `GEOMETRY_GROUP` rather than a literal index.
-    //
-    // ⚠⚠ **Anything added to `GEOMETRY_GROUP` must be named in the hover text below**, or this
-    // button silently resets something it does not mention. Perspective joining the group is
-    // exactly what made the previous text ("the crop, the straighten angle and any rotation or
-    // flip") wrong — the same failure as the "Reset adjustments" text that enumerated five panel
-    // sections and went stale when a sixth arrived.
-    if ui
-        .button("Reset geometry")
-        .on_hover_text("Resets the crop, straighten, rotation, flip and perspective. Leaves the adjustments and any masks alone.")
-        .clicked()
-    {
-        s.edits.merge_from(
-            &edit_model::Edits::default(),
-            edit_model::EditGroups::only(edit_model::GEOMETRY_GROUP),
+/// The Lens section: the lens scale, or why there is nothing to scale.
+///
+/// ⚠ The lens **Scale** appears here as well as in the Edit panel's Lens section, and this is
+/// the one place it can actually be judged: crop mode previews the *uncropped* frame, which is
+/// where the empty corners that pincushion correction leaves are visible at all. In the Edit
+/// panel the crop is applied, so if you have cropped even slightly the gaps are already outside
+/// it and the slider looks inert. One field, relevant to two decisions, edited from whichever
+/// view can see its effect.
+///
+/// ⚠ Labelled "Lens scale", not "Scale": Perspective has a Scale, and two controls on one panel
+/// must not share a name.
+fn lens(ui: &mut egui::Ui, s: &mut Session, lens_profile_found: bool, ed: &mut Edited) {
+    let distortion = s.edits.applied_lens_correction().distortion;
+    if lens_profile_found && distortion {
+        if let Some(l) = &mut s.edits.lens_correction {
+            ed.slider(ui, &mut l.scale, 0.0..=100.0, "Lens scale")
+                .on_hover_text(
+                    "How far the corrected frame is scaled up to hide the empty corners \
+                     distortion correction leaves. Judged here, against the uncropped frame.",
+                );
+        }
+    } else if !lens_profile_found {
+        ui.label(
+            egui::RichText::new("No profile for this lens, so there is nothing to scale.").weak(),
         );
-        ed.discrete();
+    } else {
+        ui.label(egui::RichText::new("Distortion is off in the Edit panel's Lens section.").weak());
     }
 }
 
@@ -621,30 +660,24 @@ mod tests {
         assert!(!auto, "clicking Clear reported an Auto");
     }
 
-    #[test]
-    fn every_composition_guide_has_a_chip_in_the_panel() {
-        // ⚠⚠ The guard against the control shipping *absent*, which is the failure mode a pure
-        // `composition_guides` test structurally cannot see: delete the chips and every one of
-        // those tests stays green while the panel offers no way to pick a guide at all.
-        //
-        // ⚠ Stated over `ALL`, so a sixth guide reachable only from the keyboard is a failure
-        // rather than something nobody notices — the rule
-        // `every_tool_is_reachable_from_the_photo_menu` already follows.
-        let ctx = test_ui::ctx();
-        let mut s = session();
+    /// Draw the panel with one shared context, with `guide` as the composition guide.
+    fn composition_labels(
+        ctx: &egui::Context,
+        s: &mut Session,
+        guide: &mut CompositionGuide,
+    ) -> Vec<String> {
         let mut aspect = None;
         let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
-        let mut guide = CompositionGuide::Off;
-        let labels: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+        test_ui::labelled_centres(ctx, Vec::new(), |ui| {
             let mut ed = Edited::default();
             show(
                 ui,
-                &mut s,
+                s,
                 AspectLock {
                     lock: &mut aspect,
                     custom: &mut custom,
                 },
-                &mut guide,
+                guide,
                 false,
                 &mut ed,
                 &mut false,
@@ -652,41 +685,65 @@ mod tests {
         })
         .into_iter()
         .map(|(l, _)| l)
-        .collect();
-
-        for g in CompositionGuide::ALL {
-            assert!(
-                labels.iter().any(|l| l == g.label()),
-                "{g:?} has no chip; drawn: {labels:?}"
-            );
-        }
+        .collect()
     }
 
-    #[test]
-    fn clicking_a_composition_chip_selects_that_guide() {
-        // ⚠ The other half: a chip that is drawn but wired to nothing looks identical in the
-        // test above. ⚠ And it clicks a guide that is **not** the one already set, or a control
-        // that ignored the click entirely would pass.
-        let ctx = test_ui::ctx();
-        let mut s = session();
+    fn click_composition(
+        ctx: &egui::Context,
+        s: &mut Session,
+        guide: &mut CompositionGuide,
+        label: &str,
+    ) {
         let mut aspect = None;
         let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
-        let mut guide = CompositionGuide::Off;
-        test_ui::click(&ctx, CompositionGuide::Diagonals.label(), |ui| {
+        test_ui::click(ctx, label, |ui| {
             let mut ed = Edited::default();
             show(
                 ui,
-                &mut s,
+                s,
                 AspectLock {
                     lock: &mut aspect,
                     custom: &mut custom,
                 },
-                &mut guide,
+                guide,
                 false,
                 &mut ed,
                 &mut false,
             );
         });
+    }
+
+    #[test]
+    fn every_composition_guide_is_offered_by_the_dropdown() {
+        // ⚠ Through the shipped combo: its button is reachable by the current guide's name
+        // (egui gives a combo only its selected text, as a value — `test_ui` falls back to it),
+        // and the items appear once it is open. One context across the frames, or the popup is
+        // gone.
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut guide = CompositionGuide::Off;
+        click_composition(&ctx, &mut s, &mut guide, CompositionGuide::Off.label());
+        let labels = composition_labels(&ctx, &mut s, &mut guide);
+        for g in CompositionGuide::ALL {
+            assert!(
+                labels.iter().any(|l| l == g.label()),
+                "{g:?} is not offered; drawn: {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn picking_a_composition_guide_from_the_dropdown_selects_it() {
+        let ctx = test_ui::ctx();
+        let mut s = session();
+        let mut guide = CompositionGuide::Off;
+        click_composition(&ctx, &mut s, &mut guide, CompositionGuide::Off.label());
+        click_composition(
+            &ctx,
+            &mut s,
+            &mut guide,
+            CompositionGuide::Diagonals.label(),
+        );
         assert_eq!(guide, CompositionGuide::Diagonals);
     }
 
@@ -816,7 +873,7 @@ mod tests {
         let mut s = session();
         let mut aspect = None;
         let mut custom = [6, 4];
-        click_in_panel_with("Custom", &mut s, false, &mut aspect, &mut custom);
+        click_in_panel_with("W:H", &mut s, false, &mut aspect, &mut custom);
         assert!((aspect.unwrap() - 1.5).abs() < 1e-6);
         let mut ed = Edited::default();
         let values = test_ui::numeric_values(&ctx, |ui| {
@@ -867,7 +924,7 @@ mod tests {
         .into_iter()
         .map(|(l, _)| l)
         .collect();
-        for want in ["Custom", "Swap"] {
+        for want in ["W:H", "Swap"] {
             assert!(drawn.iter().any(|l| l == want), "{want} missing: {drawn:?}");
         }
     }
@@ -913,7 +970,7 @@ mod tests {
         s.edits.geometry.crop = asymmetric();
         let mut aspect = None;
         let mut custom = [21, 9];
-        let (ed, _) = click_in_panel_with("Custom", &mut s, false, &mut aspect, &mut custom);
+        let (ed, _) = click_in_panel_with("W:H", &mut s, false, &mut aspect, &mut custom);
         assert!(ed.settled);
         assert!((aspect.unwrap() - 21.0 / 9.0).abs() < 1e-6, "{aspect:?}");
         assert_crop_close(
@@ -1089,16 +1146,43 @@ mod tests {
     /// ⚠⚠ The reset button covers the whole Geometry group, perspective included. Without this
     /// the button's promise is only checked by reading its hover text.
     #[test]
-    fn resetting_the_geometry_clears_the_perspective_too() {
+    fn a_perspective_reset_clears_it_and_leaves_the_crop_alone() {
+        // ⚠ Only Perspective is modified, so exactly one `reset` is drawn — the harness cannot
+        // tell two apart.
         let mut s = session();
-        s.edits.geometry.crop = asymmetric();
         s.edits.perspective = edit_model::Perspective {
             vertical: 40.0,
             ..Default::default()
         };
-        click_in_panel("Reset geometry", &mut s, false);
+        s.guides.push(pipeline::perspective::guides::Guide {
+            from: [0.2, 0.2],
+            to: [0.2, 0.8],
+        });
+        let ed = click_in_panel("reset", &mut s, false);
         assert_eq!(s.edits.perspective, edit_model::Perspective::default());
-        assert_eq!(s.edits.geometry, edit_model::Geometry::default());
+        assert!(s.guides.is_empty(), "a reset perspective keeps no guides");
+        assert!(ed.settled, "one click, one history entry");
+    }
+
+    #[test]
+    fn a_crop_reset_leaves_the_angle_and_the_perspective_alone() {
+        let mut s = session();
+        s.edits.geometry.crop = asymmetric();
+        let mut aspect = Some(1.5);
+        let mut custom = rustroom_app::settings::DEFAULT_CUSTOM_ASPECT;
+        click_in_panel_with("reset", &mut s, false, &mut aspect, &mut custom);
+        assert_eq!(s.edits.geometry.crop, edit_model::CropRect::default());
+        assert_eq!(aspect, None, "a reset crop is a free crop");
+    }
+
+    #[test]
+    fn the_level_toggle_arms_the_line_tool_by_its_accessible_name() {
+        let mut s = session();
+        assert!(!s.straighten_armed);
+        click_in_panel("Straighten by drawing a line", &mut s, false);
+        assert!(s.straighten_armed, "the toggle did not arm the tool");
+        click_in_panel("Straighten by drawing a line", &mut s, false);
+        assert!(!s.straighten_armed, "nor disarm it");
     }
 
     /// ⚠⚠ `↔` and `↕` — the obvious choice — are **absent from every bundled font** and would
@@ -1180,7 +1264,7 @@ mod tests {
                 &mut false,
             );
         });
-        for want in ["Guide Mode", "Clear"] {
+        for want in ["Guide mode", "Clear"] {
             assert!(
                 found.iter().any(|(l, _)| l.contains(want)),
                 "no “{want}” control; found {:?}",

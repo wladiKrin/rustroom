@@ -62,10 +62,16 @@ pub fn labelled_centres(
         .nodes
         .iter()
         .filter_map(|(_, node)| {
-            let label = node.label()?;
+            // ⚠ A `ComboBox` has no label at all — egui gives it only its selected text as the
+            // node's *value* (`combo_box.rs`, `current_text_value`) — so it is reachable here by
+            // that text, which is also what a screen reader says for it (2026-09-19).
+            let label = node
+                .label()
+                .map(str::to_owned)
+                .or_else(|| node.value().map(str::to_owned))?;
             let b = node.bounds()?;
             Some((
-                label.to_string(),
+                label,
                 egui::pos2((b.x0 + b.x1) as f32 / 2.0, (b.y0 + b.y1) as f32 / 2.0),
             ))
         })

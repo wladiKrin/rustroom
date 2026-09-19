@@ -4,8 +4,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod geo_group;
 mod local_group;
 mod mask_ops;
+pub use geo_group::GeoGroup;
 pub use local_group::LocalGroup;
 pub use mask_ops::{MaskOp, Refinement};
 
