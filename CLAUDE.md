@@ -144,26 +144,15 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-19)
 
-**2584 tests** on `main` (goldens unmoved since 2026-09-18).
+**2599 tests** on `main` (goldens unmoved since 2026-09-18).
 
-⚠ **One branch, `masks-panel` (2026-09-19), fourteen commits ahead of `main`: the Masks panel as
-"icon rows, sectioned"** — a segmented mode control and a row of kind icons, painted rows with
-an **eye per mask** (the overlay, any number at once; `Session::mask_shown`), Show all / Hide
-all, a Shape section, the mask's adjustments under the Edit panel's four sections, hovers
-instead of hints, and larger rail icons. (Option A, menus not modes, was built first and
-superseded by the user's choice of C.) Gated green on its tip (**2599 tests**), **unmerged, unpushed, and not yet seen in use** —
-the GUI was launched for a look. Spec `2026-09-19-masks-panel-design.md`; `grep -n 'Masks panel'
-docs/JOURNAL.md`. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the
-user pushes.**
-
-✅ **The Develop panel restyle is merged and confirmed by use (2026-09-19)** — A surfaces, B
-slider rows, C section chrome, D2 icon rail, then its first look's corrections (a Profile block,
-`› NAME … reset` headers, a feathered wheel rim, the re-ordered sections, the global reset at the
-top) and the fix for a panel that widened 8 pt every frame. Specs
-`2026-09-18-develop-panel-restyle-design.md` and `2026-09-19-develop-panel-order-and-chrome-design.md`;
-`grep -n 'Develop panel' docs/JOURNAL.md` finds both sections, including the 77-failure named
-text style, the ~22 s first-launch stall every fresh test binary pays on this Mac, the
-unbounded `with_layout` in a scroll area, and the growth hunt's wrong turns.
+✅ **The Masks panel rework is merged and confirmed by use (2026-09-19)** — a segmented mode
+control that wraps rather than overlaps, a row of kind icons, painted rows with an **eye per
+mask** (the overlay, any number at once; `Session::mask_shown`, `suppressed_masks` derived from
+it), Show all / Hide all, a Shape section, the mask's adjustments under the Edit panel's four
+sections (`edit_model::LocalGroup`), hovers instead of hints, and larger rail icons. Spec
+`2026-09-19-masks-panel-design.md` (option A was built first and superseded by C at the user's
+request; the spec records both); `grep -n 'Masks panel' docs/JOURNAL.md`.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
