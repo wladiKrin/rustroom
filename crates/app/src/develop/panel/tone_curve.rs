@@ -43,21 +43,20 @@ pub fn show(
     ed: &mut Edited,
     hist: Option<&[[u32; 256]; 3]>,
 ) -> egui::Rect {
-    ui.horizontal(|ui| {
-        theme::sub_label(ui, "Tone Curve");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // ⚠ Disabled rather than hidden on a neutral curve: a control that appears and
-            // disappears is harder to learn than one that greys out.
-            let r = ui
-                .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
-                .on_hover_text("Return the curve to a straight line");
-            if r.clicked() {
-                // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
-                // `ToneCurveStage` out of the pipeline entirely.
-                curve.points.clear();
-                ed.discrete();
-            }
-        });
+    // ⚠ Through `sub_label_with`, never a hand-rolled `horizontal` around a sub-label: that
+    // nesting is what widened the panel every frame on 2026-09-19 — see `theme::sub_label_with`.
+    theme::sub_label_with(ui, "Tone Curve", |ui| {
+        // ⚠ Disabled rather than hidden on a neutral curve: a control that appears and
+        // disappears is harder to learn than one that greys out.
+        let r = ui
+            .add_enabled(!curve.points.is_empty(), egui::Button::new("Reset"))
+            .on_hover_text("Return the curve to a straight line");
+        if r.clicked() {
+            // ⚠ Cleared to *empty*, not to the two identity endpoints: empty is what keeps
+            // `ToneCurveStage` out of the pipeline entirely.
+            curve.points.clear();
+            ed.discrete();
+        }
     });
 
     let size = ui.available_width().min(MAX_SIZE);

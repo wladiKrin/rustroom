@@ -24,7 +24,8 @@ use std::ops::RangeInclusive;
 /// The label column. The widest labels today ("Radius (px)", "Smoothness") fit; a wider one
 /// truncates and shows in full on hover.
 pub const LABEL_WIDTH: f32 = 78.0;
-/// The value column, right-aligned.
+/// The value column's minimum width, right-aligned. A wider value widens its own cell — see
+/// `value_w` in the widget.
 pub const VALUE_WIDTH: f32 = 44.0;
 const RAIL_HEIGHT: f32 = 3.0;
 const HANDLE_RADIUS: f32 = 5.0;
@@ -92,6 +93,27 @@ impl egui::Widget for Slider<'_> {
         let (min, max) = (*range.start(), *range.end());
         let height = ui.spacing().interact_size.y;
         let old = *value;
+        // ⚠ **The value cell is sized from the text it will show, never a fixed width.** At a
+        // fixed 44 pt a value wider than the cell — "12500 K" — would draw a `DragValue` past
+        // it, the row would exceed the panel, and egui would widen the panel to fit, again every
+        // frame: the feedback loop the 2026-09-19 growth hunt found elsewhere (a nested
+        // sub-label row, see `theme::sub_label_with`) and this row was hardened against while
+        // suspected. The rail takes what is left, so a wide value costs rail, not panel.
+        // Measured with the `DragValue`'s own text style and button padding; `VALUE_WIDTH` is
+        // the floor so the columns stay aligned across ordinary rows.
+        let value_w = {
+            let text = match &formatter {
+                Some(f) => f(*value as f64),
+                None => egui::emath::format_with_decimals_in_range(*value as f64, 0..=2),
+            };
+            let font = ui.style().drag_value_text_style.resolve(ui.style());
+            let text_w = ui
+                .fonts_mut(|f| f.layout_no_wrap(text, font, egui::Color32::WHITE))
+                .size()
+                .x;
+            let padded = text_w + 2.0 * ui.spacing().button_padding.x;
+            VALUE_WIDTH.max(padded.ceil())
+        };
         let bipolar = slider_map::straddles_zero(min, max);
 
         ui.horizontal(|ui| {
@@ -122,7 +144,7 @@ impl egui::Widget for Slider<'_> {
             }
 
             // ── rail ──
-            let rail_w = (ui.available_width() - VALUE_WIDTH - GAP).max(24.0);
+            let rail_w = (ui.available_width() - value_w - GAP).max(24.0);
             let (rect, mut resp) =
                 ui.allocate_exact_size(egui::vec2(rail_w, height), egui::Sense::click_and_drag());
             let x_range =
@@ -212,7 +234,7 @@ impl egui::Widget for Slider<'_> {
             let dim = bipolar && *value == 0.0;
             let value_resp = ui
                 .allocate_ui_with_layout(
-                    egui::vec2(VALUE_WIDTH, height),
+                    egui::vec2(value_w, height),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
                         let vis = ui.visuals_mut();

@@ -174,31 +174,28 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 // `the_sessions_baseline_reaches_the_auto_solve`).
                 if tool == Tool::Edit {
                     if let Some(s) = &mut app.session {
-                        ui.horizontal(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui
-                                        .small_button("Reset adjustments")
-                                        .on_hover_text(format!(
-                                            "Resets {}. Leaves the crop and any masks alone.",
-                                            adjustments::SECTIONS
-                                                .iter()
-                                                .map(|s| s.name())
-                                                .collect::<Vec<_>>()
-                                                .join(", ")
-                                        ))
-                                        .clicked()
-                                    {
-                                        s.edits.merge_from(
-                                            &Edits::default(),
-                                            adjustments::edit_groups(),
-                                        );
-                                        ed.discrete();
-                                    }
-                                },
-                            );
-                        });
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui
+                                    .small_button("Reset adjustments")
+                                    .on_hover_text(format!(
+                                        "Resets {}. Leaves the crop and any masks alone.",
+                                        adjustments::SECTIONS
+                                            .iter()
+                                            .map(|s| s.name())
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ))
+                                    .clicked()
+                                {
+                                    s.edits
+                                        .merge_from(&Edits::default(), adjustments::edit_groups());
+                                    ed.discrete();
+                                }
+                            },
+                        );
                     }
                 }
                 // ⚠ Presets is drawn outside the mutable session borrow, because it is the one
@@ -590,6 +587,42 @@ mod tests {
         assert_eq!(s.edits.exposure, 0.0, "the sliders were not reset");
         assert_eq!(s.edits.geometry.crop.left, 0.25, "the crop must survive");
         assert!(s.history.can_undo(), "one click, one history entry");
+    }
+
+    /// ⚠⚠ **The panel must not widen frame over frame.** A row whose content is wider than the
+    /// space it was given makes egui grow the panel to fit, which gives the row more space, which
+    /// it again exceeds by the same amount — "the sidecar keeps expanding whenever I move the
+    /// mouse" (2026-09-19). A sub-label that had become a full-width row, nested inside the
+    /// tone curve's header row, did exactly that. Measured on the Profile header's centre, which
+    /// tracks the panel's left edge; a wide Temp value is set so the slider row is exercised too.
+    #[test]
+    fn the_panel_keeps_its_width_frame_over_frame() {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 200, 100);
+        // ⚠ A wide value on purpose — "12500 K" is the widest the Temp row can show.
+        app.session.as_mut().unwrap().edits.white_balance.kelvin = Some(12500.0);
+        let centre = |app: &mut RustroomApp, frame: usize| {
+            crate::test_ui::labelled_centres(
+                &ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    10.0 + frame as f32,
+                    10.0,
+                ))],
+                |ui| {
+                    show(app, ui);
+                },
+            )
+            .into_iter()
+            .find(|(l, _)| l == "Profile")
+            .map(|(_, p)| p.x)
+            .expect("the Profile header was not drawn")
+        };
+        let first = centre(&mut app, 0);
+        for frame in 1..6 {
+            let x = centre(&mut app, frame);
+            assert_eq!(x, first, "the panel widened by frame {frame}");
+        }
     }
 
     #[test]
