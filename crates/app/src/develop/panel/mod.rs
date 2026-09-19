@@ -7,6 +7,7 @@ pub mod hsl_bands;
 pub mod look;
 pub mod mask_adjust;
 pub mod mask_components;
+pub mod mask_glyph;
 pub mod masks;
 pub mod presets;
 pub mod profile;
@@ -220,17 +221,13 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                     // ⚠ Drawn here rather than in `adjustments` because the camera profile row
                     // needs `&mut app` (settings, a re-decode) where the rest needs `&mut
                     // app.session`; the body borrows `app` first, then the session.
-                    let (mut state, _) = section::header(
+                    let mut out = section::header(
                         ui,
                         ui.make_persistent_id("profile-block"),
                         true,
-                        section::Header {
-                            name: "Profile",
-                            modified: false,
-                            resettable: false,
-                        },
+                        section::Header::new("Profile"),
                     );
-                    state.show_body_unindented(ui, |ui| {
+                    out.state.show_body_unindented(ui, |ui| {
                         camera_profile_row(app, ui);
                         if let Some(s) = &mut app.session {
                             profile::rendering(ui, &mut s.edits, &app.looks, &mut ed);

@@ -503,18 +503,16 @@ fn section(
     body: impl FnOnce(&mut egui::Ui, &mut edit_model::Edits, &mut Edited),
 ) {
     let modified = edits.group_differs(&edit_model::Edits::default(), s.index());
-    let (mut state, reset) = super::section::header(
+    let mut out = super::section::header(
         ui,
         ui.make_persistent_id(s.name()),
         open_by_default,
-        super::section::Header {
-            name: s.name(),
-            modified,
-            resettable: true,
-        },
+        super::section::Header::new(s.name())
+            .modified(modified)
+            .resettable(true),
     );
-    state.show_body_unindented(ui, |ui| body(ui, edits, ed));
-    if reset {
+    out.state.show_body_unindented(ui, |ui| body(ui, edits, ed));
+    if out.reset {
         edits.merge_from(
             &edit_model::Edits::default(),
             edit_model::EditGroups::only(s.index()),
