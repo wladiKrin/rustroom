@@ -10,6 +10,7 @@ pub mod mask_components;
 pub mod masks;
 pub mod presets;
 pub mod retouch;
+pub mod section;
 pub mod slider;
 pub mod snapshots;
 pub mod tone_curve;

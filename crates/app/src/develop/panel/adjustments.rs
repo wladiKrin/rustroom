@@ -512,16 +512,8 @@ pub fn show(
     });
 }
 
-/// One collapsible section, headed by its edit group's name.
-///
-/// ⚠ A hand-drawn header over `CollapsingState`, not a `CollapsingHeader`: that widget draws
-/// egui's triangle and indents its body, and has no slot for the two things this row carries —
-/// an accent dot while the group differs from neutral, and a `reset` for exactly that group.
-/// The body goes through `show_body_unindented`, so the left-hand gap under every section is
-/// gone with the indent that made it.
-///
-/// ⚠ The AccessKit label is `s.name()` as written, not the uppercased text the row paints:
-/// the harnesses click sections by name ("Color"), and the name is what a screen reader wants.
+/// One collapsible section, headed by its edit group's name — see `section::header` for the
+/// row itself.
 ///
 /// ⚠ `edits` and `ed` are passed *through* to the body rather than captured by it, because
 /// the header reads `edits` for the dot before the body runs and writes it for the reset after
@@ -534,101 +526,18 @@ fn section(
     ed: &mut Edited,
     body: impl FnOnce(&mut egui::Ui, &mut edit_model::Edits, &mut Edited),
 ) {
-    const HEIGHT: f32 = 22.0;
-    const CHEVRON_W: f32 = 14.0;
-    let id = ui.make_persistent_id(s.name());
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        id,
-        open_by_default,
-    );
     let modified = edits.group_differs(&edit_model::Edits::default(), s.index());
-
-    ui.add_space(6.0);
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), HEIGHT),
-        egui::Sense::click(),
+    let (mut state, reset) = super::section::header(
+        ui,
+        ui.make_persistent_id(s.name()),
+        open_by_default,
+        super::section::Header {
+            name: s.name(),
+            modified,
+            resettable: true,
+        },
     );
-    let enabled = ui.is_enabled();
-    resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, s.name())
-    });
-
-    // ⚠ Registered after the row, so it wins the hit-test tie — egui takes the last widget
-    // registered at a point, the rule the Library's rubber band relies on.
-    let mut reset = false;
-    let mut right = rect.right() - CHEVRON_W;
-    let font = theme::section_font(ui.style());
-    if modified {
-        let weak = ui.visuals().weak_text_color();
-        let galley = ui
-            .painter()
-            .layout_no_wrap("reset".to_owned(), font.clone(), weak);
-        let cell = egui::Rect::from_min_max(
-            egui::pos2(right - galley.size().x - 8.0, rect.top()),
-            egui::pos2(right, rect.bottom()),
-        );
-        let r = ui
-            .interact(cell, id.with("reset"), egui::Sense::click())
-            .on_hover_text(format!("Reset {} and nothing else", s.name()));
-        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "reset"));
-        reset = r.clicked();
-        let colour = if r.hovered() {
-            ui.visuals().strong_text_color()
-        } else {
-            weak
-        };
-        ui.painter().galley(
-            egui::pos2(cell.left() + 4.0, cell.center().y - galley.size().y / 2.0),
-            galley,
-            colour,
-        );
-        right = cell.left() - 6.0;
-    }
-    if resp.clicked() && !reset {
-        state.toggle(ui);
-    }
-
-    if ui.is_rect_visible(rect) {
-        let v = ui.visuals().clone();
-        let painter = ui.painter_at(rect);
-        let text_rect = painter.text(
-            egui::pos2(rect.left(), rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            s.name().to_uppercase(),
-            font,
-            v.strong_text_color(),
-        );
-        if modified {
-            painter.circle_filled(
-                egui::pos2(text_rect.right() + 8.0, rect.center().y),
-                2.5,
-                v.selection.bg_fill,
-            );
-        }
-        // The chevron: '›' closed, rotated to '⌄' as the section opens.
-        let openness = state.openness(ui.ctx());
-        let rot = egui::emath::Rot2::from_angle(std::f32::consts::FRAC_PI_2 * openness);
-        let c = egui::pos2(right + CHEVRON_W / 2.0, rect.center().y);
-        let pts = [
-            egui::vec2(-2.0, -3.5),
-            egui::vec2(1.5, 0.0),
-            egui::vec2(-2.0, 3.5),
-        ]
-        .map(|p| c + rot * p)
-        .to_vec();
-        painter.add(egui::Shape::line(
-            pts,
-            egui::Stroke::new(1.4, v.weak_text_color()),
-        ));
-        painter.line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
-        );
-    }
-
     state.show_body_unindented(ui, |ui| body(ui, edits, ed));
-
     if reset {
         edits.merge_from(
             &edit_model::Edits::default(),
