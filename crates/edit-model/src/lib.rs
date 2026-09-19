@@ -579,7 +579,7 @@ pub const RETOUCH_GROUP: usize = 8;
 /// ⚠⚠ **There is deliberately no panel *section* named "Rendering".** "Reset adjustments" derives
 /// its group set from the panel's `SECTIONS`, so a group with no matching section is never reset —
 /// which is what stops that button flattening the photograph back to a colorimetric render. The
-/// control lives at the top of the Tone section instead.
+/// control lives in the panel's Profile block above the sections, whose header offers no reset.
 pub const RENDERING_GROUP: usize = 9;
 
 /// Which groups of settings a paste or a preset carries.

@@ -9,6 +9,7 @@ pub mod mask_adjust;
 pub mod mask_components;
 pub mod masks;
 pub mod presets;
+pub mod profile;
 pub mod retouch;
 pub mod section;
 pub mod slider;
@@ -160,12 +161,39 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 // ⚠ Drawn here, outside the session borrow below, for the same reason
                 // `presets::show` is: it needs `&mut app` for the settings and the re-decode,
                 // which is not disjoint from `&mut app.session`.
+                // ⚠ Hoisted above the Profile block, which records the rendering click into it
+                // before the session borrow below reads it.
+                let mut ed = Edited::default();
                 if tool == Tool::Edit {
-                    camera_profile_row(app, ui);
+                    // ⚠⚠ **The Profile block: the three controls that decide how the raw data
+                    // becomes a picture**, gathered above every adjustment because they establish
+                    // the starting picture and everything below adjusts it. Not a `Section`, and
+                    // deliberately `resettable: false` — "Reset adjustments" derives its group set
+                    // from `SECTIONS`, and a reset here would flatten the photo to a colorimetric
+                    // render (`edit_model::RENDERING_GROUP`).
+                    //
+                    // ⚠ Drawn here rather than in `adjustments` because the camera profile row
+                    // needs `&mut app` (settings, a re-decode) where the rest needs `&mut
+                    // app.session`; the body borrows `app` first, then the session.
+                    let (mut state, _) = section::header(
+                        ui,
+                        ui.make_persistent_id("profile-block"),
+                        true,
+                        section::Header {
+                            name: "Profile",
+                            modified: false,
+                            resettable: false,
+                        },
+                    );
+                    state.show_body_unindented(ui, |ui| {
+                        camera_profile_row(app, ui);
+                        if let Some(s) = &mut app.session {
+                            profile::rendering(ui, &mut s.edits, &app.looks, &mut ed);
+                        }
+                    });
                 }
 
                 if let Some(s) = &mut app.session {
-                    let mut ed = Edited::default();
                     // ⚠ An exhaustive match, not a wildcard: a fifth tool must force a
                     // decision about what the panel shows under it.
                     match tool {
@@ -188,7 +216,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                                     // s.edits` beside it — disjoint fields, so this is legal
                                     // where a closure capturing `s` twice would be `E0499`.
                                     buffer: &s.buffer,
-                                    looks: &app.looks,
                                     hist: Some(&s.hist),
                                 },
                                 Some(&mut s.picking_wb),

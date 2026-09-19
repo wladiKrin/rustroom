@@ -137,11 +137,6 @@ pub struct SourceInfo<'a> {
     /// Auto twice and it would keep moving. The white-balance eyedropper reads this same `Arc`
     /// for the same reason, which is why `Session` keeps it at all.
     pub buffer: &'a core_image::ImageBuf,
-    /// The looks installed on this machine, and whether this photo's named one loaded.
-    ///
-    /// ⚠ Read-only here: discovery happens once per photo in `session_flow`, never in this body,
-    /// which runs sixty times a second.
-    pub looks: &'a rustroom_app::looks::LooksState,
     /// The rendered frame's histogram, for the ghost behind the tone curve. `None` in a
     /// harness that has no render.
     pub hist: Option<&'a [[u32; 256]; 3]>,
@@ -241,7 +236,10 @@ pub(crate) fn white_balance(
 const MIRED_MIN: f32 = 1.0e6 / 25000.0;
 const MIRED_MAX: f32 = 1.0e6 / 2000.0;
 
-/// The Tone section: Auto, the six tonal sliders, the Presence block and the curve.
+/// The Tone section: Auto, the six tonal sliders, the curve, then the Presence block.
+///
+/// ⚠ The camera rendering and the look sat on top of this section until 2026-09-19; they are
+/// the Profile block now — see `profile::rendering`.
 ///
 /// ⚠ Its own function rather than a closure inside [`show`], which had reached 605 lines. The
 /// Auto button needs the buffer threaded to it, and threading a parameter through a closure that
@@ -251,7 +249,6 @@ pub(crate) fn tone(
     edits: &mut edit_model::Edits,
     buffer: &core_image::ImageBuf,
     baseline_ev: Option<f32>,
-    looks: &rustroom_app::looks::LooksState,
     hist: Option<&[[u32; 256]; 3]>,
     ed: &mut Edited,
 ) {
@@ -262,34 +259,6 @@ pub(crate) fn tone(
     // ⚠ Its own row rather than squeezed beside the Exposure slider: the panel is 240 pt and a
     // slider there already spends all of it on the rail, its label and its value. Lightroom puts
     // its Auto on its own row in the Tone panel for the same reason.
-    // ⚠⚠ **A rendering is not an adjustment, and it sits above the sliders to say so.** Every
-    // control below moves a photograph already in a defined state; this one *establishes* that
-    // state, turning scene-referred light into something a screen can show. It is also the first
-    // thing anyone reaches for when a RAW opens looking flat, which is the other reason it is
-    // first.
-    let mut rendered = edits.applied_rendering() == edit_model::Rendering::Camera;
-    if ui
-        .checkbox(&mut rendered, "Camera rendering")
-        .on_hover_text(
-            "Maps the scene's light onto the display the way the camera would. \
-             Off is colorimetric only, which looks flat and is what the CLI renders.",
-        )
-        .changed()
-    {
-        // ⚠ Always `Some`: a click is a decision, and *decided off* is what survives a photo
-        // switch — `None` would read as never-asked and the preference would switch it back on.
-        edits.rendering = Some(if rendered {
-            edit_model::Rendering::Camera
-        } else {
-            edit_model::Rendering::None
-        });
-        // ⚠ `mark_changed`, not a slider's `changed()`: a click is a complete act, so it is one
-        // history entry immediately rather than waiting for a `drag_stopped` that never comes.
-        ed.mark_changed();
-    }
-    // ⚠ Directly under the camera-rendering checkbox, because a `Linear` look *replaces* it:
-    // the two controls decide one thing between them and must be read together.
-    crate::develop::panel::look::section(ui, edits, looks, ed);
     if ui
         .button("Auto")
         .on_hover_text("Sets Exposure, Whites and Blacks from the histogram")
@@ -367,7 +336,6 @@ pub fn show(
         wb_baseline: baseline,
         baseline_ev,
         buffer,
-        looks,
         hist,
     } = source;
     // White Balance and Tone open by default; the rest start collapsed, because a panel
@@ -377,7 +345,7 @@ pub fn show(
     });
 
     section(ui, SECTIONS[1], true, edits, ed, |ui, edits, ed| {
-        tone(ui, edits, buffer, baseline_ev, looks, hist, ed);
+        tone(ui, edits, buffer, baseline_ev, hist, ed);
     });
 
     section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
@@ -609,15 +577,7 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Auto", |ui| {
             ed = Edited::default();
-            tone(
-                ui,
-                &mut edits,
-                &buf,
-                None,
-                &Default::default(),
-                None,
-                &mut ed,
-            );
+            tone(ui, &mut edits, &buf, None, None, &mut ed);
         });
         assert!(ed.changed, "the click must request a render");
         assert!(ed.settled, "the click must push exactly one history entry");
@@ -629,86 +589,6 @@ mod tests {
         assert_eq!(edits.contrast, 0.0);
         assert_eq!(edits.highlights, 0.0);
         assert_eq!(edits.shadows, 0.0);
-    }
-
-    /// ⚠⚠ **Both directions, because a checkbox stuck on would pass a one-way test.** The
-    /// control writes an enum from a `bool`, so the mapping is the thing that can be wrong, and
-    /// only clicking it twice can see it.
-    #[test]
-    fn the_rendering_checkbox_switches_both_ways_and_marks_the_edit() {
-        let ctx = crate::test_ui::ctx();
-        let buf = tone_fixture();
-        let mut edits = edit_model::Edits::default();
-        let mut ed = Edited::default();
-
-        crate::test_ui::click(&ctx, "Camera rendering", |ui| {
-            ed = Edited::default();
-            tone(
-                ui,
-                &mut edits,
-                &buf,
-                None,
-                &Default::default(),
-                None,
-                &mut ed,
-            );
-        });
-        assert_eq!(
-            edits.rendering,
-            Some(edit_model::Rendering::Camera),
-            "ticking it did not turn the rendering on"
-        );
-        assert!(ed.changed && ed.settled, "one click, one history entry");
-
-        crate::test_ui::click(&ctx, "Camera rendering", |ui| {
-            ed = Edited::default();
-            tone(
-                ui,
-                &mut edits,
-                &buf,
-                None,
-                &Default::default(),
-                None,
-                &mut ed,
-            );
-        });
-        assert_eq!(
-            edits.rendering,
-            Some(edit_model::Rendering::None),
-            "unticking it did not turn the rendering off"
-        );
-    }
-
-    /// ⚠ The checkbox writes `Some` in both directions. `None` on untick would read as
-    /// never-asked, and the preference would switch the rendering back on at the next open —
-    /// the exact bug the `Option` exists to end.
-    #[test]
-    fn unticking_the_rendering_decides_off_rather_than_forgetting() {
-        let ctx = crate::test_ui::ctx();
-        let buf = tone_fixture();
-        let mut edits = edit_model::Edits {
-            rendering: Some(edit_model::Rendering::Camera),
-            ..Default::default()
-        };
-        let mut ed = Edited::default();
-        crate::test_ui::click(&ctx, "Camera rendering", |ui| {
-            ed = Edited::default();
-            tone(
-                ui,
-                &mut edits,
-                &buf,
-                None,
-                &Default::default(),
-                None,
-                &mut ed,
-            );
-        });
-        assert_eq!(edits.rendering, Some(edit_model::Rendering::None));
-        assert_ne!(
-            edits,
-            edit_model::Edits::default(),
-            "decided off must not be neutral"
-        );
     }
 
     /// Same for the lens boxes: unticking the last one leaves `Some(off)`, not `None`.
@@ -724,7 +604,6 @@ mod tests {
             ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
         }
         let buf = tone_fixture();
-        let looks = rustroom_app::looks::LooksState::default();
         let mut edits = edit_model::Edits {
             lens_correction: Some(edit_model::LensCorrection {
                 distortion: true,
@@ -753,7 +632,6 @@ mod tests {
                     wb_baseline: color::wb::Illuminant::default(),
                     baseline_ev: None,
                     buffer: &buf,
-                    looks: &looks,
                     hist: None,
                 },
                 None,
@@ -780,7 +658,6 @@ mod tests {
         view: Option<rustroom_app::grade_view::GradeRangeView>,
         ed: Edited,
         buf: core_image::ImageBuf,
-        looks: rustroom_app::looks::LooksState,
     }
 
     impl RangePanel {
@@ -793,7 +670,6 @@ mod tests {
                 view: None,
                 ed: Edited::default(),
                 buf: tone_fixture(),
-                looks: rustroom_app::looks::LooksState::default(),
             }
         }
 
@@ -807,7 +683,6 @@ mod tests {
                 view,
                 ed,
                 buf,
-                looks,
             } = self;
             crate::test_ui::click(ctx, label, |ui| {
                 *ed = Edited::default();
@@ -826,7 +701,6 @@ mod tests {
                         wb_baseline: color::wb::Illuminant::default(),
                         baseline_ev: None,
                         buffer: buf,
-                        looks,
                         hist: None,
                     },
                     None,
@@ -845,7 +719,6 @@ mod tests {
                 view,
                 ed,
                 buf,
-                looks,
             } = self;
             let labels = crate::test_ui::labelled_centres(ctx, Vec::new(), |ui| {
                 *ed = Edited::default();
@@ -864,7 +737,6 @@ mod tests {
                         wb_baseline: color::wb::Illuminant::default(),
                         baseline_ev: None,
                         buffer: buf,
-                        looks,
                         hist: None,
                     },
                     None,
@@ -1013,15 +885,7 @@ mod tests {
             let mut ed = Edited::default();
             crate::test_ui::click(&ctx, "Auto", |ui| {
                 ed = Edited::default();
-                tone(
-                    ui,
-                    &mut edits,
-                    &buf,
-                    baseline,
-                    &Default::default(),
-                    None,
-                    &mut ed,
-                );
+                tone(ui, &mut edits, &buf, baseline, None, &mut ed);
             });
             assert!(ed.changed, "the click did not take");
             exposures.push(edits.exposure);
@@ -1047,15 +911,7 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    tone(
-                        ui,
-                        &mut edits,
-                        &buf,
-                        None,
-                        &Default::default(),
-                        None,
-                        &mut ed,
-                    );
+                    tone(ui, &mut edits, &buf, None, None, &mut ed);
                     assert!(!ed.changed, "drawing the panel reported an edit");
                     assert!(!ed.settled, "drawing the panel pushed a history entry");
                 },
@@ -1232,76 +1088,5 @@ mod tests {
             "No profile for XF8mmF3.5 R WR"
         );
         assert_eq!(lens_status(Some("XF23mmF2 R WR"), true), "XF23mmF2 R WR");
-    }
-
-    /// A `LooksState` with two installed looks, built without touching disk.
-    fn two_looks() -> rustroom_app::looks::LooksState {
-        rustroom_app::looks::LooksState::from_entries(vec![
-            rustroom_app::looks::LookEntry {
-                file: "portra.cube".into(),
-                name: "portra".into(),
-            },
-            rustroom_app::looks::LookEntry {
-                file: "teal.cube".into(),
-                name: "teal".into(),
-            },
-        ])
-    }
-
-    fn look_labels(
-        edits: &mut edit_model::Edits,
-        looks: &rustroom_app::looks::LooksState,
-    ) -> Vec<String> {
-        let ctx = crate::test_ui::ctx();
-        let buf = tone_fixture();
-        let mut ed = Edited::default();
-        crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            ed = Edited::default();
-            tone(ui, edits, &buf, None, looks, None, &mut ed);
-        })
-        .into_iter()
-        .map(|(l, _)| l)
-        .collect()
-    }
-
-    /// ⚠ The controls appear only once there is something to choose, and the Strength slider
-    /// only once a look is chosen — a dropdown whose sole entry is "None" can only disappoint.
-    ///
-    /// ⚠⚠ **Asserted on Strength, not on the dropdown or the warnings.** The harness reads the
-    /// accessibility tree, which carries interactive widgets and not plain labels or combo box
-    /// headings — so what the panel *says* is guarded in `looks::notes`, where it is a pure
-    /// function, and only what the panel *offers* is guarded here.
-    #[test]
-    fn the_strength_slider_appears_only_when_a_look_is_chosen() {
-        let looks = two_looks();
-        let mut none = edit_model::Edits::default();
-        assert!(
-            !look_labels(&mut none, &looks)
-                .iter()
-                .any(|l| l == "Strength"),
-            "Strength was offered with no look chosen"
-        );
-
-        let mut chosen = edit_model::Edits {
-            look: edit_model::Look {
-                file: Some("portra.cube".into()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert!(
-            look_labels(&mut chosen, &looks)
-                .iter()
-                .any(|l| l == "Strength"),
-            "a chosen look offered no Strength"
-        );
-
-        // ⚠ And nothing at all when none are installed and none is named.
-        let empty = rustroom_app::looks::LooksState::default();
-        let mut e = edit_model::Edits::default();
-        assert!(
-            !look_labels(&mut e, &empty).iter().any(|l| l == "Strength"),
-            "the look controls appeared with no looks installed"
-        );
     }
 }
