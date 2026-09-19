@@ -3,9 +3,14 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this
 > plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rebuild the Masks panel as the approved option A: one Add mask menu, painted mask and
-component rows, a Refine row of op menus, a Shape section, and the mask's adjustments under the
-same four sections as the Edit panel.
+**Goal:** Rebuild the Masks panel as the approved option (A first, then **C** at the user's
+request the same day): a segmented mode control and a row of kind icons, painted mask and
+component rows, a Shape section, and the mask's adjustments under the same four sections as the
+Edit panel.
+
+> ⚠ Executed as written for A through Task 7, then Task 5 was redone for C in one further commit:
+> the Add mask menu and the Refine row became the segmented mode + kind icon row, the header's
+> overlay toggle went back to the Show mask checkbox, and `mask_add_mode` returned.
 
 **Architecture:** Kind templates and labels move to a lib module (`mask_kind`); per-group
 differ/reset moves to `edit-model` (`LocalGroup`); the header gains a toggle and a trailing text;

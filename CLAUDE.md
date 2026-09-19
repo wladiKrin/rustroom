@@ -144,7 +144,15 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-19)
 
-**2584 tests** on `main` (goldens unmoved since 2026-09-18). ⚠ `main` is **ahead of `origin/main`** — **not pushed; the
+**2584 tests** on `main` (goldens unmoved since 2026-09-18).
+
+⚠ **One branch, `masks-panel` (2026-09-19), ten commits ahead of `main`: the Masks panel as
+"icon rows, sectioned"** — a segmented mode control and a row of kind icons, painted rows, a
+Shape section, the mask's adjustments under the Edit panel's four sections, and larger rail
+icons. (Option A, menus not modes, was built first and superseded by the user's choice of C.)
+Gated green on its tip (**2594 tests**), **unmerged, unpushed, and not yet seen in use** —
+the GUI was launched for a look. Spec `2026-09-19-masks-panel-design.md`; `grep -n 'Masks panel'
+docs/JOURNAL.md`. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the
 user pushes.**
 
 ✅ **The Develop panel restyle is merged and confirmed by use (2026-09-19)** — A surfaces, B

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Masks panel: icon rows, sectioned (2026-09-19)](#the-masks-panel-icon-rows-sectioned-2026-09-19)
 - [The Develop panel, seen in use: order of controls, header chrome, wheel rim (2026-09-19)](#the-develop-panel-seen-in-use-order-of-controls-header-chrome-wheel-rim-2026-09-19)
 - [The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)](#the-develop-panel-restyle-surfaces-slider-rows-section-chrome-icon-rail-2026-09-19)
 - [M8.11 — a mask's coverage and blend on the GPU (2026-09-16)](#m811-a-masks-coverage-and-blend-on-the-gpu-2026-09-16)
@@ -118,9 +119,57 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Masks panel: icon rows, sectioned (2026-09-19)
 
----
+Three options on a design canvas ("Rustroom Masks Panel"); the user chose **A** ("menus, not
+modes"), it was built and gated, and while the gate ran he changed his mind to **C** ("icon rows,
+minimal change"). C was applied as one further commit on top of A rather than a rebuild: the two
+share everything below the list. Spec `2026-09-19-masks-panel-design.md` records both, plan of
+the same name. **2584 → 2594 tests**, goldens unmoved, `pipeline` untouched; `edit-model`
+gained a pure partition, no field.
+
+**What the old panel got wrong, from the code:** adding anything took two rows read together — a
+mode chip (New / Add / Subtract / Intersect) and then one of five "Add …" buttons wrapping over
+three lines; masks and their components were the same button style, only indented; ~40 sliders
+arrived as one flat run grouped by separators and two lone collapsing rows.
+
+| what landed | where |
+|---|---|
+| the mode as a `segmented` control, **disabled without a selection and disarmed on deselect**; the five kinds as one row of icon buttons with the name on hover and as the accessible name | `masks::add_controls`, `mask_components::kind_button` |
+| painted mask rows — kind glyph, name, `×` on the right, the selected mask tinted like the rail; component rows indented with the op glyph (+ − ∩), the edited one in the weak fill | `mask_components.rs` (`row`, `rows`), `mask_glyph.rs` |
+| the MASKS section header is the heading, with the dot and `reset` (the old "Remove all masks"); "Show mask" stays a checkbox | `section::header` gained a trailing text and a builder; `Tool::Masks.panel_heading()` is `None` |
+| a SHAPE section naming its kind; the mask's adjustments under **the Edit panel's four sections**, dot and reset per section | `masks.rs`, `mask_adjust.rs`, `edit_model::LocalGroup` |
+| kind templates and labels in a lib module | `mask_kind.rs` |
+
+**A, for the record (one commit, superseded):** one `Add mask ▾` menu, a Refine row of
+`Add ▾ / Subtract ▾ / Intersect ▾` menus under the selected mask, an `overlay` toggle on the
+header. It removed the mode as state entirely. The user preferred the shorter, mode-visible C.
+⚠ egui menus proved testable through AccessKit — `click("Add mask")` opens the popup on the
+release frame and the next `click("Brush")` finds the item in the popup's layer — worth knowing
+the next time a menu is the right control.
+
+**Worth keeping:**
+
+- ⚠⚠ **`LocalGroup::copy_group` destructures `LocalAdjustments` with no `..`.** The dot and the
+  reset both go through it, so a new field on a mask's adjustments fails to compile until it is
+  assigned to a section — the standing lesson about guards that enumerate a list, applied before
+  the list grew rather than after.
+- ⚠ **The panel harness needs one context for its whole life** now that sections keep open
+  state in it: the old per-call `test_ui::ctx()` would have reset Detail to collapsed between
+  "open it" and "drag in it". `masks.rs`'s `Panel` is that harness, and it replaced three copies
+  of the same tool-state boilerplate.
+- ⚠ Two label collisions for the harness only: the NR sliders "Color" and "Detail" now share
+  names with section headers, so the mask_adjust test drags "Smoothness" and "Masking" instead.
+  A section reset test must accept *either* modified section being reset — the AccessKit tree
+  does not promise layout order, the trap the Edit panel's test already records.
+- The kind glyphs are hand-painted, not Phosphor codepoints: those five are not known here and a
+  guessed one ships a tofu box, which four features have done before.
+
+`masks.rs` 834 → ~730 lines, still over the marker (its tests are half of it);
+`mask_components.rs` ~400, `mask_adjust.rs` 363. The rail icons went 22 → 26 pt on a 48 pt rail
+in the same branch, the user's call.
+
+ call.
 
 ### The Develop panel, seen in use: order of controls, header chrome, wheel rim (2026-09-19)
 

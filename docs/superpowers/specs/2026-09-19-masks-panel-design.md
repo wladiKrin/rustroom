@@ -1,9 +1,12 @@
-# The Masks panel: menus, not modes — design
+# The Masks panel: icon rows, minimal change — design
 
-**Date:** 2026-09-19. **Branch:** `masks-panel`. **Status:** option A of the canvas
-"Rustroom Masks Panel" (https://claude.ai/artifact/E7CgHLYEyoV3jwd1os18SB), approved in
-conversation. Also carries one unrelated tweak the user asked for at the same time: larger rail
-icons.
+**Date:** 2026-09-19. **Branch:** `masks-panel`. **Status:** option **C** of the canvas
+"Rustroom Masks Panel" (https://claude.ai/artifact/E7CgHLYEyoV3jwd1os18SB). ⚠ Option A ("menus,
+not modes") was approved and built first the same day; the user then preferred C, and the panel
+was changed before merge. What A and C share (painted rows, the Shape section, the four
+adjustment sections, the glyphs, `MaskKind`, `LocalGroup`) stayed; the Add mask menu, the Refine
+row and the header's overlay toggle went. Also carries one unrelated tweak the user asked for at
+the same time: larger rail icons.
 
 ## Why
 
@@ -17,15 +20,16 @@ masks" float loose at the bottom.
 ## The panel, top to bottom
 
 ```
-› MASKS •                         overlay   reset
-                                   [+ Add mask ▾]
+› MASKS •                                       reset
+  [ New mask | Add | Subtract | Intersect ]     (segmented; disabled without a selection)
+  [ ◐ ][ ◐ ][ ◐ ][ ◐ ][ ◐ ]                     (one icon per kind, name on hover)
+  hint: New mask starts a fresh mask; Add, Subtract and Intersect put the next shape onto the selected one.
   ◐ Gradient 1                                 ×
   ◐ Radial 2                    (selected, tinted) ×
       ◐ Radial                  (component being edited)
     − ◐ Brush                                  ×
     ∩ ◐ Luminance                              ×
-    Refine  [Add ▾] [Subtract ▾] [Intersect ▾]
-    hint: Add widens the mask, Subtract cuts out of it, Intersect keeps only where both reach.
+  ☐ Show mask
 › SHAPE                                   Radial
   ☐ Invert · Feather …  (or the brush tool settings) · the kind's hint
 › WHITE BALANCE                           Temp, Tint
@@ -40,21 +44,25 @@ masks" float loose at the bottom.
 - The tool's plain "Masks" heading goes; `Tool::Masks.panel_heading()` returns `None` and the
   section header is the heading. The rule in `tool.rs` becomes "Edit and Masks carry their own
   section headers".
-- `section::header` gains two optional trailers, drawn left of `reset`: a **toggle** (label,
-  on/off, returns clicked; accessible as a checkbox named by its label) and a **trailing text**
-  (weak, non-interactive). `Header` becomes a builder: `Header::new(name).modified(b)
-  .resettable(b).toggle(label, on).trailing(text)`; the return is `HeaderOut { state, reset,
-  toggled }`. The two existing callers move to the builder.
+- `section::header` gains an optional **trailing text** (weak, non-interactive) and becomes a
+  builder: `Header::new(name).modified(b).resettable(b).trailing(text)`; the return is
+  `HeaderOut { state, reset }`. The two existing callers move to the builder.
 - MASKS: `modified` = any masks; `reset` = today's "Remove all masks" (same group merge, same
-  selection clearing, tooltip says what it deletes); toggle `overlay` = `show_mask_tint`, the
-  same flag the View menu's "Show mask overlay" flips.
-- **Add mask** is one `menu_button("Add mask")` right-aligned in a row pinned to its width
-  (`allocate_ui_with_layout`, never a bare `with_layout` — the 2026-09-19 growth bug). Its
-  items are the five kinds; clicking one appends a new mask with that kind's template, selects
-  it, and is one history entry. The templates and menu labels move to a lib module,
+  selection clearing, tooltip says what it deletes).
+- **The mode** is a `theme::segmented` over `Option<MaskOp>`: New mask / Add / Subtract /
+  Intersect (`MaskOp::label()`). It is visible state (`MaskUi::add_mode`,
+  `RustroomApp::mask_add_mode`, as before). Without a selected mask the control is disabled
+  with a hover "Select a mask to refine it" and the mode is forced back to New mask, so an op
+  can never outlive its selection.
+- **The kinds** are one row of five equal icon buttons (`mask_components::kind_button`): the
+  kind's glyph, its name on hover and as the accessible name. A click in New mask (or with
+  nothing selected) appends a new mask with that kind's template and selects it; in an op mode
+  it appends `Refinement { op, mask: template }` to the selected mask and selects the new
+  shape. One history entry either way. The templates and labels live in a lib module,
   `mask_kind.rs`: `MaskKind { Gradient, Radial, Brush, Luminance, Colour }`, `ALL`,
   `menu_label()` ("Gradient", "Radial", "Brush", "Luminance range", "Colour range"),
-  `template() -> Mask`, with the existing doc comments on each default.
+  `template() -> Mask`, `of(&Mask)`.
+- A one-line hint under the buttons explains the modes.
 - **Mask rows** are hand-painted, 22 pt: a kind glyph, the name (`"{label} {i+1}"` as today), a
   `×` cell at the right registered after the row. Selected: the accent tint (`TINT` as the rail).
   Accessible name = the row's name (`SelectableLabel`, selected state); the × is a `Button`
@@ -63,18 +71,14 @@ masks" float loose at the bottom.
   (blank, −, ∩, +), the kind glyph, the kind name; the component being edited gets the
   inactive weak fill; refinements have a ×. Accessible names unchanged: the base is
   `mask.label()`, a refinement is `Refinement::label()` ("Subtract Radial").
-- **Refine row** under the components, indented: weak "Refine", then three `menu_button`s
-  labelled by `MaskOp::label()` (Add, Subtract, Intersect), each listing the five kinds. A
-  click appends `Refinement { op, mask: kind.template() }` and selects the new component. Hover
-  text on each op from `chip_label()` plus a sentence. The mode chips, `chips()`,
-  `MaskUi::add_mode` and `RustroomApp::mask_add_mode` are removed.
+- **Show mask** stays a checkbox, under the list, drawn in every state.
 - The kind glyphs are painted by hand in a bin module `mask_glyph.rs` (`paint(painter, rect,
   kind, colour)`): gradient = three lines fading, radial = an ellipse in an ellipse, brush = a
   short thick stroke with a dot, luminance = a circle with its left half filled, colour = a drop
   (circle plus triangle). Not the icon font: the codepoints for these are unknown here and a
   wrong one ships a tofu box.
-- With no masks: the Add mask row and a hint ("Add a mask, then drag its handles on the
-  image…"). With a mask selected and no refinement: no component rows, but the Refine row.
+- With no mask selected: a hint under the checkbox ("Add a mask, then drag its handles on the
+  image…").
 
 ### The SHAPE section
 
@@ -118,9 +122,9 @@ Mask names, drag-reordering, thumbnails, a per-mask on/off, the canvas overlay.
 
 - new lib `crates/app/src/mask_kind.rs`; new bin `develop/panel/mask_glyph.rs`
 - new `crates/edit-model/src/local_group.rs` (+ `pub use`)
-- `develop/panel/section.rs` (builder, toggle, trailing), `adjustments.rs` and `panel/mod.rs`
+- `develop/panel/section.rs` (builder, trailing), `adjustments.rs` and `panel/mod.rs`
   (builder call sites), `masks.rs`, `mask_components.rs`, `mask_adjust.rs`, `tool.rs`,
-  `main.rs` + `test_app.rs` (drop `mask_add_mode`), `rail.rs`
+  `rail.rs`
 - `docs/JOURNAL.md`, `CLAUDE.md` state
 
 ## Testing
@@ -128,13 +132,13 @@ Mask names, drag-reordering, thumbnails, a per-mask on/off, the canvas overlay.
 - `mask_kind`: every kind's template is its own variant; labels distinct.
 - `local_group`: for each group, one field moved → exactly that group differs; `reset_group`
   clears exactly it; a fully-changed set reset group by group ends at default.
-- `section`: a toggle is reachable by its label and reports a click; trailing text is not a
-  widget.
-- `masks`: the existing tests re-targeted — adding goes through "Add mask" then the kind's
-  label; refining through the op's menu then the kind; the overlay toggle flips `show_tint`;
-  the MASKS reset removes every mask and clears the selection.
-- `mask_components`: the component rows keep their accessible names; the Refine row offers
-  the three ops.
+- `section`: trailing text is not a widget.
+- `masks`: the existing tests re-targeted — adding is the kind's button in New mask mode;
+  refining is the op's segment then the kind's button; the op modes are inert without a
+  selection and disarm on deselect; the Show mask checkbox flips `show_tint`; the MASKS reset
+  removes every mask and clears the selection.
+- `mask_components`: the component rows keep their accessible names; every kind button is
+  named for accessibility.
 - `mask_adjust`: the curve is laid out with Tone open; Color and Detail start collapsed;
   opening Color leaves the mask's grade range alone; the capture sliders reach their fields
   (Dehaze, Smoothness, Masking — "Color" and "Detail" now collide with the section names for
