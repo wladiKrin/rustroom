@@ -5,9 +5,12 @@
 //! panel — the global adjustment sliders are not visible alongside it. A mask carries its own
 //! Temp…Sharpening, so nothing here needs them.
 //!
-//! ⚠ The layout is option A of the 2026-09-19 canvas ("menus, not modes"): one `Add mask`
-//! menu, painted rows, a Refine row of op menus, then SHAPE and the four adjustment sections
-//! the Edit panel also uses — one layout learned once.
+//! ⚠ The layout is option C of the 2026-09-19 canvas ("icon rows, minimal change"): a
+//! segmented mode control (New mask / Add / Subtract / Intersect), one row of kind icons,
+//! painted rows, then SHAPE and the four adjustment sections the Edit panel also uses — one
+//! layout learned once. Option A ("menus, not modes") was built first the same day and
+//! replaced at the user's request: the mode is visible state here, and an armed Subtract
+//! still adds a shape you did not mean, which the user accepted for the shorter panel.
 
 use crate::develop::panel::{mask_components, section, Edited};
 use crate::{theme, Session};
@@ -37,11 +40,13 @@ pub struct BrushTool<'a> {
 
 /// The panel state a mask's controls need that lives on `RustroomApp` rather than on the mask.
 ///
-/// ⚠ Two `&mut` to **disjoint** fields, which is what makes this legal where a closure capturing
+/// ⚠ Three `&mut` to **disjoint** fields, which is what makes this legal where a closure capturing
 /// `app` would be `E0499` — the reasoning `BrushTool` already carries.
 pub struct MaskUi<'a> {
     pub hsl: &'a mut super::adjustments::HslChannel,
     pub grade: &'a mut super::color_wheel::GradeRange,
+    /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
+    pub add_mode: &'a mut Option<edit_model::MaskOp>,
 }
 
 /// Draw the Masks tool's controls.
@@ -58,26 +63,23 @@ pub fn show(
     let MaskUi {
         hsl: mask_hsl,
         grade: mask_grade,
+        add_mode,
     } = ui_state;
     // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
     // nothing and keeps the later mutable borrows disjoint.
     let baseline = s.wb_baseline;
 
     // ── MASKS ──
-    // ⚠ `reset` here is the old "Remove all masks", and `overlay` the old "Show mask" checkbox;
-    // both belong to the list as a whole, so they sit on its header.
+    // ⚠ `reset` here is the old "Remove all masks": it belongs to the list as a whole, so it
+    // sits on its header.
     let mut out = section::header(
         ui,
         ui.make_persistent_id(("mask", "Masks")),
         true,
         section::Header::new("Masks")
             .modified(!s.edits.masks.is_empty())
-            .resettable(true)
-            .toggle("overlay", *brush.show_tint),
+            .resettable(true),
     );
-    if out.toggled {
-        *brush.show_tint = !*brush.show_tint;
-    }
     if out.reset {
         s.edits.merge_from(
             &edit_model::Edits::default(),
@@ -91,8 +93,15 @@ pub fn show(
         ed.discrete();
     }
     out.state.show_body_unindented(ui, |ui| {
-        add_row(ui, s, ed);
+        add_controls(ui, s, add_mode, ed);
         list(ui, s, ed);
+        // ⚠ Drawn for every state, not only with a selection: the rule is one sentence with
+        // no exceptions, and a checkbox that comes and goes is harder to learn.
+        ui.checkbox(&mut *brush.show_tint, "Show mask")
+            .on_hover_text(
+                "Tints where the selected mask reaches, and takes its own adjustments out of \
+                 the view so you can see what you are covering. Untick it to judge the effect.",
+            );
         if s.selected_mask.is_none() {
             theme::hint(
                 ui,
@@ -130,42 +139,82 @@ pub fn show(
     super::mask_adjust::show(ui, &mut m.adjustments, baseline, mask_hsl, mask_grade, ed);
 }
 
-/// The `Add mask` menu, right-aligned in a row pinned to its width.
+/// The mode control and the row of kind buttons.
 ///
-/// ⚠ `allocate_ui_with_layout`, never a bare `with_layout(right_to_left)`: inside this panel
-/// that widened the panel every frame (2026-09-19, `theme::sub_label_with`'s note).
-fn add_row(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
+/// ⚠ The mode is **visible state** — a segmented control, never a hidden flag — and it is
+/// inert without a selection: the three ops mean nothing with no mask to refine, so the control
+/// is disabled and the mode forced back to New mask. A kind click in New mask (or with nothing
+/// selected) adds a mask; in an op mode it appends a refinement to the selected mask and selects
+/// the new shape, or the sliders below would still be pointing at whatever was selected before.
+fn add_controls(
+    ui: &mut egui::Ui,
+    s: &mut Session,
+    mode: &mut Option<edit_model::MaskOp>,
+    ed: &mut Edited,
+) {
+    let can_refine = s.selected_mask.is_some_and(|i| i < s.edits.masks.len());
+    if !can_refine {
+        *mode = None;
+    }
+    let items = [
+        (None, "New mask"),
+        (
+            Some(edit_model::MaskOp::Add),
+            edit_model::MaskOp::Add.label(),
+        ),
+        (
+            Some(edit_model::MaskOp::Subtract),
+            edit_model::MaskOp::Subtract.label(),
+        ),
+        (
+            Some(edit_model::MaskOp::Intersect),
+            edit_model::MaskOp::Intersect.label(),
+        ),
+    ];
+    ui.add_enabled_ui(can_refine, |ui| theme::segmented(ui, mode, &items))
+        .response
+        .on_disabled_hover_text("Select a mask to refine it");
     let mut added: Option<MaskKind> = None;
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            ui.menu_button("Add mask", |ui| {
-                for k in MaskKind::ALL {
-                    if ui.button(k.menu_label()).clicked() {
-                        added = Some(k);
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("A new mask of one of five kinds; the Refine row adds shapes to one");
-        },
+    ui.horizontal(|ui| {
+        let n = MaskKind::ALL.len() as f32;
+        let w = (ui.available_width() - ui.spacing().item_spacing.x * (n - 1.0)) / n;
+        for k in MaskKind::ALL {
+            if mask_components::kind_button(ui, k, w).clicked() {
+                added = Some(k);
+            }
+        }
+    });
+    theme::hint(
+        ui,
+        "New mask starts a fresh mask. Add, Subtract and Intersect put the next shape onto the \
+         selected one: Add widens it, Subtract cuts out of it, Intersect keeps only where both \
+         reach.",
     );
     if let Some(k) = added {
-        s.edits.masks.push(edit_model::MaskedAdjustment {
-            mask: k.template(),
-            refine: Vec::new(),
-            adjustments: edit_model::LocalAdjustments::default(),
-        });
-        s.selected_mask = Some(s.edits.masks.len() - 1);
-        s.selected_component = 0;
+        match (*mode, s.selected_mask) {
+            (Some(op), Some(i)) if i < s.edits.masks.len() => {
+                s.edits.masks[i].refine.push(edit_model::Refinement {
+                    op,
+                    mask: k.template(),
+                });
+                s.selected_component = s.edits.masks[i].refine.len();
+            }
+            _ => {
+                s.edits.masks.push(edit_model::MaskedAdjustment {
+                    mask: k.template(),
+                    refine: Vec::new(),
+                    adjustments: edit_model::LocalAdjustments::default(),
+                });
+                s.selected_mask = Some(s.edits.masks.len() - 1);
+                s.selected_component = 0;
+            }
+        }
         s.active_mask_handle = None;
         ed.discrete();
     }
 }
 
-/// The mask rows, the selected mask's component rows and its Refine row.
+/// The mask rows, and the selected mask's component rows.
 fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
     let mut remove: Option<usize> = None;
     let mut pick: Option<usize> = None;
@@ -198,7 +247,6 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         }
         if picked {
             mask_components::rows(ui, s, i, ed);
-            mask_components::refine_row(ui, s, i, ed);
         }
     }
     if let Some(i) = pick {
@@ -296,6 +344,7 @@ mod tests {
         tolerance: f32,
         channel: crate::develop::panel::adjustments::HslChannel,
         grade: crate::develop::panel::color_wheel::GradeRange,
+        mode: Option<edit_model::MaskOp>,
     }
 
     impl Panel {
@@ -318,6 +367,7 @@ mod tests {
                 tolerance: 35.0,
                 channel: Default::default(),
                 grade: Default::default(),
+                mode: None,
             }
         }
 
@@ -328,6 +378,7 @@ mod tests {
                 MaskUi {
                     hsl: &mut self.channel,
                     grade: &mut self.grade,
+                    add_mode: &mut self.mode,
                 },
                 BrushTool {
                     size: &mut self.size,
@@ -353,15 +404,16 @@ mod tests {
             ed
         }
 
-        /// Add a mask through the menu: `Add mask`, then the kind's item.
+        /// Add a mask: New mask mode, then the kind's button.
         fn add(&mut self, kind: MaskKind) -> Edited {
-            self.click("Add mask");
+            self.mode = None;
             self.click(kind.menu_label())
         }
 
-        /// Refine the selected mask through an op's menu.
+        /// Refine the selected mask: the op's segment, then the kind's button.
         fn refine(&mut self, op: edit_model::MaskOp, kind: MaskKind) -> Edited {
             self.click(op.label());
+            assert_eq!(self.mode, Some(op), "the segment did not arm {op:?}");
             self.click(kind.menu_label())
         }
 
@@ -417,15 +469,15 @@ mod tests {
     }
 
     #[test]
-    fn the_add_menu_adds_a_mask_and_an_op_menu_refines_the_selected_one() {
+    fn a_kind_button_adds_a_mask_in_new_mode_and_a_component_in_an_op_mode() {
         // ⚠⚠ **Both halves, and the pair is what makes this mean anything.** A version that
         // always appended a component would pass a "does Subtract refine?" test on its own, and
-        // a version that always added a mask would pass the Add-mask half.
+        // a version that always added a mask would pass the New-mask half.
         let mut p = Panel::new();
         p.add(MaskKind::Gradient);
         assert_eq!(p.s.edits.masks.len(), 1, "fixture: one mask to refine");
         p.add(MaskKind::Radial);
-        assert_eq!(p.s.edits.masks.len(), 2, "Add mask adds a mask");
+        assert_eq!(p.s.edits.masks.len(), 2, "New mask mode adds a mask");
         assert!(p.s.edits.masks[1].refine.is_empty());
 
         p.refine(edit_model::MaskOp::Subtract, MaskKind::Radial);
@@ -434,7 +486,7 @@ mod tests {
         assert_eq!(
             p.s.edits.masks[1].refine[0].op,
             edit_model::MaskOp::Subtract,
-            "the menu's op is what the refinement carries"
+            "the armed op is what the refinement carries"
         );
         assert_eq!(
             p.s.selected_component, 1,
@@ -443,22 +495,24 @@ mod tests {
     }
 
     #[test]
-    fn the_refine_row_exists_only_for_a_selected_mask() {
-        // ⚠ Replaces the disabled chips: with nothing selected there is nothing to refine, and
-        // the row is absent rather than greyed.
+    fn the_op_modes_are_inert_without_a_selection() {
+        // ⚠ The belt to the disabled control's braces: with nothing selected an op cannot be
+        // armed, and a kind click still adds a mask — recoverable in one click — rather than
+        // dropping the click. And deselecting disarms: a mode that outlives its selection is
+        // the invisible state option C was allowed to keep only while it stays visible.
         let mut p = Panel::new();
-        assert!(
-            !p.labels().iter().any(|l| l == "Subtract"),
-            "a Refine row with no mask"
-        );
-        p.add(MaskKind::Gradient);
-        assert!(p.labels().iter().any(|l| l == "Subtract"));
-        p.click("Gradient 1"); // deselect
+        p.click("Subtract");
+        assert_eq!(p.mode, None, "an op was armed with nothing to refine");
+        p.click("Radial");
+        assert_eq!(p.s.edits.masks.len(), 1, "the click must still add a mask");
+        assert!(p.s.edits.masks[0].refine.is_empty());
+
+        p.click("Subtract");
+        assert_eq!(p.mode, Some(edit_model::MaskOp::Subtract));
+        p.click("Radial 1"); // deselect
         assert_eq!(p.s.selected_mask, None);
-        assert!(
-            !p.labels().iter().any(|l| l == "Subtract"),
-            "a Refine row with nothing selected"
-        );
+        p.labels();
+        assert_eq!(p.mode, None, "deselecting must disarm the op");
     }
 
     #[test]
@@ -530,13 +584,14 @@ mod tests {
     }
 
     #[test]
-    fn the_overlay_toggle_flips_show_tint() {
-        // ⚠ Both directions: a toggle stuck on would pass a one-way test.
+    fn the_show_mask_checkbox_flips_show_tint() {
+        // ⚠ Both directions: a checkbox stuck on would pass a one-way test. Drawn with no mask
+        // at all, because the rule has no exceptions.
         let mut p = Panel::new();
         assert!(p.tint);
-        p.click("overlay");
-        assert!(!p.tint, "the header toggle did not turn the overlay off");
-        p.click("overlay");
+        p.click("Show mask");
+        assert!(!p.tint, "the checkbox did not turn the overlay off");
+        p.click("Show mask");
         assert!(p.tint, "nor back on");
     }
 

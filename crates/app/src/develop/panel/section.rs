@@ -1,9 +1,9 @@
-//! The section header: `› NAME •  …  trailing  toggle  reset`.
+//! The section header: `› NAME •  …  trailing  reset`.
 //!
 //! A hand-drawn header over `CollapsingState`, not a `CollapsingHeader`: that widget draws
 //! egui's triangle and indents its body, and has no slot for the things this row carries —
 //! an accent dot while the group differs from neutral, a `reset` for exactly that group, and
-//! optionally a toggle or a word of trailing text. Callers show the body through
+//! optionally a word of trailing text. Callers show the body through
 //! `show_body_unindented`, so the left-hand gap under every section is gone with the indent
 //! that made it.
 //!
@@ -14,8 +14,8 @@
 //!
 //! Callers: `adjustments::section` for the six edit-group sections, the Profile block in
 //! `panel/mod.rs` (deliberately **not** resettable — a reset there would flatten the photo to a
-//! colorimetric render, see `edit_model::RENDERING_GROUP`), and the Masks panel's MASKS (toggle
-//! `overlay`), SHAPE (trailing = the shape's kind) and adjustment sections.
+//! colorimetric render, see `edit_model::RENDERING_GROUP`), and the Masks panel's MASKS, SHAPE
+//! (trailing = the shape's kind) and adjustment sections.
 
 use crate::theme;
 use eframe::egui;
@@ -33,10 +33,7 @@ pub struct Header<'a> {
     pub modified: bool,
     /// Offer a `reset` at the right edge while `modified`.
     pub resettable: bool,
-    /// A toggle drawn left of the reset: its label and whether it is on. Accessible as a
-    /// checkbox named by the label.
-    pub toggle: Option<(&'a str, bool)>,
-    /// A word of weak text left of the toggle — the Shape section names its kind here. Not a
+    /// A word of weak text left of the reset — the Shape section names its kind here. Not a
     /// widget.
     pub trailing: Option<&'a str>,
 }
@@ -47,7 +44,6 @@ impl<'a> Header<'a> {
             name,
             modified: false,
             resettable: false,
-            toggle: None,
             trailing: None,
         }
     }
@@ -57,10 +53,6 @@ impl<'a> Header<'a> {
     }
     pub fn resettable(mut self, on: bool) -> Self {
         self.resettable = on;
-        self
-    }
-    pub fn toggle(mut self, label: &'a str, on: bool) -> Self {
-        self.toggle = Some((label, on));
         self
     }
     pub fn trailing(mut self, text: &'a str) -> Self {
@@ -75,15 +67,13 @@ pub struct HeaderOut {
     pub state: egui::collapsing_header::CollapsingState,
     /// `reset` was clicked this frame.
     pub reset: bool,
-    /// The toggle was clicked this frame.
-    pub toggled: bool,
 }
 
 /// Draw the header row.
 ///
-/// ⚠ The reset and the toggle are registered **after** the row, so they win the hit-test tie —
-/// egui takes the last widget registered at a point, the rule the Library's rubber band relies
-/// on. A click on either does not toggle the section.
+/// ⚠ The reset is registered **after** the row, so it wins the hit-test tie — egui takes the
+/// last widget registered at a point, the rule the Library's rubber band relies on. A click on
+/// it does not toggle the section.
 pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>) -> HeaderOut {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
@@ -131,36 +121,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         );
         right = cell.left() - 6.0;
     }
-    let mut toggled = false;
-    if let Some((label, on)) = h.toggle {
-        let accent = ui.visuals().selection.bg_fill;
-        let galley = ui
-            .painter()
-            .layout_no_wrap(label.to_owned(), font.clone(), weak);
-        let cell = egui::Rect::from_min_max(
-            egui::pos2(right - galley.size().x - 8.0, rect.top()),
-            egui::pos2(right, rect.bottom()),
-        );
-        let r = ui.interact(cell, id.with(("toggle", label)), egui::Sense::click());
-        r.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label)
-        });
-        toggled = r.clicked();
-        let colour = if on {
-            accent
-        } else if r.hovered() {
-            ui.visuals().strong_text_color()
-        } else {
-            weak
-        };
-        ui.painter().galley(
-            egui::pos2(cell.left() + 4.0, cell.center().y - galley.size().y / 2.0),
-            galley,
-            colour,
-        );
-        right = cell.left() - 6.0;
-    }
-    if resp.clicked() && !reset && !toggled {
+    if resp.clicked() && !reset {
         state.toggle(ui);
     }
 
@@ -213,11 +174,7 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         );
     }
 
-    HeaderOut {
-        state,
-        reset,
-        toggled,
-    }
+    HeaderOut { state, reset }
 }
 
 #[cfg(test)]
@@ -230,7 +187,6 @@ mod tests {
             name,
             modified,
             resettable,
-            toggle,
             trailing,
         } = h;
         crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
@@ -242,7 +198,6 @@ mod tests {
                     name,
                     modified,
                     resettable,
-                    toggle,
                     trailing,
                 },
             );
@@ -274,36 +229,6 @@ mod tests {
     fn a_neutral_header_offers_no_reset() {
         let l = labels(Header::new("Profile").resettable(true));
         assert!(!l.iter().any(|l| l == "reset"));
-    }
-
-    #[test]
-    fn a_toggle_is_reachable_by_its_label_and_reports_a_click() {
-        // ⚠ Clicked through the shipped header, not a re-declared widget; and it must not also
-        // collapse the section, which is what the "registered after the row" rule buys.
-        let ctx = crate::test_ui::ctx();
-        for theme in [egui::Theme::Dark, egui::Theme::Light] {
-            ctx.style_mut_of(theme, |s| s.animation_time = 0.0);
-        }
-        let mut on = false;
-        let mut open_after = None;
-        crate::test_ui::click(&ctx, "overlay", |ui| {
-            let out = header(
-                ui,
-                egui::Id::new("t"),
-                true,
-                Header::new("Masks").toggle("overlay", on),
-            );
-            if out.toggled {
-                on = !on;
-            }
-            open_after = Some(out.state.is_open());
-        });
-        assert!(on, "the toggle did not report the click");
-        assert_eq!(
-            open_after,
-            Some(true),
-            "the click on the toggle collapsed the section"
-        );
     }
 
     #[test]

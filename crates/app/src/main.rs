@@ -353,6 +353,8 @@ struct RustroomApp {
     /// ⚠ Its own field rather than sharing `grade_range`: switching to a mask would otherwise
     /// silently change which wheel the global panel shows when you switch back.
     mask_grade_range: develop::panel::color_wheel::GradeRange,
+    /// `None` = New mask; `Some(op)` = the next kind button refines the selected mask.
+    mask_add_mode: Option<edit_model::MaskOp>,
     /// Whether the next mask-kind button creates a mask or refines the selected one.
     ///
     /// ⚠ Tool state on the app rather than on the mask, the rule the brush settings already
@@ -605,6 +607,7 @@ impl RustroomApp {
             hsl_channel: Default::default(),
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),
+            mask_add_mode: None,
             grade_range: Default::default(),
             new_collection: String::new(),
             new_smart: String::new(),

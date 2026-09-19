@@ -1,12 +1,7 @@
-//! A mask's rows: the painted row the mask list and the component list share, the component
-//! rows under a refined mask, and the Refine row of op menus.
+//! A mask's rows and its kind buttons: the painted row the mask list and the component list
+//! share, the component rows under a refined mask, and the icon button for one mask kind.
 //!
 //! ⚠ Its own module because `develop/panel/masks.rs` is past the ~600 marker.
-//!
-//! ⚠⚠ **Menus, not modes (2026-09-19).** The first composite UI armed an op with a chip and
-//! then routed the next kind button through it — invisible state, and an armed "Subtract"
-//! added a shape you did not mean. Now the op *is* the menu: `Add ▾ / Subtract ▾ / Intersect ▾`,
-//! each listing the five kinds, so the operation and the shape are one decision.
 
 use crate::develop::panel::{mask_glyph, Edited};
 use crate::Session;
@@ -234,52 +229,32 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
     }
 }
 
-/// The Refine row under mask `i`: `Add ▾ / Subtract ▾ / Intersect ▾`, each a menu of the kinds.
+/// One kind as an icon button `width` wide: the glyph, and the kind's name on hover and as its
+/// accessible name.
 ///
-/// ⚠ A pick appends a [`edit_model::Refinement`] and selects the new shape, or the sliders
-/// below would still be pointing at whatever was selected before it was added. One history
-/// entry.
-pub fn refine_row(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
-    let mut added: Option<(edit_model::MaskOp, MaskKind)> = None;
-    ui.horizontal(|ui| {
-        ui.add_space(INDENT + 6.0);
-        ui.label(egui::RichText::new("Refine").weak());
-        for op in edit_model::MaskOp::ALL {
-            ui.menu_button(op.label(), |ui| {
-                for k in MaskKind::ALL {
-                    if ui.button(k.menu_label()).clicked() {
-                        added = Some((op, k));
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text(format!(
-                "{} the selected mask: {}",
-                op.chip_label(),
-                op_help(op)
-            ));
-        }
+/// ⚠ Painted rather than a `Button` with text: five names do not fit the panel's ~240 pt on one
+/// row, and the old "Add graduated filter" buttons wrapped over three. The name is one hover
+/// away and every screen reader gets it.
+pub fn kind_button(ui: &mut egui::Ui, kind: MaskKind, width: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, kind.menu_label())
     });
-    if let Some((op, k)) = added {
-        if let Some(m) = s.edits.masks.get_mut(i) {
-            m.refine.push(edit_model::Refinement {
-                op,
-                mask: k.template(),
-            });
-            s.selected_component = m.refine.len();
-            s.active_mask_handle = None;
-            ed.discrete();
-        }
+    let resp = resp.on_hover_text(kind.menu_label());
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let wv = if resp.hovered() {
+            &v.widgets.hovered
+        } else {
+            &v.widgets.inactive
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, 4.0, wv.weak_bg_fill);
+        let glyph = egui::Rect::from_center_size(rect.center(), egui::vec2(15.0, 15.0));
+        mask_glyph::paint(painter, glyph, kind, wv.fg_stroke.color);
     }
-}
-
-fn op_help(op: edit_model::MaskOp) -> &'static str {
-    match op {
-        edit_model::MaskOp::Add => "the new shape widens where it reaches",
-        edit_model::MaskOp::Subtract => "the new shape cuts out of it",
-        edit_model::MaskOp::Intersect => "only where both reach is kept",
-    }
+    resp
 }
 
 #[cfg(test)]
@@ -404,60 +379,25 @@ mod tests {
     }
 
     #[test]
-    fn the_refine_row_offers_every_op_by_name() {
-        let (ctx, mut app) = composite_session();
-        let s = app.session.as_mut().expect("session");
+    fn every_kind_button_is_named_for_accessibility() {
+        // ⚠ The buttons paint a glyph and no text; the kind's name reaches a sighted user as a
+        // tooltip and everyone else — a screen reader, this harness — as the accessible name.
+        // Sabotage: drop `widget_info` and every label vanishes.
+        let ctx = test_ui::ctx();
         let labels: Vec<String> = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
-            let mut ed = Edited::default();
-            refine_row(ui, s, 0, &mut ed);
+            for k in MaskKind::ALL {
+                let _ = kind_button(ui, k, 40.0);
+            }
         })
         .into_iter()
         .map(|(l, _)| l)
         .collect();
-        for op in edit_model::MaskOp::ALL {
+        for k in MaskKind::ALL {
             assert!(
-                labels.iter().any(|l| l == op.label()),
-                "missing {}: {labels:?}",
-                op.label()
+                labels.iter().any(|l| l == k.menu_label()),
+                "{} has no accessible name: {labels:?}",
+                k.menu_label()
             );
         }
-    }
-
-    #[test]
-    fn picking_a_kind_from_an_op_menu_appends_that_refinement_and_selects_it() {
-        // ⚠⚠ Through the shipped menus: the op button opens, the kind item is clicked in the
-        // popup, and the refinement must carry *that* op — an always-Add fold would pass a test
-        // that only ever used Add.
-        let (ctx, mut app) = composite_session();
-        let s = app.session.as_mut().expect("session");
-        let mut ed = Edited::default();
-        test_ui::click(&ctx, "Intersect", |ui| {
-            refine_row(ui, s, 0, &mut Edited::default());
-        });
-        test_ui::click(&ctx, "Brush", |ui| {
-            ed = Edited::default();
-            refine_row(ui, s, 0, &mut ed);
-        });
-        assert_eq!(
-            s.edits.masks[0].refine.len(),
-            3,
-            "no refinement was appended"
-        );
-        let last = &s.edits.masks[0].refine[2];
-        assert_eq!(
-            last.op,
-            edit_model::MaskOp::Intersect,
-            "the menu's op is what it carries"
-        );
-        assert!(
-            matches!(last.mask, edit_model::Mask::Brush(_)),
-            "and the item's kind"
-        );
-        assert_eq!(
-            s.component_index(),
-            3,
-            "the new shape is the one the sliders edit"
-        );
-        assert!(ed.settled, "one pick, one history entry");
     }
 }
