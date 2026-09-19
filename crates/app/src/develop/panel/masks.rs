@@ -23,7 +23,7 @@ use rustroom_app::mask_tool;
 /// ⚠ They are the *tool's* state and apply to the next stroke, exactly as a brush size does
 /// in any editor. Each stroke records its own copy at the moment it is drawn.
 ///
-/// ⚠ Seven `&mut` to *disjoint* fields of `RustroomApp`, which is what replaced the previous
+/// ⚠ Six `&mut` to *disjoint* fields of `RustroomApp`, which is what replaced the previous
 /// copy-into-locals-and-write-back workaround: that existed only because a closure capturing
 /// `app` while `s` also borrowed it is `E0499`. Explicit parameters have no such problem.
 pub struct BrushTool<'a> {
@@ -31,9 +31,6 @@ pub struct BrushTool<'a> {
     pub hardness: &'a mut f32,
     pub flow: &'a mut f32,
     pub erase: &'a mut bool,
-    /// The overlay: tints where the selected mask reaches. Toggled in the MASKS header and
-    /// from the View menu, the same flag.
-    pub show_tint: &'a mut bool,
     pub auto_mask: &'a mut bool,
     pub tolerance: &'a mut f32,
 }
@@ -68,6 +65,9 @@ pub fn show(
     // Hoisted above every `&mut s.*` below: `Illuminant` is `Copy`, so reading it here costs
     // nothing and keeps the later mutable borrows disjoint.
     let baseline = s.wb_baseline;
+    // ⚠ Once per frame, before anything reads it: undo, paste and snapshots change the mask
+    // count without passing through this panel.
+    s.sync_mask_shown();
 
     // ── MASKS ──
     // ⚠ `reset` here is the old "Remove all masks": it belongs to the list as a whole, so it
@@ -90,26 +90,13 @@ pub fn show(
         s.selected_mask = None;
         s.selected_component = 0;
         s.active_mask_handle = None;
+        s.mask_shown.clear();
         ed.discrete();
     }
     out.state.show_body_unindented(ui, |ui| {
         add_controls(ui, s, add_mode, ed);
         list(ui, s, ed);
-        // ⚠ Drawn for every state, not only with a selection: the rule is one sentence with
-        // no exceptions, and a checkbox that comes and goes is harder to learn.
-        ui.checkbox(&mut *brush.show_tint, "Show mask")
-            .on_hover_text(
-                "Tints where the selected mask reaches, and takes its own adjustments out of \
-                 the view so you can see what you are covering. Untick it to judge the effect.",
-            );
-        if s.selected_mask.is_none() {
-            theme::hint(
-                ui,
-                "Add a mask, then drag its handles on the image. A gradient's two outer lines \
-                 mark where the effect starts and reaches full strength; a radial's ellipse marks \
-                 where it falls to nothing.",
-            );
-        }
+        show_all_row(ui, s);
     });
 
     let Some(i) = s.selected_mask else {
@@ -156,24 +143,35 @@ fn add_controls(
     if !can_refine {
         *mode = None;
     }
+    // ⚠ The hint that used to sit under the buttons, split into a hover per mode (user's
+    // call, 2026-09-19).
     let items = [
-        (None, "New mask"),
+        (
+            None,
+            "New mask",
+            "Starts a fresh mask with the next kind you pick.",
+        ),
         (
             Some(edit_model::MaskOp::Add),
             edit_model::MaskOp::Add.label(),
+            "Adds the next shape to the selected mask, widening it.",
         ),
         (
             Some(edit_model::MaskOp::Subtract),
             edit_model::MaskOp::Subtract.label(),
+            "Cuts the next shape out of the selected mask.",
         ),
         (
             Some(edit_model::MaskOp::Intersect),
             edit_model::MaskOp::Intersect.label(),
+            "Keeps only where the selected mask and the next shape both reach.",
         ),
     ];
-    ui.add_enabled_ui(can_refine, |ui| theme::segmented(ui, mode, &items))
-        .response
-        .on_disabled_hover_text("Select a mask to refine it");
+    ui.add_enabled_ui(can_refine, |ui| {
+        theme::segmented_with_hover(ui, mode, &items)
+    })
+    .response
+    .on_disabled_hover_text("Select a mask to refine it");
     let mut added: Option<MaskKind> = None;
     ui.horizontal(|ui| {
         let n = MaskKind::ALL.len() as f32;
@@ -184,12 +182,6 @@ fn add_controls(
             }
         }
     });
-    theme::hint(
-        ui,
-        "New mask starts a fresh mask. Add, Subtract and Intersect put the next shape onto the \
-         selected one: Add widens it, Subtract cuts out of it, Intersect keeps only where both \
-         reach.",
-    );
     if let Some(k) = added {
         match (*mode, s.selected_mask) {
             (Some(op), Some(i)) if i < s.edits.masks.len() => {
@@ -207,10 +199,42 @@ fn add_controls(
                 });
                 s.selected_mask = Some(s.edits.masks.len() - 1);
                 s.selected_component = 0;
+                // ⚠ A mask you just added shows its overlay: a brush has no strokes yet, and
+                // the tint is how you see where you are painting.
+                s.sync_mask_shown();
+                if let Some(last) = s.mask_shown.last_mut() {
+                    *last = true;
+                }
             }
         }
         s.active_mask_handle = None;
         ed.discrete();
+    }
+}
+
+/// `Show all` / `Hide all`, right-aligned under the list: every eye at once.
+///
+/// ⚠ `allocate_ui_with_layout`, never a bare `with_layout(right_to_left)` — the 2026-09-19
+/// growth bug.
+fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
+    if s.edits.masks.is_empty() {
+        return;
+    }
+    let all = s.all_masks_shown();
+    let label = if all { "Hide all" } else { "Show all" };
+    let mut clicked = false;
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            clicked = ui
+                .small_button(label)
+                .on_hover_text("Every mask's eye at once: show all the overlays, or none")
+                .clicked();
+        },
+    );
+    if clicked {
+        s.set_all_masks_shown(!all);
     }
 }
 
@@ -238,10 +262,15 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 current: false,
                 deletable: true,
                 indent: 0.0,
+                eye: Some(s.mask_shown.get(i).copied().unwrap_or(false)),
             },
         );
         if out.delete {
             remove = Some(i);
+        } else if out.eye {
+            if let Some(on) = s.mask_shown.get_mut(i) {
+                *on = !*on;
+            }
         } else if out.clicked {
             pick = Some(i);
         }
@@ -263,6 +292,9 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         s.selected_mask =
             mask_tool::selection_after_delete(s.selected_mask, i, s.edits.masks.len());
         s.edits.masks.remove(i);
+        if i < s.mask_shown.len() {
+            s.mask_shown.remove(i);
+        }
         s.active_mask_handle = None;
         ed.discrete();
     }
@@ -275,49 +307,65 @@ fn shape_block(
     brush: &mut BrushTool<'_>,
     ed: &mut Edited,
 ) {
-    if ui.checkbox(shape.invert_mut(), "Invert").changed() {
+    // ⚠ Every explanation is a hover on its own control, never a line of small print under
+    // the block (user's call, 2026-09-19).
+    if ui
+        .checkbox(shape.invert_mut(), "Invert")
+        .on_hover_text("Flips the shape: where it reached becomes where it does not.")
+        .changed()
+    {
         ed.discrete();
     }
     if let edit_model::Mask::Radial(r) = shape {
-        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
+        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
+            .on_hover_text("How softly the edge falls off.");
     }
     if let edit_model::Mask::Luminance(r) = shape {
-        ed.slider(ui, &mut r.low, 0.0..=100.0, "Range low");
-        ed.slider(ui, &mut r.high, 0.0..=100.0, "Range high");
-        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
-        theme::hint(
-            ui,
-            "Selects tones by brightness — 0 is black, 100 is white, the same scale as the \
-             histogram. Feather widens the range with a soft shoulder either side.",
-        );
+        const SCALE: &str = "Selects tones by brightness — 0 is black, 100 is white, the same \
+                             scale as the histogram.";
+        ed.slider(ui, &mut r.low, 0.0..=100.0, "Range low")
+            .on_hover_text(SCALE);
+        ed.slider(ui, &mut r.high, 0.0..=100.0, "Range high")
+            .on_hover_text(SCALE);
+        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
+            .on_hover_text("Widens the range with a soft shoulder either side.");
     }
     if let edit_model::Mask::Colour(r) = shape {
-        ed.slider(ui, &mut r.low, 0.0..=360.0, "Hue low");
-        ed.slider(ui, &mut r.high, 0.0..=360.0, "Hue high");
-        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather");
-        ed.slider(ui, &mut r.min_chroma, 0.0..=0.15, "Min chroma");
-        theme::hint(
-            ui,
-            "Selects colours by hue, in degrees around the wheel — and the band wraps, so 340 \
-             to 20 selects the reds either side of zero. Min chroma is what stops a near-neutral \
-             sky being selected: below it a pixel has no reliable hue, only sensor noise.",
-        );
+        const WHEEL: &str = "Degrees around the wheel. The band wraps, so 340 to 20 selects \
+                             the reds either side of zero.";
+        ed.slider(ui, &mut r.low, 0.0..=360.0, "Hue low")
+            .on_hover_text(WHEEL);
+        ed.slider(ui, &mut r.high, 0.0..=360.0, "Hue high")
+            .on_hover_text(WHEEL);
+        ed.slider(ui, &mut r.feather, 0.0..=100.0, "Feather")
+            .on_hover_text("Widens the band with a soft shoulder either side.");
+        ed.slider(ui, &mut r.min_chroma, 0.0..=0.15, "Min chroma")
+            .on_hover_text(
+                "Stops a near-neutral sky being selected: below it a pixel has no reliable \
+                 hue, only sensor noise.",
+            );
     }
     if matches!(shape, edit_model::Mask::Brush(_)) {
-        ed.slider(ui, &mut *brush.size, 4.0..=300.0, "Size");
-        ed.slider(ui, &mut *brush.hardness, 0.0..=100.0, "Hardness");
-        ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow");
-        ui.checkbox(&mut *brush.erase, "Erase");
-        ui.checkbox(&mut *brush.auto_mask, "Auto mask");
+        ed.slider(ui, &mut *brush.size, 4.0..=300.0, "Size")
+            .on_hover_text(
+                "Brush diameter, in pixels of the full-resolution photo. Drag on the image to \
+                 paint.",
+            );
+        ed.slider(ui, &mut *brush.hardness, 0.0..=100.0, "Hardness")
+            .on_hover_text("Shapes the edge: hard is a crisp stroke, soft fades out.");
+        ed.slider(ui, &mut *brush.flow, 1.0..=100.0, "Flow")
+            .on_hover_text("Strength of one pass; repeated passes build up.");
+        ui.checkbox(&mut *brush.erase, "Erase")
+            .on_hover_text("Strokes remove coverage instead of adding it.");
+        ui.checkbox(&mut *brush.auto_mask, "Auto mask")
+            .on_hover_text(
+                "Paints only what matches the pixel under the brush centre. Applies to new \
+                 strokes.",
+            );
         ui.add_enabled_ui(*brush.auto_mask, |ui| {
-            ed.slider(ui, &mut *brush.tolerance, 0.0..=100.0, "Tolerance");
+            ed.slider(ui, &mut *brush.tolerance, 0.0..=100.0, "Tolerance")
+                .on_hover_text("How far from the centre pixel's colour auto mask still paints.");
         });
-        theme::hint(
-            ui,
-            "Drag to paint. Hardness shapes the edge; Flow is strength, and repeated passes \
-             build up. Auto mask paints only what matches the pixel under the brush centre, and \
-             applies to new strokes.",
-        );
     }
 }
 
@@ -339,7 +387,6 @@ mod tests {
         hardness: f32,
         flow: f32,
         erase: bool,
-        tint: bool,
         auto_mask: bool,
         tolerance: f32,
         channel: crate::develop::panel::adjustments::HslChannel,
@@ -362,7 +409,6 @@ mod tests {
                 hardness: 50.0,
                 flow: 100.0,
                 erase: false,
-                tint: true,
                 auto_mask: false,
                 tolerance: 35.0,
                 channel: Default::default(),
@@ -385,7 +431,6 @@ mod tests {
                     hardness: &mut self.hardness,
                     flow: &mut self.flow,
                     erase: &mut self.erase,
-                    show_tint: &mut self.tint,
                     auto_mask: &mut self.auto_mask,
                     tolerance: &mut self.tolerance,
                 },
@@ -573,7 +618,7 @@ mod tests {
         let mut p = Panel::new();
         p.add(MaskKind::Gradient);
         p.s.active_mask_handle = Some(mask_tool::Handle::Center);
-        let ed = p.click("×");
+        let ed = p.click("Delete Gradient 1");
         assert!(p.s.edits.masks.is_empty(), "the mask should be gone");
         assert!(ed.settled, "a delete is one history entry");
         assert_eq!(p.s.selected_mask, None, "and nothing should be selected");
@@ -584,15 +629,43 @@ mod tests {
     }
 
     #[test]
-    fn the_show_mask_checkbox_flips_show_tint() {
-        // ⚠ Both directions: a checkbox stuck on would pass a one-way test. Drawn with no mask
-        // at all, because the rule has no exceptions.
+    fn the_eye_shows_one_masks_overlay_and_show_all_flips_every_eye() {
+        // ⚠ Both directions for the eye, and both labels for the row button: a toggle stuck
+        // on, or a button that only ever showed, would each pass a one-sided test.
         let mut p = Panel::new();
-        assert!(p.tint);
-        p.click("Show mask");
-        assert!(!p.tint, "the checkbox did not turn the overlay off");
-        p.click("Show mask");
-        assert!(p.tint, "nor back on");
+        p.add(MaskKind::Gradient);
+        assert_eq!(
+            p.s.mask_shown,
+            vec![true],
+            "a mask you add shows its overlay"
+        );
+        p.click("Show Gradient 1");
+        assert_eq!(p.s.mask_shown, vec![false], "the eye did not hide it");
+        p.click("Show Gradient 1");
+        assert_eq!(p.s.mask_shown, vec![true], "nor show it again");
+        p.add(MaskKind::Radial);
+        p.click("Show Gradient 1");
+        assert_eq!(p.s.mask_shown, vec![false, true]);
+        p.click("Show all");
+        assert_eq!(p.s.mask_shown, vec![true, true]);
+        p.click("Hide all");
+        assert_eq!(p.s.mask_shown, vec![false, false]);
+    }
+
+    #[test]
+    fn deleting_a_mask_drops_its_eye_with_it() {
+        let mut p = Panel::new();
+        p.add(MaskKind::Gradient);
+        p.add(MaskKind::Radial);
+        p.click("Show Gradient 1"); // off, on
+        assert_eq!(p.s.mask_shown, vec![false, true]);
+        p.click("Delete Gradient 1");
+        assert_eq!(p.s.edits.masks.len(), 1);
+        assert_eq!(
+            p.s.mask_shown,
+            vec![true],
+            "the survivor keeps its own flag"
+        );
     }
 
     #[test]
@@ -604,6 +677,7 @@ mod tests {
         // ⚠ The MASKS header's reset is the only one drawn: no adjustment section is modified.
         let ed = p.click("reset");
         assert!(p.s.edits.masks.is_empty(), "the masks survived the reset");
+        assert!(p.s.mask_shown.is_empty(), "the eyes survived the reset");
         assert_eq!(p.s.selected_mask, None);
         assert_eq!(
             p.s.edits.exposure, 1.5,

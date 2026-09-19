@@ -114,7 +114,14 @@ pub fn execute(app: &mut RustroomApp, ctx: &egui::Context, cmd: Command) {
             }
         }
         Command::ToggleFilmstrip => app.show_filmstrip = !app.show_filmstrip,
-        Command::ToggleMaskOverlay => app.show_mask_tint = !app.show_mask_tint,
+        // ⚠ Every mask's eye at once — the keyboard twin of the panel's "Show all / Hide all".
+        Command::ToggleMaskOverlay => {
+            if let Some(s) = &mut app.session {
+                s.sync_mask_shown();
+                let all = s.all_masks_shown();
+                s.set_all_masks_shown(!all);
+            }
+        }
         // ⚠ Persisted immediately rather than on quit. This is one enum in a tiny file, the key
         // is pressed a handful of times a session, and the same `save_settings` the panel's
         // dropdown calls — one write path, so the two controls cannot disagree about what is

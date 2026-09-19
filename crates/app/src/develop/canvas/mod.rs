@@ -128,7 +128,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     //
     // ⚠ The press **origin**, not the current pointer position: a drag that began on a panel
     // slider and wandered over the canvas is still a slider drag and must still drop the rung.
-    let app_suppressed_mask = app.session.as_ref().and_then(|s| s.suppressed_mask);
+    // ⚠ Whether the mask being edited is held out of the view — since 2026-09-19 that is a
+    // per-mask eye, so the question is about the *selected* mask, not "any suppression".
+    let app_suppressed_mask = app.session.as_ref().is_some_and(|s| {
+        s.selected_mask
+            .is_some_and(|i| s.suppressed_masks.contains(&i))
+    });
     let text_focused = ui.ctx().memory(|m| m.focused()).is_some();
     let press_on_canvas = ui
         .ctx()
@@ -137,7 +142,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     let panning = ui
         .ctx()
         .input(|i| navigation::pan_button_down(i, app_pan_drag, text_focused));
-    let view_only_gesture = press_on_canvas && (panning || app_suppressed_mask.is_some());
+    let view_only_gesture = press_on_canvas && (panning || app_suppressed_mask);
     // ⚠⚠ **`press_origin.is_some()` as well as `is_decidedly_dragging()`, and it was found by
     // instrumenting.** On the RELEASE frame egui still reports a decided drag while the press
     // origin is already gone — the edge the comment above calls benign. It stops being benign
@@ -508,7 +513,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                         hardness: app_brush_hardness,
                                         flow: app.brush_flow,
                                         erase: app_brush_erase,
-                                        show_tint: app.show_mask_tint,
                                         auto_mask: app_brush_auto_mask,
                                         tolerance: app_brush_tolerance,
                                         base: app_tint_frame.as_ref(),

@@ -12,6 +12,8 @@ use rayon::prelude::*;
 /// ⚠ The tint is an indicator over the photograph, not the photograph, so it does not need the
 /// frame's real resolution — and at 1:1 the frame is the full decode. Capping makes the cost
 /// constant in zoom.
+/// How many masks' tints are kept: enough for every eye a panel is likely to have on.
+const TINT_CACHE_ENTRIES: usize = 8;
 const TINT_MAX_DIM: usize = 1400;
 
 /// A memoised tint, rasterized at a capped resolution and held as an uploaded **texture**.
@@ -66,7 +68,7 @@ thread_local! {
     /// reached from inside egui closures that already hold `&mut app`, and threading a cache down
     /// would widen four signatures for something with no observable behaviour. egui is
     /// single-threaded per context, so this is the same thread every frame.
-    static TINT: std::cell::RefCell<Option<TintCache>> = const { std::cell::RefCell::new(None) };
+    static TINT: std::cell::RefCell<Vec<TintCache>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Paint the brush's coverage as a translucent red tint.
@@ -312,7 +314,9 @@ pub(super) fn paint_tint(
     TINT.with(|slot| {
         let mut slot = slot.borrow_mut();
         let base_id = base.map(|f| f.bytes.as_ptr());
-        let hit = slot.as_ref().is_some_and(|c| {
+        // ⚠ A handful of entries, not one: several masks can be shown at once (2026-09-19),
+        // and a single slot would recompute every one of them every frame.
+        let found = slot.iter().position(|c| {
             c.w == w
                 && c.h == h
                 && c.geometry == *geometry
@@ -320,7 +324,7 @@ pub(super) fn paint_tint(
                 && c.refine == m.refine
                 && c.base == base_id
         });
-        if !hit {
+        if found.is_none() {
             // ⚠ Gated only when this brush actually needs pixels *and* a frame has landed. With
             // no base an auto-masked stroke tints positionally, which is the documented
             // degradation and better than showing nothing while the first frame renders.
@@ -351,7 +355,10 @@ pub(super) fn paint_tint(
                         .load_texture("mask_tint", img, egui::TextureOptions::LINEAR);
                 Some((tex, [cov.x0, cov.y0, cov.w, cov.h], scale))
             };
-            *slot = Some(TintCache {
+            if slot.len() >= TINT_CACHE_ENTRIES {
+                slot.remove(0);
+            }
+            slot.push(TintCache {
                 mask: m.mask.clone(),
                 refine: m.refine.clone(),
                 geometry: *geometry,
@@ -362,7 +369,9 @@ pub(super) fn paint_tint(
                 outside,
             });
         }
-        let Some(cache) = slot.as_ref() else { return };
+        let Some(cache) = found.map(|i| &slot[i]).or_else(|| slot.last()) else {
+            return;
+        };
         if cache.outside > 0 {
             let tint = egui::Color32::from_rgba_unmultiplied(255, 40, 40, cache.outside / 2);
             // ⚠⚠ Painted **around** the box, never under it. A single full-frame rect plus the

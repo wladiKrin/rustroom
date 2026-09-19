@@ -298,7 +298,7 @@ fn view_items() -> Vec<Item> {
         ),
         Item::Separator,
         action("Filmstrip", Command::ToggleFilmstrip, None),
-        action("Show mask overlay", Command::ToggleMaskOverlay, None),
+        action("Show all mask overlays", Command::ToggleMaskOverlay, None),
         // ⚠ A **bare** key, so it never becomes a native accelerator — see
         // `safe_as_native_accelerator`. `O` is Lightroom's, which is the whole argument
         // for it; ⌘O is Open file and the two chords are distinct.

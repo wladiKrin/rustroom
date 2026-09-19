@@ -77,6 +77,36 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, kind: MaskKind, colour: 
     }
 }
 
+/// An eye: open when `on`, a closed lid otherwise. The per-mask overlay toggle.
+pub fn paint_eye(painter: &egui::Painter, rect: egui::Rect, on: bool, colour: egui::Color32) {
+    let r = rect.shrink(rect.width() * 0.1);
+    let c = r.center();
+    let w = r.width();
+    let stroke = egui::Stroke::new((w / 9.0).max(1.0), colour);
+    const N: usize = 12;
+    let arc = |sign: f32| -> Vec<egui::Pos2> {
+        (0..=N)
+            .map(|i| {
+                let t = i as f32 / N as f32;
+                egui::pos2(
+                    r.left() + w * t,
+                    c.y + sign * w * 0.32 * (std::f32::consts::PI * t).sin(),
+                )
+            })
+            .collect()
+    };
+    if on {
+        let mut pts = arc(-1.0);
+        let mut lower = arc(1.0);
+        lower.reverse();
+        pts.extend(lower);
+        painter.add(egui::Shape::closed_line(pts, stroke));
+        painter.circle_filled(c, w * 0.14, colour);
+    } else {
+        painter.add(egui::Shape::line(arc(1.0), stroke));
+    }
+}
+
 /// An ellipse as a closed polyline.
 fn ellipse(painter: &egui::Painter, c: egui::Pos2, rx: f32, ry: f32, stroke: egui::Stroke) {
     const N: usize = 24;
@@ -123,5 +153,30 @@ mod tests {
             let n: usize = out.shapes.iter().map(|c| count(&c.shape)).sum();
             assert!(n > 0, "{k:?} painted nothing");
         }
+    }
+
+    #[test]
+    fn the_eye_paints_in_both_states_and_differently() {
+        let shapes = |on: bool| {
+            let ctx = egui::Context::default();
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(100.0, 100.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(16.0, 16.0));
+                    paint_eye(ui.painter(), rect, on, egui::Color32::WHITE);
+                },
+            );
+            format!("{:?}", out.shapes)
+        };
+        let (open, closed) = (shapes(true), shapes(false));
+        assert!(open.contains("Circle"), "an open eye has a pupil");
+        assert!(!closed.contains("Circle"), "a closed eye has none");
     }
 }

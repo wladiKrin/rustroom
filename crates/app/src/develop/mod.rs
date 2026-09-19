@@ -87,10 +87,15 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     //
     // ⚠ Also before both panels: each requests renders through `view_edits`, and a value written
     // after them would be one frame stale exactly where it matters.
-    let suppressed = if picked == rustroom_app::tool::Tool::Masks && app.show_mask_tint {
-        app.session.as_ref().and_then(|s| s.selected_mask)
+    // ⚠ Every mask whose eye is on, not the selected one: the overlay is per mask since
+    // 2026-09-19, and the picture must hold out exactly the masks it tints.
+    let suppressed: Vec<usize> = if picked == rustroom_app::tool::Tool::Masks {
+        app.session
+            .as_ref()
+            .map(|s| s.shown_masks())
+            .unwrap_or_default()
     } else {
-        None
+        Vec::new()
     };
     // ⚠⚠ **A change guard that ASKS FOR A RENDER, which the first version did not.** The
     // suppression decides what `view_edits` returns, so a change to it changes the picture — and
@@ -99,8 +104,8 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // until some unrelated edit happened to request a frame.
     let tool_for_request = picked;
     if let Some(s) = app.session.as_mut() {
-        if s.suppressed_mask != suppressed {
-            s.suppressed_mask = suppressed;
+        if s.suppressed_masks != suppressed {
+            s.suppressed_masks = suppressed;
             // ⚠⚠ **One rung lower first, so the switch is seen at once and sharpens after.** A
             // full-quality render of this is 95-300 ms on a large window — measured, with a
             // single mask roughly doubling it — and that is felt as a delay between the click and
@@ -240,18 +245,18 @@ mod tests {
     /// Drive the real `develop::body` and report what `suppressed_mask` came out as.
     fn suppression_under(
         tool: rustroom_app::tool::Tool,
-        show_tint: bool,
+        shown: bool,
         selected: Option<usize>,
-    ) -> Option<usize> {
+    ) -> Vec<usize> {
         let ctx = crate::test_ui::ctx();
         let mut app = crate::test_app::for_test();
         crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
         app.tool = tool;
-        app.show_mask_tint = show_tint;
         {
             let s = app.session.as_mut().expect("session");
             s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
             s.selected_mask = selected;
+            s.mask_shown = vec![shown];
         }
         let c = ctx.clone();
         // ⚠ A 1400 pt screen, not 700. `test_ui::screen`'s own doc records that a widget laid out
@@ -267,11 +272,15 @@ mod tests {
             },
             |ui| body(&mut app, ui, &c),
         );
-        app.session.as_ref().expect("session").suppressed_mask
+        app.session
+            .as_ref()
+            .expect("session")
+            .suppressed_masks
+            .clone()
     }
 
     /// Run one real `body` frame and report `(suppressed_mask, renders issued)`.
-    fn frame(app: &mut crate::RustroomApp, ctx: &egui::Context) -> (Option<usize>, usize) {
+    fn frame(app: &mut crate::RustroomApp, ctx: &egui::Context) -> (Vec<usize>, usize) {
         let c = ctx.clone();
         let _ = ctx.run_ui(
             egui::RawInput {
@@ -284,7 +293,7 @@ mod tests {
             |ui| body(app, ui, &c),
         );
         let s = app.session.as_ref().expect("session");
-        (s.suppressed_mask, s.engine.requests_issued())
+        (s.suppressed_masks.clone(), s.engine.requests_issued())
     }
 
     /// ⚠⚠ **Reported in use, both directions at once.** Leaving the Masks tool rendered *without*
@@ -303,25 +312,28 @@ mod tests {
         let mut app = crate::test_app::for_test();
         crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
         app.tool = rustroom_app::tool::Tool::Masks;
-        app.show_mask_tint = true;
         {
             let s = app.session.as_mut().expect("session");
             s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
             s.selected_mask = Some(0);
+            s.mask_shown = vec![true];
         }
         // Settle: the suppression is established and whatever renders it wants are issued.
         let _ = frame(&mut app, &ctx);
         let (before_mask, before_reqs) = frame(&mut app, &ctx);
         assert_eq!(
             before_mask,
-            Some(0),
+            vec![0],
             "fixture check: the mask must be suppressed before the toggle, or this proves nothing"
         );
 
         // Untick "Show mask" — no tool change, so `select_tool` will not fire.
-        app.show_mask_tint = false;
+        app.session.as_mut().expect("session").mask_shown = vec![false];
         let (after_mask, after_reqs) = frame(&mut app, &ctx);
-        assert_eq!(after_mask, None, "the suppression must have been lifted");
+        assert!(
+            after_mask.is_empty(),
+            "the suppression must have been lifted"
+        );
         assert!(
             after_reqs > before_reqs,
             "lifting the suppression changed the picture and asked for no render, so the mask's \
@@ -341,11 +353,11 @@ mod tests {
         let mut app = crate::test_app::for_test();
         crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
         app.tool = rustroom_app::tool::Tool::Masks;
-        app.show_mask_tint = true;
         {
             let s = app.session.as_mut().expect("session");
             s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
             s.selected_mask = Some(0);
+            s.mask_shown = vec![true];
             // A ladder with somewhere to drop to: the fixture's own buffer gives one rung, where
             // `rung_below` returns the rung unchanged and this test could see nothing.
             s.buffer_long = 3200;
@@ -359,7 +371,7 @@ mod tests {
              unrepresentable and this test proves nothing"
         );
 
-        app.show_mask_tint = false;
+        app.session.as_mut().expect("session").mask_shown = vec![false];
         let (_, _) = frame(&mut app, &ctx);
         assert_eq!(
             app.session.as_ref().expect("session").render_rung,
@@ -379,32 +391,28 @@ mod tests {
     /// a version where nobody ever writes the field. That is exactly how creative LUTs shipped
     /// fully tested and 100% non-functional.
     #[test]
-    fn the_shown_tint_suppresses_the_selected_mask() {
+    fn a_shown_mask_is_suppressed_under_the_masks_tool_whether_or_not_selected() {
+        // ⚠ Selection no longer enters into it: the eye is per mask, and a mask you are not
+        // editing can be shown too.
         assert_eq!(
             suppression_under(rustroom_app::tool::Tool::Masks, true, Some(0)),
-            Some(0)
-        );
-    }
-
-    /// Each of the three facts is load-bearing on its own. A test that only checked the positive
-    /// case would pass against a version that suppressed unconditionally — which would hide a
-    /// mask's effect in the Edit panel, where no tint is drawn to explain it.
-    #[test]
-    fn nothing_is_suppressed_without_all_three_facts() {
-        assert_eq!(
-            suppression_under(rustroom_app::tool::Tool::Edit, true, Some(0)),
-            None,
-            "the Edit panel draws no tint, so nothing may be hidden there"
-        );
-        assert_eq!(
-            suppression_under(rustroom_app::tool::Tool::Masks, false, Some(0)),
-            None,
-            "with the tint off the mask's effect is the only feedback there is"
+            vec![0]
         );
         assert_eq!(
             suppression_under(rustroom_app::tool::Tool::Masks, true, None),
-            None,
-            "no mask is selected, so there is nothing to suppress"
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn nothing_is_suppressed_under_another_tool_or_with_the_eye_off() {
+        assert!(
+            suppression_under(rustroom_app::tool::Tool::Edit, true, Some(0)).is_empty(),
+            "the Edit panel draws no tint, so nothing may be hidden there"
+        );
+        assert!(
+            suppression_under(rustroom_app::tool::Tool::Masks, false, Some(0)).is_empty(),
+            "with the eye off the mask's effect is the only feedback there is"
         );
     }
 

@@ -34,7 +34,7 @@ pub fn component_mut(
 }
 
 /// Row height in points.
-pub const ROW_HEIGHT: f32 = 22.0;
+pub const ROW_HEIGHT: f32 = 26.0;
 /// How far a component row sits in from its mask.
 pub const INDENT: f32 = 18.0;
 const GLYPH: f32 = 14.0;
@@ -65,17 +65,21 @@ pub struct RowSpec<'a> {
     pub current: bool,
     pub deletable: bool,
     pub indent: f32,
+    /// The eye: `Some(on)` draws it left of the `×`; a mask row has one, a component row none.
+    pub eye: Option<bool>,
 }
 
 pub struct RowOut {
     pub clicked: bool,
     pub delete: bool,
+    /// The eye was clicked.
+    pub eye: bool,
 }
 
 /// Draw one row.
 ///
-/// ⚠ The `×` is registered **after** the row so it wins the hit-test tie, and a click on it is
-/// not a click on the row.
+/// ⚠ The `×` and the eye are registered **after** the row so they win the hit-test tie, and a
+/// click on either is not a click on the row.
 pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ROW_HEIGHT),
@@ -98,17 +102,46 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
     if spec.deletable {
         let cell =
             egui::Rect::from_min_max(egui::pos2(rect.right() - ROW_HEIGHT, rect.top()), rect.max);
+        // ⚠ Named after its row for a screen reader — and for the harness, which cannot tell
+        // one "×" from another (a test deleted the wrong mask before this).
+        let name = format!("Delete {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("delete"), egui::Sense::click())
             .on_hover_text("Delete");
-        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "×"));
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
         delete = r.clicked();
         if r.hovered() {
             x_colour = v.strong_text_color();
         }
         right = cell.left();
     }
-    let clicked = resp.clicked() && !delete;
+    let mut eye = false;
+    let mut eye_colour = v.weak_text_color();
+    if let Some(on) = spec.eye {
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(right - ROW_HEIGHT, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        );
+        let name = format!("Show {}", spec.accessible);
+        let r = ui
+            .interact(cell, resp.id.with("eye"), egui::Sense::click())
+            .on_hover_text(
+                "Shows this mask's overlay on the image and holds its effect out of the view, \
+                 so you can see what it covers. Any number of masks can be shown at once.",
+            );
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
+        });
+        eye = r.clicked();
+        eye_colour = if on {
+            v.selection.bg_fill
+        } else if r.hovered() {
+            v.strong_text_color()
+        } else {
+            v.weak_text_color()
+        };
+    }
+    let clicked = resp.clicked() && !delete && !eye;
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
@@ -124,10 +157,12 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         if fill != egui::Color32::TRANSPARENT {
             painter.rect_filled(rect, 4.0, fill);
         }
+        // ⚠ The button-text colour, not body text: the rows are controls, and the mockup's
+        // brighter names were what the user asked for (2026-09-19).
         let text = if lit {
             v.strong_text_color()
         } else {
-            v.text_color()
+            v.widgets.inactive.fg_stroke.color
         };
         let font = egui::TextStyle::Body.resolve(ui.style());
         let mut x = rect.left() + spec.indent + 6.0;
@@ -154,17 +189,31 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             font.clone(),
             text,
         );
+        // The action cells, from the right edge in: `×`, then the eye.
+        let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
         if spec.deletable {
             painter.text(
-                egui::pos2(right + ROW_HEIGHT / 2.0, rect.center().y),
+                egui::pos2(cell_x, rect.center().y),
                 egui::Align2::CENTER_CENTER,
                 "×",
-                font,
+                egui::FontId::proportional(17.0),
                 x_colour,
             );
+            cell_x -= ROW_HEIGHT;
+        }
+        if let Some(on) = spec.eye {
+            let eye_rect = egui::Rect::from_center_size(
+                egui::pos2(cell_x, rect.center().y),
+                egui::vec2(16.0, 16.0),
+            );
+            mask_glyph::paint_eye(&painter, eye_rect, on, eye_colour);
         }
     }
-    RowOut { clicked, delete }
+    RowOut {
+        clicked,
+        delete,
+        eye,
+    }
 }
 
 /// The component rows of mask `i`, if it has any refinements.
@@ -208,6 +257,7 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
                 current: selected == j,
                 deletable: j > 0,
                 indent: INDENT,
+                eye: None,
             },
         );
         if out.delete {
@@ -236,12 +286,12 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
 /// row, and the old "Add graduated filter" buttons wrapped over three. The name is one hover
 /// away and every screen reader gets it.
 pub fn kind_button(ui: &mut egui::Ui, kind: MaskKind, width: f32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
     let enabled = ui.is_enabled();
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, kind.menu_label())
     });
-    let resp = resp.on_hover_text(kind.menu_label());
+    let resp = resp.on_hover_text(kind.hover());
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let wv = if resp.hovered() {
@@ -358,11 +408,11 @@ mod tests {
 
     #[test]
     fn deleting_a_component_removes_it_and_clamps_the_selection() {
-        // ⚠ The base row has no `×`, so the first one drawn belongs to the first refinement.
+        // ⚠ The base row has no `×`; the refinement's is named after it.
         let (ctx, mut app) = composite_session();
         app.session.as_mut().unwrap().selected_component = 2;
         let s = app.session.as_mut().expect("session");
-        test_ui::click(&ctx, "×", |ui| {
+        test_ui::click(&ctx, "Delete Subtract Radial", |ui| {
             let mut ed = Edited::default();
             rows(ui, s, 0, &mut ed);
         });

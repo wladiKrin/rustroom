@@ -21,7 +21,6 @@ pub(super) struct BrushTool<'a> {
     pub(super) hardness: f32,
     pub(super) flow: f32,
     pub(super) erase: bool,
-    pub(super) show_tint: bool,
     pub(super) auto_mask: bool,
     pub(super) tolerance: f32,
     /// The displayed frame the tint's auto-mask gate reads, when one has landed.
@@ -69,40 +68,28 @@ pub(super) fn draw_mask_overlay(
     brush: BrushTool<'_>,
     tool: Tool,
 ) -> bool {
+    if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
+        return false;
+    }
+    let painter = ui.painter_at(img_rect);
+    // ⚠ Every mask whose eye is on, before and independent of the selection: the tint is per
+    // mask since 2026-09-19, and a mask can be shown without being the one edited.
+    for (k, shown) in s.edits.masks.iter().zip(s.mask_shown.iter()) {
+        if *shown {
+            paint_tint(&painter, k, &s.edits.geometry, frame_rect, brush.base);
+        }
+    }
+
     let Some(i) = s.selected_mask else {
         return false;
     };
     let Some(m) = s.edits.masks.get(i) else {
         return false;
     };
-    // ⚠⚠ **The selected component owns the gesture.** `mask_tool::hit_test` and `apply_drag` are
-    // unchanged — the canvas simply hands them a different `Mask` — which is what keeps 3.1b's
-    // flat `Handle` decision intact rather than re-litigating it for a tree.
-    //
-    // ⚠ Through `component_index`, the panel's own read rule, so the handles and the sliders
-    // cannot disagree about which shape is selected.
     let j = s.component_index();
     let Some(mask) = mask_components::component(m, j).cloned() else {
         return false;
     };
-    if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
-        return false;
-    }
-
-    // ⚠ The other components draw as dimmed outlines with no handles, so you can see what you are
-    // cutting against without a second set of grab points stacked on the first — which is the
-    // thing the "every component draggable" alternative could not avoid.
-    //
-    // ⚠ `show_tint: false` here: the tint belongs to the **composite** and is drawn once, by the
-    // selected component's pass below, not once per shape.
-    let painter = ui.painter_at(img_rect);
-    // ⚠⚠ **Once, for the whole composite, and BEFORE the outlines** so the marks stay legible on
-    // top of it. Drawn from inside `paint_mask`'s per-shape match it would be painted once per
-    // brush component and double-blend wherever two overlapped — which is the same mistake the
-    // inverted brush's surround already cost this project once.
-    if brush.show_tint {
-        paint_tint(&painter, m, &s.edits.geometry, frame_rect, brush.base);
-    }
     for (k, other) in std::iter::once(&m.mask)
         .chain(m.refine.iter().map(|r| &r.mask))
         .enumerate()
@@ -306,7 +293,7 @@ pub(super) fn draw_mask_overlay(
 /// ⚠ One helper rather than the same condition written at both call sites: the motion render and
 /// the release render must agree about this, and two copies is how they would stop.
 fn request_unless_suppressed(s: &Session, tool: Tool, mask: usize) {
-    if s.suppressed_mask == Some(mask) {
+    if s.suppressed_masks.contains(&mask) {
         return;
     }
     s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
@@ -609,8 +596,11 @@ mod tests {
         let mut app = crate::test_app::for_test();
         crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
         with_selected_brush(&mut app);
-        app.show_mask_tint = true;
-        app.session.as_mut().unwrap().suppressed_mask = Some(0);
+        {
+            let s = app.session.as_mut().unwrap();
+            s.mask_shown = vec![true];
+            s.suppressed_masks = vec![0];
+        }
 
         let before = app.session.as_ref().unwrap().engine.requests_issued();
         let centre = canvas_centre(&mut app, &ctx);

@@ -373,6 +373,16 @@ pub fn segmented<T: PartialEq + Copy>(
     current: &mut T,
     items: &[(T, &str)],
 ) -> egui::Response {
+    let with: Vec<(T, &str, &str)> = items.iter().map(|(t, l)| (*t, *l, "")).collect();
+    segmented_with_hover(ui, current, &with)
+}
+
+/// [`segmented`] with a hover text per item (an empty one shows nothing).
+pub fn segmented_with_hover<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    items: &[(T, &str, &str)],
+) -> egui::Response {
     const HEIGHT: f32 = 18.0;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), HEIGHT),
@@ -385,12 +395,17 @@ pub fn segmented<T: PartialEq + Copy>(
     let inner = rect.shrink(2.0);
     let w = inner.width() / items.len().max(1) as f32;
     let mut all = resp.clone();
-    for (i, (item, label)) in items.iter().enumerate() {
+    for (i, (item, label, hover)) in items.iter().enumerate() {
         let cell = egui::Rect::from_min_size(
             egui::pos2(inner.left() + w * i as f32, inner.top()),
             egui::vec2(w, inner.height()),
         );
         let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
+        let r = if hover.is_empty() {
+            r
+        } else {
+            r.on_hover_text(*hover)
+        };
         let enabled = ui.is_enabled();
         let selected = *current == *item;
         r.widget_info(|| {

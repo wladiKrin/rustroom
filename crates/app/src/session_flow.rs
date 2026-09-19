@@ -189,12 +189,48 @@ impl Session {
         // ⚠ Removed rather than neutralised, `suppressed_spot`'s reasoning: a mask contributes to
         // the picture only through its adjustments, so the two are the same thing and removal
         // cannot be half-done.
-        if let Some(i) = self.suppressed_mask {
-            if i < e.masks.len() {
-                e.masks.remove(i);
-            }
+        // ⚠ Highest index first, so each removal leaves the lower indices meaning what they
+        // meant; a stale index past the end is ignored, as a stale spot index is.
+        let mut gone: Vec<usize> = self
+            .suppressed_masks
+            .iter()
+            .copied()
+            .filter(|&i| i < e.masks.len())
+            .collect();
+        gone.sort_unstable();
+        gone.dedup();
+        for i in gone.into_iter().rev() {
+            e.masks.remove(i);
         }
         e
+    }
+
+    /// Keep `mask_shown` the masks' length. A mask that arrived by undo, paste or a snapshot
+    /// starts with its overlay off; the panel turns it on for a mask it adds itself.
+    pub(crate) fn sync_mask_shown(&mut self) {
+        self.mask_shown.resize(self.edits.masks.len(), false);
+    }
+
+    /// The masks whose overlay is shown, as indices into `edits.masks`.
+    pub(crate) fn shown_masks(&self) -> Vec<usize> {
+        self.mask_shown
+            .iter()
+            .take(self.edits.masks.len())
+            .enumerate()
+            .filter(|(_, &on)| on)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Whether every mask's overlay is shown (false with no masks at all).
+    pub(crate) fn all_masks_shown(&self) -> bool {
+        let n = self.edits.masks.len();
+        n > 0 && self.shown_masks().len() == n
+    }
+
+    /// Show or hide every mask's overlay.
+    pub(crate) fn set_all_masks_shown(&mut self, on: bool) {
+        self.mask_shown = vec![on; self.edits.masks.len()];
     }
 
     /// Which component of the selected mask the panel and the canvas act on, **clamped**.
@@ -510,7 +546,8 @@ impl RustroomApp {
             selected_component: 0,
             selected_spot: None,
             suppressed_spot: None,
-            suppressed_mask: None,
+            suppressed_masks: Vec::new(),
+            mask_shown: Vec::new(),
             soft_next: false,
             backdrop: None,
             spot_drag: Default::default(),
@@ -830,11 +867,57 @@ mod tests {
             masked_exposure(1.5),
             masked_exposure(2.5),
         ];
-        s.suppressed_mask = Some(1);
+        s.suppressed_masks = vec![1];
         let e = s.view_edits(rustroom_app::tool::Tool::Masks);
         assert_eq!(e.masks.len(), 2, "exactly one mask must have been dropped");
         let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
         assert_eq!(left, vec![0.5, 2.5], "the wrong mask was dropped: {left:?}");
+    }
+
+    #[test]
+    fn several_suppressed_masks_all_leave_the_view() {
+        // ⚠ Given unsorted and with a duplicate: the removal must not shift an index it has
+        // yet to remove, which a naive forward loop would.
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        s.edits.masks = vec![
+            masked_exposure(0.5),
+            masked_exposure(1.5),
+            masked_exposure(2.5),
+        ];
+        s.suppressed_masks = vec![2, 0, 0];
+        let e = s.view_edits(rustroom_app::tool::Tool::Masks);
+        let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
+        assert_eq!(left, vec![1.5]);
+    }
+
+    #[test]
+    fn shown_masks_follow_the_flags_and_the_mask_count() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        s.edits.masks = vec![masked_exposure(0.5), masked_exposure(1.5)];
+        s.sync_mask_shown();
+        assert_eq!(
+            s.mask_shown,
+            vec![false, false],
+            "a synced mask starts hidden"
+        );
+        assert!(!s.all_masks_shown());
+        s.mask_shown[1] = true;
+        assert_eq!(s.shown_masks(), vec![1]);
+        s.set_all_masks_shown(true);
+        assert!(s.all_masks_shown());
+        // ⚠ A flag past the masks' end — left by a delete elsewhere — must not name a mask.
+        s.mask_shown.push(true);
+        assert_eq!(s.shown_masks(), vec![0, 1]);
+        s.edits.masks.clear();
+        s.sync_mask_shown();
+        assert!(s.mask_shown.is_empty());
+        assert!(!s.all_masks_shown(), "no masks is not \"all shown\"");
     }
 
     /// ⚠⚠ **The read rule for the selected component.** `selected_component` is reset when a
@@ -888,7 +971,7 @@ mod tests {
         test_app::open_test_photo(&mut app, &ctx, 80, 40);
         let s = app.session.as_mut().expect("session");
         s.edits.masks = vec![masked_exposure(0.5), masked_exposure(1.5)];
-        s.suppressed_mask = None;
+        s.suppressed_masks = Vec::new();
         assert_eq!(s.view_edits(rustroom_app::tool::Tool::Masks).masks.len(), 2);
     }
 
@@ -901,7 +984,7 @@ mod tests {
         test_app::open_test_photo(&mut app, &ctx, 80, 40);
         let s = app.session.as_mut().expect("session");
         s.edits.masks = vec![masked_exposure(0.5)];
-        s.suppressed_mask = Some(7);
+        s.suppressed_masks = vec![7];
         assert_eq!(s.view_edits(rustroom_app::tool::Tool::Masks).masks.len(), 1);
     }
 

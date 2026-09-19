@@ -38,6 +38,30 @@ impl MaskKind {
         }
     }
 
+    /// What the kind's button says on hover: the name and what the shape does on the image.
+    ///
+    /// ⚠ These carried the panel's hints until 2026-09-19 (user's call: hover text, not lines
+    /// of small print under the controls).
+    pub fn hover(self) -> &'static str {
+        match self {
+            MaskKind::Gradient => {
+                "Gradient — a straight ramp. Drag its lines on the image: the outer two mark \
+                 where the effect starts and where it reaches full strength."
+            }
+            MaskKind::Radial => {
+                "Radial — an ellipse. Drag it on the image; the outer line marks where the \
+                 effect falls to nothing."
+            }
+            MaskKind::Brush => "Brush — paint the mask on the image with the settings under Shape.",
+            MaskKind::Luminance => {
+                "Luminance range — selects tones by brightness, wherever they are in the frame."
+            }
+            MaskKind::Colour => {
+                "Colour range — selects colours by hue, wherever they are in the frame."
+            }
+        }
+    }
+
     /// The kind of an existing mask.
     pub fn of(mask: &Mask) -> MaskKind {
         match mask {

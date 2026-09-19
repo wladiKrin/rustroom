@@ -325,8 +325,6 @@ struct RustroomApp {
     brush_auto_mask: bool,
     /// How close counts, 0..=100.
     brush_tolerance: f32,
-    /// Whether to tint the selected brush mask's coverage on the canvas.
-    show_mask_tint: bool,
     /// Whether the Retouch tool draws its patch outlines.
     ///
     /// ⚠ A *view* toggle on the app, `show_mask_tint`'s home: turning the outlines off is how you
@@ -602,7 +600,6 @@ impl RustroomApp {
             brush_tolerance: 35.0,
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
-            show_mask_tint: true,
             show_spots: true,
             hsl_channel: Default::default(),
             mask_hsl_channel: Default::default(),
@@ -778,7 +775,13 @@ pub struct Session {
     /// the canvas had suppressed — and the rule that came out of it was "an owner may release
     /// only what it suppressed". A single unconditional derivation cannot acquire a second owner,
     /// and cannot disagree with what is on screen.
-    suppressed_mask: Option<usize>,
+    suppressed_masks: Vec<usize>,
+    /// Per mask, whether its overlay is shown: tinted on the canvas and **held out of the
+    /// view**, exactly what the old "Show mask" checkbox did for the selected mask — now per
+    /// mask, any number at once, toggled by the eye on its row (2026-09-19). View state, never
+    /// part of `Edits`; `sync_mask_shown` keeps it the masks' length, and a mask that arrives
+    /// by undo, paste or a snapshot starts with its overlay off.
+    mask_shown: Vec<bool>,
     /// Set for exactly one frame after a suppression change, so the canvas lets the deliberately
     /// softer render stand instead of sharpening it away on the same frame.
     ///
