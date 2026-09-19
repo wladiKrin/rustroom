@@ -145,6 +145,12 @@ Seen in the running app, the user asked for five things; all are in the branch.
    compact 18 pt segmented control stays for the HSL and grading selectors;
    `theme::segmented_sized` takes a height and a font, and the mode row uses it at the kind
    buttons' height.
+7. **No overlap at the default width.** Four body-face labels overlapped in one row at 240 pt.
+   `segmented_sized` now picks the most columns that hold its widest label and wraps the rest
+   onto further rows, so the mode control is a 2 × 2 block at the default width and one row
+   once the panel is wider. Pinned by a test at both widths.
+8. **The brush block regrouped:** Size, Hardness, Flow, then Invert, Erase, Auto mask together,
+   Tolerance straight under Auto mask. Other kinds keep Invert first.
 
 ## Out of scope
 

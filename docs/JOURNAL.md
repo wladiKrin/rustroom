@@ -125,7 +125,7 @@ Three options on a design canvas ("Rustroom Masks Panel"); the user chose **A** 
 modes"), it was built and gated, and while the gate ran he changed his mind to **C** ("icon rows,
 minimal change"). C was applied as one further commit on top of A rather than a rebuild: the two
 share everything below the list. Spec `2026-09-19-masks-panel-design.md` records both, plan of
-the same name. **2584 → 2598 tests**, goldens unmoved, `pipeline` untouched; `edit-model`
+the same name. **2584 → 2599 tests**, goldens unmoved, `pipeline` untouched; `edit-model`
 gained a pure partition, no field.
 
 **What the old panel got wrong, from the code:** adding anything took two rows read together — a
@@ -172,7 +172,10 @@ today's overlay per mask, any number at once, view state in `Session::mask_shown
 every hint turned into a hover on its own control; the `×` drawn larger and named "Delete
 {row}" for accessibility. A fourth look asked for the mode control itself to be bigger: 28 pt in
 the body face through `theme::segmented_sized`, the compact one staying for the HSL and grading
-selectors.
+selectors. A fifth: the four labels overlapped at the panel's default 240 pt, so `segmented_sized`
+wraps onto rows when its widest label does not fit — a 2 × 2 block there, one row once the
+panel is wider — and the brush's controls were regrouped (sliders, then the three checkboxes,
+Tolerance under Auto mask).
 
 - ⚠ **The eye's meaning was a judgement call.** "An eye that enables or disables the mask, so
   one could see all the masks at the same time" reads as either a per-mask *enabled* flag in
