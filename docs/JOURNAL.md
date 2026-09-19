@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Develop panel, seen in use: order of controls, header chrome, wheel rim (2026-09-19)](#the-develop-panel-seen-in-use-order-of-controls-header-chrome-wheel-rim-2026-09-19)
 - [The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)](#the-develop-panel-restyle-surfaces-slider-rows-section-chrome-icon-rail-2026-09-19)
 - [M8.11 — a mask's coverage and blend on the GPU (2026-09-16)](#m811-a-masks-coverage-and-blend-on-the-gpu-2026-09-16)
 - [M8.10 — a parallel batch export (2026-09-15)](#m810-a-parallel-batch-export-2026-09-15)
@@ -120,6 +121,47 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath)
 
 ---
+
+### The Develop panel, seen in use: order of controls, header chrome, wheel rim (2026-09-19)
+
+The restyle's first look in use, same day, produced three corrections — the standing lesson
+("almost every GUI-wiring defect was found by USE") holding for chrome as well as wiring. Five
+commits on `develop-panel-restyle`, on top of the restyle's nine. Spec
+`2026-09-19-develop-panel-order-and-chrome-design.md`, plan of the same name. **2579 → 2583
+tests**, goldens unmoved, `pipeline` and `Edits` untouched.
+
+| reported | cause | fix |
+|---|---|---|
+| the colour wheel's rim "looks very pixely" | an `egui::Mesh` gets **no anti-aliasing** — the rim was a hard 96-gon | a **feather ring**: one physical pixel outside the rim, `Color32::TRANSPARENT`, two triangles per segment (egui's own tessellator trick; premultiplied alpha makes it a fade, not a dark fringe); `SEGMENTS` 96 → 180. Pinned by a test that reads the mesh back out of the frame's shapes |
+| the section `reset` "looks very weird, behind the chevron" | both actions were crammed into the right corner | Lightroom's layout: **`› NAME •  …  reset`** — chevron leads the name, the reset has the corner to itself. The header moved into its own module, `panel/section.rs`, with a `resettable` flag |
+| "the camera rendering checkbox on top of the Tone field" | three controls that decide *how the raw data becomes a picture* — camera profile, camera rendering, look — were scattered over two places, and none is a tone adjustment | a **Profile block** above White Balance, drawn in `panel/mod.rs` because the profile row needs `&mut app` where the rest needs the session; `profile::rendering` holds the checkbox and the look, moved out of `tone` with their tests |
+
+The rest of the order, re-thought section by section and agreed: White Balance's eyedropper and
+Presets on one row; in Tone the curve directly after Blacks and Presence closing the section;
+"Show range" on the Color Grading sub-label row beside the selector it toggles
+(`theme::sub_label_with`); a doubled `separator()` before Blending removed; "Reset adjustments"
+moved from under forty sliders to a right-aligned row at the top of the stack. Detail, Lens and
+Vignette unchanged.
+
+**Two things worth keeping:**
+
+- ⚠⚠ **The Profile block is deliberately not a `Section`, and its header offers no reset.**
+  "Reset adjustments" derives its groups from `SECTIONS`; a section named Profile would put
+  `Rendering` in that set and the button would flatten the photograph to a colorimetric render —
+  the trap `RENDERING_GROUP`'s doc has always described. `section::header`'s `resettable: false`
+  is pinned by `a_header_that_is_not_resettable_offers_no_reset_even_when_modified`.
+- ⚠⚠ **A bare `with_layout(right_to_left(Center))` inside a `ScrollArea` centres over an
+  unbounded height.** The first reset row was written that way and pushed the entire stack below
+  it out of reach — every bin test stayed green except `the_sessions_baseline_reaches_the_auto_solve`,
+  whose click on Auto silently missed (`[0.0, 0.0]`). Wrapping the row in a `horizontal` bounds
+  it. `sub_label_with` was already inside one, which is why the same pattern worked there.
+
+⚠ Design assumption caught by the code: the spec first put the reset "to the right of the Edit
+heading", and `Tool::Edit.panel_heading()` is `None` on purpose — the sections are the headings.
+The row is its own; the spec was corrected in place.
+
+`adjustments.rs` went 1,398 → 1,100 lines with the header and the rendering controls out of it;
+still over the marker. `masks.rs` 834, `color_wheel.rs` 714 (its tests), `theme.rs` 804.
 
 ### The Develop panel restyle: surfaces, slider rows, section chrome, icon rail (2026-09-19)
 

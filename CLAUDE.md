@@ -142,17 +142,21 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-18)
+### State (2026-09-19)
 
 **2559 tests, 74 goldens** on `main`. ⚠ `main` is **ahead of `origin/main`** — **not pushed; the
 user pushes.**
 
-⚠ **One branch, `develop-panel-restyle` (2026-09-19), eight commits ahead of `main`: the Develop
-panel restyle** — A surfaces, B slider rows, C section chrome, D2 icon rail. Gated green on its tip
-(**2579 tests**, goldens unmoved), **unmerged, unpushed, and not yet seen in use** — the GUI was
-launched for a look. Spec `2026-09-18-develop-panel-restyle-design.md`; the journal section
-`grep -n 'panel restyle' docs/JOURNAL.md` carries the findings, including the 77-failure named
-text style and the ~22 s first-launch stall every fresh test binary pays on this Mac.
+⚠ **One branch, `develop-panel-restyle` (2026-09-19), fifteen commits ahead of `main`: the
+Develop panel restyle** — A surfaces, B slider rows, C section chrome, D2 icon rail — **plus the
+corrections from its first look in use**: a Profile block (camera profile, camera rendering, look)
+above White Balance, `› NAME … reset` headers, a feathered wheel rim, the re-ordered sections and
+the global reset at the top. Gated green on its tip (**2583 tests**, goldens unmoved),
+**unmerged and unpushed**; the GUI was relaunched for a second look. Specs
+`2026-09-18-develop-panel-restyle-design.md` and `2026-09-19-develop-panel-order-and-chrome-design.md`;
+`grep -n 'Develop panel' docs/JOURNAL.md` finds both sections, including the 77-failure named
+text style, the ~22 s first-launch stall every fresh test binary pays on this Mac, and the
+unbounded `with_layout` in a scroll area.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
