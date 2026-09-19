@@ -8,9 +8,12 @@ use crate::develop::panel::Edited;
 use edit_model::{ColorGrading, GradeWheel};
 use eframe::egui;
 
-/// Segments around the rim. At the panel's 188 px the arc between two is under 7 px, well
-/// below the point where the fan reads as a polygon.
-const SEGMENTS: usize = 96;
+/// Segments around the rim. At the panel's 188 px the arc between two is ~3.3 px.
+///
+/// ⚠ Was 96 (an arc under 7 px), and the rim read as pixelated in use (2026-09-19). The
+/// segment count is only half of it: an `egui::Mesh` gets no anti-aliasing, so the outer edge is
+/// also feathered by a transparent ring — see `show`.
+const SEGMENTS: usize = 180;
 /// Oklab lightness the wheel is drawn at. Mid-light, so both ends of the hue circle stay
 /// legible against the dark panel.
 const RIM_L: f32 = 0.72;
@@ -243,6 +246,26 @@ pub fn show(
         for i in 0..SEGMENTS {
             mesh.add_triangle(0, 1 + i as u32, 2 + i as u32);
         }
+        // ⚠⚠ **The feather ring.** egui anti-aliases the shapes *it* tessellates; a mesh is
+        // handed to the GPU as-is, so the rim is a hard polygon without this. One physical pixel
+        // outside the rim, fully transparent, joined by two triangles per segment — the same
+        // trick egui's own tessellator uses. Premultiplied alpha is what makes the interpolation
+        // from the rim colour to `TRANSPARENT` correct rather than a dark fringe.
+        let feather = 1.0 / ui.pixels_per_point();
+        let first_outer = mesh.vertices.len() as u32;
+        for i in 0..=SEGMENTS {
+            let deg = i as f32 / SEGMENTS as f32 * 360.0;
+            mesh.colored_vertex(
+                centre + offset(deg, 1.0, radius + feather),
+                egui::Color32::TRANSPARENT,
+            );
+        }
+        for i in 0..SEGMENTS as u32 {
+            let (a, b) = (1 + i, 2 + i);
+            let (c, d) = (first_outer + i, first_outer + i + 1);
+            mesh.add_triangle(a, c, b);
+            mesh.add_triangle(b, c, d);
+        }
         ui.painter().add(egui::Shape::mesh(mesh));
 
         // The handle.
@@ -414,6 +437,73 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), 4, "two ranges share a label");
+    }
+
+    /// The wheel mesh as drawn: its vertices, read from the frame's shapes.
+    fn wheel_vertices() -> Vec<egui::epaint::Vertex> {
+        let ctx = egui::Context::default();
+        let mut grade = ColorGrading::default();
+        let mut ed = Edited::default();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                show(ui, &mut grade, GradeRange::Shadows, 200.0, &mut ed);
+            },
+        );
+        fn meshes(shape: &egui::Shape, out: &mut Vec<Vec<egui::epaint::Vertex>>) {
+            match shape {
+                egui::Shape::Mesh(m) => out.push(m.vertices.clone()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| meshes(s, out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for c in &out.shapes {
+            meshes(&c.shape, &mut found);
+        }
+        // ⚠ The strip is a four-vertex textured quad; the wheel is the only mesh with a ring.
+        found
+            .into_iter()
+            .find(|v| v.len() > SEGMENTS)
+            .expect("the wheel mesh was not drawn")
+    }
+
+    #[test]
+    fn the_rim_is_feathered_by_a_transparent_ring_outside_the_colour() {
+        // ⚠ A mesh gets no anti-aliasing from egui, so without this ring the rim is a hard
+        // polygon and reads pixelated (user's report, 2026-09-19). Sabotage: drop the ring and
+        // the outermost vertices are opaque.
+        let verts = wheel_vertices();
+        let hub = verts[0].pos;
+        let far = verts
+            .iter()
+            .map(|v| hub.distance(v.pos))
+            .fold(0.0, f32::max);
+        let outer: Vec<_> = verts
+            .iter()
+            .filter(|v| hub.distance(v.pos) > far - 0.1)
+            .collect();
+        assert!(outer.len() >= SEGMENTS, "no ring at the outer radius");
+        assert!(
+            outer.iter().all(|v| v.color.a() == 0),
+            "the outer ring is not transparent"
+        );
+        let rim: Vec<_> = verts
+            .iter()
+            .filter(|v| v.color.a() == 255 && hub.distance(v.pos) > 1.0)
+            .collect();
+        assert!(rim.len() >= SEGMENTS, "the coloured rim is missing");
+        let rim_r = rim.iter().map(|v| hub.distance(v.pos)).fold(0.0, f32::max);
+        assert!(
+            far > rim_r && far - rim_r < 2.0,
+            "the ring is not one pixel outside the rim: {far} vs {rim_r}"
+        );
     }
 
     #[test]
