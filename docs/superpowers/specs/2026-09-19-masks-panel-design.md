@@ -114,6 +114,38 @@ color_grading; Detail = noise_reduction, sharpening.
 `rail.rs`: `GLYPH_SIZE` 22 → 26, `RAIL_WIDTH` 44 → 48, so the tool icons read as the dominant
 element. Its own commit.
 
+## Follow-ups from the first look (same day, user's call)
+
+Seen in the running app, the user asked for five things; all are in the branch.
+
+1. **Brighter names, taller rows.** Row text uses the button-text colour rather than body text;
+   mask and component rows are 26 pt, the kind buttons 28 pt.
+2. **The eye.** "Show mask" is gone. Each mask row carries an eye next to its `×` (the `×` is
+   drawn larger, 17 pt). The eye is today's "Show mask" per mask: **on** = that mask's overlay
+   is tinted on the canvas and its effect is held out of the view, so you see what it covers;
+   any number of masks can be shown at once. View state: `Session::mask_shown: Vec<bool>`,
+   parallel to `edits.masks`, resynced every frame (`sync_mask_shown`; a mask that arrives by
+   undo, paste or a snapshot starts hidden, a mask added in the panel starts shown).
+   `Session::suppressed_mask: Option<usize>` became `suppressed_masks: Vec<usize>`, derived in
+   `develop::body` from the shown set under the Masks tool; `view_edits` removes them highest
+   index first. The canvas paints a tint per shown mask (the tint memo keeps eight entries
+   instead of one) and still draws handles for the selected mask only. The brush's "a stroke on
+   a suppressed mask asks for no render" and the canvas's view-only-gesture guard ask about the
+   *selected* mask. The app-level `show_mask_tint` flag is gone; the View menu's command (now
+   "Show all mask overlays") flips every eye.
+3. **Show all / Hide all.** A small right-aligned button under the list, labelled by what it
+   would do; hidden with no masks. The same as the View menu's command.
+4. **Hover texts, not hints.** The line under the kind buttons became one hover per mode
+   segment (`theme::segmented_with_hover`) and a fuller hover per kind button
+   (`MaskKind::hover`). The luminance, colour and brush hints became a hover on each of their
+   own controls, Tolerance included. The "no mask selected" hint is folded into the kind hovers.
+5. Accessible names: the `×` is "Delete {row}", the eye "Show {row}" (a checkbox with its
+   state), so neither the harness nor a screen reader meets two identical buttons.
+6. **The mode control at 28 pt in the body face** (a fourth look: "still too small"). The
+   compact 18 pt segmented control stays for the HSL and grading selectors;
+   `theme::segmented_sized` takes a height and a font, and the mode row uses it at the kind
+   buttons' height.
+
 ## Out of scope
 
 Mask names, drag-reordering, thumbnails, a per-mask on/off, the canvas overlay.

@@ -125,7 +125,7 @@ Three options on a design canvas ("Rustroom Masks Panel"); the user chose **A** 
 modes"), it was built and gated, and while the gate ran he changed his mind to **C** ("icon rows,
 minimal change"). C was applied as one further commit on top of A rather than a rebuild: the two
 share everything below the list. Spec `2026-09-19-masks-panel-design.md` records both, plan of
-the same name. **2584 → 2594 tests**, goldens unmoved, `pipeline` untouched; `edit-model`
+the same name. **2584 → 2598 tests**, goldens unmoved, `pipeline` untouched; `edit-model`
 gained a pure partition, no field.
 
 **What the old panel got wrong, from the code:** adding anything took two rows read together — a
@@ -165,8 +165,28 @@ the next time a menu is the right control.
 - The kind glyphs are hand-painted, not Phosphor codepoints: those five are not known here and a
   guessed one ships a tofu box, which four features have done before.
 
-`masks.rs` 834 → ~730 lines, still over the marker (its tests are half of it);
-`mask_components.rs` ~400, `mask_adjust.rs` 363. The rail icons went 22 → 26 pt on a 48 pt rail
+**Third look, same day: five follow-ups, all landed** (the spec's "Follow-ups" section has the
+list): brighter row names and taller rows; "Show mask" replaced by an **eye per mask row** —
+today's overlay per mask, any number at once, view state in `Session::mask_shown` with
+`suppressed_masks` derived from it and a tint memo of eight entries; **Show all / Hide all**;
+every hint turned into a hover on its own control; the `×` drawn larger and named "Delete
+{row}" for accessibility. A fourth look asked for the mode control itself to be bigger: 28 pt in
+the body face through `theme::segmented_sized`, the compact one staying for the HSL and grading
+selectors.
+
+- ⚠ **The eye's meaning was a judgement call.** "An eye that enables or disables the mask, so
+  one could see all the masks at the same time" reads as either a per-mask *enabled* flag in
+  the edit model or as the old "Show mask" per mask. The second is what the checkbox it
+  replaces did, is what "see all the masks at once" describes, and touches no sidecar; the
+  first would have added a field to `MaskedAdjustment` and its 91 struct literals. Chosen and
+  reported; if the user wanted the other, it is a separate feature.
+- ⚠⚠ **Identical accessible names bite again**: two rows with a `×` each named "×", and the
+  eye test deleted the other mask. Each `×` is "Delete {row}" now. Two lessons in one day
+  about the AccessKit tree's order; the rule is that every interactive control gets a name
+  that is unique on the panel.
+
+`masks.rs` 834 → ~790 lines, still over the marker (its tests are half of it);
+`mask_components.rs` ~470, `mask_adjust.rs` 363. The rail icons went 22 → 26 pt on a 48 pt rail
 in the same branch, the user's call.
 
  call.
