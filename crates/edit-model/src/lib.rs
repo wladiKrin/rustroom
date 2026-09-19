@@ -4,7 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod local_group;
 mod mask_ops;
+pub use local_group::LocalGroup;
 pub use mask_ops::{MaskOp, Refinement};
 
 /// White balance as an absolute instrument: the illuminant declared for the scene.
