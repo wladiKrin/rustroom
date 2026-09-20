@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Retouch panel: list first (2026-09-20)](#the-retouch-panel-list-first-2026-09-20)
 - [The Crop & Geometry panel: four sections (2026-09-19)](#the-crop--geometry-panel-four-sections-2026-09-19)
 - [The Masks panel: icon rows, sectioned (2026-09-19)](#the-masks-panel-icon-rows-sectioned-2026-09-19)
 - [The Develop panel, seen in use: order of controls, header chrome, wheel rim (2026-09-19)](#the-develop-panel-seen-in-use-order-of-controls-header-chrome-wheel-rim-2026-09-19)
@@ -120,7 +121,35 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Crop & Geometry panel: four sections (2026-09-19)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Retouch panel: list first (2026-09-20)
+
+Option C of a three-option canvas ("Rustroom Retouch Panel"), the user's pick, plus his
+addition: the show and visualize functions on each patch's row, mirroring the Masks list. On
+`retouch-panel`; spec `2026-09-20-retouch-panel-design.md`. **2604 → 2610 tests**, goldens
+unmoved; the pipeline untouched.
+
+| what landed | where |
+|---|---|
+| a PATCHES section header (the heading; `Tool::Retouch.panel_heading()` is `None`) with the count as trailing text and Clear all as its reset | `retouch.rs`, `tool.rs` |
+| a **Next patch** row, lit whenever no patch is selected — which patch the sliders edit is a row, not a sentence of small print | `retouch::list` |
+| one row per patch: mode glyph, "Patch n", its mode and size in weak text, then a **hold-out** toggle, an **eye** and a `×`; a click selects the patch on the canvas too | `mask_components::row` gained `RowGlyph`, `meta` and a second toggle; `mask_glyph::{paint_spot, paint_hold}` |
+| the eye = the old "Show patches" per patch (`Session::spot_shown`; the app-level flag is gone; the canvas filters by it); the hold-out = the patch held out of the view so what it covers shows (`Session::spot_held`, removed by `view_edits` with the drag-suppressed one) | `session_flow.rs`, `spot_overlay.rs` |
+| Show all / Hide all under the list; the mode as a 28 pt segmented control above Size and Feather; the dust view as a **Find dust** toggle with Threshold beside it | `retouch.rs` |
+
+**Worth keeping:**
+
+- ⚠ **"Visualize" per row was a judgement call.** The panel's Visualize is a whole-image
+  dust view and cannot be per patch; the per-patch twin of a mask's eye is *hold this patch out
+  of the view* — the suppression a slider drag already uses, made a toggle. The dust view stayed
+  global as Find dust. Chosen and reported.
+- ⚠⚠ **A removed "unused assignment" was load-bearing.** The eye cell's `right = cell.left()`
+  was dropped on 2026-09-19 because nothing read it; the hold-out cell then read it and landed
+  exactly on the eye's hit area, winning the tie — the eye toggled the hold-out. Two tests
+  caught it. A "never read" warning on a layout cursor is a warning about *today's* callers.
+
+`retouch.rs` 817 lines (half tests); `mask_components.rs` 518, both over the marker.
+
+### The Crop & Geometry panel: four sections (2026-09-19)
 
 Option A of a three-option canvas ("Rustroom Geometry Panel"), the user's pick, on
 `geometry-panel`. Spec `2026-09-19-geometry-panel-design.md`. **2599 → 2604 tests**,

@@ -146,6 +146,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **2604 tests** on `main` (goldens unmoved since 2026-09-18).
 
+⚠ **One branch, `retouch-panel` (2026-09-20), three commits ahead of `main`: the Retouch panel,
+list first** — a Next patch row, one row per patch with a hold-out toggle, an eye and a delete
+(`Session::{spot_shown, spot_held}`), Show all / Hide all, the mode as a segmented control, Find
+dust. Gated green on its tip (**2610 tests**), **unmerged, unpushed, and not yet seen in
+use** — the GUI was launched for a look. Spec `2026-09-20-retouch-panel-design.md`;
+`grep -n 'Retouch panel' docs/JOURNAL.md`.
+
 ✅ **The Crop & Geometry panel rework is merged and confirmed by use (2026-09-19)** — four
 sections (Crop with a segmented aspect, a composition dropdown and the orientation glyphs with
 Swap; Straighten with the level tool beside the angle; Perspective with the guides on one row;
