@@ -3002,10 +3002,7 @@ mod tests {
             refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments {
                 exposure: 1.0,
-                dehaze: edit_model::Dehaze {
-                    amount: 30.0,
-                    ..Default::default()
-                },
+                dehaze: edit_model::Dehaze { amount: 30.0 },
                 ..Default::default()
             },
             disabled: false,
