@@ -50,7 +50,17 @@ fn delete_selected_spot(app: &mut RustroomApp, ctx: &egui::Context) -> bool {
     let Some(s) = app.session.as_mut() else {
         return false;
     };
+    let removed = s.selected_spot;
     if rustroom_app::spot_tool::delete_selected(&mut s.edits.spots, &mut s.selected_spot) {
+        // ⚠ The row flags go with the patch, or the next patch inherits its eye and hold-out.
+        if let Some(i) = removed {
+            if i < s.spot_shown.len() {
+                s.spot_shown.remove(i);
+            }
+            if i < s.spot_held.len() {
+                s.spot_held.remove(i);
+            }
+        }
         s.request(
             s.view_edits(rustroom_app::tool::Tool::Retouch),
             s.render_max_dim(),

@@ -91,7 +91,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     // `&mut app.spot_tool` cannot be taken while `match &mut app.session` holds its borrow — the
     // canvas takes `&mut app` whole, unlike the panel, which borrows disjoint fields.
     let mut app_spot_tool = app.spot_tool;
-    let app_show_spots = app.show_spots;
     // ⚠ Copied out before `match &mut app.session` takes its mutable borrow. `PanDrag` is
     // `Copy`, so this is a copy rather than a borrow that would collide.
     let app_pan_drag = app.settings.pan_drag;
@@ -558,7 +557,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
                                     img_rect,
                                     frame_rect,
                                     &mut app_spot_tool,
-                                    app_show_spots,
                                     &sample,
                                 );
                             }
@@ -1656,9 +1654,10 @@ mod tests {
         super::test_support::click_through(&mut app, &ctx, centre);
         assert_eq!(spots(&app).len(), 1, "setup: nothing was placed");
 
-        app.show_spots = true;
+        // ⚠ Per patch since 2026-09-20: the row's eye, `Session::spot_shown`.
+        app.session.as_mut().unwrap().spot_shown = vec![true];
         let shown = painted(&mut app, &ctx);
-        app.show_spots = false;
+        app.session.as_mut().unwrap().spot_shown = vec![false];
         let hidden = painted(&mut app, &ctx);
         assert!(
             hidden < shown,

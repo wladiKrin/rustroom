@@ -260,15 +260,17 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         let out = mask_components::row(
             ui,
             mask_components::RowSpec {
-                kind,
+                glyph: mask_components::RowGlyph::Mask(kind),
                 op: None,
                 name: &name,
+                meta: "",
                 accessible: &name,
                 selected: picked,
                 current: false,
                 deletable: true,
                 indent: 0.0,
                 eye: Some(s.mask_shown.get(i).copied().unwrap_or(false)),
+                hold: None,
             },
         );
         if out.delete {

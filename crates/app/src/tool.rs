@@ -62,8 +62,9 @@ impl Tool {
     ///
     /// ⚠ `Edit` returns `None` because its content **is** the adjustment sections, which
     /// carry their own edit-group headers — a heading above them would be a level of nesting
-    /// for nothing. `Masks` and `Crop` return `None` for the same reason since 2026-09-19:
-    /// their section headers (MASKS; CROP, STRAIGHTEN, PERSPECTIVE, LENS) are the headings.
+    /// for nothing. `Masks`, `Crop` and `Retouch` return `None` for the same reason since
+    /// 2026-09-19/20: their section headers (MASKS; CROP, STRAIGHTEN, PERSPECTIVE, LENS;
+    /// PATCHES) are the headings.
     ///
     /// ⚠ The panel is **exclusive**: exactly one tool's controls are shown at a time, so the
     /// global sliders are reachable only under `Edit`. An earlier design put the tool's
@@ -74,7 +75,7 @@ impl Tool {
             Self::Edit => None,
             Self::Crop => None,
             Self::Masks => None,
-            Self::Retouch => Some("Retouch"),
+            Self::Retouch => None,
             Self::Presets => Some("Presets"),
         }
     }
@@ -99,7 +100,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_edit_crop_and_masks_draw_their_own_headers() {
+    fn only_presets_has_a_plain_heading() {
         // ⚠ Both halves matter. Edit being default is what makes the panel at rest the
         // adjustment sections; the unheaded set being exactly these two is what stops a future
         // tool silently rendering untitled. Masks joined on 2026-09-19: its MASKS section
@@ -109,7 +110,10 @@ mod tests {
             .into_iter()
             .filter(|t| t.panel_heading().is_none())
             .collect();
-        assert_eq!(unheaded, vec![Tool::Edit, Tool::Crop, Tool::Masks]);
+        assert_eq!(
+            unheaded,
+            vec![Tool::Edit, Tool::Crop, Tool::Masks, Tool::Retouch]
+        );
     }
 
     #[test]
@@ -125,9 +129,13 @@ mod tests {
     /// makes `preview_edits` strip the crop, so a spot placed there would be positioned against a
     /// frame the user never sees applied.
     #[test]
-    fn retouch_is_not_a_geometry_tool_and_has_its_own_heading() {
+    fn retouch_is_not_a_geometry_tool() {
         assert!(!Tool::Retouch.is_geometry());
-        assert_eq!(Tool::Retouch.panel_heading(), Some("Retouch"));
+        assert_eq!(
+            Tool::Retouch.panel_heading(),
+            None,
+            "its PATCHES header is the heading"
+        );
     }
 
     #[test]

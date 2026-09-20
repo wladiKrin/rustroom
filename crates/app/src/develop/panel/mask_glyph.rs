@@ -77,6 +77,59 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, kind: MaskKind, colour: 
     }
 }
 
+/// A retouch patch's mode: Heal is a cross over a dot, Clone two circles.
+pub fn paint_spot(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    mode: edit_model::SpotMode,
+    colour: egui::Color32,
+) {
+    let r = rect.shrink(rect.width() * 0.12);
+    let c = r.center();
+    let w = r.width();
+    let stroke = egui::Stroke::new((w / 9.0).max(1.0), colour);
+    match mode {
+        edit_model::SpotMode::Heal => {
+            painter.line_segment(
+                [egui::pos2(c.x, r.top()), egui::pos2(c.x, r.bottom())],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(r.left(), c.y), egui::pos2(r.right(), c.y)],
+                stroke,
+            );
+            painter.circle_filled(c, w * 0.16, colour);
+        }
+        edit_model::SpotMode::Clone => {
+            painter.circle_stroke(egui::pos2(c.x - w * 0.16, c.y - w * 0.16), w * 0.3, stroke);
+            painter.circle_stroke(
+                egui::pos2(c.x + w * 0.16, c.y + w * 0.16),
+                w * 0.3,
+                egui::Stroke::new(stroke.width, colour.gamma_multiply(0.55)),
+            );
+        }
+    }
+}
+
+/// The hold-out toggle: a circle, struck through while `on` — the patch is held out of the
+/// view so what it covers shows.
+pub fn paint_hold(painter: &egui::Painter, rect: egui::Rect, on: bool, colour: egui::Color32) {
+    let r = rect.shrink(rect.width() * 0.12);
+    let c = r.center();
+    let w = r.width();
+    let stroke = egui::Stroke::new((w / 9.0).max(1.0), colour);
+    painter.circle_stroke(c, w * 0.4, stroke);
+    if on {
+        painter.line_segment(
+            [
+                egui::pos2(c.x - w * 0.24, c.y),
+                egui::pos2(c.x + w * 0.24, c.y),
+            ],
+            egui::Stroke::new(stroke.width * 1.3, colour),
+        );
+    }
+}
+
 /// An eye: open when `on`, a closed lid otherwise. The per-mask overlay toggle.
 pub fn paint_eye(painter: &egui::Painter, rect: egui::Rect, on: bool, colour: egui::Color32) {
     let r = rect.shrink(rect.width() * 0.1);
@@ -178,5 +231,41 @@ mod tests {
         let (open, closed) = (shapes(true), shapes(false));
         assert!(open.contains("Circle"), "an open eye has a pupil");
         assert!(!closed.contains("Circle"), "a closed eye has none");
+    }
+
+    #[test]
+    fn the_spot_glyphs_and_the_hold_toggle_paint_something() {
+        let shapes = |f: &dyn Fn(&egui::Painter, egui::Rect)| {
+            let ctx = egui::Context::default();
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(100.0, 100.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(14.0, 14.0));
+                    f(ui.painter(), rect);
+                },
+            );
+            format!("{:?}", out.shapes)
+        };
+        for mode in [edit_model::SpotMode::Heal, edit_model::SpotMode::Clone] {
+            let s = shapes(&|p, r| paint_spot(p, r, mode, egui::Color32::WHITE));
+            assert!(
+                s.contains("Circle") || s.contains("LineSegment"),
+                "{mode:?} painted nothing"
+            );
+        }
+        let off = shapes(&|p, r| paint_hold(p, r, false, egui::Color32::WHITE));
+        let on = shapes(&|p, r| paint_hold(p, r, true, egui::Color32::WHITE));
+        assert!(off.contains("Circle"));
+        assert!(
+            on.contains("LineSegment") && !off.contains("LineSegment"),
+            "the strike shows only when on"
+        );
     }
 }

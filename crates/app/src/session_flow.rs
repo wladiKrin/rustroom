@@ -177,10 +177,25 @@ impl Session {
         // ⚠ Removed rather than zeroed: a spot with a zero radius still runs the stage, and
         // `SpotRemovalStage`'s own guard treats a non-positive radius as covering nothing — so
         // dropping it is both cheaper and unambiguous.
+        // ⚠ The held-out patches (the rows' toggles) and the drag-suppressed one, highest index
+        // first so each removal leaves the lower indices meaning what they meant.
+        let mut gone: Vec<usize> = self
+            .spot_held
+            .iter()
+            .take(e.spots.len())
+            .enumerate()
+            .filter(|(_, &held)| held)
+            .map(|(i, _)| i)
+            .collect();
         if let Some(i) = self.suppressed_spot {
             if i < e.spots.len() {
-                e.spots.remove(i);
+                gone.push(i);
             }
+        }
+        gone.sort_unstable();
+        gone.dedup();
+        for i in gone.into_iter().rev() {
+            e.spots.remove(i);
         }
         // ⚠⚠ **Mask isolation.** While a mask's tint is shown, that mask's adjustments leave the
         // view, so painting changes no pixels and needs no render — which is what keeps the rung
@@ -231,6 +246,24 @@ impl Session {
     /// Show or hide every mask's overlay.
     pub(crate) fn set_all_masks_shown(&mut self, on: bool) {
         self.mask_shown = vec![on; self.edits.masks.len()];
+    }
+
+    /// Keep the patch flags the patches' length: a new patch is shown and not held out.
+    pub(crate) fn sync_spot_flags(&mut self) {
+        let n = self.edits.spots.len();
+        self.spot_shown.resize(n, true);
+        self.spot_held.resize(n, false);
+    }
+
+    /// Whether every patch's outline is shown (false with no patches at all).
+    pub(crate) fn all_spots_shown(&self) -> bool {
+        let n = self.edits.spots.len();
+        n > 0 && self.spot_shown.len() >= n && self.spot_shown.iter().take(n).all(|&on| on)
+    }
+
+    /// Show or hide every patch's outline.
+    pub(crate) fn set_all_spots_shown(&mut self, on: bool) {
+        self.spot_shown = vec![on; self.edits.spots.len()];
     }
 
     /// Which component of the selected mask the panel and the canvas act on, **clamped**.
@@ -548,6 +581,8 @@ impl RustroomApp {
             suppressed_spot: None,
             suppressed_masks: Vec::new(),
             mask_shown: Vec::new(),
+            spot_shown: Vec::new(),
+            spot_held: Vec::new(),
             soft_next: false,
             backdrop: None,
             spot_drag: Default::default(),
@@ -891,6 +926,46 @@ mod tests {
         let e = s.view_edits(rustroom_app::tool::Tool::Masks);
         let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
         assert_eq!(left, vec![1.5]);
+    }
+
+    #[test]
+    fn held_patches_leave_the_view_together_with_the_drag_suppressed_one() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let s = app.session.as_mut().expect("session");
+        let spot = |x: f32| edit_model::Spot {
+            centre: [x, 0.5],
+            source: [0.1, 0.1],
+            radius: 0.02,
+            feather: 50.0,
+            mode: edit_model::SpotMode::Heal,
+        };
+        s.edits.spots = vec![spot(0.2), spot(0.5), spot(0.8)];
+        s.spot_held = vec![true, false, false];
+        // ⚠ The drag suppression names the same patch as a held flag once: no double removal.
+        s.suppressed_spot = Some(2);
+        let left: Vec<f32> = s
+            .view_edits(rustroom_app::tool::Tool::Retouch)
+            .spots
+            .iter()
+            .map(|sp| sp.centre[0])
+            .collect();
+        assert_eq!(left, vec![0.5]);
+        s.suppressed_spot = Some(0);
+        let left: Vec<f32> = s
+            .view_edits(rustroom_app::tool::Tool::Retouch)
+            .spots
+            .iter()
+            .map(|sp| sp.centre[0])
+            .collect();
+        assert_eq!(left, vec![0.5, 0.8]);
+        s.sync_spot_flags();
+        assert!(!s.all_spots_shown() || s.spot_shown == vec![true, true, true]);
+        s.set_all_spots_shown(false);
+        assert!(!s.all_spots_shown());
+        s.set_all_spots_shown(true);
+        assert!(s.all_spots_shown());
     }
 
     #[test]

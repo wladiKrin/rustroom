@@ -79,7 +79,6 @@ pub(super) fn draw_spot_overlay(
     img_rect: egui::Rect,
     frame_rect: egui::Rect,
     tool: &mut SpotTool,
-    show_outlines: bool,
     sample: &dyn Fn([f32; 2]) -> [f32; 3],
 ) -> bool {
     if frame_rect.width() <= f32::EPSILON || frame_rect.height() <= f32::EPSILON {
@@ -278,7 +277,15 @@ pub(super) fn draw_spot_overlay(
     // retouching, so placing a patch while they are hidden must behave normally — and a gesture
     // with no preview would be blind again, which is the complaint this same round fixed. A
     // toggle that disabled the tool would be a mode, which is not what was asked for.
-    for (i, sp) in s.edits.spots.iter().enumerate().filter(|_| show_outlines) {
+    // ⚠ Per patch since 2026-09-20: the row's eye. A flag past the end — a patch that has not
+    // been through `sync_spot_flags` yet — draws, as outlines always did.
+    for (i, sp) in s
+        .edits
+        .spots
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| s.spot_shown.get(*i).copied().unwrap_or(true))
+    {
         let selected = s.selected_spot == Some(i);
         let c = to_screen(&map, sp.centre, frame_rect);
         let src = to_screen(&map, sp.source, frame_rect);

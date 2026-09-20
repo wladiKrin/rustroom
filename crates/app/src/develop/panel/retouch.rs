@@ -1,10 +1,17 @@
-//! The Retouch tool's controls: the patch's size and feather, its mode, and what to do with the
-//! spots already placed.
+//! The Retouch panel: the patch list first, the settings for the lit row under it, Find dust.
+//!
+//! ⚠ Option C of the 2026-09-20 canvas ("Rustroom Retouch Panel") plus the user's addition:
+//! every patch is a row with an eye (its outline), a hold-out toggle (the patch held out of the
+//! view so what it covers shows) and a `×`, mirroring the Masks list. A **Next patch** row is
+//! lit whenever no patch is selected, so which patch the sliders edit is a row, not a sentence.
 
 use super::Edited;
+use crate::develop::panel::{mask_components, section};
+use crate::theme;
 use crate::Session;
 use edit_model::SpotMode;
 use eframe::egui;
+use rustroom_app::mask_tool;
 use rustroom_app::spot_tool::{self, SpotTool, MAX_RADIUS, MIN_RADIUS};
 
 /// Draw the Retouch controls.
@@ -12,59 +19,203 @@ use rustroom_app::spot_tool::{self, SpotTool, MAX_RADIUS, MIN_RADIUS};
 /// ⚠ `tool` is `&mut` to a field of `RustroomApp` while `s` borrows another — **disjoint** fields,
 /// which is what makes both legal where a closure capturing the app twice would be `E0499`. The
 /// `masks::BrushTool` precedent, which takes five of them.
-pub(crate) fn show(
-    ui: &mut egui::Ui,
-    s: &mut Session,
-    tool: &mut SpotTool,
-    show_outlines: &mut bool,
-    ed: &mut Edited,
-) {
-    // ⚠⚠ **When a patch is selected the controls edit THAT patch; otherwise they set what the
-    // next one will be.** Reported from use: "when clicking on a patch, it should be possible to
-    // adapt the size and feather, right now it's doing nothing" — because the sliders only ever
-    // wrote the tool's defaults, which affect the *next* placement and nothing on screen.
-    //
-    // ⚠ Editing a selected patch also updates the defaults, so the next placement inherits what
-    // you just dialled in. The reverse does not hold: changing the defaults with nothing selected
-    // must not reach back and alter an existing patch.
-    let selected = s.selected_spot.filter(|&i| i < s.edits.spots.len());
-    crate::theme::hint(
+pub(crate) fn show(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: &mut Edited) {
+    // ⚠ Once per frame, before anything reads them: undo, paste, snapshots and the canvas all
+    // change the patch count without passing through this panel.
+    s.sync_spot_flags();
+    let n = s.edits.spots.len();
+    let count = match n {
+        0 => "no patches".to_owned(),
+        1 => "1 patch".to_owned(),
+        n => format!("{n} patches"),
+    };
+    // ⚠ `reset` is the old "Clear all": it belongs to the list as a whole, so it sits on its
+    // header.
+    let mut out = section::header(
         ui,
-        match selected {
-            Some(_) => "Editing the selected patch",
-            None => "Settings for the next patch",
+        ui.make_persistent_id(("retouch", "Patches")),
+        true,
+        section::Header::new("Patches")
+            .modified(n > 0)
+            .resettable(true)
+            .trailing(&count),
+    );
+    if out.reset {
+        s.edits.spots.clear();
+        s.selected_spot = None;
+        s.spot_shown.clear();
+        s.spot_held.clear();
+        ed.discrete();
+    }
+    out.state.show_body_unindented(ui, |ui| {
+        list(ui, s, tool, ed);
+        show_all_row(ui, s);
+    });
+    ui.add_space(6.0);
+    settings(ui, s, tool, ed);
+    find_dust(ui, s, ed);
+}
+
+/// The Next patch row and one row per patch.
+fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
+    let long = s.full_long;
+    let selected = s.selected_spot.filter(|&i| i < s.edits.spots.len());
+    // ⚠ The Next patch row shows the *tool's* defaults, because that is what the sliders edit
+    // while it is lit; a patch you add takes them.
+    let next_meta = meta(tool.mode, tool.radius, long);
+    let out = mask_components::row(
+        ui,
+        mask_components::RowSpec {
+            glyph: mask_components::RowGlyph::Spot(tool.mode),
+            op: None,
+            name: "Next patch",
+            meta: &next_meta,
+            accessible: "Next patch",
+            selected: false,
+            current: selected.is_none(),
+            deletable: false,
+            indent: 0.0,
+            eye: None,
+            hold: None,
         },
     );
+    if out.clicked {
+        s.selected_spot = None;
+    }
+    let mut remove: Option<usize> = None;
+    let mut pick: Option<usize> = None;
+    for i in 0..s.edits.spots.len() {
+        let sp = s.edits.spots[i];
+        let name = format!("Patch {}", i + 1);
+        let m = meta(sp.mode, sp.radius, long);
+        let out = mask_components::row(
+            ui,
+            mask_components::RowSpec {
+                glyph: mask_components::RowGlyph::Spot(sp.mode),
+                op: None,
+                name: &name,
+                meta: &m,
+                accessible: &name,
+                selected: selected == Some(i),
+                current: false,
+                deletable: true,
+                indent: 0.0,
+                eye: Some(s.spot_shown.get(i).copied().unwrap_or(true)),
+                hold: Some(s.spot_held.get(i).copied().unwrap_or(false)),
+            },
+        );
+        if out.delete {
+            remove = Some(i);
+        } else if out.eye {
+            if let Some(on) = s.spot_shown.get_mut(i) {
+                *on = !*on;
+            }
+        } else if out.hold {
+            if let Some(on) = s.spot_held.get_mut(i) {
+                *on = !*on;
+            }
+            // ⚠ A VIEW MODE, not an edit: it changes `view_edits`, so it re-renders, and pushes
+            // no history entry.
+            ed.changed = true;
+        } else if out.clicked {
+            pick = Some(i);
+        }
+    }
+    if let Some(i) = pick {
+        s.selected_spot = Some(i);
+    }
+    if let Some(i) = remove {
+        let before = s.edits.spots.len();
+        s.edits.spots.remove(i);
+        if i < s.spot_shown.len() {
+            s.spot_shown.remove(i);
+        }
+        if i < s.spot_held.len() {
+            s.spot_held.remove(i);
+        }
+        s.selected_spot = mask_tool::selection_after_delete(s.selected_spot, i, before);
+        if s.suppressed_spot == Some(i) {
+            s.suppressed_spot = None;
+        }
+        ed.discrete();
+    }
+}
 
-    // ⚠ Copied out, edited, then written back — `s.edits.spots[i]` cannot be borrowed mutably
-    // across the whole block while `s.edits.spots.len()` is also read. `Spot` is `Copy`.
+fn meta(mode: SpotMode, radius: f32, long: usize) -> String {
+    format!(
+        "{} · {:.0} px",
+        mode_label(mode),
+        spot_tool::radius_px(radius, long)
+    )
+}
+
+fn mode_label(mode: SpotMode) -> &'static str {
+    match mode {
+        SpotMode::Heal => "Heal",
+        SpotMode::Clone => "Clone",
+    }
+}
+
+/// `Show all` / `Hide all` under the list: every outline at once.
+fn show_all_row(ui: &mut egui::Ui, s: &mut Session) {
+    if s.edits.spots.is_empty() {
+        return;
+    }
+    let all = s.all_spots_shown();
+    let label = if all { "Hide all" } else { "Show all" };
+    let mut clicked = false;
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            clicked = ui
+                .small_button(label)
+                .on_hover_text("Every patch's outline at once, so you can see the photograph")
+                .clicked();
+        },
+    );
+    if clicked {
+        s.set_all_spots_shown(!all);
+    }
+}
+
+const HEAL_HINT: &str = "Matches the source patch to the ring around the destination — what \
+                         makes a spot on a sky disappear rather than leaving a disc of slightly \
+                         different sky.";
+const CLONE_HINT: &str = "A straight copy, blended by the feather.";
+
+/// The mode, Size and Feather of the lit row: the selected patch, or the tool's defaults.
+fn settings(ui: &mut egui::Ui, s: &mut Session, tool: &mut SpotTool, ed: &mut Edited) {
+    let selected = s.selected_spot.filter(|&i| i < s.edits.spots.len());
     let mut live = selected.map(|i| s.edits.spots[i]);
+    let (mut touched, mut settled, mut dragging) = (false, false, false);
+
+    {
+        let mode = live.as_mut().map_or(&mut tool.mode, |sp| &mut sp.mode);
+        let mut m = *mode;
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        theme::segmented_sized(
+            ui,
+            &mut m,
+            &[
+                (SpotMode::Heal, "Heal", HEAL_HINT),
+                (SpotMode::Clone, "Clone", CLONE_HINT),
+            ],
+            28.0,
+            font,
+        );
+        if m != *mode {
+            *mode = m;
+            touched = true;
+            settled = true;
+        }
+    }
+
     let radius = live.as_mut().map_or(&mut tool.radius, |sp| &mut sp.radius);
-    // ⚠⚠ **Not a second mechanism.** This slider shows and sets the *same* value the canvas
-    // size-drag sets — one value, two affordances, the eyedropper-and-Kelvin idiom M5.2 shipped.
-    // The drag writes `tool.radius` on every frame, so the slider tracks the gesture live.
-    //
-    // ⚠⚠ **Shown in PIXELS of the full-resolution image, not as a percentage** — reported as
-    // "I don't like the % numbering, can we just do pixels". A radius is *stored* as a fraction of
-    // the long edge, because that is what makes it survive a resize; nobody thinks about dust in
-    // fractions of a frame.
-    //
-    // ⚠ Against `full_long`, never the buffer's long edge: a RAW opens at half size, so a pixel
-    // count taken from the buffer would silently double a few seconds later when the
-    // full-resolution decode landed.
-    //
-    // ⚠⚠ **Recorded honestly: no test can see which of the two is used.** The slider's range and
-    // its write-back divide by the *same* figure, so a wrong `long` is self-consistent and yields
-    // an identical radius — it changes only the digits on screen, and egui does not publish a
-    // slider's formatted value to the accessibility tree. The arithmetic itself is covered by
-    // `spot_tool::the_pixel_conversion_round_trips_and_clamps`; this one line is not.
     let long = s.full_long;
     let mut px = spot_tool::radius_px(*radius, long);
     let r = ui
         .add(
-            // ⚠⚠ **Logarithmic**, because the range spans 50x and the useful zone sits at the
-            // bottom of it. On a linear slider 0.1–0.5% — where this tool is actually used —
-            // occupied the first 8% of the travel, which is the "cramped" half of the same report.
             super::slider::Slider::new(
                 &mut px,
                 spot_tool::radius_px(MIN_RADIUS, long)..=spot_tool::radius_px(MAX_RADIUS, long),
@@ -74,22 +225,16 @@ pub(crate) fn show(
             .custom_formatter(|v| format!("{v:.0} px")),
         )
         .on_hover_text(
-            "The patch's radius in pixels of the full-resolution image. Dragging out on the \
-             canvas sets this too.",
+            "The patch's radius in pixels of the full-resolution image. Click on the image to \
+             place a patch; drag out to size it; ⌥-drag to choose the source yourself. Delete \
+             removes the selected patch.",
         );
     if r.changed() {
         *radius = spot_tool::radius_from_px(px, long);
     }
-    // ⚠⚠ **Accounted locally, and folded into `ed` only if a patch is selected.** Calling
-    // `absorb` here unconditionally re-rendered the photo and pushed a history entry every time
-    // the *defaults* were adjusted — an undo step for a change no pixel saw. Caught by the test
-    // below, not by review.
-    let mut touched = r.changed();
-    let mut settled = r.drag_stopped();
-    // ⚠ `dragged()` rather than `changed()`: a slider reports no change on a frame the pointer
-    // held still, and treating that as "the drag ended" would flicker the patch back into view
-    // mid-gesture.
-    let mut dragging = r.dragged();
+    touched |= r.changed();
+    settled |= r.drag_stopped();
+    dragging |= r.dragged();
 
     let feather = live
         .as_mut()
@@ -101,115 +246,42 @@ pub(crate) fn show(
     settled |= r.drag_stopped();
     dragging |= r.dragged();
 
-    let mode = live.as_mut().map_or(&mut tool.mode, |sp| &mut sp.mode);
-    ui.horizontal(|ui| {
-        // ⚠ A segmented pair, matching the HSL channel selector and the grading wheels: two
-        // mutually exclusive modes read better as one control than as two checkboxes.
-        ui.spacing_mut().item_spacing.x = 0.0;
-        for (m, label, hint) in [
-            (
-                SpotMode::Heal,
-                "Heal",
-                "Matches the source patch to the ring around the destination — what makes a spot \
-                 on a sky disappear rather than leaving a disc of slightly different sky.",
-            ),
-            (
-                SpotMode::Clone,
-                "Clone",
-                "A straight copy, blended by the feather.",
-            ),
-        ] {
-            if ui
-                .selectable_label(*mode == m, format!("  {label}  "))
-                .on_hover_text(hint)
-                .clicked()
-            {
-                *mode = m;
-                // ⚠ Both flags: a click is a complete act with no drag to stop, so without
-                // `settled` the edit would reach the pixels and never the undo stack.
-                touched = true;
-                settled = true;
-            }
-        }
-    });
-
-    // ⚠ Only a change to a *selected patch* is a photo edit. Adjusting the defaults changes no
-    // pixels, so it must not re-render or push a history entry — the `apply_view_demosaic` rule
-    // in another costume.
     if let (Some(i), Some(sp)) = (selected, live) {
         if touched {
             s.edits.spots[i] = sp;
-            // ⚠ The defaults follow the patch you just tuned, so the next click inherits it.
             tool.radius = sp.radius;
             tool.feather = sp.feather;
             tool.mode = sp.mode;
         }
-        // ⚠⚠ **The pixels are NOT re-rendered while a slider is being dragged — the outline is
-        // the feedback, exactly as it is while moving a patch.** Reported as "changing the size or
-        // feathering does the live update as before with moving it; it should follow the same
-        // guidelines", and the reason is the same: `SpotRemovalStage` is in the prefix, so every
-        // frame would re-run noise reduction and dehaze over the whole buffer.
-        //
-        // ⚠ The stored spot *is* updated every frame, which is what makes the circle follow the
-        // slider — the canvas redraws from `Edits` on its own, with no render request needed.
-        //
-        // ⚠ And the patch leaves the view for the duration, so the blemish being sized against is
-        // visible. `suppressed_spot` doubles as the edge detector: it is `None` on the first
-        // dragging frame, which is the one render that hides the patch.
         if dragging {
             if s.suppressed_spot != Some(i) {
                 s.suppressed_spot = Some(i);
                 ed.changed = true;
             }
         } else if settled {
-            // ⚠⚠ Released on `settled` ONLY — never on "the selected spot is suppressed". Two
-            // owners share `suppressed_spot`: this panel while a slider is dragged, and the canvas
-            // while a patch is moved. Moving a patch *selects* it, so a clear keyed on the
-            // selection fired here on every frame of a canvas move, one frame after the canvas
-            // hid the patch — reported as "the unretouched image only flickers once, with the
-            // retouched one appearing again while moving". The panel may only release what it
-            // suppressed, and its own release is the slider's `drag_stopped`.
             s.suppressed_spot = None;
             ed.changed = true;
         }
         ed.settled |= settled;
     }
+}
 
-    ui.separator();
-
-    // ⚠⚠ **Turning the outlines off is how you see the photograph.** With thirty patches placed
-    // the circles become the picture, and judging what still needs retouching is impossible.
-    // Reported alongside wanting the unselected ones dimmer — the two answer one problem at
-    // different strengths.
-    //
-    // ⚠ It suppresses only the drawing of *committed* patches: every gesture still works, and a
-    // gesture in progress is still previewed. A toggle that disabled the tool would be a mode.
-    ui.checkbox(show_outlines, "Show patches").on_hover_text(
-        "Hides the outlines so you can see the photograph. Placing and editing still work.",
-    );
-
-    // ⚠⚠ Visualize Spots is a VIEW MODE, not an edit: it writes `Session.visualize`, which only
-    // `FrameSpec` reads, so it never reaches `Edits`, the sidecar, an export or the histogram.
-    // Hence `ed.changed` (re-render) and never `ed.settled` (no history entry) — the same split
-    // "Show patches" makes one line above, for the same reason.
-    //
-    // ⚠ It turns itself off in `select_tool`: a canvas stuck in the grey edge view after
-    // switching to Edit reads as a broken render.
-    let mut visualize_on = s.visualize.is_some();
+/// The dust view: a whole-image toggle, so not a row's business.
+fn find_dust(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
+    ui.add_space(6.0);
+    let mut on = s.visualize.is_some();
     if ui
-        .checkbox(&mut visualize_on, "Visualize spots")
+        .toggle_value(&mut on, "Find dust")
         .on_hover_text(
             "A high-contrast view that makes sensor dust visible. Affects only what you see — \
              never the render, the export or the histogram.",
         )
         .changed()
     {
-        s.visualize = visualize_on.then_some(rustroom_app::visualize::DEFAULT_THRESHOLD);
+        s.visualize = on.then_some(rustroom_app::visualize::DEFAULT_THRESHOLD);
         ed.changed = true;
     }
     if let Some(t) = s.visualize.as_mut() {
-        // ⚠ Drawn only while the view is on — a threshold for a view you are not looking at is
-        // a control that does nothing, and the absence *is* the off state.
         let r = ui
             .add(
                 super::slider::Slider::new(
@@ -221,42 +293,8 @@ pub(crate) fn show(
             .on_hover_text(
                 "Higher shows more. It is a gain, not a cutoff, so it always shows something.",
             );
-        // ⚠ Live, unlike Size and Feather: this is a post-step in `pack`, so a re-render costs
-        // only the cached-prefix tail and the prefix cache is untouched.
         ed.changed |= r.changed();
     }
-
-    // ⚠ A count, not a list. Forty dust spots make a useless list, and Lightroom has none either.
-    ui.horizontal(|ui| {
-        let n = s.edits.spots.len();
-        crate::theme::hint(
-            ui,
-            &match n {
-                0 => "No spots".to_string(),
-                1 => "1 spot".to_string(),
-                n => format!("{n} spots"),
-            },
-        );
-        if ui
-            .add_enabled(n > 0, egui::Button::new("Clear all"))
-            .on_hover_text("Removes every retouch patch from this photo")
-            .clicked()
-        {
-            s.edits.spots.clear();
-            // ⚠ The selection must go with them, or the next Delete acts on an index into an
-            // empty list.
-            s.selected_spot = None;
-            // ⚠ `discrete`, not a slider's `changed`: a click is a complete act, so it is one
-            // history entry immediately rather than waiting for a `drag_stopped` that never comes.
-            ed.discrete();
-        }
-    });
-
-    crate::theme::hint(
-        ui,
-        "Click to place a patch; drag out to size it; ⌥-drag to choose the source yourself. \
-         Delete removes the selected patch.",
-    );
 }
 
 #[cfg(test)]
@@ -276,7 +314,7 @@ mod tests {
     /// ⚠ One click, one history entry — and it must clear the selection too, or the next
     /// keystroke would act on an index into an empty list.
     #[test]
-    fn clear_all_removes_every_spot_and_marks_one_edit() {
+    fn the_reset_removes_every_spot_and_marks_one_edit() {
         let ctx = crate::test_ui::ctx();
         let mut app = crate::test_app::for_test();
         crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
@@ -286,17 +324,17 @@ mod tests {
             s.selected_spot = Some(1);
         }
         let mut seen = Edited::default();
-        crate::test_ui::click(&ctx, "Clear all", |ui| {
+        crate::test_ui::click(&ctx, "reset", |ui| {
             let mut ed = Edited::default();
             let mut tool = app.spot_tool;
             let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut true, &mut ed);
+            show(ui, s, &mut tool, &mut ed);
             if ed.changed {
                 seen = ed;
             }
         });
         let s = app.session.as_ref().expect("session");
-        assert!(s.edits.spots.is_empty(), "Clear all left spots behind");
+        assert!(s.edits.spots.is_empty(), "the reset left spots behind");
         assert_eq!(s.selected_spot, None, "the selection outlived the spots");
         assert!(
             seen.changed && seen.settled,
@@ -322,7 +360,7 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    show(ui, s, &mut tool, &mut true, &mut ed);
+                    show(ui, s, &mut tool, &mut ed);
                     assert!(!ed.changed, "drawing the panel reported an edit");
                 },
             );
@@ -342,7 +380,7 @@ mod tests {
             let mut ed = Edited::default();
             let mut tool = app.spot_tool;
             let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut true, &mut ed);
+            show(ui, s, &mut tool, &mut ed);
         })
         .expect("no Size slider was drawn");
         let target = egui::pos2(at.x + to, at.y);
@@ -367,7 +405,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| show(ui, s, &mut tool, &mut true, &mut ed),
+                    |ui| show(ui, s, &mut tool, &mut ed),
                 );
             }
             app.spot_tool = tool;
@@ -458,9 +496,8 @@ mod tests {
         let at = crate::test_ui::find(&ctx, "Size", |ui| {
             let mut ed = Edited::default();
             let mut tool = app.spot_tool;
-            let mut on = true;
             let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut on, &mut ed);
+            show(ui, s, &mut tool, &mut ed);
         })
         .expect("no Size slider was drawn");
 
@@ -485,14 +522,13 @@ mod tests {
             let mut ed = Edited::default();
             {
                 let s = app.session.as_mut().expect("session");
-                let mut on = true;
                 let _ = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(crate::test_ui::screen()),
                         events,
                         ..Default::default()
                     },
-                    |ui| show(ui, s, &mut tool, &mut on, &mut ed),
+                    |ui| show(ui, s, &mut tool, &mut ed),
                 );
             }
             app.spot_tool = tool;
@@ -530,36 +566,132 @@ mod tests {
 
     /// ⚠ The toggle is a plain view flag, and turning it off must not touch a single patch —
     /// hiding the outlines is for *looking*, not for editing.
+    /// The panel with one context for its whole life, so the section's open state and the
+    /// flags survive between clicks.
+    struct Panel {
+        ctx: egui::Context,
+        app: crate::RustroomApp,
+    }
+
+    impl Panel {
+        fn with_spots(spots: Vec<edit_model::Spot>) -> Self {
+            let ctx = crate::test_ui::ctx();
+            let mut app = crate::test_app::for_test();
+            crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
+            app.session.as_mut().unwrap().edits.spots = spots;
+            Self { ctx, app }
+        }
+
+        fn click(&mut self, label: &str) -> Edited {
+            let ctx = self.ctx.clone();
+            let mut seen = Edited::default();
+            let mut tool = self.app.spot_tool;
+            crate::test_ui::click(&ctx, label, |ui| {
+                let mut ed = Edited::default();
+                let s = self.app.session.as_mut().expect("session");
+                show(ui, s, &mut tool, &mut ed);
+                if ed.changed || ed.settled {
+                    seen = ed;
+                }
+            });
+            self.app.spot_tool = tool;
+            seen
+        }
+
+        fn s(&self) -> &Session {
+            self.app.session.as_ref().expect("session")
+        }
+    }
+
     #[test]
-    fn hiding_the_outlines_changes_no_patch() {
-        let ctx = crate::test_ui::ctx();
-        let mut app = crate::test_app::for_test();
-        crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
-        app.session.as_mut().unwrap().edits.spots = vec![a_spot()];
-        let before = app.session.as_ref().unwrap().edits.spots.clone();
-        let mut on = true;
-        let mut ed = Edited::default();
-        crate::test_ui::click(&ctx, "Show patches", |ui| {
-            ed = Edited::default();
-            let mut tool = app.spot_tool;
-            let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut on, &mut ed);
-        });
-        assert!(!on, "the checkbox did not toggle");
+    fn the_eye_hides_a_patchs_outline_and_edits_nothing() {
+        let mut p = Panel::with_spots(vec![a_spot()]);
+        let before = p.s().edits.spots.clone();
+        let ed = p.click("Show Patch 1");
         assert_eq!(
-            app.session.as_ref().unwrap().edits.spots,
+            p.s().spot_shown,
+            vec![false],
+            "the eye did not hide the outline"
+        );
+        assert_eq!(
+            p.s().edits.spots,
             before,
-            "hiding the outlines edited a patch"
+            "hiding an outline edited a patch"
+        );
+        assert!(!ed.settled, "a view toggle pushed a history entry");
+        p.click("Show Patch 1");
+        assert_eq!(p.s().spot_shown, vec![true], "nor showed it again");
+    }
+
+    #[test]
+    fn holding_a_patch_out_re_renders_and_edits_nothing() {
+        let mut p = Panel::with_spots(vec![a_spot()]);
+        let before = p.s().edits.clone();
+        let ed = p.click("Hold out Patch 1");
+        assert_eq!(
+            p.s().spot_held,
+            vec![true],
+            "the toggle did not hold the patch out"
         );
         assert!(
-            !ed.settled,
-            "a view toggle pushed a history entry for a photo that did not change"
+            ed.changed,
+            "holding a patch out changes the picture and asked for no render"
+        );
+        assert!(!ed.settled, "a view toggle pushed a history entry");
+        assert_eq!(p.s().edits, before, "a view toggle edited the photograph");
+        assert!(
+            p.s()
+                .view_edits(rustroom_app::tool::Tool::Retouch)
+                .spots
+                .is_empty(),
+            "the held patch is still in the view"
         );
     }
 
-    /// ⚠⚠ Visualize is a view mode: ticking it must ask for a render (or the canvas would not
-    /// change) and must push **no** history entry and touch **no** patch (or a view toggle would
-    /// be an undo step). All three are asserted, because each is a separate way to get it wrong.
+    #[test]
+    fn show_all_and_hide_all_flip_every_eye() {
+        let mut p = Panel::with_spots(vec![a_spot(), a_spot()]);
+        p.click("Show Patch 1");
+        assert_eq!(p.s().spot_shown, vec![false, true]);
+        p.click("Show all");
+        assert_eq!(p.s().spot_shown, vec![true, true]);
+        p.click("Hide all");
+        assert_eq!(p.s().spot_shown, vec![false, false]);
+    }
+
+    #[test]
+    fn a_row_selects_its_patch_and_next_patch_deselects() {
+        let mut p = Panel::with_spots(vec![a_spot(), a_spot()]);
+        assert_eq!(p.s().selected_spot, None);
+        p.click("Patch 2");
+        assert_eq!(
+            p.s().selected_spot,
+            Some(1),
+            "the row did not select its patch"
+        );
+        p.click("Next patch");
+        assert_eq!(p.s().selected_spot, None, "Next patch did not deselect");
+    }
+
+    #[test]
+    fn deleting_a_patch_from_its_row_drops_its_flags_with_it() {
+        let mut p = Panel::with_spots(vec![a_spot(), a_spot()]);
+        p.click("Show Patch 1"); // hidden, shown
+        p.click("Hold out Patch 2"); // -, held
+        p.app.session.as_mut().unwrap().selected_spot = Some(1);
+        let ed = p.click("Delete Patch 1");
+        let s = p.s();
+        assert_eq!(s.edits.spots.len(), 1);
+        assert_eq!(s.spot_shown, vec![true], "the survivor keeps its own eye");
+        assert_eq!(s.spot_held, vec![true], "and its own hold-out");
+        assert_eq!(
+            s.selected_spot,
+            Some(0),
+            "the selection followed the survivor"
+        );
+        assert!(ed.settled, "a delete is one history entry");
+    }
+
     #[test]
     fn ticking_visualize_re_renders_without_editing_anything() {
         let ctx = crate::test_ui::ctx();
@@ -567,19 +699,18 @@ mod tests {
         crate::test_app::open_test_photo(&mut app, &ctx, 64, 48);
         app.session.as_mut().unwrap().edits.spots = vec![a_spot()];
         let before = app.session.as_ref().unwrap().edits.clone();
-        let mut on = true;
         let mut ed = Edited::default();
-        crate::test_ui::click(&ctx, "Visualize spots", |ui| {
+        crate::test_ui::click(&ctx, "Find dust", |ui| {
             ed = Edited::default();
             let mut tool = app.spot_tool;
             let s = app.session.as_mut().expect("session");
-            show(ui, s, &mut tool, &mut on, &mut ed);
+            show(ui, s, &mut tool, &mut ed);
         });
         let s = app.session.as_ref().unwrap();
         assert_eq!(
             s.visualize,
             Some(rustroom_app::visualize::DEFAULT_THRESHOLD),
-            "the checkbox did not turn the view on"
+            "the toggle did not turn the view on"
         );
         assert!(
             ed.changed,
@@ -618,8 +749,7 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    let mut on = true;
-                    show(ui, s, &mut tool, &mut on, &mut ed);
+                    show(ui, s, &mut tool, &mut ed);
                     assert!(
                         !ed.changed,
                         "the panel requested a render during a canvas move"
@@ -644,10 +774,9 @@ mod tests {
             app.session.as_mut().unwrap().visualize = visualize;
             let found = crate::test_ui::find(&ctx, "Threshold", |ui| {
                 let mut tool = app.spot_tool;
-                let mut on = true;
                 let mut ed = Edited::default();
                 let s = app.session.as_mut().expect("session");
-                show(ui, s, &mut tool, &mut on, &mut ed);
+                show(ui, s, &mut tool, &mut ed);
             })
             .is_some();
             assert_eq!(found, expect, "visualize={visualize:?}");

@@ -325,12 +325,6 @@ struct RustroomApp {
     brush_auto_mask: bool,
     /// How close counts, 0..=100.
     brush_tolerance: f32,
-    /// Whether the Retouch tool draws its patch outlines.
-    ///
-    /// ⚠ A *view* toggle on the app, `show_mask_tint`'s home: turning the outlines off is how you
-    /// see the photograph itself and judge what still needs retouching, which is impossible with
-    /// forty circles over it.
-    show_spots: bool,
     /// The Retouch tool's live settings.
     ///
     /// ⚠ On `RustroomApp` rather than `Session` and **not persisted** — the brush's rule. The
@@ -600,7 +594,6 @@ impl RustroomApp {
             brush_tolerance: 35.0,
             // On by default: a freshly added brush mask with no adjustment yet is otherwise
             // completely invisible, which is a poor first five minutes.
-            show_spots: true,
             hsl_channel: Default::default(),
             mask_hsl_channel: Default::default(),
             mask_grade_range: Default::default(),
@@ -782,6 +775,14 @@ pub struct Session {
     /// part of `Edits`; `sync_mask_shown` keeps it the masks' length, and a mask that arrives
     /// by undo, paste or a snapshot starts with its overlay off.
     mask_shown: Vec<bool>,
+    /// Per patch, whether its outline is drawn on the canvas — the old "Show patches", per
+    /// patch (2026-09-20). View state; `sync_spot_flags` keeps it the patches' length, and a
+    /// patch that arrives by any route starts shown, as outlines always did.
+    spot_shown: Vec<bool>,
+    /// Per patch, whether it is held out of the view so that what it covers shows — the
+    /// per-patch twin of a mask's eye. View state; `view_edits` removes held patches together
+    /// with the drag-suppressed one.
+    spot_held: Vec<bool>,
     /// Set for exactly one frame after a suppression change, so the canvas lets the deliberately
     /// softer render stand instead of sharpening it away on the same frame.
     ///

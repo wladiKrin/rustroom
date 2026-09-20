@@ -50,13 +50,22 @@ pub fn op_glyph(op: edit_model::MaskOp) -> &'static str {
     }
 }
 
-/// One painted row: an op column, a kind glyph, a name, a `×`.
+/// What a row's glyph shows: a mask's kind, or a retouch patch's mode.
+#[derive(Clone, Copy)]
+pub enum RowGlyph {
+    Mask(MaskKind),
+    Spot(edit_model::SpotMode),
+}
+
+/// One painted row: an op column, a glyph, a name and its meta, then the action cells.
 pub struct RowSpec<'a> {
-    pub kind: MaskKind,
+    pub glyph: RowGlyph,
     /// The op column: `None` for a mask row (no column), `Some("")` for the base component.
     pub op: Option<&'a str>,
     /// The painted name.
     pub name: &'a str,
+    /// Weak text after the name — a patch's mode and size; empty for a mask.
+    pub meta: &'a str,
     /// The AccessKit name — what a screen reader says and the harnesses click.
     pub accessible: &'a str,
     /// The accent tint: the selected mask.
@@ -67,6 +76,8 @@ pub struct RowSpec<'a> {
     pub indent: f32,
     /// The eye: `Some(on)` draws it left of the `×`; a mask row has one, a component row none.
     pub eye: Option<bool>,
+    /// The hold-out toggle, left of the eye: a patch held out of the view. Masks pass `None`.
+    pub hold: Option<bool>,
 }
 
 pub struct RowOut {
@@ -74,6 +85,8 @@ pub struct RowOut {
     pub delete: bool,
     /// The eye was clicked.
     pub eye: bool,
+    /// The hold-out toggle was clicked.
+    pub hold: bool,
 }
 
 /// Draw one row.
@@ -140,8 +153,37 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         } else {
             v.weak_text_color()
         };
+        // ⚠ Advance, or the next cell lands on this one's hit area and wins the tie — which is
+        // exactly what happened when this line was dropped as "never read" (2026-09-20).
+        right = cell.left();
     }
-    let clicked = resp.clicked() && !delete && !eye;
+    let mut hold = false;
+    let mut hold_colour = v.weak_text_color();
+    if let Some(on) = spec.hold {
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(right - ROW_HEIGHT, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        );
+        let name = format!("Hold out {}", spec.accessible);
+        let r = ui
+            .interact(cell, resp.id.with("hold"), egui::Sense::click())
+            .on_hover_text(
+                "Holds this patch out of the view so you can see what it covers. Its outline \
+                 stays. Affects only what you see — never the render or the export.",
+            );
+        r.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
+        });
+        hold = r.clicked();
+        hold_colour = if on {
+            v.selection.bg_fill
+        } else if r.hovered() {
+            v.strong_text_color()
+        } else {
+            v.weak_text_color()
+        };
+    }
+    let clicked = resp.clicked() && !delete && !eye && !hold;
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
@@ -180,15 +222,27 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             egui::pos2(x + GLYPH / 2.0, rect.center().y),
             egui::vec2(GLYPH, GLYPH),
         );
-        mask_glyph::paint(&painter, glyph, spec.kind, text);
+        match spec.glyph {
+            RowGlyph::Mask(k) => mask_glyph::paint(&painter, glyph, k, text),
+            RowGlyph::Spot(m) => mask_glyph::paint_spot(&painter, glyph, m, text),
+        }
         x += GLYPH + 6.0;
-        painter.text(
+        let name_rect = painter.text(
             egui::pos2(x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             spec.name,
             font.clone(),
             text,
         );
+        if !spec.meta.is_empty() {
+            painter.text(
+                egui::pos2(name_rect.right() + 8.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                spec.meta,
+                egui::FontId::proportional(11.0),
+                v.weak_text_color(),
+            );
+        }
         // The action cells, from the right edge in: `×`, then the eye.
         let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
         if spec.deletable {
@@ -207,12 +261,21 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
                 egui::vec2(16.0, 16.0),
             );
             mask_glyph::paint_eye(&painter, eye_rect, on, eye_colour);
+            cell_x -= ROW_HEIGHT;
+        }
+        if let Some(on) = spec.hold {
+            let hold_rect = egui::Rect::from_center_size(
+                egui::pos2(cell_x, rect.center().y),
+                egui::vec2(16.0, 16.0),
+            );
+            mask_glyph::paint_hold(&painter, hold_rect, on, hold_colour);
         }
     }
     RowOut {
         clicked,
         delete,
         eye,
+        hold,
     }
 }
 
@@ -249,15 +312,17 @@ pub fn rows(ui: &mut egui::Ui, s: &mut Session, i: usize, ed: &mut Edited) {
         let out = row(
             ui,
             RowSpec {
-                kind: *kind,
+                glyph: RowGlyph::Mask(*kind),
                 op: Some(op),
                 name,
+                meta: "",
                 accessible,
                 selected: false,
                 current: selected == j,
                 deletable: j > 0,
                 indent: INDENT,
                 eye: None,
+                hold: None,
             },
         );
         if out.delete {
