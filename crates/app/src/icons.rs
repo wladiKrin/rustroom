@@ -51,10 +51,36 @@ pub const ZOOM_ACTUAL: char = '\u{e30c}';
 /// `square-split-horizontal` — the before/after toggle.
 pub const BEFORE_AFTER: char = '\u{e870}';
 
+/// `squares-four` — the Library half of the app-mode switch.
+pub const LIBRARY: char = '\u{e464}';
+/// `sliders` — the Develop half of the app-mode switch.
+///
+/// ⚠ The vertical sliders, not `sliders-horizontal`: that one is the Edit tool ([`EDIT`]), and
+/// the same picture for the module and for one tool inside it would say they are one thing.
+pub const DEVELOP: char = '\u{e432}';
+/// `grid-four` — the Library's Grid layout.
+pub const GRID: char = '\u{e296}';
+/// `columns` — Compare, two photos side by side.
+pub const COMPARE: char = '\u{e546}';
+/// `grid-nine` — Survey, the whole selection at once.
+pub const SURVEY: char = '\u{ec8c}';
+/// `funnel` — the Library's Filter menu.
+pub const FILTER: char = '\u{e266}';
+/// `sort-ascending` — the sort order combo.
+pub const SORT: char = '\u{e444}';
+/// `export` — the Develop toolbar's Export button.
+pub const EXPORT: char = '\u{eaf0}';
+/// `dots-three` — the "more" menu that holds Reindex.
+pub const MORE: char = '\u{e1fe}';
+/// `arrows-out-simple` — the thumbnail-size slider's glyph.
+pub const THUMB_SIZE: char = '\u{e0a6}';
+/// `gear` — edit a smart collection's rule.
+pub const GEAR: char = '\u{e270}';
+
 /// Every icon the app draws.
 ///
 /// ⚠ The coverage tests sweep this, so an icon missing from it is one nothing checks.
-pub const ALL: [char; 12] = [
+pub const ALL: [char; 23] = [
     EDIT,
     CROP,
     MASKS,
@@ -67,6 +93,17 @@ pub const ALL: [char; 12] = [
     ZOOM_FIT,
     ZOOM_ACTUAL,
     BEFORE_AFTER,
+    LIBRARY,
+    DEVELOP,
+    GRID,
+    COMPARE,
+    SURVEY,
+    FILTER,
+    SORT,
+    EXPORT,
+    MORE,
+    THUMB_SIZE,
+    GEAR,
 ];
 
 #[cfg(test)]

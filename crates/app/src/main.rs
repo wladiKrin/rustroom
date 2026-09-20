@@ -60,12 +60,14 @@ mod filmstrip;
 mod interaction;
 mod library;
 mod library_state;
+mod list_row;
 mod menu_bar;
 mod modals;
 mod multi;
 mod name_edit;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod segmented;
 mod session_flow;
 mod settings_apply;
 mod shell;

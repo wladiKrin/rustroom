@@ -1,0 +1,272 @@
+//! The Library panel's row: a name, a count, the accent tint on the open one, and its actions
+//! as glyph cells at the right edge.
+//!
+//! The Masks list's shape (`mask_components::row`) for the Library's lists — collections,
+//! keywords, folders, smart collections — without the mask-specific glyph column, and with
+//! any number of actions rather than a fixed eye and hold-out. ⚠ Its own painter rather than
+//! a fourth `RowGlyph` variant: the two rows share a look, not a contract, and every action
+//! here is a momentary button while the mask row's are toggles.
+
+use eframe::egui;
+
+/// Row height in points — the Masks list's.
+pub const ROW_HEIGHT: f32 = 26.0;
+/// How much of the accent the open row's tint carries — the rail's value.
+const TINT: f32 = 0.18;
+
+/// One action cell at the right edge of a row.
+pub struct RowAction<'a> {
+    /// The painted glyph — `×`, `+`, `−`, or an icon-font character.
+    pub glyph: char,
+    /// The verb for a screen reader; the cell is named "{verb} {row name}".
+    pub verb: &'a str,
+    pub hover: &'a str,
+    pub enabled: bool,
+}
+
+/// One row.
+pub struct RowSpec<'a> {
+    pub name: &'a str,
+    /// Weak text after the name — a count, or nothing.
+    pub count: Option<i64>,
+    /// The accent tint: the source the Library is showing.
+    pub selected: bool,
+    pub indent: f32,
+    pub hover: &'a str,
+    /// Right to left: the first action lands at the right edge.
+    pub actions: &'a [RowAction<'a>],
+}
+
+pub struct RowOut {
+    /// The row itself was clicked (never when an action was).
+    pub clicked: bool,
+    /// Which action was clicked, as an index into `actions`.
+    pub action: Option<usize>,
+}
+
+/// Draw one row.
+///
+/// ⚠ The actions are registered **after** the row so they win the hit-test tie — egui takes the
+/// last widget registered at a point — and a click on one is not a click on the row.
+pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ROW_HEIGHT),
+        egui::Sense::click(),
+    );
+    let resp = if spec.hover.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(spec.hover)
+    };
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            enabled,
+            spec.selected,
+            spec.name,
+        )
+    });
+    let v = ui.visuals().clone();
+    let mut action = None;
+    let mut right = rect.right();
+    let mut colours: Vec<egui::Color32> = Vec::with_capacity(spec.actions.len());
+    for (i, a) in spec.actions.iter().enumerate() {
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(right - ROW_HEIGHT, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        );
+        let name = format!("{} {}", a.verb, spec.name);
+        let r = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(cell), |ui| {
+                ui.add_enabled_ui(a.enabled, |ui| {
+                    let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
+                    let on = enabled && a.enabled;
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name)
+                    });
+                    r
+                })
+                .inner
+            })
+            .inner;
+        let r = if a.hover.is_empty() {
+            r
+        } else {
+            r.on_hover_text(a.hover)
+        };
+        if a.enabled && r.clicked() {
+            action = Some(i);
+        }
+        colours.push(if !a.enabled {
+            v.weak_text_color().gamma_multiply(0.45)
+        } else if r.hovered() {
+            v.strong_text_color()
+        } else {
+            v.weak_text_color()
+        });
+        // ⚠ Advance, or the next cell lands on this one's hit area and wins the tie.
+        right = cell.left();
+    }
+    let clicked = resp.clicked() && action.is_none();
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter_at(rect);
+        let fill = if spec.selected {
+            v.selection.bg_fill.gamma_multiply(TINT)
+        } else if resp.hovered() {
+            v.widgets.hovered.weak_bg_fill
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            painter.rect_filled(rect, 4.0, fill);
+        }
+        let text = if spec.selected {
+            v.strong_text_color()
+        } else {
+            v.widgets.inactive.fg_stroke.color
+        };
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        // The name is clipped before the count and the actions, never over them.
+        let name_right = right - 6.0;
+        let count_galley = spec.count.map(|n| {
+            painter.layout_no_wrap(
+                n.to_string(),
+                egui::FontId::proportional(11.0),
+                v.weak_text_color(),
+            )
+        });
+        let count_w = count_galley
+            .as_ref()
+            .map(|g| g.size().x + 8.0)
+            .unwrap_or(0.0);
+        let name_painter = painter.with_clip_rect(egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(name_right - count_w, rect.bottom()),
+        ));
+        name_painter.text(
+            egui::pos2(rect.left() + spec.indent + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            spec.name,
+            font,
+            text,
+        );
+        if let Some(g) = count_galley {
+            painter.galley(
+                egui::pos2(name_right - g.size().x, rect.center().y - g.size().y / 2.0),
+                g,
+                v.weak_text_color(),
+            );
+        }
+        let mut cell_x = rect.right() - ROW_HEIGHT / 2.0;
+        for (a, colour) in spec.actions.iter().zip(colours) {
+            painter.text(
+                egui::pos2(cell_x, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                a.glyph,
+                egui::FontId::proportional(if a.glyph == '×' { 17.0 } else { 15.0 }),
+                colour,
+            );
+            cell_x -= ROW_HEIGHT;
+        }
+    }
+    RowOut { clicked, action }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui;
+
+    fn actions() -> [RowAction<'static>; 2] {
+        [
+            RowAction {
+                glyph: '×',
+                verb: "Delete",
+                hover: "",
+                enabled: true,
+            },
+            RowAction {
+                glyph: '+',
+                verb: "Add to",
+                hover: "",
+                enabled: true,
+            },
+        ]
+    }
+
+    fn draw(ui: &mut egui::Ui, out: &mut (bool, Option<usize>)) {
+        let acts = actions();
+        let o = row(
+            ui,
+            RowSpec {
+                name: "Portraits",
+                count: Some(21),
+                selected: false,
+                indent: 0.0,
+                hover: "",
+                actions: &acts,
+            },
+        );
+        if o.clicked {
+            out.0 = true;
+        }
+        if o.action.is_some() {
+            out.1 = o.action;
+        }
+    }
+
+    #[test]
+    fn the_row_and_its_actions_are_named_and_distinct() {
+        let ctx = test_ui::ctx();
+        let mut out = (false, None);
+        let labels: Vec<String> =
+            test_ui::labelled_centres(&ctx, Vec::new(), |ui| draw(ui, &mut out))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect();
+        for want in ["Portraits", "Delete Portraits", "Add to Portraits"] {
+            assert!(labels.iter().any(|l| l == want), "{want:?} missing in {labels:?}");
+        }
+        test_ui::click(&ctx, "Portraits", |ui| draw(ui, &mut out));
+        assert!(out.0, "a click on the row did not open it");
+        assert_eq!(out.1, None, "a click on the row hit an action");
+        let mut out = (false, None);
+        test_ui::click(&ctx, "Delete Portraits", |ui| draw(ui, &mut out));
+        assert_eq!(out.1, Some(0), "the delete cell was not reached");
+        assert!(!out.0, "a click on an action opened the row");
+        let mut out = (false, None);
+        test_ui::click(&ctx, "Add to Portraits", |ui| draw(ui, &mut out));
+        assert_eq!(out.1, Some(1), "the second cell was not reached");
+    }
+
+    #[test]
+    fn a_disabled_action_does_nothing() {
+        let ctx = test_ui::ctx();
+        let mut hit = None;
+        let acts = [RowAction {
+            glyph: '+',
+            verb: "Add to",
+            hover: "",
+            enabled: false,
+        }];
+        test_ui::click(&ctx, "Add to Portraits", |ui| {
+            let o = row(
+                ui,
+                RowSpec {
+                    name: "Portraits",
+                    count: None,
+                    selected: false,
+                    indent: 0.0,
+                    hover: "",
+                    actions: &acts,
+                },
+            );
+            if o.action.is_some() {
+                hit = o.action;
+            }
+        });
+        assert_eq!(hit, None);
+    }
+}

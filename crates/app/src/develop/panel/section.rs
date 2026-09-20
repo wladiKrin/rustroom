@@ -36,6 +36,10 @@ pub struct Header<'a> {
     /// A word of weak text left of the reset — the Shape section names its kind here. Not a
     /// widget.
     pub trailing: Option<&'a str>,
+    /// Sense a drag on the row as well as a click — the Library panel reorders its sections by
+    /// dragging their headers. ⚠ egui reports `clicked()` only for a press-release that did not
+    /// become a drag, so the two gestures exclude each other by construction.
+    pub draggable: bool,
 }
 
 impl<'a> Header<'a> {
@@ -45,6 +49,7 @@ impl<'a> Header<'a> {
             modified: false,
             resettable: false,
             trailing: None,
+            draggable: false,
         }
     }
     pub fn modified(mut self, on: bool) -> Self {
@@ -59,6 +64,10 @@ impl<'a> Header<'a> {
         self.trailing = Some(text);
         self
     }
+    pub fn draggable(mut self, on: bool) -> Self {
+        self.draggable = on;
+        self
+    }
 }
 
 /// What a header row reported.
@@ -67,6 +76,8 @@ pub struct HeaderOut {
     pub state: egui::collapsing_header::CollapsingState,
     /// `reset` was clicked this frame.
     pub reset: bool,
+    /// The row's own response — a draggable header's drag is read from it.
+    pub response: egui::Response,
 }
 
 /// Draw the header row.
@@ -84,8 +95,17 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
     ui.add_space(6.0);
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), HEIGHT),
-        egui::Sense::click(),
+        if h.draggable {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::click()
+        },
     );
+    let resp = if h.draggable {
+        resp.on_hover_cursor(egui::CursorIcon::Grab)
+    } else {
+        resp
+    };
     let enabled = ui.is_enabled();
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, enabled, h.name)
@@ -174,7 +194,11 @@ pub fn header(ui: &mut egui::Ui, id: egui::Id, default_open: bool, h: Header<'_>
         );
     }
 
-    HeaderOut { state, reset }
+    HeaderOut {
+        state,
+        reset,
+        response: resp,
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +212,7 @@ mod tests {
             modified,
             resettable,
             trailing,
+            draggable,
         } = h;
         crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             let _ = header(
@@ -199,6 +224,7 @@ mod tests {
                     modified,
                     resettable,
                     trailing,
+                    draggable,
                 },
             );
         })
@@ -239,5 +265,23 @@ mod tests {
             !l.iter().any(|l| l == "Radial"),
             "trailing text became a widget"
         );
+    }
+
+    #[test]
+    fn a_draggable_header_still_toggles_on_a_click() {
+        // ⚠ `Sense::click_and_drag` must not cost the click: the Library panel's sections
+        // collapse by a click on the same row that drags them.
+        let ctx = crate::test_ui::ctx();
+        let mut open_after = None;
+        crate::test_ui::click(&ctx, "Folders", |ui| {
+            let out = header(
+                ui,
+                egui::Id::new("d"),
+                true,
+                Header::new("Folders").draggable(true),
+            );
+            open_after = Some(out.state.is_open());
+        });
+        assert_eq!(open_after, Some(false), "the click did not close the section");
     }
 }
