@@ -144,7 +144,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-20)
 
-**2620 tests** on `shell-restyle` (goldens unmoved since 2026-09-18).
+**2623 tests** on `shell-restyle` (goldens unmoved since 2026-09-18).
 
 ⚠ **One branch, `shell-restyle`, ahead of `main`: the top bar and the Library in one language** —
 an accent app-mode pill, an icon pill for Grid / Compare / Survey, format chips, a thumbnail-size
