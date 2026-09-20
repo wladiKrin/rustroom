@@ -15,8 +15,11 @@
 //! is never ambiguous. This looks exactly like the nesting the Library panel's three inner scroll
 //! areas were removed for on 2026-08-27 — and it is not that. Do not "fix" it.
 
+use crate::develop::panel::section::{header, Header};
+use crate::list_row::{self, RowAction, RowSpec};
 use crate::{theme, RustroomApp};
 use eframe::egui;
+use rustroom_app::icons;
 use rustroom_app::settings::STRIP_HEIGHT_RANGE;
 
 /// What a click in the strip asked for, applied after the panel closes.
@@ -34,6 +37,43 @@ enum Action {
 
 /// The strip's id, and so — via `.with("__resize")` — its resize handle's.
 const PANEL_ID: &str = "snapshot_strip";
+/// The gutter the timeline's dots and hairline sit in, left of every row's name.
+const GUTTER: f32 = 22.0;
+/// A dot's radius.
+const DOT: f32 = 4.0;
+
+/// One snapshot as the strip draws it.
+struct Row {
+    n: u32,
+    label: String,
+    taken: i64,
+    /// The photo's current edits equal this snapshot's — "you are here".
+    matches: bool,
+}
+
+/// What the Now row says about the edits since the newest snapshot.
+///
+/// ⚠ Pure, so the sentence is testable without a window: the Now row paints it rather than
+/// adding a widget, and a painted string is one the harness cannot read.
+fn drift_text(
+    latest: Option<(&str, &edit_model::Edits)>,
+    current: &edit_model::Edits,
+    history: &rustroom_app::history::History<edit_model::Edits>,
+) -> String {
+    let Some((label, edits)) = latest else {
+        return "no snapshots yet".to_string();
+    };
+    if edits == current {
+        return format!("same as “{label}”");
+    }
+    match history.steps_since(|e| e == edits) {
+        Some(1) => format!("1 change since “{label}”"),
+        Some(k) => format!("{k} changes since “{label}”"),
+        // ⚠ The snapshot's state is nowhere on the undo side — undone past, or restored and
+        // then undone — so there is no count to give, only the fact.
+        None => format!("changed since “{label}”"),
+    }
+}
 
 /// Draw the strip. Returns whether the photo's edits changed, which the caller records as one
 /// history entry — the contract `panel::show` already has.
@@ -47,6 +87,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
     // persisted size into this range itself — see `Panel::outer_size`.
     let max = (ui.available_height() * 0.5).max(STRIP_HEIGHT_RANGE.0 as f32);
     let stored = app.settings.clamped_strip_height();
+    // ⚠ Local wall-clock seconds, `Snapshot::taken`'s own convention, so `when::short` compares
+    // like with like.
+    let now = chrono::Local::now().naive_local().and_utc().timestamp();
 
     let panel = egui::Panel::bottom(PANEL_ID)
         .frame(theme::panel_frame(ui.style()))
@@ -55,53 +98,61 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
         .min_size(STRIP_HEIGHT_RANGE.0 as f32)
         .max_size(max)
         .show(ui, |ui| {
-            // Fill the panel's height so egui stores the panel size, not the smaller content
-            // size — otherwise a resizable panel shrinks back each frame.
-            ui.set_min_height(ui.available_height());
-
-            let snaps: Vec<(u32, String, i64)> = app
-                .session
-                .as_ref()
-                .map(|s| {
-                    s.snapshots
-                        .iter()
-                        .map(|x| (x.n, x.label(), x.taken))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            ui.horizontal(|ui| {
-                ui.label(if snaps.is_empty() {
-                    "Snapshots".to_string()
-                } else {
-                    format!("Snapshots ({})", snaps.len())
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button("+")
-                        .on_hover_text("Save the current settings as a snapshot")
-                        .clicked()
-                    {
-                        action = Action::Take;
-                    }
-                });
+            let (rows, drift) = {
+                let s = app.session.as_ref().expect("checked above");
+                // Newest first: the one you just took is the one you look for.
+                let rows: Vec<Row> = s
+                    .snapshots
+                    .iter()
+                    .rev()
+                    .map(|x| Row {
+                        n: x.n,
+                        label: x.label(),
+                        taken: x.taken,
+                        matches: x.edits == s.edits,
+                    })
+                    .collect();
+                let latest = s.snapshots.last().map(|x| (x.label(), &x.edits));
+                let drift = drift_text(
+                    latest.as_ref().map(|(l, e)| (l.as_str(), *e)),
+                    &s.edits,
+                    &s.history,
+                );
+                (rows, drift)
+            };
+            let count = match rows.len() {
+                0 => "no snapshots".to_string(),
+                1 => "1 snapshot".to_string(),
+                n => format!("{n} snapshots"),
+            };
+            let mut out = header(
+                ui,
+                ui.make_persistent_id("snapshots"),
+                true,
+                Header::new("Snapshots").trailing(&count),
+            );
+            out.state.show_body_unindented(ui, |ui| {
+                // Fill the panel's height so egui stores the panel size, not the smaller content
+                // size — otherwise a resizable panel shrinks back each frame.
+                ui.set_min_height(ui.available_height());
+                now_row(ui, &drift, &mut action);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut dots: Vec<egui::Pos2> = Vec::with_capacity(rows.len());
+                        for r in &rows {
+                            // ⚠ egui's auto-ids shift with what was drawn before them, and this
+                            // list changes as snapshots are taken and deleted — the hazard that
+                            // broke the rename field under virtualisation.
+                            ui.push_id(r.n, |ui| {
+                                if let Some(c) = row(app, ui, r, now, &mut action) {
+                                    dots.push(c);
+                                }
+                            });
+                        }
+                        hairline(ui, &dots);
+                    });
             });
-
-            if snaps.is_empty() {
-                theme::hint(ui, "Press + to save the current settings.");
-                return;
-            }
-
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (n, label, taken) in snaps {
-                        // ⚠ egui's auto-ids shift with what was drawn before them, and this list
-                        // changes as snapshots are taken and deleted — the hazard that broke the
-                        // rename field under virtualisation.
-                        ui.push_id(n, |ui| row(app, ui, n, &label, taken, &mut action));
-                    }
-                });
         });
 
     // ⚠ Persisted on the **release** frame only, never per frame: a resize runs at 60 Hz — the
@@ -123,17 +174,137 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) -> bo
     apply(app, ctx, action)
 }
 
-/// One row: its label, its timestamp, a click to restore and a menu to manage it.
+/// The Now row: a dashed dot, "Now", the drift since the newest snapshot, and the Save button.
+///
+/// ⚠ Not a snapshot and not a `list_row`: it cannot be restored, copied or deleted, and a row
+/// that looked exactly like the others while doing none of what they do would be the worst
+/// kind of affordance. It is a painted line with one real button.
+fn now_row(ui: &mut egui::Ui, drift: &str, action: &mut Action) {
+    let height = list_row::ROW_HEIGHT;
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let v = ui.visuals().clone();
+    let painter = ui.painter_at(rect);
+    let centre = egui::pos2(rect.left() + GUTTER / 2.0, rect.center().y);
+    paint_dot(&painter, centre, Dot::Now, &v);
+    // The hairline's first segment: from the Now dot down to the row's bottom, where the
+    // scroll area's own segment picks it up.
+    painter.line_segment(
+        [
+            egui::pos2(centre.x, centre.y + DOT + 2.0),
+            egui::pos2(centre.x, rect.bottom()),
+        ],
+        egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
+    );
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let name = painter.text(
+        egui::pos2(rect.left() + GUTTER + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "Now",
+        font,
+        v.weak_text_color(),
+    );
+    // The button first, at the right edge, so the drift text knows how much room it has.
+    let button = ui
+        .scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                ui.add(egui::Button::new("+ Save").min_size(egui::vec2(0.0, 22.0)))
+                    .on_hover_text("Save the current settings as a snapshot")
+            },
+        )
+        .inner;
+    // ⚠ The accessible name is the menu's wording, so the harness and a screen reader find
+    // one "Take snapshot" whichever way it is reached.
+    button
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Take snapshot"));
+    if button.clicked() {
+        *action = Action::Take;
+    }
+    let room = (button.rect.left() - 8.0 - (name.right() + 8.0)).max(0.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        drift.to_string(),
+        egui::FontId::proportional(11.0),
+        v.weak_text_color(),
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(name.right() + 8.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        v.weak_text_color(),
+    );
+}
+
+/// A timeline dot's state.
+enum Dot {
+    /// The present: a dashed ring.
+    Now,
+    /// The snapshot the photo is at: filled with the accent.
+    Here,
+    /// Any other snapshot: a hollow ring.
+    Plain,
+}
+
+fn paint_dot(painter: &egui::Painter, centre: egui::Pos2, dot: Dot, v: &egui::Visuals) {
+    match dot {
+        Dot::Here => {
+            painter.circle_filled(centre, DOT, v.selection.bg_fill);
+        }
+        Dot::Plain => {
+            painter.circle_stroke(centre, DOT, egui::Stroke::new(1.2, v.weak_text_color()));
+        }
+        Dot::Now => {
+            // Eight short arcs: a dashed ring, since egui strokes circles whole.
+            let stroke = egui::Stroke::new(1.2, v.weak_text_color());
+            for k in 0..8 {
+                let a0 = k as f32 * std::f32::consts::TAU / 8.0;
+                let a1 = a0 + std::f32::consts::TAU / 16.0;
+                let pts: Vec<egui::Pos2> = (0..=3)
+                    .map(|i| {
+                        let a = a0 + (a1 - a0) * i as f32 / 3.0;
+                        centre + egui::vec2(a.cos(), a.sin()) * DOT
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, stroke));
+            }
+        }
+    }
+}
+
+/// The hairline joining the dots, from the top of the list down to the last dot.
+fn hairline(ui: &egui::Ui, dots: &[egui::Pos2]) {
+    let Some(last) = dots.last() else {
+        return;
+    };
+    let top = ui.min_rect().top();
+    let colour = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    let p = ui.painter();
+    // Between the dots, leaving each one a little air.
+    let mut from = egui::pos2(last.x, top);
+    for d in dots {
+        p.line_segment(
+            [from, egui::pos2(d.x, d.y - DOT - 2.0)],
+            egui::Stroke::new(1.0, colour),
+        );
+        from = egui::pos2(d.x, d.y + DOT + 2.0);
+    }
+}
+
+/// One snapshot's row. Returns its dot's centre, once painted.
 fn row(
     app: &mut RustroomApp,
     ui: &mut egui::Ui,
-    n: u32,
-    label: &str,
-    taken: i64,
+    r: &Row,
+    now: i64,
     action: &mut Action,
-) {
-    // While this row owns the draft, the label is replaced by an editable field.
-    if app.snapshot_rename.as_ref().is_some_and(|(m, _)| *m == n) {
+) -> Option<egui::Pos2> {
+    // While this row owns the draft, the row is replaced by an editable field.
+    if app.snapshot_rename.as_ref().is_some_and(|(m, _)| *m == r.n) {
         let mut text = app
             .snapshot_rename
             .as_ref()
@@ -156,40 +327,71 @@ fn row(
             // its number — the rule an unnamed virtual copy already follows. Freezing the derived
             // string would strand it on today's number.
             *action = Action::Rename(
-                n,
-                (!typed.is_empty() && typed != format!("Snapshot {n}")).then_some(typed),
+                r.n,
+                (!typed.is_empty() && typed != format!("Snapshot {}", r.n)).then_some(typed),
             );
         }
-        return;
+        return None;
     }
 
-    let resp = ui
-        .horizontal(|ui| {
-            let r = ui.selectable_label(false, label);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                theme::caption(ui, &crate::modals::info::taken_text(Some(taken)));
-            });
-            r
-        })
-        .inner;
-
-    if resp.clicked() {
-        *action = Action::Restore(n);
+    let time = rustroom_app::when::short(r.taken, now);
+    let out = list_row::row(
+        ui,
+        RowSpec {
+            name: &r.label,
+            count: None,
+            meta: &time,
+            selected: r.matches,
+            indent: GUTTER,
+            hover: "",
+            actions: &[
+                RowAction {
+                    glyph: '×',
+                    verb: "Delete",
+                    hover: "Delete this snapshot",
+                    enabled: true,
+                },
+                RowAction {
+                    glyph: icons::COPY,
+                    verb: "Make a virtual copy from",
+                    hover: "Make a virtual copy with these settings",
+                    enabled: true,
+                },
+            ],
+        },
+    );
+    let centre = egui::pos2(out.rect.left() + GUTTER / 2.0, out.rect.center().y);
+    if ui.is_rect_visible(out.rect) {
+        let v = ui.visuals().clone();
+        paint_dot(
+            &ui.painter_at(out.rect),
+            centre,
+            if r.matches { Dot::Here } else { Dot::Plain },
+            &v,
+        );
     }
-    resp.context_menu(|ui| {
+    match out.action {
+        Some(0) => *action = Action::Delete(r.n),
+        Some(_) => *action = Action::MakeCopy(r.n),
+        None if out.double_clicked => app.snapshot_rename = Some((r.n, r.label.clone())),
+        None if out.clicked => *action = Action::Restore(r.n),
+        None => {}
+    }
+    out.response.context_menu(|ui| {
         if ui.button("Rename").clicked() {
-            app.snapshot_rename = Some((n, label.to_string()));
+            app.snapshot_rename = Some((r.n, r.label.clone()));
             ui.close();
         }
         if ui.button("Make virtual copy").clicked() {
-            *action = Action::MakeCopy(n);
+            *action = Action::MakeCopy(r.n);
             ui.close();
         }
         if ui.button("Delete").clicked() {
-            *action = Action::Delete(n);
+            *action = Action::Delete(r.n);
             ui.close();
         }
     });
+    Some(centre)
 }
 
 /// Apply what the frame asked for. Returns whether the photo's edits changed.
@@ -237,7 +439,7 @@ mod tests {
                 crate::develop::panel::show(&mut app, ui);
             });
             assert!(
-                labels.iter().any(|(l, _)| l == "+"),
+                labels.iter().any(|(l, _)| l == "Take snapshot"),
                 "the Take-snapshot button must be reachable under {tool:?}, got {:?}",
                 labels.iter().map(|(l, _)| l).collect::<Vec<_>>()
             );
@@ -252,7 +454,7 @@ mod tests {
         let labels = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
             crate::develop::panel::show(&mut app, ui);
         });
-        assert!(!labels.iter().any(|(l, _)| l == "+"));
+        assert!(!labels.iter().any(|(l, _)| l == "Take snapshot"));
     }
 
     /// A row is labelled by `Snapshot::label`, so a named one shows its name rather than its
@@ -422,5 +624,86 @@ mod tests {
                 .as_deref(),
             Some("Warm")
         );
+    }
+
+    /// The Now row's sentence, without a window.
+    #[test]
+    fn the_now_row_says_how_far_the_edits_have_drifted() {
+        use edit_model::Edits;
+        let base = Edits::default();
+        let warm = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let mut h = rustroom_app::history::History::new(base.clone());
+        assert_eq!(super::drift_text(None, &base, &h), "no snapshots yet");
+        assert_eq!(
+            super::drift_text(Some(("Warm", &base)), &base, &h),
+            "same as “Warm”"
+        );
+        h.push(warm.clone());
+        let more = Edits {
+            contrast: 10.0,
+            ..warm.clone()
+        };
+        h.push(more.clone());
+        assert_eq!(
+            super::drift_text(Some(("Warm", &warm)), &more, &h),
+            "1 change since “Warm”"
+        );
+        assert_eq!(
+            super::drift_text(Some(("Warm", &base)), &more, &h),
+            "2 changes since “Warm”"
+        );
+        let elsewhere = Edits {
+            exposure: -1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::drift_text(Some(("Warm", &elsewhere)), &more, &h),
+            "changed since “Warm”"
+        );
+    }
+
+    /// The row the photo is at reports selected; after an edit it no longer does; and both
+    /// cells are named for the harness and a screen reader.
+    #[test]
+    fn the_matching_row_is_lit_and_the_cells_are_named() {
+        let dir = test_app::TestDir::new("snaplit");
+        let ctx = test_ui::ctx();
+        let mut app = app_with_a_snapshot(&dir, &ctx);
+        let selected = |app: &mut crate::RustroomApp| -> Option<bool> {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(test_ui::screen()),
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::develop::panel::show(app, ui);
+                },
+            );
+            let update = out.platform_output.accesskit_update?;
+            update.nodes.iter().find_map(|(_, n)| {
+                (n.label() == Some("Snapshot 1"))
+                    .then(|| n.toggled() == Some(egui::accesskit::Toggled::True))
+            })
+        };
+        assert_eq!(
+            selected(&mut app),
+            Some(true),
+            "just taken: the photo is at it"
+        );
+        app.session.as_mut().unwrap().edits.exposure = 0.7;
+        assert_eq!(selected(&mut app), Some(false), "edited: it is not");
+        let labels = test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            crate::develop::panel::show(&mut app, ui);
+        });
+        for want in ["Delete Snapshot 1", "Make a virtual copy from Snapshot 1"] {
+            assert!(
+                labels.iter().any(|(l, _)| l == want),
+                "{want:?} missing in {:?}",
+                labels.iter().map(|(l, _)| l).collect::<Vec<_>>()
+            );
+        }
     }
 }

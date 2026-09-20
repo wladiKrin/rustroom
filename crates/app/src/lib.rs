@@ -62,4 +62,5 @@ pub mod tool;
 pub mod view_region;
 pub mod visualize;
 pub mod wb_tool;
+pub mod when;
 pub mod xmp_sync;

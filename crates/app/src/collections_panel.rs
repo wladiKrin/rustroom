@@ -137,6 +137,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         RowSpec {
                                             name: "All Photos",
                                             count: Some(all),
+                                            meta: "",
                                             selected: showing_all,
                                             indent: 0.0,
                                             hover: "Every photo in the catalog, from every folder ever opened",
@@ -163,6 +164,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             RowSpec {
                                                 name: &shown,
                                                 count: Some(f.count),
+                                                meta: "",
                                                 selected,
                                                 indent: 0.0,
                                                 hover: &path,
@@ -224,6 +226,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 RowSpec {
                                                     name: &c.name,
                                                     count: Some(c.count),
+                                                    meta: "",
                                                     selected: selected == Some(c.id),
                                                     indent: 0.0,
                                                     hover: "",
@@ -305,6 +308,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 RowSpec {
                                                     name: &sc.name,
                                                     count: None,
+                                                    meta: "",
                                                     selected,
                                                     indent: 0.0,
                                                     hover: "",
@@ -409,6 +413,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                 RowSpec {
                                                     name: &k.name,
                                                     count: Some(k.count),
+                                                    meta: "",
                                                     selected: picked_kw == Some(k.id),
                                                     indent: k.depth as f32 * 12.0,
                                                     hover: "",

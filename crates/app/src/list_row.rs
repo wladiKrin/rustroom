@@ -29,6 +29,8 @@ pub struct RowSpec<'a> {
     pub name: &'a str,
     /// Weak text after the name — a count, or nothing.
     pub count: Option<i64>,
+    /// Weak text after the name when there is no count — a snapshot's time. Empty for none.
+    pub meta: &'a str,
     /// The accent tint: the source the Library is showing.
     pub selected: bool,
     pub indent: f32,
@@ -40,8 +42,14 @@ pub struct RowSpec<'a> {
 pub struct RowOut {
     /// The row itself was clicked (never when an action was).
     pub clicked: bool,
+    /// The row itself was double-clicked — the snapshot strip's rename gesture.
+    pub double_clicked: bool,
     /// Which action was clicked, as an index into `actions`.
     pub action: Option<usize>,
+    /// Where the row landed, for a caller painting into its gutter (the timeline's dots).
+    pub rect: egui::Rect,
+    /// The row's own response, for a context menu.
+    pub response: egui::Response,
 }
 
 /// Draw one row.
@@ -105,6 +113,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         right = cell.left();
     }
     let clicked = resp.clicked() && action.is_none();
+    let double_clicked = resp.double_clicked() && action.is_none();
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
@@ -126,12 +135,12 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let font = egui::TextStyle::Body.resolve(ui.style());
         // The name is clipped before the count and the actions, never over them.
         let name_right = right - 6.0;
-        let count_galley = spec.count.map(|n| {
-            painter.layout_no_wrap(
-                n.to_string(),
-                egui::FontId::proportional(11.0),
-                v.weak_text_color(),
-            )
+        let right_text = spec
+            .count
+            .map(|n| n.to_string())
+            .or_else(|| (!spec.meta.is_empty()).then(|| spec.meta.to_string()));
+        let count_galley = right_text.map(|s| {
+            painter.layout_no_wrap(s, egui::FontId::proportional(11.0), v.weak_text_color())
         });
         let count_w = count_galley
             .as_ref()
@@ -167,7 +176,13 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             cell_x -= ROW_HEIGHT;
         }
     }
-    RowOut { clicked, action }
+    RowOut {
+        clicked,
+        double_clicked,
+        action,
+        rect,
+        response: resp,
+    }
 }
 
 #[cfg(test)]
@@ -199,6 +214,7 @@ mod tests {
             RowSpec {
                 name: "Portraits",
                 count: Some(21),
+                meta: "",
                 selected: false,
                 indent: 0.0,
                 hover: "",
@@ -260,6 +276,7 @@ mod tests {
                         RowSpec {
                             name,
                             count: Some(1),
+                            meta: "",
                             selected: false,
                             indent: 0.0,
                             hover: "",
@@ -294,6 +311,7 @@ mod tests {
                 RowSpec {
                     name: "Portraits",
                     count: None,
+                    meta: "",
                     selected: false,
                     indent: 0.0,
                     hover: "",

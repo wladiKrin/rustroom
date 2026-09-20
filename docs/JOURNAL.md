@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The snapshot strip as a timeline (2026-09-20)](#the-snapshot-strip-as-a-timeline-2026-09-20)
 - [The top bar and the Library in one language (2026-09-20)](#the-top-bar-and-the-library-in-one-language-2026-09-20)
 - [A switched-off mask stays off in the export (2026-09-20)](#a-switched-off-mask-stays-off-in-the-export-2026-09-20)
 - [The Presets panel: a sectioned list (2026-09-20)](#the-presets-panel-a-sectioned-list-2026-09-20)
@@ -124,7 +125,30 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The top bar and the Library in one language (2026-09-20)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The snapshot strip as a timeline (2026-09-20)
+
+The user: "Let's also revamp the snapshots section." Three mockups on the canvas "Rustroom
+Snapshots" (https://claude.ai/artifact/7vkX5EcCpcP7BgaVfGzXy8); **B** chosen, the timeline, with
+the copy cell added to every row. On `snapshots-timeline`; spec
+`2026-09-20-snapshots-timeline-design.md`. **2623 → TESTCOUNT tests**, goldens unmoved.
+
+| what landed | where |
+|---|---|
+| the strip under the section chrome (`SNAPSHOTS`, the count as trailing text), still a resizable bottom panel under every tool | `develop/panel/snapshots.rs` |
+| a **Now** row that is not a snapshot: a dashed dot, "Now", the drift since the newest snapshot — "n changes since “Warm”" from `History::steps_since`, "changed since" when the snapshot's state is nowhere on the undo side, "same as" when the edits equal it — and the **+ Save** button, accessible name "Take snapshot" | `snapshots.rs` `now_row`, `drift_text`; `history.rs` |
+| one row per snapshot, newest first, on a hairline: a dot filled with the accent on the one the photo is at (the row tinted too), the name, the time as `15:41` / `yesterday 15:41` / `Sep 19 15:41`, then ⧉ copy and × delete cells named for a screen reader; click restores, double-click or the menu renames in place | `list_row` (`meta`, `rect`, `double_clicked`, `response`), lib `when.rs`, `icons::COPY` |
+
+**Worth keeping:**
+
+- ⚠ `History::steps_since` counts on the **undo side only**: an entry on the redo side is a
+  future the user stepped back from, and counting it would report changes that are not in the
+  present.
+- ⚠ The Now row is painted, with one real button — not a `list_row`. A row that looked like the
+  others while doing none of what they do would be the worst kind of affordance; and a painted
+  sentence is one the harness cannot read, so `drift_text` is a pure function with its own test.
+- ⚠ `when::short` judges **calendar days**, not 24-hour spans: 23:50 seen at 00:10 is yesterday.
+
+### The top bar and the Library in one language (2026-09-20)
 
 The user, after the five panel reworks: "find a cohesive design language also for the library
 view and the top panel in both the library and edit view. In particular, the buttons for

@@ -266,16 +266,6 @@ pub fn committed(ui: &egui::Ui, resp: &egui::Response) -> bool {
     resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
-/// A caption: a filename under a thumbnail, a camera model beside a title.
-///
-/// ⚠ Renders identically to [`hint`] today and means something different — a hint is
-/// explanatory text *under a control*, a caption labels a thing. Kept separate so the visual
-/// identity pass can move one without the other. Merging two idioms because they currently
-/// look alike is how a design system loses the distinctions it exists to hold.
-pub fn caption(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).small());
-}
-
 /// The named text style section headers and sub-labels use.
 ///
 /// ⚠ A named style rather than `Small`: `Small` is the hint face at 9 pt, and a header at hint

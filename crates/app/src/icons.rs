@@ -76,11 +76,13 @@ pub const MORE: char = '\u{e1fe}';
 pub const THUMB_SIZE: char = '\u{e0a6}';
 /// `gear` — edit a smart collection's rule.
 pub const GEAR: char = '\u{e270}';
+/// `copy` — make a virtual copy from a snapshot.
+pub const COPY: char = '\u{e1ca}';
 
 /// Every icon the app draws.
 ///
 /// ⚠ The coverage tests sweep this, so an icon missing from it is one nothing checks.
-pub const ALL: [char; 23] = [
+pub const ALL: [char; 24] = [
     EDIT,
     CROP,
     MASKS,
@@ -104,6 +106,7 @@ pub const ALL: [char; 23] = [
     MORE,
     THUMB_SIZE,
     GEAR,
+    COPY,
 ];
 
 #[cfg(test)]
