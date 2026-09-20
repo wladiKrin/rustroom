@@ -5,12 +5,14 @@
 
 use crate::segmented::{self, PillItem, PillStyle};
 use crate::{
-    commands, develop, library, menu_bar, modals, multi, AppView, LibraryMode, RustroomApp,
+    commands, develop, library, menu_bar, modals, multi, name_edit, AppView, LibraryMode,
+    RustroomApp,
 };
 use eframe::egui;
 use rustroom_app::format_filter;
 use rustroom_app::icons;
 use rustroom_app::menu::{self, Command};
+use rustroom_app::photo_id::PhotoId;
 use rustroom_app::render_engine::RegionRect;
 
 impl eframe::App for RustroomApp {
@@ -42,6 +44,7 @@ impl eframe::App for RustroomApp {
             // ⚠ Discarded rather than committed: renaming is explicit, and navigating away is not
             // a way to confirm a half-typed name.
             self.rename_draft = None;
+            self.info_draft = None;
             self.snapshot_rename = None;
             self.last_view = self.view;
         }
@@ -200,6 +203,9 @@ impl eframe::App for RustroomApp {
         // and the closure already holds it. The same deferred-action shape the preset list
         // uses.
         let mut pending_command: Option<Command> = None;
+        // ⚠ The bar's rename, committed after the panel closes for the reason above: the
+        // commit writes the sidecar and rebuilds the Library with `&mut self`.
+        let mut pending_rename: Option<(PhotoId, name_edit::Rename)> = None;
         egui::Panel::top("top").show(ui, |ui| {
             // ⚠ macOS gets the real system menu bar instead; drawing this one too would put a
             // redundant row under a nearly-empty system menu.
@@ -368,12 +374,15 @@ impl eframe::App for RustroomApp {
                         }
                     })
                     .inner;
-                centre_info(self, ui, row, egui::Rangef::new(gap_left, gap_right));
+                pending_rename = centre_info(self, ui, row, egui::Rangef::new(gap_left, gap_right));
             });
         });
 
         if let Some(cmd) = pending_command {
             commands::execute(self, &ctx, cmd);
+        }
+        if let Some((id, r)) = pending_rename {
+            name_edit::commit(self, &ctx, &id, r);
         }
 
         match self.view {
@@ -947,67 +956,114 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The centred line naming the current photo: its name, format, decoded size and file size.
+/// The centred line naming the current photo: its name, then in weak small text its camera,
+/// decoded size and file size.
 ///
-/// ⚠ Painted, not laid out: the bar's left cluster and its right-to-left cluster own the
-/// row's allocation, so a third laid-out cluster is exactly the "the status was pushed into a
-/// row that had no space left" bug the right cluster was created to fix. This paints into the
-/// gap the two clusters leave, centred on the bar and pulled into the gap when the centre is
-/// not in it, elided when the gap is narrower than the text.
+/// ⚠ A child `Ui` placed in the gap, not a third laid-out cluster: the bar's left cluster and
+/// its right-to-left cluster own the row's allocation, and a third would be exactly the "the
+/// status was pushed into a row that had no space left" bug the right cluster was created to
+/// fix. `new_child` places without advancing the parent. The child is centred on the bar and
+/// pulled into the gap when the centre is not in it.
 ///
-/// ⚠ In both views (user's call, 2026-09-20). The Develop panel's footer still carries the
-/// filename; the bar's line adds the format and the sizes.
-fn centre_info(app: &mut RustroomApp, ui: &egui::Ui, row: egui::Rect, gap: egui::Rangef) {
-    let Some((path, file_name, dims)) = (match app.view {
-        AppView::Develop => app.session.as_ref().map(|s| {
+/// ⚠ The name is the Library caption's widget: a click opens the file-rename field, Enter
+/// commits, clicking away abandons (user's call, 2026-09-20 — the Develop panel's footer, which
+/// carried the filename and the copy-label field, is gone). The draft is the bar's own, never
+/// the grid's: a photo selected in the grid would otherwise open two fields on one string.
+///
+/// ⚠ Two faces on purpose: the name in the body face and the strong colour, the rest in the
+/// 11 pt weak face — as one run of body text "the name and file format and resolution and size
+/// all read the same" (seen in use, 2026-09-20).
+fn centre_info(
+    app: &mut RustroomApp,
+    ui: &mut egui::Ui,
+    row: egui::Rect,
+    gap: egui::Rangef,
+) -> Option<(PhotoId, name_edit::Rename)> {
+    let (path, copy, camera, dims) = match app.view {
+        AppView::Develop => {
+            let s = app.session.as_ref()?;
             (
                 s.path.clone(),
-                rustroom_app::entries::caption(
-                    &s.path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default(),
-                    s.copy,
-                ),
+                s.copy,
+                Some(s.make_model.clone()),
                 Some((s.buffer.width(), s.buffer.height())),
             )
-        }),
-        AppView::Library => app.library.as_ref().and_then(|lib| {
+        }
+        AppView::Library => {
+            let lib = app.library.as_ref()?;
             let e = lib.entries.get(lib.selection.active()?)?;
-            Some((e.id.path.clone(), e.caption(), None))
-        }),
-    }) else {
-        return;
+            let camera = lib.captures.get(&e.id.path).and_then(|c| c.camera.clone());
+            (e.id.path.clone(), e.id.copy, camera, None)
+        }
     };
+    let id = PhotoId::new(path.clone(), copy);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let bytes = app.info_sizes.bytes_of(&path);
-    let text = rustroom_app::photo_info::line(
-        &file_name,
-        rustroom_app::photo_info::format_of(&path).as_deref(),
-        dims,
-        bytes,
-    );
+    let meta = rustroom_app::photo_info::meta(camera.as_deref(), dims, bytes);
+
     const PAD: f32 = 12.0;
-    let width = (gap.max - gap.min - PAD * 2.0).max(0.0);
-    if width < 40.0 {
-        return;
+    const BETWEEN: f32 = 10.0;
+    let avail = (gap.max - gap.min - PAD * 2.0).max(0.0);
+    if avail < 60.0 {
+        return None;
     }
-    let mut job = egui::text::LayoutJob::simple_singleline(
-        text,
-        egui::TextStyle::Body.resolve(ui.style()),
-        ui.visuals().text_color(),
-    );
-    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
-    let galley = ui.painter().layout_job(job);
-    let w = galley.size().x;
-    // Centred on the bar, then pulled into the gap.
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let small = egui::FontId::proportional(11.0);
+    let editing = app.info_draft.as_ref().is_some_and(|(d, _)| *d == id);
+    let (name_w, meta_w) = ui.fonts_mut(|f| {
+        let shown = rustroom_app::entries::caption(&file_name, copy);
+        (
+            f.layout_no_wrap(shown, body.clone(), egui::Color32::WHITE)
+                .size()
+                .x,
+            f.layout_no_wrap(meta.clone(), small.clone(), egui::Color32::WHITE)
+                .size()
+                .x,
+        )
+    });
+    // The field wants the whole gap; the caption wants its own width.
+    let want = if editing {
+        avail
+    } else if meta.is_empty() {
+        name_w + 2.0
+    } else {
+        name_w + BETWEEN + meta_w + 2.0
+    };
+    let w = want.min(avail);
     let x = (row.center().x - w / 2.0)
         .max(gap.min + PAD)
         .min(gap.max - PAD - w);
-    ui.painter().galley(
-        egui::pos2(x, row.center().y - galley.size().y / 2.0),
-        galley,
-        ui.visuals().text_color(),
+    let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(w, row.height()));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center))
+            .id_salt("centre_info"),
     );
+    child.spacing_mut().item_spacing.x = BETWEEN;
+    let strong = child.visuals().strong_text_color();
+    child.visuals_mut().override_text_color = Some(strong);
+    let rename = name_edit::caption_or_field(
+        &mut child,
+        &id,
+        &file_name,
+        None,
+        &mut app.info_draft,
+        body.size,
+    );
+    child.visuals_mut().override_text_color = None;
+    if !editing && !meta.is_empty() {
+        let weak = child.visuals().weak_text_color();
+        child.add(
+            egui::Label::new(egui::RichText::new(meta).font(small).color(weak))
+                .selectable(false)
+                .truncate(),
+        );
+    }
+    rename.map(|r| (id, r))
 }
 
 #[cfg(test)]

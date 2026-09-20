@@ -17,12 +17,9 @@ pub mod slider;
 pub mod snapshots;
 pub mod tone_curve;
 
-use crate::name_edit;
 use crate::{theme, RustroomApp};
 use edit_model::Edits;
 use eframe::egui;
-use rustroom_app::file_rename;
-use rustroom_app::photo_id::PhotoId;
 use rustroom_app::tool::Tool;
 
 /// Accumulates, over one frame of the panel, whether the photo changed and whether a drag
@@ -100,7 +97,6 @@ impl Edited {
 ///
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let mut photo_edited = false;
-    let mut rename: Option<name_edit::Rename> = None;
     // ⚠ The Geometry panel's Auto button, applied after the panel closes: `auto_guides` needs
     // `&mut RustroomApp` while the closure below still holds `&mut app.session`, which is the
     // same reason `rename` is applied out here rather than at its call site.
@@ -306,34 +302,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                         photo_edited |= s.history.push(s.edits.clone());
                     }
 
-                    ui.separator();
-                    // ⚠⚠ The **filename**, as a caption — not a field. Renaming the file is the
-                    // Library caption's job; this panel edits the *label*, below. One control per
-                    // string, which is the whole of M6.0.
-                    theme::caption(ui, &file_rename::field_text(&s.path));
-                    // ⚠ The label field is the discoverable home for a label. The badge in the
-                    // grid is the other, and a badge is small — this is why there are two entry
-                    // points for one string, which is acceptable precisely *because* it is one
-                    // string. Contrast the Presets panel, removed for being two homes for one
-                    // feature.
-                    rename = name_edit::field(
-                        ui,
-                        name_edit::NameField {
-                            id: &PhotoId::new(s.path.clone(), s.copy),
-                            file_name: &file_rename::field_text(&s.path),
-                            label: s.name.as_deref(),
-                            mode: name_edit::Editing::Label,
-                        },
-                        &mut app.label_draft,
-                        egui::TextStyle::Body.resolve(ui.style()),
-                        // ⚠ Never autofocus: this field is on screen the whole time, so grabbing
-                        // focus would hand it every keystroke the moment a photo opened.
-                        false,
-                    );
-                    if s.copy != 0 {
-                        theme::caption(ui, &format!("Copy {}", s.copy));
-                    }
-                    theme::caption(ui, &s.make_model);
+                    // ⚠ No footer (2026-09-20, user's call): the filename, the copy-label field
+                    // and the camera used to sit here. The top bar names the photo now, and
+                    // renames it; the copy label keeps its home on the grid's badge.
                 }
             });
         });
@@ -354,16 +325,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     // ⚠ Applied *after* the panel closes, not inside it: the commit writes the sidecar and
     // rebuilds the Library, both of which need `&mut app` while the closure still holds
     // `&mut app.session`. The same shape `photo_edited` uses, and for the same reason.
-    if let Some(r) = rename {
-        let id = app
-            .session
-            .as_ref()
-            .map(|s| PhotoId::new(s.path.clone(), s.copy));
-        if let Some(id) = id {
-            let ctx = ui.ctx().clone();
-            name_edit::commit(app, &ctx, &id, r);
-        }
-    }
     photo_edited
 }
 

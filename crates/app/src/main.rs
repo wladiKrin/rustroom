@@ -402,6 +402,8 @@ struct RustroomApp {
     cell_zoom_pending: bool,
     /// The top bar's file-size lookup, one photo at a time.
     info_sizes: rustroom_app::photo_info::SizeCache,
+    /// The top bar's file-rename draft — its own, never the grid's, see `shell::centre_info`.
+    info_draft: Option<(PhotoId, String)>,
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
@@ -614,6 +616,7 @@ impl RustroomApp {
             panel_drag: None,
             cell_zoom_pending: false,
             info_sizes: Default::default(),
+            info_draft: None,
             tool: Default::default(),
             crop_aspect: None,
             clipboard: None,

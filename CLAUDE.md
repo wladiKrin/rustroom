@@ -148,7 +148,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ⚠ **One branch, `shell-restyle`, ahead of `main`: the top bar and the Library in one language** —
 an accent app-mode pill, an icon pill for Grid / Compare / Survey, format chips, a thumbnail-size
-slider, a centred line naming the current photo (name · format · size) in both views, the Develop
+slider, a centred line naming the current photo in both views (the name renamable in place, then
+camera · decoded size · file size in a weak face; the Develop panel's footer is gone), the Develop
 toolbar regrouped with an accent Export; the Library's left panel on the section chrome with
 painted rows, grid cells with rounded thumbnails and a marks row under the picture. Gated green on its tip, **GUI launched for a look, not yet confirmed by use.** Spec
 `2026-09-20-shell-restyle-design.md`; `grep -n 'one language' docs/JOURNAL.md`.

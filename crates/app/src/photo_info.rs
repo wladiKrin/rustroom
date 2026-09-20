@@ -1,24 +1,21 @@
-//! The one-line description of the current photo the top bar centres: its name, its format and
-//! its size.
+//! The line the top bar centres after the current photo's name: its camera, its decoded size
+//! and its file size.
 //!
 //! ⚠ A lib module: the sentence and the byte formatting are pure, and the size cache holds no
 //! egui. The bar only paints what this returns.
 
 use std::path::{Path, PathBuf};
 
-/// `DSCF6509.RAF · RAF · 6240 × 4160 · 24.3 MB`, with whichever parts are known.
+/// The weak line after the name: `FUJIFILM X-T4 · 6240 × 4160 · 24.3 MB`, with whichever
+/// parts are known.
 ///
-/// `dims` is the decoded pixel size, known only once the photo is open in Develop — the
-/// Library's thumbnails come from the camera's embedded JPEG and say nothing about it.
-pub fn line(
-    file_name: &str,
-    format: Option<&str>,
-    dims: Option<(usize, usize)>,
-    bytes: Option<u64>,
-) -> String {
-    let mut parts = vec![file_name.to_string()];
-    if let Some(f) = format {
-        parts.push(f.to_ascii_uppercase());
+/// ⚠ No format: it is the filename's extension already (user's call, 2026-09-20). `dims` is
+/// the decoded pixel size, known only once the photo is open in Develop — the Library's
+/// thumbnails come from the camera's embedded JPEG and say nothing about it.
+pub fn meta(camera: Option<&str>, dims: Option<(usize, usize)>, bytes: Option<u64>) -> String {
+    let mut parts = Vec::new();
+    if let Some(c) = camera.map(str::trim).filter(|c| !c.is_empty()) {
+        parts.push(c.to_string());
     }
     if let Some((w, h)) = dims {
         parts.push(format!("{w} × {h}"));
@@ -27,13 +24,6 @@ pub fn line(
         parts.push(format_bytes(b));
     }
     parts.join("  ·  ")
-}
-
-/// The file's extension, uppercased, as its format name.
-pub fn format_of(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_uppercase())
 }
 
 /// Bytes as a photographer reads them: `812 KB`, `24.3 MB`, `1.2 GB`.
@@ -85,21 +75,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_line_names_only_what_is_known() {
+    fn the_meta_names_only_what_is_known() {
         assert_eq!(
-            line(
-                "DSCF6509.RAF",
-                Some("raf"),
-                Some((6240, 4160)),
-                Some(24_300_000)
-            ),
-            "DSCF6509.RAF  ·  RAF  ·  6240 × 4160  ·  24.3 MB"
+            meta(Some("FUJIFILM X-T4"), Some((6240, 4160)), Some(24_300_000)),
+            "FUJIFILM X-T4  ·  6240 × 4160  ·  24.3 MB"
         );
-        assert_eq!(line("a.jpg", None, None, None), "a.jpg");
-        assert_eq!(
-            line("a.jpg", Some("JPG"), None, Some(812_000)),
-            "a.jpg  ·  JPG  ·  812 KB"
-        );
+        assert_eq!(meta(None, None, None), "");
+        assert_eq!(meta(Some(""), None, Some(812_000)), "812 KB");
     }
 
     #[test]
