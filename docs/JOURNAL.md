@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [A switched-off mask stays off in the export (2026-09-20)](#a-switched-off-mask-stays-off-in-the-export-2026-09-20)
 - [The Presets panel: a sectioned list (2026-09-20)](#the-presets-panel-a-sectioned-list-2026-09-20)
 - [The Retouch panel: list first (2026-09-20)](#the-retouch-panel-list-first-2026-09-20)
 - [The Crop & Geometry panel: four sections (2026-09-19)](#the-crop--geometry-panel-four-sections-2026-09-19)
@@ -122,7 +123,33 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Presets panel: a sectioned list (2026-09-20)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### A switched-off mask stays off in the export (2026-09-20)
+
+The user, after seeing the masks' hold-out toggle: a mask turned off by it must not appear in
+the exported file either. That turns the toggle from view state into an **edit**. On
+`mask-disable`, stacked on `presets-panel`; spec `2026-09-20-mask-off-switch-design.md`.
+**2615 → 2609 tests**, goldens unmoved (every fixture mask is enabled).
+
+| what landed | where |
+|---|---|
+| `MaskedAdjustment::disabled`, `skip_serializing_if` so every sidecar on disk is unchanged and a pre-field sidecar reads as enabled; **63 struct literals** across the workspace gained `disabled: false` | `edit-model`, everywhere a mask is built |
+| the pipeline is the one gate: no tail stage, no prefix NR/dehaze step, nothing toward the region reach; the export builds the same pipeline as the view | `pipeline/src/lib.rs`, three sites |
+| the panel toggle flips the flag and is one history entry ("Disable {name}"); `mask_held`, `suppressed_masks`, the derivation block in `develop::body` and `view_edits`'s mask removal are gone; the patch hold-out stays view state | `masks.rs`, `session_flow.rs`, `develop/mod.rs`, `canvas` |
+
+**Worth keeping:**
+
+- ⚠⚠ **The 2026-09-19 decision not to add this field because of "91 struct literals" lasted a
+  day.** The literals were the right thing to avoid *for a view toggle*; for "off in the export"
+  there is no other correct home than the edits. The cost was real but mechanical: a loop that
+  runs `cargo check --message-format=short`, reads each `E0063 missing field` site and inserts
+  the field before the literal's closing brace at the opening line's indentation (rustfmt's
+  invariant) — eight rounds, one crate at a time. ⚠ A hand-rolled brace matcher was tried
+  first and doubled the field wherever a nested literal sat inside; rustc is the parser to use.
+- ⚠ Removing the mask-suppression machinery also removed its soft-first re-render (drop one
+  rung, sharpen next frame). The toggle is an ordinary edit now and renders at the edit rung,
+  which is what every slider release does.
+
+### The Presets panel: a sectioned list (2026-09-20)
 
 Option A of a three-option canvas ("Rustroom Presets Panel"), the user's pick, on
 `presets-panel`; spec `2026-09-20-presets-panel-design.md`. The last of the five panels to get
