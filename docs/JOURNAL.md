@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Presets panel: a sectioned list (2026-09-20)](#the-presets-panel-a-sectioned-list-2026-09-20)
 - [The Retouch panel: list first (2026-09-20)](#the-retouch-panel-list-first-2026-09-20)
 - [The Crop & Geometry panel: four sections (2026-09-19)](#the-crop--geometry-panel-four-sections-2026-09-19)
 - [The Masks panel: icon rows, sectioned (2026-09-19)](#the-masks-panel-icon-rows-sectioned-2026-09-19)
@@ -121,7 +122,30 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Retouch panel: list first (2026-09-20)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Presets panel: a sectioned list (2026-09-20)
+
+Option A of a three-option canvas ("Rustroom Presets Panel"), the user's pick, on
+`presets-panel`; spec `2026-09-20-presets-panel-design.md`. The last of the five panels to get
+the section chrome, so **`Tool::panel_heading` is gone** with the heading row in `panel/mod.rs`.
+**2612 → 2615 tests**, goldens unmoved.
+
+| what landed | where |
+|---|---|
+| a PRESETS header with the count; `+ Save current…` right-aligned under it (accessible as the old sentence) | `develop/panel/presets.rs` |
+| one painted row per preset — a star, the name, in weak text what it carries ("all settings" or the groups joined with " · "); a click applies to the selection, `Delete {name}` deletes with the guard; **the row is tinted when the photo already has the preset** | `mask_components::RowGlyph::Preset`, `mask_glyph::paint_star` |
+| `Preset::matches(&edits)` — merging the preset into the edits changes nothing — and `groups_summary`, both in the lib with tests | `presets.rs` (lib) |
+| Undo delete as a small right-aligned button under the list while that is what undo would do | `develop/panel/presets.rs` |
+
+**Worth keeping:**
+
+- ⚠ `Preset::matches` is decided through `merge_from` itself, so "the photo already has this"
+  can never disagree with what applying would do about which fields a group carries. It clones
+  the edits per preset per frame: fine for a handful, a cache keyed on the edits for a hundred.
+- ⚠ **egui reports `WidgetInfo::selected` as the AccessKit node's *toggled* value, not its
+  selected flag** (`response.rs`); a test reading `is_selected()` sees `false` for a lit row.
+  `egui::accesskit::Toggled::True` is the thing to read, through egui's re-export.
+
+### The Retouch panel: list first (2026-09-20)
 
 Option C of a three-option canvas ("Rustroom Retouch Panel"), the user's pick, plus his
 addition: the show and visualize functions on each patch's row, mirroring the Masks list. On

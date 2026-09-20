@@ -146,6 +146,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **2612 tests** on `main` (goldens unmoved since 2026-09-18).
 
+⚠ **One branch, `presets-panel` (2026-09-20), three commits ahead of `main`: the Presets panel
+as a sectioned list** — painted rows saying what each preset carries, tinted when the photo
+already has it (`Preset::matches`), Save current… and Undo delete in their places; and with it
+`Tool::panel_heading` is gone, every tool drawing its own section header. Gated green on its tip
+(**2615 tests**), **unmerged, unpushed, and not yet seen in use** — the GUI was launched
+for a look. Spec `2026-09-20-presets-panel-design.md`; `grep -n 'Presets panel' docs/JOURNAL.md`.
+
 ✅ **The Retouch panel rework is merged and confirmed by use (2026-09-20)** — list first: a Next
 patch row, one row per patch with a hold-out toggle, an eye and a delete (`Session::{spot_shown,
 spot_held}`), Show all / Hide all, the mode as a segmented control, Find dust; and the same
