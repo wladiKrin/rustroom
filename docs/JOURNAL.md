@@ -142,6 +142,7 @@ goldens unmoved.
 | the Library's left panel on the Develop panel's section chrome: `section::header` with the count as trailing text and a new `draggable` flag so the reordering drag survives; rows through a new `list_row` painter (name, weak count, accent tint, action cells named "Delete Portraits" / "Tag landscape" …) | `collections_panel.rs`, `section.rs`, `list_row.rs` |
 | grid cells: rounded thumbnails, the marks in a **row under the picture** (constant height, so a rating never moves a neighbour), the accent selection border (the fixed blue is gone), the selected name in strong text | `thumb.rs` `cell_with` / `marks_row`, `library.rs` |
 | the three `segmented*` helpers moved out of `theme.rs` (923 → 808 lines) into `segmented.rs`, re-exported | `segmented.rs`, `theme.rs` |
+| **seen in use, then asked for:** the format chip is drawn for a single-format folder too — lit and not clickable, since a click could only blank the grid or do nothing; and a **centred line** naming the current photo in both views — `DSCF6509.RAF · RAF · 6240 × 4160 · 24.3 MB`, the decoded size only in Develop (the Library's thumbnails are the camera's JPEG and know nothing of it), the file size through a one-entry cache so the filesystem is asked once per photo. Painted into the gap between the bar's two clusters, centred on the bar, pulled into the gap and elided when it must — never a third laid-out cluster | `shell.rs` `centre_info`, `format_chips`; lib `photo_info.rs` |
 
 **Worth keeping:**
 

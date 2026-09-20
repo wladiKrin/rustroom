@@ -147,6 +147,7 @@ pub fn for_test() -> RustroomApp {
         snapshot_rename: None,
         panel_drag: None,
         cell_zoom_pending: false,
+        info_sizes: Default::default(),
         tool: Default::default(),
         crop_aspect: None,
         clipboard: None,

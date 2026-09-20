@@ -400,6 +400,8 @@ struct RustroomApp {
     /// ⚠ Exists so the settings file is written once when the gesture settles rather than sixty
     /// times a second while it runs.
     cell_zoom_pending: bool,
+    /// The top bar's file-size lookup, one photo at a time.
+    info_sizes: rustroom_app::photo_info::SizeCache,
     /// Which Develop tool the rail has selected.
     ///
     /// ⚠ On the app, not on `Session`, so it **survives a photo switch** — see `tool::Tool`.
@@ -611,6 +613,7 @@ impl RustroomApp {
             snapshot_rename: None,
             panel_drag: None,
             cell_zoom_pending: false,
+            info_sizes: Default::default(),
             tool: Default::default(),
             crop_aspect: None,
             clipboard: None,

@@ -36,6 +36,7 @@ pub mod metadata_scanner;
 pub mod panel_order;
 pub mod perspective_detect;
 pub mod photo_id;
+pub mod photo_info;
 pub mod prefix_cache;
 pub mod presets;
 pub mod render_engine;

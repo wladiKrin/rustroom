@@ -237,123 +237,138 @@ impl eframe::App for RustroomApp {
                     // half of it next to the sort order and the grid size, which are not.
                     mark_filter(self, ui);
                 }
+                let row = ui.max_rect();
+                let gap_left = ui.cursor().left();
                 // ⚠ One right-aligned cluster for everything that belongs at the far end, laid
                 // out **rightmost first**. Previously the develop toolbar right-aligned the
                 // filename itself and then the status label was added after it — which meant
                 // the status was pushed into a row that had no space left.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // ⚠ Library only. The filename is **not** shown here: the Develop panel's
-                    // footer already carries it, and the same name in two places at once is
-                    // noise rather than reassurance.
-                    if self.view == AppView::Library {
-                        if self.library.is_some() {
-                            more_menu(self, ui, &ctx);
-                        }
-                        format_chips(self, ui);
-                        if self.library.is_some() {
-                            grid_size_slider(self, ui);
-                            sort_combo(self, ui);
-                            ui.separator();
-                        }
-                    }
-                    // ⚠ Develop's one accent-filled control, at the far right — the same rule
-                    // that gives the Library its accent-filled app mode: one per bar.
-                    if self.view == AppView::Develop && self.session.is_some() {
-                        if export_button(ui).clicked() {
-                            pending_command = Some(Command::Export);
-                        }
-                        ui.separator();
-                    }
-                    if !self.export_progress.is_empty() {
-                        if ui.button("Cancel").clicked() {
-                            self.cancel_export();
-                        }
-                        ui.label(&self.export_progress);
-                    } else if !self.status.is_empty() {
-                        ui.weak(&self.status);
-                    }
-                    // ⚠ Its own label, immediately left of the status/progress label, so neither
-                    // is ever hidden. ⚠⚠ It must NOT become a second right-aligned region: this
-                    // cluster's own comment above records that "the develop toolbar right-aligned
-                    // the filename itself and then the status label was added after it — which
-                    // meant the status was pushed into a row that had no space left." One
-                    // cluster, laid out rightmost first.
-                    //
-                    // ⚠ Blank when the pointer is off the image, which `canvas::show` clears
-                    // every frame — a stale number gets trusted.
-                    //
-                    // ⚠ Develop only. The Library grid and the Compare/Survey views render
-                    // through other paths and have no rendered frame to read.
-                    if self.view == AppView::Develop {
-                        if let Some(s) = &self.session {
-                            if let Some(rgb) = s.readout {
-                                // ⚠⚠ **The swatch is what replaces the `R`/`G`/`B` letters.** It
-                                // answers "which colour" instantly, which no labelling does, and
-                                // it costs less width than three prefixes in the one row this
-                                // project has already had to fix for running out of space.
-                                //
-                                // ⚠ Laid out **rightmost first** like everything in this cluster,
-                                // so the numbers are added before the swatch that precedes them.
-                                // ⚠⚠ **The label occupies a FIXED width, measured from the widest
-                                // label that can occur.** Padding each channel to three characters
-                                // and drawing it monospaced was the first attempt and was not
-                                // enough — reported in use as the swatch still moving when the
-                                // *red* channel changed digit count, which is where a width error
-                                // surfaces: this cluster is laid out right-to-left, so the label's
-                                // right edge is pinned and any discrepancy accumulates leftward,
-                                // into the swatch.
-                                //
-                                // ⚠ Reserving the width **removes the dependency on font metrics
-                                // altogether** rather than assuming padded spaces and digits
-                                // measure alike. The padding and the monospace both stay, because
-                                // together they keep the digits themselves from shifting *inside*
-                                // the reserved box.
-                                let font = egui::TextStyle::Monospace.resolve(ui.style());
-                                // ⚠ Measured through `Painter`, not `Ui::fonts`: the latter hands
-                                // out a shared `&Fonts` while laying text out needs a mutable one
-                                // to populate the glyph atlas. `Painter::layout_no_wrap` takes
-                                // `&self` and does that internally.
-                                let w = ui
-                                    .painter()
-                                    .layout_no_wrap(
-                                        rustroom_app::color_readout::WIDEST_LABEL.to_owned(),
-                                        font,
-                                        egui::Color32::PLACEHOLDER,
-                                    )
-                                    .rect
-                                    .width();
-                                ui.add_sized(
-                                    egui::vec2(w, ui.spacing().interact_size.y),
-                                    egui::Label::new(
-                                        egui::RichText::new(rustroom_app::color_readout::label(
-                                            rgb,
-                                        ))
-                                        .monospace(),
-                                    ),
-                                );
-                                let (patch, painter) = ui.allocate_painter(
-                                    egui::vec2(READOUT_SWATCH, READOUT_SWATCH),
-                                    egui::Sense::hover(),
-                                );
-                                let r = patch.rect;
-                                painter.rect_filled(
-                                    r,
-                                    egui::CornerRadius::ZERO,
-                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
-                                );
-                                // ⚠ A hairline border, or a near-black or near-white sample is
-                                // indistinguishable from the panel behind it and the swatch reads
-                                // as missing rather than as dark.
-                                painter.rect_stroke(
-                                    r,
-                                    egui::CornerRadius::ZERO,
-                                    egui::Stroke::new(1.0, egui::Color32::from_black_alpha(120)),
-                                    egui::StrokeKind::Inside,
-                                );
+                let gap_right = ui
+                    .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // ⚠ Library only. The filename is **not** shown here: the Develop panel's
+                        // footer already carries it, and the same name in two places at once is
+                        // noise rather than reassurance.
+                        if self.view == AppView::Library {
+                            if self.library.is_some() {
+                                more_menu(self, ui, &ctx);
+                            }
+                            format_chips(self, ui);
+                            if self.library.is_some() {
+                                grid_size_slider(self, ui);
+                                sort_combo(self, ui);
+                                ui.separator();
                             }
                         }
-                    }
-                });
+                        // ⚠ Develop's one accent-filled control, at the far right — the same rule
+                        // that gives the Library its accent-filled app mode: one per bar.
+                        if self.view == AppView::Develop && self.session.is_some() {
+                            if export_button(ui).clicked() {
+                                pending_command = Some(Command::Export);
+                            }
+                            ui.separator();
+                        }
+                        if !self.export_progress.is_empty() {
+                            if ui.button("Cancel").clicked() {
+                                self.cancel_export();
+                            }
+                            ui.label(&self.export_progress);
+                        } else if !self.status.is_empty() {
+                            ui.weak(&self.status);
+                        }
+                        // ⚠ Its own label, immediately left of the status/progress label, so neither
+                        // is ever hidden. ⚠⚠ It must NOT become a second right-aligned region: this
+                        // cluster's own comment above records that "the develop toolbar right-aligned
+                        // the filename itself and then the status label was added after it — which
+                        // meant the status was pushed into a row that had no space left." One
+                        // cluster, laid out rightmost first.
+                        //
+                        // ⚠ Blank when the pointer is off the image, which `canvas::show` clears
+                        // every frame — a stale number gets trusted.
+                        //
+                        // ⚠ Develop only. The Library grid and the Compare/Survey views render
+                        // through other paths and have no rendered frame to read.
+                        if self.view == AppView::Develop {
+                            if let Some(s) = &self.session {
+                                if let Some(rgb) = s.readout {
+                                    // ⚠⚠ **The swatch is what replaces the `R`/`G`/`B` letters.** It
+                                    // answers "which colour" instantly, which no labelling does, and
+                                    // it costs less width than three prefixes in the one row this
+                                    // project has already had to fix for running out of space.
+                                    //
+                                    // ⚠ Laid out **rightmost first** like everything in this cluster,
+                                    // so the numbers are added before the swatch that precedes them.
+                                    // ⚠⚠ **The label occupies a FIXED width, measured from the widest
+                                    // label that can occur.** Padding each channel to three characters
+                                    // and drawing it monospaced was the first attempt and was not
+                                    // enough — reported in use as the swatch still moving when the
+                                    // *red* channel changed digit count, which is where a width error
+                                    // surfaces: this cluster is laid out right-to-left, so the label's
+                                    // right edge is pinned and any discrepancy accumulates leftward,
+                                    // into the swatch.
+                                    //
+                                    // ⚠ Reserving the width **removes the dependency on font metrics
+                                    // altogether** rather than assuming padded spaces and digits
+                                    // measure alike. The padding and the monospace both stay, because
+                                    // together they keep the digits themselves from shifting *inside*
+                                    // the reserved box.
+                                    let font = egui::TextStyle::Monospace.resolve(ui.style());
+                                    // ⚠ Measured through `Painter`, not `Ui::fonts`: the latter hands
+                                    // out a shared `&Fonts` while laying text out needs a mutable one
+                                    // to populate the glyph atlas. `Painter::layout_no_wrap` takes
+                                    // `&self` and does that internally.
+                                    let w = ui
+                                        .painter()
+                                        .layout_no_wrap(
+                                            rustroom_app::color_readout::WIDEST_LABEL.to_owned(),
+                                            font,
+                                            egui::Color32::PLACEHOLDER,
+                                        )
+                                        .rect
+                                        .width();
+                                    ui.add_sized(
+                                        egui::vec2(w, ui.spacing().interact_size.y),
+                                        egui::Label::new(
+                                            egui::RichText::new(
+                                                rustroom_app::color_readout::label(rgb),
+                                            )
+                                            .monospace(),
+                                        ),
+                                    );
+                                    let (patch, painter) = ui.allocate_painter(
+                                        egui::vec2(READOUT_SWATCH, READOUT_SWATCH),
+                                        egui::Sense::hover(),
+                                    );
+                                    let r = patch.rect;
+                                    painter.rect_filled(
+                                        r,
+                                        egui::CornerRadius::ZERO,
+                                        egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                                    );
+                                    // ⚠ A hairline border, or a near-black or near-white sample is
+                                    // indistinguishable from the panel behind it and the swatch reads
+                                    // as missing rather than as dark.
+                                    painter.rect_stroke(
+                                        r,
+                                        egui::CornerRadius::ZERO,
+                                        egui::Stroke::new(
+                                            1.0,
+                                            egui::Color32::from_black_alpha(120),
+                                        ),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                            }
+                        }
+                        // Where the cluster's leftmost control ends: the right edge of the gap.
+                        let used = ui.min_rect().left();
+                        if used.is_finite() {
+                            used
+                        } else {
+                            row.right()
+                        }
+                    })
+                    .inner;
+                centre_info(self, ui, row, egui::Rangef::new(gap_left, gap_right));
             });
         });
 
@@ -885,16 +900,17 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|lib| format_filter::formats_present(&lib.entries))
         .unwrap_or_default();
-    // ⚠⚠ The SAME predicate the filtering uses, not a second copy of the rule. When these were two
-    // independent conditions, hiding `jpg` and opening a JPEG-only folder drew no chips AND hid
-    // every photo — an empty grid with no way back, reported in use 2026-09-17.
-    if app
+    // ⚠⚠ The SAME predicate the filtering uses, not a second copy of the rule. When these were
+    // two independent conditions, hiding `jpg` and opening a JPEG-only folder drew no chips AND
+    // hid every photo — an empty grid with no way back, reported in use 2026-09-17.
+    //
+    // ⚠ A single-format folder still draws its chip (user's call, 2026-09-20: the format and
+    // its count should always be visible) — lit, since the override shows everything, and
+    // **not clickable**, since a click could only hide the whole grid or do nothing.
+    let single = app
         .library
         .as_ref()
-        .is_some_and(|lib| format_filter::folder_overrides_hidden(&lib.entries))
-    {
-        return;
-    }
+        .is_some_and(|lib| format_filter::folder_overrides_hidden(&lib.entries));
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
     // is what keeps the on-screen order the same as `formats_present` returns.
     //
@@ -904,11 +920,16 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // one click because the boxes are still there, so the guard cost more than it bought.
     let mut toggled: Option<String> = None;
     for (ext, count) in formats.iter().rev() {
-        let mut shown = !app.filter.format.is_hidden(ext);
+        let mut shown = single || !app.filter.format.is_hidden(ext);
         let label = format!("{} {count}", ext.to_uppercase());
         // ⚠ A chip with a dot rather than a checkbox: the dot carries the state in colour, the
         // semantics are the checkbox's exactly (`segmented::chip` reports as one).
-        if segmented::chip(ui, &mut shown, &label).changed() {
+        let r = ui
+            .add_enabled_ui(!single, |ui| segmented::chip(ui, &mut shown, &label))
+            .inner;
+        if single {
+            r.on_hover_text("The only format in this folder");
+        } else if r.changed() {
             toggled = Some(ext.clone());
         }
     }
@@ -924,6 +945,69 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
         app.settings.hidden_formats = app.filter.format.clone();
         app.save_settings();
     }
+}
+
+/// The centred line naming the current photo: its name, format, decoded size and file size.
+///
+/// ⚠ Painted, not laid out: the bar's left cluster and its right-to-left cluster own the
+/// row's allocation, so a third laid-out cluster is exactly the "the status was pushed into a
+/// row that had no space left" bug the right cluster was created to fix. This paints into the
+/// gap the two clusters leave, centred on the bar and pulled into the gap when the centre is
+/// not in it, elided when the gap is narrower than the text.
+///
+/// ⚠ In both views (user's call, 2026-09-20). The Develop panel's footer still carries the
+/// filename; the bar's line adds the format and the sizes.
+fn centre_info(app: &mut RustroomApp, ui: &egui::Ui, row: egui::Rect, gap: egui::Rangef) {
+    let Some((path, file_name, dims)) = (match app.view {
+        AppView::Develop => app.session.as_ref().map(|s| {
+            (
+                s.path.clone(),
+                rustroom_app::entries::caption(
+                    &s.path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    s.copy,
+                ),
+                Some((s.buffer.width(), s.buffer.height())),
+            )
+        }),
+        AppView::Library => app.library.as_ref().and_then(|lib| {
+            let e = lib.entries.get(lib.selection.active()?)?;
+            Some((e.id.path.clone(), e.caption(), None))
+        }),
+    }) else {
+        return;
+    };
+    let bytes = app.info_sizes.bytes_of(&path);
+    let text = rustroom_app::photo_info::line(
+        &file_name,
+        rustroom_app::photo_info::format_of(&path).as_deref(),
+        dims,
+        bytes,
+    );
+    const PAD: f32 = 12.0;
+    let width = (gap.max - gap.min - PAD * 2.0).max(0.0);
+    if width < 40.0 {
+        return;
+    }
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        text,
+        egui::TextStyle::Body.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+    let galley = ui.painter().layout_job(job);
+    let w = galley.size().x;
+    // Centred on the bar, then pulled into the gap.
+    let x = (row.center().x - w / 2.0)
+        .max(gap.min + PAD)
+        .min(gap.max - PAD - w);
+    ui.painter().galley(
+        egui::pos2(x, row.center().y - galley.size().y / 2.0),
+        galley,
+        ui.visuals().text_color(),
+    );
 }
 
 #[cfg(test)]

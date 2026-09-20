@@ -284,7 +284,10 @@ pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     // ⚠ `mark_changed`, or a caller reading `changed()` — as the format filter does, exactly
     // as it read the checkbox it replaced — sees nothing and the chips are "not clickable"
     // (seen in use 2026-09-20). A hand-drawn widget has to say so itself.
-    if r.clicked() {
+    // ⚠ Gated on the ui being enabled: a hand-drawn widget gets no greying and no gate from
+    // `add_enabled_ui` for free, and the format filter draws the only format in a folder as a
+    // chip that informs and cannot hide everything.
+    if enabled && r.clicked() {
         *on = !*on;
         r.mark_changed();
     }
