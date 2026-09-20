@@ -293,7 +293,7 @@ pub(super) fn draw_mask_overlay(
 /// ⚠ One helper rather than the same condition written at both call sites: the motion render and
 /// the release render must agree about this, and two copies is how they would stop.
 fn request_unless_suppressed(s: &Session, tool: Tool, mask: usize) {
-    if s.suppressed_masks.contains(&mask) {
+    if s.edits.masks.get(mask).is_some_and(|m| m.disabled) {
         return;
     }
     s.request(s.view_edits(tool), s.render_max_dim(), s.requested_region);
@@ -452,6 +452,7 @@ mod tests {
             }),
             refine: Vec::new(),
             adjustments: Default::default(),
+            disabled: false,
         });
         s.selected_mask = Some(0);
     }
@@ -463,6 +464,7 @@ mod tests {
             mask: edit_model::Mask::Brush(edit_model::Brush::default()),
             refine: Vec::new(),
             adjustments: Default::default(),
+            disabled: false,
         });
         s.selected_mask = Some(0);
     }
@@ -492,6 +494,7 @@ mod tests {
                 }),
             }],
             adjustments: Default::default(),
+            disabled: false,
         });
         s.selected_mask = Some(0);
         s.selected_component = 1;
@@ -599,7 +602,7 @@ mod tests {
         {
             let s = app.session.as_mut().unwrap();
             s.mask_shown = vec![true];
-            s.suppressed_masks = vec![0];
+            s.edits.masks[0].disabled = true;
         }
 
         let before = app.session.as_ref().unwrap().engine.requests_issued();

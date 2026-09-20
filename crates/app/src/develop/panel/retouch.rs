@@ -101,7 +101,12 @@ fn list(ui: &mut egui::Ui, s: &mut Session, tool: &SpotTool, ed: &mut Edited) {
                 deletable: true,
                 indent: 0.0,
                 eye: Some(s.spot_shown.get(i).copied().unwrap_or(true)),
-                hold: Some(s.spot_held.get(i).copied().unwrap_or(false)),
+                hold: Some((
+                    s.spot_held.get(i).copied().unwrap_or(false),
+                    "Hold out",
+                    "Holds this patch out of the view so you can see what it covers. Its \
+                     outline stays. Affects only what you see — never the render or the export.",
+                )),
             },
         );
         if out.delete {

@@ -816,6 +816,7 @@ fn golden_mask_linear_exposure() {
                     exposure: 1.0,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -866,6 +867,7 @@ fn composite_case(op: edit_model::MaskOp) -> Edits {
                 exposure: 0.45,
                 ..Default::default()
             },
+            disabled: false,
         }],
         ..Edits::default()
     }
@@ -986,6 +988,7 @@ fn golden_mask_linear_inverted_saturation() {
                     exposure: -0.5,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -1020,6 +1023,7 @@ fn golden_mask_radial_exposure() {
                     exposure: 0.55,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -1049,6 +1053,7 @@ fn golden_mask_radial_inverted_saturation() {
                     exposure: -0.5,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -1078,6 +1083,7 @@ fn masked_clarity_edits() -> Edits {
                 },
                 ..Default::default()
             },
+            disabled: false,
         }],
         ..Edits::default()
     }
@@ -1163,6 +1169,7 @@ fn golden_mask_brush_exposure() {
                     exposure: 0.55,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -1204,6 +1211,7 @@ fn golden_mask_brush_erase() {
                     exposure: -0.5,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -1240,6 +1248,7 @@ fn auto_mask_edits() -> Edits {
                 exposure: 0.55,
                 ..Default::default()
             },
+            disabled: false,
         }],
         ..Edits::default()
     }
@@ -1358,6 +1367,7 @@ fn golden_mask_brush_flow_buildup() {
                     exposure: 0.55,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -1417,6 +1427,7 @@ fn luminance_mask_cases() -> Vec<(&'static str, Edits)> {
             mask: edit_model::Mask::Luminance(r),
             refine: Vec::new(),
             adjustments: a,
+            disabled: false,
         }],
         ..Edits::default()
     };
@@ -2082,6 +2093,7 @@ fn colour_mask_cases() -> Vec<(&'static str, Edits)> {
                     exposure: 0.55,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -2213,6 +2225,7 @@ fn golden_mask_curve() {
                     },
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -2252,6 +2265,7 @@ fn golden_mask_grade() {
                     },
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -2283,6 +2297,7 @@ fn golden_mask_nr() {
                     },
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -2310,6 +2325,7 @@ fn golden_mask_dehaze() {
                     dehaze: edit_model::Dehaze { amount: 70.0 },
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         },
@@ -2344,6 +2360,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         },
                         ..Default::default()
                     },
+                    disabled: false,
                 }],
                 ..Edits::default()
             },
@@ -2363,6 +2380,7 @@ fn a_masked_capture_correction_really_changes_the_chart() {
                         dehaze: edit_model::Dehaze { amount: 70.0 },
                         ..Default::default()
                     },
+                    disabled: false,
                 }],
                 ..Edits::default()
             },

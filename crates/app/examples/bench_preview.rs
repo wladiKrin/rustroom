@@ -63,6 +63,7 @@ fn main() {
                         exposure: 0.5,
                         ..Default::default()
                     },
+                    disabled: false,
                 }],
                 ..Edits::default()
             },

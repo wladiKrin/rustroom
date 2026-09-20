@@ -127,11 +127,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, _ctx: &egui::Context) -> b
     //
     // ⚠ The press **origin**, not the current pointer position: a drag that began on a panel
     // slider and wandered over the canvas is still a slider drag and must still drop the rung.
-    // ⚠ Whether the mask being edited is held out of the view — since 2026-09-19 that is a
-    // per-mask eye, so the question is about the *selected* mask, not "any suppression".
+    // ⚠ Whether the mask being edited is switched off (`MaskedAdjustment::disabled`): a stroke
+    // on it changes no pixel, so the gesture is view-only.
     let app_suppressed_mask = app.session.as_ref().is_some_and(|s| {
         s.selected_mask
-            .is_some_and(|i| s.suppressed_masks.contains(&i))
+            .is_some_and(|i| s.edits.masks.get(i).is_some_and(|m| m.disabled))
     });
     let text_focused = ui.ctx().memory(|m| m.focused()).is_some();
     let press_on_canvas = ui

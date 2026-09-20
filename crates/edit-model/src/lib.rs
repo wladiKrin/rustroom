@@ -1426,6 +1426,19 @@ pub struct MaskedAdjustment {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refine: Vec<Refinement>,
     pub adjustments: LocalAdjustments,
+    /// Switched off: the mask's adjustments are not applied — in the view, the export,
+    /// anywhere — until it is switched back on. The panel's toggle beside the eye (2026-09-20).
+    ///
+    /// ⚠ **Part of the edits, not view state**, because the user asked for an off mask to stay
+    /// out of the export: it travels with the mask through the sidecar, a paste, a sync, a
+    /// preset and undo. The patch hold-out is view state and deliberately different.
+    ///
+    /// ⚠ `skip_serializing_if`: an enabled mask writes the bytes it always did, so every sidecar
+    /// on disk is unchanged and an old build reading a new sidecar simply applies the mask.
+    /// `disabled` rather than `enabled` so `Default` (false) is the applied state and no
+    /// hand-written `Default` is needed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
 }
 
 /// Optical corrections read from a lens profile. Neutral when nothing is enabled.
@@ -2893,6 +2906,7 @@ mod tests {
                     },
                     ..Default::default()
                 },
+                disabled: false,
             }],
             spots: vec![Spot {
                 centre: [0.3, 0.4],
@@ -3100,6 +3114,7 @@ mod tests {
                     exposure: -1.5,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         };
@@ -4200,5 +4215,33 @@ mod tests {
         let e: Edits = serde_json::from_str(r#"{"exposure": 0.5}"#).unwrap();
         assert_eq!(e.look, Look::default());
         assert!(!e.look.is_active());
+    }
+}
+
+#[cfg(test)]
+mod disabled_mask_tests {
+    use super::*;
+
+    #[test]
+    fn a_switched_off_mask_round_trips_and_an_enabled_one_writes_nothing_new() {
+        // ⚠ Both halves: the flag must survive the sidecar, and an enabled mask must serialise
+        // exactly as before this field existed, so every sidecar on disk is unchanged.
+        let on = MaskedAdjustment::default();
+        let text = serde_json::to_string(&on).unwrap();
+        assert!(
+            !text.contains("disabled"),
+            "an enabled mask wrote the new field: {text}"
+        );
+        let off = MaskedAdjustment {
+            disabled: true,
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&off).unwrap();
+        assert!(text.contains("\"disabled\":true"), "{text}");
+        let back: MaskedAdjustment = serde_json::from_str(&text).unwrap();
+        assert!(back.disabled);
+        // ⚠ And a sidecar from before the field reads as enabled.
+        let old: MaskedAdjustment = serde_json::from_str("{}").unwrap();
+        assert!(!old.disabled);
     }
 }

@@ -67,6 +67,7 @@ fn masked(a: edit_model::LocalAdjustments) -> edit_model::MaskedAdjustment {
         }),
         refine: Vec::new(),
         adjustments: a,
+        disabled: false,
     }
 }
 

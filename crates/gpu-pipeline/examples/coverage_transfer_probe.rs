@@ -282,6 +282,7 @@ fn masked() -> MaskedAdjustment {
             ..Default::default()
         },
         refine: Vec::new(),
+        disabled: false,
     }
 }
 

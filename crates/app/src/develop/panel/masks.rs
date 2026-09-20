@@ -91,7 +91,6 @@ pub fn show(
         s.selected_component = 0;
         s.active_mask_handle = None;
         s.mask_shown.clear();
-        s.mask_held.clear();
         ed.discrete();
     }
     out.state.show_body_unindented(ui, |ui| {
@@ -203,6 +202,7 @@ fn add_controls(
                     mask: k.template(),
                     refine: Vec::new(),
                     adjustments: edit_model::LocalAdjustments::default(),
+                    disabled: false,
                 });
                 s.selected_mask = Some(s.edits.masks.len() - 1);
                 s.selected_component = 0;
@@ -271,7 +271,12 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 deletable: true,
                 indent: 0.0,
                 eye: Some(s.mask_shown.get(i).copied().unwrap_or(false)),
-                hold: Some(s.mask_held.get(i).copied().unwrap_or(false)),
+                hold: Some((
+                    s.edits.masks[i].disabled,
+                    "Disable",
+                    "Switches the mask off: its adjustments are not applied — in the view, \
+                     the export, anywhere — until it is switched back on. Undo brings it back.",
+                )),
             },
         );
         if out.delete {
@@ -281,11 +286,10 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 *on = !*on;
             }
         } else if out.hold {
-            if let Some(on) = s.mask_held.get_mut(i) {
-                *on = !*on;
-            }
-            // ⚠ A VIEW MODE, not an edit: `develop::body` derives the suppression from it and
-            // re-renders on the change; nothing here pushes a history entry.
+            // ⚠ AN EDIT, not a view mode (2026-09-20, user's call): off in the export too, so
+            // it lives in the edits and is one history entry.
+            s.edits.masks[i].disabled = !s.edits.masks[i].disabled;
+            ed.discrete();
         } else if out.clicked {
             pick = Some(i);
         }
@@ -309,9 +313,6 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         s.edits.masks.remove(i);
         if i < s.mask_shown.len() {
             s.mask_shown.remove(i);
-        }
-        if i < s.mask_held.len() {
-            s.mask_held.remove(i);
         }
         s.active_mask_handle = None;
         ed.discrete();
@@ -682,37 +683,32 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_mask_drops_its_eye_and_hold_out_with_it() {
+    fn deleting_a_mask_drops_its_eye_with_it() {
         let mut p = Panel::new();
         p.add(MaskKind::Gradient);
         p.add(MaskKind::Radial);
         p.click("Show Gradient 1"); // off, on
-        p.click("Hold out Radial 2"); // -, held
         assert_eq!(p.s.mask_shown, vec![false, true]);
-        assert_eq!(p.s.mask_held, vec![false, true]);
         p.click("Delete Gradient 1");
         assert_eq!(p.s.edits.masks.len(), 1);
         assert_eq!(p.s.mask_shown, vec![true], "the survivor keeps its own eye");
-        assert_eq!(p.s.mask_held, vec![true], "and its own hold-out");
     }
 
     #[test]
-    fn the_hold_out_toggle_flips_a_masks_flag_and_edits_nothing() {
-        // ⚠ Both directions; and it is view state, so no history entry. The re-render is the
-        // body's job (`develop::body` derives the suppression), which is why `ed` says nothing.
+    fn the_disable_toggle_is_an_edit_that_switches_the_mask_off_and_on() {
+        // ⚠ Both directions, and it is an edit: one history entry each way, and the flag lives
+        // in the edits so the export and the sidecar see it.
         let mut p = Panel::new();
         p.add(MaskKind::Gradient);
-        let before = p.s.edits.clone();
-        let ed = p.click("Hold out Gradient 1");
-        assert_eq!(
-            p.s.mask_held,
-            vec![true],
-            "the toggle did not hold the mask out"
+        let ed = p.click("Disable Gradient 1");
+        assert!(
+            p.s.edits.masks[0].disabled,
+            "the toggle did not switch the mask off"
         );
-        assert!(!ed.settled, "a view toggle pushed a history entry");
-        assert_eq!(p.s.edits, before, "a view toggle edited the photograph");
-        p.click("Hold out Gradient 1");
-        assert_eq!(p.s.mask_held, vec![false], "nor released it");
+        assert!(ed.settled, "switching a mask off is one history entry");
+        let ed = p.click("Disable Gradient 1");
+        assert!(!p.s.edits.masks[0].disabled, "nor back on");
+        assert!(ed.settled);
     }
 
     #[test]
@@ -725,7 +721,6 @@ mod tests {
         let ed = p.click("reset");
         assert!(p.s.edits.masks.is_empty(), "the masks survived the reset");
         assert!(p.s.mask_shown.is_empty(), "the eyes survived the reset");
-        assert!(p.s.mask_held.is_empty(), "the hold-outs survived the reset");
         assert_eq!(p.s.selected_mask, None);
         assert_eq!(
             p.s.edits.exposure, 1.5,

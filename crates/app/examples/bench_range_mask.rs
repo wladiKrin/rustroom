@@ -173,6 +173,7 @@ fn main() {
                 exposure: EXPOSURE,
                 ..Default::default()
             },
+            disabled: false,
         },
         RenderScale::FULL,
         &Geometry::default(),

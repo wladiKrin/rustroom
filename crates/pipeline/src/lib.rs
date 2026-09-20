@@ -952,6 +952,10 @@ pub fn build_prefix_steps(
     // ⚠ One step per mask that actually carries a capture correction; a mask with only tail
     // adjustments costs nothing here.
     for m in &edits.masks {
+        // ⚠ A switched-off mask contributes nothing anywhere — view, export, prefix cache key.
+        if m.disabled {
+            continue;
+        }
         let p = capture_projection(m);
         if !p.adjustments.noise_reduction.is_active() && !p.adjustments.dehaze.is_active() {
             continue;
@@ -1253,6 +1257,7 @@ fn capture_projection(m: &edit_model::MaskedAdjustment) -> edit_model::MaskedAdj
             dehaze: m.adjustments.dehaze,
             ..Default::default()
         },
+        disabled: false,
     }
 }
 
@@ -1502,7 +1507,9 @@ pub fn build_pipeline_split_tapped(
     // index bug this codebase has already hit three times (the crop feedback loop,
     // `render_max_dim`, the Library grid).
     for (i, m) in edits.masks.iter().enumerate() {
-        if m.adjustments.is_active() {
+        // ⚠ `disabled` is the panel's off switch (2026-09-20): the mask keeps its slot in the
+        // coverage tables and its place in the list, and inserts no stage.
+        if m.adjustments.is_active() && !m.disabled {
             tail.push(Box::new(MaskStage::new_in_region(
                 m,
                 scale,
@@ -1764,6 +1771,7 @@ pub fn tail_kernel_radius(edits: &Edits, scale: RenderScale) -> usize {
     let masked: usize = edits
         .masks
         .iter()
+        .filter(|m| !m.disabled)
         .map(|m| {
             let a = &m.adjustments;
             let s = if a.sharpening.is_active() {
@@ -2982,6 +2990,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_switched_off_mask_inserts_no_stage_anywhere() {
+        // ⚠ The export builds the same pipeline as the view, so "not in the export" is exactly
+        // "no stage": neither the tail's mask stage nor a prefix step for its NR or dehaze.
+        // Compared against no mask at all, so a stage that slipped through under another name
+        // would show.
+        let mut edits = Edits::default();
+        edits.masks.push(edit_model::MaskedAdjustment {
+            mask: edit_model::Mask::Radial(edit_model::RadialGradient::default()),
+            refine: Vec::new(),
+            adjustments: edit_model::LocalAdjustments {
+                exposure: 1.0,
+                dehaze: edit_model::Dehaze {
+                    amount: 30.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            disabled: false,
+        });
+        let names = |e: &Edits| {
+            build_pipeline(e, RenderScale::FULL, ProfileRendering::colorimetric()).stage_names()
+        };
+        let on = names(&edits);
+        assert!(
+            on.contains(&"mask"),
+            "fixture: the enabled mask must insert a stage: {on:?}"
+        );
+        edits.masks[0].disabled = true;
+        let off = names(&edits);
+        assert!(
+            !off.contains(&"mask"),
+            "a switched-off mask inserted a stage: {off:?}"
+        );
+        assert_eq!(
+            off,
+            names(&Edits::default()),
+            "a switched-off mask must build the same pipeline as no mask"
+        );
+    }
+
     fn all_edits() -> Edits {
         let mut hsl = edit_model::Hsl::default();
         hsl.bands[0].saturation = 20.0;
@@ -3112,6 +3161,7 @@ mod tests {
                     },
                     ..Default::default()
                 },
+                disabled: false,
             }],
             spots: vec![edit_model::Spot {
                 centre: [0.3, 0.4],
@@ -3571,6 +3621,7 @@ mod tests {
                     exposure: 0.5,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         };
@@ -3828,6 +3879,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            disabled: false,
         };
         let one = Edits {
             masks: vec![masked(100.0)],
@@ -4042,6 +4094,7 @@ mod tests {
                 dehaze: edit_model::Dehaze { amount },
                 ..Default::default()
             },
+            disabled: false,
         };
         let edits = Edits {
             noise_reduction: edit_model::NoiseReduction {
@@ -4079,6 +4132,7 @@ mod tests {
                     exposure: 0.8,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         };
@@ -4535,6 +4589,7 @@ mod tests {
                     exposure: 0.75,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             vignette: edit_model::Vignette {
                 amount: -40.0,

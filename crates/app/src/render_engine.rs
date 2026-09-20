@@ -2160,6 +2160,7 @@ mod tests {
                 dehaze: edit_model::Dehaze { amount: 30.0 },
                 ..Default::default()
             },
+            disabled: false,
         });
 
         let mut cache = PrefixCache::default();
@@ -3036,6 +3037,7 @@ mod tests {
                 }),
                 refine: Vec::new(),
                 adjustments: Default::default(),
+                disabled: false,
             });
             e
         };
@@ -3153,6 +3155,7 @@ mod tests {
                         dehaze: edit_model::Dehaze { amount: 45.0 },
                         ..Default::default()
                     },
+                    disabled: false,
                 },
                 // ⚠⚠ **AN AUTO-MASKED BRUSH BELONGS IN THIS EDIT SET, AND THIS IS THE GUARD ON THE
                 // WHOLE AUTO-MASK DESIGN.** Its coverage depends on PIXEL VALUES as well as position,
@@ -3188,6 +3191,7 @@ mod tests {
                         exposure: 0.5,
                         ..Default::default()
                     },
+                    disabled: false,
                 },
             ],
             ..Edits::default()
@@ -3405,6 +3409,7 @@ mod tests {
             }),
             refine: Vec::new(),
             adjustments: Default::default(),
+            disabled: false,
         };
         m.adjustments.exposure = mask_exposure;
         Edits {
@@ -3564,6 +3569,7 @@ mod tests {
                     exposure: 1.0,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..full_prefix()
         };
@@ -3748,6 +3754,7 @@ mod tests {
                     exposure: 1.0,
                     ..Default::default()
                 },
+                disabled: false,
             }],
             ..Edits::default()
         }
@@ -3874,6 +3881,7 @@ mod tests {
             mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
             refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments::default(),
+            disabled: false,
         };
         edits.masks.insert(0, inactive);
         let mut cache = BrushCache::default();

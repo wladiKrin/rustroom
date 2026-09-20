@@ -756,31 +756,14 @@ pub struct Session {
     /// it ends. `SpotRemovalStage` is in the prefix, so each costs a whole-buffer noise-reduction
     /// and dehaze pass — which is exactly why the per-frame version was reported as laggy.
     suppressed_spot: Option<usize>,
-    /// The mask whose adjustments are held out of the view while its tint is shown.
-    ///
-    /// ⚠ **View state, never `Edits`** — `suppressed_spot`'s standing, applied in the same place
-    /// and for the same reason. The sidecar, a preset, a paste, a sync, an export and the CLI
-    /// never see it.
-    ///
-    /// ⚠⚠ **One derivation site, never a set/clear pair.** It is recomputed unconditionally each
-    /// frame in `develop::body` from the same three facts that decide whether the tint is drawn.
-    /// The spot-removal flicker bug was two owners of one suppression — the panel released what
-    /// the canvas had suppressed — and the rule that came out of it was "an owner may release
-    /// only what it suppressed". A single unconditional derivation cannot acquire a second owner,
-    /// and cannot disagree with what is on screen.
-    suppressed_masks: Vec<usize>,
     /// Per mask, whether its overlay is tinted on the canvas — the row's eye. View state, never
     /// part of `Edits`; `sync_mask_shown` keeps it the masks' length, and a mask that arrives by
     /// undo, paste or a snapshot starts with its overlay off.
     ///
-    /// ⚠ Since 2026-09-20 the eye is the overlay **only**; holding the mask's adjustments out of
-    /// the view is `mask_held`, its own toggle beside the eye, as for patches.
+    /// ⚠ Since 2026-09-20 the eye is the overlay **only**; switching a mask off is
+    /// `MaskedAdjustment::disabled` in the edits — its own toggle beside the eye — because the
+    /// user wants an off mask out of the export too.
     mask_shown: Vec<bool>,
-    /// Per mask, whether its adjustments are held out of the view — the row's hold-out toggle,
-    /// the mask "disabled" while you look. View state; `develop::body` derives
-    /// `suppressed_masks` from it under the Masks tool, and `select_tool` clears it, as it does
-    /// `visualize`, so a held-out mask never outlives the panel that shows the toggle.
-    mask_held: Vec<bool>,
     /// Per patch, whether its outline is drawn on the canvas — the old "Show patches", per
     /// patch (2026-09-20). View state; `sync_spot_flags` keeps it the patches' length, and a
     /// patch that arrives by any route starts shown, as outlines always did.

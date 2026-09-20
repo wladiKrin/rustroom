@@ -1815,6 +1815,7 @@ mod tests {
             mask: edit_model::Mask::Linear(edit_model::LinearGradient::default()),
             refine: Vec::new(),
             adjustments: a,
+            disabled: false,
         }
     }
 
@@ -2953,6 +2954,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            disabled: false,
         }];
         let names = tail_of(&e).stage_names();
         for (n, _) in REPLACEABLE {

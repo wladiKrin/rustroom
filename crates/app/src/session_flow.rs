@@ -204,45 +204,21 @@ impl Session {
         // ⚠ Removed rather than neutralised, `suppressed_spot`'s reasoning: a mask contributes to
         // the picture only through its adjustments, so the two are the same thing and removal
         // cannot be half-done.
-        // ⚠ Highest index first, so each removal leaves the lower indices meaning what they
-        // meant; a stale index past the end is ignored, as a stale spot index is.
-        let mut gone: Vec<usize> = self
-            .suppressed_masks
-            .iter()
-            .copied()
-            .filter(|&i| i < e.masks.len())
-            .collect();
-        gone.sort_unstable();
-        gone.dedup();
-        for i in gone.into_iter().rev() {
-            e.masks.remove(i);
-        }
         e
     }
 
     /// Keep `mask_shown` the masks' length. A mask that arrived by undo, paste or a snapshot
     /// starts with its overlay off; the panel turns it on for a mask it adds itself.
     pub(crate) fn sync_mask_shown(&mut self) {
-        let n = self.edits.masks.len();
-        self.mask_shown.resize(n, false);
-        self.mask_held.resize(n, false);
+        self.mask_shown.resize(self.edits.masks.len(), false);
     }
 
-    /// The masks held out of the view, as indices into `edits.masks`.
-    pub(crate) fn held_masks(&self) -> Vec<usize> {
-        self.mask_held
-            .iter()
-            .take(self.edits.masks.len())
-            .enumerate()
-            .filter(|(_, &held)| held)
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// Drop every hold-out, masks and patches; true if any was on.
+    /// Drop every patch hold-out; true if any was on.
+    ///
+    /// ⚠ Patches only: a switched-off mask is an edit (`MaskedAdjustment::disabled`) and stays
+    /// off across tools, in the export and in the sidecar — that is the point of it.
     pub(crate) fn release_hold_outs(&mut self) -> bool {
-        let any = self.mask_held.iter().any(|&h| h) || self.spot_held.iter().any(|&h| h);
-        self.mask_held.iter_mut().for_each(|h| *h = false);
+        let any = self.spot_held.iter().any(|&h| h);
         self.spot_held.iter_mut().for_each(|h| *h = false);
         any
     }
@@ -600,9 +576,7 @@ impl RustroomApp {
             selected_component: 0,
             selected_spot: None,
             suppressed_spot: None,
-            suppressed_masks: Vec::new(),
             mask_shown: Vec::new(),
-            mask_held: Vec::new(),
             spot_shown: Vec::new(),
             spot_held: Vec::new(),
             soft_next: false,
@@ -914,43 +888,6 @@ mod tests {
     /// ⚠ The rule: the suppressed mask leaves the view and **nothing else does**. A test that
     /// only checked the count would pass against a version that dropped the wrong one.
     #[test]
-    fn the_suppressed_mask_leaves_the_view_and_nothing_else_does() {
-        let ctx = test_ui::ctx();
-        let mut app = test_app::for_test();
-        test_app::open_test_photo(&mut app, &ctx, 80, 40);
-        let s = app.session.as_mut().expect("session");
-        s.edits.masks = vec![
-            masked_exposure(0.5),
-            masked_exposure(1.5),
-            masked_exposure(2.5),
-        ];
-        s.suppressed_masks = vec![1];
-        let e = s.view_edits(rustroom_app::tool::Tool::Masks);
-        assert_eq!(e.masks.len(), 2, "exactly one mask must have been dropped");
-        let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
-        assert_eq!(left, vec![0.5, 2.5], "the wrong mask was dropped: {left:?}");
-    }
-
-    #[test]
-    fn several_suppressed_masks_all_leave_the_view() {
-        // ⚠ Given unsorted and with a duplicate: the removal must not shift an index it has
-        // yet to remove, which a naive forward loop would.
-        let ctx = test_ui::ctx();
-        let mut app = test_app::for_test();
-        test_app::open_test_photo(&mut app, &ctx, 80, 40);
-        let s = app.session.as_mut().expect("session");
-        s.edits.masks = vec![
-            masked_exposure(0.5),
-            masked_exposure(1.5),
-            masked_exposure(2.5),
-        ];
-        s.suppressed_masks = vec![2, 0, 0];
-        let e = s.view_edits(rustroom_app::tool::Tool::Masks);
-        let left: Vec<f32> = e.masks.iter().map(|m| m.adjustments.exposure).collect();
-        assert_eq!(left, vec![1.5]);
-    }
-
-    #[test]
     fn held_patches_leave_the_view_together_with_the_drag_suppressed_one() {
         let ctx = test_ui::ctx();
         let mut app = test_app::for_test();
@@ -1061,35 +998,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_suppression_leaves_every_mask_in_the_view() {
-        let ctx = test_ui::ctx();
-        let mut app = test_app::for_test();
-        test_app::open_test_photo(&mut app, &ctx, 80, 40);
-        let s = app.session.as_mut().expect("session");
-        s.edits.masks = vec![masked_exposure(0.5), masked_exposure(1.5)];
-        s.suppressed_masks = Vec::new();
-        assert_eq!(s.view_edits(rustroom_app::tool::Tool::Masks).masks.len(), 2);
-    }
-
-    /// An index past the end is ignored rather than panicking — the mask list can shrink under a
-    /// stale suppression between one frame and the next, exactly as the spot list can.
-    #[test]
-    fn a_stale_mask_suppression_index_is_ignored() {
-        let ctx = test_ui::ctx();
-        let mut app = test_app::for_test();
-        test_app::open_test_photo(&mut app, &ctx, 80, 40);
-        let s = app.session.as_mut().expect("session");
-        s.edits.masks = vec![masked_exposure(0.5)];
-        s.suppressed_masks = vec![7];
-        assert_eq!(s.view_edits(rustroom_app::tool::Tool::Masks).masks.len(), 1);
-    }
-
-    /// ⚠⚠ **The call-site half, and it is the half that matters.** The sibling test pins
-    /// `handover_profile`'s rule; sabotaging the **call site** back to `decoded.profile.clone()`
-    /// leaves that test green, which is exactly how this bug shipped. This one drives the real
-    /// `pump_full_res` against an injected decode whose profile carries no looks directory —
-    /// the real decode's behaviour — and asserts the engine still has one afterwards.
     #[test]
     fn the_handover_call_site_carries_the_looks_directory_onto_the_new_engine() {
         let dir = crate::test_app::TestDir::new("handoverlooks");
@@ -1215,6 +1123,7 @@ mod tests {
                     },
                     ..Default::default()
                 },
+                disabled: false,
             });
         }
         let masked = s.render_margin(&s.edits.clone(), rung);

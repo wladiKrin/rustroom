@@ -1079,6 +1079,7 @@ mod tests {
             mask: edit_model::Mask::Brush(edit_model::Brush::default()),
             refine: Vec::new(),
             adjustments: edit_model::LocalAdjustments::default(),
+            disabled: false,
         });
         e.merge_from(&edit_model::Edits::default(), edit_groups());
         assert_eq!(e.exposure, 0.0, "the adjustments should be reset");

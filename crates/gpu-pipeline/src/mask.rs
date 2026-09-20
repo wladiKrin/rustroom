@@ -827,6 +827,7 @@ mod tests {
                 ..Default::default()
             },
             refine: Vec::new(),
+            disabled: false,
         }
     }
 
@@ -1012,6 +1013,7 @@ mod tests {
                 ..Default::default()
             },
             refine: Vec::new(),
+            disabled: false,
         }
     }
 

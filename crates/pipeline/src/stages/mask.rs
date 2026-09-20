@@ -545,6 +545,7 @@ mod tests {
                 ..Default::default()
             },
             refine: Vec::new(),
+            disabled: false,
         };
         let geo = Geometry {
             angle: 3.0,
@@ -598,6 +599,7 @@ mod tests {
                 exposure: 0.5,
                 ..Default::default()
             },
+            disabled: false,
         };
         let mut stage = MaskStage::new(&masked, RenderScale::new(1.0), &Geometry::default());
         assert!(
@@ -657,6 +659,7 @@ mod tests {
                 exposure: 1.5,
                 ..Default::default()
             },
+            disabled: false,
         };
         let out = MaskStage::new(&masked, RenderScale::new(1.0), &Geometry::default()).apply(img);
         assert!(
@@ -700,6 +703,7 @@ mod tests {
                 exposure: 1.0,
                 ..Default::default()
             },
+            disabled: false,
         };
         let coverage = std::sync::Arc::new(crate::BrushCoverage::with_slots(&[1]));
         let stage = MaskStage::new_in_region(
@@ -739,6 +743,7 @@ mod tests {
                 exposure: 1.0,
                 ..Default::default()
             },
+            disabled: false,
         }
     }
 
@@ -915,6 +920,7 @@ mod tests {
                 exposure: 1.0,
                 ..Default::default()
             },
+            disabled: false,
         }
     }
 
@@ -1018,6 +1024,7 @@ mod tests {
                 exposure: 1.0,
                 ..Default::default()
             },
+            disabled: false,
         }
     }
 
@@ -1206,6 +1213,7 @@ mod tests {
                 dehaze: edit_model::Dehaze { amount: 90.0 },
                 ..Default::default()
             },
+            disabled: false,
         };
         let out = MaskStage::new_capture(
             &masked,
@@ -1318,6 +1326,7 @@ mod tests {
                 exposure: 1.0,
                 ..Default::default()
             },
+            disabled: false,
         };
         let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
 
@@ -1370,6 +1379,7 @@ mod tests {
                 saturation: -100.0,
                 ..Default::default()
             },
+            disabled: false,
         };
         let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(src.clone());
 
@@ -1396,6 +1406,7 @@ mod tests {
                 exposure: 1.0,
                 ..Default::default()
             },
+            disabled: false,
         };
         let out = MaskStage::new(&m, RenderScale::FULL, &Geometry::default()).apply(flat(80, 40));
         assert!(

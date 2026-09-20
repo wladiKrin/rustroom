@@ -77,8 +77,9 @@ pub struct RowSpec<'a> {
     pub indent: f32,
     /// The eye: `Some(on)` draws it left of the `×`; a mask row has one, a component row none.
     pub eye: Option<bool>,
-    /// The hold-out toggle, left of the eye: the row's effect held out of the view.
-    pub hold: Option<bool>,
+    /// The second toggle, left of the eye: `Some((on, verb, hover))`. A mask's is "Disable"
+    /// (an edit: off in the export too); a patch's is "Hold out" (view only).
+    pub hold: Option<(bool, &'a str, &'a str)>,
 }
 
 pub struct RowOut {
@@ -160,19 +161,15 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
     }
     let mut hold = false;
     let mut hold_colour = v.weak_text_color();
-    if let Some(on) = spec.hold {
+    if let Some((on, verb, hover)) = spec.hold {
         let cell = egui::Rect::from_min_max(
             egui::pos2(right - ROW_HEIGHT, rect.top()),
             egui::pos2(right, rect.bottom()),
         );
-        let name = format!("Hold out {}", spec.accessible);
+        let name = format!("{verb} {}", spec.accessible);
         let r = ui
             .interact(cell, resp.id.with("hold"), egui::Sense::click())
-            .on_hover_text(
-                "Holds it out of the view: its effect is not applied while this is on, so you \
-                 can judge with and without. Affects only what you see — never the render or \
-                 the export.",
-            );
+            .on_hover_text(hover);
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
         });
@@ -266,7 +263,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             mask_glyph::paint_eye(&painter, eye_rect, on, eye_colour);
             cell_x -= ROW_HEIGHT;
         }
-        if let Some(on) = spec.hold {
+        if let Some((on, _, _)) = spec.hold {
             let hold_rect = egui::Rect::from_center_size(
                 egui::pos2(cell_x, rect.center().y),
                 egui::vec2(16.0, 16.0),
@@ -403,6 +400,7 @@ mod tests {
                     },
                 ],
                 adjustments: Default::default(),
+                disabled: false,
             }];
             s.selected_mask = Some(0);
         }
