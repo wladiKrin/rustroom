@@ -125,7 +125,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 Option C of a three-option canvas ("Rustroom Retouch Panel"), the user's pick, plus his
 addition: the show and visualize functions on each patch's row, mirroring the Masks list. On
-`retouch-panel`; spec `2026-09-20-retouch-panel-design.md`. **2604 → 2610 tests**, goldens
+`retouch-panel`; spec `2026-09-20-retouch-panel-design.md`. **2604 → 2612 tests**, goldens
 unmoved; the pipeline untouched.
 
 | what landed | where |
@@ -146,6 +146,13 @@ unmoved; the pipeline untouched.
   was dropped on 2026-09-19 because nothing read it; the hold-out cell then read it and landed
   exactly on the eye's hit area, winning the tie — the eye toggled the hold-out. Two tests
   caught it. A "never read" warning on a layout cursor is a warning about *today's* callers.
+
+**Same day, for the masks too:** a hold-out toggle beside every mask row's eye, the user's
+request after seeing the patches' one. The masks' eye became the overlay **only**;
+`Session::mask_held` holds the adjustments out and `develop::body` derives `suppressed_masks`
+from it; `select_tool` releases every hold-out, masks and patches, for `visualize`'s reason.
+⚠ The 2026-09-19 reading of "an eye that enables or disables the mask" is thereby settled the
+other way: the eye shows, the new toggle disables.
 
 `retouch.rs` 817 lines (half tests); `mask_components.rs` 518, both over the marker.
 

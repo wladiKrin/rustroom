@@ -146,10 +146,12 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **2604 tests** on `main` (goldens unmoved since 2026-09-18).
 
-⚠ **One branch, `retouch-panel` (2026-09-20), three commits ahead of `main`: the Retouch panel,
+⚠ **One branch, `retouch-panel` (2026-09-20), five commits ahead of `main`: the Retouch panel,
 list first** — a Next patch row, one row per patch with a hold-out toggle, an eye and a delete
 (`Session::{spot_shown, spot_held}`), Show all / Hide all, the mode as a segmented control, Find
-dust. Gated green on its tip (**2610 tests**), **unmerged, unpushed, and not yet seen in
+dust — **and the same hold-out on every mask row** (`Session::mask_held`; the masks' eye is the
+overlay only now; `select_tool` releases every hold-out). Gated green on its tip (**2612
+tests**), **unmerged, unpushed, and not yet seen in
 use** — the GUI was launched for a look. Spec `2026-09-20-retouch-panel-design.md`;
 `grep -n 'Retouch panel' docs/JOURNAL.md`.
 

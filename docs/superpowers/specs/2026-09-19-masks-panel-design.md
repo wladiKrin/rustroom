@@ -151,6 +151,12 @@ Seen in the running app, the user asked for five things; all are in the branch.
    once the panel is wider. Pinned by a test at both widths.
 8. **The brush block regrouped:** Size, Hardness, Flow, then Invert, Erase, Auto mask together,
    Tolerance straight under Auto mask. Other kinds keep Invert first.
+9. **A hold-out toggle beside the eye (2026-09-20, after the Retouch panel got one).** The eye
+   is now the overlay **only**; the new toggle holds the mask's adjustments out of the view — the
+   mask "disabled" while you look. `Session::mask_held`, resynced with `mask_shown`;
+   `develop::body` derives `suppressed_masks` from it under the Masks tool; deleting a mask or
+   resetting the list drops it; `select_tool` releases every hold-out (masks and patches), the
+   rule Visualize follows, so a held-out mask never outlives the panel with the toggle.
 
 ## Out of scope
 

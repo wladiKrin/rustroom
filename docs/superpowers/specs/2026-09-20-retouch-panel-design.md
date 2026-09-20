@@ -69,6 +69,12 @@ Today's "Visualize spots" is a whole-image high-contrast view, so it cannot be a
 it stays as a toggle button labelled **Find dust** under the sliders, with the Threshold slider
 beside it while on. Same session field (`visualize`), same "view mode, never an edit" rule.
 
+## Follow-up, same day
+
+The user asked for the same hold-out on the Masks list, beside its eye; the masks spec's item 9
+records it. With it, hold-outs of both kinds are released on a tool change (`select_tool`), as
+Visualize is.
+
 ## Files
 
 - `develop/panel/retouch.rs` (rewrite), `develop/panel/mask_components.rs` (the row gains a
