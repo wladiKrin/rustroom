@@ -276,13 +276,17 @@ pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
             .size()
             .x
     });
-    let (rect, r) =
+    let (rect, mut r) =
         ui.allocate_exact_size(egui::vec2(w + DOT * 2.0 + 18.0, H), egui::Sense::click());
     let enabled = ui.is_enabled();
     let was = *on;
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, was, label));
+    // ⚠ `mark_changed`, or a caller reading `changed()` — as the format filter does, exactly
+    // as it read the checkbox it replaced — sees nothing and the chips are "not clickable"
+    // (seen in use 2026-09-20). A hand-drawn widget has to say so itself.
     if r.clicked() {
         *on = !*on;
+        r.mark_changed();
     }
     let v = ui.visuals().clone();
     let painter = ui.painter_at(rect);
@@ -393,9 +397,13 @@ mod tests {
     fn a_chip_reports_as_a_checkbox_and_toggles() {
         let ctx = test_ui::ctx();
         let mut on = true;
+        let mut changed = false;
         test_ui::click(&ctx, "RAF 12", |ui| {
-            chip(ui, &mut on, "RAF 12");
+            changed |= chip(ui, &mut on, "RAF 12").changed();
         });
         assert!(!on, "a click did not toggle the chip");
+        // ⚠ The format filter reads `changed()`, not the flag — a chip that flips the flag
+        // silently is one nothing downstream notices.
+        assert!(changed, "the chip did not report the change");
     }
 }

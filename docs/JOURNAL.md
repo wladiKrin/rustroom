@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The top bar and the Library in one language (2026-09-20)](#the-top-bar-and-the-library-in-one-language-2026-09-20)
 - [A switched-off mask stays off in the export (2026-09-20)](#a-switched-off-mask-stays-off-in-the-export-2026-09-20)
 - [The Presets panel: a sectioned list (2026-09-20)](#the-presets-panel-a-sectioned-list-2026-09-20)
 - [The Retouch panel: list first (2026-09-20)](#the-retouch-panel-list-first-2026-09-20)
@@ -123,7 +124,48 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### A switched-off mask stays off in the export (2026-09-20)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The top bar and the Library in one language (2026-09-20)
+
+The user, after the five panel reworks: "find a cohesive design language also for the library
+view and the top panel in both the library and edit view. In particular, the buttons for
+changing between the two modes, as well as the compare and survey buttons should be more
+pronounced." Three mockups on the canvas "Rustroom Top Bar & Library"
+(https://claude.ai/artifact/GTy76KeL7FHx3cdzkQssPW); **A** chosen, a pill-and-panel language.
+On `shell-restyle`; spec `2026-09-20-shell-restyle-design.md`. **2609 → TESTCOUNT tests**,
+goldens unmoved.
+
+| what landed | where |
+|---|---|
+| the app mode as a 32 pt icon + label pill, the lit half **accent-filled** — the one accent-filled control in the bar; Grid / Compare / Survey a second 28 pt pill with icons | `shell.rs` `view_switch`, `mode_switch`; `segmented::pill` |
+| search at 200 pt with the magnifier in its hint; Filter with a funnel, its descriptive active label kept; the formats as dot **chips** (`segmented::chip`, reporting as a checkbox); a thumbnail-size **slider** saved when the drag settles; the sort combo with a glyph; Reindex behind a ⋯ menu; the status in weak text | `shell.rs` |
+| Develop: undo/redo at 30 × 28, the four zoom actions abutted in a dark **well** (momentary, none lit), Before / After labelled, **Export…** as the bar's accent button | `develop/mod.rs`, `shell.rs` `export_button` |
+| the Library's left panel on the Develop panel's section chrome: `section::header` with the count as trailing text and a new `draggable` flag so the reordering drag survives; rows through a new `list_row` painter (name, weak count, accent tint, action cells named "Delete Portraits" / "Tag landscape" …) | `collections_panel.rs`, `section.rs`, `list_row.rs` |
+| grid cells: rounded thumbnails, the marks in a **row under the picture** (constant height, so a rating never moves a neighbour), the accent selection border (the fixed blue is gone), the selected name in strong text | `thumb.rs` `cell_with` / `marks_row`, `library.rs` |
+| the three `segmented*` helpers moved out of `theme.rs` (923 → 808 lines) into `segmented.rs`, re-exported | `segmented.rs`, `theme.rs` |
+
+**Worth keeping:**
+
+- ⚠ **Eleven new Phosphor codepoints, verified two ways.** The bundled TTF's `post` table
+  carries no glyph names, so the cmap alone cannot say which picture a codepoint is; the
+  2.1.2 stylesheet from the package registry gives name → codepoint, and its four codepoints
+  that were already in `icons.rs` matched, which is what makes the other eleven trustworthy.
+  Every one was then confirmed present in the TTF's cmap before being written down.
+- ⚠ `egui::SelectableLabel` is gone in 0.35 — `Button::selectable(on, text)` is its spelling.
+- ⚠ The zoom group is a well of buttons, not a pill: a pill claims one item is the current
+  state, and "fit" stops being true the moment you scroll.
+- ⚠⚠ **Two defects found by USE within a minute of the first launch, neither by a test.** The
+  left panel's rows overlapped: each action cell was drawn through `scope_builder(..max_rect(cell))`
+  to get `add_enabled_ui`'s greying, and a scope that places nothing has an empty `min_rect`,
+  which the parent advanced its cursor after — three rows landed at 0, 3 and 6 pt. And the
+  format chips were "not clickable": `chip` flipped its flag but never `mark_changed()`, and
+  the format filter reads `changed()` as it read the checkbox it replaced. Both pinned:
+  `rows_are_laid_out_at_a_constant_pitch` (verified to fail on the old code) and the chip
+  test now asserts `changed()`. ⚠ A hand-drawn widget has to report its own change.
+- ⚠ `shell.rs` is **1130** lines and `library.rs` **1143** — both past the marker before this
+  work and each grew by under a hundred; `collections_panel.rs` is 835. Reported, not split:
+  the bar's right-to-left cluster and the grid's cell closure are each one thing.
+
+### A switched-off mask stays off in the export (2026-09-20)
 
 The user, after seeing the masks' hold-out toggle: a mask turned off by it must not appear in
 the exported file either. That turns the toggle from view state into an **edit**. On

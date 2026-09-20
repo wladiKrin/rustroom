@@ -77,19 +77,15 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
             egui::pos2(right, rect.bottom()),
         );
         let name = format!("{} {}", a.verb, spec.name);
-        let r = ui
-            .scope_builder(egui::UiBuilder::new().max_rect(cell), |ui| {
-                ui.add_enabled_ui(a.enabled, |ui| {
-                    let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
-                    let on = enabled && a.enabled;
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name)
-                    });
-                    r
-                })
-                .inner
-            })
-            .inner;
+        // ⚠⚠ A plain `interact`, never a child scope. The first version wrapped this in
+        // `scope_builder(..max_rect(cell))` to get `add_enabled_ui`'s greying — and a scope
+        // that places nothing has an empty `min_rect`, which the parent then advanced its
+        // cursor after, so every row after the first landed on top of it ("the boxes and
+        // names on the left are overlapping", seen in use 2026-09-20). The enabled flag goes
+        // straight into the widget info instead.
+        let r = ui.interact(cell, resp.id.with(i), egui::Sense::click());
+        let on = enabled && a.enabled;
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &name));
         let r = if a.hover.is_empty() {
             r
         } else {
@@ -242,6 +238,44 @@ mod tests {
         let mut out = (false, None);
         test_ui::click(&ctx, "Add to Portraits", |ui| draw(ui, &mut out));
         assert_eq!(out.1, Some(1), "the second cell was not reached");
+    }
+
+    #[test]
+    fn rows_are_laid_out_at_a_constant_pitch() {
+        // ⚠ The regression: three rows with action cells must stack, not overlap. The action
+        // cells used to be drawn through a child scope whose empty rect moved the cursor.
+        let ctx = test_ui::ctx();
+        let mut tops = Vec::new();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(test_ui::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                let acts = actions();
+                for name in ["One", "Two", "Three"] {
+                    let top = ui.cursor().top();
+                    row(
+                        ui,
+                        RowSpec {
+                            name,
+                            count: Some(1),
+                            selected: false,
+                            indent: 0.0,
+                            hover: "",
+                            actions: &acts,
+                        },
+                    );
+                    tops.push(top);
+                }
+            },
+        );
+        let pitch: Vec<f32> = tops.windows(2).map(|p| p[1] - p[0]).collect();
+        assert!(
+            pitch.iter().all(|&d| d >= ROW_HEIGHT && d.is_finite()),
+            "rows overlap or wander: tops {tops:?}"
+        );
+        assert_eq!(pitch[0], pitch[1], "the pitch is not constant: {tops:?}");
     }
 
     #[test]

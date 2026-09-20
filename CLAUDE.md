@@ -100,7 +100,7 @@ opensource_lightroom/
 │   ├── export/               # ✅ to_rgb8 + save (JPEG/PNG/TIFF) + metadata::{ExportMetadata, FileMetadata, MetadataScope} — the full XMP packet (M6.2) + watermark + output_sharpen
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is 681 lines after W0 (2026-09-01); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename; bin-only modules=theme/modals/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell (egui lives here, not in the lib)
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is 681 lines after W0 (2026-09-01); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename; bin-only modules=theme/segmented/list_row/modals/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel (egui lives here, not in the lib)
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -142,17 +142,20 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-19)
+### State (2026-09-20)
 
-**2609 tests** on `main` (goldens unmoved since 2026-09-18; the count fell by three with the mask suppression tests).
+**TESTCOUNT tests** on `shell-restyle` (goldens unmoved since 2026-09-18).
 
-✅ **The Presets panel rework and the mask off switch are merged and confirmed by use
-(2026-09-20)** — the Presets panel as a sectioned list (rows saying what each preset carries,
-tinted when the photo already has it; `Tool::panel_heading` is gone, every tool draws its own
-section header), and **a switched-off mask stays off in the export**: `MaskedAdjustment::disabled`
-in the edits, gated in the pipeline, 63 struct literals gained the field, the view-state mask
-suppression machinery removed. Specs `2026-09-20-presets-panel-design.md` and
-`2026-09-20-mask-off-switch-design.md`; `grep -n 'Presets panel\|off in the export' docs/JOURNAL.md`.
+⚠ **One branch, `shell-restyle`, ahead of `main`: the top bar and the Library in one language** —
+an accent app-mode pill, an icon pill for Grid / Compare / Survey, format chips, a thumbnail-size
+slider, the Develop toolbar regrouped with an accent Export; the Library's left panel on the
+section chrome with painted rows, grid cells with rounded thumbnails and a marks row under the
+picture. Gated green on its tip, **GUI launched for a look, not yet confirmed by use.** Spec
+`2026-09-20-shell-restyle-design.md`; `grep -n 'one language' docs/JOURNAL.md`.
+
+✅ The five panel reworks (Develop, Masks, Geometry, Retouch, Presets) and the mask off switch are
+merged and confirmed by use; specs under `docs/superpowers/specs/2026-09-1[89]-*` and
+`2026-09-20-*`.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
