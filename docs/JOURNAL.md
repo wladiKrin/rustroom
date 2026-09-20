@@ -131,7 +131,7 @@ view and the top panel in both the library and edit view. In particular, the but
 changing between the two modes, as well as the compare and survey buttons should be more
 pronounced." Three mockups on the canvas "Rustroom Top Bar & Library"
 (https://claude.ai/artifact/GTy76KeL7FHx3cdzkQssPW); **A** chosen, a pill-and-panel language.
-On `shell-restyle`; spec `2026-09-20-shell-restyle-design.md`. **2609 → TESTCOUNT tests**,
+On `shell-restyle`; spec `2026-09-20-shell-restyle-design.md`. **2609 → 2620 tests**,
 goldens unmoved.
 
 | what landed | where |
