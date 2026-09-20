@@ -76,7 +76,7 @@ pub struct RowSpec<'a> {
     pub indent: f32,
     /// The eye: `Some(on)` draws it left of the `×`; a mask row has one, a component row none.
     pub eye: Option<bool>,
-    /// The hold-out toggle, left of the eye: a patch held out of the view. Masks pass `None`.
+    /// The hold-out toggle, left of the eye: the row's effect held out of the view.
     pub hold: Option<bool>,
 }
 
@@ -139,8 +139,8 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let r = ui
             .interact(cell, resp.id.with("eye"), egui::Sense::click())
             .on_hover_text(
-                "Shows this mask's overlay on the image and holds its effect out of the view, \
-                 so you can see what it covers. Any number of masks can be shown at once.",
+                "Shows the overlay on the image, so you can see what it covers. Any number can \
+                 be shown at once.",
             );
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)
@@ -168,8 +168,9 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         let r = ui
             .interact(cell, resp.id.with("hold"), egui::Sense::click())
             .on_hover_text(
-                "Holds this patch out of the view so you can see what it covers. Its outline \
-                 stays. Affects only what you see — never the render or the export.",
+                "Holds it out of the view: its effect is not applied while this is on, so you \
+                 can judge with and without. Affects only what you see — never the render or \
+                 the export.",
             );
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &name)

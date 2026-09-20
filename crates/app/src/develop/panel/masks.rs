@@ -91,6 +91,7 @@ pub fn show(
         s.selected_component = 0;
         s.active_mask_handle = None;
         s.mask_shown.clear();
+        s.mask_held.clear();
         ed.discrete();
     }
     out.state.show_body_unindented(ui, |ui| {
@@ -270,7 +271,7 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
                 deletable: true,
                 indent: 0.0,
                 eye: Some(s.mask_shown.get(i).copied().unwrap_or(false)),
-                hold: None,
+                hold: Some(s.mask_held.get(i).copied().unwrap_or(false)),
             },
         );
         if out.delete {
@@ -279,6 +280,12 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
             if let Some(on) = s.mask_shown.get_mut(i) {
                 *on = !*on;
             }
+        } else if out.hold {
+            if let Some(on) = s.mask_held.get_mut(i) {
+                *on = !*on;
+            }
+            // ⚠ A VIEW MODE, not an edit: `develop::body` derives the suppression from it and
+            // re-renders on the change; nothing here pushes a history entry.
         } else if out.clicked {
             pick = Some(i);
         }
@@ -302,6 +309,9 @@ fn list(ui: &mut egui::Ui, s: &mut Session, ed: &mut Edited) {
         s.edits.masks.remove(i);
         if i < s.mask_shown.len() {
             s.mask_shown.remove(i);
+        }
+        if i < s.mask_held.len() {
+            s.mask_held.remove(i);
         }
         s.active_mask_handle = None;
         ed.discrete();
@@ -672,19 +682,37 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_mask_drops_its_eye_with_it() {
+    fn deleting_a_mask_drops_its_eye_and_hold_out_with_it() {
         let mut p = Panel::new();
         p.add(MaskKind::Gradient);
         p.add(MaskKind::Radial);
         p.click("Show Gradient 1"); // off, on
+        p.click("Hold out Radial 2"); // -, held
         assert_eq!(p.s.mask_shown, vec![false, true]);
+        assert_eq!(p.s.mask_held, vec![false, true]);
         p.click("Delete Gradient 1");
         assert_eq!(p.s.edits.masks.len(), 1);
+        assert_eq!(p.s.mask_shown, vec![true], "the survivor keeps its own eye");
+        assert_eq!(p.s.mask_held, vec![true], "and its own hold-out");
+    }
+
+    #[test]
+    fn the_hold_out_toggle_flips_a_masks_flag_and_edits_nothing() {
+        // ⚠ Both directions; and it is view state, so no history entry. The re-render is the
+        // body's job (`develop::body` derives the suppression), which is why `ed` says nothing.
+        let mut p = Panel::new();
+        p.add(MaskKind::Gradient);
+        let before = p.s.edits.clone();
+        let ed = p.click("Hold out Gradient 1");
         assert_eq!(
-            p.s.mask_shown,
+            p.s.mask_held,
             vec![true],
-            "the survivor keeps its own flag"
+            "the toggle did not hold the mask out"
         );
+        assert!(!ed.settled, "a view toggle pushed a history entry");
+        assert_eq!(p.s.edits, before, "a view toggle edited the photograph");
+        p.click("Hold out Gradient 1");
+        assert_eq!(p.s.mask_held, vec![false], "nor released it");
     }
 
     #[test]
@@ -697,6 +725,7 @@ mod tests {
         let ed = p.click("reset");
         assert!(p.s.edits.masks.is_empty(), "the masks survived the reset");
         assert!(p.s.mask_shown.is_empty(), "the eyes survived the reset");
+        assert!(p.s.mask_held.is_empty(), "the hold-outs survived the reset");
         assert_eq!(p.s.selected_mask, None);
         assert_eq!(
             p.s.edits.exposure, 1.5,

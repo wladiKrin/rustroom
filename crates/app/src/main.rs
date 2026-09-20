@@ -769,12 +769,18 @@ pub struct Session {
     /// only what it suppressed". A single unconditional derivation cannot acquire a second owner,
     /// and cannot disagree with what is on screen.
     suppressed_masks: Vec<usize>,
-    /// Per mask, whether its overlay is shown: tinted on the canvas and **held out of the
-    /// view**, exactly what the old "Show mask" checkbox did for the selected mask — now per
-    /// mask, any number at once, toggled by the eye on its row (2026-09-19). View state, never
-    /// part of `Edits`; `sync_mask_shown` keeps it the masks' length, and a mask that arrives
-    /// by undo, paste or a snapshot starts with its overlay off.
+    /// Per mask, whether its overlay is tinted on the canvas — the row's eye. View state, never
+    /// part of `Edits`; `sync_mask_shown` keeps it the masks' length, and a mask that arrives by
+    /// undo, paste or a snapshot starts with its overlay off.
+    ///
+    /// ⚠ Since 2026-09-20 the eye is the overlay **only**; holding the mask's adjustments out of
+    /// the view is `mask_held`, its own toggle beside the eye, as for patches.
     mask_shown: Vec<bool>,
+    /// Per mask, whether its adjustments are held out of the view — the row's hold-out toggle,
+    /// the mask "disabled" while you look. View state; `develop::body` derives
+    /// `suppressed_masks` from it under the Masks tool, and `select_tool` clears it, as it does
+    /// `visualize`, so a held-out mask never outlives the panel that shows the toggle.
+    mask_held: Vec<bool>,
     /// Per patch, whether its outline is drawn on the canvas — the old "Show patches", per
     /// patch (2026-09-20). View state; `sync_spot_flags` keeps it the patches' length, and a
     /// patch that arrives by any route starts shown, as outlines always did.

@@ -222,6 +222,7 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
         suppressed_spot: None,
         suppressed_masks: Vec::new(),
         mask_shown: Vec::new(),
+        mask_held: Vec::new(),
         spot_shown: Vec::new(),
         spot_held: Vec::new(),
         soft_next: false,

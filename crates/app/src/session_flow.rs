@@ -223,7 +223,28 @@ impl Session {
     /// Keep `mask_shown` the masks' length. A mask that arrived by undo, paste or a snapshot
     /// starts with its overlay off; the panel turns it on for a mask it adds itself.
     pub(crate) fn sync_mask_shown(&mut self) {
-        self.mask_shown.resize(self.edits.masks.len(), false);
+        let n = self.edits.masks.len();
+        self.mask_shown.resize(n, false);
+        self.mask_held.resize(n, false);
+    }
+
+    /// The masks held out of the view, as indices into `edits.masks`.
+    pub(crate) fn held_masks(&self) -> Vec<usize> {
+        self.mask_held
+            .iter()
+            .take(self.edits.masks.len())
+            .enumerate()
+            .filter(|(_, &held)| held)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Drop every hold-out, masks and patches; true if any was on.
+    pub(crate) fn release_hold_outs(&mut self) -> bool {
+        let any = self.mask_held.iter().any(|&h| h) || self.spot_held.iter().any(|&h| h);
+        self.mask_held.iter_mut().for_each(|h| *h = false);
+        self.spot_held.iter_mut().for_each(|h| *h = false);
+        any
     }
 
     /// The masks whose overlay is shown, as indices into `edits.masks`.
@@ -581,6 +602,7 @@ impl RustroomApp {
             suppressed_spot: None,
             suppressed_masks: Vec::new(),
             mask_shown: Vec::new(),
+            mask_held: Vec::new(),
             spot_shown: Vec::new(),
             spot_held: Vec::new(),
             soft_next: false,

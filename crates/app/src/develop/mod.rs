@@ -97,12 +97,12 @@ pub fn body(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     //
     // ⚠ Also before both panels: each requests renders through `view_edits`, and a value written
     // after them would be one frame stale exactly where it matters.
-    // ⚠ Every mask whose eye is on, not the selected one: the overlay is per mask since
-    // 2026-09-19, and the picture must hold out exactly the masks it tints.
+    // ⚠ Every mask whose hold-out toggle is on (since 2026-09-20 the eye is the overlay only),
+    // not the selected one: the picture must hold out exactly the masks the rows say.
     let suppressed: Vec<usize> = if picked == rustroom_app::tool::Tool::Masks {
         app.session
             .as_ref()
-            .map(|s| s.shown_masks())
+            .map(|s| s.held_masks())
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -255,7 +255,7 @@ mod tests {
     /// Drive the real `develop::body` and report what `suppressed_mask` came out as.
     fn suppression_under(
         tool: rustroom_app::tool::Tool,
-        shown: bool,
+        held: bool,
         selected: Option<usize>,
     ) -> Vec<usize> {
         let ctx = crate::test_ui::ctx();
@@ -266,7 +266,7 @@ mod tests {
             let s = app.session.as_mut().expect("session");
             s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
             s.selected_mask = selected;
-            s.mask_shown = vec![shown];
+            s.mask_held = vec![held];
         }
         let c = ctx.clone();
         // ⚠ A 1400 pt screen, not 700. `test_ui::screen`'s own doc records that a widget laid out
@@ -326,7 +326,7 @@ mod tests {
             let s = app.session.as_mut().expect("session");
             s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
             s.selected_mask = Some(0);
-            s.mask_shown = vec![true];
+            s.mask_held = vec![true];
         }
         // Settle: the suppression is established and whatever renders it wants are issued.
         let _ = frame(&mut app, &ctx);
@@ -338,7 +338,7 @@ mod tests {
         );
 
         // Untick "Show mask" — no tool change, so `select_tool` will not fire.
-        app.session.as_mut().expect("session").mask_shown = vec![false];
+        app.session.as_mut().expect("session").mask_held = vec![false];
         let (after_mask, after_reqs) = frame(&mut app, &ctx);
         assert!(
             after_mask.is_empty(),
@@ -367,7 +367,7 @@ mod tests {
             let s = app.session.as_mut().expect("session");
             s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
             s.selected_mask = Some(0);
-            s.mask_shown = vec![true];
+            s.mask_held = vec![true];
             // A ladder with somewhere to drop to: the fixture's own buffer gives one rung, where
             // `rung_below` returns the rung unchanged and this test could see nothing.
             s.buffer_long = 3200;
@@ -381,7 +381,7 @@ mod tests {
              unrepresentable and this test proves nothing"
         );
 
-        app.session.as_mut().expect("session").mask_shown = vec![false];
+        app.session.as_mut().expect("session").mask_held = vec![false];
         let (_, _) = frame(&mut app, &ctx);
         assert_eq!(
             app.session.as_ref().expect("session").render_rung,
@@ -401,9 +401,9 @@ mod tests {
     /// a version where nobody ever writes the field. That is exactly how creative LUTs shipped
     /// fully tested and 100% non-functional.
     #[test]
-    fn a_shown_mask_is_suppressed_under_the_masks_tool_whether_or_not_selected() {
-        // ⚠ Selection no longer enters into it: the eye is per mask, and a mask you are not
-        // editing can be shown too.
+    fn a_held_out_mask_is_suppressed_under_the_masks_tool_whether_or_not_selected() {
+        // ⚠ Selection does not enter into it: the hold-out is per mask, and a mask you are
+        // not editing can be held out too.
         assert_eq!(
             suppression_under(rustroom_app::tool::Tool::Masks, true, Some(0)),
             vec![0]
@@ -415,14 +415,14 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_suppressed_under_another_tool_or_with_the_eye_off() {
+    fn nothing_is_suppressed_under_another_tool_or_with_the_hold_out_off() {
         assert!(
             suppression_under(rustroom_app::tool::Tool::Edit, true, Some(0)).is_empty(),
             "the Edit panel draws no tint, so nothing may be hidden there"
         );
         assert!(
             suppression_under(rustroom_app::tool::Tool::Masks, false, Some(0)).is_empty(),
-            "with the eye off the mask's effect is the only feedback there is"
+            "with the hold-out off the mask's effect is applied"
         );
     }
 

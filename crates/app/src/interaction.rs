@@ -88,6 +88,11 @@ impl RustroomApp {
             // nothing on screen to explain it. Cleared here, where every route into a tool change
             // already converges.
             s.suppressed_spot = None;
+            // ⚠ The hold-outs — masks and patches held out of the view by their rows' toggles —
+            // are released here too, for `visualize`'s reason: the toggle is only visible in
+            // its own panel, and a picture missing a mask with nothing on screen to say so
+            // reads as a broken render (2026-09-20).
+            s.release_hold_outs();
             // ⚠ Visualize Spots turns itself off here too. A canvas stuck in a high-contrast grey
             // view after switching to Edit reads as a broken render, and it is the single most
             // likely thing in the Retouch tool to be reported as a bug. The request below is
@@ -599,5 +604,36 @@ mod tests {
         let s = app.session.as_ref().unwrap();
         assert_eq!(s.guides.len(), 1, "the guide should still be there");
         assert!(s.show_guides, "and the sub-mode should still be on");
+    }
+}
+
+#[cfg(test)]
+mod hold_out_tests {
+    #[test]
+    fn hold_outs_are_released_when_the_tool_changes() {
+        // ⚠ Both kinds, and both must go: a mask or a patch held out under its own panel must
+        // not stay missing from the picture under a panel with no toggle to show it.
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        app.select_tool(rustroom_app::tool::Tool::Masks);
+        {
+            let s = app.session.as_mut().unwrap();
+            s.edits.masks = vec![edit_model::MaskedAdjustment::default()];
+            s.mask_held = vec![true];
+            s.spot_held = vec![true];
+        }
+        app.select_tool(rustroom_app::tool::Tool::Edit);
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(
+            s.mask_held,
+            vec![false],
+            "a held-out mask outlived its tool"
+        );
+        assert_eq!(
+            s.spot_held,
+            vec![false],
+            "a held-out patch outlived its tool"
+        );
     }
 }
