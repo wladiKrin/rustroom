@@ -130,7 +130,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 The user: "Let's also revamp the snapshots section." Three mockups on the canvas "Rustroom
 Snapshots" (https://claude.ai/artifact/7vkX5EcCpcP7BgaVfGzXy8); **B** chosen, the timeline, with
 the copy cell added to every row. On `snapshots-timeline`; spec
-`2026-09-20-snapshots-timeline-design.md`. **2623 → TESTCOUNT tests**, goldens unmoved.
+`2026-09-20-snapshots-timeline-design.md`. **2623 → 2627 tests**, goldens unmoved.
 
 | what landed | where |
 |---|---|

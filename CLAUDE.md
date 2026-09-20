@@ -150,7 +150,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ⚠ **One branch, `snapshots-timeline`, ahead of `main`: the snapshot strip as a timeline** — the
 section chrome, a Now row with the drift since the newest snapshot and the Save button, dotted
 rows with the accent on the one the photo is at, copy and delete cells, double-click to rename.
-**TESTCOUNT tests on its tip, gated green, GUI launched for a look, not yet confirmed by use.**
+**2627 tests on its tip, gated green, GUI launched for a look, not yet confirmed by use.**
 Spec `2026-09-20-snapshots-timeline-design.md`; `grep -n 'timeline' docs/JOURNAL.md`.
 
 ✅ **The top bar and the Library in one language — merged and confirmed by use (2026-09-20).**
