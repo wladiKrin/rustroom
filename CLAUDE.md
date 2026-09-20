@@ -144,23 +144,14 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-19)
 
-**2604 tests** on `main` (goldens unmoved since 2026-09-18).
+**2612 tests** on `main` (goldens unmoved since 2026-09-18).
 
-⚠ **One branch, `retouch-panel` (2026-09-20), five commits ahead of `main`: the Retouch panel,
-list first** — a Next patch row, one row per patch with a hold-out toggle, an eye and a delete
-(`Session::{spot_shown, spot_held}`), Show all / Hide all, the mode as a segmented control, Find
-dust — **and the same hold-out on every mask row** (`Session::mask_held`; the masks' eye is the
-overlay only now; `select_tool` releases every hold-out). Gated green on its tip (**2612
-tests**), **unmerged, unpushed, and not yet seen in
-use** — the GUI was launched for a look. Spec `2026-09-20-retouch-panel-design.md`;
+✅ **The Retouch panel rework is merged and confirmed by use (2026-09-20)** — list first: a Next
+patch row, one row per patch with a hold-out toggle, an eye and a delete (`Session::{spot_shown,
+spot_held}`), Show all / Hide all, the mode as a segmented control, Find dust; and the same
+hold-out on every mask row (`Session::mask_held`; the masks' eye is the overlay only;
+`select_tool` releases every hold-out). Spec `2026-09-20-retouch-panel-design.md`;
 `grep -n 'Retouch panel' docs/JOURNAL.md`.
-
-✅ **The Crop & Geometry panel rework is merged and confirmed by use (2026-09-19)** — four
-sections (Crop with a segmented aspect, a composition dropdown and the orientation glyphs with
-Swap; Straighten with the level tool beside the angle; Perspective with the guides on one row;
-Lens), a dot and reset per section through `edit_model::GeoGroup`. Spec
-`2026-09-19-geometry-panel-design.md`; `grep -n 'Geometry panel' docs/JOURNAL.md`. ⚠ egui gives
-a `ComboBox` no accessible label, only its selected text as a value; `test_ui` falls back to it.
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
