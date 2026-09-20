@@ -162,6 +162,19 @@ goldens unmoved.
   the format filter reads `changed()` as it read the checkbox it replaced. Both pinned:
   `rows_are_laid_out_at_a_constant_pitch` (verified to fail on the old code) and the chip
   test now asserts `changed()`. ⚠ A hand-drawn widget has to report its own change.
+- ⚠ **Seen in use, round three: the line changed content on a view switch, and so did the
+  bar's height.** Develop read the camera off the decode label and showed the pixel size; the
+  Library read the catalog and showed neither. Now one rule, `photo_info::facts`, fed the same
+  two sources in both views — the catalog's camera wins, the session's label and size count
+  only for the session's own photo. The height: measured at **39 in Develop against 36 in Library** once the row could be
+  drawn headless — the zoom well, an `egui::Frame` with a 2 pt margin around 28 pt buttons,
+  came out 39 tall (a nested ui is centred in the row and then allocated back into it), and a
+  `scope` around a `horizontal` still 37. The well is now painted behind buttons laid straight
+  into the row and allocates nothing; the row itself is `allocate_ui_with_layout` at an exact
+  `BAR_HEIGHT` rather than a `horizontal` with a minimum. The bar's row moved into
+  `RustroomApp::top_bar` so `the_bar_is_the_same_height_in_both_views` can draw it through
+  `test_app` with the real controls of both views and measure it, and
+  `the_centred_name_is_the_same_in_both_views` reads the caption widget's label in each.
 - ⚠ `shell.rs` is **1130** lines and `library.rs` **1143** — both past the marker before this
   work and each grew by under a hundred; `collections_panel.rs` is 835. Reported, not split:
   the bar's right-to-left cluster and the grid's cell closure are each one thing.

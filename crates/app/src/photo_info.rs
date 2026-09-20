@@ -26,6 +26,34 @@ pub fn meta(camera: Option<&str>, dims: Option<(usize, usize)>, bytes: Option<u6
     parts.join("  ·  ")
 }
 
+/// What the bar knows about `path` beyond its name, from the two sources both views have.
+pub struct Facts<'a> {
+    pub camera: Option<&'a str>,
+    pub dims: Option<(usize, usize)>,
+}
+
+/// One rule for both views, so a view switch cannot change the line.
+///
+/// The camera is the catalog's capture scan when it has one, else the open session's decode
+/// label when the session *is* this photo; the decoded size is the session's, again only when
+/// it is this photo. ⚠ Never the session's camera for a different photo: a photo selected in
+/// the grid while another is open would borrow the open one's camera.
+pub fn facts<'a>(
+    path: &Path,
+    catalog_camera: Option<&'a str>,
+    session: Option<(&Path, &'a str, (usize, usize))>,
+) -> Facts<'a> {
+    let same = session.filter(|(p, _, _)| *p == path);
+    let camera = catalog_camera
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .or_else(|| same.map(|(_, m, _)| m.trim()).filter(|m| !m.is_empty()));
+    Facts {
+        camera,
+        dims: same.map(|(_, _, d)| d),
+    }
+}
+
 /// Bytes as a photographer reads them: `812 KB`, `24.3 MB`, `1.2 GB`.
 ///
 /// ⚠ Decimal units, the ones Finder and every camera spec sheet use, and one decimal only
@@ -82,6 +110,26 @@ mod tests {
         );
         assert_eq!(meta(None, None, None), "");
         assert_eq!(meta(Some(""), None, Some(812_000)), "812 KB");
+    }
+
+    #[test]
+    fn the_facts_follow_one_rule_whichever_view_asks() {
+        let a = Path::new("/p/a.RAF");
+        let b = Path::new("/p/b.RAF");
+        let session = Some((a, "X-T4 (decode)", (6240, 4160)));
+        // The catalog wins for the camera; the session gives the size for its own photo.
+        let f = facts(a, Some("FUJIFILM X-T4"), session);
+        assert_eq!(f.camera, Some("FUJIFILM X-T4"));
+        assert_eq!(f.dims, Some((6240, 4160)));
+        // No catalog entry yet: the session's label, for the session's photo only.
+        let f = facts(a, None, session);
+        assert_eq!(f.camera, Some("X-T4 (decode)"));
+        // ⚠ Another photo selected while `a` is open borrows nothing from the session.
+        let f = facts(b, None, session);
+        assert_eq!(f.camera, None);
+        assert_eq!(f.dims, None);
+        let f = facts(b, Some(" "), session);
+        assert_eq!(f.camera, None, "blank camera names are not names");
     }
 
     #[test]

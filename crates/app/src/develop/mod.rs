@@ -204,19 +204,38 @@ const TOOL_HEIGHT: f32 = 28.0;
 
 /// A dark well holding abutting buttons — the zoom group.
 ///
-/// ⚠ The well is what turns four icon buttons into one control: `item_spacing` zero inside it,
-/// the extreme background behind, one rounding around. The buttons keep their own frames, so
-/// hover and press look as they do everywhere else.
+/// ⚠ The well is what turns four icon buttons into one control: `item_spacing` 2 between
+/// them, the extreme background behind, one rounding around. The buttons keep their own
+/// frames, so hover and press look as they do everywhere else.
+///
+/// ⚠⚠ **No child `Ui` of any kind, and painted behind.** The first version was an
+/// `egui::Frame` with a 2 pt inner margin and came out 39 pt tall in a 36 pt row; a `scope`
+/// around a `horizontal` still came out 37 — a nested ui is centred in the row and then
+/// allocated back into it, and the rounding lands wherever it lands. So the bar grew in
+/// Develop and shrank back in Library ("the height of the top bar changes when switching",
+/// seen in use 2026-09-20). The buttons go straight into the row with a narrower spacing, the
+/// well is a shape reserved first and set afterwards (Frame's own trick, without its
+/// allocation), 2 pt beyond the buttons, `TOOL_HEIGHT` tall about the row's centre — it
+/// allocates nothing, so the row stays the buttons' height.
+/// `the_bar_is_the_same_height_in_both_views` measures it.
 fn well<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    egui::Frame::new()
-        .fill(ui.visuals().extreme_bg_color)
-        .corner_radius(5.0)
-        .inner_margin(2.0)
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(add).inner
-        })
-        .inner
+    let fill = ui.visuals().extreme_bg_color;
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let spacing = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = 2.0;
+    let left = ui.cursor().left();
+    let inner = add(ui);
+    let right = ui.cursor().left() - 2.0;
+    ui.spacing_mut().item_spacing.x = spacing;
+    let cy = ui.max_rect().center().y;
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(left, cy - TOOL_HEIGHT / 2.0),
+        egui::pos2(right, cy + TOOL_HEIGHT / 2.0),
+    )
+    .expand(2.0);
+    ui.painter()
+        .set(bg, egui::epaint::RectShape::filled(rect, 5.0, fill));
+    inner
 }
 
 /// One toolbar icon at [`ICON_SIZE`].

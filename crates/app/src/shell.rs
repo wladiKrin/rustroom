@@ -214,15 +214,76 @@ impl eframe::App for RustroomApp {
                     pending_command = Some(cmd);
                 }
             }
-            ui.horizontal(|ui| {
-                // ⚠ The bar's height is the app-mode pill's plus a little air: every other
-                // control centres on it.
-                ui.set_min_height(BAR_HEIGHT);
+            let (row_rename, row_command, _) = self.top_bar(ui, &ctx);
+            pending_rename = row_rename;
+            if row_command.is_some() {
+                pending_command = row_command;
+            }
+        });
+
+        if let Some(cmd) = pending_command {
+            commands::execute(self, &ctx, cmd);
+        }
+        if let Some((id, r)) = pending_rename {
+            name_edit::commit(self, &ctx, &id, r);
+        }
+
+        match self.view {
+            AppView::Develop => develop::body(self, ui, &ctx),
+            AppView::Library => {
+                // ⚠ Panel order is load-bearing: egui allocates side panels in call order and
+                // the central panel takes what is left, so the collections panel must be drawn
+                // *before* the grid.
+                crate::collections_panel::show(self, ui, &ctx);
+                // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
+                // a mode that silently shows the grid — the rule `commands::execute`'s match
+                // already follows.
+                self.release_compare_panes();
+                match self.library_mode {
+                    LibraryMode::Grid => library::show(self, ui, &ctx),
+                    LibraryMode::Compare => multi::compare::show(self, ui, &ctx),
+                    LibraryMode::Survey => multi::survey::show(self, ui, &ctx),
+                }
+            }
+        }
+
+        modals::draw(self, &ctx);
+    }
+}
+
+impl RustroomApp {
+    /// The bar's one row, at a **fixed** height in both views.
+    ///
+    /// ⚠⚠ `allocate_ui_with_layout` at `BAR_HEIGHT`, not `horizontal` with a minimum: the
+    /// bar changed height between Library and Develop ("it feels like the height of the top
+    /// bar also changes when switching", seen in use 2026-09-20), and a row allocated at an
+    /// exact size cannot — `the_bar_is_the_same_height_in_both_views` measures it. Every
+    /// control centres in the row.
+    ///
+    /// Returns the bar's file rename, if the centred name committed one, the command its
+    /// Export button asked for, and the row's rect.
+    /// The rename is applied by the caller after the panel closes: the commit writes the
+    /// sidecar and rebuilds the Library with `&mut self`.
+    fn top_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) -> (
+        Option<(PhotoId, name_edit::Rename)>,
+        Option<Command>,
+        egui::Rect,
+    ) {
+        let mut rename = None;
+        let mut command = None;
+        let r = ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), BAR_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
                 view_switch(ui, &mut self.view);
                 if self.view == AppView::Develop && self.session.is_some() {
                     ui.separator();
                     let decoding = self.pending.is_some();
-                    ui.add_enabled_ui(!decoding, |ui| develop::toolbar(self, ui, &ctx));
+                    ui.add_enabled_ui(!decoding, |ui| develop::toolbar(self, ui, ctx));
                 }
                 // ⚠ On the LEFT, not in the right-aligned cluster below. A text field needs
                 // ~180 px and that cluster already carries five controls plus the status line;
@@ -256,7 +317,7 @@ impl eframe::App for RustroomApp {
                         // noise rather than reassurance.
                         if self.view == AppView::Library {
                             if self.library.is_some() {
-                                more_menu(self, ui, &ctx);
+                                more_menu(self, ui, ctx);
                             }
                             format_chips(self, ui);
                             if self.library.is_some() {
@@ -269,7 +330,7 @@ impl eframe::App for RustroomApp {
                         // that gives the Library its accent-filled app mode: one per bar.
                         if self.view == AppView::Develop && self.session.is_some() {
                             if export_button(ui).clicked() {
-                                pending_command = Some(Command::Export);
+                                command = Some(Command::Export);
                             }
                             ui.separator();
                         }
@@ -374,37 +435,10 @@ impl eframe::App for RustroomApp {
                         }
                     })
                     .inner;
-                pending_rename = centre_info(self, ui, row, egui::Rangef::new(gap_left, gap_right));
-            });
-        });
-
-        if let Some(cmd) = pending_command {
-            commands::execute(self, &ctx, cmd);
-        }
-        if let Some((id, r)) = pending_rename {
-            name_edit::commit(self, &ctx, &id, r);
-        }
-
-        match self.view {
-            AppView::Develop => develop::body(self, ui, &ctx),
-            AppView::Library => {
-                // ⚠ Panel order is load-bearing: egui allocates side panels in call order and
-                // the central panel takes what is left, so the collections panel must be drawn
-                // *before* the grid.
-                crate::collections_panel::show(self, ui, &ctx);
-                // ⚠ Exhaustive, so a fourth Library layout is a compile error here rather than
-                // a mode that silently shows the grid — the rule `commands::execute`'s match
-                // already follows.
-                self.release_compare_panes();
-                match self.library_mode {
-                    LibraryMode::Grid => library::show(self, ui, &ctx),
-                    LibraryMode::Compare => multi::compare::show(self, ui, &ctx),
-                    LibraryMode::Survey => multi::survey::show(self, ui, &ctx),
-                }
-            }
-        }
-
-        modals::draw(self, &ctx);
+                rename = centre_info(self, ui, row, egui::Rangef::new(gap_left, gap_right));
+            },
+        );
+        (rename, command, r.response.rect)
     }
 }
 
@@ -979,30 +1013,49 @@ fn centre_info(
     row: egui::Rect,
     gap: egui::Rangef,
 ) -> Option<(PhotoId, name_edit::Rename)> {
-    let (path, copy, camera, dims) = match app.view {
+    // ⚠⚠ **Which photo** depends on the view; **what is said about it** does not. The facts
+    // come from one rule (`photo_info::facts`) fed the same two sources in both views — the
+    // catalog's capture scan and the open session — so switching views with a photo selected
+    // never changes the line ("the content of the name should not change when switching",
+    // seen in use 2026-09-20: Develop read the camera off the decode and showed the pixel size,
+    // the Library read the catalog and showed neither).
+    let (path, copy) = match app.view {
         AppView::Develop => {
             let s = app.session.as_ref()?;
-            (
-                s.path.clone(),
-                s.copy,
-                Some(s.make_model.clone()),
-                Some((s.buffer.width(), s.buffer.height())),
-            )
+            (s.path.clone(), s.copy)
         }
         AppView::Library => {
             let lib = app.library.as_ref()?;
             let e = lib.entries.get(lib.selection.active()?)?;
-            let camera = lib.captures.get(&e.id.path).and_then(|c| c.camera.clone());
-            (e.id.path.clone(), e.id.copy, camera, None)
+            (e.id.path.clone(), e.id.copy)
         }
     };
+    let catalog_camera = app
+        .library
+        .as_ref()
+        .and_then(|lib| lib.captures.get(&path))
+        .and_then(|c| c.camera.clone());
+    let session = app.session.as_ref().map(|s| {
+        (
+            s.path.clone(),
+            s.make_model.clone(),
+            (s.buffer.width(), s.buffer.height()),
+        )
+    });
+    let facts = rustroom_app::photo_info::facts(
+        &path,
+        catalog_camera.as_deref(),
+        session
+            .as_ref()
+            .map(|(p, m, d)| (p.as_path(), m.as_str(), *d)),
+    );
     let id = PhotoId::new(path.clone(), copy);
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let bytes = app.info_sizes.bytes_of(&path);
-    let meta = rustroom_app::photo_info::meta(camera.as_deref(), dims, bytes);
+    let meta = rustroom_app::photo_info::meta(facts.camera, facts.dims, bytes);
 
     const PAD: f32 = 12.0;
     const BETWEEN: f32 = 10.0;
@@ -1068,6 +1121,61 @@ fn centre_info(
 
 #[cfg(test)]
 mod tests {
+    /// The bar with a Library of three, the second selected, and that same photo open.
+    fn app_with_photo() -> (egui::Context, RustroomApp) {
+        let ctx = crate::test_ui::ctx();
+        let mut app = crate::test_app::for_test();
+        crate::test_app::open_test_photo(&mut app, &ctx, 80, 40);
+        let mut lib = crate::test_app::library_of(3);
+        lib.selection.click(1);
+        let path = lib.entries[1].id.path.clone();
+        if let Some(s) = app.session.as_mut() {
+            s.path = path;
+        }
+        app.library = Some(lib);
+        (ctx, app)
+    }
+
+    /// Draw the bar in `view` and return the row's height and every accessible label in it.
+    fn bar(ctx: &egui::Context, app: &mut RustroomApp, view: AppView) -> (f32, Vec<String>) {
+        app.view = view;
+        let mut height = 0.0;
+        // ⚠ A wide screen: at the panels' 400 pt the bar has no gap for its centred line.
+        let wide = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 200.0));
+        let labels: Vec<String> =
+            crate::test_ui::labelled_centres_on(ctx, wide, Vec::new(), |ui| {
+                let ctx = ui.ctx().clone();
+                let (_, _, rect) = app.top_bar(ui, &ctx);
+                height = rect.height();
+            })
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        (height, labels)
+    }
+
+    #[test]
+    fn the_bar_is_the_same_height_in_both_views() {
+        // ⚠ Seen in use: the bar changed height on a view switch. The row is allocated at an
+        // exact height now, and this measures it with the real controls of both views.
+        let (ctx, mut app) = app_with_photo();
+        let (lib_h, _) = bar(&ctx, &mut app, AppView::Library);
+        let (dev_h, _) = bar(&ctx, &mut app, AppView::Develop);
+        assert_eq!(lib_h, BAR_HEIGHT, "the Library bar grew past its height");
+        assert_eq!(dev_h, BAR_HEIGHT, "the Develop bar grew past its height");
+    }
+
+    #[test]
+    fn the_centred_name_is_the_same_in_both_views() {
+        // ⚠ Seen in use: the line said different things about one photo depending on the
+        // view. The name is the caption widget's label; it must be there, and be the same.
+        let (ctx, mut app) = app_with_photo();
+        let name = app.library.as_ref().unwrap().entries[1].caption();
+        let (_, lib) = bar(&ctx, &mut app, AppView::Library);
+        let (_, dev) = bar(&ctx, &mut app, AppView::Develop);
+        assert!(lib.contains(&name), "Library bar lacks the name: {lib:?}");
+        assert!(dev.contains(&name), "Develop bar lacks the name: {dev:?}");
+    }
 
     #[test]
     fn the_filter_button_reports_an_active_filter() {

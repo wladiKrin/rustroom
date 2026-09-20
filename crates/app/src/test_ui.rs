@@ -47,9 +47,20 @@ pub fn labelled_centres(
     events: Vec<egui::Event>,
     body: impl FnMut(&mut egui::Ui),
 ) -> Vec<(String, egui::Pos2)> {
+    labelled_centres_on(ctx, screen(), events, body)
+}
+
+/// [`labelled_centres`] on a screen of the caller's size — the top bar wants a wide one, since
+/// at the panels' 400 pt width its centred line has no gap to sit in.
+pub fn labelled_centres_on(
+    ctx: &egui::Context,
+    screen_rect: egui::Rect,
+    events: Vec<egui::Event>,
+    body: impl FnMut(&mut egui::Ui),
+) -> Vec<(String, egui::Pos2)> {
     let out = ctx.run_ui(
         egui::RawInput {
-            screen_rect: Some(screen()),
+            screen_rect: Some(screen_rect),
             events,
             ..Default::default()
         },
