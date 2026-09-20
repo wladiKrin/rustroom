@@ -15,18 +15,24 @@
 
 use eframe::egui;
 
+/// The selected cell's border: the accent for the active one, a dimmed accent for the rest of
+/// a multi-selection.
+///
+/// ⚠ Through the theme's accent rather than the fixed blue it used to be — the one hand-painted
+/// colour the theme's own module comment listed as not yet routed through it.
 pub fn selection_border(ui: &egui::Ui, rect: egui::Rect, active: bool, selected: bool) {
     if !selected {
         return;
     }
+    let accent = ui.visuals().selection.bg_fill;
     let color = if active {
-        egui::Color32::from_rgb(120, 160, 240)
+        accent
     } else {
-        egui::Color32::from_rgb(90, 100, 120)
+        accent.gamma_multiply(0.45)
     };
     ui.painter().rect_stroke(
         rect,
-        egui::CornerRadius::same(3),
+        egui::CornerRadius::same(5),
         egui::Stroke::new(2.0, color),
         egui::StrokeKind::Inside,
     );
@@ -73,6 +79,23 @@ pub fn cell(
     badge: Option<&str>,
     marks: catalog::db::Marks,
 ) -> egui::Response {
+    cell_with(ui, box_size, thumb, badge, marks, true)
+}
+
+/// The thumbnail's corner radius in points.
+const CORNER: u8 = 4;
+
+/// [`cell`] with a say over the marks: `overlay_marks` paints them over the picture's bottom
+/// edge (the filmstrip, which has no room under it); `false` leaves them to the caller, who
+/// draws a [`marks_row`] under the picture (the Library grid).
+pub fn cell_with(
+    ui: &mut egui::Ui,
+    box_size: egui::Vec2,
+    thumb: Option<&egui::TextureHandle>,
+    badge: Option<&str>,
+    marks: catalog::db::Marks,
+    overlay_marks: bool,
+) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
         Some(tex) => {
@@ -81,15 +104,17 @@ pub fn cell(
             // on layout.
             let size = tex.size_vec2();
             let scale = (box_size.x / size.x).min(box_size.y / size.y).min(1.0);
-            egui::Image::new(tex).paint_at(
-                ui,
-                egui::Rect::from_center_size(rect.center(), size * scale),
-            );
+            egui::Image::new(tex)
+                .corner_radius(egui::CornerRadius::same(CORNER))
+                .paint_at(
+                    ui,
+                    egui::Rect::from_center_size(rect.center(), size * scale),
+                );
         }
         None => {
             ui.painter().rect_filled(
                 rect,
-                egui::CornerRadius::same(3),
+                egui::CornerRadius::same(CORNER),
                 egui::Color32::from_gray(60),
             );
         }
@@ -128,9 +153,101 @@ pub fn cell(
     // ⚠ Painted into the **allocated** rect rather than allocating more: the cell's geometry must
     // not depend on whether a photo happens to be marked, or marked photos would resize their
     // cells — the reflow bug the filmstrip already paid for.
-    paint_marks(&ui.painter_at(rect), rect, marks, box_size.y * 0.09);
+    if overlay_marks {
+        paint_marks(&ui.painter_at(rect), rect, marks, box_size.y * 0.09);
+    }
 
     resp
+}
+
+/// The marks row's height for a glyph of `size` points.
+pub fn marks_row_height(size: f32) -> f32 {
+    size + 4.0
+}
+
+/// A row under a grid thumbnail: the stars at the left, the flag and the colour label at the
+/// right. Allocated at a **constant** height whether or not the photo is marked, so a mark can
+/// never resize a cell — the reflow rule [`cell`] follows.
+///
+/// ⚠ Under the picture rather than over it (2026-09-20): a star over a photograph's corner is
+/// read as part of the photograph until you look twice, and a rating you have to look twice
+/// for is one you miss while culling.
+pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size: f32) {
+    let size = size.clamp(7.0, 13.0);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(width, marks_row_height(size)),
+        egui::Sense::hover(),
+    );
+    if marks.is_empty() || !ui.is_rect_visible(rect) {
+        return;
+    }
+    let p = ui.painter_at(rect);
+    let y = rect.center().y;
+    let mut x = rect.left() + 2.0;
+    for _ in 0..marks.rating {
+        p.text(
+            egui::pos2(x, y),
+            egui::Align2::LEFT_CENTER,
+            "★",
+            egui::FontId::proportional(size),
+            egui::Color32::from_rgb(240, 200, 90),
+        );
+        x += size * 0.8;
+    }
+    let mut right = rect.right() - 2.0;
+    if marks.label > 0 {
+        let c = label_colour(marks.label);
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(right - size, y - size / 2.0),
+                egui::vec2(size, size),
+            ),
+            egui::CornerRadius::same(2),
+            c,
+        );
+        right -= size + 5.0;
+    }
+    if let Some((glyph, colour)) = flag_glyph(marks.flag) {
+        p.text(
+            egui::pos2(right, y),
+            egui::Align2::RIGHT_CENTER,
+            glyph,
+            egui::FontId::proportional(size),
+            colour,
+        );
+    }
+}
+
+/// The flag's glyph and colour.
+///
+/// ⚠⚠ `⚑` and `×`, chosen by **probing**, not by taste. `✓` and `✕` are absent from every
+/// bundled font and would have shipped as tofu boxes — caught by `every_mark_glyph_is_renderable`,
+/// the same finding the rail's four glyphs produced. ⚠ The flag is also the better symbol:
+/// Lightroom's "pick" *is* a flag.
+fn flag_glyph(flag: catalog::db::Flag) -> Option<(&'static str, egui::Color32)> {
+    match flag {
+        catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120))),
+        catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110))),
+        catalog::db::Flag::None => None,
+    }
+}
+
+/// The colour of label `n` (1-based).
+///
+/// ⚠ Red, blue, yellow, green — **not** the obvious red/orange/yellow/green. Orange and yellow
+/// are barely distinguishable at badge size, which defeats the whole point of a colour label;
+/// blue is unmistakable against all three.
+///
+/// ⚠ Exactly four, matching the four keys that can reach them. A fifth colour existed briefly
+/// with no key bound to it — unreachable, and invisible as a bug.
+fn label_colour(n: u8) -> egui::Color32 {
+    let colours = [
+        egui::Color32::from_rgb(220, 90, 90),
+        egui::Color32::from_rgb(110, 150, 230),
+        egui::Color32::from_rgb(220, 210, 90),
+        egui::Color32::from_rgb(110, 200, 110),
+    ];
+    colours[(n as usize - 1).min(colours.len() - 1)]
 }
 
 /// Draw a photo's stars, flag and colour label into `rect`.
@@ -163,16 +280,7 @@ pub(crate) fn paint_marks(
             );
             x += size * 0.8;
         }
-        let flag_glyph = match marks.flag {
-            // ⚠⚠ `⚑` and `×`, chosen by **probing**, not by taste. `✓` and `✕` are absent from
-            // every bundled font and would have shipped as tofu boxes — caught by the guard
-            // below, which is the same finding the rail's four glyphs produced.
-            //
-            // ⚠ The flag is also the better symbol: Lightroom's "pick" *is* a flag.
-            catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120))),
-            catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110))),
-            catalog::db::Flag::None => None,
-        };
+        let flag_glyph = flag_glyph(marks.flag);
         if let Some((glyph, colour)) = flag_glyph {
             p.text(
                 egui::pos2(rect.right() - pad, y),
@@ -183,19 +291,7 @@ pub(crate) fn paint_marks(
             );
         }
         if marks.label > 0 {
-            // ⚠ Red, blue, yellow, green — **not** the obvious red/orange/yellow/green.
-            // Orange and yellow are barely distinguishable at badge size, which defeats the whole
-            // point of a colour label; blue is unmistakable against all three.
-            //
-            // ⚠ Exactly four, matching the four keys that can reach them. A fifth colour existed
-            // briefly with no key bound to it — unreachable, and invisible as a bug.
-            let colours = [
-                egui::Color32::from_rgb(220, 90, 90),
-                egui::Color32::from_rgb(110, 150, 230),
-                egui::Color32::from_rgb(220, 210, 90),
-                egui::Color32::from_rgb(110, 200, 110),
-            ];
-            let c = colours[(marks.label as usize - 1).min(colours.len() - 1)];
+            let c = label_colour(marks.label);
             p.rect_filled(
                 egui::Rect::from_min_size(
                     egui::pos2(rect.left() + pad, rect.top() + pad),
@@ -301,8 +397,16 @@ mod tests {
         assert_eq!(landscape, empty, "a landscape thumbnail changed the layout");
     }
 
-    /// The Library grid's shape: a `CELL`-square cell holding a thumbnail box and a filename.
+    /// The Library grid's shape: a `CELL`-square cell holding a thumbnail box, a filename and
+    /// the marks row.
     fn grid_cell_size(thumb_size: Option<[usize; 2]>) -> egui::Vec2 {
+        grid_cell_size_marked(thumb_size, catalog::db::Marks::default())
+    }
+
+    fn grid_cell_size_marked(
+        thumb_size: Option<[usize; 2]>,
+        marks: catalog::db::Marks,
+    ) -> egui::Vec2 {
         const CELL: f32 = 140.0;
         let ctx = egui::Context::default();
         let box_size = egui::vec2(CELL - 12.0, (CELL - 12.0) * 0.66);
@@ -319,14 +423,9 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell(
-                            ui,
-                            box_size,
-                            tex.as_ref(),
-                            None,
-                            catalog::db::Marks::default(),
-                        );
+                        cell_with(ui, box_size, tex.as_ref(), None, marks, false);
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
+                        marks_row(ui, box_size.x, marks, 9.0);
                     });
                 })
                 .response
@@ -345,6 +444,21 @@ mod tests {
         assert_eq!(grid_cell_size(Some(PORTRAIT)), empty);
         assert_eq!(grid_cell_size(Some(LANDSCAPE)), empty);
         assert_eq!(empty.x, 140.0, "the cell should fill its column");
+    }
+
+    #[test]
+    fn a_marked_grid_cell_is_the_size_of_an_unmarked_one() {
+        // ⚠ The marks row is allocated whether or not the photo is marked — rating a photo must
+        // not move its neighbours, the reflow rule the whole module exists for.
+        let marked = catalog::db::Marks {
+            rating: 5,
+            flag: catalog::db::Flag::Pick,
+            label: 2,
+        };
+        assert_eq!(
+            grid_cell_size_marked(Some(LANDSCAPE), marked),
+            grid_cell_size(Some(LANDSCAPE))
+        );
     }
 
     /// Click at `pos` and report whether the Library grid's *cell* response saw it.

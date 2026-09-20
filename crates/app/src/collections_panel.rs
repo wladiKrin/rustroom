@@ -7,84 +7,47 @@
 //! ⚠ A **left** panel, in the Library view only — Lightroom's placement, and it competes with
 //! nothing. The Presets panel was removed for having two homes; these have one.
 
+use crate::develop::panel::section::{header, Header};
+use crate::list_row::{self, RowAction, RowSpec};
 use crate::{theme, RustroomApp};
+use rustroom_app::icons;
 use eframe::egui;
 use rustroom_app::settings::PanelSection;
 
-/// One collapsible section of the panel.
+/// One collapsible section of the panel: the Develop panel's header, draggable.
 ///
 /// ⚠⚠ **`Settings` is what persists; egui owns the state within a session.** This app implements
 /// no `eframe::App::save`, so egui's collapsing memory dies with the process — without the
 /// stored flag a collapsed section would spring open on every launch. `default_open` seeds egui
 /// from the flag on the first frame after a restart, and the header's click updates the flag, so
-/// the two say the same thing at every moment they are both defined.
+/// the two say the same thing at every moment they are both defined. The flag mirrors egui's
+/// state rather than competing with it: an earlier version flipped `*open` directly and left the
+/// panel with two click targets that disagreed.
 ///
-/// ⚠ `id_salt` on every one: egui's auto-ids shift with what was drawn before them, and this
-/// panel's contents change with the catalog.
-/// One collapsible panel section whose **title** both toggles it and drags it.
+/// ⚠ `make_persistent_id` on every one: egui's auto-ids shift with what was drawn before them,
+/// and this panel's contents change with the catalog.
 ///
-/// Returns the title's `Response`, which is the only thing that senses either gesture.
-///
-/// ⚠⚠ **One widget for both, and `Sense::click_and_drag()` is what makes that safe.** egui reports
-/// `clicked()` only for a press-release that did **not** become a drag, so a click and a drag are
-/// mutually exclusive *by construction* rather than by a threshold — the same guarantee the
-/// Library's rubber-band selection already relies on. A separate grip was built first, on the
-/// assumption that this needed one, and removed as visual clutter once it was clear it did not.
-///
-/// ⚠⚠ **It also fixes a regression.** `CollapsingState::show_header`'s response comes from a plain
-/// `horizontal` scope, whose sense is `Sense::hover()` — so `header_response.response.clicked()`
-/// is *always false*, and the `open` flag that persists the collapsed state silently stopped
-/// updating when this moved off `CollapsingHeader`. Collapsing still looked fine because egui's
-/// own arrow handles it in-session; only the *persistence* was lost. The title's own response is a
-/// real click-sensing one.
-///
-/// ⚠ `selectable(false)`: an egui label senses click-and-drag for **text selection** by default,
-/// which would fight the drag and show an I-beam — the same reason `theme::empty_state` sets it.
-///
-/// ⚠ Built on `CollapsingState` rather than `CollapsingHeader` because that one has no slot for
-/// header content, and the title has to be a widget we own.
+/// Returns the header row's `Response`, which senses the drag that reorders the sections —
+/// `Header::draggable` makes it `Sense::click_and_drag`, and egui reports `clicked()` only for
+/// a press-release that did **not** become a drag, so the two gestures exclude each other by
+/// construction.
 fn section<R>(
     ui: &mut egui::Ui,
     open: &mut bool,
     id: &str,
     title: &str,
+    trailing: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::Response {
     let state_id = ui.make_persistent_id(id);
-    let state =
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), state_id, *open);
-    // ⚠ `show_header` consumes the state and returns a value borrowing `ui`, so the body goes
-    // through `HeaderResponse::body`. Its fields are private, so the header's response — and with
-    // it the title's — comes back out of that call, which is why the click is read afterwards.
-    let header = state.show_header(ui, |ui| {
-        ui.add(
-            egui::Label::new(egui::RichText::new(title).heading())
-                .selectable(false)
-                .sense(egui::Sense::click_and_drag()),
-        )
-        .on_hover_cursor(egui::CursorIcon::Grab)
-    });
-    let (_toggle, header_response, _body) = header.body(body);
-    let title_response = header_response.inner;
-    // ⚠⚠ Clicking the title must do exactly what clicking the arrow does. This used to flip
-    // `*open` directly instead, which left the panel with **two click targets that disagreed**:
-    // the arrow toggled egui's visual state and never the stored flag, while the title toggled
-    // the stored flag and never the visual. Collapsing by the arrow therefore looked right and
-    // sprang open on the next launch, because nothing had been persisted.
-    if title_response.clicked() {
-        if let Some(mut st) = egui::collapsing_header::CollapsingState::load(ui.ctx(), state_id) {
-            st.toggle(ui);
-            st.store(ui.ctx());
-        }
+    let mut h = Header::new(title).draggable(true);
+    if !trailing.is_empty() {
+        h = h.trailing(trailing);
     }
-    // ⚠ egui owns the state *within* a session — it is what the arrow writes, and what the
-    // animation reads — so the flag mirrors it rather than competing with it. Reading it back
-    // here is what makes both affordances persist. In memory every frame is free; the **file**
-    // write stays gated on an actual change, at the end of `show`.
-    if let Some(st) = egui::collapsing_header::CollapsingState::load(ui.ctx(), state_id) {
-        *open = st.is_open();
-    }
-    title_response
+    let mut out = header(ui, state_id, *open, h);
+    out.state.show_body_unindented(ui, body);
+    *open = out.state.is_open();
+    out.response
 }
 
 /// Draw the collections panel. Every action is applied here.
@@ -127,7 +90,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut drop_to: Option<usize> = None;
 
     egui::Panel::left("collections")
-        .default_size(190.0)
+        .default_size(210.0)
         .show(ui, |ui| {
             // ⚠⚠ **One scroll area for the whole panel, and the three inner ones were REMOVED
             // to get it.** Nested vertical scroll areas fight over the wheel — the inner one
@@ -153,276 +116,341 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         let top = ui.cursor().top();
                         let grip = match sec {
                             PanelSection::Folders => {
-                        section(ui, &mut sections.folders, "sec_folders", "Folders", |ui| {
-                            let all = app
-                                .catalog
-                                .as_ref()
-                                .and_then(|c| c.photo_count().ok())
-                                .unwrap_or(0);
-                            let showing_all = matches!(
-                                app.library.as_ref().map(|l| &l.source),
-                                Some(crate::LibrarySource::AllPhotos)
-                            );
-                            if ui
-                                .selectable_label(showing_all, format!("All Photos ({all})"))
-                                .on_hover_text(
-                                    "Every photo in the catalog, from every folder ever opened",
-                                )
-                                .clicked()
-                            {
-                                action = Action::OpenAllPhotos;
-                            }
-                            let folders = app
-                                .catalog
-                                .as_ref()
-                                .and_then(|c| c.folders().ok())
-                                .unwrap_or_default();
-                            for f in &folders {
-                                ui.horizontal(|ui| {
-                                    if ui.button("×").on_hover_text("Forget this folder").clicked() {
-                                        action = Action::ForgetFolder(f.id, f.path.clone(), f.count);
-                                    }
-                                    // ⚠ The basename is what fits and what identifies; the full path is the hover.
-                                    let shown = f
-                                        .path
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().to_string())
-                                        .unwrap_or_else(|| f.path.to_string_lossy().to_string());
-                                    let selected = matches!(
+                                let all = app
+                                    .catalog
+                                    .as_ref()
+                                    .and_then(|c| c.photo_count().ok())
+                                    .unwrap_or(0);
+                                let folders = app
+                                    .catalog
+                                    .as_ref()
+                                    .and_then(|c| c.folders().ok())
+                                    .unwrap_or_default();
+                                let n = folders.len().to_string();
+                                section(ui, &mut sections.folders, "sec_folders", "Folders", &n, |ui| {
+                                    let showing_all = matches!(
                                         app.library.as_ref().map(|l| &l.source),
-                                        Some(crate::LibrarySource::Folder(p)) if p == &f.path
+                                        Some(crate::LibrarySource::AllPhotos)
                                     );
-                                    if ui
-                                        .selectable_label(selected, format!("{shown} ({})", f.count))
-                                        .on_hover_text(f.path.to_string_lossy())
-                                        .clicked()
-                                    {
-                                        action = Action::OpenFolder(f.path.clone());
+                                    let r = list_row::row(
+                                        ui,
+                                        RowSpec {
+                                            name: "All Photos",
+                                            count: Some(all),
+                                            selected: showing_all,
+                                            indent: 0.0,
+                                            hover: "Every photo in the catalog, from every folder ever opened",
+                                            actions: &[],
+                                        },
+                                    );
+                                    if r.clicked {
+                                        action = Action::OpenAllPhotos;
                                     }
-                                });
-                            }
-                        })
+                                    for f in &folders {
+                                        // ⚠ The basename is what fits and what identifies; the full path is the hover.
+                                        let shown = f
+                                            .path
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| f.path.to_string_lossy().to_string());
+                                        let selected = matches!(
+                                            app.library.as_ref().map(|l| &l.source),
+                                            Some(crate::LibrarySource::Folder(p)) if p == &f.path
+                                        );
+                                        let path = f.path.to_string_lossy();
+                                        let r = list_row::row(
+                                            ui,
+                                            RowSpec {
+                                                name: &shown,
+                                                count: Some(f.count),
+                                                selected,
+                                                indent: 0.0,
+                                                hover: &path,
+                                                actions: &[RowAction {
+                                                    glyph: '×',
+                                                    verb: "Forget",
+                                                    hover: "Forget this folder",
+                                                    enabled: true,
+                                                }],
+                                            },
+                                        );
+                                        if r.action == Some(0) {
+                                            action = Action::ForgetFolder(f.id, f.path.clone(), f.count);
+                                        } else if r.clicked {
+                                            action = Action::OpenFolder(f.path.clone());
+                                        }
+                                    }
+                                })
                             }
                             PanelSection::Collections => {
-                        section(
-                            ui,
-                            &mut sections.collections,
-                            "sec_collections",
-                            "Collections",
-                            |ui| {
-                                ui.horizontal(|ui| {
-                                    let field = ui.add(
-                                        egui::TextEdit::singleline(&mut app.new_collection)
-                                            .hint_text("New collection")
-                                            .desired_width(110.0),
-                                    );
-                                    // ⚠ Guarded on a non-empty name: the store keys on the name, and a nameless
-                                    // collection cannot be told from another nameless one.
-                                    //
-                                    // ⚠ The **same** guard serves Enter and `+`, so the two cannot disagree about
-                                    // what is a valid name — two guards for one rule is how they drift.
-                                    let named = !app.new_collection.trim().is_empty();
-                                    let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                    if named && (plus || theme::committed(ui, &field)) {
-                                        if let Some(cat) = &app.catalog {
-                                            let _ = cat.create_collection(app.new_collection.trim());
-                                        }
-                                        app.new_collection.clear();
-                                    }
-                                });
-                                ui.separator();
-
                                 let rows = app
                                     .catalog
                                     .as_ref()
                                     .and_then(|c| c.collections().ok())
                                     .unwrap_or_default();
-                                if rows.is_empty() {
-                                    crate::theme::hint(ui, "No collections yet.");
-                                }
-                                for c in &rows {
-                                    ui.horizontal(|ui| {
-                                        if ui.button("×").on_hover_text("Delete").clicked() {
-                                            action = Action::Delete(c.id);
+                                let n = rows.len().to_string();
+                                section(
+                                    ui,
+                                    &mut sections.collections,
+                                    "sec_collections",
+                                    "Collections",
+                                    &n,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            let field = ui.add(
+                                                egui::TextEdit::singleline(&mut app.new_collection)
+                                                    .hint_text("New collection")
+                                                    .desired_width(ui.available_width() - 30.0),
+                                            );
+                                            let named = !app.new_collection.trim().is_empty();
+                                            let plus =
+                                                ui.add_enabled(named, egui::Button::new("+")).clicked();
+                                            if named && (plus || theme::committed(ui, &field)) {
+                                                if let Some(cat) = &app.catalog {
+                                                    let _ = cat.create_collection(app.new_collection.trim());
+                                                }
+                                                app.new_collection.clear();
+                                            }
+                                        });
+                                        if rows.is_empty() {
+                                            crate::theme::hint(ui, "No collections yet.");
                                         }
                                         // ⚠ Enabled only with a selection, and the hover names the count, so it
                                         // can never be ambiguous about what it is about to do.
-                                        if ui
-                                            .add_enabled(picked > 0, egui::Button::new("+"))
-                                            .on_hover_text(format!("Add {picked} selected"))
-                                            .clicked()
-                                        {
-                                            action = Action::AddSelection(c.id);
+                                        let add_hover = format!("Add {picked} selected");
+                                        for c in &rows {
+                                            let r = list_row::row(
+                                                ui,
+                                                RowSpec {
+                                                    name: &c.name,
+                                                    count: Some(c.count),
+                                                    selected: selected == Some(c.id),
+                                                    indent: 0.0,
+                                                    hover: "",
+                                                    actions: &[
+                                                        RowAction {
+                                                            glyph: '×',
+                                                            verb: "Delete",
+                                                            hover: "Delete",
+                                                            enabled: true,
+                                                        },
+                                                        RowAction {
+                                                            glyph: '+',
+                                                            verb: "Add to",
+                                                            hover: &add_hover,
+                                                            enabled: picked > 0,
+                                                        },
+                                                    ],
+                                                },
+                                            );
+                                            match r.action {
+                                                Some(0) => action = Action::Delete(c.id),
+                                                Some(_) => action = Action::AddSelection(c.id),
+                                                None if r.clicked => {
+                                                    action = Action::Open(c.id, c.name.clone())
+                                                }
+                                                None => {}
+                                            }
                                         }
-                                        let label = format!("{} ({})", c.name, c.count);
-                                        if ui.selectable_label(selected == Some(c.id), label).clicked()
-                                        {
-                                            action = Action::Open(c.id, c.name.clone());
-                                        }
-                                    });
-                                }
-                            },
-                        )
+                                    },
+                                )
                             }
                             PanelSection::Smart => {
-                        section(
-                            ui,
-                            &mut sections.smart,
-                            "sec_smart",
-                            "Smart collections",
-                            |ui| {
-                                ui.horizontal(|ui| {
-                                    let field = ui.add(
-                                        egui::TextEdit::singleline(&mut app.new_smart)
-                                            .hint_text("Save this view")
-                                            .desired_width(110.0),
-                                    );
-                                    // ⚠ Enabled only with a name *and* a Library open: the rule is built from what is
-                                    // on screen, so there has to be something on screen.
-                                    let ready =
-                                        !app.new_smart.trim().is_empty() && app.library.is_some();
-                                    let plus = ui
-                                        .add_enabled(ready, egui::Button::new("+"))
-                                        .on_hover_text("Save the current source and filter as a rule")
-                                        .clicked();
-                                    if ready && (plus || theme::committed(ui, &field)) {
-                                        action = Action::SaveSmart;
-                                    }
-                                });
                                 let smarts = app
                                     .catalog
                                     .as_ref()
                                     .and_then(|c| c.smart_collections().ok())
                                     .unwrap_or_default();
-                                if smarts.is_empty() {
-                                    crate::theme::hint(ui, "No smart collections yet.");
-                                }
-                                for sc in &smarts {
-                                    ui.horizontal(|ui| {
-                                        // ⚠ No confirmation: a smart collection is a **query** with nothing behind it,
-                                        // so it follows `delete_collection`'s precedent rather than `forget_folder`'s,
-                                        // which takes ratings and keywords with it.
-                                        if ui.button("×").on_hover_text("Delete").clicked() {
-                                            action = Action::DeleteSmart(sc.id);
-                                        }
-                                        if ui.button("⚙").on_hover_text("Edit the rule").clicked() {
-                                            action = Action::EditSmart(
-                                                sc.id,
-                                                sc.name.clone(),
-                                                sc.rule.clone(),
+                                let n = smarts.len().to_string();
+                                section(
+                                    ui,
+                                    &mut sections.smart,
+                                    "sec_smart",
+                                    "Smart collections",
+                                    &n,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            let field = ui.add(
+                                                egui::TextEdit::singleline(&mut app.new_smart)
+                                                    .hint_text("Save this view")
+                                                    .desired_width(ui.available_width() - 30.0),
                                             );
+                                            let ready =
+                                                !app.new_smart.trim().is_empty() && app.library.is_some();
+                                            let plus = ui
+                                                .add_enabled(ready, egui::Button::new("+"))
+                                                .on_hover_text("Save the current source and filter as a rule")
+                                                .clicked();
+                                            if ready && (plus || theme::committed(ui, &field)) {
+                                                action = Action::SaveSmart;
+                                            }
+                                        });
+                                        if smarts.is_empty() {
+                                            crate::theme::hint(ui, "No smart collections yet.");
                                         }
-                                        let selected = matches!(
-                                            app.library.as_ref().map(|l| &l.source),
-                                            Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
-                                        );
-                                        // ⚠⚠ **No count, unlike Collections and Keywords.** Computing one means
-                                        // evaluating the rule over every photo, every frame. The row does not pretend
-                                        // to know something it would be expensive to know.
-                                        if ui.selectable_label(selected, &sc.name).clicked() {
-                                            action = Action::OpenSmart(sc.id, sc.name.clone());
+                                        for sc in &smarts {
+                                            let selected = matches!(
+                                                app.library.as_ref().map(|l| &l.source),
+                                                Some(crate::LibrarySource::Smart { id, .. }) if *id == sc.id
+                                            );
+                                            // ⚠⚠ **No count, unlike Collections and Keywords.** Computing one means
+                                            // evaluating the rule over every photo, every frame. The row does not
+                                            // pretend to know something it would be expensive to know.
+                                            //
+                                            // ⚠ No confirmation on delete: a smart collection is a **query** with
+                                            // nothing behind it, so it follows `delete_collection`'s precedent rather
+                                            // than `forget_folder`'s, which takes ratings and keywords with it.
+                                            let r = list_row::row(
+                                                ui,
+                                                RowSpec {
+                                                    name: &sc.name,
+                                                    count: None,
+                                                    selected,
+                                                    indent: 0.0,
+                                                    hover: "",
+                                                    actions: &[
+                                                        RowAction {
+                                                            glyph: '×',
+                                                            verb: "Delete",
+                                                            hover: "Delete",
+                                                            enabled: true,
+                                                        },
+                                                        RowAction {
+                                                            glyph: icons::GEAR,
+                                                            verb: "Edit",
+                                                            hover: "Edit the rule",
+                                                            enabled: true,
+                                                        },
+                                                    ],
+                                                },
+                                            );
+                                            match r.action {
+                                                Some(0) => action = Action::DeleteSmart(sc.id),
+                                                Some(_) => {
+                                                    action = Action::EditSmart(
+                                                        sc.id,
+                                                        sc.name.clone(),
+                                                        sc.rule.clone(),
+                                                    )
+                                                }
+                                                None if r.clicked => {
+                                                    action = Action::OpenSmart(sc.id, sc.name.clone())
+                                                }
+                                                None => {}
+                                            }
                                         }
-                                    });
-                                }
-                            },
-                        )
+                                    },
+                                )
                             }
                             PanelSection::Keywords => {
-                        section(
-                            ui,
-                            &mut sections.keywords,
-                            "sec_keywords",
-                            "Keywords",
-                            |ui| {
-                                ui.horizontal(|ui| {
-                                    let field = ui.add(
-                                        egui::TextEdit::singleline(&mut app.new_keyword)
-                                            .hint_text("New keyword")
-                                            .desired_width(110.0),
-                                    );
-                                    let named = !app.new_keyword.trim().is_empty();
-                                    let plus = ui.add_enabled(named, egui::Button::new("+")).clicked();
-                                    if named && (plus || theme::committed(ui, &field)) {
-                                        action = Action::CreateKeyword;
-                                    }
-                                });
                                 let kws = app
                                     .catalog
                                     .as_ref()
                                     .and_then(|c| c.keywords().ok())
                                     .unwrap_or_default();
-                                // ⚠ The parent is chosen *before* creating, because there is no drag-and-drop and no
-                                // re-parenting: this is the only moment a keyword's place in the tree is decided.
-                                let parent_name = app
-                                    .new_keyword_parent
-                                    .and_then(|id| kws.iter().find(|k| k.id == id))
-                                    .map(|k| k.name.clone())
-                                    .unwrap_or_else(|| "(top level)".to_string());
-                                egui::ComboBox::from_id_salt("kw_parent")
-                                    .selected_text(format!("under {parent_name}"))
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut app.new_keyword_parent,
-                                            None,
-                                            "(top level)",
-                                        );
-                                        for k in &kws {
-                                            ui.selectable_value(
-                                                &mut app.new_keyword_parent,
-                                                Some(k.id),
-                                                format!("{}{}", "  ".repeat(k.depth), k.name),
+                                let n = kws.len().to_string();
+                                section(
+                                    ui,
+                                    &mut sections.keywords,
+                                    "sec_keywords",
+                                    "Keywords",
+                                    &n,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            let field = ui.add(
+                                                egui::TextEdit::singleline(&mut app.new_keyword)
+                                                    .hint_text("New keyword")
+                                                    .desired_width(ui.available_width() - 30.0),
                                             );
-                                        }
-                                    });
+                                            let named = !app.new_keyword.trim().is_empty();
+                                            let plus =
+                                                ui.add_enabled(named, egui::Button::new("+")).clicked();
+                                            if named && (plus || theme::committed(ui, &field)) {
+                                                action = Action::CreateKeyword;
+                                            }
+                                        });
+                                        let parent_name = app
+                                            .new_keyword_parent
+                                            .and_then(|id| kws.iter().find(|k| k.id == id))
+                                            .map(|k| k.name.clone())
+                                            .unwrap_or_else(|| "(top level)".to_string());
+                                        egui::ComboBox::from_id_salt("kw_parent")
+                                            .selected_text(format!("under {parent_name}"))
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(
+                                                    &mut app.new_keyword_parent,
+                                                    None,
+                                                    "(top level)",
+                                                );
+                                                for k in &kws {
+                                                    ui.selectable_value(
+                                                        &mut app.new_keyword_parent,
+                                                        Some(k.id),
+                                                        format!("{}{}", "  ".repeat(k.depth), k.name),
+                                                    );
+                                                }
+                                            });
 
-                                if kws.is_empty() {
-                                    crate::theme::hint(ui, "No keywords yet.");
-                                }
-                                let picked_kw = app.selected_keyword();
-                                for k in &kws {
-                                    ui.horizontal(|ui| {
-                                        // ⚠ Indented by depth — the only thing that makes the tree readable,
-                                        // since the rows are a flat depth-first list.
-                                        ui.add_space(k.depth as f32 * 12.0);
-                                        if ui
-                                            .button("×")
-                                            .on_hover_text("Delete, with everything under it")
-                                            .clicked()
-                                        {
-                                            action = Action::DeleteKeyword(k.id, k.name.clone());
+                                        if kws.is_empty() {
+                                            crate::theme::hint(ui, "No keywords yet.");
                                         }
-                                        if ui
-                                            .add_enabled(picked > 0, egui::Button::new("+"))
-                                            .on_hover_text(format!("Tag {picked} selected"))
-                                            .clicked()
-                                        {
-                                            action = Action::TagSelection(k.id);
+                                        let picked_kw = app.selected_keyword();
+                                        let tag_hover = format!("Tag {picked} selected");
+                                        let untag_hover = format!("Remove from {picked} selected");
+                                        for k in &kws {
+                                            // ⚠ Indented by depth — the only thing that makes the tree readable,
+                                            // since the rows are a flat depth-first list.
+                                            //
+                                            // ⚠ `−` completes the existing mechanism rather than adding a second
+                                            // one: `unassign_keyword` already existed and was tested. Both go
+                                            // through one pair of functions the photo context menu also calls.
+                                            let r = list_row::row(
+                                                ui,
+                                                RowSpec {
+                                                    name: &k.name,
+                                                    count: Some(k.count),
+                                                    selected: picked_kw == Some(k.id),
+                                                    indent: k.depth as f32 * 12.0,
+                                                    hover: "",
+                                                    actions: &[
+                                                        RowAction {
+                                                            glyph: '×',
+                                                            verb: "Delete",
+                                                            hover: "Delete, with everything under it",
+                                                            enabled: true,
+                                                        },
+                                                        RowAction {
+                                                            glyph: '+',
+                                                            verb: "Tag",
+                                                            hover: &tag_hover,
+                                                            enabled: picked > 0,
+                                                        },
+                                                        RowAction {
+                                                            glyph: '−',
+                                                            verb: "Untag",
+                                                            hover: &untag_hover,
+                                                            enabled: picked > 0,
+                                                        },
+                                                    ],
+                                                },
+                                            );
+                                            match r.action {
+                                                Some(0) => {
+                                                    action = Action::DeleteKeyword(k.id, k.name.clone())
+                                                }
+                                                Some(1) => action = Action::TagSelection(k.id),
+                                                Some(_) => action = Action::UntagSelection(k.id),
+                                                None if r.clicked => {
+                                                    action = Action::OpenKeyword(k.id, k.name.clone())
+                                                }
+                                                None => {}
+                                            }
                                         }
-                                        // ⚠ Completing the existing mechanism rather than adding a second
-                                        // one: `unassign_keyword` already existed and was tested, and the
-                                        // `+` was already here. Both go through one pair of functions the
-                                        // photo context menu also calls.
-                                        if ui
-                                            .add_enabled(picked > 0, egui::Button::new("−"))
-                                            .on_hover_text(format!("Remove from {picked} selected"))
-                                            .clicked()
-                                        {
-                                            action = Action::UntagSelection(k.id);
-                                        }
-                                        let label = format!("{} ({})", k.name, k.count);
-                                        if ui
-                                            .selectable_label(picked_kw == Some(k.id), label)
-                                            .clicked()
-                                        {
-                                            action = Action::OpenKeyword(k.id, k.name.clone());
-                                        }
-                                    });
-                                }
-                            },
-                        )
+                                    },
+                                )
                             }
                             PanelSection::Dates => {
-                        section(ui, &mut sections.dates, "sec_dates", "Dates", |ui| {
+                        section(ui, &mut sections.dates, "sec_dates", "Dates", "", |ui| {
                             // ⚠ A tree built from a `GROUP BY` over what is actually in the catalog — which is
                             // what makes this need **no date picker**, since egui has none. It shows the days you
                             // have rather than asking you to type a range.
@@ -722,7 +750,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    super::section(ui, &mut open, "sec_test", "Folders", |ui| {
+                    super::section(ui, &mut open, "sec_test", "Folders", "", |ui| {
                         ui.label("body");
                     });
                 },

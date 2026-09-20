@@ -473,7 +473,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     // reflow bug in its grid form.
                                     ui.set_min_size(egui::vec2(cell, cell));
                                     ui.vertical_centered(|ui| {
-                                        thumb::cell(
+                                        let marks = lib
+                                            .marks
+                                            .get(&lib.entries[i].id)
+                                            .copied()
+                                            .unwrap_or_default();
+                                        // ⚠ The marks go in a row under the picture, not over
+                                        // it — see `thumb::marks_row`.
+                                        thumb::cell_with(
                                             ui,
                                             box_size,
                                             // ⚠ The exact render if it is there, else this
@@ -485,12 +492,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                                     lib.cache.get_stale(&lib.entries[i].id)
                                                 }),
                                             lib.entries[i].badge().as_deref(),
-                                            lib.marks
-                                                .get(&lib.entries[i].id)
-                                                .copied()
-                                                .unwrap_or_default(),
+                                            marks,
+                                            false,
                                         );
                                         let e = &lib.entries[i];
+                                        // ⚠ The selected cell's name is drawn in the strong
+                                        // text colour: the border says "selected" at the edge
+                                        // of the eye, the name says it where you read.
+                                        if lib.selection.contains(i) {
+                                            let strong = ui.visuals().strong_text_color();
+                                            ui.visuals_mut().override_text_color = Some(strong);
+                                        }
                                         // ⚠⚠ Clicking the **badge** opens the label draft,
                                         // clicking the **caption** opens the file-rename
                                         // draft: each affordance edits the string drawn at
@@ -550,6 +562,8 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         if let Some(r) = r {
                                             rename = Some((e.id.clone(), r));
                                         }
+                                        ui.visuals_mut().override_text_color = None;
+                                        thumb::marks_row(ui, box_size.x, marks, name_size);
                                     });
                                 })
                                 .response
