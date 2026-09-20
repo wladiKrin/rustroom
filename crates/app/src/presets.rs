@@ -23,6 +23,37 @@ pub struct Preset {
     pub edits: Edits,
 }
 
+impl Preset {
+    /// Whether the open photo already has this preset: merging it into `edits` would change
+    /// nothing. What lights a row in the panel.
+    ///
+    /// ⚠ Decided through `merge_from` itself, never a field-by-field comparison: the merge is
+    /// what applying does, so the two cannot disagree about which fields a group carries.
+    pub fn matches(&self, edits: &Edits) -> bool {
+        let mut probe = edits.clone();
+        probe.merge_from(&self.edits, self.groups);
+        probe == *edits
+    }
+}
+
+/// What a preset carries, for its row: "all settings", or the on groups' names joined with
+/// " · " ("Tone · Color").
+pub fn groups_summary(groups: EditGroups) -> String {
+    let on: Vec<&str> = edit_model::EDIT_GROUP_NAMES
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| groups.get(*i))
+        .map(|(_, n)| *n)
+        .collect();
+    if on.len() == edit_model::EDIT_GROUP_NAMES.len() {
+        "all settings".to_owned()
+    } else if on.is_empty() {
+        "nothing".to_owned()
+    } else {
+        on.join(" · ")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PresetError {
     #[error("a preset needs a name")]
@@ -556,5 +587,68 @@ mod tests {
         let store = dir.store();
         store.delete("Nothing").unwrap();
         assert_eq!(dir.trash_count(), 0, "nothing should be trashed");
+    }
+}
+
+#[cfg(test)]
+mod panel_helpers_tests {
+    use super::*;
+
+    #[test]
+    fn a_summary_names_the_groups_or_says_all() {
+        assert_eq!(groups_summary(EditGroups::ALL), "all settings");
+        assert_eq!(groups_summary(EditGroups::NONE), "nothing");
+        assert_eq!(
+            groups_summary(EditGroups::only(1)),
+            edit_model::EDIT_GROUP_NAMES[1]
+        );
+        let mut two = EditGroups::only(1);
+        *two.get_mut(2) = true;
+        assert_eq!(
+            groups_summary(two),
+            format!(
+                "{} · {}",
+                edit_model::EDIT_GROUP_NAMES[1],
+                edit_model::EDIT_GROUP_NAMES[2]
+            )
+        );
+    }
+
+    #[test]
+    fn a_preset_matches_when_applying_it_would_change_nothing() {
+        // ⚠ Both halves: a `matches` that always said yes would light every row.
+        let edits = Edits {
+            exposure: 1.0,
+            ..Default::default()
+        };
+        let same = Preset {
+            name: "Same".into(),
+            groups: EditGroups::ALL,
+            edits: edits.clone(),
+        };
+        assert!(same.matches(&edits));
+        let differs = Preset {
+            name: "Other".into(),
+            groups: EditGroups::ALL,
+            edits: Edits {
+                exposure: 2.0,
+                ..Default::default()
+            },
+        };
+        assert!(!differs.matches(&edits));
+        // ⚠ And the groups scope it: a preset carrying only the Color group matches a photo
+        // whose exposure differs from the preset's, because exposure is not what it applies.
+        let scoped = Preset {
+            name: "Colour".into(),
+            groups: EditGroups::only(2),
+            edits: Edits {
+                exposure: 5.0,
+                ..Default::default()
+            },
+        };
+        assert!(
+            scoped.matches(&edits),
+            "a group it does not carry must not count"
+        );
     }
 }

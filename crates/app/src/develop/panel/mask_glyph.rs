@@ -111,6 +111,25 @@ pub fn paint_spot(
     }
 }
 
+/// A preset's star.
+pub fn paint_star(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) {
+    let r = rect.shrink(rect.width() * 0.1);
+    let c = r.center();
+    let outer = r.width() * 0.5;
+    let inner = outer * 0.45;
+    let pts: Vec<egui::Pos2> = (0..10)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+            let rad = if i % 2 == 0 { outer } else { inner };
+            egui::pos2(c.x + rad * a.cos(), c.y + rad * a.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::closed_line(
+        pts,
+        egui::Stroke::new((r.width() / 9.0).max(1.0), colour),
+    ));
+}
+
 /// The hold-out toggle: a circle, struck through while `on` — the patch is held out of the
 /// view so what it covers shows.
 pub fn paint_hold(painter: &egui::Painter, rect: egui::Rect, on: bool, colour: egui::Color32) {

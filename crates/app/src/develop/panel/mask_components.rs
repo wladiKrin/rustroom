@@ -55,6 +55,7 @@ pub fn op_glyph(op: edit_model::MaskOp) -> &'static str {
 pub enum RowGlyph {
     Mask(MaskKind),
     Spot(edit_model::SpotMode),
+    Preset,
 }
 
 /// One painted row: an op column, a glyph, a name and its meta, then the action cells.
@@ -226,6 +227,7 @@ pub fn row(ui: &mut egui::Ui, spec: RowSpec<'_>) -> RowOut {
         match spec.glyph {
             RowGlyph::Mask(k) => mask_glyph::paint(&painter, glyph, k, text),
             RowGlyph::Spot(m) => mask_glyph::paint_spot(&painter, glyph, m, text),
+            RowGlyph::Preset => mask_glyph::paint_star(&painter, glyph, text),
         }
         x += GLYPH + 6.0;
         let name_rect = painter.text(

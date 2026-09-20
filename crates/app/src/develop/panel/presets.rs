@@ -1,4 +1,7 @@
-//! The Presets tool: save the current edits as a preset, apply one, or delete one.
+//! The Presets tool: a sectioned list — save the current edits as a preset, apply one by
+//! clicking its row, delete one by its `×`. A row is tinted when the open photo already has
+//! that preset, and says in weak text what the preset carries (option A of the 2026-09-20
+//! canvas).
 //!
 //! ⚠ Was a dedicated **left panel** plus a toolbar toggle — the only feature in the app with
 //! two homes. It is a rail tool now, with exactly one.
@@ -8,14 +11,13 @@
 //! through `app.apply_to_selection`. That is why it needs `&mut RustroomApp` and cannot sit
 //! inside the tool `match` with the others.
 
+use crate::develop::panel::{mask_components, section};
 use crate::{Modal, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
 
 pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    // ⚠ egui borrows `app` through the closure, so a click is recorded here and acted on
-    // after the panel closes. Keep this indirection — it is not incidental.
     enum Action {
         None,
         Apply(usize),
@@ -24,37 +26,95 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         UndoDelete,
     }
     let mut action = Action::None;
-    // Shown whenever the next undo would restore a preset, so the restore is
-    // discoverable rather than only a keystroke. It is the same action the toolbar's
-    // Undo performs — not a second, competing one.
     let open = app.open_photo();
     let undo_name = match app.actions.peek_undo(open.as_ref()) {
         Some(ActionKind::PresetDelete { name }) => Some(name.clone()),
         _ => None,
     };
 
-    if ui.button("Save current as preset…").clicked() {
-        action = Action::Save;
-    }
-    if let Some(name) = &undo_name {
-        if ui.button(format!("↩ Undo delete “{name}”")).clicked() {
-            action = Action::UndoDelete;
+    let n = app.preset_list.len();
+    let count = match n {
+        0 => "no presets".to_owned(),
+        1 => "1 preset".to_owned(),
+        n => format!("{n} presets"),
+    };
+    let mut out = section::header(
+        ui,
+        ui.make_persistent_id(("presets", "Presets")),
+        true,
+        section::Header::new("Presets").trailing(&count),
+    );
+    out.state.show_body_unindented(ui, |ui| {
+        // ⚠ Pinned to its width, never a bare `with_layout(right_to_left)` — the 2026-09-19
+        // growth bug.
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                let r = ui.button("+ Save current…").on_hover_text(
+                    "Keeps this photo's settings as a preset, under a name you give it",
+                );
+                // ⚠ The accessible name is the old sentence: the harness and a screen reader
+                // get what the button does, not its short form.
+                let enabled = ui.is_enabled();
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        enabled,
+                        "Save current as preset…",
+                    )
+                });
+                if r.clicked() {
+                    action = Action::Save;
+                }
+            },
+        );
+
+        if n == 0 {
+            ui.label(
+                egui::RichText::new("No presets yet. Save current… keeps this photo's settings.")
+                    .weak(),
+            );
         }
-    }
-    ui.separator();
-    if app.preset_list.is_empty() {
-        ui.label("No presets yet.");
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
+        // ⚠ Computed once per frame against the open photo's edits: `matches` clones the edits,
+        // and a mask's brush strokes are not free. A handful of presets is fine; a hundred would
+        // want a cache keyed on the edits.
+        let current = app.session.as_ref().map(|s| s.edits.clone());
         for (i, p) in app.preset_list.iter().enumerate() {
-            ui.horizontal(|ui| {
-                if ui.button("×").on_hover_text("Delete").clicked() {
-                    action = Action::Delete(p.name.clone());
-                }
-                if ui.button(&p.name).clicked() {
-                    action = Action::Apply(i);
-                }
-            });
+            let meta = rustroom_app::presets::groups_summary(p.groups);
+            let has = current.as_ref().is_some_and(|e| p.matches(e));
+            let out = mask_components::row(
+                ui,
+                mask_components::RowSpec {
+                    glyph: mask_components::RowGlyph::Preset,
+                    op: None,
+                    name: &p.name,
+                    meta: &meta,
+                    accessible: &p.name,
+                    selected: has,
+                    current: false,
+                    deletable: true,
+                    indent: 0.0,
+                    eye: None,
+                    hold: None,
+                },
+            );
+            if out.delete {
+                action = Action::Delete(p.name.clone());
+            } else if out.clicked {
+                action = Action::Apply(i);
+            }
+        }
+        if let Some(name) = &undo_name {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y + 4.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if ui.small_button(format!("↩ Undo delete “{name}”")).clicked() {
+                        action = Action::UndoDelete;
+                    }
+                },
+            );
         }
     });
 
@@ -68,7 +128,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         Action::Apply(i) => {
             if let Some(p) = app.preset_list.get(i).cloned() {
-                // Applying a preset targets the selection, exactly as a paste does.
                 let (n, failed) = app.apply_to_selection(&p.edits, p.groups);
                 app.status = match (n, failed) {
                     (0, _) => "Nothing selected".to_string(),
@@ -139,7 +198,7 @@ mod tests {
         // irrecoverable export-preset deletion.
         let mut app = app_with(&["Warm"]);
         app.settings.confirm_preset_delete = true;
-        click_in_panel("×", &mut app);
+        click_in_panel("Delete Warm", &mut app);
         assert!(
             matches!(app.modal, Modal::ConfirmDeletePreset { .. }),
             "expected the confirm dialog"
@@ -151,7 +210,7 @@ mod tests {
     fn deleting_with_the_guard_disarmed_does_not_ask() {
         let mut app = app_with(&["Warm"]);
         app.settings.confirm_preset_delete = false;
-        click_in_panel("×", &mut app);
+        click_in_panel("Delete Warm", &mut app);
         assert!(
             matches!(app.modal, Modal::None),
             "no dialog when the guard is off"
@@ -182,7 +241,7 @@ mod tests {
                 .map(|(l, _)| l)
                 .collect();
         assert!(
-            !labels.iter().any(|l| l == "×"),
+            !labels.iter().any(|l| l.starts_with("Delete ")),
             "an empty list must offer nothing to delete, got {labels:?}"
         );
         assert!(
@@ -217,5 +276,44 @@ mod tests {
             shown(&mut app),
             "a preset deletion should surface the restore"
         );
+    }
+
+    #[test]
+    fn a_preset_the_photo_already_has_lights_its_row() {
+        // ⚠ Both rows, so a `matches` wired to "always" or "never" fails: the preset equal to
+        // the open photo's edits reports selected, the other does not.
+        let ctx = test_ui::ctx();
+        let mut app = app_with(&["Same", "Other"]);
+        crate::test_app::open_test_photo(&mut app, &ctx, 40, 20);
+        app.session.as_mut().unwrap().edits.exposure = 1.0;
+        app.preset_list[0].edits.exposure = 1.0;
+        app.preset_list[1].edits.exposure = 2.0;
+        let c = ctx.clone();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(test_ui::screen()),
+                ..Default::default()
+            },
+            |ui| show(&mut app, ui, &c),
+        );
+        let update = out
+            .platform_output
+            .accesskit_update
+            .expect("accesskit is on");
+        let selected = |name: &str| -> Option<bool> {
+            update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.label() == Some(name))
+                // ⚠ egui reports a `WidgetInfo::selected` state as the node's *toggled* value
+                // (`response.rs`), not its selected flag.
+                .map(|(_, n)| n.toggled() == Some(egui::accesskit::Toggled::True))
+        };
+        assert_eq!(
+            selected("Same"),
+            Some(true),
+            "the matching preset is not lit"
+        );
+        assert_eq!(selected("Other"), Some(false), "a differing preset is lit");
     }
 }

@@ -58,28 +58,6 @@ impl Tool {
         }
     }
 
-    /// The heading shown above this tool's controls, or `None` for the adjustment stack.
-    ///
-    /// ⚠ `Edit` returns `None` because its content **is** the adjustment sections, which
-    /// carry their own edit-group headers — a heading above them would be a level of nesting
-    /// for nothing. `Masks`, `Crop` and `Retouch` return `None` for the same reason since
-    /// 2026-09-19/20: their section headers (MASKS; CROP, STRAIGHTEN, PERSPECTIVE, LENS;
-    /// PATCHES) are the headings.
-    ///
-    /// ⚠ The panel is **exclusive**: exactly one tool's controls are shown at a time, so the
-    /// global sliders are reachable only under `Edit`. An earlier design put the tool's
-    /// controls in a *drawer above* a permanent adjustment stack; that was reversed in use —
-    /// see the spec's "Exclusive, reversed 2026-08-24" section.
-    pub fn panel_heading(self) -> Option<&'static str> {
-        match self {
-            Self::Edit => None,
-            Self::Crop => None,
-            Self::Masks => None,
-            Self::Retouch => None,
-            Self::Presets => Some("Presets"),
-        }
-    }
-
     /// Whether this tool puts the canvas in geometry mode.
     ///
     /// ⚠ This **replaces the stored `Session::geometry_mode` field**. Two facts that could
@@ -100,20 +78,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_presets_has_a_plain_heading() {
-        // ⚠ Both halves matter. Edit being default is what makes the panel at rest the
-        // adjustment sections; the unheaded set being exactly these two is what stops a future
-        // tool silently rendering untitled. Masks joined on 2026-09-19: its MASKS section
-        // header is the heading.
+    fn edit_is_the_default_tool() {
+        // ⚠ Edit being default is what makes the panel at rest the adjustment sections. Every
+        // tool draws its own section header now (2026-09-20, Presets last), so there is no
+        // heading method left to pin.
         assert_eq!(Tool::default(), Tool::Edit);
-        let unheaded: Vec<Tool> = Tool::ALL
-            .into_iter()
-            .filter(|t| t.panel_heading().is_none())
-            .collect();
-        assert_eq!(
-            unheaded,
-            vec![Tool::Edit, Tool::Crop, Tool::Masks, Tool::Retouch]
-        );
     }
 
     #[test]
@@ -131,11 +100,6 @@ mod tests {
     #[test]
     fn retouch_is_not_a_geometry_tool() {
         assert!(!Tool::Retouch.is_geometry());
-        assert_eq!(
-            Tool::Retouch.panel_heading(),
-            None,
-            "its PATCHES header is the heading"
-        );
     }
 
     #[test]

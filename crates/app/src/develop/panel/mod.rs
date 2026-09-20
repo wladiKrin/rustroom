@@ -151,9 +151,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                 // ⚠ Hoisted above the reset row and the Profile block, which record clicks
                 // into it before the session borrow below reads it.
                 let mut ed = Edited::default();
-                if let Some(title) = tool.panel_heading() {
-                    ui.heading(title);
-                }
                 // ⚠ At the top of the stack, not under forty sliders (2026-09-19): every section
                 // carries its own reset now, and the one for all of them must be reachable
                 // without scrolling. Its own right-aligned row, because `Edit` has no heading
