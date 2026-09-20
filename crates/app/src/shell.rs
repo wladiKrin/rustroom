@@ -3,6 +3,7 @@
 //! ⚠ This is a **trait impl moved to another module of the same crate**, which Rust allows —
 //! so unlike every other move in this refactor, `self` stays `self` and the body is verbatim.
 
+use crate::segmented::{self, PillItem, PillStyle};
 use crate::{
     commands, develop, library, menu_bar, modals, multi, AppView, LibraryMode, RustroomApp,
 };
@@ -208,6 +209,9 @@ impl eframe::App for RustroomApp {
                 }
             }
             ui.horizontal(|ui| {
+                // ⚠ The bar's height is the app-mode pill's plus a little air: every other
+                // control centres on it.
+                ui.set_min_height(BAR_HEIGHT);
                 view_switch(ui, &mut self.view);
                 if self.view == AppView::Develop && self.session.is_some() {
                     ui.separator();
@@ -242,18 +246,23 @@ impl eframe::App for RustroomApp {
                     // footer already carries it, and the same name in two places at once is
                     // noise rather than reassurance.
                     if self.view == AppView::Library {
-                        format_bullets(self, ui);
                         if self.library.is_some() {
-                            grid_size_buttons(self, ui);
-                            sort_combo(self, ui);
-                            let r = ui.button("Reindex").on_hover_text(
-                                "Re-read the folder, sort it alphabetically, and close any gaps \
-                                 in the copy numbering.",
-                            );
-                            if r.clicked() {
-                                self.reindex(&ctx);
-                            }
+                            more_menu(self, ui, &ctx);
                         }
+                        format_chips(self, ui);
+                        if self.library.is_some() {
+                            grid_size_slider(self, ui);
+                            sort_combo(self, ui);
+                            ui.separator();
+                        }
+                    }
+                    // ⚠ Develop's one accent-filled control, at the far right — the same rule
+                    // that gives the Library its accent-filled app mode: one per bar.
+                    if self.view == AppView::Develop && self.session.is_some() {
+                        if export_button(ui).clicked() {
+                            pending_command = Some(Command::Export);
+                        }
+                        ui.separator();
                     }
                     if !self.export_progress.is_empty() {
                         if ui.button("Cancel").clicked() {
@@ -261,7 +270,7 @@ impl eframe::App for RustroomApp {
                         }
                         ui.label(&self.export_progress);
                     } else if !self.status.is_empty() {
-                        ui.label(&self.status);
+                        ui.weak(&self.status);
                     }
                     // ⚠ Its own label, immediately left of the status/progress label, so neither
                     // is ever hidden. ⚠⚠ It must NOT become a second right-aligned region: this
@@ -457,39 +466,130 @@ fn egui_key(c: char) -> Option<egui::Key> {
     })
 }
 
-/// The Library / Develop switch, as one segmented control.
+/// The bar's minimum height in points: the app-mode pill and 4 pt of air.
+const BAR_HEIGHT: f32 = 36.0;
+
+/// The app-mode pill's height.
+const VIEW_PILL: f32 = 32.0;
+/// The Library layout pill's height — a step smaller than the app mode, which it sits inside.
+const MODE_PILL: f32 = 28.0;
+
+/// The Library / Develop switch: a 32 pt icon + label pill, its lit half filled with the accent.
 ///
-/// ⚠ Zero spacing between the two halves is the whole of the effect: as separate buttons they
-/// read as two unrelated actions, and abutted they read as one control with two states — which
-/// is what a module switch is. The padded labels give it the proportions of a segment rather
-/// than of a word.
+/// ⚠⚠ **The one accent-filled control in the bar**, so it answers "where am I" at a glance —
+/// which two selectable labels at the same weight as every other control did not (the canvas
+/// "Rustroom Top Bar & Library", 2026-09-20). The accessible names stay "Library" / "Develop".
 fn view_switch(ui: &mut egui::Ui, view: &mut AppView) {
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.selectable_value(view, AppView::Library, "  Library  ");
-        ui.selectable_value(view, AppView::Develop, "  Develop  ");
-    });
+    segmented::pill(
+        ui,
+        view,
+        &[
+            PillItem {
+                value: AppView::Library,
+                icon: icons::LIBRARY,
+                label: "Library",
+                hover: "Browse the catalog",
+            },
+            PillItem {
+                value: AppView::Develop,
+                icon: icons::DEVELOP,
+                label: "Develop",
+                hover: "Edit the open photo",
+            },
+        ],
+        PillStyle {
+            height: VIEW_PILL,
+            font: egui::FontId::proportional(13.5),
+            accent: true,
+        },
+    );
 }
 
-/// The Grid / Compare / Survey switch, built exactly like [`view_switch`].
+/// The Grid / Compare / Survey switch: a second pill, 28 pt, with an icon per layout.
 ///
-/// ⚠ A *second* segmented control rather than three more segments on the first one: Library and
-/// Develop are modules and these are layouts within one of them, and flattening the two would
-/// say that leaving Compare for Develop is the same kind of move as leaving Compare for the
-/// grid. It is shown only in Library, where the distinction is visible.
+/// ⚠ A *second* pill rather than three more cells on the first one: Library and Develop are
+/// modules and these are layouts within one of them, and flattening the two would say that
+/// leaving Compare for Develop is the same kind of move as leaving Compare for the grid. It is
+/// shown only in Library, where the distinction is visible — and it takes the button fill, not
+/// the accent, for the reason on [`view_switch`].
+///
+/// ⚠ The chord is in the hover text rather than the label: a segment reading "Grid (G)" is a
+/// third of it punctuation, and the Keyboard-shortcuts dialog is generated from the menu model
+/// so it already lists all three.
 fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode) {
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        // ⚠ The chord is in the hover text rather than the label: a segment reading "Grid (G)"
-        // is a third of it punctuation, and the Keyboard-shortcuts dialog is generated from the
-        // menu model so it already lists all three.
-        ui.selectable_value(mode, LibraryMode::Grid, " Grid ")
-            .on_hover_text("Thumbnails (G)");
-        ui.selectable_value(mode, LibraryMode::Compare, " Compare ")
-            .on_hover_text("Two photos side by side (C)");
-        ui.selectable_value(mode, LibraryMode::Survey, " Survey ")
-            .on_hover_text("The whole selection at once (N)");
-    });
+    segmented::pill(
+        ui,
+        mode,
+        &[
+            PillItem {
+                value: LibraryMode::Grid,
+                icon: icons::GRID,
+                label: "Grid",
+                hover: "Thumbnails (G)",
+            },
+            PillItem {
+                value: LibraryMode::Compare,
+                icon: icons::COMPARE,
+                label: "Compare",
+                hover: "Two photos side by side (C)",
+            },
+            PillItem {
+                value: LibraryMode::Survey,
+                icon: icons::SURVEY,
+                label: "Survey",
+                hover: "The whole selection at once (N)",
+            },
+        ],
+        PillStyle {
+            height: MODE_PILL,
+            font: egui::FontId::proportional(12.5),
+            accent: false,
+        },
+    );
+}
+
+/// The Develop toolbar's Export button: the bar's one accent-filled control.
+fn export_button(ui: &mut egui::Ui) -> egui::Response {
+    let accent = ui.visuals().selection.bg_fill;
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(format!("{} Export…", icons::EXPORT)).color(egui::Color32::WHITE),
+        )
+        .fill(accent)
+        .min_size(egui::vec2(0.0, MODE_PILL)),
+    )
+    .on_hover_text("Export the selection (⌘E)")
+}
+
+/// The ⋯ menu at the bar's right edge: the Library actions that are neither a filter nor a
+/// view — today, Reindex.
+///
+/// ⚠ Behind a menu rather than a button of its own: Reindex is used once per folder, and a
+/// once-per-folder verb at the same weight as the sort order was the old bar's failure in
+/// miniature.
+fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    let mut reindex = false;
+    egui::containers::menu::MenuButton::new(
+        egui::RichText::new(icons::MORE.to_string()).size(16.0),
+    )
+    .ui(ui, |ui| {
+        if ui
+            .button("Reindex")
+            .on_hover_text(
+                "Re-read the folder, sort it alphabetically, and close any gaps in the copy \
+                 numbering.",
+            )
+            .clicked()
+        {
+            reindex = true;
+            ui.close();
+        }
+    })
+    .0
+    .on_hover_text("More");
+    if reindex {
+        app.reindex(ctx);
+    }
 }
 
 /// The Library's format filter: which file formats the grid and filmstrip show.
@@ -522,7 +622,9 @@ fn mark_filter(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // filters a four-click job of reopening it.
     let cfg = egui::containers::menu::MenuConfig::default()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    egui::containers::menu::MenuButton::new(mark_filter_label(&f))
+    // ⚠ The funnel is prepended at the widget, not in `mark_filter_label`: the label stays a
+    // pure, testable sentence and the glyph is its clothing.
+    egui::containers::menu::MenuButton::new(format!("{} {}", icons::FILTER, mark_filter_label(&f)))
         .config(cfg)
         .ui(ui, |ui| {
             // ⚠ Tall enough to need scrolling now that capture values join the marks — the list
@@ -704,10 +806,12 @@ fn search_field(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
     let before = app.filter.text.clone();
     let mut text = before.clone();
+    // ⚠ The magnifying glass is in the hint, so it disappears with it once you type — it
+    // names the field, it is not a button.
     let r = ui.add(
         egui::TextEdit::singleline(&mut text)
-            .hint_text("Search")
-            .desired_width(170.0),
+            .hint_text(format!("{} Search photos", icons::ZOOM_ACTUAL))
+            .desired_width(200.0),
     );
     // ⚠ Read the key press into a local *before* touching `r`. `Response` methods take the context
     // lock internally, and holding one across `ui.input(..)` panics inside epaint's mutex — the
@@ -726,49 +830,38 @@ fn search_field(app: &mut RustroomApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Bigger / smaller Library cells.
+/// The Library cell size, as a short slider with the `arrows-out-simple` glyph.
 ///
-/// ⚠ Buttons rather than a slider: this row is right-aligned and already carries the sort combo,
-/// the format bullets and the status line, and a slider needs a fixed width there whether or not
-/// the space exists. Two icons cost one line each.
+/// ⚠ A slider at a **fixed** 80 pt, where the two buttons it replaces were chosen because "a
+/// slider needs a fixed width there whether or not the space exists": the row's right cluster
+/// has since lost the format checkboxes' text and gained a ⋯ menu, so the width exists now.
 ///
-/// ⚠ Built rightmost-first, because the enclosing layout runs right to left.
-fn grid_size_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
-    let now = app.settings.clamped_cell() as u32;
-    let mut next = None;
-    if ui
-        .add_enabled(
-            now < rustroom_app::settings::CELL_RANGE.1,
-            egui::Button::new(icons::ZOOM_IN.to_string()),
-        )
-        .on_hover_text("Bigger thumbnails")
-        .clicked()
-    {
-        next = Some(app.settings.stepped_cell(true));
-    }
-    if ui
-        .add_enabled(
-            now > rustroom_app::settings::CELL_RANGE.0,
-            egui::Button::new(icons::ZOOM_OUT.to_string()),
-        )
-        .on_hover_text("Smaller thumbnails")
-        .clicked()
-    {
-        next = Some(app.settings.stepped_cell(false));
-    }
-    // ⚠ Saved only on an actual press. This body runs every frame, so writing unconditionally
-    // would rewrite the settings file sixty times a second — the `apply_view_demosaic` rule.
-    if let Some(cell) = next {
+/// ⚠ Saved when the drag **settles**, never per frame — the `cell_zoom_pending` rule the pinch
+/// gesture follows. A click on the rail (no drag) saves at once.
+fn grid_size_slider(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    let (lo, hi) = rustroom_app::settings::CELL_RANGE;
+    let mut cell = app.settings.clamped_cell() as u32;
+    ui.spacing_mut().slider_width = 80.0;
+    let r = ui
+        .add(egui::Slider::new(&mut cell, lo..=hi).show_value(false))
+        .on_hover_text("Thumbnail size");
+    if r.changed() {
         app.settings.library_cell = cell;
+        app.cell_zoom_pending = true;
+    }
+    if app.cell_zoom_pending && !r.dragged() {
+        app.cell_zoom_pending = false;
         app.save_settings();
     }
+    ui.label(egui::RichText::new(icons::THUMB_SIZE.to_string()).size(15.0))
+        .on_hover_text("Thumbnail size");
 }
 
 /// How the folder is ordered. Drives the filmstrip too — both read one `entries` list.
 fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let mut order = app.settings.library_sort;
     egui::ComboBox::from_id_salt("library_sort")
-        .selected_text(order.label())
+        .selected_text(format!("{} {}", icons::SORT, order.label()))
         .show_ui(ui, |ui| {
             for o in catalog::SortOrder::ALL {
                 ui.selectable_value(&mut order, o, o.label());
@@ -786,7 +879,7 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui) {
 /// ticked, which is both the default and self-evident. An "All" radio alongside per-format
 /// radios would additionally make "RAF and JPG but not PNG" unreachable, which is a real
 /// combination on a mixed folder.
-fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
+fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let formats = app
         .library
         .as_ref()
@@ -812,8 +905,10 @@ fn format_bullets(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let mut toggled: Option<String> = None;
     for (ext, count) in formats.iter().rev() {
         let mut shown = !app.filter.format.is_hidden(ext);
-        let label = format!("{} ({count})", ext.to_uppercase());
-        if ui.checkbox(&mut shown, label).changed() {
+        let label = format!("{} {count}", ext.to_uppercase());
+        // ⚠ A chip with a dot rather than a checkbox: the dot carries the state in colour, the
+        // semantics are the checkbox's exactly (`segmented::chip` reports as one).
+        if segmented::chip(ui, &mut shown, &label).changed() {
             toggled = Some(ext.clone());
         }
     }

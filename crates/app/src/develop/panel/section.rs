@@ -282,6 +282,10 @@ mod tests {
             );
             open_after = Some(out.state.is_open());
         });
-        assert_eq!(open_after, Some(false), "the click did not close the section");
+        assert_eq!(
+            open_after,
+            Some(false),
+            "the click did not close the section"
+        );
     }
 }

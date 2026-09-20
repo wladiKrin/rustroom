@@ -227,7 +227,10 @@ mod tests {
                 .map(|(l, _)| l)
                 .collect();
         for want in ["Portraits", "Delete Portraits", "Add to Portraits"] {
-            assert!(labels.iter().any(|l| l == want), "{want:?} missing in {labels:?}");
+            assert!(
+                labels.iter().any(|l| l == want),
+                "{want:?} missing in {labels:?}"
+            );
         }
         test_ui::click(&ctx, "Portraits", |ui| draw(ui, &mut out));
         assert!(out.0, "a click on the row did not open it");

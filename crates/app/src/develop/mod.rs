@@ -122,6 +122,7 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         app.actions.can_undo(open.as_ref()),
     );
     let redo_click = icon(ui, icons::REDO, "Redo", app.actions.can_redo(open.as_ref()));
+    ui.separator();
     if undo_click {
         commands::execute(app, ctx, Command::Undo);
     }
@@ -130,15 +131,22 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 
     if app.session.is_some() {
-        ui.separator();
         // ⚠ Real magnifying glasses, from the bundled font. These were `⊞`/`⊟` and a text
         // "1:1" until the icon font landed, because egui's own fonts contain no magnifying
         // glass at all. ⚠ `ZOOM_FIT` is a frame rather than a fourth glass — Phosphor has
         // exactly three glass variants, and a frame is the conventional fit symbol anyway.
-        let zoom_out = icon(ui, icons::ZOOM_OUT, "Zoom out", true);
-        let zoom_in = icon(ui, icons::ZOOM_IN, "Zoom in", true);
-        let zoom_fit = icon(ui, icons::ZOOM_FIT, "Zoom to fit", true);
-        let zoom_actual = icon(ui, icons::ZOOM_ACTUAL, "Zoom to 1:1", true);
+        //
+        // ⚠ The four abut in one dark well, in the order a zoom reads: out, fit, 1:1, in. They
+        // are momentary actions, so none is ever lit — a `pill` would claim one of them is
+        // the current state, and "fit" stops being true the moment you scroll.
+        let (zoom_out, zoom_fit, zoom_actual, zoom_in) = well(ui, |ui| {
+            (
+                icon(ui, icons::ZOOM_OUT, "Zoom out", true),
+                icon(ui, icons::ZOOM_FIT, "Zoom to fit", true),
+                icon(ui, icons::ZOOM_ACTUAL, "Zoom to 1:1", true),
+                icon(ui, icons::ZOOM_IN, "Zoom in", true),
+            )
+        });
         if zoom_out {
             commands::execute(app, ctx, Command::ZoomOut);
         }
@@ -155,10 +163,17 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.separator();
         // ⚠ Reads the live flag and dispatches on a change rather than writing it, so the
         // button and the View-menu item are one implementation.
-        let mut before_after = app.session.as_ref().is_some_and(|s| s.show_before);
+        //
+        // ⚠ Labelled, where the zoom buttons are glyphs alone: a toggle whose state you have
+        // to notice deserves the word, and it is the one control here that is a state.
+        let before_after = app.session.as_ref().is_some_and(|s| s.show_before);
+        let label = egui::RichText::new(format!("{} Before / After", icons::BEFORE_AFTER));
         if ui
-            .toggle_value(&mut before_after, icon_text(icons::BEFORE_AFTER))
-            .on_hover_text("Before / After")
+            .add(
+                egui::Button::selectable(before_after, label)
+                    .min_size(egui::vec2(0.0, TOOL_HEIGHT)),
+            )
+            .on_hover_text("Show the photo as it was decoded (\\)")
             .clicked()
         {
             commands::execute(app, ctx, Command::ToggleBeforeAfter);
@@ -174,9 +189,34 @@ pub fn toolbar(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 /// ⚠ The tooltip is not decoration: it is the only thing naming the action once the label is a
 /// glyph, so every caller must supply a real one.
 fn icon(ui: &mut egui::Ui, glyph: char, hint: &str, enabled: bool) -> bool {
-    ui.add_enabled(enabled, egui::Button::new(icon_text(glyph)))
-        .on_hover_text(hint)
-        .clicked()
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(icon_text(glyph)).min_size(egui::vec2(TOOL_WIDTH, TOOL_HEIGHT)),
+    )
+    .on_hover_text(hint)
+    .clicked()
+}
+
+/// A toolbar control's size: wide enough for a glyph with air, as tall as the Library's
+/// layout pill so the two bars share one rhythm.
+const TOOL_WIDTH: f32 = 30.0;
+const TOOL_HEIGHT: f32 = 28.0;
+
+/// A dark well holding abutting buttons — the zoom group.
+///
+/// ⚠ The well is what turns four icon buttons into one control: `item_spacing` zero inside it,
+/// the extreme background behind, one rounding around. The buttons keep their own frames, so
+/// hover and press look as they do everywhere else.
+fn well<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .corner_radius(5.0)
+        .inner_margin(2.0)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(add).inner
+        })
+        .inner
 }
 
 /// One toolbar icon at [`ICON_SIZE`].

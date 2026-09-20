@@ -133,7 +133,6 @@ pub fn segmented_sized<T: PartialEq + Copy>(
     all
 }
 
-
 /// One item of a [`pill`]: its value, its glyph, its label and its hover text.
 pub struct PillItem<'a, T> {
     pub value: T,
@@ -173,9 +172,13 @@ pub fn pill<T: PartialEq + Copy>(
         let lw = items
             .iter()
             .map(|it| {
-                f.layout_no_wrap(it.label.to_owned(), style.font.clone(), egui::Color32::WHITE)
-                    .size()
-                    .x
+                f.layout_no_wrap(
+                    it.label.to_owned(),
+                    style.font.clone(),
+                    egui::Color32::WHITE,
+                )
+                .size()
+                .x
             })
             .fold(0.0, f32::max);
         let iw = items
