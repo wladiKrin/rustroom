@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [CI ran out of disk (2026-09-21)](#ci-ran-out-of-disk-2026-09-21)
 - [The snapshot strip as a timeline (2026-09-20)](#the-snapshot-strip-as-a-timeline-2026-09-20)
 - [The top bar and the Library in one language (2026-09-20)](#the-top-bar-and-the-library-in-one-language-2026-09-20)
 - [A switched-off mask stays off in the export (2026-09-20)](#a-switched-off-mask-stays-off-in-the-export-2026-09-20)
@@ -125,7 +126,19 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The snapshot strip as a timeline (2026-09-20)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### CI ran out of disk (2026-09-21)
+
+The first push after the panel and shell reworks failed on GitHub with "No space left on
+device" while compiling `pipeline`'s tests, and the linker then died with a bus error on the
+golden test binary. Not a code failure: the workspace's debug build with full debug info and
+incremental artifacts is **80 GB** on the development Mac, and the runner has ~14 GB free.
+`ci.yml` now sets `CARGO_INCREMENTAL=0` and `line-tables-only` debug info for the dev and test
+profiles, removes the runner image's .NET, Android, Haskell and CodeQL toolchains (~25 GB) before
+building, and prints the disk after. ⚠ Unverifiable locally — the next push is the test; if it
+still fills, the next lever is one job per crate group or dropping `cargo build --all`, which
+`cargo test --all` already covers.
+
+### The snapshot strip as a timeline (2026-09-20)
 
 The user: "Let's also revamp the snapshots section." Three mockups on the canvas "Rustroom
 Snapshots" (https://claude.ai/artifact/7vkX5EcCpcP7BgaVfGzXy8); **B** chosen, the timeline, with
