@@ -2,11 +2,28 @@ name: CI
 on:
   push:
   pull_request:
+env:
+  # ⚠ Disk, not speed: `cargo test --all` filled the runner's ~14 GB on 2026-09-21 ("No space
+  # left on device" while compiling `pipeline`'s tests; the linker then died with a bus error).
+  # A debug build of this workspace with full debug info and incremental artifacts is ~80 GB on
+  # a developer machine. Line tables keep backtraces readable at a fraction of the size, and
+  # CI never rebuilds incrementally anyway.
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_TERM_COLOR: always
 jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The runner image ships .NET, Android, Haskell and CodeQL toolchains this build never
+      # touches — about 25 GB. Removing them is the other half of the disk fix.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y libraw-dev liblcms2-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
@@ -21,3 +38,6 @@ jobs:
         run: cargo build --all
       - name: Test
         run: cargo test --all
+      - name: Disk after
+        if: always()
+        run: df -h / && du -sh target || true
