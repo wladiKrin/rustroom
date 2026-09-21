@@ -70,6 +70,12 @@ impl<T: Clone + PartialEq> History<T> {
         self.undo.iter().rev().position(is).map(|k| k + 1)
     }
 
+    /// How many entries the undo side holds — the changes applied since the initial state
+    /// that are still in the present.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn redo(&mut self) -> bool {
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.current, next));
@@ -128,6 +134,7 @@ mod tests {
         assert_eq!(h.steps_since(|v| *v == 1), Some(2));
         assert_eq!(h.steps_since(|v| *v == 0), Some(3));
         assert_eq!(h.steps_since(|v| *v == 9), None, "never was");
+        assert_eq!(h.undo_depth(), 3);
         // ⚠ Undone past: the entry sits on the redo side and must not count.
         h.undo();
         h.undo();

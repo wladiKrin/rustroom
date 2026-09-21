@@ -60,8 +60,14 @@ fn drift_text(
     current: &edit_model::Edits,
     history: &rustroom_app::history::History<edit_model::Edits>,
 ) -> String {
+    // ⚠ With no snapshot the row still says something useful: how many changes the photo has
+    // taken since it was opened (user's call, 2026-09-21, replacing "no snapshots yet").
     let Some((label, edits)) = latest else {
-        return "no snapshots yet".to_string();
+        return match history.undo_depth() {
+            0 => "no changes yet".to_string(),
+            1 => "1 change so far".to_string(),
+            n => format!("{n} changes so far"),
+        };
     };
     if edits == current {
         return format!("same as “{label}”");
@@ -636,7 +642,7 @@ mod tests {
             ..Default::default()
         };
         let mut h = rustroom_app::history::History::new(base.clone());
-        assert_eq!(super::drift_text(None, &base, &h), "no snapshots yet");
+        assert_eq!(super::drift_text(None, &base, &h), "no changes yet");
         assert_eq!(
             super::drift_text(Some(("Warm", &base)), &base, &h),
             "same as “Warm”"
@@ -647,6 +653,7 @@ mod tests {
             ..warm.clone()
         };
         h.push(more.clone());
+        assert_eq!(super::drift_text(None, &more, &h), "2 changes so far");
         assert_eq!(
             super::drift_text(Some(("Warm", &warm)), &more, &h),
             "1 change since “Warm”"

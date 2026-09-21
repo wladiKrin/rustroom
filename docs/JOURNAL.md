@@ -147,6 +147,10 @@ the copy cell added to every row. On `snapshots-timeline`; spec
   others while doing none of what they do would be the worst kind of affordance; and a painted
   sentence is one the harness cannot read, so `drift_text` is a pure function with its own test.
 - ⚠ `when::short` judges **calendar days**, not 24-hour spans: 23:50 seen at 00:10 is yesterday.
+- Seen in use (2026-09-21): with no snapshot the Now row said "no snapshots yet", which says
+  nothing — it now counts the changes since the photo was opened ("3 changes so far", from
+  `History::undo_depth`); and the Develop panel's default width went **240 → 270**, since the
+  row's sentence and the longer slider names were cut off at 240.
 
 ### The top bar and the Library in one language (2026-09-20)
 

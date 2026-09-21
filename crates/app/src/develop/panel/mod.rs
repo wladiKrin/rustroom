@@ -109,7 +109,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let guide_before = app.settings.composition_guide;
     let custom_before = app.settings.custom_aspect;
     egui::Panel::right("panel")
-        .default_size(240.0)
+        // ⚠ 270, up from 240 (2026-09-21, user's call): at 240 the snapshot strip's Now row and
+        // the longer slider names were cut off.
+        .default_size(270.0)
         .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
             if app.pending.is_some() {
