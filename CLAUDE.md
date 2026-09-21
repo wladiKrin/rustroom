@@ -142,16 +142,16 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-20)
+### State (2026-09-21)
 
-**2623 tests** on `main` (goldens unmoved since 2026-09-18); `main` is ahead of `origin/main` —
-**not pushed; the user pushes.**
+**2627 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is ahead of
+`origin/main` — **not pushed; the user pushes.**
 
-⚠ **One branch, `snapshots-timeline`, ahead of `main`: the snapshot strip as a timeline** — the
-section chrome, a Now row with the drift since the newest snapshot and the Save button, dotted
-rows with the accent on the one the photo is at, copy and delete cells, double-click to rename.
-**2627 tests on its tip, gated green, GUI launched for a look, not yet confirmed by use.**
-Spec `2026-09-20-snapshots-timeline-design.md`; `grep -n 'timeline' docs/JOURNAL.md`.
+✅ **The snapshot strip as a timeline — merged and confirmed by use (2026-09-21).** The section
+chrome, a Now row with the drift since the newest snapshot (or the changes so far, with none) and
+the Save button, dotted rows with the accent on the one the photo is at, copy and delete cells,
+double-click to rename; the Develop panel's default width is 270. Spec
+`2026-09-20-snapshots-timeline-design.md`; `grep -n 'timeline' docs/JOURNAL.md`.
 
 ✅ **The top bar and the Library in one language — merged and confirmed by use (2026-09-20).**
 Spec `2026-09-20-shell-restyle-design.md`; `grep -n 'one language' docs/JOURNAL.md` — five
