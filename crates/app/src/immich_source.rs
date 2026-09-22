@@ -515,6 +515,46 @@ mod tests {
         assert_eq!(c.key, "abc");
     }
 
+    /// ⚠⚠ **The new invariant, pinned.** A `CatalogEntry` may name a file that does not exist,
+    /// and `open_scan` calls `sidecar::load_all`, `import_xmp`, `queue_metadata`, `reload_marks`
+    /// and `reload_captures` on every row. None of them may fail on an absent file.
+    #[test]
+    fn a_sidecar_for_a_file_that_does_not_exist_is_neutral_not_an_error() {
+        let p = std::path::Path::new(
+            "/nonexistent/rustroom/11111111-1111-4111-8111-111111111111.RAF",
+        );
+        let s = crate::sidecar::load_all(p);
+        assert!(s.is_neutral(), "no file and no sidecar must read as neutral");
+    }
+
+    #[test]
+    fn edited_at_for_a_file_that_does_not_exist_is_none() {
+        let p = std::path::Path::new(
+            "/nonexistent/rustroom/22222222-2222-4222-8222-222222222222.RAF",
+        );
+        assert!(crate::sidecar::edited_at(p).is_none());
+    }
+
+    /// ⚠ And the mapping itself must survive a whole album of absent files — which is the normal
+    /// case, not an edge one: every row is absent until it is opened.
+    #[test]
+    fn a_whole_album_of_absent_files_still_maps_to_rows() {
+        let root = std::path::Path::new("/nonexistent/rustroom/immich/host");
+        let assets: Vec<immich::Asset> = (0..5)
+            .map(|i| {
+                asset(
+                    &format!("1111111{i}-1111-4111-8111-111111111111"),
+                    "DSCF1234.RAF",
+                    immich::AssetType::Image,
+                )
+            })
+            .collect();
+        let entries = entries_from_album(&assets, root);
+        assert_eq!(entries.len(), 5);
+        assert!(entries.iter().all(|e| e.edited.is_none()));
+        assert!(entries.iter().all(|e| !is_cached(&e.path)));
+    }
+
     #[test]
     fn is_cached_is_false_before_the_file_exists_and_true_after() {
         let dir = std::env::temp_dir().join(format!("rustroom_immich_{}", std::process::id()));

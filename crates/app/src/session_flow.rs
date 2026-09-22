@@ -376,6 +376,27 @@ impl RustroomApp {
     /// Start opening `path`: instant from the cache, otherwise a debounced background decode
     /// with the filmstrip thumbnail as a placeholder. Never blocks the UI thread.
     pub(crate) fn open_path(&mut self, ctx: &egui::Context, id: PhotoId) {
+        // ⚠⚠ **An Immich photo may not be on disk yet**, because the browse grid builds rows for
+        // cache paths that are known before the file exists. Enqueue the download and return; the
+        // worker's Ok outcome re-enters this function with the file in place, so there is **one**
+        // opening path rather than two.
+        //
+        // ⚠ Before `persist_current_session`: nothing about the current session changes when we
+        // decline to switch away from it. The persist happens on the second entry, which is a real
+        // switch.
+        //
+        // ⚠⚠ **Scoped to the Immich cache deliberately, and an absent *local* file still falls
+        // through to the behaviour it always had.** Reporting "not there" for any missing file
+        // reads as an improvement and is not this change's business: `open_path` is reached from
+        // ten places including `undo` and `snapshots`, where an early return would silently skip
+        // an operation the user asked for. Widening it is its own change, with its own reasoning.
+        if !id.path.is_file() {
+            if let Some(job) = self.immich_download_for(&id.path) {
+                self.immich.request(job);
+                self.status = "Downloading from Immich…".to_string();
+                return;
+            }
+        }
         self.persist_current_session();
 
         // ⚠ The cache is keyed by **path**, so opening a copy of an already-decoded file is a

@@ -84,3 +84,20 @@ impl RustroomApp {
         self.immich.request(Job::Albums);
     }
 }
+
+impl RustroomApp {
+    /// The download job for `path`, if it names an Immich cache file on a configured server.
+    ///
+    /// ⚠ `None` for every ordinary local path, which is what keeps [`Self::open_path`]'s handling
+    /// of a missing local file exactly as it was.
+    pub(crate) fn immich_download_for(&self, path: &std::path::Path) -> Option<Job> {
+        let conn = immich_source::connection(&self.settings)?;
+        if !immich_source::is_immich_path(&immich_source::cache_root(&conn.url), path) {
+            return None;
+        }
+        Some(Job::Original {
+            asset_id: immich_source::asset_id_of(path)?,
+            dest: path.to_path_buf(),
+        })
+    }
+}
