@@ -28,6 +28,7 @@ pub mod histogram;
 pub mod history;
 pub mod icons;
 pub mod immich_source;
+pub mod immich_worker;
 pub mod library_filter;
 pub mod looks;
 pub mod marks;
