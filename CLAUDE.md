@@ -151,7 +151,7 @@ and is unverified until the next push.
 ⚠ **One branch, `dialogs-tabs`, ahead of `main`: the dialogs in one language** — one shell with a
 title bar, a pinned footer with the accent verb, tabs for Settings / Export / Information and the
 panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
-descriptions as hovers. **TESTCOUNT tests on its tip, gated green, GUI launched
+descriptions as hovers. **2633 tests on its tip, gated green, GUI launched
 for a look, not yet confirmed by use.** Spec `2026-09-21-dialogs-design.md`;
 `grep -n 'dialogs in one language' docs/JOURNAL.md`.
 

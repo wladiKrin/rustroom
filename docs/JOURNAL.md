@@ -133,7 +133,7 @@ The user: "rework all the window popups, such that we have one cohesive design l
 mockups on the canvas "Rustroom Dialogs" (https://claude.ai/artifact/Gmvn3eqBNgtWopBRG9vJCK);
 **B** chosen — the title bar, tabs for the long dialogs, a pinned footer. Spec written to be
 handed to another agent, then executed here after all. On `dialogs-tabs`; spec
-`2026-09-21-dialogs-design.md`. **2627 → TESTCOUNT tests**, goldens unmoved.
+`2026-09-21-dialogs-design.md`. **2627 → 2633 tests**, goldens unmoved.
 
 | what landed | where |
 |---|---|
