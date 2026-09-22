@@ -201,6 +201,60 @@ fn run_download(fetch: &FetchFn, asset_id: &str, dest: &Path) -> Outcome {
     }
 }
 
+/// The real fetcher: a `FetchFn` that talks to the server, or reports that none is configured.
+///
+/// ⚠ Built from a snapshot of the connection rather than reading `Settings` on the worker thread.
+/// `Settings` lives on the UI side; a snapshot also means a job already in flight finishes against
+/// the server it started with.
+///
+/// ⚠⚠ `Job::About` carries its **own** connection and that one wins. The Settings dialog tests
+/// what is typed in it, which is by definition not yet the saved connection this closure captured
+/// — testing the saved one would make the button useless for its only purpose.
+pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
+    Arc::new(move |job: Job| {
+        let wanted = match &job {
+            Job::About { conn: typed } => typed.clone(),
+            _ => conn.clone(),
+        };
+        let client = match wanted
+            .as_ref()
+            .ok_or_else(|| "no Immich server is configured — set one in Settings".to_string())
+            .and_then(|c| immich::Client::new(&c.url, &c.key).map_err(|e| e.to_string()))
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return match job {
+                    Job::About { .. } => Outcome::About(Err(e)),
+                    Job::Albums => Outcome::Albums(Err(e)),
+                    Job::Album { id, name } => Outcome::Album {
+                        id,
+                        name,
+                        result: Err(e),
+                    },
+                    Job::Original { dest, .. } => Outcome::Original {
+                        dest,
+                        result: Err(e),
+                    },
+                }
+            }
+        };
+        match job {
+            Job::About { .. } => {
+                Outcome::About(client.about().map(|a| a.version).map_err(|e| e.to_string()))
+            }
+            Job::Albums => Outcome::Albums(client.albums().map_err(|e| e.to_string())),
+            Job::Album { id, name } => {
+                let result = client.album(&id).map_err(|e| e.to_string());
+                Outcome::Album { id, name, result }
+            }
+            Job::Original { asset_id, dest } => Outcome::Original {
+                dest: dest.clone(),
+                result: client.original(&asset_id, &dest).map_err(|e| e.to_string()),
+            },
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +277,53 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the worker never produced a result");
+    }
+
+    /// ⚠ Without a configured connection the fetcher must produce an error outcome rather than
+    /// panicking or silently doing nothing — the section shows that message.
+    #[test]
+    fn the_real_fetcher_without_a_connection_reports_it() {
+        let f = live_fetcher(None);
+        match f(Job::Albums) {
+            Outcome::Albums(Err(msg)) => assert!(!msg.is_empty()),
+            _ => panic!("an unconfigured fetcher must report an error"),
+        }
+    }
+
+    /// ⚠ An unreachable host must come back as an error, not a hang or a panic. `.invalid` is
+    /// reserved by RFC 2606 and never resolves, so this needs no network.
+    #[test]
+    fn an_unreachable_server_is_an_error_not_a_panic() {
+        let f = live_fetcher(Some(crate::immich_source::Connection {
+            url: "http://immich.invalid".into(),
+            key: "k".into(),
+        }));
+        match f(Job::Albums) {
+            Outcome::Albums(Err(_)) => {}
+            _ => panic!("an unreachable server must be an error"),
+        }
+    }
+
+    /// ⚠⚠ A download job whose connection is missing must still clean up after itself: the
+    /// worker creates the parent directory and a `.part` before the fetcher runs, and an error
+    /// path that skipped the cleanup would leave litter behind on every failed open.
+    #[test]
+    fn an_unconfigured_download_leaves_no_part_file() {
+        let dir = temp_dir("noconf");
+        let dest = dir.join("55555555.RAF");
+        let mut w = ImmichWorker::new(live_fetcher(None), || {});
+        w.request(Job::Original {
+            asset_id: "55555555".into(),
+            dest: dest.clone(),
+        });
+        let mut got = Vec::new();
+        settle(&mut w, |w| {
+            got.extend(w.poll());
+            !got.is_empty()
+        });
+        assert!(!dest.exists());
+        assert!(!part_path(&dest).exists(), "no .part may be left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
