@@ -296,6 +296,13 @@ impl ThumbLoader {
             &dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
         );
         let look_cache: LookCache = Mutex::new(std::collections::HashMap::new());
+        // ⚠⚠ Captured here for the same reason the store and the looks are, and with the same
+        // consequence: `ThumbLoader::new`'s signature, and therefore its four call sites, stay
+        // untouched.
+        //
+        // ⚠ The shared **cell**, not a snapshot of the connection: pasting a key in Settings must
+        // not rebuild the loader, because a rebuild drops the open folder's whole thumbnail cache.
+        let immich = crate::immich_source::shared();
         Self::with_loader(
             // ⚠⚠ Thumbnails always use the **default** resampler, deliberately, and do not follow
             // `Settings.resampler` (user's call, 2026-09-01). Honouring it was tried first and is
@@ -306,6 +313,13 @@ impl ThumbLoader {
             // ⚠ The store is captured here rather than passed to `ThumbLoader::new`, which keeps
             // that signature — and therefore its four call sites — untouched.
             Arc::new(move |r: &ThumbRequest| {
+                // ⚠⚠ **Only while the original is absent.** Once a photo has been downloaded this
+                // declines and the ordinary local path — on-disk store included — takes over with
+                // no special case at all. For every non-Immich photo it is one `is_file` and one
+                // mutex read.
+                if let Some(t) = crate::immich_source::remote_thumbnail(&immich, r.id.file()) {
+                    return Some(t);
+                }
                 load_thumbnail(
                     r,
                     pipeline::Resampler::default(),

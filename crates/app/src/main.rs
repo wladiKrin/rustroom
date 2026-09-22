@@ -550,6 +550,11 @@ impl RustroomApp {
         // accent, so applying it earlier would style the app from the defaults and then
         // silently disagree with what the user chose.
         theme::apply(ctx, &settings);
+        // ⚠⚠ Before the first `ThumbLoader` exists. The loader reads the connection out of a
+        // shared cell, so a server configured in a previous session has to be in that cell by the
+        // time the first album could be browsed — otherwise every thumbnail would decline until
+        // Settings happened to be opened and applied.
+        rustroom_app::immich_source::refresh_shared(&settings);
         // ⚠ Opened once, at startup. A failure is reported and then ignored — see the field.
         let catalog = match catalog::db::Catalog::open(&catalog::db::Catalog::user_default_path()) {
             Ok(c) => Some(c),

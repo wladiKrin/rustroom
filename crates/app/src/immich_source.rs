@@ -160,6 +160,88 @@ pub fn set_connection(s: &mut crate::settings::Settings, url: &str, key: &str) {
     s.immich_key = key.trim().to_string();
 }
 
+/// Decode thumbnail bytes the server sent.
+///
+/// ⚠⚠ Sniffs the format with `load_from_memory` rather than assuming webp. Immich's thumbnail and
+/// preview formats are **both admin settings**, so either could arrive — and the workspace only
+/// gained the `webp` feature for this.
+pub fn decode_thumbnail(bytes: &[u8]) -> Option<core_image::Thumbnail> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgba = img.to_rgba8();
+    Some(core_image::Thumbnail {
+        width: rgba.width() as usize,
+        height: rgba.height() as usize,
+        rgba: rgba.into_raw(),
+    })
+}
+
+/// Is this path one of the Immich cache's?
+///
+/// ⚠ The test the thumbnail loader branches on. A plain prefix check, not a canonicalisation —
+/// the file may not exist yet, which is the whole point.
+pub fn is_immich_path(root: &Path, path: &Path) -> bool {
+    path.starts_with(root)
+}
+
+/// The asset id a cache path was built from — its stem.
+///
+/// ⚠ The inverse of [`cache_path`], and the reason the UUID leads rather than trails.
+pub fn asset_id_of(path: &Path) -> Option<String> {
+    path.file_stem().map(|s| s.to_string_lossy().to_string())
+}
+
+/// The connection the thumbnail loader reads.
+pub type SharedConnection = std::sync::Arc<std::sync::Mutex<Option<Connection>>>;
+
+/// The process-wide cell holding the current connection.
+///
+/// ⚠⚠ A `OnceLock` rather than a field on `RustroomApp`, because `ThumbLoader::new` is built from
+/// inside `open_scan` where `self` is already mutably borrowed — and widening that signature
+/// would touch its four call sites for no gain. `ThumbLoader::new` already captures the
+/// `ThumbStore` and the `LookStore` for exactly this reason, with a comment saying so.
+///
+/// ⚠ A cell rather than a snapshot so that pasting a key in Settings is seen **without rebuilding
+/// the loader** — a rebuild drops the open folder's whole thumbnail cache, measured at ~41 ms × N,
+/// about 34 s on an 830-photo folder.
+pub fn shared() -> SharedConnection {
+    static STATE: std::sync::OnceLock<SharedConnection> = std::sync::OnceLock::new();
+    STATE
+        .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(None)))
+        .clone()
+}
+
+/// Point the shared cell at whatever the settings now say.
+pub fn refresh_shared(s: &crate::settings::Settings) {
+    if let Ok(mut slot) = shared().lock() {
+        *slot = connection(s);
+    }
+}
+
+/// Fetch and decode one Immich thumbnail, or `None` if this is not an Immich photo, the original
+/// is already downloaded, or no server is configured.
+///
+/// ⚠⚠ Declines for an already-cached file, so a downloaded photo falls through to the ordinary
+/// local path — on-disk store included — with no special case at all.
+///
+/// ⚠ The on-disk `ThumbStore` is deliberately **not** used here: its key is `(path, mtime, size)`
+/// from `fs::metadata`, which cannot be built for a file that does not exist. The in-memory
+/// `ThumbCache` still applies, keyed on `PhotoId` as it already is, so the cost is that album
+/// thumbnails re-fetch after a restart. Accepted for this slice; the fix is a key of
+/// `(asset id, updated_at)`.
+pub fn remote_thumbnail(shared: &SharedConnection, path: &Path) -> Option<core_image::Thumbnail> {
+    if is_cached(path) {
+        return None;
+    }
+    let conn = shared.lock().ok()?.clone()?;
+    if !is_immich_path(&cache_root(&conn.url), path) {
+        return None;
+    }
+    let id = asset_id_of(path)?;
+    let client = immich::Client::new(&conn.url, &conn.key).ok()?;
+    let bytes = client.thumbnail(&id, immich::Size::Thumbnail).ok()?;
+    decode_thumbnail(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +391,104 @@ mod tests {
         let entries = entries_from_album(&[a], root);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].modified, std::time::UNIX_EPOCH);
+    }
+
+    /// A 1×1 red PNG. ⚠ Deliberately **not** a webp: the point is that the decode sniffs the
+    /// format, because the server's thumbnail and preview formats are both admin settings.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn encoded_bytes_become_a_thumbnail_whatever_format_they_are_in() {
+        let t = decode_thumbnail(TINY_PNG).expect("a PNG must decode");
+        assert_eq!((t.width, t.height), (1, 1));
+        assert_eq!(t.rgba.len(), 4);
+    }
+
+    /// A 2×2 lossless webp.
+    ///
+    /// ⚠⚠ **This fixture is the only thing verifying the `webp` feature is actually enabled.**
+    /// webp is Immich's *default* thumbnail format, and `image` was built here with
+    /// `default-features = false` — so if `webp` were ever dropped from the feature list, every
+    /// album thumbnail would fail to decode and the grid would simply stay empty, with no error
+    /// anywhere. A PNG fixture cannot catch that.
+    const TINY_WEBP: &[u8] = &[
+        0x52, 0x49, 0x46, 0x46, 0x1E, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38,
+        0x4C, 0x11, 0x00, 0x00, 0x00, 0x2F, 0x01, 0x40, 0x00, 0x00, 0x0F, 0x10, 0xF3, 0xBF, 0xFF,
+        0xF3, 0x1F, 0x0E, 0x32, 0xA2, 0xFF, 0x01, 0x00,
+    ];
+
+    #[test]
+    fn a_webp_thumbnail_decodes_because_the_feature_is_enabled() {
+        let t = decode_thumbnail(TINY_WEBP)
+            .expect("webp must decode — it is Immich's default thumbnail format");
+        assert_eq!((t.width, t.height), (2, 2));
+        assert_eq!(t.rgba.len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn rubbish_bytes_are_none_rather_than_a_panic() {
+        assert!(decode_thumbnail(b"not an image at all").is_none());
+    }
+
+    #[test]
+    fn a_path_inside_the_cache_root_is_recognised_as_an_immich_photo() {
+        let root = std::path::Path::new("/c/rustroom/immich/host");
+        assert!(is_immich_path(root, &root.join("11111111.RAF")));
+        assert!(!is_immich_path(
+            root,
+            std::path::Path::new("/home/w/Pictures/a.RAF")
+        ));
+    }
+
+    /// ⚠ The inverse of `cache_path`, and the reason the UUID leads rather than trails.
+    #[test]
+    fn the_asset_id_is_recoverable_from_a_cache_path() {
+        let root = std::path::Path::new("/c/immich/host");
+        let a = asset(
+            "11111111-1111-4111-8111-111111111111",
+            "DSCF1234.RAF",
+            immich::AssetType::Image,
+        );
+        let p = cache_path(root, &a);
+        assert_eq!(asset_id_of(&p).as_deref(), Some(a.id.as_str()));
+    }
+
+    /// ⚠⚠ A downloaded photo must fall through to the ordinary local loader, on-disk store and
+    /// all. Returning a remote thumbnail for a file that is already here would re-fetch it on
+    /// every cache miss forever.
+    #[test]
+    fn a_cached_photo_gets_no_remote_thumbnail() {
+        let dir = std::env::temp_dir().join(format!("rustroom_rt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("11111111.RAF");
+        std::fs::write(&p, b"x").unwrap();
+        let shared: SharedConnection = std::sync::Arc::new(std::sync::Mutex::new(Some(
+            Connection {
+                url: "http://immich.invalid".into(),
+                key: "k".into(),
+            },
+        )));
+        assert!(
+            remote_thumbnail(&shared, &p).is_none(),
+            "an already-downloaded photo must not be fetched"
+        );
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// ⚠ With no server configured the branch must decline instantly rather than erroring — it
+    /// runs for every thumbnail of every ordinary local folder.
+    #[test]
+    fn an_unconfigured_connection_declines_without_touching_the_network() {
+        let shared: SharedConnection = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let p = std::path::Path::new("/nonexistent/rustroom/11111111.RAF");
+        assert!(remote_thumbnail(&shared, p).is_none());
     }
 
     #[test]
