@@ -6,7 +6,7 @@
 pub mod dto;
 pub mod error;
 
-pub use dto::{About, AlbumSummary, Asset, AssetType, SearchAssets, SearchResponse};
+pub use dto::{About, AlbumSummary, Asset, AssetType, NextPage, SearchAssets, SearchResponse};
 pub use error::Error;
 
 use std::io::Write;
@@ -173,25 +173,32 @@ impl Client {
     /// ⚠ Paged by `cursor`, which is not deprecated, rather than by `page`, which is.
     pub fn album(&self, id: &str) -> Result<Vec<Asset>, Error> {
         let mut out: Vec<Asset> = Vec::new();
-        let mut cursor: Option<String> = None;
-        // ⚠ A hard ceiling on round trips. A server that returned a cursor for ever would
-        // otherwise hang the worker thread silently; 1000 pages at the maximum page size is a
-        // million assets, far past any album.
+        let mut next: Option<NextPage> = None;
+        // ⚠ A hard ceiling on round trips. A server that paged for ever would otherwise hang the
+        // worker thread silently; 1000 pages at the maximum page size is a million assets.
         for _ in 0..1000 {
             let mut body = serde_json::json!({
                 "albumIds": [id],
                 "size": PAGE_SIZE,
             });
-            if let Some(c) = &cursor {
-                body["cursor"] = serde_json::Value::String(c.clone());
+            // ⚠⚠ Whichever the previous reply asked for. A real 3.2.0 server pages by **number**
+            // and leaves `nextCursor` null, so a cursor-only loop returns a silently truncated
+            // album; cursors are honoured first in case a later server switches to them.
+            match &next {
+                Some(NextPage::Cursor(c)) => {
+                    body["cursor"] = serde_json::Value::String(c.clone());
+                }
+                Some(NextPage::Page(n)) => {
+                    body["page"] = serde_json::Value::from(*n);
+                }
+                None => {}
             }
             let page: SearchResponse = self.post_json("/search/metadata", &body)?;
+            let more = page.assets.next();
             out.extend(page.assets.items);
-            match page.assets.next_cursor {
-                // ⚠ An empty cursor is as final as a null one — a server that sends `""` must not
-                // put this into an endless loop.
-                Some(c) if !c.is_empty() => cursor = Some(c),
-                _ => return Ok(out),
+            match more {
+                Some(n) => next = Some(n),
+                None => return Ok(out),
             }
         }
         Ok(out)
