@@ -815,6 +815,7 @@ pub enum PanelSection {
     Smart,
     Keywords,
     Dates,
+    Immich,
 }
 
 impl PanelSection {
@@ -823,12 +824,16 @@ impl PanelSection {
     /// ⚠ Folders first because "where photos come from" is the outer concept, and All Photos —
     /// the whole catalog — is the natural top of it. That reasoning is `collections_panel`'s and
     /// is preserved here as the default rather than re-derived.
-    pub const ALL: [PanelSection; 5] = [
+    pub const ALL: [PanelSection; 6] = [
         Self::Folders,
         Self::Collections,
         Self::Smart,
         Self::Keywords,
         Self::Dates,
+        // ⚠ Last, so an existing `panel_order` — which `Settings::panel_order` repairs by
+        // appending whatever `ALL` member it lacks — grows the new section at the bottom of the
+        // rail rather than shuffling the five somebody already arranged.
+        Self::Immich,
     ];
 }
 
@@ -856,6 +861,8 @@ pub struct PanelSections {
     pub smart: bool,
     pub keywords: bool,
     pub dates: bool,
+    /// ⚠ Defaults to closed like the rest, so the derived `Default` above stays correct.
+    pub immich: bool,
 }
 
 /// What a confirm dialog decided.

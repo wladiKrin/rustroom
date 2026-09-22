@@ -102,6 +102,14 @@ pub fn for_test() -> RustroomApp {
         // ⚠ A real scanner, with a reader that never runs: nothing queues work in these tests, so
         // its workers park immediately and cost nothing.
         filter: Default::default(),
+        // ⚠ A worker whose fetcher never runs — nothing in these tests enqueues a job, and a
+        // fetcher that panics is the right thing to hand it: if one ever did, the panic names the
+        // test rather than letting it reach the network.
+        immich: rustroom_app::immich_worker::ImmichWorker::new(
+            std::sync::Arc::new(|_| panic!("a test must not talk to an Immich server")),
+            || {},
+        ),
+        immich_albums: None,
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),

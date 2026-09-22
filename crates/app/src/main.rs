@@ -58,6 +58,7 @@ mod display_colorspace;
 mod export_flow;
 mod filmstrip;
 mod immich_flow;
+mod immich_panel;
 mod interaction;
 mod library;
 mod library_state;

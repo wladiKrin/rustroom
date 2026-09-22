@@ -78,6 +78,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // borrows half of `app`, and writing the settings file per frame is the `apply_view_demosaic`
     // mistake in another costume.
     let mut sections = app.settings.panel_sections;
+    // ⚠ Its own variable rather than another `Action` variant: the Immich section's outcomes are
+    // enqueued jobs, not catalog operations, and folding them into the catalog `Action` enum would
+    // put two unrelated concerns behind one match.
+    let mut immich_action = crate::immich_panel::Action::None;
     // ⚠ Read once, out here, because Collections and Keywords are separate sections now and both
     // need it — it used to be a local of the Collections block that Keywords happened to see.
     let picked = app.library.as_ref().map(|l| l.selection.len()).unwrap_or(0);
@@ -535,6 +539,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             }
                         })
                             }
+                            PanelSection::Immich => {
+                                let n = crate::immich_panel::header_count(app);
+                                section(ui, &mut sections.immich, "sec_immich", "Immich", &n, |ui| {
+                                    immich_action = crate::immich_panel::body(app, ui);
+                                })
+                            }
                         };
                         tops.push(top);
                         if grip.drag_started() {
@@ -590,6 +600,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     if sections != app.settings.panel_sections {
         app.settings.panel_sections = sections;
         app.save_settings();
+    }
+
+    // ⚠ Applied here, after the panel's closures have released their borrow of `app` — the shape
+    // every panel in this file uses.
+    match immich_action {
+        crate::immich_panel::Action::None => {}
+        crate::immich_panel::Action::Refresh => app.request_immich_albums(),
+        crate::immich_panel::Action::Open { id, name } => {
+            app.immich
+                .request(rustroom_app::immich_worker::Job::Album { id, name });
+        }
     }
 
     match action {
