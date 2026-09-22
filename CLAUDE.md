@@ -144,15 +144,14 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2627 tests** on `main` (goldens unmoved since 2026-09-18); `main` is ahead of `origin/main` —
-**not pushed; the user pushes.** The CI workflow was fixed for the runner's disk on 2026-09-21
-and is unverified until the next push.
+**2633 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is ahead of
+`origin/main` — **not pushed; the user pushes.** The CI workflow was fixed for the runner's disk
+on 2026-09-21 and is unverified until the next push.
 
-⚠ **One branch, `dialogs-tabs`, ahead of `main`: the dialogs in one language** — one shell with a
-title bar, a pinned footer with the accent verb, tabs for Settings / Export / Information and the
-panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
-descriptions as hovers. **2633 tests on its tip, gated green, GUI launched
-for a look, not yet confirmed by use.** Spec `2026-09-21-dialogs-design.md`;
+✅ **The dialogs in one language — merged and confirmed by use (2026-09-22).** One shell with a
+title bar and ×, a pinned footer with the accent verb, tabs for Settings / Export / Information,
+the panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
+descriptions as hovers. Spec `2026-09-21-dialogs-design.md`;
 `grep -n 'dialogs in one language' docs/JOURNAL.md`.
 
 ✅ **The snapshot timeline** (2026-09-21) and **the top bar and the Library in one language**
