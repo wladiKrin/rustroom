@@ -138,10 +138,15 @@ A **lib** module, so all of this is unit-testable with no window and no server:
 - `cache_path(root: &Path, asset: &Asset) -> PathBuf` — **deterministic**: `<uuid>-<safe original
   file name>`. The same asset yields the same path forever, so a re-download restores byte-identical
   identity and nothing that recorded the path dangles.
-- `entries_from_album(assets: &[Asset], root: &Path) -> Vec<PhotoEntry>` — synthetic `PhotoId`s at
-  copy 0, `file_name` from `original_file_name` (the **human** name, not the UUID), `edits` read
-  from the sidecar beside the cache path when one exists, `label: None`. **Skips** anything that is
-  not an image or that `catalog::is_supported` rejects; skipped assets are absent, not greyed out.
+- `entries_from_album(assets: &[Asset], root: &Path) -> Vec<catalog::CatalogEntry>` — ⚠ **not
+  `PhotoEntry`.** `RustroomApp::open_scan` (`sources.rs:180`, "the one place a `Library` is
+  constructed") takes `Vec<catalog::CatalogEntry>` and calls `entries::build(&scan,
+  sidecar::load_all)` itself, so producing `CatalogEntry` reuses the *whole* loader — sidecars,
+  virtual copies, the filter, `ThumbLoader` construction — instead of half of it. Fields: `path` =
+  `cache_path`, `file_name` = `original_file_name` (the **human** name, never the UUID), `modified`
+  = `file_modified_at`, `edited` = the sidecar's mtime beside the cache path or `None`. **Skips**
+  anything not an image or that `catalog::is_supported` rejects (its `RAW_EXTENSIONS` is narrower
+  than Immich's — no `pef`, `srw`, `3fr`, `iiq`); skipped assets are absent, not greyed out.
 - `is_cached(id: &PhotoId) -> bool` — does the file exist yet.
 
 ## The rail section
@@ -225,14 +230,20 @@ cannot write cannot damage the library if the file leaks.
 This is new and it is the real risk in this slice. It is bounded by making the Immich browse grid
 the **only** place synthetic ids exist. The audit is therefore limited to what that path reaches:
 
+⚠⚠ **`open_scan` itself calls four of these** — `import_xmp`, `reload_marks`, `reload_captures`,
+`queue_metadata` — so reusing it means every one of them meets absent files on the first album
+opened. They are in the audit because of that, not speculatively.
+
 | Site | What it must do |
 |---|---|
 | `thumb_store::ThumbStore::of` | Already returns `None` on a missing file — **verify**, don't assume |
-| `sidecar::load` | Must yield default `Edits`, not an error, when neither file nor sidecar exists |
+| `sidecar::load` / `load_all` | Must yield default `Edits`, not an error, when neither file nor sidecar exists |
+| `RustroomApp::import_xmp` | Must skip a photo with no file rather than logging or erroring per row |
+| `RustroomApp::queue_metadata` → `metadata_scanner` | Must not enqueue, or must skip, a photo whose file is absent |
 | `photo_info` | Must render without EXIF rather than showing zeroes or panicking |
-| `metadata_scanner` | Must not enqueue, or must skip, a photo whose file is absent |
+| `reload_marks` / `reload_captures` | Already early-return without a catalog row; **verify** they do not insert one |
 
-Each gets a test that passes a `PhotoId` for a nonexistent path.
+Each gets a test that passes a `PhotoId`, or a `CatalogEntry`, for a nonexistent path.
 
 ## What does not change
 
