@@ -1,0 +1,60 @@
+[
+  {
+    "albumName": "analog",
+    "description": "",
+    "albumThumbnailAssetId": "17fc9a4b-7bc7-4518-a2ad-9ae90edc924d",
+    "createdAt": "2026-05-27T09:25:05.558Z",
+    "updatedAt": "2026-09-14T15:22:52.492Z",
+    "id": "a6e6f5aa-8be7-454e-9328-82dc0cc2ab2b",
+    "albumUsers": [
+      {
+        "user": {
+          "id": "789c87c3-c544-4d42-9960-4400fdd69a2f",
+          "email": "owner@example.com",
+          "name": "Owner",
+          "profileImagePath": "",
+          "avatarColor": "pink",
+          "profileChangedAt": "2025-12-23T15:57:29.996228+00:00"
+        },
+        "role": "owner"
+      }
+    ],
+    "shared": false,
+    "hasSharedLink": false,
+    "startDate": "2025-01-10T00:00:00.000Z",
+    "endDate": "2026-08-14T00:00:00.000Z",
+    "assetCount": 872,
+    "isActivityEnabled": true,
+    "order": "desc",
+    "lastModifiedAssetTimestamp": "2026-08-14T08:29:23.862Z"
+  },
+  {
+    "albumName": "Rom",
+    "description": "",
+    "albumThumbnailAssetId": "121799ad-7ceb-4cec-96ec-e40f3be48733",
+    "createdAt": "2026-04-19T10:13:21.640Z",
+    "updatedAt": "2026-09-14T15:22:52.492Z",
+    "id": "b89aa1ea-7250-478d-8d7a-fee1bc8c2e7f",
+    "albumUsers": [
+      {
+        "user": {
+          "id": "789c87c3-c544-4d42-9960-4400fdd69a2f",
+          "email": "owner@example.com",
+          "name": "Owner",
+          "profileImagePath": "",
+          "avatarColor": "pink",
+          "profileChangedAt": "2025-12-23T15:57:29.996228+00:00"
+        },
+        "role": "owner"
+      }
+    ],
+    "shared": false,
+    "hasSharedLink": false,
+    "startDate": "2023-12-16T00:00:00.000Z",
+    "endDate": "2023-12-28T00:00:00.000Z",
+    "assetCount": 112,
+    "isActivityEnabled": true,
+    "order": "desc",
+    "lastModifiedAssetTimestamp": "2026-06-14T12:11:35.623Z"
+  }
+]

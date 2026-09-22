@@ -6,7 +6,7 @@
 pub mod dto;
 pub mod error;
 
-pub use dto::{About, AlbumDetail, AlbumSummary, Asset, AssetType};
+pub use dto::{About, AlbumSummary, Asset, AssetType, SearchAssets, SearchResponse};
 pub use error::Error;
 
 use std::io::Write;
@@ -18,6 +18,10 @@ use std::path::Path;
 /// that at roughly 25,000 assets. Raised explicitly so a large album fails as "too large" only
 /// at an absurd size, not silently at a plausible one.
 const JSON_LIMIT: u64 = 256 * 1024 * 1024;
+
+/// Assets per search page. ⚠ 1000 is the maximum the server accepts (`MetadataSearchDto.size`),
+/// and the default is 250 — so asking for the maximum is four times fewer round trips.
+const PAGE_SIZE: u32 = 1000;
 
 /// How many bytes an in-memory image read may be. See `get_bytes`.
 const IMAGE_LIMIT: u64 = 64 * 1024 * 1024;
@@ -86,6 +90,32 @@ impl Client {
         serde_json::from_str(&body).map_err(|e| Error::Decode(e.to_string()))
     }
 
+    /// POST `body` as JSON to `path` and deserialise the JSON reply.
+    fn post_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, Error> {
+        let mut res = self
+            .agent
+            .post(self.url(path))
+            .header("x-api-key", &self.key)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            // ⚠ Serialised here and sent as a plain body rather than with `send_json`, which lives
+            // behind ureq's non-default `json` feature. This crate already depends on `serde_json`
+            // directly, so enabling a second copy of it through ureq buys nothing.
+            .send(serde_json::to_string(body).map_err(|e| Error::Decode(e.to_string()))?)
+            .map_err(map_ureq)?;
+        let text = res
+            .body_mut()
+            .with_config()
+            .limit(JSON_LIMIT)
+            .read_to_string()
+            .map_err(|e| Error::Decode(e.to_string()))?;
+        serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))
+    }
+
     fn get_text(&self, path: &str) -> Result<String, Error> {
         let mut res = self
             .agent
@@ -128,10 +158,43 @@ impl Client {
         self.get_json("/albums")
     }
 
-    /// `GET /albums/{id}` — the album's assets, in the album's own order.
+    /// Every asset in an album, following the cursor to the last page.
+    ///
+    /// ⚠⚠ **`POST /search/metadata`, not `GET /albums/{id}`.** `AlbumResponseDto` carries
+    /// `assetCount` and **no assets**, so the obvious endpoint cannot answer this at all — it
+    /// fails with "missing field `assets`", which is how this was found in use.
+    ///
+    /// ⚠ `albumIds` is marked **deprecated** in 3.2.0 and is nevertheless the only way to scope a
+    /// metadata search to an album: `isNotInAlbum` is deprecated too, and the timeline endpoints
+    /// return a columnar shape with **no `originalFileName`**, which is what decides the cache
+    /// path's extension and therefore the decoder. A deliberate dependency on a deprecated field,
+    /// recorded here so the next person does not think it was an oversight.
+    ///
+    /// ⚠ Paged by `cursor`, which is not deprecated, rather than by `page`, which is.
     pub fn album(&self, id: &str) -> Result<Vec<Asset>, Error> {
-        let detail: AlbumDetail = self.get_json(&format!("/albums/{id}"))?;
-        Ok(detail.assets)
+        let mut out: Vec<Asset> = Vec::new();
+        let mut cursor: Option<String> = None;
+        // ⚠ A hard ceiling on round trips. A server that returned a cursor for ever would
+        // otherwise hang the worker thread silently; 1000 pages at the maximum page size is a
+        // million assets, far past any album.
+        for _ in 0..1000 {
+            let mut body = serde_json::json!({
+                "albumIds": [id],
+                "size": PAGE_SIZE,
+            });
+            if let Some(c) = &cursor {
+                body["cursor"] = serde_json::Value::String(c.clone());
+            }
+            let page: SearchResponse = self.post_json("/search/metadata", &body)?;
+            out.extend(page.assets.items);
+            match page.assets.next_cursor {
+                // ⚠ An empty cursor is as final as a null one — a server that sends `""` must not
+                // put this into an endless loop.
+                Some(c) if !c.is_empty() => cursor = Some(c),
+                _ => return Ok(out),
+            }
+        }
+        Ok(out)
     }
 
     /// `GET /assets/{id}/thumbnail?size=…` — the raw encoded bytes, format unspecified.

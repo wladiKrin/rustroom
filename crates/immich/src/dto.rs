@@ -24,13 +24,28 @@ pub struct AlbumSummary {
     pub asset_count: u32,
 }
 
-/// `GET /albums/{id}` — the album plus its assets.
+/// `POST /search/metadata` — one page of results.
+///
+/// ⚠⚠ **This is how an album's assets are fetched, and `GET /albums/{id}` is not.**
+/// `AlbumResponseDto` in Immich 3.2.0 carries `assetCount` and **no `assets` field at all**, so
+/// asking that endpoint for assets fails with "missing field `assets`" — which is exactly what it
+/// did in use, after a hand-written fixture had asserted the opposite.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchResponse {
+    pub assets: SearchAssets,
+}
+
+/// The `assets` half of a search response.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AlbumDetail {
-    pub id: String,
-    pub album_name: String,
-    pub assets: Vec<Asset>,
+pub struct SearchAssets {
+    pub items: Vec<Asset>,
+    /// The cursor for the next page, or `None` on the last one.
+    ///
+    /// ⚠ `cursor`/`nextCursor` rather than `page`: `page` is marked deprecated in 3.2.0 and this
+    /// is not.
+    #[serde(default)]
+    pub next_cursor: Option<String>,
 }
 
 /// What kind of thing an asset is.
@@ -71,7 +86,13 @@ mod tests {
 
     const ABOUT: &str = include_str!("../tests/fixtures/about.json");
     const ALBUMS: &str = include_str!("../tests/fixtures/albums.json");
-    const ALBUM: &str = include_str!("../tests/fixtures/album.json");
+    const SEARCH: &str = include_str!("../tests/fixtures/search_album.json");
+    /// ⚠⚠ **A real reply from a real server**, captured 2026-09-22 and scrubbed of the owner's
+    /// name and email. The others in this directory are shaped from the OpenAPI schema; this one
+    /// is not, and that difference matters — a hand-written `album.json` once asserted that
+    /// `GET /albums/{id}` returns an `assets` array, which it does not, and the test passed because
+    /// it was checking my assumption against itself rather than against a server.
+    const ALBUMS_REAL: &str = include_str!("../tests/fixtures/albums_real.json");
 
     #[test]
     fn about_reads_the_version() {
@@ -87,13 +108,43 @@ mod tests {
         assert_eq!(v[0].asset_count, 412);
     }
 
+    /// ⚠ Parses a captured reply, with all twelve fields this DTO does not model present in it —
+    /// `albumUsers`, `startDate`, `order`, `lastModifiedAssetTimestamp` and the rest.
     #[test]
-    fn one_album_reads_its_assets() {
-        let a: AlbumDetail = serde_json::from_str(ALBUM).expect("album must parse");
-        assert_eq!(a.assets.len(), 4);
-        assert_eq!(a.assets[0].original_file_name, "DSCF1234.RAF");
-        assert!(matches!(a.assets[0].asset_type, AssetType::Image));
-        assert!(matches!(a.assets[1].asset_type, AssetType::Video));
+    fn a_real_albums_reply_parses_and_its_extra_fields_are_ignored() {
+        let v: Vec<AlbumSummary> = serde_json::from_str(ALBUMS_REAL)
+            .expect("a captured /albums reply must parse");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].album_name, "analog");
+        assert_eq!(v[0].asset_count, 872);
+        assert_eq!(v[0].id, "a6e6f5aa-8be7-454e-9328-82dc0cc2ab2b");
+        assert_eq!(v[1].album_name, "Rom");
+        assert_eq!(v[1].asset_count, 112);
+    }
+
+    #[test]
+    fn a_search_page_reads_its_assets() {
+        let r: SearchResponse = serde_json::from_str(SEARCH).expect("a search page must parse");
+        assert_eq!(r.assets.items.len(), 4);
+        assert_eq!(r.assets.items[0].original_file_name, "DSCF1234.RAF");
+        assert!(matches!(r.assets.items[0].asset_type, AssetType::Image));
+        assert!(matches!(r.assets.items[1].asset_type, AssetType::Video));
+    }
+
+    /// ⚠ A `null` cursor is the last page, and must not read as an error or as a cursor of "null".
+    #[test]
+    fn a_null_next_cursor_is_none() {
+        let r: SearchResponse = serde_json::from_str(SEARCH).expect("must parse");
+        assert!(r.assets.next_cursor.is_none());
+    }
+
+    /// ⚠⚠ **The regression this whole change exists for.** `AlbumResponseDto` has no `assets`
+    /// field, so a DTO that expects one fails on a real reply. The album list endpoint is still
+    /// used — for the list — and must keep parsing without one.
+    #[test]
+    fn an_album_row_has_no_assets_field_and_that_is_correct() {
+        let v: Vec<AlbumSummary> = serde_json::from_str(ALBUMS).expect("albums must parse");
+        assert_eq!(v[0].asset_count, 412, "the count comes from the album row");
     }
 
     /// ⚠ Immich keeps adding fields; a DTO that fails on an unknown one breaks on every server
