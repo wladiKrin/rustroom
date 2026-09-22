@@ -13,6 +13,7 @@ members = [
     "crates/camera-profile",
     "crates/catalog",
     "crates/image-decode",
+    "crates/immich",
     "crates/lens-profile",
     "crates/xmp",
 ]
@@ -25,7 +26,7 @@ repository = "https://github.com/wladiKrin/rustroom"
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
-image = { version = "0.25", default-features = false, features = ["tiff", "jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["tiff", "jpeg", "png", "webp"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,3 +43,4 @@ wgpu = "29"
 pollster = "0.4"
 bytemuck = "1"
 quick-xml = "0.41"
+ureq = "3"
