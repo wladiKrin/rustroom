@@ -273,6 +273,7 @@ dependencies = [
  "gpu-pipeline",
  "image",
  "image-decode",
+ "immich",
  "lens-profile",
  "muda",
  "objc2 0.6.4",

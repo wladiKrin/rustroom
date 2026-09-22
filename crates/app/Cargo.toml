@@ -29,6 +29,7 @@ export = { path = "../export" }
 catalog = { path = "../catalog" }
 xmp = { path = "../xmp" }
 image-decode = { path = "../image-decode" }
+immich = { path = "../immich" }
 eframe = { workspace = true }
 egui = { workspace = true }
 rfd = { workspace = true }
