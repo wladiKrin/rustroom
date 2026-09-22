@@ -543,6 +543,12 @@ impl Size {
     }
 }
 
+/// How much JSON one response may be. See `get_text`.
+const JSON_LIMIT: u64 = 256 * 1024 * 1024;
+
+/// How many bytes an in-memory image read may be. See `get_bytes`.
+const IMAGE_LIMIT: u64 = 64 * 1024 * 1024;
+
 /// A connection to one Immich server.
 ///
 /// ⚠ **Certificate verification is never disabled.** A self-signed certificate fails to connect
@@ -597,7 +603,12 @@ impl Client {
             .header("Accept", "application/json")
             .call()
             .map_err(map_ureq)?;
+        // ⚠⚠ ureq caps a body read at 10 MB by default (`MAX_BODY_SIZE`), and an album's JSON
+        // passes that at roughly 25,000 assets. Raised explicitly so a large album fails as
+        // "too large" only at an absurd size, not silently at a plausible one.
         res.body_mut()
+            .with_config()
+            .limit(JSON_LIMIT)
             .read_to_string()
             .map_err(|e| Error::Decode(e.to_string()))
     }
@@ -609,9 +620,12 @@ impl Client {
             .header("x-api-key", &self.key)
             .call()
             .map_err(map_ureq)?;
+        // ⚠ A limit, not `u64::MAX`: this reads into memory, and the guard against a
+        // misconfigured server streaming something enormous is worth keeping. Thumbnails and
+        // previews are orders of magnitude below this.
         res.body_mut()
             .with_config()
-            .limit(u64::MAX)
+            .limit(IMAGE_LIMIT)
             .read_to_vec()
             .map_err(|e| Error::Network(e.to_string()))
     }
@@ -680,7 +694,7 @@ fn map_ureq(e: ureq::Error) -> Error {
 }
 ```
 
-⚠⚠ **`ureq` 3's exact method names must be checked against the version Cargo resolves** — read `cargo doc -p ureq --open` or the resolved source rather than trusting this block. The shape (agent, header, call, body reader) is right; `with_config().limit(..)` and `as_reader()` are the details most likely to have moved. Fix them here, do not work around them at call sites.
+✅ **Checked against the resolved `ureq` 3.4.2 source on 2026-09-22, not written from memory.** All four hold: `Agent::new_with_defaults()` (`agent.rs:103`), `body_mut().read_to_string()` / `read_to_vec()` / `as_reader()` / `with_config()` (`body/mod.rs:292/325/230/421`), `BodyWithConfig::limit(u64)` (`body/mod.rs:502`), and `Error::StatusCode(u16)` (`error.rs:14`). ⚠ Two things the check *changed*: the default body cap is **10 MB** (`MAX_BODY_SIZE`), which both reads now raise explicitly; and `http_status_as_error` **defaults to `true`**, so `.call()` really does return `Err(StatusCode)` on 4xx/5xx and `map_ureq` is correct as written.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
