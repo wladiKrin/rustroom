@@ -1,6 +1,7 @@
 //! The Settings window.
 
-use super::dialog;
+use super::shell::tabs;
+use super::{dialog, Footer};
 use crate::decode::view_quality_hint;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
@@ -27,336 +28,272 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let os_manages_colour = app.os_manages_colour;
     let mut close = false;
 
-    let dismissed = dialog(
+    // ⚠ Five tabs (2026-09-21): the thirteen hairline groups became five named pages, so a
+    // setting is found by its subject rather than by scrolling. Every control and every hint
+    // is the one the single page had; only the grouping is new.
+    let out = dialog(
         ctx,
         &mut app.settings,
         "settings",
         "Settings",
         theme::DialogSize::Standard,
+        Footer::close("Done").note("Changes apply as you make them."),
         |ui| {
-            ui.checkbox(&mut confirm, "Confirm before deleting a preset");
-            ui.separator();
-
-            // ⚠⚠ Both preferences existed since M5.4b and M3.2 and had NO control — they lived
-            // only in the settings file, and this file's own handoff told the user to change one
-            // "in Settings". Reported 2026-09-08. They apply to a photo with no sidecar; a photo
-            // already edited keeps what it stored (`Settings::initial_edits`).
-            ui.checkbox(
-                &mut camera_rendering,
-                "Open new photos with the camera rendering",
-            );
-            theme::hint(
+            let tab = tabs(
                 ui,
-                "A RAW that has never been edited opens rendered the way the camera would. Off \
-             opens it colorimetric, which looks flat. A photo you have already edited keeps \
-             its own setting either way.",
+                egui::Id::new("settings_tab"),
+                &["Behaviour", "Appearance", "Display", "Performance", "Input"],
             );
-            ui.checkbox(&mut auto_lens, "Apply lens corrections to new photos");
-            theme::hint(
-                ui,
-                "Distortion, chromatic aberration and vignetting from the lens profile, on a \
-             RAW that has never been edited. A photo you have already edited keeps its own.",
-            );
-            ui.separator();
-
-            ui.checkbox(&mut write_xmp, "Write XMP sidecars beside RAW files");
-            theme::hint(
-                ui,
-                "Ratings, colour labels and keywords are written to a stem.xmp file next to \
-             each RAW, which is what Lightroom and exiftool read. An existing sidecar is \
-             merged into, never replaced, so develop settings written by another application \
-             survive. Turning this off does not stop Rustroom reading sidecars somebody else \
-             changed, and turning it back on updates each photo at its next rating or keyword \
-             change rather than all at once.",
-            );
-            ui.separator();
-
-            ui.checkbox(&mut auto_advance, "Move to the next photo after rating");
-            theme::hint(
-                ui,
-                "In the Library grid a rating, a flag or a colour label steps past everything \
-                 that was selected; in Compare it steps the bordered pane, exactly as the arrow \
-                 keys do. Clearing a rating with 0 or a flag with U never moves on — a \
-                 correction should leave you on the photo you are fixing.",
-            );
-            ui.separator();
-
-            // ⚠ One grid so the two controls line up. The Display row below sits in a runtime
-            // branch and gets its **own** grid: a `Grid` whose row count changes between frames
-            // is an id-and-column-width problem for no gain.
-            egui::Grid::new("settings_appearance")
-                .num_columns(2)
-                .spacing([12.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Theme");
-                    egui::ComboBox::from_id_salt("theme_pick")
-                        .selected_text(theme_choice.label())
-                        .show_ui(ui, |ui| {
-                            for t in ThemeChoice::ALL {
-                                ui.selectable_value(&mut theme_choice, t, t.label());
-                            }
-                        });
-                    ui.end_row();
-
-                    ui.label("Accent");
-                    egui::ComboBox::from_id_salt("accent_pick")
-                        .selected_text(accent.label())
-                        .show_ui(ui, |ui| {
-                            for a in Accent::ALL {
-                                ui.selectable_value(&mut accent, a, a.label());
-                            }
-                        });
-                    ui.end_row();
-                });
-            theme::hint(
-                ui,
-                "Dark is the default because a light surround changes how you judge exposure. \
-             The accent marks active controls; Neutral turns it off.",
-            );
-            ui.separator();
-
-            // ⚠ A **runtime** branch, not `#[cfg]`, so both halves compile on every platform. The
-            // menu-bar work shipped a `#[cfg]`-gated UI branch that the developer never compiled and
-            // Linux CI never exercised, leaving both halves unverified by whoever was looking.
-            if os_manages_colour {
-                // ⚠ A note, not a disabled dropdown. There is nothing to choose: the OS is using the
-                // display's calibrated profile and following the window between monitors, which no
-                // value here could improve on.
-                ui.horizontal(|ui| {
-                    ui.label("Display");
-                    ui.label("handled by macOS");
-                });
-                theme::hint(
-                    ui,
-                    "Your display's own colour profile is applied by the system, including any \
-                 calibration, and it follows the window if you move it to another monitor.",
-                );
-            } else {
-                ui.horizontal(|ui| {
-                    ui.label("Display");
-                    egui::ComboBox::from_id_salt("display_space_pick")
-                        .selected_text(display_space.label())
-                        .show_ui(ui, |ui| {
-                            // ⚠ `DISPLAYS`, not `ALL`: no ProPhoto monitor exists, so offering it is
-                            // a pure footgun.
-                            for s in color::OutputSpace::DISPLAYS {
-                                ui.selectable_value(&mut display_space, s, s.label());
-                            }
-                        });
-                });
-                theme::hint(
-                    ui,
-                    "The primaries of your monitor. Most are sRGB; recent Apple displays and many \
-                 laptops are Display P3. Affects only what you see — never an export, and never \
-                 the histogram.",
-                );
-            }
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("1:1 view quality");
-                egui::ComboBox::from_id_salt("view_demosaic_pick")
-                    .selected_text(tier.label())
-                    .show_ui(ui, |ui| {
-                        for d in raw_decode::Demosaic::ALL {
-                            ui.selectable_value(&mut tier, d, d.label());
-                        }
-                    });
-                theme::hint(ui, view_quality_hint(tier));
-            });
-            // ⚠ Not decoration. Unlike the export setting, this cost is *recurring*: the
-            // full-resolution decode is eager, so a slower tier is paid on every photo you
-            // stop on. The dialog is the only place a user would find that out.
-            theme::hint(
-                ui,
-                "RAW only, and separate from the export setting. Sets the demosaic used \
-             for the zoomed view. A slower tier costs that much extra on every photo \
-             you stop on, not just on export — the full-resolution decode starts on \
-             its own. The default is Better: Fast is 2.4x quicker but visibly smears \
-             fine foliage, and Best is indistinguishable from Better at 4x. \
-             Changing this re-decodes the open photo.",
-            );
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Rendering");
-                ui.checkbox(&mut gpu_tail, "Use the GPU");
-            });
-            theme::hint(
-                ui,
-                // ⚠⚠ **Deliberately does NOT enumerate what it reaches, and it has been corrected
-                // for exactly that THREE times now.** It named three ported stages, which stopped
-                // being true at M8.3e when the per-pixel tail took the count to seven; its "does
-                // not apply inside a mask" clause stopped being true at M8.3j; and at M8.9 "the
-                // per-pixel develop stages" stopped being true twice over — lens correction is a
-                // **resampler**, not a per-pixel stage, and the setting now reaches an **export**
-                // as well as the preview. A hint that lists a growing set is a hint that goes
-                // silently wrong: the "Reset crop" hover text and the "Lens scale" label were each
-                // corrected for this, and `EDIT_GROUP_NAMES` is derived rather than written out for
-                // the same reason. **Describe the rule, not the membership** — and nothing added to
-                // the seam or to `REPLACEABLE` should require editing this string.
-                //
-                // ⚠ It also carries the naming hazard the setting itself cannot: `gpu_tail` is
-                // named for the tail and decides three things. The text says "where it pays",
-                // which is true of all three and stays true of a fourth.
-                "Runs develop work on the graphics card wherever it pays — while you \
-             edit and while you export, inside a mask as well as outside one. Off by \
-             default: the CPU is the reference, and the picture should not change. \
-             ⚠ Work is only moved across when what it saves is worth the transfer, so \
-             a lightly edited photograph deliberately stays on the CPU. The first \
-             render after switching it on spends about a sixth of a second compiling \
-             shaders.",
-            );
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Thumbnail cache");
-                // ⚠ Read once, on the first frame the dialog is open. `get_or_insert_with` is
-                // what makes that "once" rather than "every frame" — walking the directory sixty
-                // times a second is the `apply_view_demosaic` mistake in another costume.
-                let store = rustroom_app::thumb_store::ThumbStore::user_default();
-                let bytes = *app
-                    .thumb_cache_bytes
-                    .get_or_insert_with(|| store.size_bytes());
-                ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
-                // ⚠ No confirmation, deliberately. This destroys nothing the app cannot rebuild
-                // — the distinction that already separates deleting a collection from forgetting
-                // a folder, which does take ratings and keywords with it.
-                if ui.button("Clear").clicked() {
-                    store.clear();
-                    app.thumb_cache_bytes = Some(0);
+            match tab {
+                0 => {
+                    ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+                    ui.checkbox(
+                        &mut camera_rendering,
+                        "Open new photos with the camera rendering",
+                    );
+                    theme::hint(
+                        ui,
+                        "A RAW that has never been edited opens rendered the way the camera \
+                         would. Off opens it colorimetric, which looks flat. A photo you have \
+                         already edited keeps its own setting either way.",
+                    );
+                    ui.checkbox(&mut auto_lens, "Apply lens corrections to new photos");
+                    theme::hint(
+                        ui,
+                        "Distortion, chromatic aberration and vignetting from the lens profile, \
+                         on a RAW that has never been edited. A photo you have already edited \
+                         keeps its own.",
+                    );
+                    ui.checkbox(&mut write_xmp, "Write XMP sidecars beside RAW files");
+                    theme::hint(
+                        ui,
+                        "Ratings, colour labels and keywords are written to a stem.xmp file next \
+                         to each RAW, which is what Lightroom and exiftool read. An existing \
+                         sidecar is merged into, never replaced, so develop settings written by \
+                         another application survive. Turning this off does not stop Rustroom \
+                         reading sidecars somebody else changed, and turning it back on updates \
+                         each photo at its next rating or keyword change rather than all at once.",
+                    );
+                    ui.checkbox(&mut auto_advance, "Move to the next photo after rating");
+                    theme::hint(
+                        ui,
+                        "In the Library grid a rating, a flag or a colour label steps past \
+                         everything that was selected; in Compare it steps the bordered pane, \
+                         exactly as the arrow keys do. Clearing a rating with 0 or a flag with U \
+                         never moves on — a correction should leave you on the photo you are \
+                         fixing.",
+                    );
                 }
-            });
-            theme::hint(
-                ui,
-                "Previews already extracted from your photos, so a folder you have \
-             opened before fills in at once instead of re-reading every file. \
-             Clearing costs nothing but the time to build it again.",
-            );
+                1 => {
+                    egui::Grid::new("settings_appearance")
+                        .num_columns(2)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Theme");
+                            egui::ComboBox::from_id_salt("theme_pick")
+                                .selected_text(theme_choice.label())
+                                .show_ui(ui, |ui| {
+                                    for t in ThemeChoice::ALL {
+                                        ui.selectable_value(&mut theme_choice, t, t.label());
+                                    }
+                                });
+                            ui.end_row();
 
-            ui.separator();
+                            ui.label("Accent");
+                            egui::ComboBox::from_id_salt("accent_pick")
+                                .selected_text(accent.label())
+                                .show_ui(ui, |ui| {
+                                    for a in Accent::ALL {
+                                        ui.selectable_value(&mut accent, a, a.label());
+                                    }
+                                });
+                            ui.end_row();
+                        });
+                    theme::hint(
+                        ui,
+                        "Dark is the default because a light surround changes how you judge \
+                         exposure. The accent marks active controls; Neutral turns it off.",
+                    );
+                }
+                2 => {
+                    if os_manages_colour {
+                        ui.horizontal(|ui| {
+                            ui.label("Display");
+                            ui.label("handled by macOS");
+                        });
+                        theme::hint(
+                            ui,
+                            "Your display's own colour profile is applied by the system, \
+                             including any calibration, and it follows the window if you move it \
+                             to another monitor.",
+                        );
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label("Display");
+                            egui::ComboBox::from_id_salt("display_space_pick")
+                                .selected_text(display_space.label())
+                                .show_ui(ui, |ui| {
+                                    for s in color::OutputSpace::DISPLAYS {
+                                        ui.selectable_value(&mut display_space, s, s.label());
+                                    }
+                                });
+                        });
+                        theme::hint(
+                            ui,
+                            "The primaries of your monitor. Most are sRGB; recent Apple displays \
+                             and many laptops are Display P3. Affects only what you see — never \
+                             an export, and never the histogram.",
+                        );
+                    }
+                }
+                3 => {
+                    theme::sub_label(ui, "1:1 view quality");
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("view_demosaic_pick")
+                            .selected_text(tier.label())
+                            .show_ui(ui, |ui| {
+                                for d in raw_decode::Demosaic::ALL {
+                                    ui.selectable_value(&mut tier, d, d.label());
+                                }
+                            });
+                        theme::hint(ui, view_quality_hint(tier));
+                    });
+                    theme::hint(
+                        ui,
+                        "RAW only, and separate from the export setting. Sets the demosaic used \
+                         for the zoomed view. A slower tier costs that much extra on every photo \
+                         you stop on, not just on export — the full-resolution decode starts on \
+                         its own. The default is Better: Fast is 2.4x quicker but visibly smears \
+                         fine foliage, and Best is indistinguishable from Better at 4x. \
+                         Changing this re-decodes the open photo.",
+                    );
 
-            ui.horizontal(|ui| {
-                ui.label("Export at once");
-                // ⚠ The ceiling is the core count rather than a constant: libraw's decode is
-                // single-threaded, so beyond one photo per core there is nothing left to overlap
-                // and only memory to spend. `Settings::export_width` repairs the same way, so a
-                // hand-edited file cannot get past it either.
-                let cores = std::thread::available_parallelism()
-                    .map(|n| n.get() as u32)
-                    .unwrap_or(1);
-                ui.add(egui::Slider::new(&mut export_width, 1..=cores.max(1)).text("photos"));
-            });
-            theme::hint(
-                ui,
-                "How many photos a batch export works on at once. Decoding a RAW uses one core, \
-             so several at a time is much faster — measured at about 3x at four, and 4.5x at \
-             eight. ⚠ Each photo in flight holds its decoded pixels in memory: roughly 300 MB \
-             on a 26-megapixel camera, so four is about 1.2 GB. Turn it down if exporting makes \
-             the machine swap. Applies to the next export.",
-            );
+                    theme::sub_label(ui, "Rendering");
+                    ui.checkbox(&mut gpu_tail, "Use the GPU");
+                    theme::hint(
+                        ui,
+                        "Runs develop work on the graphics card wherever it pays — while you \
+                         edit and while you export, inside a mask as well as outside one. Off by \
+                         default: the CPU is the reference, and the picture should not change. \
+                         ⚠ Work is only moved across when what it saves is worth the transfer, \
+                         so a lightly edited photograph deliberately stays on the CPU. The first \
+                         render after switching it on spends about a sixth of a second compiling \
+                         shaders.",
+                    );
 
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Resampling");
-                egui::ComboBox::from_id_salt("resampler_pick")
-                    .selected_text(resampler.label())
-                    .show_ui(ui, |ui| {
-                        for k in pipeline::Resampler::ALL {
-                            ui.selectable_value(&mut resampler, k, k.label());
+                    theme::sub_label(ui, "Thumbnail cache");
+                    ui.horizontal(|ui| {
+                        let store = rustroom_app::thumb_store::ThumbStore::user_default();
+                        let bytes = *app
+                            .thumb_cache_bytes
+                            .get_or_insert_with(|| store.size_bytes());
+                        ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
+                        if ui.button("Clear").clicked() {
+                            store.clear();
+                            app.thumb_cache_bytes = Some(0);
                         }
                     });
-                // ⚠ Per-kernel, from `Resampler::hint`. The names are accurate but mean nothing
-                // to a photographer on their own, so the trade has to be spelled out.
-                theme::hint(ui, resampler.hint());
-            });
-            theme::hint(
-                ui,
-                "How pixels are read when straightening, correcting perspective or applying a \
-             lens profile — the only three things that resample. One setting for the preview \
-             and the export, so what you judge is what you get. Sharper kernels recover detail \
-             a bilinear pass throws away and ring slightly on hard edges; bilinear is the only \
-             one that provably cannot, and is what Rustroom used before.",
-            );
+                    theme::hint(
+                        ui,
+                        "Previews already extracted from your photos, so a folder you have \
+                         opened before fills in at once instead of re-reading every file. \
+                         Clearing costs nothing but the time to build it again.",
+                    );
 
-            ui.separator();
+                    theme::sub_label(ui, "Export at once");
+                    let cores = std::thread::available_parallelism()
+                        .map(|n| n.get() as u32)
+                        .unwrap_or(1);
+                    ui.add(egui::Slider::new(&mut export_width, 1..=cores.max(1)).text("photos"));
+                    theme::hint(
+                        ui,
+                        "How many photos a batch export works on at once. Decoding a RAW uses one \
+                         core, so several at a time is much faster — measured at about 3x at \
+                         four, and 4.5x at eight. ⚠ Each photo in flight holds its decoded pixels \
+                         in memory: roughly 300 MB on a 26-megapixel camera, so four is about \
+                         1.2 GB. Turn it down if exporting makes the machine swap. Applies to the \
+                         next export.",
+                    );
 
-            ui.horizontal(|ui| {
-                ui.label("Pan with");
-                egui::ComboBox::from_id_salt("pan_drag_pick")
-                    .selected_text(pan_drag.label())
-                    .show_ui(ui, |ui| {
-                        for b in PanDrag::ALL {
-                            ui.selectable_value(&mut pan_drag, b, b.label());
-                        }
+                    theme::sub_label(ui, "Resampling");
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("resampler_pick")
+                            .selected_text(resampler.label())
+                            .show_ui(ui, |ui| {
+                                for k in pipeline::Resampler::ALL {
+                                    ui.selectable_value(&mut resampler, k, k.label());
+                                }
+                            });
+                        theme::hint(ui, resampler.hint());
                     });
-            });
-            theme::hint(
-                ui,
-                "Scrolling and two-finger swipe always pan — this is the extra drag gesture, \
-             for when a middle button is missing or broken.",
-            );
+                    theme::hint(
+                        ui,
+                        "How pixels are read when straightening, correcting perspective or \
+                         applying a lens profile — the only three things that resample. One \
+                         setting for the preview and the export, so what you judge is what you \
+                         get. Sharper kernels recover detail a bilinear pass throws away and ring \
+                         slightly on hard edges; bilinear is the only one that provably cannot, \
+                         and is what Rustroom used before.",
+                    );
+                }
+                _ => {
+                    theme::sub_label(ui, "Pan with");
+                    egui::ComboBox::from_id_salt("pan_drag_pick")
+                        .selected_text(pan_drag.label())
+                        .show_ui(ui, |ui| {
+                            for b in PanDrag::ALL {
+                                ui.selectable_value(&mut pan_drag, b, b.label());
+                            }
+                        });
+                    theme::hint(
+                        ui,
+                        "Scrolling and two-finger swipe always pan — this is the extra drag \
+                         gesture, for when a middle button is missing or broken.",
+                    );
 
-            ui.separator();
+                    theme::sub_label(ui, "Erase with");
+                    egui::ComboBox::from_id_salt("erase_drag_pick")
+                        .selected_text(erase_drag.label())
+                        .show_ui(ui, |ui| {
+                            for b in EraseDrag::ALL {
+                                ui.selectable_value(&mut erase_drag, b, b.label());
+                            }
+                        });
+                    theme::hint(
+                        ui,
+                        &if erase_drag.button(pan_drag).is_none() && erase_drag != EraseDrag::Off {
+                            format!(
+                                "Unavailable: {} is already bound to panning, which always wins. \
+                                 Pick another button, or change what pans.",
+                                erase_drag.label()
+                            )
+                        } else {
+                            "Hold this button while painting a brush mask to erase instead, for \
+                             the duration of the stroke. With Erase already ticked it paints."
+                                .to_string()
+                        },
+                    );
 
-            ui.horizontal(|ui| {
-                ui.label("Erase with");
-                egui::ComboBox::from_id_salt("erase_drag_pick")
-                    .selected_text(erase_drag.label())
-                    .show_ui(ui, |ui| {
-                        for b in EraseDrag::ALL {
-                            ui.selectable_value(&mut erase_drag, b, b.label());
-                        }
-                    });
-            });
-            // ⚠ The hint names the *configured* pan binding rather than saying "right-drag"
-            // literally, or it becomes a lie the moment that setting changes — `PanDrag::label`'s
-            // reason, and the same trap the toolbar hint was fixed for.
-            theme::hint(
-                ui,
-                &if erase_drag.button(pan_drag).is_none() && erase_drag != EraseDrag::Off {
-                    format!(
-                        "Unavailable: {} is already bound to panning, which always wins. \
-                         Pick another button, or change what pans.",
-                        erase_drag.label()
-                    )
-                } else {
-                    "Hold this button while painting a brush mask to erase instead, for the \
-                     duration of the stroke. With Erase already ticked it paints."
-                        .to_string()
-                },
-            );
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Preview while dragging");
-                egui::ComboBox::from_id_salt("drag_quality_pick")
-                    .selected_text(drag_quality.label())
-                    .show_ui(ui, |ui| {
-                        for q in DragQuality::ALL {
-                            ui.selectable_value(&mut drag_quality, q, q.label());
-                        }
-                    });
-            });
-            theme::hint(
-                ui,
-                "Renders at a lower resolution while a slider or the canvas is being dragged, \
-                 then at full quality the moment you let go. Each step is about a quarter as \
-                 many pixels. Sharpening is the one adjustment that reads weakly while dragging \
-                 — judge it at 1:1, or choose Full quality.",
-            );
-
-            ui.separator();
-            if ui.button("Close").clicked() {
-                close = true;
+                    theme::sub_label(ui, "Preview while dragging");
+                    egui::ComboBox::from_id_salt("drag_quality_pick")
+                        .selected_text(drag_quality.label())
+                        .show_ui(ui, |ui| {
+                            for q in DragQuality::ALL {
+                                ui.selectable_value(&mut drag_quality, q, q.label());
+                            }
+                        });
+                    theme::hint(
+                        ui,
+                        "Renders at a lower resolution while a slider or the canvas is being \
+                         dragged, then at full quality the moment you let go. Each step is about \
+                         a quarter as many pixels. Sharpening is the one adjustment that reads \
+                         weakly while dragging — judge it at 1:1, or choose Full quality.",
+                    );
+                }
             }
         },
     );
-    close |= dismissed;
+    close |= out.dismissed;
 
     if confirm != app.settings.confirm_preset_delete {
         app.settings.confirm_preset_delete = confirm;

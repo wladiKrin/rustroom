@@ -1,6 +1,7 @@
 //! Develop-preset dialogs: saving one, and confirming a deletion.
 
-use super::dialog;
+use super::{dialog, Footer};
+use crate::develop::panel::section::{header, Header};
 use crate::transfer::edit_group_checkboxes;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
@@ -17,28 +18,32 @@ pub fn save(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut close = false;
     let mut save = false;
 
-    let dismissed = dialog(
+    let note = "Saved presets appear in the Presets panel.";
+    let out = dialog(
         ctx,
         &mut app.settings,
         "save_preset",
         "Save preset",
         theme::DialogSize::Standard,
+        Footer::confirm("Save", !name.trim().is_empty(), "Cancel").note(note),
         |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut name);
             });
-            ui.separator();
-            ui.label("Include:");
-            edit_group_checkboxes(ui, &mut groups);
-            ui.separator();
-            let (confirmed, dismissed) =
-                theme::button_row(ui, "Save", !name.trim().is_empty(), "Cancel");
-            save |= confirmed;
-            close |= dismissed;
+            let summary = rustroom_app::presets::groups_summary(groups);
+            let mut h = header(
+                ui,
+                egui::Id::new(("save_preset", "Include")),
+                true,
+                Header::new("Include").trailing(&summary),
+            );
+            h.state
+                .show_body_unindented(ui, |ui| edit_group_checkboxes(ui, &mut groups));
         },
     );
-    close |= dismissed;
+    save |= out.primary;
+    close |= out.dismissed;
 
     if save {
         // Clone the edits *out* first: holding `&app.session` across the assignments
@@ -83,30 +88,23 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut dont_ask = *dont_ask_again;
     let mut outcome: Option<ConfirmOutcome> = None;
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "confirm_delete",
-        "Delete preset",
+        "Delete preset?",
         theme::DialogSize::Compact,
+        Footer::confirm("Delete", true, "Cancel"),
         |ui| {
             ui.label(format!("Delete the preset “{name}”?"));
             ui.checkbox(&mut dont_ask, "Don't ask again");
-            ui.separator();
-            let (confirmed, dismissed) = theme::button_row(ui, "Delete", true, "Cancel");
-            if confirmed {
-                outcome = Some(ConfirmOutcome::Confirmed {
-                    suppress_future: dont_ask,
-                });
-            }
-            if dismissed {
-                outcome = Some(ConfirmOutcome::Cancelled);
-            }
         },
     );
-    // Clicking outside is a cancel — and therefore also discards the "don't ask again"
-    // tick, exactly like the Cancel button.
-    if dismissed {
+    if out.primary {
+        outcome = Some(ConfirmOutcome::Confirmed {
+            suppress_future: dont_ask,
+        });
+    } else if out.dismissed {
         outcome = Some(ConfirmOutcome::Cancelled);
     }
 

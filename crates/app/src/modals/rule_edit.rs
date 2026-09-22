@@ -7,7 +7,7 @@
 //! ⚠ Every dropdown is built from the catalog — the same lists the Filter popup and the panel use
 //! — so a value that cannot exist cannot be chosen.
 
-use crate::modals::{dialog, Modal};
+use crate::modals::{dialog, Footer, Modal};
 use crate::theme;
 use crate::RustroomApp;
 use eframe::egui;
@@ -307,12 +307,13 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut save = false;
     let mut cancel = false;
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "edit_rule",
         &format!("Rule for “{name}”"),
         theme::DialogSize::Wide,
+        Footer::confirm("Save", !unsupported, "Cancel"),
         |ui| {
             if unsupported {
                 // ⚠⚠ Declining to edit, never starting from empty. An empty form that replaced a
@@ -322,10 +323,6 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     "This rule uses nesting the editor cannot show, so it is left alone. \
                  Edit it in the catalog's JSON, or delete it and save a new one.",
                 );
-                ui.separator();
-                if ui.button("Close").clicked() {
-                    cancel = true;
-                }
                 return;
             }
 
@@ -424,18 +421,15 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     values: vec![prototypes()[0].clone()],
                 });
             }
-
-            ui.separator();
-            let (yes, no) = crate::theme::button_row(ui, "Save", true, "Cancel");
-            save = yes;
-            cancel = no;
         },
     );
+    save |= out.primary;
+    cancel |= out.dismissed;
 
     if save {
         app.save_rule(ctx, id, &name, &form);
         app.modal = Modal::None;
-    } else if cancel || dismissed {
+    } else if cancel {
         app.modal = Modal::None;
     } else if let Modal::EditRule { form: f, .. } = &mut app.modal {
         // ⚠ Written back so edits survive the frame — the dialog draws from a clone because the

@@ -4,7 +4,8 @@
 //! **return to** `Modal::ExportSettings` when closed, so the export dialog does not vanish
 //! underneath the user.
 
-use super::dialog;
+use super::shell::tabs_with_hover;
+use super::{dialog, Footer};
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
@@ -40,117 +41,89 @@ impl SampleName {
     }
 }
 
-/// The three sections that turn an export into a deliverable.
+/// A tab's hover: whether its section is doing anything, so it need not be opened to know.
 ///
-/// ⚠ Extracted from [`settings`] rather than written inline: that function had reached ~360
-/// lines, and this repository's record is that every oversized file got there one
-/// reasonable-seeming addition at a time. ⚠ It takes `&mut ExportOptions` and no `app`, which
-/// is what lets it sit outside the dialog closure's borrow — the shape this file's own
-/// comments say has cost a compile error here twice.
-fn delivery_sections(ui: &mut egui::Ui, opts: &mut ExportOptions) {
-    ui.separator();
-    // ⚠⚠ **Collapsed by default, all three.** They are the sections most exports never
-    // touch, and the dialog was reported as cramped once already; five always-open
-    // sections is how it got that way the first time. ⚠ Each header says whether it is
-    // *doing* something, so a collapsed section can never be hidden state — the failure
-    // the crop aspect lock and the `Filter:` button were each fixed for.
-    let on = |b: bool| if b { " ·" } else { "" };
+/// ⚠ The collapsing headers used to carry this as a `·` suffix in their title; a tab's title
+/// is its name, so the fact moved to the hover — pure, because a hover is invisible to the
+/// harness and this is the one place the sentence is written.
+fn tab_hover(name: &str, on: bool) -> String {
+    format!("{name} is {}", if on { "on" } else { "off" })
+}
 
-    egui::CollapsingHeader::new(format!("Metadata{}", on(opts.metadata.is_active())))
-        .id_salt("export_metadata")
+/// The Metadata tab.
+fn metadata_tab(ui: &mut egui::Ui, opts: &mut ExportOptions) {
+    egui::Grid::new("export_metadata_grid")
+        .num_columns(2)
+        .spacing([12.0, 4.0])
         .show(ui, |ui| {
-            egui::Grid::new("export_metadata_grid")
-                .num_columns(2)
-                .spacing([12.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Copyright");
-                    ui.text_edit_singleline(&mut opts.metadata.copyright);
-                    ui.end_row();
-                    ui.label("Creator");
-                    ui.text_edit_singleline(&mut opts.metadata.creator);
-                    ui.end_row();
-                    ui.label("Caption");
-                    ui.text_edit_singleline(&mut opts.metadata.caption);
-                    ui.end_row();
-                    ui.label("Include");
-                    ui.horizontal(|ui| {
-                        for s in [
-                            export::MetadataScope::All,
-                            export::MetadataScope::CopyrightOnly,
-                        ] {
-                            ui.selectable_value(&mut opts.metadata.scope, s, s.label());
-                        }
-                    });
-                    ui.end_row();
-                });
-            // ⚠ The load-bearing sentence in this whole dialog. Rustroom's promise is
-            // that it never writes to the negative, and a field marked "Copyright" is
-            // exactly where someone would expect it to break that promise.
-            theme::hint(
-                ui,
-                "Written into the exported file as XMP. The original is never modified. \
-                 A photo's own title, caption, copyright and creator (Information dialog) win \
-                 over the fields above; leave a field empty to write nothing for it. \
-                 \"All metadata\" also writes the camera, exposure, keywords and rating.",
-            );
+            ui.label("Copyright");
+            ui.text_edit_singleline(&mut opts.metadata.copyright);
+            ui.end_row();
+            ui.label("Creator");
+            ui.text_edit_singleline(&mut opts.metadata.creator);
+            ui.end_row();
+            ui.label("Caption");
+            ui.text_edit_singleline(&mut opts.metadata.caption);
+            ui.end_row();
+            ui.label("Include");
+            ui.horizontal(|ui| {
+                for s in [
+                    export::MetadataScope::All,
+                    export::MetadataScope::CopyrightOnly,
+                ] {
+                    ui.selectable_value(&mut opts.metadata.scope, s, s.label());
+                }
+            });
+            ui.end_row();
         });
+    theme::hint(
+        ui,
+        "Written into the exported file as XMP. The original is never modified. \
+         A photo's own title, caption, copyright and creator (Information dialog) win \
+         over the fields above; leave a field empty to write nothing for it. \
+         \"All metadata\" also writes the camera, exposure, keywords and rating.",
+    );
+}
 
-    egui::CollapsingHeader::new(format!("Watermark{}", on(opts.watermark.is_active())))
-        .id_salt("export_watermark")
+/// The Watermark tab.
+fn watermark_tab(ui: &mut egui::Ui, opts: &mut ExportOptions) {
+    egui::Grid::new("export_watermark_grid")
+        .num_columns(2)
+        .spacing([12.0, 4.0])
         .show(ui, |ui| {
-            egui::Grid::new("export_watermark_grid")
-                .num_columns(2)
-                .spacing([12.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Text");
-                    ui.text_edit_singleline(&mut opts.watermark.text);
-                    ui.end_row();
-                    ui.label("Corner");
-                    egui::ComboBox::from_id_salt("watermark_corner")
-                        .selected_text(opts.watermark.corner.label())
-                        // ⚠ Built from `WatermarkCorner::ALL`, never written out here,
-                        // so a fifth corner cannot land in a list this dialog does not
-                        // show — the rule `Tool::ALL` and `FlagSet::ALL` already follow.
-                        .show_ui(ui, |ui| {
-                            for c in WatermarkCorner::ALL {
-                                ui.selectable_value(&mut opts.watermark.corner, c, c.label());
-                            }
-                        });
-                    ui.end_row();
+            ui.label("Text");
+            ui.text_edit_singleline(&mut opts.watermark.text);
+            ui.end_row();
+            ui.label("Corner");
+            egui::ComboBox::from_id_salt("watermark_corner")
+                .selected_text(opts.watermark.corner.label())
+                .show_ui(ui, |ui| {
+                    for c in WatermarkCorner::ALL {
+                        ui.selectable_value(&mut opts.watermark.corner, c, c.label());
+                    }
                 });
-            let (lo, hi) = Watermark::SIZE_RANGE;
-            ui.add(
-                egui::Slider::new(&mut opts.watermark.size, lo..=hi).text("Size (% of long edge)"),
-            );
-            ui.add(egui::Slider::new(&mut opts.watermark.opacity, 0..=100).text("Opacity"));
-            // ⚠ Not decoration: the size is a *fraction*, which is the only thing that
-            // makes one preset usable at 800 px and at 6000 — and it is exactly the
-            // behaviour someone would otherwise report as the slider being ignored.
-            theme::hint(
-                ui,
-                "Scales with the exported image, so one setting suits every output size. \
-                 Skipped on a file too small to hold it.",
-            );
+            ui.end_row();
         });
+    let (lo, hi) = Watermark::SIZE_RANGE;
+    ui.add(egui::Slider::new(&mut opts.watermark.size, lo..=hi).text("Size (% of long edge)"));
+    ui.add(egui::Slider::new(&mut opts.watermark.opacity, 0..=100).text("Opacity"));
+    theme::hint(
+        ui,
+        "Scales with the exported image, so one setting suits every output size. \
+         Skipped on a file too small to hold it.",
+    );
+}
 
-    egui::CollapsingHeader::new(format!(
-        "Output sharpening{}",
-        on(opts.output_sharpening.is_active())
-    ))
-    .id_salt("export_sharpening")
-    .show(ui, |ui| {
-        ui.add(egui::Slider::new(&mut opts.output_sharpening.amount, 0..=100).text("Amount"));
-        // ⚠ The one thing a user cannot work out from the slider: this is *not* the
-        // Detail panel's Sharpening, it stacks on top of it, and it exists because the
-        // resize happens before the pipeline. Same reason the Demosaic hint above says
-        // what it says.
-        theme::hint(
-            ui,
-            "Applied to the finished file at a fixed radius, on top of the Detail \
-             panel's sharpening — it puts back the edge a resize takes. Not shown in \
-             the preview.",
-        );
-    });
+/// The Output tab's sharpening block.
+fn sharpening_block(ui: &mut egui::Ui, opts: &mut ExportOptions) {
+    theme::sub_label(ui, "Output sharpening");
+    ui.add(egui::Slider::new(&mut opts.output_sharpening.amount, 0..=100).text("Amount"));
+    theme::hint(
+        ui,
+        "Applied to the finished file at a fixed radius, on top of the Detail \
+         panel's sharpening — it puts back the edge a resize takes. Not shown in \
+         the preview.",
+    );
 }
 
 /// Where and how to export the selection.
@@ -187,197 +160,169 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     let presets = app.export_preset_list.clone();
     let selected = app.selected_export_preset.clone();
 
-    let dismissed = dialog(
+    let note = format!(
+        "{count} photo{} to export",
+        if count == 1 { "" } else { "s" }
+    );
+    // ⚠ Four tabs (2026-09-21): Output, Filename, Metadata, Watermark. The collapsing headers
+    // and their `(on)` suffix are gone with the single page.
+    let out = dialog(
         ctx,
         &mut app.settings,
         "export_settings",
         "Export",
         theme::DialogSize::Standard,
+        Footer::confirm("Export", can_export(&opts), "Cancel").note(&note),
         |ui| {
-            ui.label(format!("Export {count} photos as JPEG."));
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("export_preset_pick")
-                    .selected_text(selected.clone().unwrap_or_else(|| "Preset…".into()))
-                    .show_ui(ui, |ui| {
-                        for p in &presets {
-                            let is_sel = selected.as_deref() == Some(p.name.as_str());
-                            if ui.selectable_label(is_sel, &p.name).clicked() {
-                                // Fills every field below, which is what keeps a preset's
-                                // destination change visible rather than hidden.
-                                picked = Some((p.name.clone(), p.options.clone()));
-                            }
-                        }
-                    });
-                if ui.button("Save as…").clicked() {
-                    save_as = true;
-                }
-                let can_delete = selected.is_some();
-                if ui
-                    .add_enabled(can_delete, egui::Button::new("Delete"))
-                    .clicked()
-                {
-                    delete_selected = true;
-                }
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Destination…").clicked() {
-                    pick_dir = true;
-                }
-                let shown = if opts.dest_dir.as_os_str().is_empty() {
-                    "(none chosen)".to_string()
-                } else if opts.dest_dir.is_dir() {
-                    opts.dest_dir.display().to_string()
-                } else {
-                    // A preset can carry a folder that has since gone — an unplugged drive,
-                    // or a preset from another machine. Say so rather than failing per photo.
-                    format!("{} (missing)", opts.dest_dir.display())
-                };
-                ui.label(shown);
-            });
-
-            // ─── M6.1 sections ───────────────────────────────────────────────────────────
-            //
-            // ⚠⚠ Naming is here, between the destination and the output format, because *where
-            // the file goes* and *what it is called* are one question. The four sections below
-            // it are the seam M6.1b–e drop into; their `ExportOptions` fields already exist,
-            // defaulted and inert, so each can be built without touching this file's neighbours
-            // or the struct every one of them would otherwise contend for.
-            //
-            // ⚠ Deliberately **no inert widgets** for the one not yet built: a copyright field
-            // that silently writes nothing is worse than an absent one, because it looks like a
-            // feature. A section appears when it works.
-            //
-            //   M6.1e — Delivery:  opts.delivery.{subfolder, then}
-            ui.horizontal(|ui| {
-                ui.label("Filename");
-                ui.text_edit_singleline(&mut opts.filename_template);
-            });
-            // ⚠ Always shown, and built from `Token::NAMES` rather than written out here: a
-            // reference listing a token the parser does not have is worse than none, the rule
-            // the Keyboard-shortcuts dialog already follows.
-            egui::Grid::new("export_token_help")
-                .num_columns(2)
-                .spacing([10.0, 2.0])
-                .show(ui, |ui| {
-                    // ⚠ A grid rather than one comma-separated line: the tokens are not
-                    // self-explanatory — `{copy}` in particular was reported as unclear — and a
-                    // list of names without meanings is a reference only for whoever wrote it.
-                    for (tok, what) in rustroom_app::filename_template::token_help() {
-                        theme::hint(ui, tok);
-                        theme::hint(ui, what);
-                        ui.end_row();
-                    }
-                });
-            match Template::parse(&opts.filename_template) {
-                // ⚠ The preview is what makes the absent-value rule visible: a template naming a
-                // token this photo has nothing for otherwise reads as "why did my dash vanish".
-                // It is also where `-N` and `_N` are visibly *not* part of the template.
-                Ok(t) => {
-                    if let Some(s) = &sample {
-                        theme::hint(
-                            ui,
-                            &format!(
-                                "First file: {}.{}",
-                                t.render(&s.facts()),
-                                opts.format.extension()
-                            ),
-                        );
-                    }
-                }
-                // ⚠⚠ Reported, and Export goes dark while it stands. A typo must not export a
-                // folder of files all called the same thing — which is what dropping an unknown
-                // token silently would produce, collided into one by `-N`.
-                Err(e) => theme::error_hint(ui, &e.to_string()),
-            }
-            // ⚠⚠ **Only these two.** `Demosaic` further down is also a labelled control, but it
-            // is separated from these by the banding hint, the quality slider, the long-edge
-            // checkbox and its slider — folding it in here would **reorder the dialog** and
-            // detach the banding hint from the two controls it is about, whose placement is
-            // deliberate (see its comment). Alignment is not worth silently rearranging a dialog
-            // someone reasoned about.
-            //
-            // ⚠ The two sliders carry their labels inside the widget (`Slider::text`), so they
-            // are not `label: control` rows and do not belong in a column either.
-            egui::Grid::new("export_output")
-                .num_columns(2)
-                .spacing([12.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label("Format");
-                    egui::ComboBox::from_id_salt("format_pick")
-                        .selected_text(opts.format.label())
-                        .show_ui(ui, |ui| {
-                            for f in export::ExportFormat::ALL {
-                                ui.selectable_value(&mut opts.format, f, f.label());
-                            }
-                        });
-                    ui.end_row();
-
-                    ui.label("Colour space");
-                    egui::ComboBox::from_id_salt("space_pick")
-                        .selected_text(opts.space.label())
-                        .show_ui(ui, |ui| {
-                            for s in color::OutputSpace::ALL {
-                                ui.selectable_value(&mut opts.space, s, s.label());
-                            }
-                        });
-                    ui.end_row();
-                });
-            // ⚠ Warn, never block — see `banding_warning`. Placed under the two controls it is
-            // about, so the fix ("use 16-bit") is one glance from the Format dropdown.
-            if let Some(msg) = banding_warning(opts.space, opts.format) {
-                theme::hint(ui, msg);
-            }
-
-            // Greyed out rather than hidden for the non-lossy formats: the value is still
-            // there and returns when JPEG is reselected — the same treatment NR's Detail and
-            // Sharpening's Masking get for being inert.
-            ui.add_enabled(
-                opts.format.is_lossy(),
-                egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
-            );
-
-            let mut resize = opts.max_edge.is_some();
-            ui.checkbox(&mut resize, "Fit within a long edge");
-            if resize {
-                let mut edge = opts.max_edge.unwrap_or(2048);
-                ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
-                opts.max_edge = Some(edge);
-            } else {
-                opts.max_edge = None;
-            }
-
-            ui.horizontal(|ui| {
-                ui.label("Demosaic");
-                egui::ComboBox::from_id_salt("demosaic_pick")
-                    .selected_text(opts.demosaic.label())
-                    .show_ui(ui, |ui| {
-                        for d in raw_decode::Demosaic::ALL {
-                            ui.selectable_value(&mut opts.demosaic, d, d.label());
-                        }
-                    });
-            });
-            // ⚠ Not decoration. This is the one export control whose effect cannot be
-            // previewed, and the dialog is the only place a user would find that out.
-            theme::hint(
+            let meta = tab_hover("Metadata", opts.metadata.is_active());
+            let wm = tab_hover("Watermark", opts.watermark.is_active());
+            let tab = tabs_with_hover(
                 ui,
-                "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
-             Independent of the 1:1 view's own quality setting, so judging this \
-             means exporting a frame at two settings and comparing crops.",
+                egui::Id::new("export_tab"),
+                &[
+                    ("Output", ""),
+                    ("Filename", ""),
+                    ("Metadata", &meta),
+                    ("Watermark", &wm),
+                ],
             );
+            match tab {
+                0 => {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("export_preset_pick")
+                            .selected_text(selected.clone().unwrap_or_else(|| "Preset…".into()))
+                            .show_ui(ui, |ui| {
+                                for p in &presets {
+                                    let is_sel = selected.as_deref() == Some(p.name.as_str());
+                                    if ui.selectable_label(is_sel, &p.name).clicked() {
+                                        picked = Some((p.name.clone(), p.options.clone()));
+                                    }
+                                }
+                            });
+                        if ui.button("Save as…").clicked() {
+                            save_as = true;
+                        }
+                        let can_delete = selected.is_some();
+                        if ui
+                            .add_enabled(can_delete, egui::Button::new("Delete"))
+                            .clicked()
+                        {
+                            delete_selected = true;
+                        }
+                    });
+                    theme::sub_label(ui, "Destination");
+                    ui.horizontal(|ui| {
+                        if ui.button("Destination…").clicked() {
+                            pick_dir = true;
+                        }
+                        let shown = if opts.dest_dir.as_os_str().is_empty() {
+                            "(none chosen)".to_string()
+                        } else if opts.dest_dir.is_dir() {
+                            opts.dest_dir.display().to_string()
+                        } else {
+                            format!("{} (missing)", opts.dest_dir.display())
+                        };
+                        ui.label(shown);
+                    });
+                    theme::sub_label(ui, "File");
+                    egui::Grid::new("export_output")
+                        .num_columns(2)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Format");
+                            egui::ComboBox::from_id_salt("format_pick")
+                                .selected_text(opts.format.label())
+                                .show_ui(ui, |ui| {
+                                    for f in export::ExportFormat::ALL {
+                                        ui.selectable_value(&mut opts.format, f, f.label());
+                                    }
+                                });
+                            ui.end_row();
 
-            ui.separator();
-            delivery_sections(ui, &mut opts);
-
-            ui.separator();
-            // ⚠ Both halves, checked before the run rather than per photo — the reason
-            // `destination_ready` exists, applied to the other thing knowable up front.
-            let (confirmed, dismissed) =
-                theme::button_row(ui, "Export", can_export(&opts), "Cancel");
-            start |= confirmed;
-            close |= dismissed;
+                            ui.label("Colour space");
+                            egui::ComboBox::from_id_salt("space_pick")
+                                .selected_text(opts.space.label())
+                                .show_ui(ui, |ui| {
+                                    for s in color::OutputSpace::ALL {
+                                        ui.selectable_value(&mut opts.space, s, s.label());
+                                    }
+                                });
+                            ui.end_row();
+                        });
+                    if let Some(msg) = banding_warning(opts.space, opts.format) {
+                        theme::hint(ui, msg);
+                    }
+                    ui.add_enabled(
+                        opts.format.is_lossy(),
+                        egui::Slider::new(&mut opts.quality, 1..=100).text("JPEG quality"),
+                    );
+                    let mut resize = opts.max_edge.is_some();
+                    ui.checkbox(&mut resize, "Fit within a long edge");
+                    if resize {
+                        let mut edge = opts.max_edge.unwrap_or(2048);
+                        ui.add(egui::Slider::new(&mut edge, 256..=8192).text("Long edge (px)"));
+                        opts.max_edge = Some(edge);
+                    } else {
+                        opts.max_edge = None;
+                    }
+                    theme::sub_label(ui, "Demosaic");
+                    egui::ComboBox::from_id_salt("demosaic_pick")
+                        .selected_text(opts.demosaic.label())
+                        .show_ui(ui, |ui| {
+                            for d in raw_decode::Demosaic::ALL {
+                                ui.selectable_value(&mut opts.demosaic, d, d.label());
+                            }
+                        });
+                    theme::hint(
+                        ui,
+                        "RAW only. Higher is slower — roughly 1.2 s to 11 s per photo. \
+                         Independent of the 1:1 view's own quality setting, so judging this \
+                         means exporting a frame at two settings and comparing crops.",
+                    );
+                    sharpening_block(ui, &mut opts);
+                }
+                1 => {
+                    ui.horizontal(|ui| {
+                        ui.label("Filename");
+                        ui.text_edit_singleline(&mut opts.filename_template);
+                    });
+                    egui::Grid::new("export_token_help")
+                        .num_columns(2)
+                        .spacing([10.0, 2.0])
+                        .show(ui, |ui| {
+                            for (tok, what) in rustroom_app::filename_template::token_help() {
+                                theme::hint(ui, tok);
+                                theme::hint(ui, what);
+                                ui.end_row();
+                            }
+                        });
+                    match Template::parse(&opts.filename_template) {
+                        Ok(t) => {
+                            if let Some(s) = &sample {
+                                theme::hint(
+                                    ui,
+                                    &format!(
+                                        "First file: {}.{}",
+                                        t.render(&s.facts()),
+                                        opts.format.extension()
+                                    ),
+                                );
+                            }
+                        }
+                        Err(e) => theme::error_hint(ui, &e.to_string()),
+                    }
+                }
+                2 => metadata_tab(ui, &mut opts),
+                _ => watermark_tab(ui, &mut opts),
+            }
         },
     );
+    if out.primary {
+        start = true;
+    }
+    if out.dismissed {
+        close = true;
+    }
 
     if pick_dir {
         if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -412,7 +357,7 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
         app.start_export();
         close = true;
     }
-    if close || dismissed {
+    if close {
         app.modal = Modal::None;
     }
 }
@@ -425,20 +370,22 @@ pub fn save_preset(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut name = name.clone();
     let mut save = false;
     let mut close = false;
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "save_export_preset",
         "Save export preset",
         theme::DialogSize::Standard,
+        Footer::confirm("Save", !name.trim().is_empty(), "Cancel"),
         |ui| {
-            ui.text_edit_singleline(&mut name);
-            let (confirmed, dismissed) =
-                theme::button_row(ui, "Save", !name.trim().is_empty(), "Cancel");
-            save |= confirmed;
-            close |= dismissed;
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut name);
+            });
         },
     );
+    save |= out.primary;
+    close |= out.dismissed;
     if save {
         let preset = ExportPreset {
             name: name.clone(),
@@ -451,7 +398,7 @@ pub fn save_preset(app: &mut RustroomApp, ctx: &egui::Context) {
         app.export_preset_list = app.export_preset_store.list();
         close = true;
     }
-    app.modal = if close || dismissed {
+    app.modal = if close {
         // Back to the export dialog rather than to nothing, so it does not vanish
         // underneath the user.
         Modal::ExportSettings
@@ -477,30 +424,25 @@ pub fn confirm_delete(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut dont_ask = *dont_ask_again;
     let mut outcome: Option<ConfirmOutcome> = None;
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "confirm_delete_export",
-        "Delete export preset",
+        "Delete export preset?",
         theme::DialogSize::Compact,
+        Footer::confirm("Delete", true, "Cancel"),
         |ui| {
             ui.label(format!("Delete the export preset \u{201c}{name}\u{201d}?"));
             theme::hint(ui, "This cannot be undone — export presets have no trash.");
             ui.checkbox(&mut dont_ask, "Don't ask again");
-            ui.separator();
-            let (confirmed, dismissed) = theme::button_row(ui, "Delete", true, "Cancel");
-            if confirmed {
-                outcome = Some(ConfirmOutcome::Confirmed {
-                    suppress_future: dont_ask,
-                });
-            }
-            if dismissed {
-                outcome = Some(ConfirmOutcome::Cancelled);
-            }
         },
     );
     // Clicking outside is a cancel — and therefore discards the tick too.
-    if dismissed {
+    if out.primary {
+        outcome = Some(ConfirmOutcome::Confirmed {
+            suppress_future: dont_ask,
+        });
+    } else if out.dismissed {
         outcome = Some(ConfirmOutcome::Cancelled);
     }
 
@@ -538,40 +480,34 @@ pub fn collision(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut apply_all = app.export_apply_all;
     let mut decision: Option<Decision> = None;
 
-    let dismissed = dialog(
+    // ⚠ "Keep both" is the primary: it is the one answer that loses nothing. Skip and
+    // Overwrite are the extras, in that order; dismissing — the ×, the backdrop, "Cancel
+    // export" — cancels the export, as it always did, and `Decision::Cancel` carries no
+    // `apply_to_all`, so the tick cannot leak out of a cancel by construction.
+    let out = dialog(
         ctx,
         &mut app.settings,
         "export_collision",
         "File already exists",
         theme::DialogSize::Standard,
+        Footer::confirm("Keep both", true, "Cancel export").extra(&["Skip", "Overwrite"]),
         |ui| {
             ui.label(format!("“{name}” is already in the destination folder."));
             ui.checkbox(&mut apply_all, "Apply to all remaining");
-            ui.separator();
-            ui.horizontal(|ui| {
-                for (label, collision) in [
-                    ("Skip", Collision::Skip),
-                    ("Overwrite", Collision::Overwrite),
-                    ("Keep both", Collision::KeepBoth),
-                ] {
-                    if ui.button(label).clicked() {
-                        decision = Some(Decision::Resolve {
-                            collision,
-                            apply_to_all: apply_all,
-                        });
-                    }
-                }
-                if ui.button("Cancel export").clicked() {
-                    decision = Some(Decision::Cancel);
-                }
-            });
         },
     );
-
     app.export_apply_all = apply_all;
-    // ⚠ Dismissing by clicking outside cancels the run — and `Decision::Cancel` carries
-    // no `apply_to_all`, so the tick cannot leak out of a cancel by construction.
-    if dismissed {
+    let resolve = |collision: Collision| Decision::Resolve {
+        collision,
+        apply_to_all: apply_all,
+    };
+    if out.primary {
+        decision = Some(resolve(Collision::KeepBoth));
+    } else if out.extra == Some(0) {
+        decision = Some(resolve(Collision::Skip));
+    } else if out.extra == Some(1) {
+        decision = Some(resolve(Collision::Overwrite));
+    } else if out.dismissed {
         decision = Some(Decision::Cancel);
     }
     if let Some(d) = decision {
@@ -632,65 +568,45 @@ mod tests {
     }
 
     #[test]
-    fn the_three_delivery_sections_are_offered() {
-        // ⚠ A `CollapsingHeader` *is* an interactive widget, so unlike `theme::hint` it does
-        // produce an AccessKit node and can be read back. That is the whole of what is testable
-        // here — the fields inside it are only drawn once it is opened.
+    fn the_four_tabs_are_offered() {
         let drawn = with_app(|_| {});
-        for want in ["Metadata", "Watermark", "Output sharpening"] {
+        for want in ["Output", "Filename", "Metadata", "Watermark"] {
             assert!(
-                drawn.iter().any(|l| l.starts_with(want)),
-                "{want} section missing: {drawn:?}"
+                drawn.iter().any(|l| l == want),
+                "{want} tab missing: {drawn:?}"
+            );
+        }
+    }
+
+    /// ⚠ The footer is pinned, so the verb is there whichever tab is open — the reason the
+    /// footer exists.
+    #[test]
+    fn export_is_in_the_footer_on_every_tab() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.library = Some(test_app::library_of(2));
+        app.library.as_mut().unwrap().selection.select_indices(&[0]);
+        for tab in ["Filename", "Metadata", "Watermark", "Output"] {
+            test_ui::click(&ctx, tab, |_| super::settings(&mut app, &ctx));
+            let drawn: Vec<String> =
+                test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
+                    .into_iter()
+                    .map(|(l, _)| l)
+                    .collect();
+            assert!(
+                drawn.iter().any(|l| l == "Export"),
+                "Export missing on {tab}: {drawn:?}"
+            );
+            assert!(
+                drawn.iter().any(|l| l == "Cancel"),
+                "Cancel missing on {tab}"
             );
         }
     }
 
     #[test]
-    fn a_section_that_is_doing_something_says_so_in_its_header() {
-        // ⚠⚠ **The guard against invisible state**, and the reason the marker exists at all:
-        // these sections are collapsed by default, so a watermark set once and forgotten would
-        // otherwise appear on every export with nothing on screen to say so. Same failure the
-        // crop aspect lock and the `Filter:` button were each fixed for.
-        //
-        // ⚠ Both directions are asserted. A marker that is always on and one that is never on
-        // are equally useless, and only the pair distinguishes them.
-        let idle = with_app(|_| {});
-        assert!(
-            idle.iter().any(|l| l == "Metadata"),
-            "an untouched section must carry no marker: {idle:?}"
-        );
-
-        let busy = with_app(|app| {
-            app.export_draft.metadata.copyright = "(c) 2026".into();
-            app.export_draft.watermark.text = "rustroom".into();
-            app.export_draft.output_sharpening.amount = 40;
-        });
-        for want in ["Metadata", "Watermark", "Output sharpening"] {
-            assert!(
-                busy.iter()
-                    .any(|l| l.starts_with(want) && l.len() > want.len()),
-                "{want} is active and its header does not say so: {busy:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_narrowed_scope_marks_the_metadata_header() {
-        // ⚠ `All` is the default and therefore not hidden state; `CopyrightOnly` is a choice
-        // someone made and forgot, which is exactly what the marker exists for.
-        let narrowed = with_app(|app| {
-            app.export_draft.metadata.scope = export::MetadataScope::CopyrightOnly;
-        });
-        assert!(
-            narrowed
-                .iter()
-                .any(|l| l.starts_with("Metadata") && l.len() > "Metadata".len()),
-            "a changed scope must show in the header: {narrowed:?}"
-        );
-        let idle = with_app(|_| {});
-        assert!(
-            idle.iter().any(|l| l == "Metadata"),
-            "All is the default and must carry no marker: {idle:?}"
-        );
+    fn a_tabs_hover_says_whether_its_section_is_doing_something() {
+        assert_eq!(super::tab_hover("Metadata", true), "Metadata is on");
+        assert_eq!(super::tab_hover("Watermark", false), "Watermark is off");
     }
 }

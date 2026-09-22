@@ -429,33 +429,23 @@ pub fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
     egui::Frame::popup(&ctx.style_of(ctx.theme())).inner_margin(DIALOG_MARGIN)
 }
 
-/// The trailing confirm/dismiss button pair. Returns `(confirmed, dismissed)`.
+/// The accent-filled button with white text: a dialog footer's primary verb, the bar's Export.
 ///
-/// ⚠ This **encodes the order the dialogs already use** — confirm first, dismiss second — it
-/// does not impose a new one. An audit of all nine before the split found them already
-/// uniform, with "Close" appearing only in Settings, the one dialog that has nothing to
-/// abandon. Its job is to stop that drifting as dialogs are added, which is why it earns its
-/// place even though it changes nothing today.
-pub fn button_row(
-    ui: &mut egui::Ui,
-    confirm: &str,
-    confirm_enabled: bool,
-    dismiss: &str,
-) -> (bool, bool) {
-    let mut confirmed = false;
-    let mut dismissed = false;
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(confirm_enabled, egui::Button::new(confirm))
-            .clicked()
-        {
-            confirmed = true;
-        }
-        if ui.button(dismiss).clicked() {
-            dismissed = true;
-        }
-    });
-    (confirmed, dismissed)
+/// ⚠ One painter for both, so the bar and the dialogs cannot drift apart. ⚠ White on the
+/// accent in both themes: every accent pair was contrast-checked against white text
+/// (`every_accent_has_usable_contrast`). A disabled one is drawn greyed, never hidden — the
+/// Save button with an empty name must still be seen.
+pub fn primary_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    let accent = ui.visuals().selection.bg_fill;
+    let (fill, colour) = if enabled {
+        (accent, egui::Color32::WHITE)
+    } else {
+        (accent.gamma_multiply(0.35), ui.visuals().weak_text_color())
+    };
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(egui::RichText::new(text).color(colour)).fill(fill),
+    )
 }
 
 #[cfg(test)]

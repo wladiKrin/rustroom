@@ -36,80 +36,14 @@ pub mod presets;
 pub mod rule_edit;
 pub mod settings;
 
+use crate::develop::panel::section::{header, Header};
 use crate::{theme, RustroomApp};
 use edit_model::EditGroups;
 use eframe::egui;
 
-/// Show a centred modal with a heading and a separator. Returns whether the backdrop was
-/// clicked, which every dialog treats as a dismissal.
-///
-/// ⚠ `egui::Modal`, not `egui::Window`: a Window opens at the top-left and is genuinely easy
-/// to miss, while a Modal centres on the viewport, dims the backdrop and blocks clicks behind
-/// it.
-///
-/// ⚠⚠ **This is the single place dialog sizing lives.** Fourteen dialogs each choosing their own
-/// width is how they became inconsistent and cramped; a call site names a [`theme::DialogSize`]
-/// and nothing else.
-///
-/// ⚠⚠ **The dialog stays centred as it grows**, because `Modal` anchors `Align2::CENTER_CENTER`.
-/// The corner handle therefore drifts from the pointer at half rate. That is inherent to a centred
-/// modal and cannot be fixed without giving up the centring, which was the deliberate choice over
-/// `egui::Window`.
-///
-/// ⚠ The size is measured as the content `Ui`'s available size on its **first line** — the
-/// `Resize`'s own `content_ui`, whose extent is the same quantity `default_size` sets. Feeding
-/// back the same quantity is what makes the round trip unable to drift. It is measured rather than
-/// read from `egui::Resize::State`, whose `desired_size` is `pub(crate)`.
-pub fn dialog<R>(
-    ctx: &egui::Context,
-    settings: &mut rustroom_app::settings::Settings,
-    id: &str,
-    title: &str,
-    size: theme::DialogSize,
-    content: impl FnOnce(&mut egui::Ui) -> R,
-) -> bool {
-    let min = size.min();
-    let seed = settings.dialog_size(id, min, size.default_size());
-    // ⚠ Bounded by the live viewport, so a size chosen on a large monitor is clamped rather than
-    // stranding the dialog off-screen on a small one.
-    // ⚠ `viewport_rect`, not `screen_rect` — renamed in egui 0.35.
-    let vp = ctx.viewport_rect().size();
-    let max = (vp.x * 0.8, vp.y * 0.8);
-    let mut measured = seed;
+pub mod shell;
+pub use shell::{dialog, Footer};
 
-    let backdrop = egui::Modal::new(egui::Id::new(id))
-        .frame(theme::dialog_frame(ctx))
-        .show(ctx, |ui| {
-            egui::Resize::default()
-                .id_salt(id)
-                .default_size(seed)
-                .min_size(min)
-                .max_size(max)
-                .resizable(true)
-                .show(ui, |ui| {
-                    measured = (ui.available_width(), ui.available_height());
-                    ui.heading(title);
-                    ui.separator();
-                    // ⚠ The content scrolls, so a long rule or preset list can never push the
-                    // dialog past the bottom of the screen. ⚠ The buttons scroll **with** it:
-                    // `dialog` does not own the button row, and pinning it means restructuring
-                    // every call site. They stay reachable, which is the bug being fixed.
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            content(ui);
-                        });
-                });
-        })
-        .backdrop_response
-        .clicked();
-
-    settings.remember_dialog_size(id, measured);
-    backdrop
-}
-
-/// Which modal dialog is open. At most one at a time, so this is an enum rather than a
-/// pile of booleans that could contradict each other.
 #[derive(Default, PartialEq)]
 pub enum Modal {
     #[default]
@@ -286,37 +220,31 @@ fn confirm_forget_folder(app: &mut RustroomApp, ctx: &egui::Context) {
         return;
     };
     let (path, id, count) = (path.clone(), *id, *count);
-    let mut confirmed = false;
-    let mut cancelled = false;
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "confirm_forget_folder",
-        "Forget folder",
+        "Forget folder?",
         theme::DialogSize::Compact,
+        Footer::confirm("Forget", true, "Cancel"),
         |ui| {
             ui.label(format!("Forget “{}”?", path.display()));
             crate::theme::hint(
                 ui,
                 &format!(
-                "Removes {count} photos from the catalog, with their ratings, flags, labels and \
-                 keywords. No files are deleted and no edits are lost — re-opening the folder \
-                 catalogues it again."
-            ),
+                    "Removes {count} photos from the catalog, with their ratings, flags, labels \
+                     and keywords. No files are deleted and no edits are lost — re-opening the \
+                     folder catalogues it again."
+                ),
             );
-            ui.separator();
-            let (yes, no) = crate::theme::button_row(ui, "Forget", true, "Cancel");
-            confirmed = yes;
-            cancelled = no;
         },
     );
 
-    // Clicking outside is a cancel, as in every other confirmation here.
-    if confirmed {
+    if out.primary {
         app.forget_folder(ctx, id, &path);
         app.modal = Modal::None;
-    } else if cancelled || dismissed {
+    } else if out.dismissed {
         app.modal = Modal::None;
     }
 }
@@ -337,15 +265,14 @@ fn confirm_delete_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
         return;
     };
     let (id, name, descendants, assignments) = (*id, name.clone(), *descendants, *assignments);
-    let mut confirmed = false;
-    let mut cancelled = false;
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "confirm_delete_keyword",
-        "Delete keyword",
+        "Delete keyword?",
         theme::DialogSize::Compact,
+        Footer::confirm("Delete", true, "Cancel"),
         |ui| {
             ui.label(format!("Delete “{name}”?"));
             let mut what = Vec::new();
@@ -368,17 +295,13 @@ fn confirm_delete_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
                     what.join(" and ")
                 ),
             );
-            ui.separator();
-            let (yes, no) = crate::theme::button_row(ui, "Delete", true, "Cancel");
-            confirmed = yes;
-            cancelled = no;
         },
     );
 
-    if confirmed {
+    if out.primary {
         app.delete_keyword_now(id);
         app.modal = Modal::None;
-    } else if cancelled || dismissed {
+    } else if out.dismissed {
         app.modal = Modal::None;
     }
 }
@@ -389,67 +312,64 @@ fn confirm_delete_keyword(app: &mut RustroomApp, ctx: &egui::Context) {
 /// chord the app does not have is worse than no dialog at all, and a hand-written one drifts
 /// the first time a shortcut moves.
 fn shortcuts(app: &mut RustroomApp, ctx: &egui::Context) {
-    let mut close = false;
     // ⚠ Through the shared funnel like every other dialog. It built its own `egui::Modal` before,
     // which meant it missed the frame padding and the sizing entirely — and it is one of the
     // dialogs that most wants to be Wide and scrollable.
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "shortcuts",
         "Keyboard shortcuts",
         theme::DialogSize::Wide,
+        Footer::close("Close"),
         |ui| {
-            // ⚠ The inner `ScrollArea` is gone: `dialog` provides one, and nesting two vertical
-            // scroll areas makes them fight over the wheel.
+            // One section per menu section, under the panels' header. ⚠ The inner
+            // `ScrollArea` is gone: `dialog` provides one, and nesting two vertical scroll
+            // areas makes them fight over the wheel.
             for section in rustroom_app::menu::model() {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(section.title).strong());
-                for item in section.items {
-                    if let rustroom_app::menu::Item::Action {
-                        label,
-                        shortcut: Some(sc),
-                        ..
-                    } = item
-                    {
-                        ui.horizontal(|ui| {
-                            ui.label(label);
-                            theme::hint(ui, &sc.label());
-                        });
+                let mut h = header(
+                    ui,
+                    egui::Id::new(("shortcuts", section.title)),
+                    true,
+                    Header::new(section.title),
+                );
+                h.state.show_body_unindented(ui, |ui| {
+                    for item in section.items {
+                        if let rustroom_app::menu::Item::Action {
+                            label,
+                            shortcut: Some(sc),
+                            ..
+                        } = item
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label(label);
+                                theme::hint(ui, &sc.label());
+                            });
+                        }
                     }
-                }
-            }
-            ui.separator();
-            if ui.button("Close").clicked() {
-                close = true;
+                });
             }
         },
     );
-    if close || dismissed {
+    if out.dismissed {
         app.modal = Modal::None;
     }
 }
 
 /// The about box.
 fn about(app: &mut RustroomApp, ctx: &egui::Context) {
-    let mut close = false;
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "about",
         "Rustroom",
-        // ⚠ `Compact` despite being a "form-ish" dialog: it is two lines and a Close button, and
-        // `Standard` would be mostly empty.
         theme::DialogSize::Compact,
+        Footer::close("Close"),
         |ui| {
             theme::hint(ui, "An open-source RAW photo editor.");
-            ui.separator();
-            if ui.button("Close").clicked() {
-                close = true;
-            }
         },
     );
-    if close || dismissed {
+    if out.dismissed {
         app.modal = Modal::None;
     }
 }
@@ -457,84 +377,78 @@ fn about(app: &mut RustroomApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use crate::theme::DialogSize;
+    use crate::{test_app, test_ui, Modal};
 
-    /// Run `dialog` once on a viewport of `size`, returning what it recorded.
-    #[cfg(test)]
-    fn record_once(
-        ctx: &egui::Context,
-        settings: &mut rustroom_app::settings::Settings,
-        size: egui::Vec2,
-    ) -> Option<[u32; 2]> {
-        let _ = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            },
-            |ui| {
-                super::dialog(
-                    ui.ctx(),
-                    settings,
-                    "round_trip",
-                    "Round trip",
-                    DialogSize::Compact,
-                    |ui| {
-                        ui.label("body");
-                    },
-                );
-            },
-        );
-        settings.dialog_sizes.get("round_trip").copied()
+    /// Draw the app's current modal once and return its accessible labels.
+    fn labels(ctx: &egui::Context, app: &mut crate::RustroomApp) -> Vec<String> {
+        test_ui::labelled_centres(ctx, Vec::new(), |ui| super::draw(app, ui.ctx()))
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect()
     }
 
-    /// ⚠⚠ **The round trip the design could not confirm from egui's source**, because
-    /// `Resize::State::desired_size` is `pub(crate)`. `dialog` measures the content `Ui`'s
-    /// available size and feeds it back as `default_size` next time; if those are not the same
-    /// quantity, a dialog creeps larger or smaller every time it is opened.
-    ///
-    /// Three cycles, because a one-frame check cannot see a creep.
-    ///
-    /// ⚠ On a **large** viewport, so nothing is clamped and the recorded size can be compared to
-    /// the class default directly. A small screen would clamp the width to 80% of it and the test
-    /// would pass while proving only that the clamp is stable — which is how a round-trip test
-    /// ends up unable to see the thing it names.
+    /// ⚠ The tabs must not lose a setting: every control the single page had is reachable on
+    /// one of the five, and this walks them all.
     #[test]
-    fn a_dialogs_measured_size_round_trips_and_does_not_creep() {
-        use crate::test_ui;
+    fn every_setting_is_reachable_across_the_five_tabs() {
         let ctx = test_ui::ctx();
-        let mut settings = rustroom_app::settings::Settings::default();
-        let big = egui::vec2(1600.0, 1200.0);
-
-        let seen: Vec<Option<[u32; 2]>> = (0..3)
-            .map(|_| record_once(&ctx, &mut settings, big))
-            .collect();
-
-        let (w, h) = DialogSize::Compact.default_size();
-        let want = [w as u32, h as u32];
-        assert!(
-            seen.iter().all(|s| *s == Some(want)),
-            "the size must round-trip at the class default, got {seen:?}, wanted {want:?}"
-        );
+        let mut app = test_app::for_test();
+        // ⚠ Pre-filled, so the Performance tab does not size the real user cache on disk.
+        app.thumb_cache_bytes = Some(0);
+        app.modal = Modal::Settings;
+        let mut seen: Vec<String> = Vec::new();
+        for tab in ["Behaviour", "Appearance", "Display", "Performance", "Input"] {
+            test_ui::click(&ctx, tab, |ui| super::draw(&mut app, ui.ctx()));
+            seen.extend(labels(&ctx, &mut app));
+        }
+        for want in [
+            "Confirm before deleting a preset",
+            "Open new photos with the camera rendering",
+            "Apply lens corrections to new photos",
+            "Write XMP sidecars beside RAW files",
+            "Move to the next photo after rating",
+            "Use the GPU",
+            "Clear",
+            "Done",
+            "Close",
+        ] {
+            assert!(
+                seen.iter().any(|l| l == want),
+                "{want:?} missing in {seen:?}"
+            );
+        }
     }
 
-    /// ⚠ The other half: a viewport too small for the class **clamps**, and stays clamped rather
-    /// than shrinking again on each reopen.
     #[test]
-    fn a_small_viewport_clamps_the_dialog_once_and_then_holds() {
-        use crate::test_ui;
+    fn the_information_dialog_offers_its_five_tabs() {
         let ctx = test_ui::ctx();
-        let mut settings = rustroom_app::settings::Settings::default();
-        let small = egui::vec2(400.0, 300.0);
+        let mut app = test_app::for_test();
+        app.modal = Modal::PhotoInfo {
+            id: rustroom_app::photo_id::PhotoId::new("/nonexistent/a.RAF".into(), 0),
+            dims: Some((6240, 4160)),
+            description: None,
+        };
+        let seen = labels(&ctx, &mut app);
+        for want in ["File", "Image", "Capture", "Description", "Marks", "Close"] {
+            assert!(
+                seen.iter().any(|l| l == want),
+                "{want:?} missing in {seen:?}"
+            );
+        }
+    }
 
-        let seen: Vec<Option<[u32; 2]>> = (0..3)
-            .map(|_| record_once(&ctx, &mut settings, small))
-            .collect();
-
-        // 80% of 400 is 320, below Compact's 340 default and above its 300 minimum.
-        assert_eq!(seen[0], Some([320, 140]), "clamped to the viewport");
-        assert!(
-            seen.iter().all(|s| *s == seen[0]),
-            "and then stable, got {seen:?}"
-        );
+    #[test]
+    fn the_collision_dialog_names_all_four_answers() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.export_collision = Some("/nonexistent/out/a.jpg".into());
+        let seen = labels(&ctx, &mut app);
+        for want in ["Keep both", "Skip", "Overwrite", "Cancel export"] {
+            assert!(
+                seen.iter().any(|l| l == want),
+                "{want:?} missing in {seen:?}"
+            );
+        }
     }
 
     /// Every dialog id in the app, with the class it uses.

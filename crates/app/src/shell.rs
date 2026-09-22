@@ -4,6 +4,7 @@
 //! so unlike every other move in this refactor, `self` stays `self` and the body is verbatim.
 
 use crate::segmented::{self, PillItem, PillStyle};
+use crate::theme;
 use crate::{
     commands, develop, library, menu_bar, modals, multi, name_edit, AppView, LibraryMode,
     RustroomApp,
@@ -608,14 +609,11 @@ fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode) {
 
 /// The Develop toolbar's Export button: the bar's one accent-filled control.
 fn export_button(ui: &mut egui::Ui) -> egui::Response {
-    let accent = ui.visuals().selection.bg_fill;
-    ui.add(
-        egui::Button::new(
-            egui::RichText::new(format!("{} Export…", icons::EXPORT)).color(egui::Color32::WHITE),
-        )
-        .fill(accent)
-        .min_size(egui::vec2(0.0, MODE_PILL)),
-    )
+    ui.scope(|ui| {
+        ui.style_mut().spacing.button_padding.y = (MODE_PILL - 14.0) / 2.0;
+        theme::primary_button(ui, &format!("{} Export…", icons::EXPORT), true)
+    })
+    .inner
     .on_hover_text("Export the selection (⌘E)")
 }
 

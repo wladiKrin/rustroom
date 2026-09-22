@@ -1,79 +1,74 @@
-//! Dialogs that move edits between photos: paste, and sync.
+//! Paste settings and Sync settings: which edit groups to carry across.
 
-use super::dialog;
+use super::{dialog, Footer};
 use crate::transfer::{edit_group_checkboxes, paste_status};
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 
-/// The "Paste…" dialog: which groups this paste applies.
-///
-/// The chosen selection is remembered in `paste_groups`, which is also what a bare
-/// Ctrl+V uses.
 pub fn paste(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut groups = app.paste_groups;
-    let mut close = false;
-    let mut paste = false;
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "paste_settings",
         "Paste settings",
         theme::DialogSize::Standard,
+        Footer::confirm("Paste", true, "Cancel"),
         |ui| {
-            ui.label("Apply:");
-            edit_group_checkboxes(ui, &mut groups);
-            ui.separator();
-            let (confirmed, dismissed) = theme::button_row(ui, "Paste", true, "Cancel");
-            paste |= confirmed;
-            close |= dismissed;
+            apply_section(ui, "paste", "", &mut groups);
         },
     );
-    close |= dismissed;
 
     app.paste_groups = groups;
-    if paste {
+    if out.primary {
         if let Some(src) = app.clipboard.clone() {
             let (n, failed) = app.apply_to_selection(&src, groups);
             app.status = paste_status(n, failed);
         }
-        close = true;
     }
-    if close {
+    if out.primary || out.dismissed {
         app.modal = Modal::None;
     }
 }
 
-/// The "Sync…" dialog: which groups this sync applies to the rest of the selection.
 pub fn sync(app: &mut RustroomApp, ctx: &egui::Context) {
     let mut groups = app.sync_groups;
     let count = app.sync_targets().len();
-    let mut close = false;
-    let mut run = false;
+    let trailing = format!(
+        "to {count} other selected photo{}",
+        if count == 1 { "" } else { "s" }
+    );
 
-    let dismissed = dialog(
+    let out = dialog(
         ctx,
         &mut app.settings,
         "sync_settings",
         "Sync settings",
         theme::DialogSize::Standard,
+        Footer::confirm("Sync", true, "Cancel"),
         |ui| {
-            ui.label(format!("Apply to {count} other selected photos:"));
-            edit_group_checkboxes(ui, &mut groups);
-            ui.separator();
-            let (confirmed, dismissed) = theme::button_row(ui, "Sync", true, "Cancel");
-            run |= confirmed;
-            close |= dismissed;
+            apply_section(ui, "sync", &trailing, &mut groups);
         },
     );
-    close |= dismissed;
 
     app.sync_groups = groups;
-    if run {
+    if out.primary {
         app.run_sync(groups);
-        close = true;
     }
-    if close {
+    if out.primary || out.dismissed {
         app.modal = Modal::None;
     }
+}
+
+/// The **Apply** section: the edit-group checkboxes under the panels' section header.
+fn apply_section(ui: &mut egui::Ui, id: &str, trailing: &str, groups: &mut edit_model::EditGroups) {
+    use crate::develop::panel::section::{header, Header};
+    let mut h = Header::new("Apply");
+    if !trailing.is_empty() {
+        h = h.trailing(trailing);
+    }
+    let mut out = header(ui, egui::Id::new((id, "Apply")), true, h);
+    out.state
+        .show_body_unindented(ui, |ui| edit_group_checkboxes(ui, groups));
 }
