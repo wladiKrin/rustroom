@@ -16,7 +16,10 @@ pub enum Action {
     /// Ask the server for its albums.
     Refresh,
     /// Open this album.
-    Open { id: String, name: String },
+    Open {
+        id: String,
+        name: String,
+    },
 }
 
 /// The trailing count for the section header: how many albums, once known.
@@ -64,7 +67,11 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
         }
         Some(Ok(albums)) => {
             if albums.is_empty() {
-                ui.label(egui::RichText::new("No albums on the server").weak().small());
+                ui.label(
+                    egui::RichText::new("No albums on the server")
+                        .weak()
+                        .small(),
+                );
             }
             for a in albums {
                 let selected = matches!(

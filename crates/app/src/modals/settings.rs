@@ -39,6 +39,8 @@ pub struct SettingsDraft {
     erase_drag: EraseDrag,
     drag_quality: DragQuality,
     display_space: color::OutputSpace,
+    immich_url: String,
+    immich_key: String,
 }
 
 impl SettingsDraft {
@@ -59,6 +61,8 @@ impl SettingsDraft {
             erase_drag: s.erase_drag,
             drag_quality: s.drag_quality,
             display_space: s.display_space,
+            immich_url: s.immich_url.clone(),
+            immich_key: s.immich_key.clone(),
         }
     }
 
@@ -107,6 +111,34 @@ impl SettingsDraft {
             app.settings.auto_advance = self.auto_advance;
             plain = true;
         }
+        if self.immich_url != app.settings.immich_url || self.immich_key != app.settings.immich_key
+        {
+            // ⚠ Through the accessor, which is the only writer of those two fields — so moving
+            // the key to the OS keychain later changes one file rather than this one too.
+            rustroom_app::immich_source::set_connection(
+                &mut app.settings,
+                &self.immich_url,
+                &self.immich_key,
+            );
+            // ⚠⚠ And the shared cell the thumbnail loader reads, or a key pasted here would not
+            // reach the loader until the next restart.
+            rustroom_app::immich_source::refresh_shared(&app.settings);
+            // ⚠ The worker holds a snapshot of the connection, so it has to be rebuilt — a job
+            // already in flight finishes against the server it started with, which is the point of
+            // the snapshot.
+            app.immich = rustroom_app::immich_worker::ImmichWorker::new(
+                rustroom_app::immich_worker::live_fetcher(rustroom_app::immich_source::connection(
+                    &app.settings,
+                )),
+                {
+                    let ctx = ctx.clone();
+                    move || ctx.request_repaint()
+                },
+            );
+            // ⚠ Forget the album list: it belongs to whatever server was configured before.
+            app.immich_albums = None;
+            plain = true;
+        }
         if plain {
             app.save_settings();
         }
@@ -147,7 +179,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
             let tab = tabs(
                 ui,
                 egui::Id::new("settings_tab"),
-                &["Behaviour", "Appearance", "Display", "Performance", "Input"],
+                &[
+                    "Behaviour",
+                    "Appearance",
+                    "Display",
+                    "Performance",
+                    "Input",
+                    "Immich",
+                ],
             );
             ui.spacing_mut().item_spacing.y = GAP;
             match tab {
@@ -344,7 +383,10 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         theme::hint(ui, d.resampler.hint());
                     });
                 }
-                _ => {
+                // ⚠⚠ An explicit index, **not** `_`. This arm was the catch-all, so adding a sixth
+                // tab would have made Immich render Input's contents — it compiles and it looks
+                // plausible.
+                4 => {
                     theme::sub_label(ui, "Pan with");
                     egui::ComboBox::from_id_salt("pan_drag_pick")
                         .selected_text(d.pan_drag.label())
@@ -402,6 +444,65 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                              that reads weakly while dragging — judge it at 1:1, or choose Full \
                              quality.",
                         );
+                }
+                _ => {
+                    egui::Grid::new("settings_immich")
+                        .num_columns(2)
+                        .spacing([12.0, GAP])
+                        .show(ui, |ui| {
+                            ui.label("Server");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut d.immich_url)
+                                    .hint_text("https://photos.example.com")
+                                    .desired_width(260.0),
+                            )
+                            .on_hover_text(
+                                "The base URL of your Immich server. The /api suffix is added for \
+                                 you, and http:// is accepted for a server on your own network.",
+                            );
+                            ui.end_row();
+
+                            ui.label("API key");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut d.immich_key)
+                                    .password(true)
+                                    .desired_width(260.0),
+                            )
+                            .on_hover_text(
+                                "Paste a read-only key — asset.read, asset.view, asset.download \
+                                 and album.read are all it needs. ⚠ It is stored in plain text in \
+                                 settings.json, so a key that cannot write cannot damage your \
+                                 library if that file is ever read by somebody else.",
+                            );
+                            ui.end_row();
+
+                            ui.label("");
+                            // ⚠⚠ Tests what is **typed**, not what is saved — the whole point of a
+                            // test button is checking a key before committing to it, so the job
+                            // carries its own connection rather than reading `app.settings`.
+                            if ui
+                                .button("Test")
+                                .on_hover_text("Ask the server for its version.")
+                                .clicked()
+                            {
+                                let typed = (!d.immich_url.trim().is_empty()
+                                    && !d.immich_key.trim().is_empty())
+                                .then(|| rustroom_app::immich_source::Connection {
+                                    url: d.immich_url.trim().to_string(),
+                                    key: d.immich_key.trim().to_string(),
+                                });
+                                app.immich.request(rustroom_app::immich_worker::Job::About {
+                                    conn: typed,
+                                });
+                            }
+                            ui.end_row();
+                        });
+                    crate::theme::hint(
+                        ui,
+                        "Albums appear in the Immich section of the left panel. Photos are \
+                         downloaded when you open them, and your edits are saved beside the \
+                         downloaded copy — nothing is written back to the server.",
+                    );
                 }
             }
         },

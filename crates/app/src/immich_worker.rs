@@ -415,7 +415,10 @@ mod tests {
             got.extend(w.poll());
             !got.is_empty()
         });
-        assert!(dest.is_file(), "a finished download must be at the real path");
+        assert!(
+            dest.is_file(),
+            "a finished download must be at the real path"
+        );
         assert_eq!(std::fs::read(&dest).unwrap(), b"a whole raw");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -457,7 +460,11 @@ mod tests {
         });
         std::thread::sleep(std::time::Duration::from_millis(100));
         got.extend(w.poll());
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "one fetch for two requests");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "one fetch for two requests"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

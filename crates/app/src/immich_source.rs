@@ -284,7 +284,10 @@ mod tests {
         let p = cache_path(root, &a);
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         assert!(name.starts_with("11111111-1111-4111-8111-111111111111"));
-        assert!(name.ends_with(".RAF"), "the extension decides the decoder: {name}");
+        assert!(
+            name.ends_with(".RAF"),
+            "the extension decides the decoder: {name}"
+        );
     }
 
     /// ⚠ A filename from the server is untrusted input. It must not be able to escape the cache.
@@ -468,12 +471,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("11111111.RAF");
         std::fs::write(&p, b"x").unwrap();
-        let shared: SharedConnection = std::sync::Arc::new(std::sync::Mutex::new(Some(
-            Connection {
+        let shared: SharedConnection =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(Connection {
                 url: "http://immich.invalid".into(),
                 key: "k".into(),
-            },
-        )));
+            })));
         assert!(
             remote_thumbnail(&shared, &p).is_none(),
             "an already-downloaded photo must not be fetched"
@@ -507,9 +509,11 @@ mod tests {
     /// like "the server rejected the key".
     #[test]
     fn surrounding_whitespace_is_trimmed_off_both() {
-        let mut s = crate::settings::Settings::default();
-        s.immich_url = "  https://photos.example.com  ".into();
-        s.immich_key = "  abc\n".into();
+        let s = crate::settings::Settings {
+            immich_url: "  https://photos.example.com  ".into(),
+            immich_key: "  abc\n".into(),
+            ..Default::default()
+        };
         let c = connection(&s).expect("must be a connection");
         assert_eq!(c.url, "https://photos.example.com");
         assert_eq!(c.key, "abc");
@@ -520,18 +524,19 @@ mod tests {
     /// and `reload_captures` on every row. None of them may fail on an absent file.
     #[test]
     fn a_sidecar_for_a_file_that_does_not_exist_is_neutral_not_an_error() {
-        let p = std::path::Path::new(
-            "/nonexistent/rustroom/11111111-1111-4111-8111-111111111111.RAF",
-        );
+        let p =
+            std::path::Path::new("/nonexistent/rustroom/11111111-1111-4111-8111-111111111111.RAF");
         let s = crate::sidecar::load_all(p);
-        assert!(s.is_neutral(), "no file and no sidecar must read as neutral");
+        assert!(
+            s.is_neutral(),
+            "no file and no sidecar must read as neutral"
+        );
     }
 
     #[test]
     fn edited_at_for_a_file_that_does_not_exist_is_none() {
-        let p = std::path::Path::new(
-            "/nonexistent/rustroom/22222222-2222-4222-8222-222222222222.RAF",
-        );
+        let p =
+            std::path::Path::new("/nonexistent/rustroom/22222222-2222-4222-8222-222222222222.RAF");
         assert!(crate::sidecar::edited_at(p).is_none());
     }
 

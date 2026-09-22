@@ -662,9 +662,9 @@ impl RustroomApp {
             // the struct, which is why the fetcher is constructed here rather than after. A key
             // pasted later reaches it through `settings_apply`, which rebuilds the fetcher.
             immich: rustroom_app::immich_worker::ImmichWorker::new(
-                rustroom_app::immich_worker::live_fetcher(
-                    rustroom_app::immich_source::connection(&settings),
-                ),
+                rustroom_app::immich_worker::live_fetcher(rustroom_app::immich_source::connection(
+                    &settings,
+                )),
                 {
                     let ctx = ctx.clone();
                     move || ctx.request_repaint()
