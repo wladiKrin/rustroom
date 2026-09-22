@@ -144,12 +144,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2683 tests**, of which **2634 on `main`** plus 49 on branch `immich-browse` (goldens unmoved since
-2026-09-18). ⚠ **`immich-browse` is 18 commits ahead of `main` and not merged** — ask before
-starting anything on top of it, and **never push; the user pushes.** The CI workflow was fixed for
-the runner's disk on 2026-09-21 and is unverified until the next push.
+**2683 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **19 commits
+ahead of `origin/main` — not pushed; the user pushes.** The CI workflow was fixed for the runner's
+disk on 2026-09-21 and is unverified until the next push.
 
-✅ **Immich, slice 1 — built and confirmed by use (2026-09-22), on the branch.** A sixth rail
+✅ **Immich, slice 1 — merged and confirmed by use (2026-09-22).** A sixth rail
 section beside Folders and Collections lists the server's albums; the ordinary grid fills from
 server thumbnails with nothing downloaded; opening a photo fetches the original into a cache
 directory and re-enters `open_path`, after which every existing path applies unchanged. New crate
