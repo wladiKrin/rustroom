@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The Export dialog: presets beside summarised sections (2026-09-22)](#the-export-dialog-presets-beside-summarised-sections-2026-09-22)
 - [The dialogs in one language (2026-09-22)](#the-dialogs-in-one-language-2026-09-22)
 - [CI ran out of disk (2026-09-21)](#ci-ran-out-of-disk-2026-09-21)
 - [The snapshot strip as a timeline (2026-09-20)](#the-snapshot-strip-as-a-timeline-2026-09-20)
@@ -127,7 +128,30 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The dialogs in one language (2026-09-22)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The Export dialog: presets beside summarised sections (2026-09-22)
+
+The user, right after the dialogs rework: "Let's also rework the export dialog." Three
+mockups on the canvas "Rustroom Export" (https://claude.ai/artifact/GG1AUf12BdF9hhxs7xPgJf);
+**C** chosen — the preset list beside the sections, Lightroom's shape at the Wide size. On
+`export-presets-sheet`; spec `2026-09-22-export-dialog-design.md`. **2633 → TESTCOUNT tests**,
+goldens unmoved.
+
+| what landed | where |
+|---|---|
+| the dialog at **Wide**, titled `Export 3 photos`; a 170 pt **preset column** on the left — `list_row`s (lit when the current options equal the preset's, click applies, × deletes through the confirm path by selecting first), "+ Save current…" at the bottom (accessible "Save current as preset…") | `modals/export.rs` |
+| the settings as **eight collapsible sections** with the panels' header and the state as trailing text — LOCATION `Export`, NAMING `DSCF6509-web.jpg` (rendered live, or `invalid`), FILE `JPEG · sRGB · 92`, SIZE `2048 px long edge`, SHARPENING, DEMOSAIC, METADATA, WATERMARK — the first three open by default; the long hints are hovers, the token list stays inline | `modals/export.rs` `section`; lib **`export_summary.rs`** (pure, each phrase tested) |
+| the footer note names the preset the options equal, or `changed from “Web”` | `export_summary::footer_note` |
+
+**Worth keeping:**
+
+- ⚠ A header's trailing text is painted and the harness cannot read it — so every summary is a
+  lib function with its own test, and the dialog test asserts the section *names* and the
+  preset rows (named, and lit through AccessKit's `toggled`).
+- ⚠ `modals/export.rs` is **655** lines (603 before): the preset column and eight sections in
+  one closure. Reported; the collision and save-preset dialogs are the natural split if it
+  grows again.
+
+### The dialogs in one language (2026-09-22)
 
 The user: "rework all the window popups, such that we have one cohesive design language." Three
 mockups on the canvas "Rustroom Dialogs" (https://claude.ai/artifact/Gmvn3eqBNgtWopBRG9vJCK);

@@ -100,7 +100,7 @@ opensource_lightroom/
 │   ├── export/               # ✅ to_rgb8 + save (JPEG/PNG/TIFF) + metadata::{ExportMetadata, FileMetadata, MetadataScope} — the full XMP packet (M6.2) + watermark + output_sharpen
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is 681 lines after W0 (2026-09-01); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel (egui lives here, not in the lib)
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is 681 lines after W0 (2026-09-01); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel (egui lives here, not in the lib)
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -144,15 +144,20 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2633 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is ahead of
-`origin/main` — **not pushed; the user pushes.** The CI workflow was fixed for the runner's disk
-on 2026-09-21 and is unverified until the next push.
+**2633 tests** on `main` (goldens unmoved since 2026-09-18); `main` is ahead of `origin/main` —
+**not pushed; the user pushes.** The CI workflow was fixed for the runner's disk on 2026-09-21
+and is unverified until the next push.
+
+⚠ **One branch, `export-presets-sheet`, ahead of `main`: the Export dialog as a preset list
+beside summarised sections** (Wide; eight collapsible sections whose headers say their state;
+`export_summary.rs` in the lib). **TESTCOUNT tests on its tip, gated green, GUI launched for a
+look, not yet confirmed by use.** Spec `2026-09-22-export-dialog-design.md`;
+`grep -n 'presets beside' docs/JOURNAL.md`.
 
 ✅ **The dialogs in one language — merged and confirmed by use (2026-09-22).** One shell with a
-title bar and ×, a pinned footer with the accent verb, tabs for Settings / Export / Information,
-the panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
-descriptions as hovers. Spec `2026-09-21-dialogs-design.md`;
-`grep -n 'dialogs in one language' docs/JOURNAL.md`.
+title bar and ×, a pinned footer with the accent verb, tabs for Settings / Information, the
+panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
+descriptions as hovers. Spec `2026-09-21-dialogs-design.md`.
 
 ✅ **The snapshot timeline** (2026-09-21) and **the top bar and the Library in one language**
 (2026-09-20) are merged and confirmed by use; specs `2026-09-20-snapshots-timeline-design.md`
