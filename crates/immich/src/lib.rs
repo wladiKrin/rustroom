@@ -8,3 +8,217 @@ pub mod error;
 
 pub use dto::{About, AlbumDetail, AlbumSummary, Asset, AssetType};
 pub use error::Error;
+
+use std::io::Write;
+use std::path::Path;
+
+/// How much JSON one response may be. See `get_text`.
+///
+/// ⚠⚠ ureq caps a body read at 10 MB by default (`MAX_BODY_SIZE`), and an album's JSON passes
+/// that at roughly 25,000 assets. Raised explicitly so a large album fails as "too large" only
+/// at an absurd size, not silently at a plausible one.
+const JSON_LIMIT: u64 = 256 * 1024 * 1024;
+
+/// How many bytes an in-memory image read may be. See `get_bytes`.
+const IMAGE_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// Which rendition of an asset to fetch. Immich's own `AssetMediaSize` spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Size {
+    Thumbnail,
+    Preview,
+    Fullsize,
+}
+
+impl Size {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Size::Thumbnail => "thumbnail",
+            Size::Preview => "preview",
+            Size::Fullsize => "fullsize",
+        }
+    }
+}
+
+/// A connection to one Immich server.
+///
+/// ⚠ **Certificate verification is never disabled.** A self-signed certificate fails to connect
+/// and says so; silently trusting any certificate is not something to ship, and the fix belongs
+/// on the server.
+pub struct Client {
+    /// Base URL including the `/api` prefix, with no trailing slash.
+    base: String,
+    key: String,
+    agent: ureq::Agent,
+}
+
+impl Client {
+    pub fn new(base_url: &str, api_key: &str) -> Result<Self, Error> {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        if trimmed.is_empty() {
+            return Err(Error::Network("no server URL is set".into()));
+        }
+        if api_key.trim().is_empty() {
+            return Err(Error::Unauthorized);
+        }
+        // ⚠ The user may or may not have typed the `/api` prefix. Adding it unconditionally
+        // would give `/api/api`, and leaving it off gives a 404 on every call.
+        let base = if trimmed.ends_with("/api") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/api")
+        };
+        Ok(Self {
+            base,
+            key: api_key.trim().to_string(),
+            agent: ureq::Agent::new_with_defaults(),
+        })
+    }
+
+    /// The absolute URL for an API path beginning with `/`.
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
+
+    /// GET `path` and deserialise the JSON body.
+    fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Error> {
+        let body = self.get_text(path)?;
+        serde_json::from_str(&body).map_err(|e| Error::Decode(e.to_string()))
+    }
+
+    fn get_text(&self, path: &str) -> Result<String, Error> {
+        let mut res = self
+            .agent
+            .get(self.url(path))
+            .header("x-api-key", &self.key)
+            .header("Accept", "application/json")
+            .call()
+            .map_err(map_ureq)?;
+        res.body_mut()
+            .with_config()
+            .limit(JSON_LIMIT)
+            .read_to_string()
+            .map_err(|e| Error::Decode(e.to_string()))
+    }
+
+    /// ⚠ A limit, not `u64::MAX`: this reads into memory, and the guard against a misconfigured
+    /// server streaming something enormous is worth keeping. Thumbnails and previews are orders
+    /// of magnitude below it.
+    fn get_bytes(&self, path: &str) -> Result<Vec<u8>, Error> {
+        let mut res = self
+            .agent
+            .get(self.url(path))
+            .header("x-api-key", &self.key)
+            .call()
+            .map_err(map_ureq)?;
+        res.body_mut()
+            .with_config()
+            .limit(IMAGE_LIMIT)
+            .read_to_vec()
+            .map_err(|e| Error::Network(e.to_string()))
+    }
+
+    /// `GET /server/about` — the version probe, and what the Settings Test button calls.
+    pub fn about(&self) -> Result<About, Error> {
+        self.get_json("/server/about")
+    }
+
+    /// `GET /albums`.
+    pub fn albums(&self) -> Result<Vec<AlbumSummary>, Error> {
+        self.get_json("/albums")
+    }
+
+    /// `GET /albums/{id}` — the album's assets, in the album's own order.
+    pub fn album(&self, id: &str) -> Result<Vec<Asset>, Error> {
+        let detail: AlbumDetail = self.get_json(&format!("/albums/{id}"))?;
+        Ok(detail.assets)
+    }
+
+    /// `GET /assets/{id}/thumbnail?size=…` — the raw encoded bytes, format unspecified.
+    ///
+    /// ⚠ The server decides whether that is webp or jpeg (both are admin settings), so the
+    /// caller must sniff rather than assume. `image::load_from_memory` does.
+    pub fn thumbnail(&self, id: &str, size: Size) -> Result<Vec<u8>, Error> {
+        self.get_bytes(&format!("/assets/{}/thumbnail?size={}", id, size.as_str()))
+    }
+
+    /// `GET /assets/{id}/original` — **the true original file**, streamed to `dest`.
+    ///
+    /// ⚠⚠ Streamed, never buffered: these are 25–50 MB RAWs and several may be in flight.
+    ///
+    /// ⚠⚠ Callers pass a `.part` path and rename on success, so a partial download never sits
+    /// at the path the rest of the app reads.
+    ///
+    /// ⚠ Never `?edited=true`. Immich's own edits are crop/rotate/mirror and Rustroom applies
+    /// its own geometry; importing theirs would apply a crop twice.
+    pub fn original(&self, id: &str, dest: &Path) -> Result<(), Error> {
+        let mut res = self
+            .agent
+            .get(self.url(&format!("/assets/{id}/original")))
+            .header("x-api-key", &self.key)
+            .call()
+            .map_err(map_ureq)?;
+        let mut file = std::fs::File::create(dest).map_err(|e| Error::Io(e.to_string()))?;
+        let body = res.body_mut();
+        let mut reader = body.as_reader();
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            let n = std::io::Read::read(&mut reader, &mut buf)
+                .map_err(|e| Error::Network(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])
+                .map_err(|e| Error::Io(e.to_string()))?;
+        }
+        file.flush().map_err(|e| Error::Io(e.to_string()))?;
+        Ok(())
+    }
+}
+
+/// Map a `ureq` failure onto this crate's error, keeping the status distinction the UI needs.
+///
+/// ⚠ `http_status_as_error` defaults to `true` in ureq 3, so a 4xx/5xx really does arrive here
+/// as `StatusCode` rather than as a successful response.
+fn map_ureq(e: ureq::Error) -> Error {
+    match e {
+        ureq::Error::StatusCode(code) => Error::from_status(code),
+        other => Error::Network(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_trailing_slash_on_the_base_url_does_not_double_up() {
+        let a = Client::new("https://photos.example.com/", "k").expect("must build");
+        let b = Client::new("https://photos.example.com", "k").expect("must build");
+        assert_eq!(a.url("/albums"), b.url("/albums"));
+        assert_eq!(a.url("/albums"), "https://photos.example.com/api/albums");
+    }
+
+    /// ⚠ Immich is served under `/api`. Forgetting it gives a 404 on every call, which reads as
+    /// "the server has no albums" rather than "the URL is wrong".
+    #[test]
+    fn the_api_prefix_is_added_once_even_if_the_user_typed_it() {
+        let c = Client::new("https://photos.example.com/api", "k").expect("must build");
+        assert_eq!(c.url("/albums"), "https://photos.example.com/api/albums");
+    }
+
+    #[test]
+    fn an_empty_url_or_key_is_refused_before_any_request() {
+        assert!(Client::new("", "k").is_err());
+        assert!(Client::new("https://photos.example.com", "").is_err());
+    }
+
+    /// ⚠⚠ The size values are Immich's `AssetMediaSize` spelling. A typo here is a 400 at runtime
+    /// and nowhere else.
+    #[test]
+    fn the_sizes_spell_immichs_own_values() {
+        assert_eq!(Size::Thumbnail.as_str(), "thumbnail");
+        assert_eq!(Size::Preview.as_str(), "preview");
+        assert_eq!(Size::Fullsize.as_str(), "fullsize");
+    }
+}

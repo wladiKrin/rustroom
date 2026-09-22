@@ -103,7 +103,8 @@ mod tests {
         let json = r#"{"id":"11111111-1111-4111-8111-111111111111","type":"IMAGE",
             "originalFileName":"a.RAF","width":1,"height":1,"thumbhash":"x",
             "fileModifiedAt":"2025-08-14T09:21:33.000Z","somethingNewIn3_3":true}"#;
-        let a: Asset = serde_json::from_str(json).expect("an unknown field must not fail the parse");
+        let a: Asset =
+            serde_json::from_str(json).expect("an unknown field must not fail the parse");
         assert_eq!(a.original_file_name, "a.RAF");
     }
 

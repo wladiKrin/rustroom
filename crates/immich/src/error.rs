@@ -32,7 +32,6 @@ impl Error {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
