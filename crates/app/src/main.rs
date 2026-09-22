@@ -57,6 +57,7 @@ mod develop;
 mod display_colorspace;
 mod export_flow;
 mod filmstrip;
+mod immich_flow;
 mod interaction;
 mod library;
 mod library_state;
@@ -168,6 +169,14 @@ enum LibrarySource {
     },
     Keyword {
         id: i64,
+        name: String,
+    },
+    /// One Immich album, its photos cached locally on demand.
+    ///
+    /// ⚠ The name is carried rather than looked up: the rail may not have fetched the album list
+    /// when the status line wants to say where these photos came from.
+    ImmichAlbum {
+        id: String,
         name: String,
     },
 }
@@ -464,6 +473,13 @@ struct RustroomApp {
     preset_list: Vec<Preset>,
     settings_store: SettingsStore,
     settings: Settings,
+    /// The one worker for everything the UI needs from an Immich server.
+    immich: rustroom_app::immich_worker::ImmichWorker,
+    /// The album list once fetched. `None` = never asked, `Some(Err)` = the failure to show.
+    ///
+    /// ⚠ Three states, not two: "not asked yet" has to be distinguishable from "asked and got
+    /// nothing", or the section would refetch on every frame.
+    immich_albums: Option<Result<Vec<immich::AlbumSummary>, String>>,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
@@ -641,6 +657,19 @@ impl RustroomApp {
             preset_store,
             preset_list,
             settings_store,
+            // ⚠⚠ The worker is built from the settings **before** the `settings` field moves into
+            // the struct, which is why the fetcher is constructed here rather than after. A key
+            // pasted later reaches it through `settings_apply`, which rebuilds the fetcher.
+            immich: rustroom_app::immich_worker::ImmichWorker::new(
+                rustroom_app::immich_worker::live_fetcher(
+                    rustroom_app::immich_source::connection(&settings),
+                ),
+                {
+                    let ctx = ctx.clone();
+                    move || ctx.request_repaint()
+                },
+            ),
+            immich_albums: None,
             settings,
             catalog,
             modal: Modal::None,

@@ -67,6 +67,9 @@ impl eframe::App for RustroomApp {
             commands::execute(self, &ctx, cmd);
         }
         self.pump_export(&ctx);
+        // ⚠ Beside the other pumps, so an album list or a finished download lands on the next
+        // frame rather than waiting for whatever the user does next.
+        self.pump_immich(&ctx);
 
         // Pull any finished preview frame into a texture.
         if let Some(s) = &mut self.session {
