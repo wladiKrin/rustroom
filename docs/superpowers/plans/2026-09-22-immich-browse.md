@@ -1986,7 +1986,9 @@ Find where the app polls its other workers each frame (`grep -rn "\.poll()" crat
         }
 ```
 
-⚠ `open_photo_at` is a placeholder for whatever this app already calls to open a photo by path — find the real one with `grep -rn "fn open_photo\|fn show_photo\|fn enter_develop" crates/app/src/session_flow.rs` and use it. Do **not** add a new opening path.
+✅ **The real function is `RustroomApp::open_path(&mut self, ctx: &egui::Context, id: PhotoId)`** (`session_flow.rs:378`), returning `()`. So the handler is `self.open_path(ctx, PhotoId::original(dest)); self.view = AppView::Develop;` — mirroring `open_entry` (`session_flow.rs:788`), which is the shape that already exists.
+
+⚠⚠ **It has ten callers**, so giving it a return value to signal "did not open" is out of scope for this slice. Consequence, reasoned through rather than observed: `open_entry` sets `AppView::Develop` **unconditionally** after calling it, so an early return for an undownloaded photo lands the user in Develop with **no session**. That does not panic — `develop` guards every entry point with `let Some(s) = app.session.as_mut() else { return … }` — so the user sees an empty canvas reading "Downloading from Immich…" and the photo appears when the rename lands. **Task 13 must look at this**; if it reads as breakage the fix is to stay in Library while the download runs.
 
 Add the two fields to `RustroomApp` in `main.rs`:
 
@@ -2106,7 +2108,8 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                     ui,
                     RowSpec {
                         name: &a.album_name,
-                        count: Some(a.asset_count as usize),
+                        // ⚠ `i64`, not `usize` — checked against `list_row.rs:31`.
+                        count: Some(a.asset_count as i64),
                         meta: "",
                         selected,
                         indent: 0.0,
@@ -2128,7 +2131,7 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
 }
 ```
 
-⚠ `RowSpec`'s exact fields and `row`'s return type must be checked against `crates/app/src/list_row.rs` — the folder section at `collections_panel.rs:130` is the worked example. `count` may be `Option<usize>` or another integer width; match it.
+✅ **Checked against `crates/app/src/list_row.rs` on 2026-09-22.** `RowSpec { name: &str, count: Option<i64>, meta: &str, selected: bool, indent: f32, hover: &str, actions: &[RowAction] }` and `row(ui, spec) -> RowOut { clicked, double_clicked, action, rect }`. ⚠ The one thing the check corrected: `count` is **`Option<i64>`**, so `as usize` would not have compiled. `count` may be `Option<usize>` or another integer width; match it.
 
 - [ ] **Step 2: Add the section to the rail**
 
@@ -2436,5 +2439,5 @@ cargo run --release -p app
 **Known soft spots, called out rather than hidden:**
 
 - **`ureq` 3's exact API** (Task 3) — the shape is right, the method names must be checked against the resolved version. Flagged in the task itself.
-- **`list_row::RowSpec`'s exact fields** (Task 10) and **the real open-photo function's name** (Tasks 9, 11) — both need reading before pasting; the worked examples are named.
+- ~~**`list_row::RowSpec`'s exact fields** and **the real open-photo function's name**~~ — ✅ both closed 2026-09-22 by reading the code. `count` was the wrong integer type in the plan, and `open_path`'s ten callers rule out the return-value approach; see Tasks 9 and 10 for what replaced them.
 - **Which Settings tab the Immich group belongs on** (Task 12) is left to whoever sees the dialog. The four tabs exist; pick the one that reads right rather than adding a fifth.
