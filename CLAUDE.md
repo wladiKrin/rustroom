@@ -144,14 +144,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2633 tests** on `main` (goldens unmoved since 2026-09-18); `main` is ahead of `origin/main` —
-**not pushed; the user pushes.** The CI workflow was fixed for the runner's disk on 2026-09-21
-and is unverified until the next push.
+**2634 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is ahead of
+`origin/main` — **not pushed; the user pushes.** The CI workflow was fixed for the runner's disk
+on 2026-09-21 and is unverified until the next push.
 
-⚠ **One branch, `export-presets-sheet`, ahead of `main`: the Export dialog as a preset list
-beside summarised sections** (Wide; eight collapsible sections whose headers say their state;
-`export_summary.rs` in the lib). **2634 tests on its tip, gated green, GUI launched for a
-look, not yet confirmed by use.** Spec `2026-09-22-export-dialog-design.md`;
+✅ **The Export dialog as a preset list beside summarised sections — merged and confirmed by use
+(2026-09-22).** Wide; a `list_row` preset column; eight collapsible sections whose headers say
+their state; `export_summary.rs` in the lib. Spec `2026-09-22-export-dialog-design.md`;
 `grep -n 'presets beside' docs/JOURNAL.md`.
 
 ✅ **The dialogs in one language — merged and confirmed by use (2026-09-22).** One shell with a
