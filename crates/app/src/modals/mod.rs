@@ -409,7 +409,8 @@ mod tests {
             "Move to the next photo after rating",
             "Use the GPU",
             "Clear",
-            "Done",
+            "Apply",
+            "Cancel",
             "Close",
         ] {
             assert!(

@@ -23,6 +23,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 
 ## Contents
 
+- [The dialogs in one language (2026-09-22)](#the-dialogs-in-one-language-2026-09-22)
 - [CI ran out of disk (2026-09-21)](#ci-ran-out-of-disk-2026-09-21)
 - [The snapshot strip as a timeline (2026-09-20)](#the-snapshot-strip-as-a-timeline-2026-09-20)
 - [The top bar and the Library in one language (2026-09-20)](#the-top-bar-and-the-library-in-one-language-2026-09-20)
@@ -126,7 +127,44 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 - [Fixes found by using the finished rework (2026-08-24)](#fixes-found-by-using-the-finished-rework-2026-08-24)
 - [Per-tool resets and a lockable crop aspect (2026-08-24)](#per-tool-resets-and-a-lockable-crop-aspect-2026-08-24)
 - [Three bugs from the first hour of real use (2026-08-12), and the two interesting ones are mine](#three-bugs-from-the-first-hour-of-real-use-2026-08-12-and-the-two-interesting-ones-are-mine)
-- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### CI ran out of disk (2026-09-21)
+- [Filmstrip fixes (2026-08-10) — a layout bug and a loading bug, reported together, unrelated underneath](#filmstrip-fixes-2026-08-10-a-layout-bug-and-a-loading-bug-reported-together-unrelated-underneath### The dialogs in one language (2026-09-22)
+
+The user: "rework all the window popups, such that we have one cohesive design language." Three
+mockups on the canvas "Rustroom Dialogs" (https://claude.ai/artifact/Gmvn3eqBNgtWopBRG9vJCK);
+**B** chosen — the title bar, tabs for the long dialogs, a pinned footer. Spec written to be
+handed to another agent, then executed here after all. On `dialogs-tabs`; spec
+`2026-09-21-dialogs-design.md`. **2627 → TESTCOUNT tests**, goldens unmoved.
+
+| what landed | where |
+|---|---|
+| one shell for all fifteen: a 36 pt **title bar** with a × ("Close"), the body in a scroll area, a **footer pinned** under it — a weak note at the left, the extras, Cancel, and the **accent-filled primary verb** rightmost; `Footer` / `DialogOut` replace the `bool` the old shell returned and `theme::button_row` | **new** `modals/shell.rs` (the size round-trip tests moved in) |
+| **tabs** through `theme::segmented_sized` in the body face, the current tab in egui's temporary memory per dialog: Settings (Behaviour · Appearance · Display · Performance · Input, the thirteen hairline groups redistributed, group labels as `sub_label`s), Export (Output · Filename · Metadata · Watermark; the collapsing headers' `·` marker is the tab's hover, "Metadata is on"), Information (File · Image · Capture · Description · Marks) | `shell::tabs`, `settings.rs`, `export.rs`, `info.rs` |
+| the panels' `section::header` inside dialogs: Shortcuts (one per menu section), Save preset (**Include** with `groups_summary` as trailing text), Paste and Sync (**Apply**) | `mod.rs`, `presets.rs`, `edits.rs` |
+| the confirms with a question for a title and the verb in the accent; the collision dialog's **Keep both** as primary, Skip and Overwrite as extras, "Cancel export" as dismiss | `mod.rs`, `presets.rs`, `export.rs` |
+| `theme::primary_button`, the accent fill with white text, shared with the bar's Export | `theme.rs`, `shell.rs` |
+
+**Worth keeping:**
+
+- ⚠⚠ **The shell's round-trip test caught two overshoots in a row.** The body scroll area is
+  sized to what the footer leaves; without subtracting egui's `item_spacing` between the two the
+  dialog crept 4 pt taller on every reopen, and with it subtracted it still grew once — egui's
+  `ScrollArea` has a **default `min_scrolled_height` of 64** that overrides a smaller
+  `max_height`, so a Compact dialog's 58 pt body came out 63. `min_scrolled_height(0.0)` on the
+  body. The test that pinned the old shell's sizing is what made the new one honest.
+- ⚠ Two of the old Export tests asserted the collapsing headers' `·` marker; the marker is a hover
+  now, which the harness cannot read, so the sentence lives in a pure `tab_hover` with its own
+  test and the tabs are asserted by name — with "Export" in the footer on every tab, which is
+  the reason the footer exists.
+- Seen in use (2026-09-22): Settings gets a real **Apply / Cancel** — a `SettingsDraft` held
+  on the app while the dialog is open, written back through the same `apply_*` methods on Apply
+  and dropped on Cancel (the thumbnail cache's Clear stays immediate: it is an action). And the
+  paragraph under each control "reads as one single piece of text": the descriptions are
+  **hovers** now, the Masks panel's rule, with 8 pt between rows; the two value-dependent notes
+  (demosaic tier, resampler) stay inline, and the erase/pan clash stays on the page as an error
+  hint because it is a problem, not a description.
+- ⚠ `modals/export.rs` is **603** lines after the split (696 before); `mod.rs` 477.
+
+### CI ran out of disk (2026-09-21)
 
 The first push after the panel and shell reworks failed on GitHub with "No space left on
 device" while compiling `pipeline`'s tests, and the linker then died with a bus error on the

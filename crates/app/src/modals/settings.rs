@@ -1,184 +1,290 @@
 //! The Settings window.
+//!
+//! ⚠ **A draft, applied on Apply** (2026-09-22, user's call): the first tabbed version applied
+//! every change as it was made and said so in the footer; the user wanted Apply and Cancel.
+//! `SettingsDraft` holds the fifteen preferences while the dialog is open, and `apply` writes
+//! back exactly what changed, through the same `apply_*` methods the live version called —
+//! so a cancelled dialog leaves nothing behind, and an applied one saves the file once.
+//!
+//! ⚠ **The descriptions are hovers, not paragraphs under each control** (same day, same
+//! call): five settings with a paragraph each read as one block of text. The rule the Masks
+//! panel already follows. The two short, *value-dependent* notes — the demosaic tier's and the
+//! resampler's — stay inline beside their combos, because they change with the choice.
 
 use super::shell::tabs;
 use super::{dialog, Footer};
 use crate::decode::view_quality_hint;
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
-use rustroom_app::settings::{Accent, DragQuality, EraseDrag, PanDrag, ThemeChoice};
+use rustroom_app::settings::{Accent, DragQuality, EraseDrag, PanDrag, Settings, ThemeChoice};
+
+/// Air between two settings on a tab.
+const GAP: f32 = 8.0;
+
+/// The preferences the dialog edits, held while it is open.
+#[derive(Clone, PartialEq, Debug)]
+pub struct SettingsDraft {
+    confirm: bool,
+    write_xmp: bool,
+    auto_advance: bool,
+    camera_rendering: bool,
+    auto_lens: bool,
+    tier: raw_decode::Demosaic,
+    gpu_tail: bool,
+    resampler: pipeline::Resampler,
+    export_width: u32,
+    theme_choice: ThemeChoice,
+    accent: Accent,
+    pan_drag: PanDrag,
+    erase_drag: EraseDrag,
+    drag_quality: DragQuality,
+    display_space: color::OutputSpace,
+}
+
+impl SettingsDraft {
+    fn from_settings(s: &Settings) -> Self {
+        Self {
+            confirm: s.confirm_preset_delete,
+            write_xmp: s.write_xmp,
+            auto_advance: s.auto_advance,
+            camera_rendering: s.default_rendering == edit_model::Rendering::Camera,
+            auto_lens: s.auto_lens_correction,
+            tier: s.view_demosaic,
+            gpu_tail: s.gpu_tail,
+            resampler: s.resampler,
+            export_width: s.export_concurrency,
+            theme_choice: s.theme,
+            accent: s.accent,
+            pan_drag: s.pan_drag,
+            erase_drag: s.erase_drag,
+            drag_quality: s.drag_quality,
+            display_space: s.display_space,
+        }
+    }
+
+    /// Write back what differs from the live settings, through the methods that know what
+    /// each change entails (a re-decode, a re-render, a restyle), and save once.
+    fn apply(self, app: &mut RustroomApp, ctx: &egui::Context) {
+        let mut plain = false;
+        if self.confirm != app.settings.confirm_preset_delete {
+            app.settings.confirm_preset_delete = self.confirm;
+            plain = true;
+        }
+        if self.write_xmp != app.settings.write_xmp {
+            app.settings.write_xmp = self.write_xmp;
+            plain = true;
+        }
+        let want_rendering = if self.camera_rendering {
+            edit_model::Rendering::Camera
+        } else {
+            edit_model::Rendering::None
+        };
+        if want_rendering != app.settings.default_rendering {
+            app.settings.default_rendering = want_rendering;
+            plain = true;
+        }
+        if self.auto_lens != app.settings.auto_lens_correction {
+            app.settings.auto_lens_correction = self.auto_lens;
+            plain = true;
+        }
+        if self.export_width != app.settings.export_concurrency {
+            app.settings.export_concurrency = self.export_width;
+            plain = true;
+        }
+        if self.pan_drag != app.settings.pan_drag {
+            app.settings.pan_drag = self.pan_drag;
+            plain = true;
+        }
+        if self.erase_drag != app.settings.erase_drag {
+            app.settings.erase_drag = self.erase_drag;
+            plain = true;
+        }
+        if self.drag_quality != app.settings.drag_quality {
+            app.settings.drag_quality = self.drag_quality;
+            plain = true;
+        }
+        if self.auto_advance != app.settings.auto_advance {
+            app.settings.auto_advance = self.auto_advance;
+            plain = true;
+        }
+        if plain {
+            app.save_settings();
+        }
+        if self.theme_choice != app.settings.theme || self.accent != app.settings.accent {
+            app.apply_appearance(self.theme_choice, self.accent, ctx);
+        }
+        if self.tier != app.settings.view_demosaic {
+            app.apply_view_demosaic(self.tier, ctx);
+        }
+        if self.gpu_tail != app.settings.gpu_tail {
+            app.apply_gpu_tail(self.gpu_tail);
+        }
+        if self.resampler != app.settings.resampler {
+            app.apply_resampler(self.resampler);
+        }
+        if self.display_space != app.settings.display_space {
+            app.apply_display_space(self.display_space, ctx);
+        }
+    }
+}
 
 /// The Settings window: preferences that survive a restart.
 pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
-    let mut confirm = app.settings.confirm_preset_delete;
-    let mut write_xmp = app.settings.write_xmp;
-    let mut auto_advance = app.settings.auto_advance;
-    let mut camera_rendering = app.settings.default_rendering == edit_model::Rendering::Camera;
-    let mut auto_lens = app.settings.auto_lens_correction;
-    let mut tier = app.settings.view_demosaic;
-    let mut gpu_tail = app.settings.gpu_tail;
-    let mut resampler = app.settings.resampler;
-    let mut export_width = app.settings.export_concurrency;
-    let mut theme_choice = app.settings.theme;
-    let mut accent = app.settings.accent;
-    let mut pan_drag = app.settings.pan_drag;
-    let mut erase_drag = app.settings.erase_drag;
-    let mut drag_quality = app.settings.drag_quality;
-    let mut display_space = app.settings.display_space;
-    // Copied out before the closure borrows `app`.
+    let mut d = app
+        .settings_draft
+        .take()
+        .unwrap_or_else(|| SettingsDraft::from_settings(&app.settings));
     let os_manages_colour = app.os_manages_colour;
-    let mut close = false;
 
-    // ⚠ Five tabs (2026-09-21): the thirteen hairline groups became five named pages, so a
-    // setting is found by its subject rather than by scrolling. Every control and every hint
-    // is the one the single page had; only the grouping is new.
     let out = dialog(
         ctx,
         &mut app.settings,
         "settings",
         "Settings",
         theme::DialogSize::Standard,
-        Footer::close("Done").note("Changes apply as you make them."),
+        Footer::confirm("Apply", true, "Cancel"),
         |ui| {
             let tab = tabs(
                 ui,
                 egui::Id::new("settings_tab"),
                 &["Behaviour", "Appearance", "Display", "Performance", "Input"],
             );
+            ui.spacing_mut().item_spacing.y = GAP;
             match tab {
                 0 => {
-                    ui.checkbox(&mut confirm, "Confirm before deleting a preset");
+                    ui.checkbox(&mut d.confirm, "Confirm before deleting a preset")
+                        .on_hover_text(
+                            "A deleted preset can be brought back with Undo either way.",
+                        );
                     ui.checkbox(
-                        &mut camera_rendering,
+                        &mut d.camera_rendering,
                         "Open new photos with the camera rendering",
-                    );
-                    theme::hint(
-                        ui,
+                    )
+                    .on_hover_text(
                         "A RAW that has never been edited opens rendered the way the camera \
                          would. Off opens it colorimetric, which looks flat. A photo you have \
                          already edited keeps its own setting either way.",
                     );
-                    ui.checkbox(&mut auto_lens, "Apply lens corrections to new photos");
-                    theme::hint(
-                        ui,
-                        "Distortion, chromatic aberration and vignetting from the lens profile, \
-                         on a RAW that has never been edited. A photo you have already edited \
-                         keeps its own.",
-                    );
-                    ui.checkbox(&mut write_xmp, "Write XMP sidecars beside RAW files");
-                    theme::hint(
-                        ui,
-                        "Ratings, colour labels and keywords are written to a stem.xmp file next \
-                         to each RAW, which is what Lightroom and exiftool read. An existing \
-                         sidecar is merged into, never replaced, so develop settings written by \
-                         another application survive. Turning this off does not stop Rustroom \
-                         reading sidecars somebody else changed, and turning it back on updates \
-                         each photo at its next rating or keyword change rather than all at once.",
-                    );
-                    ui.checkbox(&mut auto_advance, "Move to the next photo after rating");
-                    theme::hint(
-                        ui,
-                        "In the Library grid a rating, a flag or a colour label steps past \
-                         everything that was selected; in Compare it steps the bordered pane, \
-                         exactly as the arrow keys do. Clearing a rating with 0 or a flag with U \
-                         never moves on — a correction should leave you on the photo you are \
-                         fixing.",
-                    );
+                    ui.checkbox(&mut d.auto_lens, "Apply lens corrections to new photos")
+                        .on_hover_text(
+                            "Distortion, chromatic aberration and vignetting from the lens \
+                             profile, on a RAW that has never been edited. A photo you have \
+                             already edited keeps its own.",
+                        );
+                    ui.checkbox(&mut d.write_xmp, "Write XMP sidecars beside RAW files")
+                        .on_hover_text(
+                            "Ratings, colour labels and keywords are written to a stem.xmp file \
+                             next to each RAW, which is what Lightroom and exiftool read. An \
+                             existing sidecar is merged into, never replaced, so develop settings \
+                             written by another application survive. Turning this off does not \
+                             stop Rustroom reading sidecars somebody else changed, and turning it \
+                             back on updates each photo at its next rating or keyword change \
+                             rather than all at once.",
+                        );
+                    ui.checkbox(&mut d.auto_advance, "Move to the next photo after rating")
+                        .on_hover_text(
+                            "In the Library grid a rating, a flag or a colour label steps past \
+                             everything that was selected; in Compare it steps the bordered pane, \
+                             exactly as the arrow keys do. Clearing a rating with 0 or a flag \
+                             with U never moves on — a correction should leave you on the photo \
+                             you are fixing.",
+                        );
                 }
                 1 => {
                     egui::Grid::new("settings_appearance")
                         .num_columns(2)
-                        .spacing([12.0, 4.0])
+                        .spacing([12.0, GAP])
                         .show(ui, |ui| {
                             ui.label("Theme");
                             egui::ComboBox::from_id_salt("theme_pick")
-                                .selected_text(theme_choice.label())
+                                .selected_text(d.theme_choice.label())
                                 .show_ui(ui, |ui| {
                                     for t in ThemeChoice::ALL {
-                                        ui.selectable_value(&mut theme_choice, t, t.label());
+                                        ui.selectable_value(&mut d.theme_choice, t, t.label());
                                     }
-                                });
+                                })
+                                .response
+                                .on_hover_text(
+                                    "Dark is the default because a light surround changes how \
+                                     you judge exposure.",
+                                );
                             ui.end_row();
 
                             ui.label("Accent");
                             egui::ComboBox::from_id_salt("accent_pick")
-                                .selected_text(accent.label())
+                                .selected_text(d.accent.label())
                                 .show_ui(ui, |ui| {
                                     for a in Accent::ALL {
-                                        ui.selectable_value(&mut accent, a, a.label());
+                                        ui.selectable_value(&mut d.accent, a, a.label());
                                     }
-                                });
+                                })
+                                .response
+                                .on_hover_text(
+                                    "The accent marks active controls; Neutral turns it off.",
+                                );
                             ui.end_row();
                         });
-                    theme::hint(
-                        ui,
-                        "Dark is the default because a light surround changes how you judge \
-                         exposure. The accent marks active controls; Neutral turns it off.",
-                    );
                 }
                 2 => {
                     if os_manages_colour {
                         ui.horizontal(|ui| {
                             ui.label("Display");
-                            ui.label("handled by macOS");
+                            ui.label("handled by macOS").on_hover_text(
+                                "Your display's own colour profile is applied by the system, \
+                                 including any calibration, and it follows the window if you \
+                                 move it to another monitor.",
+                            );
                         });
-                        theme::hint(
-                            ui,
-                            "Your display's own colour profile is applied by the system, \
-                             including any calibration, and it follows the window if you move it \
-                             to another monitor.",
-                        );
                     } else {
                         ui.horizontal(|ui| {
                             ui.label("Display");
                             egui::ComboBox::from_id_salt("display_space_pick")
-                                .selected_text(display_space.label())
+                                .selected_text(d.display_space.label())
                                 .show_ui(ui, |ui| {
                                     for s in color::OutputSpace::DISPLAYS {
-                                        ui.selectable_value(&mut display_space, s, s.label());
+                                        ui.selectable_value(&mut d.display_space, s, s.label());
                                     }
-                                });
+                                })
+                                .response
+                                .on_hover_text(
+                                    "The primaries of your monitor. Most are sRGB; recent Apple \
+                                     displays and many laptops are Display P3. Affects only what \
+                                     you see — never an export, and never the histogram.",
+                                );
                         });
-                        theme::hint(
-                            ui,
-                            "The primaries of your monitor. Most are sRGB; recent Apple displays \
-                             and many laptops are Display P3. Affects only what you see — never \
-                             an export, and never the histogram.",
-                        );
                     }
                 }
                 3 => {
                     theme::sub_label(ui, "1:1 view quality");
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_id_salt("view_demosaic_pick")
-                            .selected_text(tier.label())
+                            .selected_text(d.tier.label())
                             .show_ui(ui, |ui| {
-                                for d in raw_decode::Demosaic::ALL {
-                                    ui.selectable_value(&mut tier, d, d.label());
+                                for t in raw_decode::Demosaic::ALL {
+                                    ui.selectable_value(&mut d.tier, t, t.label());
                                 }
-                            });
-                        theme::hint(ui, view_quality_hint(tier));
+                            })
+                            .response
+                            .on_hover_text(
+                                "RAW only, and separate from the export setting. Sets the demosaic \
+                                 used for the zoomed view. A slower tier costs that much extra on \
+                                 every photo you stop on, not just on export — the full-resolution \
+                                 decode starts on its own. The default is Better: Fast is 2.4x \
+                                 quicker but visibly smears fine foliage, and Best is \
+                                 indistinguishable from Better at 4x. Changing this re-decodes the \
+                                 open photo.",
+                            );
+                        theme::hint(ui, view_quality_hint(d.tier));
                     });
-                    theme::hint(
-                        ui,
-                        "RAW only, and separate from the export setting. Sets the demosaic used \
-                         for the zoomed view. A slower tier costs that much extra on every photo \
-                         you stop on, not just on export — the full-resolution decode starts on \
-                         its own. The default is Better: Fast is 2.4x quicker but visibly smears \
-                         fine foliage, and Best is indistinguishable from Better at 4x. \
-                         Changing this re-decodes the open photo.",
-                    );
 
                     theme::sub_label(ui, "Rendering");
-                    ui.checkbox(&mut gpu_tail, "Use the GPU");
-                    theme::hint(
-                        ui,
+                    ui.checkbox(&mut d.gpu_tail, "Use the GPU").on_hover_text(
                         "Runs develop work on the graphics card wherever it pays — while you \
-                         edit and while you export, inside a mask as well as outside one. Off by \
-                         default: the CPU is the reference, and the picture should not change. \
-                         ⚠ Work is only moved across when what it saves is worth the transfer, \
-                         so a lightly edited photograph deliberately stays on the CPU. The first \
-                         render after switching it on spends about a sixth of a second compiling \
-                         shaders.",
+                         edit and while you export, inside a mask as well as outside one. The CPU \
+                         is the reference, and the picture should not change. ⚠ Work is only \
+                         moved across when what it saves is worth the transfer, so a lightly \
+                         edited photograph deliberately stays on the CPU. The first render after \
+                         switching it on spends about a sixth of a second compiling shaders.",
                     );
 
                     theme::sub_label(ui, "Thumbnail cache");
@@ -188,208 +294,126 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             .thumb_cache_bytes
                             .get_or_insert_with(|| store.size_bytes());
                         ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
-                        if ui.button("Clear").clicked() {
+                        if ui
+                            .button("Clear")
+                            .on_hover_text(
+                                "Previews already extracted from your photos, so a folder you \
+                                 have opened before fills in at once instead of re-reading every \
+                                 file. Clearing costs nothing but the time to build it again. \
+                                 Takes effect at once, not on Apply.",
+                            )
+                            .clicked()
+                        {
                             store.clear();
                             app.thumb_cache_bytes = Some(0);
                         }
                     });
-                    theme::hint(
-                        ui,
-                        "Previews already extracted from your photos, so a folder you have \
-                         opened before fills in at once instead of re-reading every file. \
-                         Clearing costs nothing but the time to build it again.",
-                    );
 
                     theme::sub_label(ui, "Export at once");
                     let cores = std::thread::available_parallelism()
                         .map(|n| n.get() as u32)
                         .unwrap_or(1);
-                    ui.add(egui::Slider::new(&mut export_width, 1..=cores.max(1)).text("photos"));
-                    theme::hint(
-                        ui,
-                        "How many photos a batch export works on at once. Decoding a RAW uses one \
-                         core, so several at a time is much faster — measured at about 3x at \
-                         four, and 4.5x at eight. ⚠ Each photo in flight holds its decoded pixels \
-                         in memory: roughly 300 MB on a 26-megapixel camera, so four is about \
-                         1.2 GB. Turn it down if exporting makes the machine swap. Applies to the \
-                         next export.",
-                    );
+                    ui.add(egui::Slider::new(&mut d.export_width, 1..=cores.max(1)).text("photos"))
+                        .on_hover_text(
+                            "How many photos a batch export works on at once. Decoding a RAW uses \
+                             one core, so several at a time is much faster — measured at about 3x \
+                             at four, and 4.5x at eight. ⚠ Each photo in flight holds its decoded \
+                             pixels in memory: roughly 300 MB on a 26-megapixel camera, so four is \
+                             about 1.2 GB. Turn it down if exporting makes the machine swap. \
+                             Applies to the next export.",
+                        );
 
                     theme::sub_label(ui, "Resampling");
                     ui.horizontal(|ui| {
                         egui::ComboBox::from_id_salt("resampler_pick")
-                            .selected_text(resampler.label())
+                            .selected_text(d.resampler.label())
                             .show_ui(ui, |ui| {
                                 for k in pipeline::Resampler::ALL {
-                                    ui.selectable_value(&mut resampler, k, k.label());
+                                    ui.selectable_value(&mut d.resampler, k, k.label());
                                 }
-                            });
-                        theme::hint(ui, resampler.hint());
+                            })
+                            .response
+                            .on_hover_text(
+                                "How pixels are read when straightening, correcting perspective \
+                                 or applying a lens profile — the only three things that resample. \
+                                 One setting for the preview and the export, so what you judge is \
+                                 what you get. Sharper kernels recover detail a bilinear pass \
+                                 throws away and ring slightly on hard edges; bilinear is the only \
+                                 one that provably cannot, and is what Rustroom used before.",
+                            );
+                        theme::hint(ui, d.resampler.hint());
                     });
-                    theme::hint(
-                        ui,
-                        "How pixels are read when straightening, correcting perspective or \
-                         applying a lens profile — the only three things that resample. One \
-                         setting for the preview and the export, so what you judge is what you \
-                         get. Sharper kernels recover detail a bilinear pass throws away and ring \
-                         slightly on hard edges; bilinear is the only one that provably cannot, \
-                         and is what Rustroom used before.",
-                    );
                 }
                 _ => {
                     theme::sub_label(ui, "Pan with");
                     egui::ComboBox::from_id_salt("pan_drag_pick")
-                        .selected_text(pan_drag.label())
+                        .selected_text(d.pan_drag.label())
                         .show_ui(ui, |ui| {
                             for b in PanDrag::ALL {
-                                ui.selectable_value(&mut pan_drag, b, b.label());
+                                ui.selectable_value(&mut d.pan_drag, b, b.label());
                             }
-                        });
-                    theme::hint(
-                        ui,
-                        "Scrolling and two-finger swipe always pan — this is the extra drag \
-                         gesture, for when a middle button is missing or broken.",
-                    );
+                        })
+                        .response
+                        .on_hover_text(
+                            "Scrolling and two-finger swipe always pan — this is the extra drag \
+                             gesture, for when a middle button is missing or broken.",
+                        );
 
                     theme::sub_label(ui, "Erase with");
+                    let clash =
+                        d.erase_drag.button(d.pan_drag).is_none() && d.erase_drag != EraseDrag::Off;
                     egui::ComboBox::from_id_salt("erase_drag_pick")
-                        .selected_text(erase_drag.label())
+                        .selected_text(d.erase_drag.label())
                         .show_ui(ui, |ui| {
                             for b in EraseDrag::ALL {
-                                ui.selectable_value(&mut erase_drag, b, b.label());
+                                ui.selectable_value(&mut d.erase_drag, b, b.label());
                             }
-                        });
-                    theme::hint(
-                        ui,
-                        &if erase_drag.button(pan_drag).is_none() && erase_drag != EraseDrag::Off {
-                            format!(
+                        })
+                        .response
+                        .on_hover_text(
+                            "Hold this button while painting a brush mask to erase instead, for \
+                             the duration of the stroke. With Erase already ticked it paints.",
+                        );
+                    // ⚠ A clash is a problem, not a description: it stays on the page.
+                    if clash {
+                        theme::error_hint(
+                            ui,
+                            &format!(
                                 "Unavailable: {} is already bound to panning, which always wins. \
                                  Pick another button, or change what pans.",
-                                erase_drag.label()
-                            )
-                        } else {
-                            "Hold this button while painting a brush mask to erase instead, for \
-                             the duration of the stroke. With Erase already ticked it paints."
-                                .to_string()
-                        },
-                    );
+                                d.erase_drag.label()
+                            ),
+                        );
+                    }
 
                     theme::sub_label(ui, "Preview while dragging");
                     egui::ComboBox::from_id_salt("drag_quality_pick")
-                        .selected_text(drag_quality.label())
+                        .selected_text(d.drag_quality.label())
                         .show_ui(ui, |ui| {
                             for q in DragQuality::ALL {
-                                ui.selectable_value(&mut drag_quality, q, q.label());
+                                ui.selectable_value(&mut d.drag_quality, q, q.label());
                             }
-                        });
-                    theme::hint(
-                        ui,
-                        "Renders at a lower resolution while a slider or the canvas is being \
-                         dragged, then at full quality the moment you let go. Each step is about \
-                         a quarter as many pixels. Sharpening is the one adjustment that reads \
-                         weakly while dragging — judge it at 1:1, or choose Full quality.",
-                    );
+                        })
+                        .response
+                        .on_hover_text(
+                            "Renders at a lower resolution while a slider or the canvas is being \
+                             dragged, then at full quality the moment you let go. Each step is \
+                             about a quarter as many pixels. Sharpening is the one adjustment \
+                             that reads weakly while dragging — judge it at 1:1, or choose Full \
+                             quality.",
+                        );
                 }
             }
         },
     );
-    close |= out.dismissed;
 
-    if confirm != app.settings.confirm_preset_delete {
-        app.settings.confirm_preset_delete = confirm;
-        app.save_settings();
-    }
-    // ⚠ Change-guarded like its neighbours: this body runs every frame the dialog is open, and
-    // an unguarded write would rewrite the settings file sixty times a second.
-    if write_xmp != app.settings.write_xmp {
-        app.settings.write_xmp = write_xmp;
-        app.save_settings();
-    }
-    // ⚠ Change-guarded for the same reason. Neither needs a re-decode or a re-render: both are
-    // read at the next photo *open*, by `initial_edits`, and nothing on screen changes now.
-    let want_rendering = if camera_rendering {
-        edit_model::Rendering::Camera
-    } else {
-        edit_model::Rendering::None
-    };
-    if want_rendering != app.settings.default_rendering {
-        app.settings.default_rendering = want_rendering;
-        app.save_settings();
-    }
-    if auto_lens != app.settings.auto_lens_correction {
-        app.settings.auto_lens_correction = auto_lens;
-        app.save_settings();
-    }
-    // ⚠ The inequality is what stops the worker being rebuilt and a decode fired on
-    // *every frame* the dialog is open — `settings_modal` runs once per frame.
-    // ⚠ The same one-frame rule: `show` runs once per frame the dialog is open, so an
-    // unguarded re-apply would rebuild both themes' styles sixty times a second.
-    if theme_choice != app.settings.theme || accent != app.settings.accent {
-        app.apply_appearance(theme_choice, accent, ctx);
-    }
-    if tier != app.settings.view_demosaic {
-        app.apply_view_demosaic(tier, ctx);
-    }
-    // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
-    // re-renders — the `apply_view_demosaic` rule.
-    if gpu_tail != app.settings.gpu_tail {
-        app.apply_gpu_tail(gpu_tail);
-    }
-    // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
-    // rebuilds the thumbnail loader and re-renders. Unguarded it would reload the whole folder's
-    // thumbnails sixty times a second — the `apply_view_demosaic` rule.
-    if resampler != app.settings.resampler {
-        app.apply_resampler(resampler);
-    }
-    // ⚠ A change guard like its neighbours, though for a weaker reason: this has no side effect
-    // beyond the write, because `start_export` reads `settings.export_width()` afresh when a run
-    // begins. The guard is here so the settings file is not rewritten on every frame the dialog
-    // is open — the `apply_view_demosaic` rule.
-    if export_width != app.settings.export_concurrency {
-        app.settings.export_concurrency = export_width;
-        app.save_settings();
-    }
-    // ⚠ Guarded like its neighbours: `show` runs every frame the dialog is open, and this one
-    // rebuilds the thumbnail loader and re-renders, so an unguarded call would reload the whole
-    // folder's thumbnails sixty times a second.
-    if display_space != app.settings.display_space {
-        app.apply_display_space(display_space, ctx);
-    }
-    // ⚠ A change guard like its neighbours, though for a weaker reason: this has no side
-    // effect beyond the write, because the canvas reads `settings.pan_drag` afresh every
-    // frame — no worker rebuild, no re-decode. The guard is here so the settings file is not
-    // rewritten on every frame the dialog is open.
-    if pan_drag != app.settings.pan_drag {
-        app.settings.pan_drag = pan_drag;
-        app.save_settings();
-    }
-    // ⚠ A change guard like its neighbours: the canvas reads `settings.erase_drag` afresh every
-    // frame, so this has no side effect beyond keeping the file from being rewritten each frame.
-    if erase_drag != app.settings.erase_drag {
-        app.settings.erase_drag = erase_drag;
-        app.save_settings();
-    }
-    // ⚠ A change guard like its neighbours, and for `pan_drag`'s weaker reason: this has no side
-    // effect beyond the write, because the canvas reads `settings.drag_quality` afresh every
-    // frame — no worker rebuild, no re-decode. The guard is here so the settings file is not
-    // rewritten on every frame the dialog is open.
-    if drag_quality != app.settings.drag_quality {
-        app.settings.drag_quality = drag_quality;
-        app.save_settings();
-    }
-    // ⚠ A change guard like its neighbours, and for `pan_drag`'s weaker reason: this has no side
-    // effect beyond the write, because both views read `settings.auto_advance` afresh every
-    // frame. The guard is here so the settings file is not rewritten on every frame the dialog
-    // is open.
-    if auto_advance != app.settings.auto_advance {
-        app.settings.auto_advance = auto_advance;
-        app.save_settings();
-    }
-    if close {
+    if out.primary {
+        d.apply(app, ctx);
         app.modal = Modal::None;
-        // ⚠ Cleared on close so the next open re-reads the size rather than showing a stale one
-        // — in particular after a Clear, or after a folder has been browsed in between.
-        app.thumb_cache_bytes = None;
+    } else if out.dismissed {
+        app.modal = Modal::None;
+    } else {
+        app.settings_draft = Some(d);
     }
 }
 
@@ -398,9 +422,6 @@ mod tests {
     use super::*;
     use crate::{test_app, test_ui};
 
-    /// One layout frame with no input, so the modal's resize and scroll settle — the
-    /// `modals::info` tests' rule: the Close button's centre on the very first frame is not
-    /// where it is drawn from the second on, and a click aimed from it lands beside the widget.
     fn settle(ctx: &egui::Context, app: &mut RustroomApp) {
         let _ = test_ui::labelled_centres(ctx, Vec::new(), |_| show(app, ctx));
     }
@@ -412,11 +433,9 @@ mod tests {
         (ctx, app)
     }
 
-    /// ⚠⚠ The report: *"I don't see the option in the settings … to turn off the automatic
-    /// camera rendering."* There was none. This is the control existing and reaching the
-    /// preference — the half a test on `initial_edits` cannot see.
+    /// ⚠ Nothing lands before Apply, and Cancel discards — the contract the buttons make.
     #[test]
-    fn the_camera_rendering_preference_has_a_control_that_reaches_it() {
+    fn a_change_lands_on_apply_and_not_before() {
         let (ctx, mut app) = open_settings();
         assert_eq!(
             app.settings.default_rendering,
@@ -428,30 +447,40 @@ mod tests {
         });
         assert_eq!(
             app.settings.default_rendering,
-            edit_model::Rendering::None,
-            "the click never reached the preference"
+            edit_model::Rendering::Camera,
+            "the change landed before Apply"
         );
-        settle(&ctx, &mut app);
-        test_ui::click(&ctx, "Open new photos with the camera rendering", |_| {
-            show(&mut app, &ctx)
-        });
+        test_ui::click(&ctx, "Apply", |_| show(&mut app, &ctx));
         assert_eq!(
             app.settings.default_rendering,
-            edit_model::Rendering::Camera
+            edit_model::Rendering::None,
+            "Apply did not land the change"
         );
+        assert!(
+            matches!(app.modal, Modal::None),
+            "Apply must close the dialog"
+        );
+        assert!(app.settings_draft.is_none(), "and drop the draft");
     }
 
     #[test]
-    fn the_lens_correction_preference_has_a_control_that_reaches_it() {
+    fn cancel_discards_the_draft() {
         let (ctx, mut app) = open_settings();
         assert!(app.settings.auto_lens_correction);
         settle(&ctx, &mut app);
         test_ui::click(&ctx, "Apply lens corrections to new photos", |_| {
             show(&mut app, &ctx)
         });
+        test_ui::click(&ctx, "Cancel", |_| show(&mut app, &ctx));
         assert!(
-            !app.settings.auto_lens_correction,
-            "the click never reached the preference"
+            app.settings.auto_lens_correction,
+            "Cancel let a change through"
         );
+        assert!(matches!(app.modal, Modal::None));
+        assert!(app.settings_draft.is_none());
+        // Reopening starts from the live settings, not the abandoned draft.
+        app.modal = Modal::Settings;
+        settle(&ctx, &mut app);
+        assert_eq!(app.settings_draft.as_ref().map(|d| d.auto_lens), Some(true));
     }
 }
