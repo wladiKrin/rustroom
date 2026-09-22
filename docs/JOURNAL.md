@@ -151,6 +151,65 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-22 — M9.1 slice 1: Immich albums browse and download on open
+
+Shape **A** of `docs/BACKLOG.md`'s Immich entry: an asset becomes a local file in a cache
+directory, and a cache directory is just a folder. **No catalog migration** — `db.rs` stays at v7,
+which is the whole reason this came in at eighteen commits rather than a rewrite. Spec
+`2026-09-22-immich-browse-design.md`, plan `2026-09-22-immich-browse.md`.
+
+**The blocking question is answered.** `docs/BACKLOG.md:1303` said to verify whether Immich serves
+true RAW originals before designing anything. It does: `GET /assets/{id}/original`, and
+`AssetFileType` (`fullsize | preview | thumbnail | sidecar | encoded_video`) does not include the
+original because the original is the asset's own `originalPath`.
+
+**Confirmed by use, 2026-09-22**, in this order and each after a fix: the connection and the
+album list; then the album opening; then thumbnails rendering; then open → download → decode →
+render; then an edit persisting to the sidecar beside the cached copy. ⚠ **Export from an Immich
+photo is the one step not yet exercised** — the risk is low, because by then it is an ordinary local
+file, but low risk is not verification.
+
+**What shipped.** A sixth rail section beside Folders and Collections; albums with counts; the
+ordinary grid filled from server thumbnails with nothing downloaded; opening a photo fetches the
+original into the cache and re-enters `open_path`, after which every existing path applies
+unchanged. A `crates/immich` client with zero GUI, `ureq` (blocking, because every background job
+here is a thread). Deliberately out: catalog rows, so marks do not persist; cache eviction; the
+keychain; timeline browsing; write-back.
+
+**⚠⚠ THE LESSON, AND IT COST TWO BUGS: A FIXTURE I WROTE IS NOT EVIDENCE ABOUT A REMOTE API.**
+`album.json` was hand-written and described *in the plan* as "trimmed from `GET /albums/{id}`". It
+asserted an `assets` array. `AlbumResponseDto` in Immich 3.2.0 has **no `assets` field at all** — it
+carries `assetCount`. The test passed because it checked my assumption against itself. **2,678 green
+tests, and the first real album open failed immediately** with "missing field `assets`".
+
+Then the *captured* reply found a second, worse one. A real server answers a paged album with
+**`"nextCursor": null, "nextPage": "2"`** — it pages by number and leaves the cursor null, which the
+schema nowhere says. The cursor-only loop returned page one and stopped: a **silently truncated
+album**, no error. Invisible in use because the page size is 1000 and the largest album here is 872,
+so it would have surfaced months later on a big album and looked like an Immich fault.
+
+⚠ Both fixes are pinned by fixtures **captured from a real server** and scrubbed
+(`albums_real.json`, `search_real.json`), and every fixture now states whether it was captured or
+constructed. `albumIds` on `/search/metadata` is **deprecated and still the only** way to scope a
+search to an album: `isNotInAlbum` is deprecated too, and the timeline endpoints omit
+`originalFileName`, which decides the cache extension and therefore the decoder.
+
+**A third defect, found by reading rather than by a test:** `open_immich_album` never called
+`catalog::sort`, so the library sort setting silently did nothing for an album. Every other loader
+sorts before `open_scan`, which is documented as requiring a sorted scan.
+
+**Guards that caught real mistakes**, worth knowing they work: the exhaustive `Settings` round-trip
+literal; `test_app`'s exhaustive `RustroomApp` (a compile error `cargo build` never sees, only
+`cargo test`); `RowSpec::count` being `i64`; clippy's `field_reassign_with_default`. ⚠ And two
+**catch-alls that hid** new cases instead: the seven `LibrarySource` matches (reviewed by hand, all
+correct — but nothing would have said so) and the Settings tab dispatch, whose `_` arm would have
+made the new Immich tab render Input's contents.
+
+⚠ The `image` crate is built with `default-features = false` and gained **`webp`** here: it is
+Immich's default thumbnail format, so without it every album thumbnail would fail to decode and the
+grid would stay empty with no error. A generated 38-byte lossless webp fixture pins it; a PNG
+fixture cannot.
+
 ### The dialogs in one language (2026-09-22)
 
 The user: "rework all the window popups, such that we have one cohesive design language." Three

@@ -144,9 +144,26 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2634 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is ahead of
-`origin/main` — **not pushed; the user pushes.** The CI workflow was fixed for the runner's disk
-on 2026-09-21 and is unverified until the next push.
+**2683 tests**, of which **2634 on `main`** plus 49 on branch `immich-browse` (goldens unmoved since
+2026-09-18). ⚠ **`immich-browse` is 18 commits ahead of `main` and not merged** — ask before
+starting anything on top of it, and **never push; the user pushes.** The CI workflow was fixed for
+the runner's disk on 2026-09-21 and is unverified until the next push.
+
+✅ **Immich, slice 1 — built and confirmed by use (2026-09-22), on the branch.** A sixth rail
+section beside Folders and Collections lists the server's albums; the ordinary grid fills from
+server thumbnails with nothing downloaded; opening a photo fetches the original into a cache
+directory and re-enters `open_path`, after which every existing path applies unchanged. New crate
+`crates/immich` (zero GUI, `ureq`), new lib modules `immich_source`/`immich_worker`, new bin modules
+`immich_flow`/`immich_panel`, and a sixth Settings tab. **No catalog migration — `db.rs` stays at
+v7**, which is what shape A bought. Spec `2026-09-22-immich-browse-design.md`;
+`grep -n 'M9.1 slice 1' docs/JOURNAL.md`.
+
+⚠⚠ **Three defects that a green suite did not catch, two of them found only by real server data:**
+`GET /albums/{id}` returns **no `assets` field** (use `POST /search/metadata` with `albumIds`); a
+real server pages by **`nextPage`** and leaves `nextCursor` null, so cursor-only paging **silently
+truncated** albums; and `open_immich_album` never called `catalog::sort`. ⚠ Out of scope by
+decision: catalog rows (**so marks do not persist on Immich photos**), cache eviction, the OS
+keychain (the API key is **plaintext** in `settings.json`), timeline browsing, write-back.
 
 ✅ **The Export dialog as a preset list beside summarised sections — merged and confirmed by use
 (2026-09-22).** Wide; a `list_row` preset column; eight collapsible sections whose headers say
@@ -315,3 +332,10 @@ asking then rather than now.
   question"* note in `docs/BACKLOG.md` against the code before trusting it.
 - **⚠ Almost every GUI-wiring defect in this repo was found by USE, not by a test.** A milestone is
   not closed when it is green; it is closed when it has been seen.
+- **⚠⚠ A FIXTURE YOU WROTE IS NOT EVIDENCE ABOUT SOMETHING YOU DO NOT CONTROL.** M9.1's
+  `album.json` was hand-written and described *in its own plan* as "trimmed from `GET
+  /albums/{id}`". It asserted an `assets` array that endpoint has never returned. The test passed
+  because it checked an assumption against itself — **2,678 green tests, and the first real album
+  open failed immediately.** The captured reply then exposed a second, worse bug the schema nowhere
+  implies. **Every fixture must say whether it was captured or constructed**, and a constructed one
+  proves only self-consistency. One real response is worth more than any number of invented ones.

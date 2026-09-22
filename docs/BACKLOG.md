@@ -1298,11 +1298,25 @@ mean pulling tens of gigabytes of RAW.
    collections, keep marks in step with favourites. **Much larger**, and where the design questions
    live: what is authoritative, what happens on conflict, what happens offline.
 
-### ⚠ Verify this FIRST, before designing anything
+### ✅ ANSWERED 2026-09-22 — the original is the original. Do not re-research this.
 
-**Does Immich's API serve the true original for RAW files, or only a converted preview?** If it
-only returns a JPEG, slice 1 loses most of its point and the whole shape changes. One probe
-settles it; do not assume.
+**Immich serves the true original for RAW files.** `GET /assets/{id}/original` — *"Downloads the
+original file of the specified asset"*. `AssetFileType` is `fullsize | preview | thumbnail | sidecar
+| encoded_video` and the original is **not** in that list, because it is the asset's own
+`originalPath`: derivatives are additive and the original is never one of them.
+`server/src/utils/mime-types.ts` registers the full RAW set. So slice 1 keeps its point.
+
+⚠⚠ **Slices 1 and 2 are now BUILT, on branch `immich-browse`, confirmed by use** — albums browse,
+server thumbnails, download on open, edit, persist. See `CLAUDE.md`'s live state and
+`grep -n 'M9.1 slice 1' docs/JOURNAL.md`. **Only slice 3 (two-way sync) remains**, and its design
+questions are unchanged.
+
+⚠ **But the question this heading asked was the wrong one to stop at.** The two defects that
+actually cost time were not about originals at all: `GET /albums/{id}` returns **no `assets` field**,
+and a real server pages by **`nextPage`** while leaving `nextCursor` null. Neither is discoverable
+from the OpenAPI schema, and both were found by a real reply. **Before the next Immich slice, capture
+a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
+lessons.
 
 ### ⚠ Three honest costs
 
