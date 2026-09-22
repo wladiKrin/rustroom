@@ -150,7 +150,7 @@ and is unverified until the next push.
 
 ⚠ **One branch, `export-presets-sheet`, ahead of `main`: the Export dialog as a preset list
 beside summarised sections** (Wide; eight collapsible sections whose headers say their state;
-`export_summary.rs` in the lib). **TESTCOUNT tests on its tip, gated green, GUI launched for a
+`export_summary.rs` in the lib). **2634 tests on its tip, gated green, GUI launched for a
 look, not yet confirmed by use.** Spec `2026-09-22-export-dialog-design.md`;
 `grep -n 'presets beside' docs/JOURNAL.md`.
 

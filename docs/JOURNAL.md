@@ -133,7 +133,7 @@ measured, what it retracted, and which sabotages its tests failed to catch.
 The user, right after the dialogs rework: "Let's also rework the export dialog." Three
 mockups on the canvas "Rustroom Export" (https://claude.ai/artifact/GG1AUf12BdF9hhxs7xPgJf);
 **C** chosen — the preset list beside the sections, Lightroom's shape at the Wide size. On
-`export-presets-sheet`; spec `2026-09-22-export-dialog-design.md`. **2633 → TESTCOUNT tests**,
+`export-presets-sheet`; spec `2026-09-22-export-dialog-design.md`. **2633 → 2634 tests**,
 goldens unmoved.
 
 | what landed | where |
