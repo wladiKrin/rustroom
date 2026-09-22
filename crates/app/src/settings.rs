@@ -526,6 +526,22 @@ pub struct Settings {
     /// would use `bool`'s own default of `false` instead, silently disabling the feature for every
     /// existing user. The same trap `write_xmp` and `snapshot_strip_height` both document.
     pub auto_advance: bool,
+    /// The Immich server's base URL, e.g. `https://photos.example.com`. Empty means unconfigured.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
+    /// missing field already reads as `String::default()`, which is the right "not configured".
+    pub immich_url: String,
+    /// The Immich API key.
+    ///
+    /// ⚠⚠ **Stored in plaintext**, accepted deliberately for the first Immich slice with the OS
+    /// keychain as the named follow-up. Read and written only through
+    /// [`crate::immich_source::connection`] and [`crate::immich_source::set_connection`], so
+    /// moving it to a keychain is a change to one file.
+    ///
+    /// ⚠ The Settings field's help text tells the user to paste a **read-only** key
+    /// (`asset.read`, `asset.view`, `asset.download`, `album.read`). A key that cannot write
+    /// cannot damage the library if this file leaks, which is what bounds the exposure.
+    pub immich_key: String,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -755,6 +771,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hidden_formats: crate::format_filter::FormatFilter::default(),
+            immich_url: String::new(),
+            immich_key: String::new(),
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
@@ -1457,6 +1475,11 @@ mod tests {
             // Non-default for the same reason as its neighbours: the preference defaults to *on*,
             // so persisting `false` is what proves it round-trips rather than being re-defaulted.
             auto_advance: false,
+            // Non-default so a field re-defaulted on load cannot pass. ⚠ The key is deliberately
+            // included: it is the one field whose loss would be silent — browsing would simply
+            // report "the server rejected the API key" — so the round trip must cover it.
+            immich_url: "https://photos.example.com".to_string(),
+            immich_key: "round-trip-key".to_string(),
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -1466,6 +1489,24 @@ mod tests {
         };
         store.save(&s).unwrap();
         assert_eq!(store.load(), s);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_immich_fields_still_loads() {
+        // ⚠ Same property as its neighbours: `load()` is infallible, so a field that fails to
+        // parse does not surface an error — it silently reverts *every* setting to its default.
+        // The container-level `#[serde(default)]` is what fills these two, and an empty string is
+        // exactly the right "no server configured".
+        let f = TempFile::new("immich_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert!(loaded.immich_url.is_empty());
+        assert!(loaded.immich_key.is_empty());
+        assert!(
+            crate::immich_source::connection(&loaded).is_none(),
+            "an upgraded config must read as unconfigured, not as a half-set connection"
+        );
     }
 
     #[test]

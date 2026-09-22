@@ -131,6 +131,35 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// A configured server, url and key both present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub url: String,
+    pub key: String,
+}
+
+/// The configured connection, or `None` when either half is missing.
+///
+/// ⚠⚠ **The only reader of `Settings::immich_key`.** Everything else asks for a `Connection`, so
+/// moving the key into the OS keychain later changes this function and nothing else.
+pub fn connection(s: &crate::settings::Settings) -> Option<Connection> {
+    let url = s.immich_url.trim();
+    let key = s.immich_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return None;
+    }
+    Some(Connection {
+        url: url.to_string(),
+        key: key.to_string(),
+    })
+}
+
+/// The only writer of those two fields, for the same reason.
+pub fn set_connection(s: &mut crate::settings::Settings, url: &str, key: &str) {
+    s.immich_url = url.trim().to_string();
+    s.immich_key = key.trim().to_string();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +309,30 @@ mod tests {
         let entries = entries_from_album(&[a], root);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].modified, std::time::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn a_connection_needs_both_a_url_and_a_key() {
+        let mut s = crate::settings::Settings::default();
+        assert!(connection(&s).is_none(), "unconfigured by default");
+        s.immich_url = "https://photos.example.com".into();
+        assert!(connection(&s).is_none(), "a URL alone is not a connection");
+        s.immich_key = "abc".into();
+        let c = connection(&s).expect("both set is a connection");
+        assert_eq!(c.url, "https://photos.example.com");
+        assert_eq!(c.key, "abc");
+    }
+
+    /// ⚠ Whitespace pasted around a key is the commonest way this fails, and the failure looks
+    /// like "the server rejected the key".
+    #[test]
+    fn surrounding_whitespace_is_trimmed_off_both() {
+        let mut s = crate::settings::Settings::default();
+        s.immich_url = "  https://photos.example.com  ".into();
+        s.immich_key = "  abc\n".into();
+        let c = connection(&s).expect("must be a connection");
+        assert_eq!(c.url, "https://photos.example.com");
+        assert_eq!(c.key, "abc");
     }
 
     #[test]
