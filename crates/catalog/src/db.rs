@@ -1046,7 +1046,7 @@ impl Catalog {
                     CAST(strftime('%d', taken, 'unixepoch') AS INTEGER),
                     count(*)
              FROM photo_capture WHERE taken IS NOT NULL
-             GROUP BY 1, 2, 3 ORDER BY 1 DESC, 2 DESC, 3 DESC",
+             GROUP BY 1, 2, 3 ORDER BY 1 DESC, 2, 3",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(DayRow {
@@ -3045,25 +3045,51 @@ mod tests {
             .unwrap();
         cat.set_capture(Path::new("/a/three.RAF"), &on_day(2026, 7, 9))
             .unwrap();
-        // ⚠ Newest first (2026-09-23, user's call): the Dates tree reads the way the Immich
-        // timeline does, and the way you browse a photo library rather than audit one.
+        // ⚠ Both rows are 2026, so month-ascending order puts May before July. The year ordering
+        // is pinned separately by `capture_days_puts_the_newest_year_first`.
         assert_eq!(
             cat.capture_days().unwrap(),
             vec![
-                DayRow {
-                    year: 2026,
-                    month: 7,
-                    day: 9,
-                    count: 1
-                },
                 DayRow {
                     year: 2026,
                     month: 5,
                     day: 17,
                     count: 2
                 },
+                DayRow {
+                    year: 2026,
+                    month: 7,
+                    day: 9,
+                    count: 1
+                },
             ]
         );
+    }
+
+    /// ⚠⚠ **Years newest first, months chronological inside them** (2026-09-23, settled by use).
+    /// You pick the year by recency, then read it forwards. ⚠ The test above cannot see this: both
+    /// of its rows are the same year.
+    #[test]
+    fn capture_days_puts_the_newest_year_first_and_reads_its_months_forwards() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(
+            Path::new("/a"),
+            &entries_in("/a", &["old.RAF", "mid.RAF", "new.RAF"]),
+        )
+        .unwrap();
+        cat.set_capture(Path::new("/a/old.RAF"), &on_day(2024, 8, 1))
+            .unwrap();
+        cat.set_capture(Path::new("/a/mid.RAF"), &on_day(2026, 3, 4))
+            .unwrap();
+        cat.set_capture(Path::new("/a/new.RAF"), &on_day(2026, 11, 2))
+            .unwrap();
+        let got: Vec<(i32, u32)> = cat
+            .capture_days()
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.year, r.month))
+            .collect();
+        assert_eq!(got, vec![(2026, 3), (2026, 11), (2024, 8)]);
     }
 
     #[test]

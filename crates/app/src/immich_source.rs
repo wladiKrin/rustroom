@@ -184,18 +184,18 @@ pub struct BucketMonth {
     pub bucket: String,
 }
 
-/// Group the server's buckets into years and months, **newest first**.
+/// Group the server's buckets into **years newest first, months chronological within each year**.
 ///
 /// ⚠⚠ Not `date_tree::group`. Immich's buckets are monthly, and pushing them through that
 /// function would produce a day node meaning "the whole month" — a lie in the data rather than a
 /// rendering detail. Twenty lines is cheaper than the lie, and `date_tree` stays untouched.
 ///
-/// ⚠⚠ **Descending, the user's call after using it (2026-09-23).** This was built ascending to
-/// match the local Dates section, whose `capture_days()` orders ascending — the argument being that
-/// two date trees in one panel reading opposite ways reads as a bug. Use disagreed: for a library
-/// you are browsing rather than auditing, the recent months are the ones you want first, and it is
-/// also the order Immich's own clients use. ⚠ The local Dates section is therefore still ascending;
-/// flipping it too is a separate decision about an established view, not a side effect of this one.
+/// ⚠⚠ **The ordering was settled by use, in two steps (2026-09-23).** Built fully ascending to match
+/// the local Dates section, on the argument that two date trees reading opposite ways looks like a
+/// bug. Use disagreed: recent months are the ones you want first. Then fully descending read oddly in
+/// turn — a year's months running backwards is not how anyone thinks about a year. The answer is
+/// **mixed**: years by recency, months chronological. `Catalog::capture_days` now orders the same way,
+/// so the two trees agree.
 ///
 /// ⚠ A row whose `time_bucket` is not `YYYY-MM-DD` is **skipped**: one bad row must not empty the
 /// tree. ⚠ Sorted explicitly rather than trusting the server's order, so a gap between months
@@ -214,8 +214,10 @@ pub fn group_buckets(buckets: &[immich::Bucket]) -> Vec<BucketYear> {
             Some((year, month, b.count, s.clone()))
         })
         .collect();
-    // ⚠ Newest first, both levels: years descend, and the months inside a year descend with them.
-    rows.sort_by_key(|&(y, m, _, _)| (std::cmp::Reverse(y), std::cmp::Reverse(m)));
+    // ⚠⚠ **Years descend, months ascend inside them** (user's call, 2026-09-23): you pick the year by
+    // recency, then read it forwards. Both levels descending was tried first and reads oddly — a
+    // year's months running backwards is not how anyone thinks about a year.
+    rows.sort_by_key(|&(y, m, _, _)| (std::cmp::Reverse(y), m));
 
     let mut out: Vec<BucketYear> = Vec::new();
     for (year, month, count, bucket) in rows {
@@ -682,10 +684,10 @@ mod tests {
         }
     }
 
-    /// ⚠⚠ **Newest first**, the user's call after using it. Both levels descend: for a library you
-    /// browse rather than audit, the recent months are the ones you want first.
+    /// ⚠⚠ **Years newest first, months chronological inside them.** Both levels descending was tried
+    /// and reads oddly: a year's months running backwards is not how anyone thinks about a year.
     #[test]
-    fn group_buckets_puts_the_newest_year_and_month_first() {
+    fn group_buckets_puts_the_newest_year_first_and_reads_its_months_forwards() {
         let v = vec![
             bucket("2025-12-01", 189),
             bucket("2026-07-01", 233),
@@ -699,8 +701,8 @@ mod tests {
         assert_eq!(years[1].count, 189);
         assert_eq!(
             years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
-            vec![8, 7],
-            "months descending within the year"
+            vec![7, 8],
+            "months ascending within the year"
         );
     }
 
@@ -716,7 +718,7 @@ mod tests {
         let years = group_buckets(&shuffled);
         assert_eq!(
             years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
-            vec![8, 6, 4]
+            vec![4, 6, 8]
         );
     }
 
@@ -728,7 +730,7 @@ mod tests {
         assert_eq!(years.len(), 1);
         assert_eq!(
             years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
-            vec![8, 4]
+            vec![4, 8]
         );
     }
 

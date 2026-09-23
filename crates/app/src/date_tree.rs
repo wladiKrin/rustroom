@@ -149,17 +149,19 @@ mod tests {
         }
     }
 
-    /// ⚠⚠ `capture_days` returns **newest first** since 2026-09-23. Grouping must hold either way,
-    /// because it groups on change rather than on direction.
+    /// ⚠⚠ `capture_days` returns **years newest first, months chronological inside them** since
+    /// 2026-09-23. Grouping must hold for that mixed ordering, because it groups on *change* rather
+    /// than on direction — which is exactly why nothing here needed changing.
     #[test]
-    fn grouping_holds_for_descending_rows() {
-        let years = group(&[d(2026, 7, 9, 1), d(2026, 5, 17, 2), d(2025, 12, 1, 3)]);
+    fn grouping_holds_for_years_descending_with_months_ascending() {
+        let years = group(&[d(2026, 5, 17, 2), d(2026, 7, 9, 1), d(2025, 12, 1, 3)]);
         assert_eq!(years.len(), 2);
         assert_eq!(years[0].year, 2026, "newest year first");
         assert_eq!(years[0].count, 3);
         assert_eq!(
             years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
-            vec![7, 5]
+            vec![5, 7],
+            "months forwards inside the year"
         );
         assert_eq!(years[1].year, 2025);
     }
