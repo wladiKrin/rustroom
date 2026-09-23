@@ -56,11 +56,59 @@ impl RustroomApp {
         n
     }
 
+    /// Show one month of the Immich timeline.
+    ///
+    /// ⚠ Identical in shape to [`Self::open_immich_album`] — including `catalog::sort`, which that
+    /// function was missing at first and which silently ignored the library sort setting.
+    pub(crate) fn open_immich_bucket(
+        &mut self,
+        ctx: &egui::Context,
+        bucket: String,
+        label: String,
+        assets: &[immich::Asset],
+    ) -> usize {
+        let Some(conn) = immich_source::connection(&self.settings) else {
+            self.status = "No Immich server is configured — set one in Settings".to_string();
+            return 0;
+        };
+        let root = immich_source::cache_root(&conn.url);
+        let mut scan = immich_source::entries_from_assets(assets, &root);
+        catalog::sort(&mut scan, self.settings.library_sort);
+        let n = self.open_scan(
+            ctx,
+            LibrarySource::ImmichBucket {
+                bucket,
+                label: label.clone(),
+            },
+            scan,
+        );
+        self.status = if n == assets.len() {
+            format!("{n} photos in {label}")
+        } else {
+            format!(
+                "{n} of {} photos in {label} — the rest are videos or formats Rustroom cannot open",
+                assets.len()
+            )
+        };
+        n
+    }
+
     /// Drain the Immich worker. Called once a frame from [`crate::shell`].
     pub(crate) fn pump_immich(&mut self, ctx: &egui::Context) {
         for outcome in self.immich.poll() {
             match outcome {
                 Outcome::Albums(result) => self.immich_albums = Some(result),
+                Outcome::Buckets(result) => self.immich_buckets = Some(result),
+                Outcome::Bucket {
+                    bucket,
+                    label,
+                    result,
+                } => match result {
+                    Ok(assets) => {
+                        self.open_immich_bucket(ctx, bucket, label, &assets);
+                    }
+                    Err(e) => self.status = format!("Could not open {label}: {e}"),
+                },
                 Outcome::Album { id, name, result } => match result {
                     Ok(assets) => {
                         self.open_immich_album(ctx, id, name, &assets);

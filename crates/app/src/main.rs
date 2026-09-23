@@ -180,6 +180,14 @@ enum LibrarySource {
         id: String,
         name: String,
     },
+    /// One month of the Immich timeline.
+    ///
+    /// ⚠ The bucket identifier the server gave, plus the label to show. The label is carried rather
+    /// than formatted on demand so the status line and the rail always agree.
+    ImmichBucket {
+        bucket: String,
+        label: String,
+    },
 }
 
 struct Library {
@@ -481,6 +489,8 @@ struct RustroomApp {
     /// ⚠ Three states, not two: "not asked yet" has to be distinguishable from "asked and got
     /// nothing", or the section would refetch on every frame.
     immich_albums: Option<Result<Vec<immich::AlbumSummary>, String>>,
+    /// The month buckets, once fetched. Same three states as `immich_albums`.
+    immich_buckets: Option<Result<Vec<immich::Bucket>, String>>,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
@@ -676,6 +686,7 @@ impl RustroomApp {
                 },
             ),
             immich_albums: None,
+            immich_buckets: None,
             settings,
             catalog,
             modal: Modal::None,

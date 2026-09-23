@@ -20,6 +20,35 @@ pub enum Action {
         id: String,
         name: String,
     },
+    /// Ask the server for its month buckets.
+    RefreshBuckets,
+    /// Open one month of the timeline.
+    OpenBucket {
+        bucket: String,
+        label: String,
+    },
+}
+
+/// A month's name, for the timeline's rows.
+///
+/// ⚠ `"?"` rather than a panic for an impossible month: `group_buckets` already refuses one, so this
+/// is unreachable — and a rail that panics is worse than a rail with a question mark in it.
+fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "?",
+    }
 }
 
 /// The trailing count for the section header: how many albums, once known.
@@ -100,6 +129,65 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
             }
         }
     }
+
+    // ⚠⚠ The timeline is how the photos in **no album** are reached — most of them, for most
+    // people. Albums above; the whole library by month here.
+    ui.add_space(4.0);
+    egui::CollapsingHeader::new("Timeline")
+        .id_salt("immich_timeline")
+        .show(ui, |ui| match &app.immich_buckets {
+            None => {
+                if app.immich.is_listing() {
+                    ui.label(egui::RichText::new("Loading…").weak().small());
+                } else {
+                    action = Action::RefreshBuckets;
+                }
+            }
+            Some(Err(e)) => {
+                ui.label(egui::RichText::new(e).weak().small());
+            }
+            Some(Ok(buckets)) => {
+                let years = rustroom_app::immich_source::group_buckets(buckets);
+                if years.is_empty() {
+                    ui.label(egui::RichText::new("Nothing on the server").weak().small());
+                }
+                for y in years {
+                    // ⚠ `id_salt` on every header: egui's auto-ids shift with what was drawn before
+                    // them, so two years would otherwise collapse together — the hazard the Dates
+                    // section already documents.
+                    egui::CollapsingHeader::new(format!("{} ({})", y.year, y.count))
+                        .id_salt(("immich_year", y.year))
+                        .show(ui, |ui| {
+                            for m in &y.months {
+                                let label = format!("{} {}", month_name(m.month), y.year);
+                                let selected = matches!(
+                                    app.library.as_ref().map(|l| &l.source),
+                                    Some(crate::LibrarySource::ImmichBucket { bucket, .. })
+                                        if bucket == &m.bucket
+                                );
+                                let r = list_row::row(
+                                    ui,
+                                    RowSpec {
+                                        name: &label,
+                                        count: Some(m.count as i64),
+                                        meta: "",
+                                        selected,
+                                        indent: 8.0,
+                                        hover: "Photos are downloaded when you open them",
+                                        actions: &[],
+                                    },
+                                );
+                                if r.clicked {
+                                    action = Action::OpenBucket {
+                                        bucket: m.bucket.clone(),
+                                        label,
+                                    };
+                                }
+                            }
+                        });
+                }
+            }
+        });
 
     action
 }

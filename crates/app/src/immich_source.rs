@@ -304,7 +304,8 @@ pub fn shared() -> SharedConnection {
 }
 
 /// Asset id → its `updatedAt`, for versioning cached thumbnails.
-pub type SharedVersions = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
+pub type SharedVersions =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
 
 /// The process-wide cell holding the versions of the assets currently on show.
 ///
@@ -318,7 +319,9 @@ pub type SharedVersions = std::sync::Arc<std::sync::Mutex<std::collections::Hash
 pub fn shared_versions() -> SharedVersions {
     static STATE: std::sync::OnceLock<SharedVersions> = std::sync::OnceLock::new();
     STATE
-        .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .get_or_init(|| {
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()))
+        })
         .clone()
 }
 

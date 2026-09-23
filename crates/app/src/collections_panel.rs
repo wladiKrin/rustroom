@@ -611,6 +611,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.immich
                 .request(rustroom_app::immich_worker::Job::Album { id, name });
         }
+        crate::immich_panel::Action::RefreshBuckets => {
+            app.immich
+                .request(rustroom_app::immich_worker::Job::Buckets);
+        }
+        crate::immich_panel::Action::OpenBucket { bucket, label } => {
+            app.immich
+                .request(rustroom_app::immich_worker::Job::Bucket { bucket, label });
+        }
     }
 
     match action {

@@ -303,7 +303,8 @@ impl ThumbStore {
             .write(true)
             .open(self.dir.join(id.file_name()))
         {
-            let _ = f.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
+            let _ =
+                f.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
         }
         Some(Thumbnail {
             width: w,
@@ -667,7 +668,10 @@ mod tests {
             paths[0].exists(),
             "the entry that was just read was evicted anyway — the touch is not working"
         );
-        assert!(!paths[1].exists(), "an untouched older entry should have gone");
+        assert!(
+            !paths[1].exists(),
+            "an untouched older entry should have gone"
+        );
     }
 
     /// ⚠ Enough writes must trigger a sweep on their own, or a long session could exceed the

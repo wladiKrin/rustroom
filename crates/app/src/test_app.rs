@@ -110,6 +110,7 @@ pub fn for_test() -> RustroomApp {
             || {},
         ),
         immich_albums: None,
+        immich_buckets: None,
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),

@@ -27,6 +27,10 @@ pub enum Job {
     },
     /// `GET /albums`.
     Albums,
+    /// `GET /timeline/buckets` — the whole library's month list, in one call.
+    Buckets,
+    /// One month of the timeline: a date-ranged search.
+    Bucket { bucket: String, label: String },
     /// `GET /albums/{id}`.
     Album { id: String, name: String },
     /// `GET /assets/{id}/original`, streamed to `dest`.
@@ -40,6 +44,12 @@ pub enum Job {
 pub enum Outcome {
     About(Result<String, String>),
     Albums(Result<Vec<immich::AlbumSummary>, String>),
+    Buckets(Result<Vec<immich::Bucket>, String>),
+    Bucket {
+        bucket: String,
+        label: String,
+        result: Result<Vec<immich::Asset>, String>,
+    },
     Album {
         id: String,
         name: String,
@@ -120,7 +130,7 @@ impl ImmichWorker {
                 }
                 Some(asset_id.clone())
             }
-            Job::Albums | Job::Album { .. } => {
+            Job::Albums | Job::Album { .. } | Job::Buckets | Job::Bucket { .. } => {
                 if self.pending_list {
                     return;
                 }
@@ -150,7 +160,13 @@ impl ImmichWorker {
             if let Some(id) = &msg.asset_id {
                 self.in_flight.remove(id);
             }
-            if matches!(msg.outcome, Outcome::Albums(_) | Outcome::Album { .. }) {
+            if matches!(
+                msg.outcome,
+                Outcome::Albums(_)
+                    | Outcome::Album { .. }
+                    | Outcome::Buckets(_)
+                    | Outcome::Bucket { .. }
+            ) {
                 self.pending_list = false;
             }
             out.push(msg.outcome);
@@ -231,6 +247,12 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
                         name,
                         result: Err(e),
                     },
+                    Job::Buckets => Outcome::Buckets(Err(e)),
+                    Job::Bucket { bucket, label } => Outcome::Bucket {
+                        bucket,
+                        label,
+                        result: Err(e),
+                    },
                     Job::Original { dest, .. } => Outcome::Original {
                         dest,
                         result: Err(e),
@@ -246,6 +268,26 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
             Job::Album { id, name } => {
                 let result = client.album(&id).map_err(|e| e.to_string());
                 Outcome::Album { id, name, result }
+            }
+            Job::Buckets => Outcome::Buckets(client.buckets().map_err(|e| e.to_string())),
+            Job::Bucket { bucket, label } => {
+                // ⚠ The bucket identifier is `YYYY-MM-DD`; the search wants the whole month.
+                let range = bucket
+                    .get(0..4)
+                    .and_then(|y| y.parse::<i32>().ok())
+                    .zip(bucket.get(5..7).and_then(|m| m.parse::<u32>().ok()))
+                    .and_then(|(y, m)| crate::immich_source::month_range(y, m));
+                let result = match range {
+                    Some((after, before)) => client
+                        .search(&immich::Filter::TakenBetween { after, before })
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!("“{bucket}” is not a month this build understands")),
+                };
+                Outcome::Bucket {
+                    bucket,
+                    label,
+                    result,
+                }
             }
             Job::Original { asset_id, dest } => Outcome::Original {
                 dest: dest.clone(),
@@ -277,6 +319,53 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the worker never produced a result");
+    }
+
+    #[test]
+    fn a_buckets_job_comes_back_as_a_buckets_result() {
+        let mut w = ImmichWorker::new(
+            Arc::new(|job: Job| match job {
+                Job::Buckets => Outcome::Buckets(Ok(vec![])),
+                _ => unreachable!(),
+            }),
+            || {},
+        );
+        w.request(Job::Buckets);
+        let mut got = Vec::new();
+        settle(&mut w, |w| {
+            got.extend(w.poll());
+            !got.is_empty()
+        });
+        assert!(matches!(got[0], Outcome::Buckets(Ok(_))));
+    }
+
+    /// ⚠ An unconfigured server must report, not panic — the section shows the message.
+    #[test]
+    fn a_buckets_job_without_a_connection_reports_it() {
+        let f = live_fetcher(None);
+        match f(Job::Buckets) {
+            Outcome::Buckets(Err(msg)) => assert!(!msg.is_empty()),
+            _ => panic!("an unconfigured fetcher must report an error"),
+        }
+    }
+
+    /// ⚠⚠ A bucket identifier the build cannot parse must be an error outcome, not a search over
+    /// a nonsense range.
+    #[test]
+    fn an_unparseable_bucket_is_an_error_not_a_wild_search() {
+        let f = live_fetcher(Some(crate::immich_source::Connection {
+            url: "http://immich.invalid".into(),
+            key: "k".into(),
+        }));
+        match f(Job::Bucket {
+            bucket: "not-a-month".into(),
+            label: "?".into(),
+        }) {
+            Outcome::Bucket { result: Err(m), .. } => {
+                assert!(m.contains("not a month"), "got: {m}")
+            }
+            _ => panic!("an unparseable bucket must be an error"),
+        }
     }
 
     /// ⚠ Without a configured connection the fetcher must produce an error outcome rather than
