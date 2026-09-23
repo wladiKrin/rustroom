@@ -22,6 +22,15 @@ pub struct AlbumSummary {
     pub id: String,
     pub album_name: String,
     pub asset_count: u32,
+    /// When an asset in this album last changed.
+    ///
+    /// ⚠⚠ **The album list cache's validator, together with `asset_count`.** Not `updated_at`: the
+    /// captured reply has that identical for every album — evidently a bulk touch — so it never
+    /// signals a content change. This field differs per album and is explicitly about its assets.
+    ///
+    /// ⚠ `Option` because the schema does not mark it required. An album without it simply cannot be
+    /// validated, so its list is refetched rather than trusted.
+    pub last_modified_asset_timestamp: Option<String>,
 }
 
 /// One row of `GET /timeline/buckets`.
@@ -179,8 +188,10 @@ mod tests {
         assert_eq!(v[0].asset_count, 412);
     }
 
-    /// ⚠ Parses a captured reply, with all twelve fields this DTO does not model present in it —
-    /// `albumUsers`, `startDate`, `order`, `lastModifiedAssetTimestamp` and the rest.
+    /// ⚠ Parses a captured reply, with the eleven fields this DTO does not model present in it —
+    /// `albumUsers`, `startDate`, `order` and the rest. (`lastModifiedAssetTimestamp` was among them
+    /// until it became the cache validator; see
+    /// `a_real_albums_reply_carries_the_per_album_change_signal`.)
     #[test]
     fn a_real_albums_reply_parses_and_its_extra_fields_are_ignored() {
         let v: Vec<AlbumSummary> =
@@ -191,6 +202,27 @@ mod tests {
         assert_eq!(v[0].id, "a6e6f5aa-8be7-454e-9328-82dc0cc2ab2b");
         assert_eq!(v[1].album_name, "Rom");
         assert_eq!(v[1].asset_count, 112);
+    }
+
+    /// ⚠⚠ The album validator is `(assetCount, lastModifiedAssetTimestamp)`, **not** `updatedAt`:
+    /// the captured reply shows `updatedAt` identical for both albums — a bulk touch — so it says
+    /// nothing about an album's contents. This asserts the real captured values, which is the only
+    /// way to know the field is there and means what it appears to.
+    #[test]
+    fn a_real_albums_reply_carries_the_per_album_change_signal() {
+        let v: Vec<AlbumSummary> = serde_json::from_str(ALBUMS_REAL).expect("must parse");
+        assert_eq!(
+            v[0].last_modified_asset_timestamp.as_deref(),
+            Some("2026-08-14T08:29:23.862Z")
+        );
+        assert_eq!(
+            v[1].last_modified_asset_timestamp.as_deref(),
+            Some("2026-06-14T12:11:35.623Z")
+        );
+        assert_ne!(
+            v[0].last_modified_asset_timestamp, v[1].last_modified_asset_timestamp,
+            "it must differ per album, which is the whole point of using it"
+        );
     }
 
     #[test]
