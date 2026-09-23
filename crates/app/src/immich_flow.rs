@@ -39,6 +39,15 @@ impl RustroomApp {
         Some(list_cache::lists_dir(&conn.url))
     }
 
+    /// The configured server's cache root, if there is one — what `row_is_browsable` needs.
+    ///
+    /// ⚠ `None` when no server is configured, which leaves every catalog row browsable rather than
+    /// hiding things because a setting is blank.
+    pub(crate) fn immich_cache_root(&self) -> Option<std::path::PathBuf> {
+        let conn = immich_source::connection(&self.settings)?;
+        Some(immich_source::cache_root(&conn.url))
+    }
+
     /// An album's stored asset list, if it is still current.
     pub(crate) fn immich_cached_album(&self, id: &str) -> Option<Vec<immich::Asset>> {
         let dir = self.immich_lists_dir()?;

@@ -65,6 +65,8 @@ impl RustroomApp {
     /// now). Consequence: a file changed outside Rustroom since its folder was last scanned shows
     /// a stale time here. Clicking that folder in the panel re-scans it and refreshes them.
     pub(crate) fn open_all_photos(&mut self, ctx: &egui::Context) {
+        // ⚠ Read before `cat` borrows `self`.
+        let immich_root = self.immich_cache_root();
         let Some(cat) = &self.catalog else {
             self.status = "No catalog".into();
             return;
@@ -76,6 +78,19 @@ impl RustroomApp {
                 return;
             }
         };
+        // ⚠⚠ An Immich row exists as soon as its album is browsed, downloaded or not. A
+        // catalog-wide view shows the ones that are really here — the user's call, and the same line
+        // he drew for slice 2: a photo downloaded from Immich becomes local and joins everything else.
+        //
+        // ⚠ Through `row_is_browsable`, shared with the other catalog-wide reader, so the two cannot
+        // drift. ⚠ It checks **Immich** rows only: an absent local file stays visible, because the
+        // unplugged-drive rule is a different question.
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|r| {
+                rustroom_app::immich_catalog::row_is_browsable(&r.path, immich_root.as_deref())
+            })
+            .collect();
         // ⚠ A lookup built once, rather than a stat per photo. `s.max(0)` guards a negative unix
         // time, which `SystemTime` addition cannot represent — it would panic rather than sort
         // oddly.

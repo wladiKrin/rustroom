@@ -158,7 +158,10 @@ mod tests {
         let dir = temp_dir("nofile");
         let root = dir.join("immich");
         let scan = crate::immich_source::entries_from_assets(&[asset("absent")], &root);
-        assert!(!scan[0].path.exists(), "the fixture must not create the file");
+        assert!(
+            !scan[0].path.exists(),
+            "the fixture must not create the file"
+        );
 
         let cat = catalog::db::Catalog::open(&dir.join("c.sqlite")).unwrap();
         record_assets(&cat, &root, &scan).unwrap();
@@ -181,7 +184,11 @@ mod tests {
         record_assets(&cat, &root, &b).unwrap();
 
         assert_eq!(cat.photos_in(&root).unwrap().len(), 3, "all three rows");
-        assert_eq!(cat.marks_in(&root).unwrap().len(), 1, "and the mark survived");
+        assert_eq!(
+            cat.marks_in(&root).unwrap().len(),
+            1,
+            "and the mark survived"
+        );
     }
 
     // ── row_is_browsable ──
