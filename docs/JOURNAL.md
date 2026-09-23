@@ -151,6 +151,49 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-23 — three defects found by using Immich slice 2, and the lesson they share
+
+All three were reported in use within minutes, behind a green 2,726-test suite. Branch
+`immich-null-thumbhash`, merged the same day.
+
+**1. `null` failed a whole month.** Opening February 2026: *"invalid type: null, expected a string"*.
+`thumbhash` is marked **`required: true` AND `nullable: true`** in the schema — "required" means the
+key is present, **not** that it has a value. I read the required list and declared a non-optional
+`String`, missing the `nullable` flag sitting beside it. The spec even demonstrates the distinction
+elsewhere: `duration` is required and documented *"null for static images"*.
+⚠ Because deserialisation happens **before** the image filter, one asset without a generated
+thumbnail — or one video — failed the entire page. That is why only *some* months broke.
+⚠ Fixed by **audit, not guess**: the DTO has eight nullable fields, this models exactly three
+(`thumbhash`, `width`, `height`), none of them used, all three now `Option`. The first instinct was
+"make `thumbhash` optional and see" — which would have left the other two as the same bug waiting for
+a different month.
+
+**2. A second album click was silently discarded.** Reported as "it doesn't switch immediately".
+⚠⚠ Not slow — **dropped**. `ImmichWorker::request` had one `pending_list` guard covering four job
+kinds, so clicking B while A loaded hit `return`. The guard was right for the *automatic* list
+fetches, which the rail fires every frame while it has none, and wrong for a user's click. Split in
+two; opens now bump a sequence number and `poll` drops a superseded reply — the `DecodeWorker` idiom.
+⚠ That second half fixes a race nobody had reported: a slow album A finishing after B would have
+landed its grid on top of the album actually asked for.
+
+**3. And it still felt slow, for a third reason.** The round trip really is **a couple of seconds** —
+~900 KB of metadata for 872 assets — and clicking gave **no feedback whatsoever**, because the rail's
+highlight follows `library.source`, which does not change until the reply lands. Visually identical to
+the bug above, mechanically unrelated. The row now lights at once; asset lists are remembered for the
+session so switching **back** is instant.
+⚠⚠ And a real waste, **measured against the live caches** (1,188 local + 1,283 Immich entries):
+`ThumbStore::new` swept in its constructor, and `ThumbLoader::new` builds **two** stores per library
+open — ~2,500 stats on the UI thread per click. Moved to one background sweep at startup; the
+write-triggered sweep still enforces the budget. ⚠ That constructor sweep was added the same day, in
+part 1, with the comment "so a store left over budget is corrected" — a defensible line that became a
+per-click cost the moment part 2 gave it a second store to walk.
+
+**⚠⚠ THE LESSON, AND IT NOW HAS THREE INSTANCES IN TWO DAYS.** All three API defects came from
+trusting a *reading* of the API rather than the API itself: a hand-written fixture asserting a field
+the endpoint never returns; paging by `nextCursor` when the server sends `nextPage`; and reading
+`required` without reading `nullable` beside it. **An OpenAPI schema describes what a server MAY send,
+not what it DOES.** Every one was invisible to the suite and obvious within a minute of use.
+
 ### 2026-09-23 — M9.1 slice 2: a thumbnail budget, persisted remote thumbnails, and the timeline
 
 **Confirmed by use, 2026-09-23:** the Timeline lists years and months and opens one; **thumbnails are

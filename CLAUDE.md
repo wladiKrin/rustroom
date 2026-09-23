@@ -165,8 +165,15 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2726 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **15 commits
-ahead of `origin/main` — not pushed; the user pushes.** The CI workflow was fixed for the runner's
+**2732 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **19 commits
+ahead of `origin/main` — not pushed; the user pushes.**
+
+✅ **Immich slice 2's three use-found defects are fixed and confirmed (2026-09-23)**, all behind a
+green suite: a **`null` `thumbhash`** failed a whole month (`required: true` does **not** mean
+non-null — `nullable` sits beside it); a **second album click was silently discarded** because opens
+shared the automatic list fetch's guard; and switching *felt* slow because clicking gave **no feedback
+at all** while the server spent a couple of seconds on ~900 KB of metadata. Asset lists are now kept
+for the session, so switching back is instant. `grep -n 'three defects found by using' docs/JOURNAL.md`. The CI workflow was fixed for the runner's
 disk on 2026-09-21 and is unverified until the next push.
 
 ✅ **Immich, slice 2 — merged and confirmed by use (2026-09-23).** A **Timeline** of
@@ -377,6 +384,13 @@ asking then rather than now.
   question"* note in `docs/BACKLOG.md` against the code before trusting it.
 - **⚠ Almost every GUI-wiring defect in this repo was found by USE, not by a test.** A milestone is
   not closed when it is green; it is closed when it has been seen.
+- **⚠⚠ AN OPENAPI SCHEMA DESCRIBES WHAT A SERVER *MAY* SEND, NOT WHAT IT *DOES*.** Three defects in
+  two days, every one invisible to a green suite and obvious within a minute of real use: a
+  hand-written fixture asserting a field the endpoint never returns; paging by `nextCursor` when the
+  server sends `nextPage`; and reading `required` **without reading `nullable` beside it** — a `null`
+  `thumbhash` then failed a whole month of the timeline. ⚠ When a field turns out to be nullable,
+  **audit every field against the schema** rather than patching the one that broke: two more were
+  waiting. And when an endpoint's shape matters, get a **captured reply** before writing the DTO.
 - **⚠⚠ A FIXTURE YOU WROTE IS NOT EVIDENCE ABOUT SOMETHING YOU DO NOT CONTROL.** M9.1's
   `album.json` was hand-written and described *in its own plan* as "trimmed from `GET
   /albums/{id}`". It asserted an `assets` array that endpoint has never returned. The test passed
