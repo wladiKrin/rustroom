@@ -169,7 +169,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 **2742 tests** (goldens unmoved since 2026-09-18). Branch **`immich-list-cache`**, 7 commits, gated
 green; `main` is **19 commits ahead of `origin/main` — not pushed; the user pushes.**
 
-🟡 **Immich asset lists are persisted (2026-09-23) — green, NOT YET SEEN IN USE.** A new lib module
+🟡 **Immich asset lists are persisted (2026-09-23) — writes confirmed by use, the HIT still unseen.**
+One release run wrote **8 lists / 2,155 assets / 618 KB**, all internally consistent, no panic, no
+`.tmp` left (one holds **1,022** assets, above `PAGE_SIZE`, so paging is complete). ⚠ What remains
+unverified is that a **relaunch opens one with no wait**. ⚠ Measured at **280–303 B/asset** — the
+spec's ~175 KB per 872-asset album was **wrong** (really 238 KB; ~9.8 MB for 35k, not ~7). A new lib module
 `immich_list_cache` writes each fetched list to `<cache>/rustroom/immich/<host_slug>-lists/`, and a
 click tries the session map, then the stored list **if its validator still matches**, then a fetch.
 The album validator is **`(assetCount, lastModifiedAssetTimestamp)`** — ⚠⚠ **not `updatedAt`, which

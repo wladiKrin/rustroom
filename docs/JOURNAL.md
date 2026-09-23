@@ -213,9 +213,16 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 
 ### 2026-09-23 — Immich asset lists persisted, validated before use
 
-Branch `immich-list-cache`, five commits. **2,742 tests**, clippy and fmt clean, the **74 goldens
-unmoved**. ⚠ **Green but not yet seen in use at the time of writing** — the wiring is the half no
-test reaches, and every Immich defect so far was found by use.
+Branch `immich-list-cache`, seven commits. **2,742 tests**, clippy and fmt clean, the **74 goldens
+unmoved**.
+
+**The write half is confirmed by use; the read half is not.** A single release run wrote **eight
+lists** — seven albums and one month, 2,155 assets, 618 KB total — with **no panic**, every payload
+internally consistent (`asset_count` equals the stored asset count in all eight), every album carrying
+a non-null `lastModifiedAssetTimestamp`, and **no leftover `.tmp`**. ⚠⚠ One of them holds **1,022
+assets**, above the 1,000 `PAGE_SIZE`, so it also re-confirms slice 1's `nextPage` paging fix stores a
+*complete* list rather than a truncated one. ⚠ What is still unseen is the **hit**: that a relaunch
+opens one of those albums with no wait. Every Immich defect so far was found by use.
 
 **The problem.** Slice 2 kept fetched lists in `immich_assets`, so a *second* visit to an album was
 instant. A *first* visit after every launch still paid the round trip: ~900 KB of metadata and a
@@ -243,9 +250,13 @@ changed" would pin a stale grid in place for as long as the server stayed unreac
 asset swapped for another inside a month goes unnoticed until something else changes — accepted
 rather than paying an extra request per month. ⚠ Do not "fix" this without measuring that cost.
 
-**No budget, and the arithmetic says why.** ~175 KB for an 872-asset album, ~7 MB for a 35k library,
-and `store` **replaces** rather than accumulates — pinned by a test that asserts exactly one file
-after two stores, which also catches a leftover `.tmp`.
+**No budget, and the MEASURED sizes say why.** ⚠ The spec estimated **~175 KB** for an 872-asset album
+and **~7 MB** for a 35k library; the real files are **238 KB** and **~9.8 MB** — a steady **280–303
+bytes per asset** across eight real lists, 36% over the estimate. The decision stands unchanged (10 MB
+is nothing beside the thumbnail budget's 5 GB), but ⚠⚠ **the estimate was wrong and was quoted twice
+before being measured** — exactly the habit the standing lesson about requoted figures is about.
+`store` **replaces** rather than accumulates, pinned by a test asserting exactly one file after two
+stores, which also catches a leftover `.tmp`.
 
 **Three things that were nearly wrong, and what caught each:**
 
