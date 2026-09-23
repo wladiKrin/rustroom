@@ -211,6 +211,88 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-23 — the histogram's scale, and a frozen temperature found beside it
+
+Branch `histogram-and-panel`, four commits, merged and **confirmed by use**. **2,777 tests**, clippy
+and fmt clean, the **74 goldens unmoved**.
+
+**Four reports, three of them one cause.** *"The histogram is very static"* and *"sometimes large peaks
+drown out the whole view"* were **the same bug**: both draw sites scaled to the single tallest bin
+across all channels, **linearly**, each computing its own maximum. One large flat area — a sky, a wall —
+put an enormous count in one bin and pinned everything else on the floor; and a shape pinned at zero
+does not visibly move when you edit, which is what "static" was.
+
+**The fix, the user's choice of four offered:** square root, with **bins 0 and 255 excluded from the
+scale**. A blown sky or a crushed black is an *edge*, not tonal content, and it is the commonest cause
+of a scale-wrecking spike; they are still drawn, clamped, and `clipped_edges` already reports them.
+⚠ Chosen over log, which flatters almost-empty bins so sensor noise in an empty shadow reads as tonal
+content, and over a percentile clip, which keeps true proportions but shows peaks visibly cut off.
+
+**⚠⚠ THE FIRST TEST I WROTE FOR IT FAILED, AND THE MEASUREMENT WAS THE USEFUL PART.** I asserted that
+small counts beside a 2000:1 peak would reach 5% of the well. They reach **2.2%**. Square root
+compresses a ratio by its own square root, so it does not make an arbitrarily large peak harmless.
+Measured in pixels of the 72 pt well:
+
+| peak : detail | linear | sqrt |
+|---|---|---|
+| 10:1 | 7.2 px | 22.8 px |
+| 100:1 | **0.7 px** | 7.2 px |
+| 200:1 | **0.4 px** | 5.1 px |
+| 2000:1 | 0.04 px | **1.6 px** |
+
+So realistic ratios go from sub-pixel to plainly legible, and the extreme case stays a sliver. ⚠ The
+test was **rewritten around the measurement** rather than having its threshold lowered to pass, and it
+says so in as many words: *"do not fix this test by lowering its threshold — the next lever is log or a
+minimum-height floor."* **Lowering an assertion to match the code is how a test stops being evidence.**
+
+**The other three, each a line or two:** the ghost behind the tone curve went `0.15 → 0.35` (present
+but unreadable before); the curve is **centred** using the same pad-inside-a-`horizontal` the colour
+wheel adopted on 2026-09-02, because `allocate_exact_size` starts at the left edge in a vertical
+layout; and the panel defaults to **320 pt**, up from 270. ⚠ `MAX_SIZE` stays 220 deliberately —
+growing the curve to fill the panel would make the centring a no-op. ⚠ Its doc claimed *"the panel is
+240 pt"*, stale since the panel went to 270 two days earlier: **a size named in a comment is a size
+that goes stale.**
+
+## The regression found beside it, which was not a regression
+
+⚠⚠ Reported next: *"some photos, when opening, automatically set temp to 2000K, even though the neutral
+is as shot"* — with *"that wasn't like that before"*. **Two faults, one per file, and neither from this
+work:**
+
+1. **`egui::DragValue::range()` clamps EXISTING values by default** — `clamp_existing_to_range`
+   defaults to `true` — and writes the clamp back through its `&mut`, reporting it as `changed()`. The
+   panel, seeing `changed()`, committed it as a user edit. **Merely drawing the panel froze a
+   temperature**, which is precisely the rule the code beside it already documented.
+2. **A two-file range mismatch.** `color::wb::solve_xy` clamps an as-shot temperature to
+   `1667..=25000` K; the panel's Temp slider ran `2000..=25000`. A warm photo produced a value the
+   control could not represent.
+
+**⚠ And it was not new.** The custom slider row landed 2026-09-19, but `egui::Slider`'s own default is
+`SliderClamping::Always`, so the version it replaced clamped identically. Possible since **2026-09-01**,
+when the Kelvin slider landed — what changed was which photo got opened. ⚠ Checked with
+`git log -L` on both lines rather than asserted; **"that wasn't like that before" is a claim to verify,
+not a diagnosis to accept or to deflect.**
+
+**⚠⚠ THE GUARD FOR THIS EXACT CLASS WAS SITTING NEXT TO IT AND WAS BLIND.**
+`merely_drawing_the_panel_leaves_the_temperature_following_the_file` exists for this bug and passes —
+because it only ever passes **4200 K**, a baseline comfortably inside the range. The enumerating-guard
+failure again, in a test written *specifically* to prevent this.
+
+**Fixes:** the slider passes `clamp_existing_to_range(false)`, so a range governs only what the user
+types or drags (`slider_map::t_of` already clamps the handle, so an out-of-range value draws at the
+rail's end and the number reads truthfully); and the Temp range is 1667 K. ⚠ A test now compares the
+slider's bounds against the solve's, so **moving either fails loudly** instead of silently reopening
+this.
+
+⚠ One behaviour change to know: any slider handed a stored value outside its range now **displays** it
+rather than quietly rewriting it. More honest, and it means a number past the rail's end is real data.
+
+⛔ **Per-channel RGB tone curves** were asked about, answered — they make sense, they are standard, and
+they place a colour crossover at an exact tonal position the grading wheels cannot — and **deferred by
+the user's choice**, with the cost written down: `ToneCurve` becomes four curves, the pipeline stage and
+its goldens change, the sidecar needs a version bump and migration, and the panel needs a channel
+selector. Spec `2026-09-23-histogram-and-panel-design.md`.
+
 ### 2026-09-23 — the snapshot row counts difference, not history steps; Reindex loses its menu
 
 Branch `snapshot-count-and-reindex-button`, three commits, merged and **confirmed by use**.

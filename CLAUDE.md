@@ -166,19 +166,33 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-23)
 
-**2765 tests** (goldens unmoved since 2026-09-18). No branch; `main` is **44 commits ahead of
-`origin/main` — not pushed; the user pushes.**
+**2777 tests** (goldens unmoved since 2026-09-18). No branch. ⚠ The user **pushed** through
+`074c62f` on 2026-09-23; `main` is **6 commits ahead of `origin/main`** — still never push.
 
-✅ **The Now row counts what DIFFERS, not history steps (2026-09-23, confirmed by use).**
-`Edits::changed_parameters` counts the individual parameters that differ — ⚠⚠ **derived from
-serialisation, never a field list**: `Edits` has 25 top-level fields and no `#[serde(skip)]`, so a new
-parameter is counted without anybody adding it, and a test sweeps every edit group to assert any
-difference counts as ≥1. ⚠ Nested objects recurse (three HSL sliders = 3); a list counts one per
-differing element (adding a mask = 1). ⚠ `History::steps_since` is **gone** — it had no caller left.
+✅ **The histogram survives a peak (2026-09-23, confirmed by use).** Square root with bins 0 and 255
+**out of the scale**, in `histogram::normalised`/`envelope` — one function pair for the panel and the
+tone curve's ghost, which each computed their own linear maximum before. ⚠⚠ Measured, and the limit is
+pinned: 0.7 → 7.2 px at 100:1, but only 1.6 px at 2000:1, because sqrt compresses a ratio by its own
+square root. **The test says not to fix that by lowering its threshold.** Ghost 0.15 → 0.35; the curve
+centred like the colour wheel; the panel 320 pt. `grep -n "histogram's scale" docs/JOURNAL.md`.
+
+⚠⚠ **A slider must never clamp a value it was merely handed.** `DragValue::range()` clamps *existing*
+values by default and reports the clamp as `changed()`, so opening certain photos **froze Temp at a
+slider limit** while the preset still read "As Shot". Fixed with `clamp_existing_to_range(false)` plus a
+Temp range of **1667 K** matching `color::wb::solve_xy`'s own clamp, with a test comparing the two
+bounds. ⚠ Not a regression from any recent work — possible since 2026-09-01. ⚠ Any slider handed an
+out-of-range stored value now **displays** it rather than rewriting it.
+
+⛔ **Per-channel RGB tone curves: considered, deferred by the user.** They make sense and are standard,
+but `ToneCurve` is one `Vec<[f32; 2]>`, so it means four curves, a pipeline and golden change, a sidecar
+version bump with migration, and a channel selector. Costs written down in
+`2026-09-23-histogram-and-panel-design.md`.
+
+✅ **The Now row counts what DIFFERS, not history steps** (2026-09-23). `Edits::changed_parameters`,
+⚠⚠ **derived from serialisation, never a field list** — 25 fields, no `#[serde(skip)]`, so a new
+parameter counts itself. ⚠ `History::steps_since` is **gone**, having lost its only caller. ✅ **Reindex
+is a plain button**, not a ⋯ menu holding one item.
 `grep -n 'counts difference, not history steps' docs/JOURNAL.md`.
-
-✅ **Reindex is a plain button, not a ⋯ menu holding one item** (2026-09-23, user's call). ⚠
-`icons::MORE` is kept, glyph and coverage entry, marked as drawn by nothing.
 
 ✅ **Reindex refetches from Immich (2026-09-23) — merged and confirmed by use.**
 On an Immich album or month, ⋯ → Reindex persists the session, compacts copy numbering, **removes that
@@ -221,12 +235,10 @@ them, 5120 MB each in Settings, on separate directories. It had **no eviction at
 `2026-09-22-immich-browse-design.md`, `2026-09-23-immich-timeline-design.md`;
 `grep -n 'M9.1 slice' docs/JOURNAL.md`.
 
-⚠⚠ **Three slice-1 defects a green suite did not catch, two found only by real server data:**
-`GET /albums/{id}` returns **no `assets` field** (use `POST /search/metadata` with `albumIds`); a real
-server pages by **`nextPage`** and leaves `nextCursor` null, so cursor-only paging **silently
-truncated** albums; and `open_immich_album` never called `catalog::sort`. ⚠ Out of scope by decision:
-catalog rows (**so marks do not persist on Immich photos**), eviction of cached originals, the OS
-keychain (the API key is **plaintext** in `settings.json`), write-back.
+⚠ **Immich, out of scope by decision:** catalog rows (**so marks do not persist on Immich photos**),
+eviction of cached originals, the OS keychain (the API key is **plaintext** in `settings.json`),
+write-back. ⚠ Slice 1's three defects — the missing `assets` field, `nextPage` paging, the absent
+`catalog::sort` — are in the journal and their lesson is under **Standing lessons**.
 
 ✅ **Two slice-2 corrections worth keeping:** the thumbnail store's "pinned hash vectors" do **not**
 guard `Identity`'s key derivation (they pin `fnv1a`), so a concrete filename is pinned instead; and the
@@ -235,19 +247,11 @@ RTHM header carries the identity's fields, so there are two layouts — `VERSION
 chronological inside them (`capture_days` orders `1 DESC, 2, 3`). ⚠ `date_tree::group` needed no change
 either time: it groups on *change*, not on direction, and its doc used to claim otherwise.
 
-✅ **The Export dialog as a preset list beside summarised sections — merged and confirmed by use
-(2026-09-22).** Wide; a `list_row` preset column; eight collapsible sections whose headers say
-their state; `export_summary.rs` in the lib. Spec `2026-09-22-export-dialog-design.md`;
-`grep -n 'presets beside' docs/JOURNAL.md`.
-
-✅ **The dialogs in one language — merged and confirmed by use (2026-09-22).** One shell with a
-title bar and ×, a pinned footer with the accent verb, tabs for Settings / Information, the
-panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
-descriptions as hovers. Spec `2026-09-21-dialogs-design.md`.
-
-✅ Merged and confirmed by use, specs under `docs/superpowers/specs/`: the **snapshot timeline**
-(2026-09-21), the **top bar and Library in one language** (2026-09-20), and the five **panel reworks**
-(Develop, Masks, Geometry, Retouch, Presets) plus the mask off switch (2026-09-18/19/20).
+✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
+as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
+**snapshot timeline** (2026-09-21), the **top bar and Library in one language** (2026-09-20), and the
+five **panel reworks** (Develop, Masks, Geometry, Retouch, Presets) plus the mask off switch
+(2026-09-18/19/20).
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
@@ -346,6 +350,13 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   double-application test named three of five fields and was therefore blind to a whole milestone —
   the real sabotage left it at `1 passed` while six goldens failed. Read this before adding anything
   to `adjustment_stages`.
+- **⚠⚠ LOWERING AN ASSERTION TO MATCH THE CODE IS HOW A TEST STOPS BEING EVIDENCE.** The first
+  histogram test asserted that detail beside a 2000:1 peak would reach 5% of the well; it reaches
+  **2.2%**, because square root compresses a ratio by its own square root. The measurement was the
+  useful part: the test was **rewritten around it** — a table of linear-vs-sqrt pixel heights, plus a
+  second test pinning the extreme case as a known limit and saying *do not fix this by lowering the
+  threshold*. ⚠ When a threshold you invented fails, find out what the real number is before touching
+  either side.
 - **⚠⚠ "THAT OTHER BRANCH IS FINE" IS A CLAIM, AND READING ONE LINE IS NOT RUNNING IT.** Fixing the
   snapshot row's change count on 2026-09-23, I reported that "the snapshot branch never had this bug"
   — inferred from seeing `if edits == current` and never executed. The user found it the same day: with
