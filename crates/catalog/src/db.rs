@@ -452,12 +452,25 @@ impl Catalog {
             )?;
             for f in files {
                 let (size, mtime) = file_facts(f);
+                // ⚠⚠ **Keyed on the PATH's own name, never on `CatalogEntry::file_name`.** Every read
+                // side — `photo_id`, `marks_in`, `all_photos` — derives the key from a `Path` through
+                // `split`, so a row written under a different name can never be found again.
+                //
+                // For a local file the two are identical, which is why this went unnoticed. An Immich
+                // asset's cache path is `<uuid>.<ext>` while its `file_name` is the camera's name for
+                // the grid to show, so the row was written as `IMG-20231218-WA0011.jpg` and looked up
+                // as `<uuid>.jpg`. `set_marks` found nothing and returned `Ok(())`, so **every rating
+                // on an Immich photo was silently dropped** — reported in use 2026-09-23 as "pressing
+                // any of the buttons simply moves to the next picture, without leaving any marks".
+                let Some((_, key)) = split(&f.path) else {
+                    continue;
+                };
                 self.conn.execute(
                     "INSERT INTO photos (folder_id, file_name, copy, size, mtime, last_seen)
                      VALUES (?1, ?2, 0, ?3, ?4, ?5)
                      ON CONFLICT(folder_id, file_name, copy)
                      DO UPDATE SET size = ?3, mtime = ?4, last_seen = ?5",
-                    rusqlite::params![folder_id, f.file_name, size, mtime, now],
+                    rusqlite::params![folder_id, key, size, mtime, now],
                 )?;
             }
             Ok(())

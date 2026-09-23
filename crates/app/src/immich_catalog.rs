@@ -75,11 +75,19 @@ mod tests {
         p
     }
 
+    /// ⚠⚠ **The asset's id and its original file name must DIFFER, and this fixture once made them
+    /// the same.** `cache_path` builds `<uuid>.<ext>` while `CatalogEntry::file_name` carries the
+    /// camera's name for the grid to show. Writing `asset("one")` with `original_file_name: "one.jpg"`
+    /// made the two coincide, so every test below passed while the real bug — the catalog keyed on the
+    /// display name and looked up by the path — sat there untouched. **Reported in use: "pressing any
+    /// of the buttons simply moves to the next picture, without leaving any marks".**
     fn asset(id: &str) -> immich::Asset {
         immich::Asset {
             id: id.to_string(),
             asset_type: immich::AssetType::Image,
-            original_file_name: format!("{id}.jpg"),
+            // ⚠ Deliberately nothing like `id`, the way a real asset's UUID is nothing like
+            // `IMG-20231218-WA0011.jpg`.
+            original_file_name: format!("IMG-2023-{id}-WA0011.jpg"),
             original_mime_type: None,
             width: Some(1),
             height: Some(1),
@@ -94,6 +102,20 @@ mod tests {
             rating,
             ..Default::default()
         }
+    }
+
+    /// ⚠⚠ **A guard on the fixture, not on the code.** If these ever coincide again, every test below
+    /// starts passing for the wrong reason — which is exactly what happened on 2026-09-23.
+    #[test]
+    fn the_fixture_keeps_the_cache_name_and_the_display_name_apart() {
+        let a = asset("abc");
+        let root = std::path::Path::new("/tmp/immich");
+        let path = crate::immich_source::cache_path(root, &a);
+        assert_ne!(
+            path.file_name().unwrap().to_string_lossy(),
+            a.original_file_name,
+            "the cache path's name and the display name must differ, as they do on a real server"
+        );
     }
 
     /// ⚠⚠ **The report: a rating on an Immich photo vanished on restart.** `set_marks` returns
