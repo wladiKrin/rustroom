@@ -211,6 +211,67 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-23 — the snapshot row counts difference, not history steps; Reindex loses its menu
+
+Branch `snapshot-count-and-reindex-button`, three commits, merged and **confirmed by use**.
+**2,765 tests**, clippy and fmt clean, the **74 goldens unmoved**.
+
+**Two independent fixes, both reported in use, and the first one was shipped half-done.**
+
+**The bug.** The Now row's sentence — "n changes since “Warm”", "n changes so far" — was built on
+history *steps*, not on difference. Two reports, a few hours apart:
+
+1. *"resetting e.g. the adjustment still shows as if changes were made"*. The no-snapshot branch asked
+   `history.undo_depth()`, which counts **entries**: a slider set and set back leaves two entries with
+   nothing different. Fixed by measuring against `History::initial()` — ⚠ the state the photo
+   **opened** in, not `Edits::default()`, because a photo that opened warm from its sidecar really has
+   changed when it is reset to neutral.
+2. *"The snapshot branch behaves the same as before … setting the exposure, resetting … and then
+   setting it again counts as 3"*. ⚠⚠ **And I had written, in the report for fix 1, that "the snapshot
+   branch never had this bug".** That claim came from reading one line — `if edits == current` — and
+   was never run.
+
+**Why fix 1 missed it, which is the part worth keeping.** `steps_since` counts back to the most recent
+occurrence of the reference state. Returning **to** the reference is `Some(0)` and reads correctly —
+that is the case fix 1 tested. Passing **through** it and ending elsewhere is what inflates, and that
+is the shape a reset actually has. A probe settled it in one run:
+
+| snapshot taken at | set / reset / set reads |
+|---|---|
+| neutral | `1 change since “Warm”` |
+| exposure 0.5 | **`3 changes since “Warm”`** ← the report |
+
+So the position of the snapshot decided the number. Not a bug in `steps_since`; the **measure** was
+wrong.
+
+**The fix, and the user's call on what the number means.** Offered three definitions — changed
+parameters, changed edit groups, or no number at all — and he chose **changed parameters**.
+`Edits::changed_parameters` counts the individual parameters that differ.
+
+⚠⚠ **It is derived from serialisation, not from a field list, and that is the whole point.** `Edits`
+has **25 top-level fields and no `#[serde(skip)]` anywhere**, so a parameter added tomorrow is counted
+without anyone remembering to add it. A test sweeps **every edit group** through `merge_from` and
+asserts that any difference at all counts as at least one. A hand-written diff would report **zero**
+for a new field — the enumerating-guard failure this repo has paid for repeatedly. ⚠ The
+`group_differs` helper next to it was rejected for being too coarse: exposure and contrast share the
+Tone group, so two sliders would have read as one change.
+
+⚠ Granularity, chosen rather than accidental: nested objects are **recursed into**, so three HSL
+sliders are three changes; a list counts **one per differing element** and is not recursed into, so
+adding a mask is one change rather than the twenty fields it contains. ⚠ `serde_json` refuses
+non-finite floats, so a NaN reaching an edit field falls back to "they differ by at least one thing"
+rather than panicking the panel.
+
+**`History::steps_since` was removed.** It existed for this one caller and its own doc named it, so
+keeping it would have left a method citing a reason that no longer held. ⚠ Removing it also restored
+**`redo`'s doc comment**, which had been stranded above `steps_since` — `redo` had been undocumented,
+and nobody had noticed because the stray line read plausibly where it sat.
+
+**Reindex is a plain button.** The ⋯ menu's own doc argued a once-per-folder verb should not sit at the
+same weight as the sort order, but it only ever held that one item, so the menu was a click and a layer
+hiding a single button. User's call. ⚠ `icons::MORE` is kept with its glyph and its `ALL` coverage
+entry, marked as drawn by nothing: the next Library action wanting that corner will want the menu back.
+
 ### 2026-09-23 — Reindex refetches from Immich, and two scripted edits that damaged a file
 
 Branch `immich-reindex-refetch`, on top of `immich-list-cache`. **2,753 tests**, clippy and fmt clean,
