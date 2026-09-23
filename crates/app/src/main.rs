@@ -512,6 +512,12 @@ struct RustroomApp {
     /// visit still pays the round trip. ~260 KB per 872-asset album. Persisting it across restarts is
     /// a further change with a staleness rule to decide, not a side effect of this one.
     immich_assets: std::collections::HashMap<String, Vec<immich::Asset>>,
+    /// The cache file names this server has on disk — the Folders rail's count and the grid's
+    /// downloaded indicator both read it.
+    ///
+    /// ⚠⚠ Cached because the alternative is a stat per thumbnail per frame. Refreshed at startup, when
+    /// an Immich library opens, and by one insert per completed download — never per frame.
+    immich_present: std::collections::HashSet<std::ffi::OsString>,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
@@ -725,6 +731,14 @@ impl RustroomApp {
             immich_test: None,
             immich_opening: None,
             immich_assets: Default::default(),
+            // ⚠ Read at startup so the Folders rail's count is right before any album is opened.
+            immich_present: rustroom_app::immich_source::connection(&settings)
+                .map(|c| {
+                    rustroom_app::immich_source::present_names(
+                        &rustroom_app::immich_source::cache_root(&c.url),
+                    )
+                })
+                .unwrap_or_default(),
             settings,
             catalog,
             modal: Modal::None,

@@ -48,6 +48,17 @@ impl RustroomApp {
         Some(immich_source::cache_root(&conn.url))
     }
 
+    /// Re-read which of this server's assets are on disk.
+    ///
+    /// ⚠ On opening a library rather than per frame, so a photo downloaded — or deleted — outside
+    /// Rustroom is picked up at the next open without costing a stat per thumbnail.
+    pub(crate) fn refresh_immich_present(&mut self) {
+        self.immich_present = match self.immich_cache_root() {
+            Some(root) => immich_source::present_names(&root),
+            None => Default::default(),
+        };
+    }
+
     /// An album's stored asset list, if it is still current.
     pub(crate) fn immich_cached_album(&self, id: &str) -> Option<Vec<immich::Asset>> {
         let dir = self.immich_lists_dir()?;
@@ -113,6 +124,7 @@ impl RustroomApp {
                 eprintln!("catalog: {e}");
             }
         }
+        self.refresh_immich_present();
         let n = self.open_scan(
             ctx,
             LibrarySource::ImmichAlbum {
@@ -160,6 +172,7 @@ impl RustroomApp {
                 eprintln!("catalog: {e}");
             }
         }
+        self.refresh_immich_present();
         let n = self.open_scan(
             ctx,
             LibrarySource::ImmichBucket {
@@ -234,6 +247,11 @@ impl RustroomApp {
                     // open path applies with no special case — and the view switch mirrors
                     // `open_entry`, which is the shape that already exists.
                     Ok(()) => {
+                        // ⚠ One insert rather than re-reading the directory: this download's own path
+                        // is already in hand, and it is what the grid's indicator reads.
+                        if let Some(name) = dest.file_name() {
+                            self.immich_present.insert(name.to_os_string());
+                        }
                         self.open_path(ctx, PhotoId::original(dest));
                         self.view = AppView::Develop;
                     }
