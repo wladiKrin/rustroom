@@ -84,8 +84,16 @@ const REPLACEABLE: &[(&str, Builder)] = &[
     }),
     // ⚠ After `tone_regions`, as in the tail. Like `contrast`, it sits between ported stages and
     // split the per-pixel head before this milestone.
+    // ⚠⚠ `with_channels`, never `new`: the tail is on by default, so passing only the composite would
+    // give a preview that disagrees with the export on any photo with a channel curve.
     ("tone_curve", |e, _, _, _, _, ctx| {
-        Some(Box::new(GpuToneCurveStage::new(&e.tone_curve.points, ctx)))
+        Some(Box::new(GpuToneCurveStage::with_channels(
+            &e.tone_curve.points,
+            &e.tone_curve_red.points,
+            &e.tone_curve_green.points,
+            &e.tone_curve_blue.points,
+            ctx,
+        )))
     }),
     // ⚠⚠ **The last stage that could split a mask's sub-stage chain**, and the last that could
     // take the LEADING position and deny a mask M8.3l's shared upload. Takes the render scale,
