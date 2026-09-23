@@ -211,6 +211,70 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-23 — Reindex refetches from Immich, and two scripted edits that damaged a file
+
+Branch `immich-reindex-refetch`, on top of `immich-list-cache`. **2,753 tests**, clippy and fmt clean,
+the **74 goldens unmoved**. ⚠ Green; the refetch itself is not yet confirmed by use.
+
+**The gap was narrower than "there is no refresh".** A click resolves an Immich album in three steps:
+the session map `immich_assets`, then the stored list **if its validator matches**, then a fetch. Steps
+2 and 3 already notice a change, because the rail's album list is refetched at launch. ⚠⚠ **Step 1 is
+not validated at all** — once an album has been opened in a session its list is frozen for the life of
+the process, even after the rail's own Refresh, which refetches the *album list* and never the *asset
+lists*. So a change in Immich appeared on a relaunch and never within a session.
+
+**What Reindex now does on an Immich album or month:** persists the session, compacts copy numbering
+over the current scan, **removes that album's entry from `immich_assets`** — the one load-bearing line
+— and requests the matching rail list plus the asset list. The reply lands on the existing
+`pump_immich` path, so there is no new reopen path, no new reply handler and no new state on
+`RustroomApp`. The open photo is **dropped rather than reopened**, unlike the folder branch: it may no
+longer exist on the server, so you land in the grid.
+
+**⚠⚠ The dependency that would have made the whole thing silently do nothing.** `ImmichWorker` had
+**one** `pending_list` flag covering both `Job::Albums` and `Job::Buckets`, with two faults:
+`request(Albums)` followed by `request(Buckets)` **dropped the second silently**, and a *bucket* reply
+**cleared the flag an outstanding album fetch had set**. The rail survived both because it re-requests
+on every frame while its list is `None` — Reindex asks **once**, so it would have lost the request for
+good. Split into `pending_albums`/`pending_buckets`, each fault with its own failing-first test. ⚠ Same
+family as the guard that swallowed a second album click, four days earlier. **A guard shared by two
+callers with different retry behaviour is a bug waiting for the one that does not retry.**
+
+⚠ A measurable tell: the worker suite ran in **5.01 s** before the split and **0.21 s** after — the old
+code was sitting in `settle`'s five-second retry loop waiting for a reply that had been dropped.
+
+**⚠⚠ `reindex` had ZERO tests, and the plan assumed otherwise.** The plan said the extraction of the
+compaction loop would be proven a pure move by "the existing folder tests passing unchanged". There
+were none — no test anywhere called `reindex`. Three characterisation tests were written **first**
+(closes a gap and says so; reports an already-tidy folder differently; picks up a file added outside
+Rustroom), and only then was the loop moved. ⚠ **A plan that names a safety net must check the net
+exists.**
+
+**⚠⚠ TWO SCRIPTED EDITS DAMAGED `copies.rs`, AND THE TEST SUITE WAS GREEN THROUGH BOTH.**
+
+1. The extraction script walked backwards over doc-comment lines to find its insertion point and
+   inserted the helper **below** `reindex`'s seventeen-line doc block instead of above it. The doc
+   ended up attached to the helper, `reindex` was left undocumented with a **three-space indent**, and
+   all tests passed. Caught only by reading the file.
+2. The repair then added the doc block back above `reindex` **while the first copy was still there**,
+   leaving it duplicated. Tests still passed. Caught by **clippy's `doc_lazy_continuation`**, which
+   flagged the helper's own doc as continuing the stray list above it.
+
+⚠ The lesson is not "be careful". It is: **an edit positioned by walking over comment lines will
+eventually eat one**, and neither a compiler nor a test suite can see a lost or duplicated doc comment.
+The fix was to verify the result against the pre-extraction file directly — `git diff <commit> -- file`
+filtered to removed `///` lines, which must be empty — and that check is cheap enough to be routine.
+
+**Also:** the refusal message for a collection, a date or All Photos now names Immich among what
+works, rather than implying it is a fourth unsupported source. The ⋯ hover is source-aware while the
+label stays **Reindex** — one verb, one place.
+
+⚠ Known and accepted: the two requests **race**. The rail list is a handful of rows against up to a
+thousand assets so it lands first in practice; if it loses, the refetched list is stamped with the old
+validator and costs exactly **one** extra fetch on the next launch. Never wrong data, so not worth
+sequencing. ⚠ `shell.rs` is **1,379** lines and `immich_worker.rs` **698** — both past the ~600
+threshold; this change adds a handful of lines to each and no new responsibility, and neither was
+split.
+
 ### 2026-09-23 — Immich asset lists persisted, validated before use
 
 Branch `immich-list-cache`, seven commits. **2,742 tests**, clippy and fmt clean, the **74 goldens

@@ -101,9 +101,17 @@ pub struct ImmichWorker {
     /// `DecodeWorker` idiom: superseded requests are **abandoned, not aborted** — the doomed thread
     /// runs to completion and the caller drops its result by comparing sequence numbers.
     open_seq: u64,
-    /// Whether a list request (albums or one album) is outstanding, so an expanded section does
-    /// not refetch on every frame.
-    pending_list: bool,
+    /// Whether the **album list** fetch is outstanding, so an expanded section does not refetch on
+    /// every frame.
+    ///
+    /// ⚠⚠ **Two flags, one per list, and deliberately not one shared flag.** A single flag had two
+    /// faults: `request(Albums)` immediately followed by `request(Buckets)` dropped the second
+    /// silently, and a *bucket* reply cleared the flag an outstanding *album* request had set. The
+    /// rail survived both by re-requesting every frame; Reindex asks **once**, so it would not have.
+    /// Same family as the guard that swallowed a second album click.
+    pending_albums: bool,
+    /// Whether the **bucket list** fetch is outstanding. See [`Self::pending_albums`].
+    pending_buckets: bool,
 }
 
 impl ImmichWorker {
@@ -116,7 +124,8 @@ impl ImmichWorker {
             rx,
             in_flight: HashSet::new(),
             open_seq: 0,
-            pending_list: false,
+            pending_albums: false,
+            pending_buckets: false,
         }
     }
 
@@ -129,7 +138,7 @@ impl ImmichWorker {
     ///
     /// ⚠ Not user-initiated opens: those are never queued or guarded, so there is nothing to report.
     pub fn is_listing(&self) -> bool {
-        self.pending_list
+        self.pending_albums || self.pending_buckets
     }
 
     /// Enqueue a job. A duplicate download of one asset, and a second list while one is in
@@ -143,12 +152,20 @@ impl ImmichWorker {
                 Some(asset_id.clone())
             }
             // ⚠ The **automatic** list fetches. The rail asks for these on every frame while it has
-            // none, so without a guard that is a thread per frame.
-            Job::Albums | Job::Buckets => {
-                if self.pending_list {
+            // none, so without a guard that is a thread per frame. ⚠⚠ One guard **each**: they are
+            // two independent fetches, and sharing a guard dropped whichever came second.
+            Job::Albums => {
+                if self.pending_albums {
                     return;
                 }
-                self.pending_list = true;
+                self.pending_albums = true;
+                None
+            }
+            Job::Buckets => {
+                if self.pending_buckets {
+                    return;
+                }
+                self.pending_buckets = true;
                 None
             }
             // ⚠⚠ A **user-initiated open is never dropped.** It used to share the guard above, so
@@ -187,8 +204,12 @@ impl ImmichWorker {
             if let Some(id) = &msg.asset_id {
                 self.in_flight.remove(id);
             }
-            if matches!(msg.outcome, Outcome::Albums(_) | Outcome::Buckets(_)) {
-                self.pending_list = false;
+            // ⚠ Each reply clears **its own** flag. Clearing a shared one let a bucket reply free an
+            // album fetch that was still running.
+            match msg.outcome {
+                Outcome::Albums(_) => self.pending_albums = false,
+                Outcome::Buckets(_) => self.pending_buckets = false,
+                _ => {}
             }
             // ⚠⚠ A superseded open is **dropped here**, not acted on: its grid would otherwise land
             // on top of the album the user actually asked for.
@@ -458,6 +479,86 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
         let _ = w.poll();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "one fetch for two frames");
+    }
+
+    /// A worker whose fetcher records every job it is handed, so a *dropped* request is visible.
+    fn worker_recording_jobs() -> (ImmichWorker, Arc<std::sync::Mutex<Vec<Job>>>) {
+        let seen: Arc<std::sync::Mutex<Vec<Job>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        let w = ImmichWorker::new(
+            Arc::new(move |job: Job| {
+                rec.lock().unwrap().push(job.clone());
+                match job {
+                    Job::Buckets => Outcome::Buckets(Ok(vec![])),
+                    _ => Outcome::Albums(Ok(vec![])),
+                }
+            }),
+            || {},
+        );
+        (w, seen)
+    }
+
+    /// ⚠⚠ **The regression test for a shared guard.** One `pending_list` flag covered both list kinds,
+    /// so asking for the album list and the bucket list in the same frame **silently dropped the
+    /// second**. The rail never noticed, because it re-requests on every frame while its list is
+    /// `None`; a one-shot request from Reindex would have been lost for good. Same shape as the guard
+    /// that swallowed a second album click.
+    #[test]
+    fn an_albums_and_a_buckets_request_do_not_drop_each_other() {
+        let (mut w, seen) = worker_recording_jobs();
+        w.request(Job::Albums);
+        w.request(Job::Buckets);
+        settle(&mut w, |_| seen.lock().unwrap().len() >= 2);
+        let jobs = seen.lock().unwrap().clone();
+        assert!(
+            jobs.contains(&Job::Albums),
+            "the album list must be requested: {jobs:?}"
+        );
+        assert!(
+            jobs.contains(&Job::Buckets),
+            "and the bucket list must NOT be swallowed by it: {jobs:?}"
+        );
+    }
+
+    /// ⚠ The per-frame guard must still guard: the rail asks on every frame while it has no list, and
+    /// without this that is a thread per frame.
+    #[test]
+    fn a_second_albums_request_while_one_is_outstanding_is_still_dropped() {
+        let (mut w, _seen) = worker_recording_jobs();
+        w.request(Job::Albums);
+        assert!(w.is_listing(), "one is outstanding");
+        w.request(Job::Albums);
+        // ⚠ Counted through the guard rather than the fetcher: the first job may already have
+        // finished, and a race there would make this test flaky rather than wrong.
+        assert!(w.is_listing());
+    }
+
+    /// ⚠⚠ A **bucket** reply used to clear the one flag an outstanding **album** request had set, so
+    /// the rail could fire a second album fetch while the first was still running. Two flags, two
+    /// lifetimes.
+    #[test]
+    fn a_buckets_reply_does_not_clear_an_outstanding_albums_request() {
+        let mut w = ImmichWorker::new(
+            Arc::new(|job: Job| match job {
+                // ⚠ Albums is slow, Buckets is instant, so the bucket reply is certain to be drained
+                // while the album fetch is still in flight — which is the situation being pinned.
+                Job::Albums => {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    Outcome::Albums(Ok(vec![]))
+                }
+                _ => Outcome::Buckets(Ok(vec![])),
+            }),
+            || {},
+        );
+        w.request(Job::Albums);
+        w.request(Job::Buckets);
+        settle(&mut w, |w| {
+            matches!(w.poll().first(), Some(Outcome::Buckets(_)))
+        });
+        assert!(
+            w.is_listing(),
+            "the album fetch is still outstanding, so a list is still in flight"
+        );
     }
 
     #[test]

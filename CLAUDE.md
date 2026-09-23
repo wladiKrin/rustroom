@@ -166,8 +166,19 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-23)
 
-**2742 tests** (goldens unmoved since 2026-09-18). Branch **`immich-list-cache`**, 7 commits, gated
-green; `main` is **19 commits ahead of `origin/main` — not pushed; the user pushes.**
+**2753 tests** (goldens unmoved since 2026-09-18). Branch **`immich-reindex-refetch`**, on top of
+**`immich-list-cache`** — ⚠ **both unmerged**, linear, so merging them is one step in order. `main` is
+**19 commits ahead of `origin/main` — not pushed; the user pushes.**
+
+🟡 **Reindex refetches from Immich (2026-09-23) — green, the refetch itself not yet seen in use.**
+On an Immich album or month, ⋯ → Reindex persists the session, compacts copy numbering, **removes that
+album's entry from `immich_assets`** (the one load-bearing line — the session map is checked *before*
+the validator and was never invalidated, so a change in Immich appeared only on a relaunch), and asks
+for the matching rail list plus the asset list. ⚠⚠ This needed `ImmichWorker`'s single `pending_list`
+flag **split in two**: it covered both `Albums` and `Buckets`, so one of two requests in a frame was
+dropped silently and a bucket reply cleared an outstanding album fetch. The rail survived that by
+re-requesting every frame; a one-shot Reindex would not have. Spec
+`2026-09-23-immich-reindex-design.md`; `grep -n 'Reindex refetches' docs/JOURNAL.md`.
 
 🟡 **Immich asset lists are persisted (2026-09-23) — writes confirmed by use, the HIT still unseen.**
 One release run wrote **8 lists / 2,155 assets / 618 KB**, all internally consistent, no panic, no
@@ -198,17 +209,12 @@ and are instant after a restart**, keyed `(asset id, updatedAt)` in their own di
 on separate directories so neither sweep reaches the other's entries. It had **no eviction at all**
 since M8.2. Spec `2026-09-23-immich-timeline-design.md`; `grep -n 'M9.1 slice 2' docs/JOURNAL.md`.
 
-⚠⚠ **Two things the spec got wrong and the code corrected.** It claimed the store's "pinned hash
-vectors" guard `Local`'s key derivation — **they do not**, they pin `fnv1a` itself, so nothing stopped
-an enum discriminant silently invalidating every thumbnail on disk. A concrete filename is now pinned
-(`a_known_local_identity_keeps_its_filename_for_ever`). And "no `VERSION` bump" was too glib: the RTHM
-header carries the identity's own fields, so there are two layouts — `VERSION_LOCAL` 1,
-`VERSION_REMOTE` 2. ✅ **Both date trees now order the same way** — **years newest first, months chronological inside
-them**, settled by use in two steps (fully ascending, then fully descending, then mixed: a year's
-months running backwards is not how anyone thinks about a year). `capture_days` orders
-`1 DESC, 2, 3`. ⚠ `date_tree::group` needed no change either time, because it groups on *change*
-rather than on direction — its doc used to claim it "relies on ascending", which was narrower than
-the truth and would have sent someone looking for a rewrite that was not needed.
+⚠⚠ **Two corrections from slice 2 worth keeping:** the thumbnail store's "pinned hash vectors" do
+**not** guard `Identity`'s key derivation (they pin `fnv1a`), so a concrete filename is now pinned
+instead; and the RTHM header carries the identity's fields, so there are two layouts —
+`VERSION_LOCAL` 1, `VERSION_REMOTE` 2. ✅ **Both date trees order the same way** — years newest first,
+months chronological inside them (`capture_days` orders `1 DESC, 2, 3`). ⚠ `date_tree::group` needed no
+change either time: it groups on *change*, not on direction, and its doc used to claim otherwise.
 
 ✅ **`jpeg`/`jpg` and `tiff`/`tif` are one format each in the Library's format chips** (2026-09-23).
 ⚠ `hidden_formats` is persisted, so a config from before then can hold `"jpeg"`; both sides are
@@ -241,33 +247,20 @@ title bar and ×, a pinned footer with the accent verb, tabs for Settings / Info
 panels' section headers inside the rest; Settings on a draft with Apply / Cancel, its
 descriptions as hovers. Spec `2026-09-21-dialogs-design.md`.
 
-✅ **The snapshot timeline** (2026-09-21) and **the top bar and the Library in one language**
-(2026-09-20) are merged and confirmed by use; specs `2026-09-20-snapshots-timeline-design.md`
-and `2026-09-20-shell-restyle-design.md`.
-
-✅ The five panel reworks (Develop, Masks, Geometry, Retouch, Presets) and the mask off switch are
-merged and confirmed by use; specs under `docs/superpowers/specs/2026-09-1[89]-*` and
-`2026-09-20-*`.
+✅ Merged and confirmed by use, specs under `docs/superpowers/specs/`: the **snapshot timeline**
+(2026-09-21), the **top bar and Library in one language** (2026-09-20), and the five **panel reworks**
+(Develop, Masks, Geometry, Retouch, Presets) plus the mask off switch (2026-09-18/19/20).
 
 ⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
 outcome; the measurements, the retractions and the things that went wrong live in
 `docs/JOURNAL.md`. This section reached a full screen of per-milestone tables twice — that is the
 1.2 MB failure in miniature. **Overwrite it; do not append to it.**
 
-**Landed 2026-09-18, all merged and confirmed by use:**
-
-| | outcome |
-|---|---|
-| **M8.13** GPU-resident base for `GpuBrushRaster` | **1.13–1.36×** on a global drag over a masked photo |
-| **M8.14** resident buffer across the prefix seams | **43.3–49.4 ms**, 5.6–6.3% of a whole-frame render — **export/cold only** |
-| `batch_export.rs` split | 2,335 lines → six files, a pure move |
-| the rendering seam reaches export **and** thumbnails | three defects of one shape; an already-rendered source was rendered **twice** (119.32 levels) |
-| `ProfileRendering` is a **required** argument | 122 call sites, behaviour-preserving, 74 goldens unmoved |
-| **the GPU tail is ON by default** | user's call; required removing a field-level `#[serde(default)]` |
-
-⚠⚠ **The GPU default flip had a one-word trap**: the field's own doc said `#[serde(default)]` was
-safe *because* the intended default matched `bool`'s. Flipping it to `true` would have loaded
-**`false`** for every existing settings file. Pinned by a test that fails when the attribute returns.
+**Landed 2026-09-18** — M8.13, M8.14, the `batch_export.rs` split, the rendering seam reaching export
+and thumbnails, `ProfileRendering` becoming a required argument, and the GPU tail on by default: all
+merged and confirmed by use. ⚠ The measurements, the three defects of one shape, and the one-word
+`#[serde(default)]` trap that would have shipped `false` to every existing settings file are in
+`docs/JOURNAL.md` — `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 
 ### ▶ Next action — see the list cache in use, then Immich slice 3 or the leftovers
 
@@ -328,19 +321,16 @@ are renamed, so a filename comparison undercounts.
 - **A GPU-side mask coverage cache** — ✅ measured 2026-09-16; the ceiling missed 4–8×. ⚠⚠ The cost
   is **not transfer**: a serial u8→u32 repack and a 4×-inflated download wire. **Fix those two
   first** — mechanical, no design question. Re-price after.
-- **The u8 coverage wire** — 0.56–0.70 ms against an actual 3.55–6.35 at rung 3200. ⚠⚠ Blocked on a
-  shader restructure; **a considered trade, not an oversight.**
-- **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. A ~120-site
-  diff since 2026-09-18. ⚠ Its own change.
-- **`MAX_TILE_DABS`** — the cliff is at **2560, not 3584**. ⚠ Blocked on a **portability** question
-  (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) no M2 run settles.
+- ⚠ **The u8 coverage wire**, the **`ProfileRendering` → `TailRendering`** rename and **`MAX_TILE_DABS`**
+  are listed with their numbers and their blockers under **▶ Next action** above — not repeated here,
+  because a list kept in two places is how this file reached 1.2 MB.
 - The prefix-cache eviction fix's **picture** half.
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
 - ⚠ **M7.3b is DEFERRED, not done.**
-- ⚠ `crates/lens-profile/src/lib.rs` is **949** lines and `crates/app/src/immich_source.rs` is **821**
-  — both past the ~600 threshold and both wanting a split. (`batch_export/worker.rs` is 1,127
-  deliberately — ~190 of code, the rest its own tests, and its module header says so.)
+- ⚠ Past the ~600 threshold and wanting a split: `shell.rs` **1,379**, `main.rs` **1,116**,
+  `lens-profile/src/lib.rs` **949**, `immich_source.rs` **821**, `immich_worker.rs` **698**.
+  (`batch_export/worker.rs` is 1,127 deliberately — ~190 of code, the rest its own tests.)
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
   adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
   `thumb_store`'s use a counter as well and are the pattern to copy.
@@ -352,11 +342,9 @@ are renamed, so a filename comparison undercounts.
 
 ### The open question M8.11 did not settle
 
-M8.3j/k/l's inner-chain machinery — `accelerate_inner`, `sub_stage_names`, the coverage rasteriser
-hook and the shared upload — is now reachable **only on the decline path**, i.e. a gating brush with
-a cold cache. That is a genuine configuration and the machinery was kept, pinned with the
-gating-brush wedge; whether it earns its keep once a GPU-resident brush raster exists is worth
-asking then rather than now.
+M8.3j/k/l's inner-chain machinery is reachable **only on the decline path** (a gating brush with a cold
+cache). Kept, pinned with the gating-brush wedge; whether it earns its keep now that a GPU-resident
+brush raster exists is worth asking when something touches it. `grep -n 'accelerate_inner' docs/JOURNAL.md`.
 
 ### Standing lessons (the expensive ones — full stories in `docs/JOURNAL.md`)
 
@@ -370,6 +358,17 @@ asking then rather than now.
   the comment advertised a guard the test did not provide. ⚠ **Run the sabotage, then describe the one
   you ran.** Two tests did fail when the `find` became `first()`; that is what the comment now says.
   Same family as the enumerating guard above: a reassuring sentence is not a guard.
+- **⚠⚠ AN EDIT POSITIONED BY WALKING OVER COMMENT LINES WILL EVENTUALLY EAT ONE, AND NOTHING IN THE
+  GATE CAN SEE IT.** On 2026-09-23 a scripted extraction in `copies.rs` inserted a helper *below* a
+  17-line doc block instead of above it — the doc ended up on the wrong function, `reindex` was left
+  undocumented at a **three-space indent**, and every test passed. The repair then left the block
+  **duplicated**, and tests passed again; only clippy's `doc_lazy_continuation` caught it. ⚠ **After
+  any scripted move, diff against the pre-move commit and require the removed `///` lines to be
+  empty** — `git diff <commit> -- <file> | grep '^-' | grep '///'`. Cheap enough to be routine.
+- **⚠⚠ A GUARD SHARED BY TWO CALLERS WITH DIFFERENT RETRY BEHAVIOUR IS A BUG WAITING FOR THE ONE THAT
+  DOES NOT RETRY.** `ImmichWorker`'s one `pending_list` flag covered two list kinds; the rail hid it by
+  re-requesting every frame, so it looked correct for weeks. The first one-shot caller would have lost
+  its request silently. ⚠ Second time in four days for this exact shape — see the album-click guard.
 - **⚠⚠ A gate run before the last commit describes a tree nobody shipped.** M8.9's tip had to be
   re-gated before merging, which caught an unformatted commit checked only with `cargo build`.
   **Re-gate the tip, and read each exit code from its own command.**
