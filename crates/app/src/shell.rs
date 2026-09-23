@@ -321,7 +321,7 @@ impl RustroomApp {
                         // noise rather than reassurance.
                         if self.view == AppView::Library {
                             if self.library.is_some() {
-                                more_menu(self, ui, ctx);
+                                reindex_button(self, ui, ctx);
                             }
                             format_chips(self, ui);
                             if self.library.is_some() {
@@ -639,28 +639,17 @@ fn reindex_hover(app: &RustroomApp) -> &'static str {
     }
 }
 
-/// The ⋯ menu at the bar's right edge: the Library actions that are neither a filter nor a
-/// view — today, Reindex.
+/// Reindex, at the bar's right edge.
 ///
-/// ⚠ Behind a menu rather than a button of its own: Reindex is used once per folder, and a
-/// once-per-folder verb at the same weight as the sort order was the old bar's failure in
-/// miniature.
-fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    let mut reindex = false;
-    // ⚠ Read before the closure, which borrows `app` mutably.
+/// ⚠⚠ **Directly a button, and it used to be behind a ⋯ menu.** That menu's own doc argued a
+/// once-per-folder verb should not sit at the same weight as the sort order — but it only ever held
+/// this one item, so the menu was a click and a layer that hid a single button. **The user's call,
+/// 2026-09-23:** with one item there is no point in the extra layer. ⚠ If a second Library action
+/// ever wants this corner, reconsider the menu then — not before.
+fn reindex_button(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    // ⚠ Read before the button, which needs `app` mutably afterwards.
     let hover = reindex_hover(app);
-    egui::containers::menu::MenuButton::new(
-        egui::RichText::new(icons::MORE.to_string()).size(16.0),
-    )
-    .ui(ui, |ui| {
-        if ui.button("Reindex").on_hover_text(hover).clicked() {
-            reindex = true;
-            ui.close();
-        }
-    })
-    .0
-    .on_hover_text("More");
-    if reindex {
+    if ui.button("Reindex").on_hover_text(hover).clicked() {
         app.reindex(ctx);
     }
 }
