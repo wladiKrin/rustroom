@@ -1046,7 +1046,7 @@ impl Catalog {
                     CAST(strftime('%d', taken, 'unixepoch') AS INTEGER),
                     count(*)
              FROM photo_capture WHERE taken IS NOT NULL
-             GROUP BY 1, 2, 3 ORDER BY 1, 2, 3",
+             GROUP BY 1, 2, 3 ORDER BY 1 DESC, 2 DESC, 3 DESC",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(DayRow {
@@ -3045,20 +3045,22 @@ mod tests {
             .unwrap();
         cat.set_capture(Path::new("/a/three.RAF"), &on_day(2026, 7, 9))
             .unwrap();
+        // ⚠ Newest first (2026-09-23, user's call): the Dates tree reads the way the Immich
+        // timeline does, and the way you browse a photo library rather than audit one.
         assert_eq!(
             cat.capture_days().unwrap(),
             vec![
                 DayRow {
                     year: 2026,
-                    month: 5,
-                    day: 17,
-                    count: 2
-                },
-                DayRow {
-                    year: 2026,
                     month: 7,
                     day: 9,
                     count: 1
+                },
+                DayRow {
+                    year: 2026,
+                    month: 5,
+                    day: 17,
+                    count: 2
                 },
             ]
         );

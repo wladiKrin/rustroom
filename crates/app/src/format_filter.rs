@@ -8,11 +8,27 @@ use crate::entries::PhotoEntry;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// The lowercase extension of an entry, or `None` when it has none.
+/// The one name a format goes by, for extensions that have more than one spelling.
+///
+/// ⚠⚠ `jpeg` and `jpg` are one format, and so are `tiff` and `tif` — `catalog::IMAGE_EXTENSIONS`
+/// lists both spellings of each, so without this a folder of mixed spellings grew **two chips for
+/// one format** and hiding one left the other visible. Reported in use, 2026-09-23.
+///
+/// ⚠ The RAW extensions are **not** aliases: `cr2` and `cr3` are different formats, as are `nef`,
+/// `arw`, `raf`, `dng`, `orf` and `rw2`. Only these two pairs collapse.
+pub fn canonical_ext(ext: &str) -> &str {
+    match ext {
+        "jpeg" => "jpg",
+        "tiff" => "tif",
+        other => other,
+    }
+}
+
+/// The canonical lowercase extension of an entry, or `None` when it has none.
 fn ext_of(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(|e| canonical_ext(&e.to_ascii_lowercase()).to_string())
 }
 
 /// Extensions present in a folder, lowercased, each with how many entries it has.
@@ -59,8 +75,18 @@ pub struct FormatFilter {
 }
 
 impl FormatFilter {
+    /// Is this format hidden?
+    ///
+    /// ⚠⚠ Compares **canonically on both sides**. `hidden` is persisted in `Settings`, so a config
+    /// written before 2026-09-23 can hold `"jpeg"`; matching raw strings would leave that entry
+    /// matching nothing and **silently un-hide** the JPEGs somebody had chosen to hide. Canonicalising
+    /// the stored value keeps it working, with no migration.
+    ///
+    /// ⚠ `toggle` canonicalises on insert, so only legacy values are ever non-canonical — the scan is
+    /// over at most a handful of formats.
     pub fn is_hidden(&self, ext: &str) -> bool {
-        self.hidden.contains(ext)
+        let want = canonical_ext(ext);
+        self.hidden.iter().any(|h| canonical_ext(h) == want)
     }
 
     /// True when at least one format is hidden.
@@ -71,9 +97,24 @@ impl FormatFilter {
         !self.hidden.is_empty()
     }
 
+    /// Hide or show a format.
+    ///
+    /// ⚠ Removes **every** spelling of it, so a legacy `"jpeg"` entry cannot survive a toggle of
+    /// `"jpg"` and leave the format hidden by a value no chip corresponds to.
     pub fn toggle(&mut self, ext: &str) {
-        if !self.hidden.remove(ext) {
-            self.hidden.insert(ext.to_string());
+        let want = canonical_ext(ext);
+        let had = self
+            .hidden
+            .iter()
+            .filter(|h| canonical_ext(h) == want)
+            .cloned()
+            .collect::<Vec<_>>();
+        if had.is_empty() {
+            self.hidden.insert(want.to_string());
+        } else {
+            for h in had {
+                self.hidden.remove(&h);
+            }
         }
     }
 
@@ -81,7 +122,7 @@ impl FormatFilter {
     /// does not exist for it.
     pub fn is_visible(&self, path: &Path) -> bool {
         match ext_of(path) {
-            Some(ext) => !self.hidden.contains(&ext),
+            Some(ext) => !self.is_hidden(&ext),
             None => true,
         }
     }
@@ -127,6 +168,76 @@ pub fn step(visible: &[usize], cur: usize, forward: bool) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    /// ⚠⚠ Two spellings, one chip. Before 2026-09-23 a folder of mixed spellings grew two chips for
+    /// one format, and hiding one left the other visible.
+    #[test]
+    fn jpg_and_jpeg_are_one_format_and_so_are_tif_and_tiff() {
+        assert_eq!(canonical_ext("jpeg"), "jpg");
+        assert_eq!(canonical_ext("jpg"), "jpg");
+        assert_eq!(canonical_ext("tiff"), "tif");
+        assert_eq!(canonical_ext("tif"), "tif");
+    }
+
+    /// ⚠ The RAW extensions are different formats, not spellings of one.
+    #[test]
+    fn the_raw_extensions_are_not_aliased_together() {
+        for e in [
+            "cr2", "cr3", "nef", "arw", "raf", "dng", "orf", "rw2", "png",
+        ] {
+            assert_eq!(canonical_ext(e), e, "{e} must stand alone");
+        }
+    }
+
+    /// ⚠⚠ Hiding the format hides **both** spellings — the bug this change exists for.
+    #[test]
+    fn hiding_jpg_also_hides_a_dot_jpeg_file() {
+        let mut f = FormatFilter::default();
+        f.toggle("jpg");
+        assert!(!f.is_visible(Path::new("/a/one.jpg")));
+        assert!(!f.is_visible(Path::new("/a/two.jpeg")));
+        assert!(
+            !f.is_visible(Path::new("/a/three.JPEG")),
+            "case must not matter"
+        );
+        assert!(f.is_visible(Path::new("/a/four.png")));
+    }
+
+    /// ⚠⚠ **A config written before this change can hold `"jpeg"`.** Matching raw strings would leave
+    /// that entry matching nothing and silently un-hide the JPEGs somebody chose to hide.
+    #[test]
+    fn a_legacy_jpeg_entry_still_hides_jpgs() {
+        let legacy: FormatFilter =
+            serde_json::from_str(r#"["jpeg"]"#).expect("the stored shape is a bare array");
+        assert!(!legacy.is_visible(Path::new("/a/one.jpg")));
+        assert!(!legacy.is_visible(Path::new("/a/two.jpeg")));
+        assert!(legacy.is_hidden("jpg"), "the chip must read as hidden");
+    }
+
+    /// ⚠ And toggling it off must clear the legacy spelling too, or the format would stay hidden by a
+    /// value no chip corresponds to.
+    #[test]
+    fn toggling_off_clears_a_legacy_spelling() {
+        let mut legacy: FormatFilter = serde_json::from_str(r#"["jpeg"]"#).unwrap();
+        legacy.toggle("jpg");
+        assert!(legacy.is_visible(Path::new("/a/one.jpeg")));
+        assert!(!legacy.is_active(), "nothing should remain hidden");
+    }
+
+    /// ⚠ One chip, one count: a folder of both spellings reports them together.
+    #[test]
+    fn formats_present_merges_the_two_spellings_into_one_row() {
+        let entries = vec![
+            entry("/a/one.jpg", 0),
+            entry("/a/two.jpeg", 0),
+            entry("/a/three.png", 0),
+        ];
+        let present = formats_present(&entries);
+        assert_eq!(
+            present,
+            vec![("jpg".to_string(), 2), ("png".to_string(), 1)]
+        );
+    }
+
     use super::*;
     use std::path::PathBuf;
 

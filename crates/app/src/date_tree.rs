@@ -46,10 +46,13 @@ pub fn month_name(month: u32) -> &'static str {
         .unwrap_or("—")
 }
 
-/// Group ascending day rows into years and months, preserving order and summing counts.
+/// Group day rows into years and months, preserving order and summing counts.
 ///
-/// ⚠ Relies on `days` being **ascending**, which `Catalog::capture_days` guarantees with its
-/// `ORDER BY`. The alternative is a `HashMap` plus a re-sort, for no gain.
+/// ⚠⚠ Relies on `days` being **grouped**, not on a direction: a new year starts whenever the year
+/// differs from the last, so any ordering that keeps a year's rows together works. This said "relies
+/// on ascending" until 2026-09-23, when `Catalog::capture_days` was flipped to newest-first and
+/// nothing here had to change — the contract was narrower than the comment claimed. The alternative
+/// is a `HashMap` plus a re-sort, for no gain.
 pub fn group(days: &[DayRow]) -> Vec<Year> {
     let mut years: Vec<Year> = Vec::new();
     for &row in days {
@@ -144,6 +147,58 @@ mod tests {
             day,
             count,
         }
+    }
+
+    /// ⚠⚠ `capture_days` returns **newest first** since 2026-09-23. Grouping must hold either way,
+    /// because it groups on change rather than on direction.
+    #[test]
+    fn grouping_holds_for_descending_rows() {
+        let years = group(&[d(2026, 7, 9, 1), d(2026, 5, 17, 2), d(2025, 12, 1, 3)]);
+        assert_eq!(years.len(), 2);
+        assert_eq!(years[0].year, 2026, "newest year first");
+        assert_eq!(years[0].count, 3);
+        assert_eq!(
+            years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
+            vec![7, 5]
+        );
+        assert_eq!(years[1].year, 2025);
+    }
+
+    /// ⚠⚠ **Shift-click range selection reads the same rows through `flatten` and `range`**, so the
+    /// reversal could have changed it silently. The **days** it spans are the same set either way.
+    ///
+    /// ⚠⚠ What is *not* the same is the whole-month node the span picks up at its boundary, and that
+    /// is a **pre-existing quirk made visible, not new fallout**: `flatten` interleaves year, month
+    /// and day nodes, so a span between two days also contains whichever month headers sit between
+    /// them — ascending picks up the later endpoint's month, descending the earlier one's. Either way
+    /// shift-clicking two days already selects one entire intervening month. Narrowing `range` to
+    /// comparable granularity would change what shift-click *means*, which is its own decision.
+    #[test]
+    fn a_shift_click_spans_the_same_days_whichever_way_the_tree_is_ordered() {
+        let asc = [d(2026, 5, 17, 1), d(2026, 6, 1, 1), d(2026, 7, 9, 1)];
+        let desc: Vec<DayRow> = asc.iter().rev().copied().collect();
+        let a = (2026, Some(5), Some(17));
+        let b = (2026, Some(7), Some(9));
+
+        // Only the day-granularity periods, which is what "select these days" means.
+        let days_of = |rows: &[DayRow]| {
+            let mut v: Vec<Period> = range(&flatten(&group(rows)), a, b)
+                .into_iter()
+                .filter(|(_, m, dd)| m.is_some() && dd.is_some())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            days_of(&asc),
+            days_of(&desc),
+            "the days between two clicks must not depend on the tree's direction"
+        );
+        assert_eq!(
+            days_of(&asc).len(),
+            3,
+            "all three days, not a truncated span"
+        );
     }
 
     #[test]
