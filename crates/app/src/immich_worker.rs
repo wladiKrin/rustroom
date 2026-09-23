@@ -72,6 +72,8 @@ pub type FetchFn = Arc<dyn Fn(Job) -> Outcome + Send + Sync>;
 /// gains a prefix the dedupe would simply stop working with nothing failing.
 struct Msg {
     asset_id: Option<String>,
+    /// The `open_seq` this reply belongs to, for a user-initiated open.
+    seq: Option<u64>,
     outcome: Outcome,
 }
 
@@ -92,6 +94,13 @@ pub struct ImmichWorker {
     rx: Receiver<Msg>,
     /// Which asset ids are being downloaded right now, so two opens do not race one path.
     in_flight: HashSet<String>,
+    /// The sequence number of the most recent **user-initiated** open.
+    ///
+    /// ⚠⚠ Opens are **not** guarded like list fetches. Clicking album B while A is still loading must
+    /// switch to B, and the older reply must not land on top of it afterwards. The
+    /// `DecodeWorker` idiom: superseded requests are **abandoned, not aborted** — the doomed thread
+    /// runs to completion and the caller drops its result by comparing sequence numbers.
+    open_seq: u64,
     /// Whether a list request (albums or one album) is outstanding, so an expanded section does
     /// not refetch on every frame.
     pending_list: bool,
@@ -106,6 +115,7 @@ impl ImmichWorker {
             tx,
             rx,
             in_flight: HashSet::new(),
+            open_seq: 0,
             pending_list: false,
         }
     }
@@ -115,7 +125,9 @@ impl ImmichWorker {
         self.in_flight.contains(asset_id)
     }
 
-    /// Is a list request (albums or one album) outstanding?
+    /// Is an **automatic list fetch** (the album list or the bucket list) outstanding?
+    ///
+    /// ⚠ Not user-initiated opens: those are never queued or guarded, so there is nothing to report.
     pub fn is_listing(&self) -> bool {
         self.pending_list
     }
@@ -130,16 +142,27 @@ impl ImmichWorker {
                 }
                 Some(asset_id.clone())
             }
-            Job::Albums | Job::Album { .. } | Job::Buckets | Job::Bucket { .. } => {
+            // ⚠ The **automatic** list fetches. The rail asks for these on every frame while it has
+            // none, so without a guard that is a thread per frame.
+            Job::Albums | Job::Buckets => {
                 if self.pending_list {
                     return;
                 }
                 self.pending_list = true;
                 None
             }
+            // ⚠⚠ A **user-initiated open is never dropped.** It used to share the guard above, so
+            // clicking a second album while the first was loading silently discarded the click —
+            // reported in use as "it doesn't switch immediately". It bumps the sequence instead, and
+            // `latest_open` lets the caller ignore a superseded reply.
+            Job::Album { .. } | Job::Bucket { .. } => {
+                self.open_seq += 1;
+                None
+            }
             Job::About { .. } => None,
         };
 
+        let seq = matches!(job, Job::Album { .. } | Job::Bucket { .. }).then_some(self.open_seq);
         let fetch = self.fetch.clone();
         let tx = self.tx.clone();
         let on_done = self.on_done.clone();
@@ -148,7 +171,11 @@ impl ImmichWorker {
                 Job::Original { asset_id, dest } => run_download(&fetch, asset_id, dest),
                 _ => fetch(job.clone()),
             };
-            let _ = tx.send(Msg { asset_id, outcome });
+            let _ = tx.send(Msg {
+                asset_id,
+                seq,
+                outcome,
+            });
             on_done();
         });
     }
@@ -160,14 +187,15 @@ impl ImmichWorker {
             if let Some(id) = &msg.asset_id {
                 self.in_flight.remove(id);
             }
-            if matches!(
-                msg.outcome,
-                Outcome::Albums(_)
-                    | Outcome::Album { .. }
-                    | Outcome::Buckets(_)
-                    | Outcome::Bucket { .. }
-            ) {
+            if matches!(msg.outcome, Outcome::Albums(_) | Outcome::Buckets(_)) {
                 self.pending_list = false;
+            }
+            // ⚠⚠ A superseded open is **dropped here**, not acted on: its grid would otherwise land
+            // on top of the album the user actually asked for.
+            if let Some(seq) = msg.seq {
+                if seq != self.open_seq {
+                    continue;
+                }
             }
             out.push(msg.outcome);
         }
@@ -319,6 +347,117 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the worker never produced a result");
+    }
+
+    /// ⚠⚠ **The bug reported in use:** clicking a second album while the first was still loading
+    /// silently discarded the click, because opens shared the list fetch's one-in-flight guard. Both
+    /// must be dispatched.
+    #[test]
+    fn a_second_open_while_the_first_is_loading_is_not_dropped() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let mut w = ImmichWorker::new(
+            Arc::new(move |job: Job| {
+                c.fetch_add(1, Ordering::SeqCst);
+                match job {
+                    Job::Album { id, name } => Outcome::Album {
+                        id,
+                        name,
+                        result: Ok(vec![]),
+                    },
+                    _ => unreachable!(),
+                }
+            }),
+            || {},
+        );
+        w.request(Job::Album {
+            id: "a".into(),
+            name: "A".into(),
+        });
+        w.request(Job::Album {
+            id: "b".into(),
+            name: "B".into(),
+        });
+        let start = std::time::Instant::now();
+        while calls.load(Ordering::SeqCst) < 2
+            && start.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the second open was dropped — the click would do nothing"
+        );
+    }
+
+    /// ⚠⚠ And the **older** reply must not land on top of the newer one. Without this, a slow album A
+    /// finishing after B would replace the grid the user actually asked for.
+    #[test]
+    fn a_superseded_open_is_dropped_rather_than_overwriting_the_newer_one() {
+        let mut w = ImmichWorker::new(
+            Arc::new(|job: Job| match job {
+                Job::Album { id, name } => Outcome::Album {
+                    id,
+                    name,
+                    result: Ok(vec![]),
+                },
+                _ => unreachable!(),
+            }),
+            || {},
+        );
+        w.request(Job::Album {
+            id: "a".into(),
+            name: "A".into(),
+        });
+        w.request(Job::Album {
+            id: "b".into(),
+            name: "B".into(),
+        });
+        let mut names = Vec::new();
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            for o in w.poll() {
+                if let Outcome::Album { name, .. } = o {
+                    names.push(name);
+                }
+            }
+            if !names.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                for o in w.poll() {
+                    if let Outcome::Album { name, .. } = o {
+                        names.push(name);
+                    }
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            names,
+            vec!["B".to_string()],
+            "only the newest open may be acted on"
+        );
+    }
+
+    /// ⚠ The automatic list fetch keeps its guard: the rail asks on every frame while it has none.
+    #[test]
+    fn a_second_album_list_fetch_while_one_is_in_flight_is_still_dropped() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let mut w = ImmichWorker::new(
+            Arc::new(move |_job: Job| {
+                c.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                Outcome::Albums(Ok(vec![]))
+            }),
+            || {},
+        );
+        w.request(Job::Albums);
+        w.request(Job::Albums);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let _ = w.poll();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one fetch for two frames");
     }
 
     #[test]

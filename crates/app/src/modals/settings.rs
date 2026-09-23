@@ -475,6 +475,11 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         .num_columns(2)
                         .spacing([12.0, GAP])
                         .show(ui, |ui| {
+                            // ⚠ Editing either field clears the last answer: a stale "Connected"
+                            // sitting under credentials it was never tested against is worse than no
+                            // message at all.
+                            let before = (d.immich_url.clone(), d.immich_key.clone());
+
                             ui.label("Server");
                             ui.add(
                                 egui::TextEdit::singleline(&mut d.immich_url)
@@ -501,25 +506,50 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             );
                             ui.end_row();
 
-                            ui.label("");
-                            // ⚠⚠ Tests what is **typed**, not what is saved — the whole point of a
-                            // test button is checking a key before committing to it, so the job
-                            // carries its own connection rather than reading `app.settings`.
-                            if ui
-                                .button("Test")
-                                .on_hover_text("Ask the server for its version.")
-                                .clicked()
-                            {
-                                let typed = (!d.immich_url.trim().is_empty()
-                                    && !d.immich_key.trim().is_empty())
-                                .then(|| rustroom_app::immich_source::Connection {
-                                    url: d.immich_url.trim().to_string(),
-                                    key: d.immich_key.trim().to_string(),
-                                });
-                                app.immich.request(rustroom_app::immich_worker::Job::About {
-                                    conn: typed,
-                                });
+                            if before != (d.immich_url.clone(), d.immich_key.clone()) {
+                                app.immich_test = None;
                             }
+
+                            ui.label("");
+                            ui.horizontal(|ui| {
+                                // ⚠⚠ Tests what is **typed**, not what is saved — the whole point of
+                                // a test button is checking a key before committing to it, so the job
+                                // carries its own connection rather than reading `app.settings`.
+                                if ui
+                                    .button("Test")
+                                    .on_hover_text("Ask the server for its version.")
+                                    .clicked()
+                                {
+                                    // ⚠ Cleared first, so the previous answer does not sit there
+                                    // looking like this one while the request is in flight.
+                                    app.immich_test = None;
+                                    let typed = (!d.immich_url.trim().is_empty()
+                                        && !d.immich_key.trim().is_empty())
+                                    .then(|| rustroom_app::immich_source::Connection {
+                                        url: d.immich_url.trim().to_string(),
+                                        key: d.immich_key.trim().to_string(),
+                                    });
+                                    app.immich.request(rustroom_app::immich_worker::Job::About {
+                                        conn: typed,
+                                    });
+                                }
+                                // ⚠⚠ **Beside the button, not in the status line** — the status line
+                                // is behind the modal, so the answer to a button you just pressed was
+                                // invisible. Reported in use.
+                                match &app.immich_test {
+                                    Some(Ok(v)) => {
+                                        ui.colored_label(
+                                            ui.visuals().selection.bg_fill,
+                                            format!("Connected to Immich {v}"),
+                                        );
+                                    }
+                                    Some(Err(e)) => {
+                                        ui.colored_label(ui.visuals().error_fg_color, e.as_str())
+                                            .on_hover_text(e.as_str());
+                                    }
+                                    None => {}
+                                }
+                            });
                             ui.end_row();
                         });
                     ui.add_space(GAP);

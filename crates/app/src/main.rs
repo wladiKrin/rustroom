@@ -491,6 +491,14 @@ struct RustroomApp {
     immich_albums: Option<Result<Vec<immich::AlbumSummary>, String>>,
     /// The month buckets, once fetched. Same three states as `immich_albums`.
     immich_buckets: Option<Result<Vec<immich::Bucket>, String>>,
+    /// What the Settings dialog's Immich **Test** button last reported.
+    ///
+    /// ⚠⚠ Its own field rather than `self.status`: the status line sits behind the modal, so the
+    /// answer to a button you just pressed was invisible — reported in use, 2026-09-23.
+    ///
+    /// ⚠ Cleared whenever the URL or the key is edited, or a stale "Connected" would sit under
+    /// credentials it was never tested against.
+    immich_test: Option<Result<String, String>>,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
@@ -687,6 +695,7 @@ impl RustroomApp {
             ),
             immich_albums: None,
             immich_buckets: None,
+            immich_test: None,
             settings,
             catalog,
             modal: Modal::None,

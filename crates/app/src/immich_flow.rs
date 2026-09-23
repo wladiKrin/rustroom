@@ -115,8 +115,10 @@ impl RustroomApp {
                     }
                     Err(e) => self.status = format!("Could not open “{name}”: {e}"),
                 },
-                Outcome::About(Ok(v)) => self.status = format!("Connected to Immich {v}"),
-                Outcome::About(Err(e)) => self.status = format!("Immich: {e}"),
+                // ⚠ Into the dialog's own field, never the status line: the status line is behind
+                // the modal, so the answer to the Test button was invisible.
+                Outcome::About(Ok(v)) => self.immich_test = Some(Ok(v)),
+                Outcome::About(Err(e)) => self.immich_test = Some(Err(e)),
                 Outcome::Original { dest, result } => match result {
                     // ⚠⚠ The file is now where the `PhotoId` always said it was, so the ordinary
                     // open path applies with no special case — and the view switch mirrors
