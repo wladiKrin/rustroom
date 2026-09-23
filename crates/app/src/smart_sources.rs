@@ -120,6 +120,8 @@ impl RustroomApp {
     /// criterion forces: it reads a copy's own name from the **sidecar**, which SQL cannot see.
     /// Measured at 4.6 ms per 830 sidecars, so ~60 ms at 10,000.
     pub(crate) fn open_smart(&mut self, ctx: &egui::Context, id: i64, name: &str) {
+        // ⚠ Read before `cat` borrows `self`.
+        let immich_root = self.immich_cache_root();
         let Some(cat) = &self.catalog else {
             self.status = "No catalog".into();
             return;
@@ -144,6 +146,19 @@ impl RustroomApp {
         };
 
         let rows = cat.all_photos().unwrap_or_default();
+        // ⚠⚠ An Immich row exists as soon as its album is browsed, downloaded or not. A
+        // catalog-wide view shows the ones that are really here — the user's call, and the same line
+        // he drew for slice 2: a photo downloaded from Immich becomes local and joins everything else.
+        //
+        // ⚠ Through `row_is_browsable`, shared with the other catalog-wide reader, so the two cannot
+        // drift. ⚠ It checks **Immich** rows only: an absent local file stays visible, because the
+        // unplugged-drive rule is a different question.
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|r| {
+                rustroom_app::immich_catalog::row_is_browsable(&r.path, immich_root.as_deref())
+            })
+            .collect();
         let mtimes: std::collections::HashMap<PathBuf, std::time::SystemTime> = rows
             .iter()
             .filter_map(|r| {

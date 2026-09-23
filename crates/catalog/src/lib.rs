@@ -17,6 +17,13 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub path: PathBuf,
+    /// The name to **show** for this photo, which is not necessarily the name on disk.
+    ///
+    /// ⚠⚠ **Not the catalog's key.** The catalog keys a row on `path`'s own file name, because every
+    /// read side derives its key from a `Path`. For a local file the two are the same; an Immich
+    /// asset's cache path is `<uuid>.<ext>` while this carries the camera's name, and storing *this*
+    /// as the key wrote rows that could never be found again — every rating on an Immich photo was
+    /// silently dropped until 2026-09-23.
     pub file_name: String,
     /// When the file was last written, read once at scan time.
     ///
