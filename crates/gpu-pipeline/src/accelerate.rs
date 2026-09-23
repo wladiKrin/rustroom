@@ -896,6 +896,60 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The preview-versus-export guard for the per-channel curves, and it closes a gap I had
+    /// written off as "only checkable by use".** `a_colorimetric_frame_renders_the_same_picture_on_the_gpu`
+    /// above runs on `Edits::default()`, so it cannot see a construction site in `GPU_STAGES` that passed
+    /// only the composite curve — and that site compiles perfectly. With the GPU tail on by default, the
+    /// symptom would be a **preview that disagrees with the export**, which is this project's worst
+    /// failure shape and one it has already paid for three times in a single milestone.
+    ///
+    /// ⚠ Three **different** channel curves, and the fixture is first shown to differ from neutral — an
+    /// accelerated chain and a CPU one agree trivially on a render that does nothing.
+    #[test]
+    fn a_frame_with_channel_curves_renders_the_same_picture_on_the_gpu() {
+        let Some(ctx) = ctx() else { return };
+        let e = Edits {
+            tone_curve_red: edit_model::ToneCurve {
+                points: vec![[0.0, 0.18], [1.0, 1.0]],
+            },
+            tone_curve_green: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.58], [1.0, 1.0]],
+            },
+            tone_curve_blue: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [1.0, 0.82]],
+            },
+            ..Default::default()
+        };
+        let cpu = tail_of(&e).run(scene_ramp());
+
+        // ⚠ The fixture must actually do something, or the comparison below is vacuous.
+        let neutral = tail_of(&Edits::default()).run(scene_ramp());
+        let moved = crate::compare(&cpu, &neutral);
+        assert!(
+            moved.worst_levels > 1.0,
+            "the channel curves changed nothing, so this would guard nothing: {moved:?}"
+        );
+
+        let gpu = accel(
+            tail_of(&e),
+            &e,
+            SCALE,
+            ProfileRendering::default(),
+            RenderSpec::default(),
+            &ctx,
+        )
+        .run(scene_ramp());
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.01,
+            "the GPU tail and the CPU disagree on the channel curves — a preview that would not \
+             match its export: worst {} levels over {} of {} samples",
+            d.worst_levels,
+            d.differing,
+            d.total
+        );
+    }
+
     /// ⚠⚠ **The guard on the projection, and the only thing that can see a mis-mapped field.**
     /// Every projected field is non-default here, so a projection that forgot one — or carried the
     /// *global* value instead of the mask's — renders a different photograph. A fixture setting
