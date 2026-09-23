@@ -7,16 +7,92 @@ const LUT_SIZE: usize = 1024;
 /// Point tone curve compiled to a LUT. Points are (x, y) in [0, 1].
 pub struct ToneCurveStage {
     lut: Vec<f32>,
+    /// Per-channel tables, composed **after** [`Self::lut`].
+    ///
+    /// ⚠⚠ `None` when every channel curve is empty, which keeps [`Self::apply`] on the cheap
+    /// `map_samples` path — the common case by far, and byte-identical to before this existed.
+    channels: Option<[Vec<f32>; 3]>,
+}
+
+/// One interpolation, shared by the composite and the channels.
+///
+/// ⚠⚠ **Factored rather than written twice**, so the composite and a channel cannot round
+/// differently — and so the GPU shader has one function to mirror rather than two. The clamp is on
+/// the **input**: a scene-referred highlight above 1.0 is pulled to the table's top entry, which is
+/// this stage's long-standing behaviour and the opposite of the rule `ProfileHueSatMap`'s `v` follows.
+fn sample_table(lut: &[f32], v: f32) -> f32 {
+    let last = lut.len() - 1;
+    let v = v.clamp(0.0, 1.0);
+    let pos = v * last as f32;
+    let i = pos.floor() as usize;
+    if i >= last {
+        return lut[last];
+    }
+    let frac = pos - i as f32;
+    lut[i] + frac * (lut[i + 1] - lut[i])
+}
+
+/// A table for `points`, or the identity when they are empty.
+fn build_lut(points: &[[f32; 2]]) -> Vec<f32> {
+    let spline = Spline::new(points);
+    (0..LUT_SIZE)
+        .map(|i| spline.eval(i as f32 / (LUT_SIZE - 1) as f32))
+        .collect()
 }
 
 impl ToneCurveStage {
     /// Build from control points. Fewer than 2 points => identity.
     pub fn new(points: &[[f32; 2]]) -> Self {
-        let spline = Spline::new(points);
-        let lut = (0..LUT_SIZE)
-            .map(|i| spline.eval(i as f32 / (LUT_SIZE - 1) as f32))
-            .collect();
-        Self { lut }
+        Self {
+            lut: build_lut(points),
+            channels: None,
+        }
+    }
+
+    /// Add per-channel curves, composed **after** the composite.
+    ///
+    /// ⚠ Empty points for a channel mean identity — the rule the composite already follows — and all
+    /// three empty leaves the stage exactly as [`Self::new`] built it, on the cheap path.
+    ///
+    /// ⚠⚠ **Composite first, then the channel.** A choice rather than a verified standard: the
+    /// composite is the overall *contrast* shaper and the channels are the *tint*, so "shape the tone,
+    /// then tint it" keeps a channel's effect predictable. The other order re-maps a tint through the
+    /// composite's black and white points, pulling a lifted blue shadow back. ⚠ The GPU shader mirrors
+    /// this order; changing it means changing both.
+    pub fn with_channels(
+        mut self,
+        red: &[[f32; 2]],
+        green: &[[f32; 2]],
+        blue: &[[f32; 2]],
+    ) -> Self {
+        if red.is_empty() && green.is_empty() && blue.is_empty() {
+            return self;
+        }
+        self.channels = Some([build_lut(red), build_lut(green), build_lut(blue)]);
+        self
+    }
+
+    /// The four tables, composite first — what `gpu-pipeline` uploads.
+    ///
+    /// ⚠⚠ Taken from here rather than rebuilt there, the rule [`Self::lut`] already states: two
+    /// constructions of one curve is how a preview stops being evidence about the render. ⚠ An
+    /// identity table is returned for a channel with no curve, because the shader is unconditional.
+    pub fn luts(&self) -> [Vec<f32>; 4] {
+        let identity: Vec<f32> = build_lut(&[]);
+        match &self.channels {
+            None => [
+                self.lut.clone(),
+                identity.clone(),
+                identity.clone(),
+                identity,
+            ],
+            Some(ch) => [
+                self.lut.clone(),
+                ch[0].clone(),
+                ch[1].clone(),
+                ch[2].clone(),
+            ],
+        }
     }
 
     /// The curve's output for one input sample, straight out of the LUT.
@@ -37,14 +113,7 @@ impl ToneCurveStage {
     pub const LUT_LEN: usize = LUT_SIZE;
 
     pub fn sample(&self, v: f32) -> f32 {
-        let v = v.clamp(0.0, 1.0);
-        let pos = v * (LUT_SIZE - 1) as f32;
-        let i = pos.floor() as usize;
-        if i >= LUT_SIZE - 1 {
-            return self.lut[LUT_SIZE - 1];
-        }
-        let frac = pos - i as f32;
-        self.lut[i] + frac * (self.lut[i + 1] - self.lut[i])
+        sample_table(&self.lut, v)
     }
 }
 
@@ -54,13 +123,108 @@ impl PipelineStage for ToneCurveStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        image.map_samples(|s| self.sample(s))
+        match &self.channels {
+            // ⚠ The common path, untouched: one table over every sample.
+            None => image.map_samples(|s| self.sample(s)),
+            Some(ch) => image.map_pixels(|p| {
+                std::array::from_fn(|c| sample_table(&ch[c], self.sample(p[c])))
+            }),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 1x1 image with all three samples at `v`.
+    fn flat(v: f32) -> ImageBuf {
+        let mut b = ImageBuf::new(1, 1);
+        for s in b.data_mut().iter_mut() {
+            *s = v;
+        }
+        b
+    }
+
+    /// ⚠⚠ **A DIFFERENT curve per channel.** Three copies of one curve would pass against an
+    /// implementation that ignored the channel index entirely — the fixture trap this project paid for
+    /// on 2026-09-23.
+    #[test]
+    fn a_per_channel_curve_moves_only_its_own_channel() {
+        let lift = [[0.0, 0.2], [1.0, 1.0]];
+        let drop = [[0.0, 0.0], [1.0, 0.8]];
+        let out = ToneCurveStage::new(&[])
+            .with_channels(&lift, &[], &drop)
+            .apply(flat(0.5));
+        let px = [out.data()[0], out.data()[1], out.data()[2]];
+        assert!(px[0] > 0.52, "red was lifted: {px:?}");
+        assert!((px[1] - 0.5).abs() < 2e-3, "green untouched: {px:?}");
+        assert!(px[2] < 0.48, "blue was dropped: {px:?}");
+    }
+
+    /// ⚠ The order the spec chose, on a fixture where the two orders differ measurably.
+    #[test]
+    fn the_composite_runs_before_the_channel_curve() {
+        let composite = [[0.0, 0.0], [0.5, 0.25], [1.0, 1.0]];
+        let red = [[0.0, 0.5], [1.0, 1.0]];
+        let got = ToneCurveStage::new(&composite)
+            .with_channels(&red, &[], &[])
+            .apply(flat(0.5))
+            .data()[0];
+
+        let composite_then_red =
+            ToneCurveStage::new(&red).sample(ToneCurveStage::new(&composite).sample(0.5));
+        let red_then_composite =
+            ToneCurveStage::new(&composite).sample(ToneCurveStage::new(&red).sample(0.5));
+        assert!(
+            (composite_then_red - red_then_composite).abs() > 0.05,
+            "the fixture must distinguish the two orders, else this proves nothing"
+        );
+        assert!(
+            (got - composite_then_red).abs() < 2e-3,
+            "expected composite-then-channel: got {got}, wanted {composite_then_red}"
+        );
+    }
+
+    /// ⚠ With no channel curve the cheap path must be kept, and byte-identical to today.
+    #[test]
+    fn with_no_channel_curves_the_result_is_unchanged() {
+        let c = [[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]];
+        let plain = ToneCurveStage::new(&c).apply(flat(0.4));
+        let built = ToneCurveStage::new(&c)
+            .with_channels(&[], &[], &[])
+            .apply(flat(0.4));
+        assert_eq!(plain.data(), built.data());
+    }
+
+    /// ⚠⚠ The input clamp is **inherited, not re-decided**: a scene-referred highlight above 1.0 is
+    /// still pulled to the table's top entry, because that is what the composite has always done and
+    /// what the GPU shader mirrors.
+    #[test]
+    fn a_channel_curve_inherits_the_input_clamp() {
+        let red = [[0.0, 0.0], [1.0, 0.5]];
+        let out = ToneCurveStage::new(&[])
+            .with_channels(&red, &[], &[])
+            .apply(flat(4.0));
+        assert!(
+            (out.data()[0] - 0.5).abs() < 2e-3,
+            "clamped to the top entry, got {}",
+            out.data()[0]
+        );
+    }
+
+    /// ⚠ `luts` hands out four tables even when no channel curve is set, because the shader is
+    /// unconditional — and the three spares must be the identity, not copies of the composite.
+    #[test]
+    fn luts_pads_with_identity_when_no_channel_curve_is_set() {
+        let luts = ToneCurveStage::new(&[[0.0, 0.0], [0.5, 0.9], [1.0, 1.0]]).luts();
+        assert_eq!(luts.len(), 4);
+        assert!(luts[0][LUT_SIZE / 2] > 0.8, "the composite is curved");
+        for c in 1..4 {
+            let mid = luts[c][LUT_SIZE / 2];
+            assert!((mid - 0.5).abs() < 2e-3, "channel {c} should be identity: {mid}");
+        }
+    }
 
     #[test]
     fn identity_curve_passes_through() {
