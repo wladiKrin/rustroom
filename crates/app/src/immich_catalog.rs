@@ -36,6 +36,24 @@ pub fn record_assets(
     cat.sync_folder(root, scan)
 }
 
+/// What the Folders rail should call this folder.
+///
+/// ⚠ The Immich cache root's basename is the host slug — `https___immich_example` — which
+/// says nothing to anybody. **Renamed rather than hidden** (user's call): clicking it opens the cache
+/// directory as an ordinary folder, which shows exactly the photos that have been downloaded, so the
+/// name is honest rather than a euphemism. The full path is still the row's hover.
+///
+/// ⚠ Compared against the **configured** root, not against the shape of the name: a folder that merely
+/// looks like a host slug keeps its own name.
+pub fn folder_display_name(path: &Path, immich_root: Option<&Path>) -> String {
+    if immich_root == Some(path) {
+        return "immich (downloaded)".to_string();
+    }
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
 /// Whether a catalog row should appear in a **catalog-wide** view — All Photos, or a smart collection.
 ///
 /// ⚠⚠ **Immich rows only, and that restriction is the point.** A local folder on an unplugged drive
@@ -210,6 +228,35 @@ mod tests {
             cat.marks_in(&root).unwrap().len(),
             1,
             "and the mark survived"
+        );
+    }
+
+    // ── folder_display_name ──
+
+    #[test]
+    fn the_immich_cache_root_is_shown_as_immich_downloaded() {
+        let root = Path::new("/c/rustroom/immich/https___host_example");
+        assert_eq!(folder_display_name(root, Some(root)), "immich (downloaded)");
+    }
+
+    #[test]
+    fn any_other_folder_keeps_its_basename() {
+        let root = Path::new("/c/rustroom/immich/https___host_example");
+        assert_eq!(
+            folder_display_name(Path::new("/Users/me/Pictures/Iceland"), Some(root)),
+            "Iceland"
+        );
+    }
+
+    /// ⚠ No server renames nothing, and a folder that merely *looks* like a host slug is not the
+    /// configured root and keeps its own name.
+    #[test]
+    fn nothing_is_renamed_without_the_configured_root() {
+        let lookalike = Path::new("/somewhere/https___host_example");
+        assert_eq!(folder_display_name(lookalike, None), "https___host_example");
+        assert_eq!(
+            folder_display_name(lookalike, Some(Path::new("/c/rustroom/immich/https___other"))),
+            "https___host_example"
         );
     }
 

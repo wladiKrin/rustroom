@@ -59,6 +59,24 @@ pub fn cache_path(root: &Path, asset: &immich::Asset) -> PathBuf {
     root.join(name)
 }
 
+/// The file names present in this server's cache directory.
+///
+/// ⚠⚠ **One `read_dir`, answering for every asset at once.** The alternative — [`is_cached`] per
+/// thumbnail — is a stat per cell per frame in a grid that draws hundreds of cells sixty times a
+/// second, which is the `apply_view_demosaic` mistake in a new costume.
+///
+/// ⚠ A directory that does not exist yields an **empty** set rather than an error: nothing downloaded
+/// yet is an ordinary state on a fresh install, not a failure.
+pub fn present_names(root: &Path) -> std::collections::HashSet<std::ffi::OsString> {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return Default::default();
+    };
+    rd.flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name())
+        .collect()
+}
+
 /// Has this asset's original been downloaded yet?
 pub fn is_cached(path: &Path) -> bool {
     path.is_file()
@@ -386,6 +404,35 @@ pub fn remote_thumbnail(
 
 #[cfg(test)]
 mod tests {
+
+    /// ⚠⚠ One `read_dir`, never a stat per asset: the grid draws hundreds of cells sixty times a
+    /// second.
+    #[test]
+    fn present_names_lists_what_is_in_the_cache_directory() {
+        let d = std::env::temp_dir().join(format!(
+            "rr_present_{}_{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.jpg"), b"x").unwrap();
+        std::fs::write(d.join("b.jpeg"), b"x").unwrap();
+        std::fs::create_dir_all(d.join("a_directory")).unwrap();
+
+        let got = present_names(&d);
+        assert_eq!(got.len(), 2, "files only, not the directory: {got:?}");
+        assert!(got.contains(std::ffi::OsStr::new("a.jpg")));
+        assert!(!got.contains(std::ffi::OsStr::new("c.jpg")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// ⚠ A cache directory that does not exist yet is **empty**, not an error.
+    #[test]
+    fn present_names_on_a_missing_directory_is_empty() {
+        assert!(present_names(Path::new("/nonexistent-rr-cache-dir")).is_empty());
+    }
+
     use super::*;
 
     fn asset(id: &str, name: &str, kind: immich::AssetType) -> immich::Asset {
