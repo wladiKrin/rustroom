@@ -79,7 +79,9 @@ pub fn cell(
     badge: Option<&str>,
     marks: catalog::db::Marks,
 ) -> egui::Response {
-    cell_with(ui, box_size, thumb, badge, marks, true)
+    // ⚠ `false`: the filmstrip carries no downloaded indicator. Turning it on there later is one
+    // argument, but it is a Develop-side strip where the photo is open and therefore downloaded.
+    cell_with(ui, box_size, thumb, badge, marks, true, false)
 }
 
 /// The thumbnail's corner radius in points.
@@ -95,6 +97,7 @@ pub fn cell_with(
     badge: Option<&str>,
     marks: catalog::db::Marks,
     overlay_marks: bool,
+    downloaded: bool,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
@@ -119,6 +122,7 @@ pub fn cell_with(
             );
         }
     }
+    let mut badge_end: Option<f32> = None;
     if let Some(text) = badge {
         // ⚠ Sized to its text, not fixed: a badge used to hold only a copy number, and a label
         // like "Client crop" would have overflowed a 17 pt box. Capped at half the cell so a long
@@ -149,6 +153,10 @@ pub fn cell_with(
             galley,
             ui.visuals().extreme_bg_color,
         );
+        badge_end = Some(badge_rect.right());
+    }
+    if downloaded {
+        paint_downloaded(&ui.painter_at(rect), rect, badge_end);
     }
     // ⚠ Painted into the **allocated** rect rather than allocating more: the cell's geometry must
     // not depend on whether a photo happens to be marked, or marked photos would resize their
@@ -158,6 +166,42 @@ pub fn cell_with(
     }
 
     resp
+}
+
+/// A circled downward arrow, marking a photo whose original is on disk.
+///
+/// ⚠⚠ **Hand-painted, and that is forced rather than lazy.** `icons.rs` requires every codepoint to be
+/// verified against the bundled Phosphor 2.1.2 TTF, because *"four separate features in this project
+/// have picked a glyph that turned out to be absent"*. That font's `post` table is **version 3.0 — no
+/// glyph names** — so a codepoint can be verified as *present* but **not** as being the right picture,
+/// and shipping the wrong icon looks fine while being wrong. A circle and three strokes need no
+/// verification and scale cleanly. The histogram's clipping marks are painted for the same reason.
+///
+/// ⚠ `after` is the badge's right edge when a cell also carries a copy or label badge: the indicator
+/// then sits just past it, so neither moves the other's established position and they never overlap.
+/// A virtual copy of a downloaded Immich photo is exactly that case.
+///
+/// ⚠ A translucent black disc with white ink rather than an accent colour, so it stays legible over a
+/// blown sky and over a dark frame alike.
+fn paint_downloaded(p: &egui::Painter, rect: egui::Rect, after: Option<f32>) {
+    // ⚠ Proportional to the cell with a floor and a ceiling, rather than a fixed radius: the grid's
+    // cell size is a slider, and a mark that does not grow with it reads as a speck at large sizes.
+    // ⚠ Enlarged on the same 2026-09-23 call as the marks row.
+    let r = (rect.height() * 0.075).clamp(8.0, 16.0);
+    const PAD: f32 = 3.0;
+    let left = match after {
+        Some(x) => x + PAD,
+        None => rect.left() + PAD,
+    };
+    let c = egui::pos2(left + r, rect.top() + PAD + r);
+    p.circle_filled(c, r, egui::Color32::from_black_alpha(150));
+    // ⚠ Every offset is a fraction of `r`, so the arrow keeps its proportions at any radius rather
+    // than turning into a dot inside a big disc.
+    let stroke = egui::Stroke::new((r * 0.23).max(1.4), egui::Color32::WHITE);
+    let tip = c + egui::vec2(0.0, r * 0.45);
+    p.line_segment([c + egui::vec2(0.0, -r * 0.5), tip], stroke);
+    p.line_segment([c + egui::vec2(-r * 0.45, 0.0), tip], stroke);
+    p.line_segment([c + egui::vec2(r * 0.45, 0.0), tip], stroke);
 }
 
 /// The marks row's height for a glyph of `size` points.
@@ -173,7 +217,10 @@ pub fn marks_row_height(size: f32) -> f32 {
 /// read as part of the photograph until you look twice, and a rating you have to look twice
 /// for is one you miss while culling.
 pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size: f32) {
-    let size = size.clamp(7.0, 13.0);
+    // ⚠ 10–20, up from 7–13 (user's call, 2026-09-23): the stars, the reject cross and the colour
+    // chip were legible but small, and they are what the grid is *read* for while culling. The floor
+    // rises with the ceiling so a small cell does not shrink them back to unreadable.
+    let size = size.clamp(10.0, 20.0);
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(width, marks_row_height(size)),
         egui::Sense::hover(),
@@ -207,12 +254,12 @@ pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size:
         );
         right -= size + 5.0;
     }
-    if let Some((glyph, colour)) = flag_glyph(marks.flag) {
+    if let Some((glyph, colour, scale)) = flag_glyph(marks.flag) {
         p.text(
             egui::pos2(right, y),
             egui::Align2::RIGHT_CENTER,
             glyph,
-            egui::FontId::proportional(size),
+            egui::FontId::proportional(size * scale),
             colour,
         );
     }
@@ -224,10 +271,17 @@ pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size:
 /// bundled font and would have shipped as tofu boxes — caught by `every_mark_glyph_is_renderable`,
 /// the same finding the rail's four glyphs produced. ⚠ The flag is also the better symbol:
 /// Lightroom's "pick" *is* a flag.
-fn flag_glyph(flag: catalog::db::Flag) -> Option<(&'static str, egui::Color32)> {
+/// The flag's glyph, its colour, and **how much to scale it** for the size the row asked for.
+///
+/// ⚠⚠ The scale compensates for the glyph's own proportions, not for a preference about flags. `×` is
+/// U+00D7, the multiplication sign, which occupies far less of its em box than `★` or `⚑` — so at an
+/// identical font size it reads visibly smaller, which is what "make the reject cross even larger"
+/// was about (user, 2026-09-23). ⚠ Scaling the glyph rather than swapping in a heavier one such as
+/// `✕`: a different codepoint risks a tofu box, and `×` is known to render in the bundled fonts.
+fn flag_glyph(flag: catalog::db::Flag) -> Option<(&'static str, egui::Color32, f32)> {
     match flag {
-        catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120))),
-        catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110))),
+        catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120), 1.0)),
+        catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110), 1.7)),
         catalog::db::Flag::None => None,
     }
 }
@@ -280,13 +334,14 @@ pub(crate) fn paint_marks(
             );
             x += size * 0.8;
         }
-        let flag_glyph = flag_glyph(marks.flag);
-        if let Some((glyph, colour)) = flag_glyph {
+        // ⚠ The same per-glyph scale as `marks_row`, so the filmstrip's overlay and the grid's row
+        // cannot disagree about how big a reject cross is.
+        if let Some((glyph, colour, scale)) = flag_glyph(marks.flag) {
             p.text(
                 egui::pos2(rect.right() - pad, y),
                 egui::Align2::RIGHT_TOP,
                 glyph,
-                egui::FontId::proportional(size),
+                egui::FontId::proportional(size * scale),
                 colour,
             );
         }
@@ -423,7 +478,7 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell_with(ui, box_size, tex.as_ref(), None, marks, false);
+                        cell_with(ui, box_size, tex.as_ref(), None, marks, false, false);
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         marks_row(ui, box_size.x, marks, 9.0);
                     });

@@ -97,6 +97,13 @@ const MARK_NONE: &str = "☐ ";
 /// ⚠ **The catalog queries live in here**, which egui runs only while the menu is open — reading
 /// them beside the grid would run three queries at 60 Hz, the `apply_view_demosaic` mistake in
 /// another costume.
+/// How much larger the grid's marks are drawn than its filename caption.
+///
+/// ⚠ 1.6 (user's call, 2026-09-23): the stars, the reject cross and the colour chip were legible but
+/// small. They are what a culling pass actually reads, so they are not tied to the caption's size.
+/// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
+const MARK_SCALE: f32 = 1.6;
+
 pub fn cell_menu(
     ui: &mut egui::Ui,
     catalog: Option<&catalog::db::Catalog>,
@@ -289,6 +296,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // thumbnail is what makes a size control look broken at the extremes.
     let cell = app.settings.clamped_cell();
     egui::CentralPanel::default().show(ui, |ui| {
+        // ⚠ Read before `lib` takes a `&mut` borrow of `app`, so the grid can ask which assets are on
+        // disk without cloning the set into the draw closure.
+        let immich_present = &app.immich_present;
         let Some(lib) = &mut app.library else {
             ui.centered_and_justified(|ui| {
                 crate::theme::empty_state(ui, "Open a folder to browse (Open folder… button).");
@@ -447,6 +457,31 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }) {
             area = area.vertical_scroll_offset(offset);
         }
+        // ⚠ Computed once for the whole grid, not per cell: `source` does not change mid-draw, and
+        // `present` is the pre-read set rather than a stat. See `immich_catalog::shows_download_badge`.
+        // ⚠⚠ **One bool per entry, decided before the closure — not a set cloned into it.** `lib` is a
+        // `&mut` borrow of `app`, so the closure cannot also read `app.immich_present`; cloning the set
+        // would work and would allocate a thousand short strings **every frame**, which is the
+        // per-frame-work mistake this file has paid for twice. A `Vec<bool>` is one pass and one
+        // kilobyte, and `shows_download_badge` stays the only place that decides.
+        let immich_grid = matches!(
+            lib.source,
+            crate::LibrarySource::ImmichAlbum { .. } | crate::LibrarySource::ImmichBucket { .. }
+        );
+        let downloaded: Vec<bool> = if immich_grid {
+            lib.entries
+                .iter()
+                .map(|e| {
+                    rustroom_app::immich_catalog::shows_download_badge(
+                        true,
+                        &e.id.path,
+                        immich_present,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let drawn = area.show_rows(ui, cell, rows, |ui, row_range| {
             for row in row_range.clone() {
                 ui.horizontal(|ui| {
@@ -494,6 +529,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             lib.entries[i].badge().as_deref(),
                                             marks,
                                             false,
+                                            downloaded.get(i).copied().unwrap_or(false),
                                         );
                                         let e = &lib.entries[i];
                                         // ⚠ The selected cell's name is drawn in the strong
@@ -563,7 +599,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             rename = Some((e.id.clone(), r));
                                         }
                                         ui.visuals_mut().override_text_color = None;
-                                        thumb::marks_row(ui, box_size.x, marks, name_size);
+                                        // ⚠ The marks get their **own** size, not the filename's:
+                                        // they are what the grid is read for while culling, and the
+                                        // caption is not. Scales with the cell exactly as
+                                        // `name_size` does, then `marks_row` clamps it.
+                                        thumb::marks_row(
+                                            ui,
+                                            box_size.x,
+                                            marks,
+                                            name_size * MARK_SCALE,
+                                        );
                                     });
                                 })
                                 .response
