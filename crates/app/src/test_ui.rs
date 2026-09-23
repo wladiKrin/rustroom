@@ -114,6 +114,34 @@ pub fn numeric_values(ctx: &egui::Context, body: impl FnMut(&mut egui::Ui)) -> V
         .collect()
 }
 
+/// The label of every widget that also reports a number — in practice every `Slider`.
+///
+/// ⚠⚠ **A role filter, not a list of expected names**, and that is the whole point: it answers "what
+/// does this panel call its sliders" for whatever sliders exist, so one added tomorrow is included
+/// without anybody remembering to add it. The enumerating guards this project keeps being bitten by
+/// are the alternative.
+///
+/// ⚠ A `DragValue` has a numeric value and **no** label, so it is absent here — see
+/// [`numeric_values`].
+pub fn slider_labels(ctx: &egui::Context, body: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen()),
+            ..Default::default()
+        },
+        body,
+    );
+    let Some(update) = out.platform_output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.numeric_value().is_some())
+        .filter_map(|(_, n)| n.label().map(str::to_owned))
+        .collect()
+}
+
 /// Where the widget labelled `label` sits, after laying `body` out once.
 pub fn find(
     ctx: &egui::Context,

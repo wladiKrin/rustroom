@@ -84,7 +84,8 @@ pub fn show(
                     color_wheel::show(ui, &mut a.color_grading, *grade, diameter, ed);
                     let w = grade.wheel_mut(&mut a.color_grading);
                     ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
-                    ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Saturation");
+                    // ⚠ `Strength` here too — the same instrument, see `adjustments`.
+                    ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength");
                     ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
                 }
                 ui.separator();

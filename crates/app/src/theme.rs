@@ -300,6 +300,20 @@ pub fn section_font(style: &egui::Style) -> egui::FontId {
 /// ⚠ Not for a value ("No presets yet.") and not for a control's own text; those stay
 /// `label`s. Plain labels produce no AccessKit node, so nothing in the tests reaches these.
 pub fn sub_label(ui: &mut egui::Ui, text: &str) {
+    let _ = sub_label_response(ui, text);
+}
+
+/// [`sub_label`] with a hover explaining what the block is.
+///
+/// ⚠ The plain-language name is what a beginner can act on; the jargon it replaces — `HSL`,
+/// `color grading` — is what an experienced user searches for, so it goes here rather than being lost.
+/// The idiom the Settings dialog already uses for its descriptions.
+pub fn sub_label_hover(ui: &mut egui::Ui, text: &str, hover: &str) {
+    sub_label_response(ui, text).on_hover_text(hover);
+}
+
+/// The one body both go through, so the two cannot drift apart in spacing, case or colour.
+fn sub_label_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add_space(4.0);
     let colour = ui.visuals().weak_text_color();
     let font = section_font(ui.style());
@@ -310,7 +324,7 @@ pub fn sub_label(ui: &mut egui::Ui, text: &str) {
                 .color(colour),
         )
         .selectable(false),
-    );
+    )
 }
 
 /// A sub-label with `trailing` content right-aligned on the same row — a view toggle or a
