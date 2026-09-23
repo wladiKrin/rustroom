@@ -106,6 +106,17 @@ mod tests {
             tone_curve: edit_model::ToneCurve {
                 points: vec![[0.0, 0.0], [0.4, 0.5], [1.0, 1.0]],
             },
+            // ⚠⚠ **Three DIFFERENT curves**, so a paste that dropped the channel index would fail
+            // here rather than pass — the fixture trap paid for on 2026-09-23.
+            tone_curve_red: edit_model::ToneCurve {
+                points: vec![[0.0, 0.15], [1.0, 1.0]],
+            },
+            tone_curve_green: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.55], [1.0, 1.0]],
+            },
+            tone_curve_blue: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [1.0, 0.85]],
+            },
             saturation: 12.0,
             vibrance: 8.0,
             hsl,

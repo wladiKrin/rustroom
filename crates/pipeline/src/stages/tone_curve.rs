@@ -126,9 +126,8 @@ impl PipelineStage for ToneCurveStage {
         match &self.channels {
             // ⚠ The common path, untouched: one table over every sample.
             None => image.map_samples(|s| self.sample(s)),
-            Some(ch) => image.map_pixels(|p| {
-                std::array::from_fn(|c| sample_table(&ch[c], self.sample(p[c])))
-            }),
+            Some(ch) => image
+                .map_pixels(|p| std::array::from_fn(|c| sample_table(&ch[c], self.sample(p[c])))),
         }
     }
 }
@@ -222,7 +221,10 @@ mod tests {
         assert!(luts[0][LUT_SIZE / 2] > 0.8, "the composite is curved");
         for c in 1..4 {
             let mid = luts[c][LUT_SIZE / 2];
-            assert!((mid - 0.5).abs() < 2e-3, "channel {c} should be identity: {mid}");
+            assert!(
+                (mid - 0.5).abs() < 2e-3,
+                "channel {c} should be identity: {mid}"
+            );
         }
     }
 

@@ -1606,6 +1606,26 @@ pub struct Edits {
     /// Blacks endpoint, ~[-100, 100]. Positive lifts the bottom end.
     pub blacks: f32,
     pub tone_curve: ToneCurve,
+    /// The red channel's own curve, composed **after** [`Self::tone_curve`].
+    ///
+    /// ⚠⚠ **The classic grading tool, not a fourth colour control.** Per-channel curves are in
+    /// Photoshop, Lightroom, Camera Raw, Capture One, darktable, RawTherapee, Affinity and GIMP; the
+    /// shadow/midtone/highlight wheels are the friendlier interface built *over* them. What they add
+    /// that [`ColorGrading`] cannot is an **exact crossover point and shape** — lifting only the
+    /// deepest shadows in one primary, with a precise knee.
+    ///
+    /// ⚠ Empty points mean identity, the rule [`Self::tone_curve`] already follows, and it is what
+    /// keeps `ToneCurveStage` out of the pipeline. ⚠⚠ The pipeline's guard must therefore test **all
+    /// four** curves; naming only `tone_curve` would silently render a channel-only edit unchanged.
+    ///
+    /// ⚠ In the **`Tone`** group with the composite, so Sync and "Reset adjustments" treat the curve as
+    /// one instrument. ⚠ No `version` bump: the container's `#[serde(default)]` loads an older sidecar
+    /// with three identity curves, and a test rather than a number is the guard.
+    pub tone_curve_red: ToneCurve,
+    /// The green channel's own curve. See [`Self::tone_curve_red`].
+    pub tone_curve_green: ToneCurve,
+    /// The blue channel's own curve. See [`Self::tone_curve_red`].
+    pub tone_curve_blue: ToneCurve,
     /// Saturation, ~[-100, 100]. -100 = monochrome, 0 = no change, +100 = 2x chroma.
     pub saturation: f32,
     /// Vibrance, ~[-100, 100]. Like saturation, but weighted toward already-muted colors.
@@ -1703,6 +1723,9 @@ impl Edits {
             whites,
             blacks,
             tone_curve,
+            tone_curve_red,
+            tone_curve_green,
+            tone_curve_blue,
             saturation,
             vibrance,
             hsl,
@@ -1732,6 +1755,11 @@ impl Edits {
             self.whites = *whites;
             self.blacks = *blacks;
             self.tone_curve = tone_curve.clone();
+            // ⚠ With the composite, because the curve is one instrument as far as Sync and
+            // "Reset adjustments" are concerned — the panel presents it as one widget.
+            self.tone_curve_red = tone_curve_red.clone();
+            self.tone_curve_green = tone_curve_green.clone();
+            self.tone_curve_blue = tone_curve_blue.clone();
             self.local_contrast = *local_contrast;
             self.dehaze = *dehaze;
         }
@@ -1855,6 +1883,50 @@ pub enum EditLoadError {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⚠⚠ The three curves must travel with **`Tone`** and with nothing else — the composite's group,
+    /// because the panel presents the curve as one instrument.
+    #[test]
+    fn the_channel_curves_transfer_with_tone_only() {
+        let src = all_nonneutral();
+        assert!(
+            !src.tone_curve_red.points.is_empty()
+                && src.tone_curve_red != src.tone_curve_green
+                && src.tone_curve_green != src.tone_curve_blue,
+            "the fixture must set three DIFFERENT curves, or this proves nothing"
+        );
+
+        let mut got = Edits::default();
+        got.merge_from(&src, EditGroups::only(1)); // 1 == "Tone"
+        assert_eq!(got.tone_curve_red, src.tone_curve_red);
+        assert_eq!(got.tone_curve_green, src.tone_curve_green);
+        assert_eq!(got.tone_curve_blue, src.tone_curve_blue);
+
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
+            if g == 1 {
+                continue;
+            }
+            let mut other = Edits::default();
+            other.merge_from(&src, EditGroups::only(g));
+            assert!(
+                other.tone_curve_red.points.is_empty(),
+                "group {g} ({name}) carried a channel curve it should not"
+            );
+        }
+    }
+
+    /// ⚠⚠ A sidecar written before these fields existed must load as **identity** — the container's
+    /// `#[serde(default)]` doing its job, with no `version` bump involved. A test rather than a number
+    /// is the guard, which is why `version` is still 7.
+    #[test]
+    fn a_sidecar_without_the_channel_curves_loads_as_identity() {
+        let e: Edits = serde_json::from_str(r#"{"version":7,"exposure":0.5}"#).expect("must parse");
+        assert_eq!(e.exposure, 0.5);
+        assert!(e.tone_curve_red.points.is_empty());
+        assert!(e.tone_curve_green.points.is_empty());
+        assert!(e.tone_curve_blue.points.is_empty());
+        assert!(e.tone_curve.points.is_empty());
+    }
 
     /// ⚠⚠ **Reported in use twice, 2026-09-23.** The snapshot strip counted *history steps* back to the
     /// reference state, so setting exposure, resetting it and setting it again read as **3 changes**
@@ -2935,6 +3007,18 @@ mod tests {
             blacks: -5.0,
             tone_curve: ToneCurve {
                 points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            // ⚠⚠ **Three DIFFERENT curves.** Three copies of one would let every "this group
+            // transfers" test in this file pass against code that ignored the channel index — the
+            // fixture trap paid for on 2026-09-23.
+            tone_curve_red: ToneCurve {
+                points: vec![[0.0, 0.15], [1.0, 1.0]],
+            },
+            tone_curve_green: ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.55], [1.0, 1.0]],
+            },
+            tone_curve_blue: ToneCurve {
+                points: vec![[0.0, 0.0], [1.0, 0.85]],
             },
             saturation: 10.0,
             vibrance: 10.0,
