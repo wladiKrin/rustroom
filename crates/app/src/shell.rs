@@ -7,7 +7,7 @@ use crate::segmented::{self, PillItem, PillStyle};
 use crate::theme;
 use crate::{
     commands, develop, library, menu_bar, modals, multi, name_edit, AppView, LibraryMode,
-    RustroomApp,
+    LibrarySource, RustroomApp,
 };
 use eframe::egui;
 use rustroom_app::format_filter;
@@ -620,6 +620,25 @@ fn export_button(ui: &mut egui::Ui) -> egui::Response {
     .on_hover_text("Export the selection (⌘E)")
 }
 
+/// What Reindex will do, in the words of whatever is open.
+///
+/// ⚠ The label stays "Reindex" for every source — one verb, one place. A second name for the same
+/// button would be worse than a hover that adapts, and the Immich branch does the same two things:
+/// re-read the list, then close gaps in the copy numbering.
+fn reindex_hover(app: &RustroomApp) -> &'static str {
+    match app.library.as_ref().map(|l| &l.source) {
+        Some(LibrarySource::ImmichAlbum { .. }) => {
+            "Fetch this album again from Immich to pick up photos added or removed there, and close \
+             any gaps in the copy numbering."
+        }
+        Some(LibrarySource::ImmichBucket { .. }) => {
+            "Fetch this month again from Immich to pick up photos added or removed there, and close \
+             any gaps in the copy numbering."
+        }
+        _ => "Re-read the folder, sort it alphabetically, and close any gaps in the copy numbering.",
+    }
+}
+
 /// The ⋯ menu at the bar's right edge: the Library actions that are neither a filter nor a
 /// view — today, Reindex.
 ///
@@ -628,18 +647,13 @@ fn export_button(ui: &mut egui::Ui) -> egui::Response {
 /// miniature.
 fn more_menu(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let mut reindex = false;
+    // ⚠ Read before the closure, which borrows `app` mutably.
+    let hover = reindex_hover(app);
     egui::containers::menu::MenuButton::new(
         egui::RichText::new(icons::MORE.to_string()).size(16.0),
     )
     .ui(ui, |ui| {
-        if ui
-            .button("Reindex")
-            .on_hover_text(
-                "Re-read the folder, sort it alphabetically, and close any gaps in the copy \
-                 numbering.",
-            )
-            .clicked()
-        {
+        if ui.button("Reindex").on_hover_text(hover).clicked() {
             reindex = true;
             ui.close();
         }

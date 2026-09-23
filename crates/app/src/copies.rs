@@ -220,23 +220,6 @@ impl RustroomApp {
         true
     }
 
-    /// Re-read the folder from disk, restore alphabetical order, and close gaps in the copy
-    /// numbering.
-    ///
-    /// ⚠⚠ **This is the one thing allowed to renumber copies, and it is a button for that
-    /// reason.** Numbers are stable everywhere else precisely so a copy's export filename and its
-    /// undo stack cannot shift under it. The price of that stability is `_1, _3, _7` after some
-    /// deleting — which is the mess this exists to tidy, on request rather than behind the user's
-    /// back.
-    ///
-    /// ⚠ Three consequences, all deliberate:
-    /// - **Unnamed copies get new export filenames**, because their name is derived from the
-    ///   number. A *named* copy keeps its name, so its export filename does not move.
-    /// - **Undo stacks for renumbered copies are dropped.** They are keyed by `PhotoId`, and a
-    ///   renumbered copy is a different `PhotoId`; keeping them would hand old copy 1's stack to
-    ///   whatever becomes the new copy 1, which is worse than losing it.
-    /// - It re-reads every sidecar and re-scans the directory, so files added or deleted outside
-    ///   Rustroom appear here.
     /// Close gaps in the copy numbering of every photo in `scan`, and let go of the undo state and
     /// catalog rows of every copy that moved. Returns how many copies were renumbered.
     ///
