@@ -240,12 +240,11 @@ eviction of cached originals, the OS keychain (the API key is **plaintext** in `
 write-back. ⚠ Slice 1's three defects — the missing `assets` field, `nextPage` paging, the absent
 `catalog::sort` — are in the journal and their lesson is under **Standing lessons**.
 
-✅ **Two slice-2 corrections worth keeping:** the thumbnail store's "pinned hash vectors" do **not**
-guard `Identity`'s key derivation (they pin `fnv1a`), so a concrete filename is pinned instead; and the
-RTHM header carries the identity's fields, so there are two layouts — `VERSION_LOCAL` 1,
-`VERSION_REMOTE` 2. ✅ **Both date trees order the same way** — years newest first, months
-chronological inside them (`capture_days` orders `1 DESC, 2, 3`). ⚠ `date_tree::group` needed no change
-either time: it groups on *change*, not on direction, and its doc used to claim otherwise.
+✅ **Settled; detail in the journal:** the thumbnail store pins a concrete filename rather than
+trusting "pinned hash vectors" (which pin `fnv1a`, not `Identity`'s key), and RTHM has two layouts —
+`VERSION_LOCAL` 1, `VERSION_REMOTE` 2. **Both date trees** order years newest-first with months
+chronological inside (`capture_days` orders `1 DESC, 2, 3`); ⚠ `date_tree::group` groups on *change*,
+not direction, so it needed no change either time.
 
 ✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
 as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
