@@ -236,10 +236,18 @@ pub(crate) fn white_balance(
     });
 }
 
-/// 2000 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
+/// 1667 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
 /// disagree about which end is warm.
+///
+/// ⚠⚠ **The warm end is 1667 K to match `color::wb::solve_xy`, which clamps an as-shot temperature
+/// to exactly `1667..=25000`.** It was 2000 K until 2026-09-23, and that two-file mismatch is what
+/// the "opening a photo sets Temp to 2000 K" report was: the panel shows the *effective* temperature
+/// while `kelvin` is `None`, so a warm as-shot solving below 2000 K was handed to a control that
+/// could not represent it. ⚠ Pinned by
+/// `the_sliders_range_covers_everything_the_solve_can_return` — **if the solve's clamp moves, that
+/// test fails rather than this silently breaking again.**
 const MIRED_MIN: f32 = 1.0e6 / 25000.0;
-const MIRED_MAX: f32 = 1.0e6 / 2000.0;
+const MIRED_MAX: f32 = 1.0e6 / 1667.0;
 
 /// The Tone section: Auto, the six tonal sliders, the curve, then the Presence block.
 ///
@@ -549,6 +557,84 @@ mod tests {
             );
         }
         assert_eq!(wb.kelvin, None, "the panel froze a temperature nobody set");
+    }
+
+    /// ⚠⚠ **Reported in use 2026-09-23: "some photos, when opening, automatically set temp to
+    /// 2000K, even though the neutral is as shot".**
+    ///
+    /// The mechanism, and it is a **range mismatch between two files**: `color::wb::solve_xy` clamps
+    /// an as-shot temperature to **1667–25000 K**, while this panel's slider ran **2000–25000 K**. A
+    /// warm photo solving below 2000 K was handed to a `DragValue` whose `range()` clamps *existing*
+    /// values by default and writes the clamp back through its `&mut` — reported as `changed()`, so
+    /// the panel committed `Some(2000.0)` on the first frame it drew. The photo stopped following its
+    /// file without anyone touching a control.
+    ///
+    /// ⚠ Not from the 2026-09-19 slider restyle: `egui::Slider`'s own default is
+    /// `SliderClamping::Always`, so the version before it clamped too. Possible since 2026-09-01.
+    ///
+    /// ⚠⚠ **The guard beside this one was blind to it** because it only ever passed 4200 K — a
+    /// baseline comfortably inside the range. A guard that names one value does not guard the others.
+    #[test]
+    fn a_baseline_below_the_sliders_range_does_not_freeze_a_temperature() {
+        let ctx = crate::test_ui::ctx();
+        let mut wb = edit_model::WhiteBalance::default();
+        // ⚠ 1800 K: what `solve_xy` can genuinely return, being above its own 1667 K floor.
+        let base = color::wb::Illuminant::new(1800.0, 0.0);
+        for _ in 0..3 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(crate::test_ui::screen()),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut ed = Edited::default();
+                    white_balance(ui, &mut wb, base, None, &mut ed);
+                    assert!(!ed.changed, "drawing the panel reported an edit");
+                },
+            );
+        }
+        assert_eq!(
+            wb.kelvin, None,
+            "the panel froze a temperature nobody set, from a baseline it could not display"
+        );
+    }
+
+    /// ⚠ The other end, for the same reason: nothing about this is specific to the warm side.
+    #[test]
+    fn a_baseline_above_the_sliders_range_does_not_freeze_a_temperature_either() {
+        let ctx = crate::test_ui::ctx();
+        let mut wb = edit_model::WhiteBalance::default();
+        let base = color::wb::Illuminant::new(40000.0, 0.0);
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(crate::test_ui::screen()),
+                ..Default::default()
+            },
+            |ui| {
+                let mut ed = Edited::default();
+                white_balance(ui, &mut wb, base, None, &mut ed);
+            },
+        );
+        assert_eq!(wb.kelvin, None);
+    }
+
+    /// ⚠⚠ **The mismatch itself, pinned so it cannot come back.** The slider must be able to show
+    /// every temperature the solve can produce; otherwise the value handed to it is out of range and
+    /// the whole class above reopens.
+    #[test]
+    fn the_sliders_range_covers_everything_the_solve_can_return() {
+        // `color::wb::solve_xy` clamps to 1667..=25000 K.
+        let (solve_min_k, solve_max_k) = (1667.0f32, 25000.0f32);
+        let slider_warmest_k = 1.0e6 / MIRED_MAX;
+        let slider_coolest_k = 1.0e6 / MIRED_MIN;
+        assert!(
+            slider_warmest_k <= solve_min_k,
+            "the slider stops at {slider_warmest_k:.0} K but the solve can return {solve_min_k:.0} K"
+        );
+        assert!(
+            slider_coolest_k >= solve_max_k,
+            "the slider stops at {slider_coolest_k:.0} K but the solve can return {solve_max_k:.0} K"
+        );
     }
 
     /// A buffer with real tails, so the solve engages every field it can.

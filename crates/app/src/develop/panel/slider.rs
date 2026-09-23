@@ -248,6 +248,22 @@ impl egui::Widget for Slider<'_> {
                         }
                         let mut dv = egui::DragValue::new(value)
                             .range(range.clone())
+                            // ⚠⚠ **`range()` clamps EXISTING values by default and writes the clamp
+                            // back through the `&mut`, reporting it as `changed()`.** So a caller
+                            // that handed this row a value outside the range had it silently
+                            // rewritten on the first frame — and the caller, seeing `changed()`,
+                            // committed it as if the user had done it.
+                            //
+                            // Reported in use 2026-09-23: opening certain photos set Temp to
+                            // 2000 K while the preset still read "As Shot", because the white
+                            // balance panel shows the *effective* temperature while `kelvin` is
+                            // `None` and a warm as-shot solve fell below the slider's warm end.
+                            //
+                            // ⚠ `false` clamps only what the **user** types or drags, which is the
+                            // only thing a range should govern. `slider_map::t_of` already clamps
+                            // the handle's position, so an out-of-range value draws at the end of
+                            // the rail and reads truthfully in the number.
+                            .clamp_existing_to_range(false)
                             .speed(((max - min) / 200.0).max(1e-3));
                         dv = match formatter {
                             Some(f) => dv.custom_formatter(move |v, _| f(v)),
