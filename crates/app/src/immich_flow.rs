@@ -7,11 +7,69 @@
 
 use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
+use rustroom_app::immich_list_cache as list_cache;
 use rustroom_app::immich_source;
 use rustroom_app::immich_worker::{Job, Outcome};
 use rustroom_app::photo_id::PhotoId;
 
 impl RustroomApp {
+    /// The validator for an album, taken from the rail's own already-fetched list.
+    ///
+    /// ⚠ `None` when the rail has no list, or does not know this album: there is then nothing to
+    /// validate against, and an unvalidated load could put a stale grid on screen.
+    fn album_validator(&self, id: &str) -> Option<list_cache::Validator> {
+        let albums = self.immich_albums.as_ref()?.as_ref().ok()?;
+        let a = albums.iter().find(|a| a.id == id)?;
+        Some(list_cache::Validator::Album {
+            asset_count: a.asset_count,
+            last_modified: a.last_modified_asset_timestamp.clone(),
+        })
+    }
+
+    /// The validator for one month, from the rail's own bucket list.
+    fn bucket_validator(&self, bucket: &str) -> Option<list_cache::Validator> {
+        let buckets = self.immich_buckets.as_ref()?.as_ref().ok()?;
+        let b = buckets.iter().find(|b| b.time_bucket == bucket)?;
+        Some(list_cache::Validator::Bucket { count: b.count })
+    }
+
+    /// The directory this server's lists live in, if a server is configured at all.
+    fn immich_lists_dir(&self) -> Option<std::path::PathBuf> {
+        let conn = immich_source::connection(&self.settings)?;
+        Some(list_cache::lists_dir(&conn.url))
+    }
+
+    /// An album's stored asset list, if it is still current.
+    pub(crate) fn immich_cached_album(&self, id: &str) -> Option<Vec<immich::Asset>> {
+        let dir = self.immich_lists_dir()?;
+        let want = self.album_validator(id)?;
+        list_cache::load(&dir, &list_cache::Key::Album(id.to_string()), &want)
+    }
+
+    /// One month's stored asset list, if it is still current.
+    pub(crate) fn immich_cached_bucket(&self, bucket: &str) -> Option<Vec<immich::Asset>> {
+        let dir = self.immich_lists_dir()?;
+        let want = self.bucket_validator(bucket)?;
+        list_cache::load(&dir, &list_cache::Key::Bucket(bucket.to_string()), &want)
+    }
+
+    /// Remember a freshly fetched list on disk, so the next launch does not refetch it.
+    ///
+    /// ⚠ Stamped with the validator **as the rail currently sees it**. If the rail's own list is
+    /// stale then so is the stamp, and the next launch refetches — a wasted fetch, never a wrong
+    /// grid. No validator at all means nothing is written.
+    fn remember_immich_list(
+        &self,
+        key: list_cache::Key,
+        want: Option<list_cache::Validator>,
+        assets: &[immich::Asset],
+    ) {
+        let (Some(dir), Some(v)) = (self.immich_lists_dir(), want) else {
+            return;
+        };
+        list_cache::store(&dir, &key, &v, assets);
+    }
+
     /// Show one Immich album's photos, downloading nothing.
     ///
     /// ⚠⚠ Goes through `open_scan`, the one place a `Library` is constructed, exactly like a
@@ -108,6 +166,12 @@ impl RustroomApp {
                     match result {
                         Ok(assets) => {
                             self.immich_assets.insert(bucket.clone(), assets.clone());
+                            let v = self.bucket_validator(&bucket);
+                            self.remember_immich_list(
+                                list_cache::Key::Bucket(bucket.clone()),
+                                v,
+                                &assets,
+                            );
                             self.open_immich_bucket(ctx, bucket, label, &assets);
                         }
                         Err(e) => self.status = format!("Could not open {label}: {e}"),
@@ -120,6 +184,14 @@ impl RustroomApp {
                             // ⚠ Remembered so switching back is instant — the round trip is a
                             // couple of seconds for a large album.
                             self.immich_assets.insert(id.clone(), assets.clone());
+                            // ⚠ And on disk too, so the *first* visit after the next launch is
+                            // instant as well — that is what the list cache buys over this map.
+                            let v = self.album_validator(&id);
+                            self.remember_immich_list(
+                                list_cache::Key::Album(id.clone()),
+                                v,
+                                &assets,
+                            );
                             self.open_immich_album(ctx, id, name, &assets);
                         }
                         Err(e) => self.status = format!("Could not open “{name}”: {e}"),
