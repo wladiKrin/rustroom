@@ -166,8 +166,17 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2797 tests** (goldens unmoved since 2026-09-18). No branch; `main` is **5 commits ahead of
-`origin/main`** — the user last pushed `f4d7633`; still never push.
+**2811 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
+branch; `main` is **17 commits ahead of `origin/main`** — the user last pushed `f4d7633`; still never push.
+
+✅ **Per-channel RGB tone curves (2026-09-24, confirmed by use).** Red/Green/Blue beside the composite on
+one widget, selector defaulting to RGB. ⚠⚠ Almost no colour science changed: `ToneCurveStage::apply` was
+already `map_samples`, so the composite was **always** a per-channel operation with one shared table — the
+space and the input clamp are **inherited, not re-decided**, which is why the 74 goldens are byte-identical.
+⚠ **Composite first, then the channel** — a choice, not a verified standard, pinned on both CPU and GPU.
+⚠ `CurveChannel` lives on the **session**, never `Edits`. ⚠ A mask's curve stays composite-only by
+decision. ⚠ No `version` bump; a test guards old sidecars, not a number.
+`grep -n 'per-channel RGB tone curves' docs/JOURNAL.md`.
 
 ✅ **The Color section, made legible (2026-09-24, confirmed by use).** An amateur's review found it
 confusing: **~40 values behind 15 sliders, two selectors and a wheel**, with **"Saturation" naming three
@@ -221,10 +230,9 @@ Temp range of **1667 K** matching `color::wb::solve_xy`'s own clamp, with a test
 bounds. ⚠ Not a regression from any recent work — possible since 2026-09-01. ⚠ Any slider handed an
 out-of-range stored value now **displays** it rather than rewriting it.
 
-⛔ **Per-channel RGB tone curves: considered, deferred by the user.** They make sense and are standard,
-but `ToneCurve` is one `Vec<[f32; 2]>`, so it means four curves, a pipeline and golden change, a sidecar
-version bump with migration, and a channel selector. Costs written down in
-`2026-09-23-histogram-and-panel-design.md`.
+⚠ The **tone curve's space** is a live question nobody has answered: it runs in **linear light**, where a
+gentle S is aggressive. That is long-standing and is what the widget plots — but moving it to a
+gamma-encoded space would **move every golden**, so it is its own change and has never been specced.
 
 ✅ **The Now row counts what DIFFERS, not history steps** (2026-09-23). `Edits::changed_parameters`,
 ⚠⚠ **derived from serialisation, never a field list** — 25 fields, no `#[serde(skip)]`, so a new
@@ -331,27 +339,24 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   double-application test named three of five fields and was therefore blind to a whole milestone —
   the real sabotage left it at `1 passed` while six goldens failed. Read this before adding anything
   to `adjustment_stages`.
-- **⚠⚠ LOWERING AN ASSERTION TO MATCH THE CODE IS HOW A TEST STOPS BEING EVIDENCE.** The first
-  histogram test asserted that detail beside a 2000:1 peak would reach 5% of the well; it reaches
-  **2.2%**, because square root compresses a ratio by its own square root. The measurement was the
-  useful part: the test was **rewritten around it** — a table of linear-vs-sqrt pixel heights, plus a
-  second test pinning the extreme case as a known limit and saying *do not fix this by lowering the
-  threshold*. ⚠ When a threshold you invented fails, find out what the real number is before touching
-  either side.
-- **⚠⚠ "THAT OTHER BRANCH IS FINE" IS A CLAIM, AND READING ONE LINE IS NOT RUNNING IT.** Fixing the
-  snapshot row's change count on 2026-09-23, I reported that "the snapshot branch never had this bug"
-  — inferred from seeing `if edits == current` and never executed. The user found it the same day: with
-  a snapshot taken mid-edit, set/reset/set read as **3 changes**. ⚠ The fix had been verified against
-  returning **to** the reference state, which the old code already handled; passing **through** it is
-  what broke, and that is the shape the reported gesture actually has. **When a fix touches one branch
-  of a two-branch function, run the other branch before saying anything about it** — a probe printing
-  both took one command.
-- **⚠⚠ A TEST'S DOC COMMENT IS A CLAIM ABOUT WHAT IT CATCHES, AND AN UNVERIFIED ONE IS WORSE THAN
-  NONE.** On 2026-09-23 a new test's comment said reading `updated_at` instead "would have produced a
-  cache that never invalidates" — `AlbumSummary` has no such field, so that sabotage is impossible and
-  the comment advertised a guard the test did not provide. ⚠ **Run the sabotage, then describe the one
-  you ran.** Two tests did fail when the `find` became `first()`; that is what the comment now says.
-  Same family as the enumerating guard above: a reassuring sentence is not a guard.
+- **⚠⚠ A TEST THAT CANNOT FAIL IS NOT A TEST, AND FOUR SHAPES OF THAT HAVE COST THIS PROJECT REAL BUGS.**
+  **(a)** A fixture that makes two different things **equal** cannot see a bug about telling them apart —
+  `asset("one")` with `original_file_name: "one.jpg"` made a UUID path and a display name coincide, and
+  four tests passed against a catalog that could never find its own rows. **(b)** A query that finds
+  **nothing** passes silently, so assert the sample first — `labels.len() > 12` caught three separate ways
+  the Color guard opened nothing, and a substring filter matching no tests exits 0. **(c)** Comparing two
+  things that are **the same** proves nothing, so prove they differ first: the curve-order test asserts the
+  two orders differ by >0.05 *before* asserting which happened; the GPU whole-chain test asserts the render
+  differs from `neutral` before comparing backends. **(d)** When a threshold you invented fails, **find the
+  real number** rather than lowering the bar — the histogram's sqrt reaches 2.2% where I asserted 5%, and
+  the test was rewritten around the measurement with a note not to weaken it.
+- **⚠⚠ A CLAIM YOU DID NOT RUN IS NOT A FINDING — INCLUDING A CLAIM ABOUT A TEST.** Twice in two days:
+  I reported *"the snapshot branch never had this bug"* from reading one line of a two-branch function,
+  and the user found it the same day; and a test's doc comment advertised catching a sabotage that
+  `AlbumSummary`'s fields make impossible. ⚠ **Run the other branch before describing it, and run the
+  sabotage before claiming the test catches it** — a probe printing both cases took one command, and the
+  four guards of 2026-09-24 were each sabotage-measured (30.6 levels, 209 levels over 8,248 of 9,216
+  samples, and so on) rather than trusted on a green run.
 - **⚠⚠ AN EDIT POSITIONED BY WALKING OVER COMMENT LINES WILL EVENTUALLY EAT ONE, AND NOTHING IN THE
   GATE CAN SEE IT.** On 2026-09-23 a scripted extraction in `copies.rs` inserted a helper *below* a
   17-line doc block instead of above it — the doc ended up on the wrong function, `reindex` was left
@@ -384,21 +389,13 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   `thumbhash` then failed a whole month of the timeline. ⚠ When a field turns out to be nullable,
   **audit every field against the schema** rather than patching the one that broke: two more were
   waiting. And when an endpoint's shape matters, get a **captured reply** before writing the DTO.
-- **⚠⚠ MAKE A TEST ASSERT ITS SAMPLE IS BIG ENOUGH BEFORE IT ASSERTS ANYTHING ABOUT IT.** The Color
-  duplicate-label guard (2026-09-24) checks `labels.len() > 12` first, and that line caught **three**
-  separate ways it would otherwise have passed while opening nothing: the Color *section* is collapsed by
-  default as well as the block inside it; `CollapsingState::set_open` needs **`store()`** or nothing
-  reaches egui's memory; and ⚠⚠ **`ui.make_persistent_id` is relative to the Ui's id stack**, so an id
-  computed outside a nested body is a different id. **A guard over "whatever exists" must prove it found
-  anything** — otherwise an empty query is indistinguishable from a clean result, which is the same shape
-  as a substring filter running zero tests and exiting 0.
-- **⚠⚠ AND THE SHARPER FORM, PAID FOR A SECOND TIME TWO DAYS LATER: A FIXTURE THAT MAKES TWO DIFFERENT
-  THINGS EQUAL CANNOT SEE A BUG ABOUT TELLING THEM APART.** Slice 3's `asset("one")` gave
-  `original_file_name: "one.jpg"`, so the UUID-derived cache path and the display name **coincided** —
-  and four row tests passed against a catalog that could never find its own rows. ⚠ Sabotage did not
-  catch it either, because the sabotage was orthogonal to the bug. **What caught it was querying the
-  user's real `catalog.db`.** ⚠ When a test is about two identifiers agreeing, make the fixture's two
-  identifiers look nothing alike, and add a test that guards the fixture itself.
+- **⚠⚠ BEFORE DECLARING SOMETHING "ONLY USE CAN VERIFY", LOOK FOR THE HARNESS THAT ALREADY ALMOST COVERS
+  IT.** I twice told the user that preview-versus-export parity for the RGB curves was the one thing only
+  he could check. `a_colorimetric_frame_renders_the_same_picture_on_the_gpu` already existed — it just ran
+  on `Edits::default()`, so it could not see a `GPU_STAGES` site passing only the composite curve, and
+  **that site compiles perfectly**. One test with three channel curves turned this project's worst failure
+  shape into a one-second check, sabotage-measured at **209 levels over 8,248 of 9,216 samples**. ⚠ "Found
+  by use" is a fact about what happened, never a reason a thing is unreachable by a test.
 - **⚠⚠ A FIXTURE YOU WROTE IS NOT EVIDENCE ABOUT SOMETHING YOU DO NOT CONTROL.** M9.1's
   `album.json` was hand-written and described *in its own plan* as "trimmed from `GET
   /albums/{id}`". It asserted an `assets` array that endpoint has never returned. The test passed
