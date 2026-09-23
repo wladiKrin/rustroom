@@ -542,6 +542,21 @@ pub struct Settings {
     /// (`asset.read`, `asset.view`, `asset.download`, `album.read`). A key that cannot write
     /// cannot damage the library if this file leaks, which is what bounds the exposure.
     pub immich_key: String,
+    /// Byte budget for the **local** thumbnail cache, in megabytes.
+    ///
+    /// ⚠⚠ No field-level `#[serde(default)]`. The struct carries a container-level one, so a
+    /// missing field falls back to this struct's `Default` — 5120. A field-level one would use
+    /// `u32`'s own default of **0**, turning the cache into a device that deletes every entry it
+    /// writes. The same trap `write_xmp`, `auto_advance` and `gpu_tail` each document.
+    ///
+    /// ⚠ Megabytes rather than gigabytes so sub-gigabyte is expressible, and because the Settings
+    /// row already displays MB.
+    pub thumb_budget_mb: u32,
+    /// Byte budget for the **Immich** thumbnail cache, in megabytes. Same trap, same reason.
+    ///
+    /// ⚠ A separate budget on a separate directory, so neither sweep can evict the other's
+    /// entries.
+    pub immich_thumb_budget_mb: u32,
 }
 
 /// The Library grid's default cell size, and the size its type scale is relative to.
@@ -773,6 +788,8 @@ impl Default for Settings {
             hidden_formats: crate::format_filter::FormatFilter::default(),
             immich_url: String::new(),
             immich_key: String::new(),
+            thumb_budget_mb: 5120,
+            immich_thumb_budget_mb: 5120,
             confirm_preset_delete: true,
             export: ExportOptions::default(),
             confirm_export_preset_delete: true,
@@ -1487,6 +1504,9 @@ mod tests {
             // report "the server rejected the API key" — so the round trip must cover it.
             immich_url: "https://photos.example.com".to_string(),
             immich_key: "round-trip-key".to_string(),
+            // Non-default so a field re-defaulted on load cannot pass.
+            thumb_budget_mb: 2048,
+            immich_thumb_budget_mb: 1024,
             export: ExportOptions {
                 dest_dir: std::path::PathBuf::from("/tmp/rustroom_out"),
                 quality: 71,
@@ -1496,6 +1516,18 @@ mod tests {
         };
         store.save(&s).unwrap();
         assert_eq!(store.load(), s);
+    }
+
+    /// ⚠⚠ The trap: a field-level `#[serde(default)]` on a `u32` yields **0**, i.e. a cache that
+    /// evicts everything it writes. The container-level default must supply 5120.
+    #[test]
+    fn a_settings_file_from_before_the_thumbnail_budgets_loads_them_at_5120() {
+        let f = TempFile::new("thumb_budget_old");
+        std::fs::write(&f.0, r#"{"confirm_preset_delete": false}"#).unwrap();
+        let loaded = SettingsStore::new(f.0.clone()).load();
+        assert!(!loaded.confirm_preset_delete, "the old field must survive");
+        assert_eq!(loaded.thumb_budget_mb, 5120);
+        assert_eq!(loaded.immich_thumb_budget_mb, 5120);
     }
 
     #[test]
