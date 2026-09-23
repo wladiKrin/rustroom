@@ -305,3 +305,108 @@ impl RustroomApp {
         };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit_model::Edits;
+
+    /// A folder with `n` files that `catalog::scan_folder` will report.
+    ///
+    /// ⚠ The bytes are not images. `scan_folder` classifies by **extension**, and nothing in
+    /// Reindex decodes anything, so a real JPEG would only make the test slower.
+    fn folder_of(n: usize) -> crate::test_app::TestDir {
+        let d = crate::test_app::TestDir::new("reindex");
+        for i in 0..n {
+            std::fs::write(d.0.join(format!("shot{i}.jpg")), b"not an image").unwrap();
+        }
+        d
+    }
+
+    fn edited(v: f32) -> Edits {
+        Edits {
+            exposure: v,
+            ..Edits::default()
+        }
+    }
+
+    /// ⚠⚠ **A characterisation test written before the compaction loop was extracted, because
+    /// `reindex` had NO tests at all** — so "the existing tests still pass" could not have shown the
+    /// extraction was a pure move. This is what shows it.
+    #[test]
+    fn reindexing_a_folder_closes_a_gap_in_the_copy_numbering() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let dir = folder_of(1);
+        let file = dir.0.join("shot0.jpg");
+
+        // A gap: copy 1 was deleted, leaving copy 2 with no copy 1 beside it.
+        let mut s = sidecar::load_all(&file);
+        s.set_edits(0, edited(1.0));
+        s.set_edits(2, edited(3.0));
+        sidecar::persist_all(&file, &s).unwrap();
+
+        let scan = catalog::scan_folder(&dir.0).unwrap();
+        app.open_scan(&ctx, LibrarySource::Folder(dir.0.clone()), scan);
+
+        app.reindex(&ctx);
+
+        let after = sidecar::load_all(&file);
+        assert!(
+            after.get(1).is_some(),
+            "copy 2 should have become copy 1: {}",
+            app.status
+        );
+        assert!(after.get(2).is_none(), "and vacated its old number");
+        assert_eq!(
+            after.get(1).unwrap().edits,
+            edited(3.0),
+            "carrying its own edits, not the original's"
+        );
+        assert!(
+            app.status.contains("renumbered"),
+            "and it must say what it did: {}",
+            app.status
+        );
+    }
+
+    /// ⚠ The no-op case has its own message, because "Reindexed" with no further word reads as a
+    /// failure when nothing visibly changed.
+    #[test]
+    fn reindexing_a_tidy_folder_says_it_was_already_tidy() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let dir = folder_of(2);
+        let scan = catalog::scan_folder(&dir.0).unwrap();
+        app.open_scan(&ctx, LibrarySource::Folder(dir.0.clone()), scan);
+
+        app.reindex(&ctx);
+
+        assert!(
+            app.status.contains("already tidy"),
+            "status was: {}",
+            app.status
+        );
+    }
+
+    /// ⚠ Re-scanning is what picks up a file that appeared outside Rustroom — the reason Reindex
+    /// re-reads the folder at all rather than only rewriting sidecars.
+    #[test]
+    fn reindexing_a_folder_picks_up_a_file_added_outside_rustroom() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        let dir = folder_of(1);
+        let scan = catalog::scan_folder(&dir.0).unwrap();
+        app.open_scan(&ctx, LibrarySource::Folder(dir.0.clone()), scan);
+        assert_eq!(app.library.as_ref().unwrap().entries.len(), 1);
+
+        std::fs::write(dir.0.join("arrived.jpg"), b"not an image").unwrap();
+        app.reindex(&ctx);
+
+        assert_eq!(
+            app.library.as_ref().unwrap().entries.len(),
+            2,
+            "the new file must appear"
+        );
+    }
+}
