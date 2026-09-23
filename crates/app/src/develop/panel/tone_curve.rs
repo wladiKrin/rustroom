@@ -14,9 +14,22 @@ use edit_model::ToneCurve;
 use eframe::egui;
 use rustroom_app::tone_curve_tool as tool;
 
-/// Widest the editor is drawn. The panel is 240 pt, so this is close to filling it, and the
-/// widget is square — a tone curve read against a non-square box misleads about its slope.
+/// Widest the editor is drawn, and it stays **fixed** while the panel grows. The widget is square —
+/// a tone curve read against a non-square box misleads about its slope.
+///
+/// ⚠ The panel is 320 pt (2026-09-23). The curve is deliberately narrower and **centred**, the way the
+/// colour wheel is; growing it to fill the panel would make that centring a no-op.
+///
+/// ⚠⚠ This doc said "the panel is 240 pt" until 2026-09-23 — stale since the panel went to 270 two
+/// days earlier. **A size named in a comment is a size that goes stale**; the number above is a
+/// cross-reference, not a fact this file can enforce.
 const MAX_SIZE: f32 = 220.0;
+
+/// How strongly the ghost histogram is painted behind the curve.
+///
+/// ⚠ 0.35, up from 0.15 (user's call, 2026-09-23): at 0.15 it was present but not readable. A number
+/// to tune by looking, which is why it is named rather than sitting inline.
+const GHOST_OPACITY: f32 = 0.35;
 
 /// Points along the plotted curve. At 220 pt this is a sample every ~2 pt, well below the
 /// point where the polyline reads as segments.
@@ -59,9 +72,25 @@ pub fn show(
         }
     });
 
-    let size = ui.available_width().min(MAX_SIZE);
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click_and_drag());
+    let full = ui.available_width();
+    let size = full.min(MAX_SIZE);
+    // ⚠⚠ **Centred, the same way the colour wheel is** (`color_wheel.rs`, user's call 2026-09-02):
+    // `allocate_exact_size` in a vertical layout starts at the left edge, so in a panel wider than
+    // `MAX_SIZE` the curve sat left while everything around it spanned the full width.
+    //
+    // ⚠ The pad is allocated **beside** the widget rather than by widening its rect, so the click
+    // target stays tight to the curve — a full-width response would let a drag grab a control point
+    // from anywhere on the row.
+    let pad = ((full - size) * 0.5).max(0.0);
+    let (rect, resp) = {
+        let mut allocated = None;
+        ui.horizontal(|ui| {
+            ui.add_space(pad);
+            allocated =
+                Some(ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click_and_drag()));
+        });
+        allocated.expect("the horizontal closure always runs")
+    };
 
     // ⚠ Which point a drag grabbed has to survive between frames, or re-hit-testing each frame
     // would let a fast drag jump to whichever point the pointer happened to pass over. egui's
@@ -178,19 +207,11 @@ pub fn show(
         // of every curve editor. The per-bin maximum over the channels, so a saturated
         // colour is not hidden by its dark siblings.
         if let Some(h) = hist {
-            let max = h
-                .iter()
-                .flat_map(|c| c.iter())
-                .copied()
-                .max()
-                .unwrap_or(1)
-                .max(1) as f32;
-            let bins: [f32; 256] =
-                std::array::from_fn(|i| h.iter().map(|c| c[i]).max().unwrap_or(0) as f32 / max);
+            let bins = rustroom_app::histogram::envelope(h);
             painter.add(egui::Shape::mesh(super::area_mesh(
                 rect,
                 &bins,
-                v.weak_text_color().linear_multiply(0.15),
+                v.weak_text_color().linear_multiply(GHOST_OPACITY),
             )));
         }
 

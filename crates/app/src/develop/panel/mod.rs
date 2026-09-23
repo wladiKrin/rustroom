@@ -109,9 +109,12 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
     let guide_before = app.settings.composition_guide;
     let custom_before = app.settings.custom_aspect;
     egui::Panel::right("panel")
-        // ⚠ 270, up from 240 (2026-09-21, user's call): at 240 the snapshot strip's Now row and
-        // the longer slider names were cut off.
-        .default_size(270.0)
+        // ⚠ 320, up from 270 (2026-09-23, user's call); 270 was up from 240 (2026-09-21), when the
+        // snapshot strip's Now row and the longer slider names were cut off.
+        //
+        // ⚠⚠ egui's panel state is **not persisted** here, so this default is the width every launch
+        // actually gets — not merely a first-run hint.
+        .default_size(320.0)
         .frame(theme::panel_frame(ui.style()))
         .show(ui, |ui| {
             if app.pending.is_some() {
@@ -362,13 +365,10 @@ pub(crate) fn area_mesh(rect: egui::Rect, bins: &[f32; 256], colour: egui::Color
 /// The histogram: three filled channels in a well, with a clipping mark at either top corner
 /// when an edge bin holds more than `histogram::CLIP_FRACTION` of the frame.
 fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
-    let max = hist
-        .iter()
-        .flat_map(|c| c.iter())
-        .copied()
-        .max()
-        .unwrap_or(1)
-        .max(1) as f32;
+    // ⚠ The scale lives in `histogram.rs`, shared with the tone curve's ghost — see `normalised`.
+    // Both sites used to compute their own maximum, linearly, which is what let one flat area
+    // squash the whole graph.
+    let bins = rustroom_app::histogram::normalised(hist);
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), HIST_HEIGHT),
         egui::Sense::hover(),
@@ -380,11 +380,10 @@ fn draw_histogram(ui: &mut egui::Ui, hist: &[[u32; 256]; 3]) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, v.extreme_bg_color);
     let plot = rect.shrink2(egui::vec2(0.0, 4.0));
-    for (ci, chan) in hist.iter().enumerate() {
-        let bins: [f32; 256] = std::array::from_fn(|i| chan[i] as f32 / max);
+    for (ci, chan) in bins.iter().enumerate() {
         painter.add(egui::Shape::mesh(area_mesh(
             plot,
-            &bins,
+            chan,
             CHANNEL_COLOURS[ci].linear_multiply(0.55),
         )));
     }
