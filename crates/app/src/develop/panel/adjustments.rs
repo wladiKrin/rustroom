@@ -271,6 +271,10 @@ pub(crate) fn tone(
     buffer: &core_image::ImageBuf,
     baseline_ev: Option<f32>,
     hist: Option<&[[u32; 256]; 3]>,
+    // ⚠ Its own parameter rather than reached through the app, for the same reason `hsl_channel` is:
+    // the caller holds `&mut app.session` at the same time, and two separate `&mut` parameters are
+    // legal where a closure capturing `app` twice is `E0499`.
+    curve_channel: &mut tone_curve::CurveChannel,
     ed: &mut Edited,
 ) {
     // ⚠⚠ **The analysis runs on the click only.** This body runs sixty times a second, and a
@@ -301,7 +305,17 @@ pub(crate) fn tone(
     // sub-label rather than a header, since `tone_curve` belongs to the `Tone` edit group and a
     // header here would put the panel and the Sync dialog out of step. The curve draws its own
     // sub-label row. (It closed the section until 2026-09-19.)
-    tone_curve::show(ui, &mut edits.tone_curve, ed, hist);
+    // ⚠ Which of the four curves the widget edits is decided here, because `show` takes one curve —
+    // and reading the selection *by value* first is what keeps `edits` and `curve_channel` from being
+    // borrowed at once.
+    let selected = *curve_channel;
+    let curve = match selected {
+        tone_curve::CurveChannel::Rgb => &mut edits.tone_curve,
+        tone_curve::CurveChannel::Red => &mut edits.tone_curve_red,
+        tone_curve::CurveChannel::Green => &mut edits.tone_curve_green,
+        tone_curve::CurveChannel::Blue => &mut edits.tone_curve_blue,
+    };
+    tone_curve::show(ui, curve, ed, hist, Some(curve_channel));
     // ⚠ A sub-label, not a header. These are Lightroom's "Presence" block and they are
     // local-contrast tools rather than tonal ones — a different kind of decision, which is why
     // they close the section — but they belong to the `Tone` edit group, and a header here would
@@ -329,6 +343,21 @@ pub(crate) fn tone(
 /// ⚠ Grouped because the three travel together and `show` was two arguments past clippy's
 /// limit with them loose — a fair complaint rather than a lint to silence, the reason
 /// `FrameSpec` exists. None of these is an edit: they never reach `Edits` or a sidecar.
+/// Which channel each of the panel's two selectors is showing.
+///
+/// ⚠ A params struct because clippy counted **eight** arguments on [`show`], and as `SourceInfo`'s own
+/// doc records, *"every time the note was that clippy was right"* — the fifth time this project has
+/// answered `too_many_arguments` this way, after `FrameSpec`, `NameField`, `RenderSpec` and
+/// `SourceInfo`.
+///
+/// ⚠⚠ Both are **view state**, never `Edits`: switching a selector must not push a history entry or
+/// travel in a preset. That is why they arrive as their own `&mut`s rather than being reached through
+/// the app — the caller holds `&mut app.session` at the same time.
+pub struct Channels<'a> {
+    pub hsl: &'a mut HslChannel,
+    pub curve: &'a mut tone_curve::CurveChannel,
+}
+
 pub struct GradeUi<'a> {
     pub range: &'a mut color_wheel::GradeRange,
     /// The "Show range" checkbox.
@@ -340,12 +369,16 @@ pub struct GradeUi<'a> {
 pub fn show(
     ui: &mut egui::Ui,
     edits: &mut edit_model::Edits,
-    hsl_channel: &mut HslChannel,
+    channels: Channels<'_>,
     grade: GradeUi<'_>,
     source: SourceInfo<'_>,
     picking: Option<&mut bool>,
     ed: &mut Edited,
 ) {
+    let Channels {
+        hsl: hsl_channel,
+        curve: curve_channel,
+    } = channels;
     let GradeUi {
         range: grade_range,
         show_range: show_grade_range,
@@ -366,7 +399,7 @@ pub fn show(
     });
 
     section(ui, SECTIONS[1], true, edits, ed, |ui, edits, ed| {
-        tone(ui, edits, buffer, baseline_ev, hist, ed);
+        tone(ui, edits, buffer, baseline_ev, hist, curve_channel, ed);
     });
 
     section(ui, SECTIONS[2], false, edits, ed, |ui, edits, ed| {
@@ -771,7 +804,15 @@ mod tests {
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Auto", |ui| {
             ed = Edited::default();
-            tone(ui, &mut edits, &buf, None, None, &mut ed);
+            tone(
+                ui,
+                &mut edits,
+                &buf,
+                None,
+                None,
+                &mut tone_curve::CurveChannel::default(),
+                &mut ed,
+            );
         });
         assert!(ed.changed, "the click must request a render");
         assert!(ed.settled, "the click must push exactly one history entry");
@@ -814,7 +855,10 @@ mod tests {
             show(
                 ui,
                 &mut edits,
-                &mut channel,
+                Channels {
+                    hsl: &mut channel,
+                    curve: &mut tone_curve::CurveChannel::default(),
+                },
                 GradeUi {
                     range: &mut grade,
                     show_range: &mut show_range,
@@ -888,7 +932,10 @@ mod tests {
                 show(
                     ui,
                     edits,
-                    channel,
+                    Channels {
+                        hsl: channel,
+                        curve: &mut tone_curve::CurveChannel::default(),
+                    },
                     GradeUi {
                         range: grade,
                         show_range,
@@ -924,7 +971,10 @@ mod tests {
                 show(
                     ui,
                     edits,
-                    channel,
+                    Channels {
+                        hsl: channel,
+                        curve: &mut tone_curve::CurveChannel::default(),
+                    },
                     GradeUi {
                         range: grade,
                         show_range,
@@ -960,7 +1010,10 @@ mod tests {
                 show(
                     ui,
                     edits,
-                    channel,
+                    Channels {
+                        hsl: channel,
+                        curve: &mut tone_curve::CurveChannel::default(),
+                    },
                     GradeUi {
                         range: grade,
                         show_range,
@@ -1126,7 +1179,15 @@ mod tests {
             let mut ed = Edited::default();
             crate::test_ui::click(&ctx, "Auto", |ui| {
                 ed = Edited::default();
-                tone(ui, &mut edits, &buf, baseline, None, &mut ed);
+                tone(
+                    ui,
+                    &mut edits,
+                    &buf,
+                    baseline,
+                    None,
+                    &mut tone_curve::CurveChannel::default(),
+                    &mut ed,
+                );
             });
             assert!(ed.changed, "the click did not take");
             exposures.push(edits.exposure);
@@ -1152,7 +1213,15 @@ mod tests {
                 },
                 |ui| {
                     let mut ed = Edited::default();
-                    tone(ui, &mut edits, &buf, None, None, &mut ed);
+                    tone(
+                        ui,
+                        &mut edits,
+                        &buf,
+                        None,
+                        None,
+                        &mut tone_curve::CurveChannel::default(),
+                        &mut ed,
+                    );
                     assert!(!ed.changed, "drawing the panel reported an edit");
                     assert!(!ed.settled, "drawing the panel pushed a history entry");
                 },

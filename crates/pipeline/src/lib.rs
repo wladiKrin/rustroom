@@ -1155,6 +1155,9 @@ fn adjustment_stages(
     //
     // ⚠ Empty points insert nothing — the global rule, and what keeps a mask with a default
     // curve from paying for a 1024-entry identity LUT on every render.
+    // ⚠ A mask's curve stays **composite only, deliberately**: masks have no per-channel curves by
+    // decision (Lightroom's have no curve at all), and a mask that wants a colour shift has its own
+    // grading wheel. The asymmetry with the global curve above is a choice, not an oversight.
     if !a.tone_curve.points.is_empty() {
         out.push(Box::new(ToneCurveStage::new(&a.tone_curve.points)));
     }
@@ -1455,8 +1458,21 @@ pub fn build_pipeline_split_tapped(
         baseline,
         scale,
     );
-    if !edits.tone_curve.points.is_empty() {
-        tail.push(Box::new(ToneCurveStage::new(&edits.tone_curve.points)));
+    // ⚠⚠ **All four curves, not just the composite.** An `is_empty` guard naming one field of four
+    // would render a channel-only edit unchanged, with nothing failing — the regression this feature
+    // invites, and it has its own test.
+    if !edits.tone_curve.points.is_empty()
+        || !edits.tone_curve_red.points.is_empty()
+        || !edits.tone_curve_green.points.is_empty()
+        || !edits.tone_curve_blue.points.is_empty()
+    {
+        tail.push(Box::new(
+            ToneCurveStage::new(&edits.tone_curve.points).with_channels(
+                &edits.tone_curve_red.points,
+                &edits.tone_curve_green.points,
+                &edits.tone_curve_blue.points,
+            ),
+        ));
     }
 
     // Local contrast, in two bands. After the tone curve is mandatory: a local contrast
@@ -2990,6 +3006,44 @@ mod tests {
         }
     }
 
+    /// ⚠⚠ **The regression this feature invites.** The guard keeping `ToneCurveStage` out of the
+    /// pipeline tested `edits.tone_curve.points` alone; with three more curves, naming one field of four
+    /// would render a channel-only edit **unchanged, with nothing failing**.
+    #[test]
+    fn a_channel_curve_alone_still_reaches_the_pipeline() {
+        let names = |e: &Edits| {
+            build_pipeline(e, RenderScale::FULL, ProfileRendering::colorimetric()).stage_names()
+        };
+        let base = Edits::default();
+        assert!(
+            !names(&base).contains(&"tone_curve"),
+            "with no curve at all the stage must stay out"
+        );
+
+        for which in 0..3 {
+            let mut e = Edits::default();
+            let c = edit_model::ToneCurve {
+                points: vec![[0.0, 0.2], [1.0, 1.0]],
+            };
+            match which {
+                0 => e.tone_curve_red = c,
+                1 => e.tone_curve_green = c,
+                _ => e.tone_curve_blue = c,
+            }
+            assert!(
+                names(&e).contains(&"tone_curve"),
+                "channel {which} alone did not bring the stage into the pipeline"
+            );
+        }
+
+        let mut e = Edits::default();
+        e.tone_curve.points = vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]];
+        assert!(
+            names(&e).contains(&"tone_curve"),
+            "and the composite still does"
+        );
+    }
+
     #[test]
     fn a_switched_off_mask_inserts_no_stage_anywhere() {
         // ⚠ The export builds the same pipeline as the view, so "not in the export" is exactly
@@ -3044,6 +3098,18 @@ mod tests {
             blacks: -5.0,
             tone_curve: edit_model::ToneCurve {
                 points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]],
+            },
+            // ⚠⚠ **Three DIFFERENT curves.** Three copies of one would let every "this group
+            // transfers" test pass against code that ignored the channel index — the fixture trap paid
+            // for on 2026-09-23.
+            tone_curve_red: edit_model::ToneCurve {
+                points: vec![[0.0, 0.15], [1.0, 1.0]],
+            },
+            tone_curve_green: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.55], [1.0, 1.0]],
+            },
+            tone_curve_blue: edit_model::ToneCurve {
+                points: vec![[0.0, 0.0], [1.0, 0.85]],
             },
             saturation: 10.0,
             vibrance: 10.0,

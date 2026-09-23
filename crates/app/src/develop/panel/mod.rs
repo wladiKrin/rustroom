@@ -241,7 +241,10 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui) -> bool {
                             adjustments::show(
                                 ui,
                                 &mut s.edits,
-                                &mut app.hsl_channel,
+                                adjustments::Channels {
+                                    hsl: &mut app.hsl_channel,
+                                    curve: &mut app.curve_channel,
+                                },
                                 adjustments::GradeUi {
                                     range: &mut app.grade_range,
                                     show_range: &mut s.show_grade_range,

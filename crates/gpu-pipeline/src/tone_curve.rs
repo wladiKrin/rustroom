@@ -14,24 +14,30 @@ use std::sync::Arc;
 ///
 /// ⚠ `ToneCurveStage` applies the curve to every **sample**, so one thread handles all three
 /// channels of its pixel — keeping the dispatch per-pixel, which is what `Dispatch` provides.
+///
+/// ⚠⚠ **Four tables in one buffer**, composite then red, green, blue, indexed by `stride`. The shader
+/// is **unconditional**, so a channel with no curve still has a table — an identity one, built by
+/// `ToneCurveStage::luts`. A branch per channel would cost more than the identity lookup it saves.
 const SHADER: &str = r#"
 struct Params {
     pixels: u32,
     row_groups: u32,
     last: u32,
-    pad0: u32,
+    // ⚠ Entries per table. The four tables — composite, red, green, blue — are one buffer, so a
+    // channel is reached by adding `stride * (channel + 1)` to the index.
+    stride: u32,
 };
 @group(0) @binding(0) var<storage, read_write> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read> lut: array<f32>;
 
-fn curve(v_in: f32) -> f32 {
+fn curve(v_in: f32, base: u32) -> f32 {
     let v = clamp(v_in, 0.0, 1.0);
     let pos = v * f32(params.last);
     let lo = u32(floor(pos));
-    if (lo >= params.last) { return lut[params.last]; }
+    if (lo >= params.last) { return lut[base + params.last]; }
     let frac = pos - f32(lo);
-    return lut[lo] + frac * (lut[lo + 1u] - lut[lo]);
+    return lut[base + lo] + frac * (lut[base + lo + 1u] - lut[base + lo]);
 }
 
 @compute @workgroup_size(64)
@@ -39,26 +45,49 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let pixel = id.y * (params.row_groups * 64u) + id.x;
     if (pixel >= params.pixels) { return; }
     let p = pixel * 3u;
-    data[p] = curve(data[p]);
-    data[p + 1u] = curve(data[p + 1u]);
-    data[p + 2u] = curve(data[p + 2u]);
+    // ⚠⚠ **Composite first, then the channel** — the order `ToneCurveStage::with_channels` documents.
+    // Changing it means changing both, and only a fixture where the two orders differ can see it.
+    data[p] = curve(curve(data[p], 0u), params.stride);
+    data[p + 1u] = curve(curve(data[p + 1u], 0u), params.stride * 2u);
+    data[p + 2u] = curve(curve(data[p + 2u], 0u), params.stride * 3u);
 }
 "#;
 
 /// The tone curve, on the GPU.
 pub struct GpuToneCurveStage {
-    /// ⚠⚠ The CPU stage's **own** compiled curve, never rebuilt here. Two constructions of one
-    /// spline is how a preview stops being evidence about the render — the rule
-    /// `ColorGradingStage::lut` and `HueTable::entries` already follow.
-    lut: Vec<f32>,
+    /// ⚠⚠ The CPU stage's **own** compiled curves, never rebuilt here — all four, concatenated.
+    /// Two constructions of one spline is how a preview stops being evidence about the render, the
+    /// rule `ColorGradingStage::lut` and `HueTable::entries` already follow.
+    luts: Vec<f32>,
     cpu: pipeline::ToneCurveStage,
 }
 
 impl GpuToneCurveStage {
     pub fn new(points: &[[f32; 2]], _ctx: &Arc<GpuContext>) -> Self {
-        let cpu = pipeline::ToneCurveStage::new(points);
+        Self::from_cpu(pipeline::ToneCurveStage::new(points))
+    }
+
+    /// The composite plus three per-channel curves.
+    ///
+    /// ⚠⚠ **`accelerate` must call this and not `new`.** The GPU tail is on by default, so a
+    /// construction site that passed only the composite would render a preview that **disagrees with
+    /// the export** — the worst failure shape this project has, and the one it has already paid for
+    /// three times in one milestone.
+    pub fn with_channels(
+        points: &[[f32; 2]],
+        red: &[[f32; 2]],
+        green: &[[f32; 2]],
+        blue: &[[f32; 2]],
+        _ctx: &Arc<GpuContext>,
+    ) -> Self {
+        Self::from_cpu(pipeline::ToneCurveStage::new(points).with_channels(red, green, blue))
+    }
+
+    /// ⚠ One place builds the buffer, so `new` and `with_channels` cannot lay it out differently —
+    /// and `cpu` carries the channels too, which is what makes the **decline path** correct.
+    fn from_cpu(cpu: pipeline::ToneCurveStage) -> Self {
         Self {
-            lut: cpu.lut().to_vec(),
+            luts: cpu.luts().concat(),
             cpu,
         }
     }
@@ -93,13 +122,15 @@ impl GpuStage for GpuToneCurveStage {
         params[4..8].copy_from_slice(&row_groups.to_le_bytes());
         // ⚠ Passed rather than written as a literal in the shader, so the table's length and the
         // index bound cannot disagree.
-        params[8..12].copy_from_slice(&((self.lut.len() - 1) as u32).to_le_bytes());
+        let stride = pipeline::ToneCurveStage::LUT_LEN as u32;
+        params[8..12].copy_from_slice(&(stride - 1).to_le_bytes());
+        params[12..16].copy_from_slice(&stride.to_le_bytes());
 
         crate::dispatch::Dispatch {
             label: "tone_curve",
             shader: SHADER.to_string(),
             params: params.to_vec(),
-            storages: &[&self.lut],
+            storages: &[&self.luts],
         }
         .encode(ctx, pass, img);
     }
@@ -164,6 +195,46 @@ mod tests {
                 "tone curve {points:?} diverged by more than fused rounding explains: {d:?}"
             );
         }
+    }
+
+    /// ⚠⚠ **The parity that matters most for this feature.** The GPU tail is on by default, so if the
+    /// shader composed the curves in the other order — or read the wrong table — the **preview would
+    /// disagree with the export** and nothing else would notice.
+    ///
+    /// ⚠ **Three DIFFERENT channel curves**, so a shader that read one table for all three, or offset
+    /// the base wrongly, cannot pass. Three copies of one would.
+    #[test]
+    fn the_gpu_matches_the_cpu_with_three_different_channel_curves() {
+        let Some(ctx) = ctx() else { return };
+        let composite = curvy();
+        let red = vec![[0.0, 0.18], [1.0, 1.0]];
+        let green = vec![[0.0, 0.0], [0.5, 0.58], [1.0, 1.0]];
+        let blue = vec![[0.0, 0.0], [1.0, 0.82]];
+
+        let img = ImageBuf::from_vec(6, 1, spread());
+        let cpu = pipeline::ToneCurveStage::new(&composite)
+            .with_channels(&red, &green, &blue)
+            .apply(img.clone());
+        let gpu = crate::chain::GpuChain::new(
+            ctx.clone(),
+            vec![Box::new(GpuToneCurveStage::with_channels(
+                &composite, &red, &green, &blue, &ctx,
+            ))],
+        )
+        .apply(img.clone());
+
+        // ⚠ The fixture must actually separate the channels, or this would pass on a grey image.
+        let a = [cpu.data()[3], cpu.data()[4], cpu.data()[5]];
+        assert!(
+            (a[0] - a[1]).abs() > 0.02 && (a[1] - a[2]).abs() > 0.02,
+            "the three channels must land apart for this to prove anything: {a:?}"
+        );
+
+        let d = crate::compare(&cpu, &gpu);
+        assert!(
+            d.worst_levels < 0.01,
+            "per-channel curves diverged by more than fused rounding explains: {d:?}"
+        );
     }
 
     /// ⚠⚠ **The clamp, and it needs a fixture above 1.0 or it is untested.** `sample` clamps its

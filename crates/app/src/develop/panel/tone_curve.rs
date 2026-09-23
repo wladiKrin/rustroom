@@ -50,11 +50,63 @@ const GRID: usize = 4;
 /// point on the curve, and the alternative is hardcoding a screen coordinate — brittle in the
 /// worst way, because a layout change then moves the target while the test keeps passing and
 /// grabbing nothing. `test_ui`'s module doc records that fault happening twice.
+/// Which curve the editor is showing.
+///
+/// ⚠⚠ **View state, never an edit.** It lives on the session beside `HslChannel` — `visualize`'s rule —
+/// because switching channels must not push a history entry. A field in `Edits` would make "look at the
+/// red curve" an undoable act and would travel in a preset.
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum CurveChannel {
+    #[default]
+    Rgb,
+    Red,
+    Green,
+    Blue,
+}
+
+impl CurveChannel {
+    pub const ALL: [CurveChannel; 4] = [Self::Rgb, Self::Red, Self::Green, Self::Blue];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rgb => "RGB",
+            Self::Red => "Red",
+            Self::Green => "Green",
+            Self::Blue => "Blue",
+        }
+    }
+
+    /// The channel's index into a per-channel histogram, or `None` for the composite.
+    fn index(self) -> Option<usize> {
+        match self {
+            Self::Rgb => None,
+            Self::Red => Some(0),
+            Self::Green => Some(1),
+            Self::Blue => Some(2),
+        }
+    }
+
+    /// The colour the plotted line takes. ⚠ Hand-picked constants outside the accent system, as
+    /// everything painted by hand is — and deliberately the *same* three as the histogram's channels,
+    /// so the curve and the ghost under it read as the same channel.
+    fn colour(self, v: &egui::Visuals) -> egui::Color32 {
+        match self {
+            Self::Rgb => v.strong_text_color(),
+            Self::Red => egui::Color32::from_rgb(230, 105, 105),
+            Self::Green => egui::Color32::from_rgb(110, 210, 110),
+            Self::Blue => egui::Color32::from_rgb(120, 150, 240),
+        }
+    }
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     curve: &mut ToneCurve,
     ed: &mut Edited,
     hist: Option<&[[u32; 256]; 3]>,
+    // ⚠ `None` for a **mask's** curve, which has no per-channel curves by decision and therefore no
+    // selector — see `build_pipeline`'s mask branch.
+    channel: Option<&mut CurveChannel>,
 ) -> egui::Rect {
     // ⚠ Through `sub_label_with`, never a hand-rolled `horizontal` around a sub-label: that
     // nesting is what widened the panel every frame on 2026-09-19 — see `theme::sub_label_with`.
@@ -71,6 +123,17 @@ pub fn show(
             ed.discrete();
         }
     });
+
+    // ⚠ The `hsl_bands` idiom — a selector rather than four nested headers — so one layout is learned
+    // once. ⚠ `theme::segmented` never touches `ed`, which is what keeps switching channels out of the
+    // history.
+    let selected = match &channel {
+        Some(c) => **c,
+        None => CurveChannel::Rgb,
+    };
+    if let Some(c) = channel {
+        theme::segmented(ui, c, &CurveChannel::ALL.map(|c| (c, c.label())));
+    }
 
     let full = ui.available_width();
     let size = full.min(MAX_SIZE);
@@ -207,7 +270,12 @@ pub fn show(
         // of every curve editor. The per-bin maximum over the channels, so a saturated
         // colour is not hidden by its dark siblings.
         if let Some(h) = hist {
-            let bins = rustroom_app::histogram::envelope(h);
+            // ⚠ The **selected** channel's distribution, so the ghost describes the curve above it.
+            // Both already exist and already share one scale, so nothing new is computed.
+            let bins = match selected.index() {
+                None => rustroom_app::histogram::envelope(h),
+                Some(c) => rustroom_app::histogram::normalised(h)[c],
+            };
             painter.add(egui::Shape::mesh(super::area_mesh(
                 rect,
                 &bins,
@@ -227,7 +295,7 @@ pub fn show(
             egui::Stroke::new(1.0, v.weak_text_color().gamma_multiply(0.7)),
         );
 
-        let curve_color = v.strong_text_color();
+        let curve_color = selected.colour(v);
         let plotted: Vec<egui::Pos2> = tool::curve_points(&pts, SAMPLES)
             .into_iter()
             .map(at)
@@ -340,7 +408,7 @@ mod tests {
             // a test asks is "did *any* frame of this gesture report it", which is what a
             // production caller reads too.
             let _ = ctx.run_ui(input, |ui| {
-                rect = show(ui, &mut curve, &mut ed, None);
+                rect = show(ui, &mut curve, &mut ed, None, None);
             });
         }
         (curve, ed)
@@ -499,7 +567,7 @@ mod tests {
         };
         let mut ed = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
-            show(ui, &mut curve, &mut ed, None);
+            show(ui, &mut curve, &mut ed, None, None);
         });
         assert!(curve.points.is_empty(), "{:?}", curve.points);
         assert!(ed.settled);
@@ -508,9 +576,82 @@ mod tests {
         // not tell a working Reset from one that clears on every frame.
         let mut ed2 = Edited::default();
         crate::test_ui::click(&ctx, "Reset", |ui| {
-            show(ui, &mut curve, &mut ed2, None);
+            show(ui, &mut curve, &mut ed2, None, None);
         });
         assert!(!ed2.changed && !ed2.settled, "a neutral curve was 'reset'");
+    }
+
+    /// ⚠⚠ **Switching channels must push NO history entry.** It is view state — `visualize`'s rule —
+    /// and a selector that reported an edit would put "I looked at the red curve" in the undo stack and
+    /// in every preset.
+    #[test]
+    fn switching_channels_is_not_an_edit() {
+        let ctx = crate::test_ui::ctx();
+        let mut curve = ToneCurve {
+            points: three_points(),
+        };
+        let mut channel = CurveChannel::Rgb;
+        let mut ed = Edited::default();
+        crate::test_ui::click(&ctx, "Blue", |ui| {
+            ed = Edited::default();
+            show(ui, &mut curve, &mut ed, None, Some(&mut channel));
+        });
+        assert_eq!(
+            channel,
+            CurveChannel::Blue,
+            "the click must select the channel"
+        );
+        assert!(
+            !ed.changed && !ed.settled,
+            "selecting a channel reported an edit"
+        );
+        assert_eq!(
+            curve.points,
+            three_points(),
+            "and it must not touch the curve"
+        );
+    }
+
+    /// ⚠ All four are offered, and each label is distinct — a selector with two "Red"s would be
+    /// unusable and the harness would click whichever came first.
+    #[test]
+    fn every_channel_is_offered_once_under_a_distinct_label() {
+        let mut seen: Vec<&str> = CurveChannel::ALL.iter().map(|c| c.label()).collect();
+        assert_eq!(seen.len(), 4);
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 4, "two channels share a label");
+        assert_eq!(
+            CurveChannel::default(),
+            CurveChannel::Rgb,
+            "RGB is the default"
+        );
+    }
+
+    /// ⚠⚠ **A mask's curve gets no selector**, because masks have no per-channel curves — the other
+    /// half of `build_pipeline`'s mask branch. Passing `None` must draw nothing clickable, or the
+    /// selector would offer channels that go nowhere.
+    #[test]
+    fn a_mask_curve_is_offered_no_channel_selector() {
+        let ctx = crate::test_ui::ctx();
+        let mut curve = ToneCurve {
+            points: three_points(),
+        };
+        let labels = crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+            show(ui, &mut curve, &mut Edited::default(), None, None);
+        });
+        for c in CurveChannel::ALL {
+            assert!(
+                !labels.iter().any(|(l, _)| l == c.label()),
+                "a mask's curve offered the {} channel: {labels:?}",
+                c.label()
+            );
+        }
+        // ⚠ And the sample must be non-empty, or this passes against a widget that drew nothing.
+        assert!(
+            labels.iter().any(|(l, _)| l == "Reset"),
+            "the widget did not draw, so this would guard nothing: {labels:?}"
+        );
     }
 
     #[test]
