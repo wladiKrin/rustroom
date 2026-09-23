@@ -167,7 +167,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-09-24)
 
 **2811 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
-branch; `main` is **17 commits ahead of `origin/main`** — the user last pushed `f4d7633`; still never push.
+branch, tree clean, and ✅ **`main` is level with `origin/main`** — the user has pushed everything through
+`a1169c4`. ⚠ Still never push.
 
 ✅ **Per-channel RGB tone curves (2026-09-24, confirmed by use).** Red/Green/Blue beside the composite on
 one widget, selector defaulting to RGB. ⚠⚠ Almost no colour science changed: `ToneCurveStage::apply` was
@@ -257,17 +258,19 @@ merged and confirmed by use. ⚠ The measurements, the three defects of one shap
 `#[serde(default)]` trap that would have shipped `false` to every existing settings file are in
 `docs/JOURNAL.md` — `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 
-### ▶ Next action — Immich slice 3, or the leftovers
+### ▶ Next action — Immich slice 4 (the user asked for it), or the leftovers
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
 not go looking for the next port; there isn't one.
 
-**Live candidates, none urgent:**
+**Live candidates, in the order the user has shown interest:**
 
-0. **Immich slice 3** — catalog rows, so **ratings/flags/labels persist on Immich photos** (they do
-   not today), and two-way sync. ⚠ The largest remaining gap in the integration, and the only one the
-   user would notice. ⚠ The album/bucket **rail lists** are also still refetched every launch; only
-   *asset* lists are cached.
+0. ⭐ **Immich slice 4 — a Download button and a Discard button (asked for 2026-09-24).** Predownload an
+   album or a selection; free the space again afterwards. ⚠ Everything it needs already exists and is
+   confirmed by use (`Job::Original`, `present_names`, the grid's ↓, the selection model). ⚠⚠ **"Discard"
+   must not touch the server** — the key is read-only and stays so — and it must **not** remove sidecars
+   or catalog rows, or it would silently destroy edits. Open questions and the reasoning are in
+   `docs/BACKLOG.md` under *Slice 4*. **Specced nowhere yet; brainstorm first.**
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
@@ -316,9 +319,17 @@ helpers and two twins are renamed, so a filename comparison undercounts.
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
 - ⚠ **M7.3b is DEFERRED, not done.**
-- ⚠ Past the ~600 threshold and wanting a split: `shell.rs` **1,379**, `main.rs` **1,116**,
-  `lens-profile/src/lib.rs` **949**, `immich_source.rs` **821**, `immich_worker.rs` **698**.
-  (`batch_export/worker.rs` is 1,127 deliberately — ~190 of code, the rest its own tests.)
+- ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL — this list was wrong in both directions until
+  2026-09-24.** Every quoted figure here had been a *total*, and this repo's files carry enormous test
+  tails, so the list named files that are fine and missed the ones that are not. Measured with
+  `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments, which are heavy here):
+  - **Genuinely large, and none was previously listed:** `edit-model/src/lib.rs` **1,883**,
+    `pipeline/src/lib.rs` **1,810**, `catalog/src/db.rs` **1,730**, `app/src/settings.rs` **1,046**.
+  - **Wrongly listed and actually fine:** `immich_source.rs` is **411** (not 896), `render_engine.rs` is
+    **169** of 4,800, `develop/canvas/mod.rs` is **16** of 2,136. ⚠ `adjustments.rs` is **610**, barely
+    over — not the "~1,250" its total suggests.
+  - ⚠ `batch_export/worker.rs` was always described correctly (~190 of code), which is the precedent the
+    rest of this entry should have followed from the start.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
   adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
   `thumb_store`'s use a counter as well and are the pattern to copy.

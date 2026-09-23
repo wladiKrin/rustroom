@@ -1267,9 +1267,11 @@ its stack table; **neither has ever been added**, and that table now records so.
 
 **Do not treat this as a parsing job.** The parsing is the easy half.
 
-## Immich integration (recorded 2026-08-26 — wanted, likely its own milestone)
+## Immich integration (recorded 2026-08-26 — slices 1–3 BUILT, 2026-09-22/24)
 
-**Status:** 🟡 wanted, not blocked. Slices 1 and 2 are the agreed start; slice 3 is a follow-up.
+**Status:** ✅ **slices 1, 2 and 3 are built, merged and confirmed by use.** What remains is **slice 4**
+(the cache-management buttons, requested 2026-09-24) and **two-way sync**, which was *not* what slice 3
+turned out to be — see the correction below.
 
 The user self-hosts an **Immich** server holding all their photos, and wants to open them in
 Rustroom by giving a URL and credentials.
@@ -1294,9 +1296,14 @@ mean pulling tens of gigabytes of RAW.
    and shares, Rustroom edits.
 2. **"Browse my Immich library."** Lazy thumbnails, originals fetched on open, the catalog holding
    asset ids. Read-only. Designed to fall out of slice 1.
-3. **Two-way sync** — push edited results back as new assets, reconcile Immich albums with
-   collections, keep marks in step with favourites. **Much larger**, and where the design questions
-   live: what is authoritative, what happens on conflict, what happens offline.
+3. **~~Two-way sync~~ — ⚠⚠ THE SLICE THAT GOT BUILT IS NOT THE SLICE WRITTEN HERE.** Asked in
+   brainstorming on 2026-09-23, the user chose **local only** of three options offered: catalog rows so
+   marks persist in Rustroom, and **nothing sent to Immich**. ✅ Built and confirmed by use.
+   ⚠ Two-way sync is therefore still **unbuilt**, and its reasons for being deferred are now sharper
+   than "it is larger": write-back needs **`asset.update`** on the API key, which the Settings help text
+   explicitly tells the user *not* to grant, and it would let a bug in Rustroom alter their library.
+   Colour labels and reject flags have no Immich equivalent in any case.
+4. **Cache management — a Download button and a Discard button (requested 2026-09-24).** See below.
 
 ### ✅ ANSWERED 2026-09-22 — the original is the original. Do not re-research this.
 
@@ -1306,10 +1313,17 @@ original file of the specified asset"*. `AssetFileType` is `fullsize | preview |
 `originalPath`: derivatives are additive and the original is never one of them.
 `server/src/utils/mime-types.ts` registers the full RAW set. So slice 1 keeps its point.
 
-⚠⚠ **Slices 1 and 2 are now BUILT, on branch `immich-browse`, confirmed by use** — albums browse,
-server thumbnails, download on open, edit, persist. See `CLAUDE.md`'s live state and
-`grep -n 'M9.1 slice 1' docs/JOURNAL.md`. **Only slice 3 (two-way sync) remains**, and its design
-questions are unchanged.
+⚠⚠ **Slices 1–3 are BUILT and confirmed by use** (2026-09-22 to 2026-09-24): albums browse, a
+**Timeline** of months, server thumbnails, download on open, edit, persist; **asset lists cached** and
+revalidated against `(assetCount, lastModifiedAssetTimestamp)`; **⋯ → Reindex** refetches; **marks
+persist** via catalog rows, one folder per server; the rail reads **"immich (downloaded)"** and counts
+only supported images; a **circled ↓** marks downloaded photos in the grid.
+`grep -n 'Immich slice' docs/JOURNAL.md`.
+
+⚠ **The invariants that are easy to break again** — all three cost real bugs: the catalog keys a row on
+the **path's own file name**, never `CatalogEntry::file_name`; `row_is_browsable` hides an absent
+**Immich** row from catalog-wide views but **never** an absent local one; and `present_names` is one
+`read_dir` filtered through `catalog::is_supported`, never a stat per thumbnail.
 
 ⚠ **But the question this heading asked was the wrong one to stop at.** The two defects that
 actually cost time were not about originals at all: `GET /albums/{id}` returns **no `assets` field**,
@@ -1317,6 +1331,47 @@ and a real server pages by **`nextPage`** while leaving `nextCursor` null. Neith
 from the OpenAPI schema, and both were found by a real reply. **Before the next Immich slice, capture
 a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
 lessons.
+
+### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
+
+**Status:** 🟡 wanted, not blocked, not specced. The user's words: *"I'd like there to be a 'download'
+button, that allows me to predownload e.g. an album or selection of images from immich, as well as a
+discard or delete button."*
+
+**Why it follows naturally.** Everything needed already exists and is confirmed by use:
+`immich_worker`'s `Job::Original` downloads one asset to its deterministic cache path;
+`immich_source::present_names` answers which assets are already here in one `read_dir`; the grid's
+**circled ↓** already shows which; the Folders rail already counts them as **"immich (downloaded)"**; and
+the selection model is the ordinary one, so "this album" and "these photos" are the same question the
+export dialog already answers.
+
+**What it is really for:** taking a working set offline, and getting the disk space back afterwards —
+which is the other half of the *"no eviction for the cached originals"* gap that has been on the
+out-of-scope list since slice 1.
+
+⚠ **Open questions, none blocking, all worth deciding before building:**
+
+- **Where do the buttons live?** The rail's album row (a per-album action, beside Refresh) or the
+  Library's toolbar (a per-selection action, beside Export)? ⚠ Likely **both**, because "the album" and
+  "what I picked" are genuinely different targets — the same asymmetry `apply_mark_to` documents for
+  Compare and Survey.
+- **Discard must not mean "delete from Immich."** ⚠⚠ The word is dangerous: the asset stays on the
+  server, only the **local cache copy** goes. Prefer **"Remove downloads"** or **"Free up space"** over
+  "Delete". The key is read-only and must stay that way, so the button *cannot* touch the server — say
+  so in the hover.
+- **What happens to edits?** A discarded photo's **sidecar** holds its edits, and its **catalog row**
+  holds its marks. Both must survive — the path is deterministic, so re-downloading restores byte-
+  identical identity and the edits reattach. ⚠ That is exactly what `cache_path`'s doc means by
+  *"re-downloading an evicted or deleted file must restore byte-identical identity"*. **A discard that
+  also removed the sidecar would silently destroy work.**
+- **Progress and cancellation.** An album of 872 assets is a long download. `immich_worker` is one job
+  per asset today; a bulk download wants a queue with a count, and the `batch_export` worker is the
+  precedent for the shape.
+- **Does the grid's ↓ need a third state?** "Downloading" is currently invisible —
+  `ImmichWorker::is_downloading` exists and nothing draws it.
+
+⚠ Before building: **capture a real response for every endpoint it touches.** The two defects that cost
+the most time in this integration were both invisible in the OpenAPI schema.
 
 ### ⚠ Three honest costs
 
