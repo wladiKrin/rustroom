@@ -361,6 +361,17 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             app.thumb_cache_bytes = Some(0);
                         }
                     });
+                    ui.add(
+                        egui::Slider::new(&mut d.thumb_budget_mb, 512..=51200)
+                            .step_by(512.0)
+                            .text("MB budget"),
+                    )
+                    .on_hover_text(
+                        "How much disk the thumbnail cache may use. The least recently seen \
+                         entries are deleted when it is exceeded. ⚠ Takes effect at the next folder \
+                         open, not on Apply — rebuilding the loader now would throw away the open \
+                         folder's thumbnails.",
+                    );
 
                     theme::sub_label(ui, "Export at once");
                     let cores = std::thread::available_parallelism()
@@ -511,6 +522,42 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             }
                             ui.end_row();
                         });
+                    ui.add_space(GAP);
+                    theme::sub_label(ui, "Thumbnail cache");
+                    ui.horizontal(|ui| {
+                        let store = rustroom_app::thumb_store::ThumbStore::immich_default(
+                            d.immich_thumb_budget_mb as u64 * 1024 * 1024,
+                        );
+                        // ⚠ `size_bytes()` walks the directory, so it is computed when the dialog
+                        // opens and cached — never in a body, which runs sixty times a second.
+                        let bytes = *app
+                            .immich_thumb_cache_bytes
+                            .get_or_insert_with(|| store.size_bytes());
+                        ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
+                        if ui
+                            .button("Clear")
+                            .on_hover_text(
+                                "Thumbnails downloaded from Immich, so an album you have opened \
+                                 before fills in without asking the server again. Clearing costs \
+                                 nothing but the time to fetch them again. Takes effect at once, \
+                                 not on Apply.",
+                            )
+                            .clicked()
+                        {
+                            store.clear();
+                            app.immich_thumb_cache_bytes = Some(0);
+                        }
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut d.immich_thumb_budget_mb, 512..=51200)
+                            .step_by(512.0)
+                            .text("MB budget"),
+                    )
+                    .on_hover_text(
+                        "How much disk Immich thumbnails may use. Separate from the local cache's \
+                         budget, so neither can evict the other's entries.",
+                    );
+
                     crate::theme::hint(
                         ui,
                         "Albums appear in the Immich section of the left panel. Photos are \

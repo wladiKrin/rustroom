@@ -179,6 +179,7 @@ pub fn for_test() -> RustroomApp {
         catalog: catalog::db::Catalog::open_in_memory().ok(),
         modal: Modal::None,
         thumb_cache_bytes: None,
+        immich_thumb_cache_bytes: None,
         settings_draft: None,
         actions: ActionLog::default(),
         // ⚠ Empty, and deliberately not pointed at the real looks directory: a test that found
