@@ -184,19 +184,23 @@ pub struct BucketMonth {
     pub bucket: String,
 }
 
-/// Group the server's buckets into years and months, **ascending**.
+/// Group the server's buckets into years and months, **newest first**.
 ///
 /// ⚠⚠ Not `date_tree::group`. Immich's buckets are monthly, and pushing them through that
 /// function would produce a day node meaning "the whole month" — a lie in the data rather than a
 /// rendering detail. Twenty lines is cheaper than the lie, and `date_tree` stays untouched.
 ///
-/// ⚠ Ascending to match the local Dates section, whose `capture_days()` orders ascending. Two date
-/// trees in one panel reading in opposite directions reads as a bug. Newest-first is arguably better
-/// for a photo library — but then *both* should change, which is its own decision.
+/// ⚠⚠ **Descending, the user's call after using it (2026-09-23).** This was built ascending to
+/// match the local Dates section, whose `capture_days()` orders ascending — the argument being that
+/// two date trees in one panel reading opposite ways reads as a bug. Use disagreed: for a library
+/// you are browsing rather than auditing, the recent months are the ones you want first, and it is
+/// also the order Immich's own clients use. ⚠ The local Dates section is therefore still ascending;
+/// flipping it too is a separate decision about an established view, not a side effect of this one.
 ///
 /// ⚠ A row whose `time_bucket` is not `YYYY-MM-DD` is **skipped**: one bad row must not empty the
 /// tree. ⚠ Sorted explicitly rather than trusting the server's order, so a gap between months
-/// cannot merge two or drop one.
+/// cannot merge two or drop one — and so this does not silently depend on the server continuing to
+/// return them newest-first.
 pub fn group_buckets(buckets: &[immich::Bucket]) -> Vec<BucketYear> {
     let mut rows: Vec<(i32, u32, u32, String)> = buckets
         .iter()
@@ -210,7 +214,8 @@ pub fn group_buckets(buckets: &[immich::Bucket]) -> Vec<BucketYear> {
             Some((year, month, b.count, s.clone()))
         })
         .collect();
-    rows.sort_by_key(|(y, m, _, _)| (*y, *m));
+    // ⚠ Newest first, both levels: years descend, and the months inside a year descend with them.
+    rows.sort_by_key(|&(y, m, _, _)| (std::cmp::Reverse(y), std::cmp::Reverse(m)));
 
     let mut out: Vec<BucketYear> = Vec::new();
     for (year, month, count, bucket) in rows {
@@ -677,25 +682,41 @@ mod tests {
         }
     }
 
-    /// ⚠⚠ Reversed to **ascending** to match the local Dates section: `capture_days()` orders
-    /// ascending, and two date trees in one panel reading in opposite directions reads as a bug.
+    /// ⚠⚠ **Newest first**, the user's call after using it. Both levels descend: for a library you
+    /// browse rather than audit, the recent months are the ones you want first.
     #[test]
-    fn group_buckets_reverses_to_ascending_and_groups_by_year() {
+    fn group_buckets_puts_the_newest_year_and_month_first() {
         let v = vec![
-            bucket("2026-08-01", 76),
-            bucket("2026-07-01", 233),
             bucket("2025-12-01", 189),
+            bucket("2026-07-01", 233),
+            bucket("2026-08-01", 76),
         ];
         let years = group_buckets(&v);
         assert_eq!(years.len(), 2);
-        assert_eq!(years[0].year, 2025, "oldest year first");
-        assert_eq!(years[0].count, 189);
-        assert_eq!(years[1].year, 2026);
-        assert_eq!(years[1].count, 76 + 233);
+        assert_eq!(years[0].year, 2026, "newest year first");
+        assert_eq!(years[0].count, 76 + 233);
+        assert_eq!(years[1].year, 2025);
+        assert_eq!(years[1].count, 189);
         assert_eq!(
-            years[1].months.iter().map(|m| m.month).collect::<Vec<_>>(),
-            vec![7, 8],
-            "months ascending within the year"
+            years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
+            vec![8, 7],
+            "months descending within the year"
+        );
+    }
+
+    /// ⚠ Sorted here rather than trusted from the reply, so the tree is right even if a server
+    /// returns its buckets in some other order.
+    #[test]
+    fn group_buckets_does_not_depend_on_the_servers_own_order() {
+        let shuffled = vec![
+            bucket("2026-04-01", 1),
+            bucket("2026-08-01", 2),
+            bucket("2026-06-01", 3),
+        ];
+        let years = group_buckets(&shuffled);
+        assert_eq!(
+            years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
+            vec![8, 6, 4]
         );
     }
 
@@ -707,7 +728,7 @@ mod tests {
         assert_eq!(years.len(), 1);
         assert_eq!(
             years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
-            vec![4, 8]
+            vec![8, 4]
         );
     }
 
