@@ -167,6 +167,92 @@ pub fn set_connection(s: &mut crate::settings::Settings, url: &str, key: &str) {
     s.immich_key = key.trim().to_string();
 }
 
+/// One year of Immich buckets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BucketYear {
+    pub year: i32,
+    pub count: u32,
+    pub months: Vec<BucketMonth>,
+}
+
+/// One month of Immich buckets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BucketMonth {
+    pub month: u32,
+    pub count: u32,
+    /// The bucket identifier the server gave, passed back verbatim when the month is opened.
+    pub bucket: String,
+}
+
+/// Group the server's buckets into years and months, **ascending**.
+///
+/// ⚠⚠ Not `date_tree::group`. Immich's buckets are monthly, and pushing them through that
+/// function would produce a day node meaning "the whole month" — a lie in the data rather than a
+/// rendering detail. Twenty lines is cheaper than the lie, and `date_tree` stays untouched.
+///
+/// ⚠ Ascending to match the local Dates section, whose `capture_days()` orders ascending. Two date
+/// trees in one panel reading in opposite directions reads as a bug. Newest-first is arguably better
+/// for a photo library — but then *both* should change, which is its own decision.
+///
+/// ⚠ A row whose `time_bucket` is not `YYYY-MM-DD` is **skipped**: one bad row must not empty the
+/// tree. ⚠ Sorted explicitly rather than trusting the server's order, so a gap between months
+/// cannot merge two or drop one.
+pub fn group_buckets(buckets: &[immich::Bucket]) -> Vec<BucketYear> {
+    let mut rows: Vec<(i32, u32, u32, String)> = buckets
+        .iter()
+        .filter_map(|b| {
+            let s = &b.time_bucket;
+            let year: i32 = s.get(0..4)?.parse().ok()?;
+            let month: u32 = s.get(5..7)?.parse().ok()?;
+            if !(1..=12).contains(&month) {
+                return None;
+            }
+            Some((year, month, b.count, s.clone()))
+        })
+        .collect();
+    rows.sort_by_key(|(y, m, _, _)| (*y, *m));
+
+    let mut out: Vec<BucketYear> = Vec::new();
+    for (year, month, count, bucket) in rows {
+        if out.last().map(|y| y.year) != Some(year) {
+            out.push(BucketYear {
+                year,
+                count: 0,
+                months: Vec::new(),
+            });
+        }
+        let y = out.last_mut().expect("just pushed");
+        y.count += count;
+        y.months.push(BucketMonth {
+            month,
+            count,
+            bucket,
+        });
+    }
+    out
+}
+
+/// The RFC 3339 bounds of one month: start inclusive, end exclusive.
+///
+/// ⚠⚠ December must roll the year, which is the one place this goes quietly wrong.
+/// ⚠ The end is the **next month's first instant**, so leap years need no special case.
+/// ⚠ UTC, matching what the server sends. A photo near a month boundary may therefore fall in the
+/// neighbouring month relative to its local time; `MetadataSearchDto` offers no local-time filter.
+pub fn month_range(year: i32, month: u32) -> Option<(String, String)> {
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    Some((
+        format!("{year:04}-{month:02}-01T00:00:00.000Z"),
+        format!("{ny:04}-{nm:02}-01T00:00:00.000Z"),
+    ))
+}
+
 /// Decode thumbnail bytes the server sent.
 ///
 /// ⚠⚠ Sniffs the format with `load_from_memory` rather than assuming webp. Immich's thumbnail and
@@ -579,6 +665,78 @@ mod tests {
         let c = connection(&s).expect("must be a connection");
         assert_eq!(c.url, "https://photos.example.com");
         assert_eq!(c.key, "abc");
+    }
+
+    fn bucket(s: &str, n: u32) -> immich::Bucket {
+        immich::Bucket {
+            time_bucket: s.to_string(),
+            count: n,
+        }
+    }
+
+    /// ⚠⚠ Reversed to **ascending** to match the local Dates section: `capture_days()` orders
+    /// ascending, and two date trees in one panel reading in opposite directions reads as a bug.
+    #[test]
+    fn group_buckets_reverses_to_ascending_and_groups_by_year() {
+        let v = vec![
+            bucket("2026-08-01", 76),
+            bucket("2026-07-01", 233),
+            bucket("2025-12-01", 189),
+        ];
+        let years = group_buckets(&v);
+        assert_eq!(years.len(), 2);
+        assert_eq!(years[0].year, 2025, "oldest year first");
+        assert_eq!(years[0].count, 189);
+        assert_eq!(years[1].year, 2026);
+        assert_eq!(years[1].count, 76 + 233);
+        assert_eq!(
+            years[1].months.iter().map(|m| m.month).collect::<Vec<_>>(),
+            vec![7, 8],
+            "months ascending within the year"
+        );
+    }
+
+    /// ⚠ A gap between months must not merge them or drop one.
+    #[test]
+    fn group_buckets_survives_a_gap_between_months() {
+        let v = vec![bucket("2026-08-01", 5), bucket("2026-04-01", 7)];
+        let years = group_buckets(&v);
+        assert_eq!(years.len(), 1);
+        assert_eq!(
+            years[0].months.iter().map(|m| m.month).collect::<Vec<_>>(),
+            vec![4, 8]
+        );
+    }
+
+    /// ⚠ One malformed row must not empty the tree.
+    #[test]
+    fn a_malformed_bucket_is_skipped_not_fatal() {
+        let v = vec![bucket("not-a-date", 9), bucket("2026-04-01", 7)];
+        let years = group_buckets(&v);
+        assert_eq!(years.len(), 1);
+        assert_eq!(years[0].count, 7);
+    }
+
+    /// ⚠⚠ Month arithmetic is where this goes quietly wrong: December must roll the year.
+    #[test]
+    fn a_month_range_rolls_december_into_january() {
+        let (a, b) = month_range(2025, 12).expect("December must be a valid month");
+        assert_eq!(a, "2025-12-01T00:00:00.000Z");
+        assert_eq!(b, "2026-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn a_month_range_is_exclusive_at_the_end_and_handles_february() {
+        let (a, b) = month_range(2024, 2).expect("February must be a valid month");
+        assert_eq!(a, "2024-02-01T00:00:00.000Z");
+        // ⚠ The next month's first instant, so leap years need no special case at all.
+        assert_eq!(b, "2024-03-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn an_impossible_month_is_none() {
+        assert!(month_range(2025, 0).is_none());
+        assert!(month_range(2025, 13).is_none());
     }
 
     /// ⚠⚠ **The new invariant, pinned.** A `CatalogEntry` may name a file that does not exist,
