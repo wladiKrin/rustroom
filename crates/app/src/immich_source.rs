@@ -409,11 +409,7 @@ mod tests {
     /// second.
     #[test]
     fn present_names_lists_what_is_in_the_cache_directory() {
-        let d = std::env::temp_dir().join(format!(
-            "rr_present_{}_{}",
-            std::process::id(),
-            line!()
-        ));
+        let d = std::env::temp_dir().join(format!("rr_present_{}_{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("a.jpg"), b"x").unwrap();

@@ -151,13 +151,29 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     if r.clicked {
                                         action = Action::OpenAllPhotos;
                                     }
+                                    // ⚠ Once, not per row.
+                                    let immich_root = app.immich_cache_root();
                                     for f in &folders {
-                                        // ⚠ The basename is what fits and what identifies; the full path is the hover.
-                                        let shown = f
-                                            .path
-                                            .file_name()
-                                            .map(|n| n.to_string_lossy().to_string())
-                                            .unwrap_or_else(|| f.path.to_string_lossy().to_string());
+                                        // ⚠ The basename is what fits and what identifies; the full
+                                        // path is the hover. ⚠ Except the Immich cache root, whose
+                                        // basename is a host slug that says nothing — see
+                                        // `folder_display_name`.
+                                        let shown = rustroom_app::immich_catalog::folder_display_name(
+                                            &f.path,
+                                            immich_root.as_deref(),
+                                        );
+                                        // ⚠⚠ A catalog row exists for every asset **browsed**, while
+                                        // the count beside a folder is a statement about that
+                                        // folder's *contents* — it read 981 against 17 files on disk.
+                                        // ⚠ Only the Immich folder is overridden; a folder on an
+                                        // unplugged drive keeps its own count, the same line slice 3
+                                        // drew for `row_is_browsable`.
+                                        let is_immich = immich_root.as_deref() == Some(f.path.as_path());
+                                        let count = if is_immich {
+                                            app.immich_present.len() as i64
+                                        } else {
+                                            f.count
+                                        };
                                         let selected = matches!(
                                             app.library.as_ref().map(|l| &l.source),
                                             Some(crate::LibrarySource::Folder(p)) if p == &f.path
@@ -167,7 +183,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             ui,
                                             RowSpec {
                                                 name: &shown,
-                                                count: Some(f.count),
+                                                count: Some(count),
                                                 meta: "",
                                                 selected,
                                                 indent: 0.0,

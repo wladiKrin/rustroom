@@ -36,6 +36,21 @@ pub fn record_assets(
     cat.sync_folder(root, scan)
 }
 
+/// Whether this grid cell should carry the downloaded indicator.
+///
+/// ⚠ **Immich sources only** — asked for under the Immich header and nowhere else. A local photo is
+/// always "downloaded", so the mark would be noise on every cell of every folder.
+///
+/// ⚠ Answered from the pre-read `present` set, never a stat: the grid draws hundreds of cells sixty
+/// times a second. See `immich_source::present_names`.
+pub fn shows_download_badge(
+    is_immich_source: bool,
+    path: &Path,
+    present: &std::collections::HashSet<std::ffi::OsString>,
+) -> bool {
+    is_immich_source && path.file_name().is_some_and(|n| present.contains(n))
+}
+
 /// What the Folders rail should call this folder.
 ///
 /// ⚠ The Immich cache root's basename is the host slug — `https___immich_example` — which
@@ -231,6 +246,45 @@ mod tests {
         );
     }
 
+    // ── shows_download_badge ──
+
+    fn present_of(names: &[&str]) -> std::collections::HashSet<std::ffi::OsString> {
+        names.iter().map(std::ffi::OsString::from).collect()
+    }
+
+    #[test]
+    fn a_downloaded_asset_under_an_immich_source_shows_the_badge() {
+        let present = present_of(&["abc.jpg"]);
+        assert!(shows_download_badge(
+            true,
+            Path::new("/cache/immich/host/abc.jpg"),
+            &present
+        ));
+    }
+
+    #[test]
+    fn an_asset_not_yet_downloaded_shows_nothing() {
+        let present = present_of(&["abc.jpg"]);
+        assert!(!shows_download_badge(
+            true,
+            Path::new("/cache/immich/host/def.jpg"),
+            &present
+        ));
+    }
+
+    /// ⚠⚠ **Not under a folder source, even though the file is plainly there.** A local photo is
+    /// always downloaded, so the mark would appear on every cell of every folder — which is the
+    /// opposite of information.
+    #[test]
+    fn a_folder_source_shows_nothing_even_for_a_present_file() {
+        let present = present_of(&["abc.jpg"]);
+        assert!(!shows_download_badge(
+            false,
+            Path::new("/Users/me/Pictures/abc.jpg"),
+            &present
+        ));
+    }
+
     // ── folder_display_name ──
 
     #[test]
@@ -255,7 +309,10 @@ mod tests {
         let lookalike = Path::new("/somewhere/https___host_example");
         assert_eq!(folder_display_name(lookalike, None), "https___host_example");
         assert_eq!(
-            folder_display_name(lookalike, Some(Path::new("/c/rustroom/immich/https___other"))),
+            folder_display_name(
+                lookalike,
+                Some(Path::new("/c/rustroom/immich/https___other"))
+            ),
             "https___host_example"
         );
     }

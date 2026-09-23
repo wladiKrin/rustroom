@@ -79,7 +79,9 @@ pub fn cell(
     badge: Option<&str>,
     marks: catalog::db::Marks,
 ) -> egui::Response {
-    cell_with(ui, box_size, thumb, badge, marks, true)
+    // ⚠ `false`: the filmstrip carries no downloaded indicator. Turning it on there later is one
+    // argument, but it is a Develop-side strip where the photo is open and therefore downloaded.
+    cell_with(ui, box_size, thumb, badge, marks, true, false)
 }
 
 /// The thumbnail's corner radius in points.
@@ -95,6 +97,7 @@ pub fn cell_with(
     badge: Option<&str>,
     marks: catalog::db::Marks,
     overlay_marks: bool,
+    downloaded: bool,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::hover());
     match thumb {
@@ -119,6 +122,7 @@ pub fn cell_with(
             );
         }
     }
+    let mut badge_end: Option<f32> = None;
     if let Some(text) = badge {
         // ⚠ Sized to its text, not fixed: a badge used to hold only a copy number, and a label
         // like "Client crop" would have overflowed a 17 pt box. Capped at half the cell so a long
@@ -149,6 +153,10 @@ pub fn cell_with(
             galley,
             ui.visuals().extreme_bg_color,
         );
+        badge_end = Some(badge_rect.right());
+    }
+    if downloaded {
+        paint_downloaded(&ui.painter_at(rect), rect, badge_end);
     }
     // ⚠ Painted into the **allocated** rect rather than allocating more: the cell's geometry must
     // not depend on whether a photo happens to be marked, or marked photos would resize their
@@ -158,6 +166,37 @@ pub fn cell_with(
     }
 
     resp
+}
+
+/// A circled downward arrow, marking a photo whose original is on disk.
+///
+/// ⚠⚠ **Hand-painted, and that is forced rather than lazy.** `icons.rs` requires every codepoint to be
+/// verified against the bundled Phosphor 2.1.2 TTF, because *"four separate features in this project
+/// have picked a glyph that turned out to be absent"*. That font's `post` table is **version 3.0 — no
+/// glyph names** — so a codepoint can be verified as *present* but **not** as being the right picture,
+/// and shipping the wrong icon looks fine while being wrong. A circle and three strokes need no
+/// verification and scale cleanly. The histogram's clipping marks are painted for the same reason.
+///
+/// ⚠ `after` is the badge's right edge when a cell also carries a copy or label badge: the indicator
+/// then sits just past it, so neither moves the other's established position and they never overlap.
+/// A virtual copy of a downloaded Immich photo is exactly that case.
+///
+/// ⚠ A translucent black disc with white ink rather than an accent colour, so it stays legible over a
+/// blown sky and over a dark frame alike.
+fn paint_downloaded(p: &egui::Painter, rect: egui::Rect, after: Option<f32>) {
+    const R: f32 = 6.0;
+    const PAD: f32 = 3.0;
+    let left = match after {
+        Some(x) => x + PAD,
+        None => rect.left() + PAD,
+    };
+    let c = egui::pos2(left + R, rect.top() + PAD + R);
+    p.circle_filled(c, R, egui::Color32::from_black_alpha(150));
+    let stroke = egui::Stroke::new(1.4, egui::Color32::WHITE);
+    let tip = c + egui::vec2(0.0, 2.7);
+    p.line_segment([c + egui::vec2(0.0, -3.0), tip], stroke);
+    p.line_segment([c + egui::vec2(-2.7, 0.0), tip], stroke);
+    p.line_segment([c + egui::vec2(2.7, 0.0), tip], stroke);
 }
 
 /// The marks row's height for a glyph of `size` points.
@@ -423,7 +462,7 @@ mod tests {
                 .allocate_ui(egui::vec2(CELL, CELL), |ui| {
                     ui.set_min_size(egui::vec2(CELL, CELL));
                     ui.vertical_centered(|ui| {
-                        cell_with(ui, box_size, tex.as_ref(), None, marks, false);
+                        cell_with(ui, box_size, tex.as_ref(), None, marks, false, false);
                         ui.label(egui::RichText::new("DSCF6509.RAF").small());
                         marks_row(ui, box_size.x, marks, 9.0);
                     });
