@@ -7,7 +7,7 @@
 //! ⚠ Every struct ignores unknown fields (serde's default) and every enum has an `Other`
 //! fallback, so a server upgrade that adds a field or a kind does not break browsing.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// `GET /server/about` — the version probe.
 #[derive(Debug, Clone, Deserialize)]
@@ -22,6 +22,15 @@ pub struct AlbumSummary {
     pub id: String,
     pub album_name: String,
     pub asset_count: u32,
+    /// When an asset in this album last changed.
+    ///
+    /// ⚠⚠ **The album list cache's validator, together with `asset_count`.** Not `updated_at`: the
+    /// captured reply has that identical for every album — evidently a bulk touch — so it never
+    /// signals a content change. This field differs per album and is explicitly about its assets.
+    ///
+    /// ⚠ `Option` because the schema does not mark it required. An album without it simply cannot be
+    /// validated, so its list is refetched rather than trusted.
+    pub last_modified_asset_timestamp: Option<String>,
 }
 
 /// One row of `GET /timeline/buckets`.
@@ -100,7 +109,10 @@ pub enum NextPage {
 ///
 /// ⚠ `Other` catches anything Immich adds later. Without it one unknown kind would fail the
 /// whole album's parse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// ⚠ `Serialize` because a stored asset list is written back as JSON. `#[serde(other)]` is a
+/// deserialise-only attribute, so `Other` writes as `"Other"` and reads back through that same
+/// fallback — round-tripped by a test rather than assumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AssetType {
     #[serde(rename = "IMAGE")]
     Image,
@@ -111,7 +123,10 @@ pub enum AssetType {
 }
 
 /// One asset, narrowed to what the browse grid and the download need.
-#[derive(Debug, Clone, Deserialize)]
+/// ⚠ `Serialize` is here for the on-disk asset-list cache (`app`'s `immich_list_cache`). The other
+/// DTOs in this file stay read-only deliberately: a type that can be written invites someone to
+/// write it, and nothing else here is ever sent anywhere.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
     pub id: String,
@@ -179,8 +194,10 @@ mod tests {
         assert_eq!(v[0].asset_count, 412);
     }
 
-    /// ⚠ Parses a captured reply, with all twelve fields this DTO does not model present in it —
-    /// `albumUsers`, `startDate`, `order`, `lastModifiedAssetTimestamp` and the rest.
+    /// ⚠ Parses a captured reply, with the eleven fields this DTO does not model present in it —
+    /// `albumUsers`, `startDate`, `order` and the rest. (`lastModifiedAssetTimestamp` was among them
+    /// until it became the cache validator; see
+    /// `a_real_albums_reply_carries_the_per_album_change_signal`.)
     #[test]
     fn a_real_albums_reply_parses_and_its_extra_fields_are_ignored() {
         let v: Vec<AlbumSummary> =
@@ -191,6 +208,27 @@ mod tests {
         assert_eq!(v[0].id, "a6e6f5aa-8be7-454e-9328-82dc0cc2ab2b");
         assert_eq!(v[1].album_name, "Rom");
         assert_eq!(v[1].asset_count, 112);
+    }
+
+    /// ⚠⚠ The album validator is `(assetCount, lastModifiedAssetTimestamp)`, **not** `updatedAt`:
+    /// the captured reply shows `updatedAt` identical for both albums — a bulk touch — so it says
+    /// nothing about an album's contents. This asserts the real captured values, which is the only
+    /// way to know the field is there and means what it appears to.
+    #[test]
+    fn a_real_albums_reply_carries_the_per_album_change_signal() {
+        let v: Vec<AlbumSummary> = serde_json::from_str(ALBUMS_REAL).expect("must parse");
+        assert_eq!(
+            v[0].last_modified_asset_timestamp.as_deref(),
+            Some("2026-08-14T08:29:23.862Z")
+        );
+        assert_eq!(
+            v[1].last_modified_asset_timestamp.as_deref(),
+            Some("2026-06-14T12:11:35.623Z")
+        );
+        assert_ne!(
+            v[0].last_modified_asset_timestamp, v[1].last_modified_asset_timestamp,
+            "it must differ per album, which is the whole point of using it"
+        );
     }
 
     #[test]
@@ -333,6 +371,47 @@ mod tests {
         let a: Asset =
             serde_json::from_str(json).expect("an unknown field must not fail the parse");
         assert_eq!(a.original_file_name, "a.RAF");
+    }
+
+    /// ⚠⚠ A stored list is a `Vec<Asset>` written back out as JSON, so `Asset` has to serialise as
+    /// well as deserialise — it derived only `Deserialize`.
+    ///
+    /// ⚠ `AssetType` carries `#[serde(other)]`, which is a **deserialise-only** attribute. This
+    /// round-trips all three variants rather than assuming the enum survives a write: `Other` must
+    /// come back as `Other`, not fail and not silently become `Image`.
+    #[test]
+    fn an_asset_round_trips_through_json_including_an_unknown_type() {
+        let json = r#"[{"id":"11111111-1111-4111-8111-111111111111","type":"IMAGE",
+            "originalFileName":"a.RAF","originalMimeType":"image/x-fuji-raf","width":10,"height":20,
+            "thumbhash":"t","fileModifiedAt":"2025-01-01T00:00:00.000Z",
+            "updatedAt":"2025-01-02T00:00:00.000Z"},
+            {"id":"22222222-2222-4222-8222-222222222222","type":"VIDEO",
+            "originalFileName":"b.MP4","width":null,"height":null,"thumbhash":null,
+            "fileModifiedAt":"2025-01-01T00:00:00.000Z",
+            "updatedAt":"2025-01-02T00:00:00.000Z"},
+            {"id":"33333333-3333-4333-8333-333333333333","type":"AUDIO",
+            "originalFileName":"c.mp3","width":null,"height":null,"thumbhash":null,
+            "fileModifiedAt":"2025-01-01T00:00:00.000Z",
+            "updatedAt":"2025-01-02T00:00:00.000Z"}]"#;
+        let before: Vec<Asset> = serde_json::from_str(json).expect("must parse");
+        let written = serde_json::to_string(&before).expect("must serialise");
+        let after: Vec<Asset> = serde_json::from_str(&written).expect("must parse back");
+
+        assert_eq!(after.len(), 3);
+        assert!(matches!(after[0].asset_type, AssetType::Image));
+        assert!(matches!(after[1].asset_type, AssetType::Video));
+        assert!(
+            matches!(after[2].asset_type, AssetType::Other),
+            "an unknown type must survive a write as Other, not become Image"
+        );
+        assert_eq!(after[0].original_file_name, "a.RAF");
+        assert_eq!(
+            after[0].original_mime_type.as_deref(),
+            Some("image/x-fuji-raf")
+        );
+        assert_eq!((after[0].width, after[0].height), (Some(10), Some(20)));
+        assert!(after[1].thumbhash.is_none());
+        assert_eq!(after[0].updated_at, "2025-01-02T00:00:00.000Z");
     }
 
     /// ⚠ `originalMimeType` is optional in the spec. A missing one must not fail the album.

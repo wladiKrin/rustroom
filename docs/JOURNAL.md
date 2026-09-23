@@ -151,6 +151,147 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-23 — the GPU port's agreed order, moved out of `CLAUDE.md` (verbatim)
+
+⚠ **Moved, not changed.** Every row of this order is done, declined with numbers, or blocked on a
+considered trade, so it was no longer live state — and `CLAUDE.md` was at its ~400-line ceiling. The
+one-paragraph summary that replaced it points here. The numbers behind each decline are in
+`docs/BACKLOG.md`.
+
+### The agreed systematic order (GPU port)
+
+⚠ **Structural, not popularity-driven.** The catalogue's 40 sidecars describe those folders and
+**not** what a photographer does; three milestones leaned on that scan and it must not be cited as
+a prioritisation argument again.
+
+⚠⚠ **But "the user has not been using Rustroom yet" is NO LONGER TRUE, and that line sat here
+unchallenged for days.** On 2026-09-18 alone, use found the export/preview divergence, the
+already-rendered double render **and** the missing thumbnail look — none of which any test caught.
+**Real use is now the best signal this project has**; the sidecar scan is still not.
+
+| # | Item | State |
+|---|---|---|
+| 1 | Finish the per-pixel tail | ✅ done (M8.3m–p) |
+| 2 | Noise reduction on the GPU | ✅ done, M8.3q — an NR drag ~207 → ~142 ms, 1.45–1.46× |
+| 3 | Port **lens correction** | ✅ **done, M8.9** — ⚠ its *value* was re-priced, not the work; see below |
+| 4 | Mask coverage + the blend | ✅ done, M8.11 |
+| 5 | **Spot removal** | ⛔ **CLOSED 2026-09-18 — measured, not worth doing.** See below |
+
+✅ **THE ORDER IS FULLY RESOLVED. There is no next item on it.** Rows 1–4 are built and confirmed;
+row 5 is closed on a measurement. Anything further is in `docs/BACKLOG.md` with numbers attached.
+
+**⚠⚠ ITEM 3 IS DONE, AND THIS LIST SAID OTHERWISE FOR A DAY.** `crates/gpu-pipeline/src/lens_correction.rs`
+is 722 lines, wired at `accelerate.rs:320`, gated by `lens_correction_is_accelerated_only_when_a_profile_is_in_hand`
+— M8.9 shipped it and it is confirmed by use. **The 🟡 this row used to carry meant its *value* was
+re-priced, and was read as unfinished work.** A status column must say whether the code exists, and
+nothing else.
+
+**⚠ What was re-priced, 2026-09-15 by M8.8, which took the other route first.** Giving the stage an
+`input_rect_for`/`apply_region` pair took a cold 1:1 entry's prefix from **1689–1869 → 218–225 ms**
+without a line of shader; lens correction is then 118 ms of that 221. **So the port's value had
+already moved to EXPORT** — whole-buffer, sequential, still paying 650–696 ms a photo — and M8.10
+then made those photos run four-wide, against a wall clock ~3× shorter than when it was proposed.
+Measured after the fact: the port saves ~550 ms of a ~11.4 s export, **under 5%**.
+
+**✅ Re-verified against the tree 2026-09-17: 18 of 21 pipeline stages have GPU twins**, and only
+**three** lack one: `geometry`, `perspective` and `spot_removal`.
+
+**⛔ ALL THREE ARE NOW DELIBERATE RATHER THAN PENDING, so the GPU port is effectively COMPLETE.**
+`geometry` and `perspective` were answered by M8.8's region scoping rather than a shader. And
+**spot removal was measured on 2026-09-18 and closed without being built**: realistic retouching is
+**0.05–0.4 ms** on a **cached prefix stage**, against `GpuBrushRaster`'s measured **~1.6 ms floor**
+(1.28 of it a fixed download), so a port would very likely make it *slower*. ⚠ **Do not re-propose
+it from the agreed order alone** — "last unported" is not "worth doing". `docs/BACKLOG.md` carries
+the table and the two caveats that would reopen it.
+
+⚠⚠ **This said "18 of 23" until 2026-09-17, which invited the wrong subtraction** — 23 − 18 = 5, and
+only three are unported. `crates/pipeline/src/stages/` holds **23 files**, of which **21 implement
+`PipelineStage`**: `hue_table` and `mask_coverage` implement none and are helpers folded into `hsl`
+and `mask`. ⚠ Two twins are also renamed rather than missing — `color_grading` → `grading.rs`,
+`sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
+`impl PipelineStage for`, not by file.**
+
+### 2026-09-23 — Immich asset lists persisted, validated before use
+
+Branch `immich-list-cache`, seven commits. **2,742 tests**, clippy and fmt clean, the **74 goldens
+unmoved**.
+
+**The write half is confirmed by use; the read half is not.** A single release run wrote **eight
+lists** — seven albums and one month, 2,155 assets, 618 KB total — with **no panic**, every payload
+internally consistent (`asset_count` equals the stored asset count in all eight), every album carrying
+a non-null `lastModifiedAssetTimestamp`, and **no leftover `.tmp`**. ⚠⚠ One of them holds **1,022
+assets**, above the 1,000 `PAGE_SIZE`, so it also re-confirms slice 1's `nextPage` paging fix stores a
+*complete* list rather than a truncated one. ⚠ What is still unseen is the **hit**: that a relaunch
+opens one of those albums with no wait. Every Immich defect so far was found by use.
+
+**The problem.** Slice 2 kept fetched lists in `immich_assets`, so a *second* visit to an album was
+instant. A *first* visit after every launch still paid the round trip: ~900 KB of metadata and a
+couple of seconds for an 872-asset album. The map is per-process; nothing survived a restart.
+
+**What it does.** A new lib module `crates/app/src/immich_list_cache.rs` writes each fetched list to
+`<cache>/rustroom/immich/<host_slug>-lists/album-<id>.json` (or `bucket-<YYYY-MM-DD>.json`), stamped
+with a validator. A click now tries three things in order: the session map, the stored list **if its
+validator still matches**, then a fetch.
+
+**The validator is `(assetCount, lastModifiedAssetTimestamp)`, and `updatedAt` would have been
+wrong.** The captured `GET /albums` reply has `updatedAt` **identical for both albums**
+(`2026-09-14T15:22:52.492Z`) — evidently a bulk touch — while `lastModifiedAssetTimestamp` differs
+per album. `assetCount` catches an addition or a removal; the timestamp catches an edit that leaves
+the count alone. ⚠ The field had to be added to `AlbumSummary`, which had been ignoring it, and the
+test asserts the two real captured values rather than the schema.
+
+**Validate first, never show stale.** A stored list is used only on a match. A grid that rearranges
+underneath you, possibly dropping a selection, is worse than a wait the status line already
+announces. Three states of the rail's own list — never fetched, failed, empty — all yield **no
+validator and therefore no hit and no write**. ⚠⚠ A failed fetch especially: treating it as "nothing
+changed" would pin a stale grid in place for as long as the server stayed unreachable.
+
+**A bucket is validated on its count alone**, because that is all `GET /timeline/buckets` gives. One
+asset swapped for another inside a month goes unnoticed until something else changes — accepted
+rather than paying an extra request per month. ⚠ Do not "fix" this without measuring that cost.
+
+**No budget, and the MEASURED sizes say why.** ⚠ The spec estimated **~175 KB** for an 872-asset album
+and **~7 MB** for a 35k library; the real files are **238 KB** and **~9.8 MB** — a steady **280–303
+bytes per asset** across eight real lists, 36% over the estimate. The decision stands unchanged (10 MB
+is nothing beside the thumbnail budget's 5 GB), but ⚠⚠ **the estimate was wrong and was quoted twice
+before being measured** — exactly the habit the standing lesson about requoted figures is about.
+`store` **replaces** rather than accumulates, pinned by a test asserting exactly one file after two
+stores, which also catches a leftover `.tmp`.
+
+**Three things that were nearly wrong, and what caught each:**
+
+- ⚠⚠ **The lists directory is a SIBLING of the originals, not inside it.** `is_immich_path` is
+  `path.starts_with(root)` and `asset_id_of` is just `path.file_stem()`, so a JSON file under the
+  originals root would answer "yes, an Immich asset" with an id of `album-<uuid>`. Pinned by
+  `the_lists_directory_is_not_inside_the_originals_directory`. It works because `Path::starts_with`
+  compares whole components: `…/<slug>-lists` does not start with `…/<slug>`.
+- ⚠⚠ **`Asset` derived only `Deserialize`**, and `AssetType` carries `#[serde(other)]`, which is a
+  **deserialise-only** attribute. Rather than assume the enum survived a write, the test round-trips
+  all three variants: `Other` must come back as `Other`, not fail and not silently become `Image`.
+  The derive turned out to work — but that was checked, not hoped.
+- ⚠⚠ **The module tests could not reach the seam that mattered.** They prove a matching validator
+  hits and a differing one misses; nothing there proves the validator is built from the right two
+  fields of the **right album**, because at store time and at load time both halves call the same
+  function and would agree with each other even on the wrong row. Five tests using
+  `test_app::for_test` pin it, and **sabotage confirms the guard**: replacing the `find` with
+  `albums.first()` fails two of them. ⚠ The plan had left this seam to use alone; that was a gap in
+  the plan, not in the design.
+
+**Also, one false claim written and then removed.** A doc comment asserted that "reading `updated_at`
+here instead would have produced a cache that never invalidates". `AlbumSummary` has no `updated_at`
+field, so that sabotage is not even possible — the comment described a guard the test does not
+provide. ⚠ Replaced with the sabotage that was actually run. **A test's doc comment is a claim about
+what it catches, and an unverified one is worse than none.**
+
+**Two temp-dir habits fixed rather than copied.** The new test module gives each test its own
+directory keyed by process id **and an atomic counter**; `immich_source`'s two older fixtures use the
+process id alone, which is exactly the collision `thumb_store::TempDir`'s own doc says has already
+bitten this repo. ⚠ Those two remain unfixed and are still on the open list.
+
+**Deliberately not done:** no catalog rows (so marks still do not persist on Immich photos), no cache
+eviction for the lists, no write-back. ⚠ The album/bucket **rail lists** themselves are still
+refetched on every launch — only the *asset* lists are persisted.
+
 ### 2026-09-23 — three defects found by using Immich slice 2, and the lesson they share
 
 All three were reported in use within minutes, behind a green 2,726-test suite. Branch

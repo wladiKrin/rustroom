@@ -612,6 +612,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // for the same reply again. This is what makes switching back and forth feel instant.
             if let Some(assets) = app.immich_assets.get(&id).cloned() {
                 app.open_immich_album(ctx, id, name, &assets);
+            } else if let Some(assets) = app.immich_cached_album(&id) {
+                // ⚠ On disk from an earlier run, and its validator still matches what the rail's
+                // album list says — so the *first* visit after a launch is instant too.
+                app.immich_assets.insert(id.clone(), assets.clone());
+                app.open_immich_album(ctx, id, name, &assets);
             } else {
                 // ⚠ Feedback **before** the request, or the click looks like it did nothing: the
                 // rail's highlight follows `library.source`, which will not change for seconds.
@@ -627,6 +632,9 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         }
         crate::immich_panel::Action::OpenBucket { bucket, label } => {
             if let Some(assets) = app.immich_assets.get(&bucket).cloned() {
+                app.open_immich_bucket(ctx, bucket, label, &assets);
+            } else if let Some(assets) = app.immich_cached_bucket(&bucket) {
+                app.immich_assets.insert(bucket.clone(), assets.clone());
                 app.open_immich_bucket(ctx, bucket, label, &assets);
             } else {
                 app.immich_opening = Some(bucket.clone());
