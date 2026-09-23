@@ -165,12 +165,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2717 tests** (goldens unmoved since 2026-09-18). ⚠ **Branch `immich-timeline` is 12 commits ahead
-of `main` and not merged** — ask before starting anything on top of it. `main` matches
-`origin/main`; **never push, the user pushes.** The CI workflow was fixed for the runner's
+**2726 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **15 commits
+ahead of `origin/main` — not pushed; the user pushes.** The CI workflow was fixed for the runner's
 disk on 2026-09-21 and is unverified until the next push.
 
-✅ **Immich, slice 2 — built and confirmed by use (2026-09-23), on the branch.** A **Timeline** of
+✅ **Immich, slice 2 — merged and confirmed by use (2026-09-23).** A **Timeline** of
 years and months beside Albums, newest first, from one `GET /timeline/buckets`; a month opens through
 `open_scan` like an album via a generalised `Client::search(&Filter)`. Immich thumbnails now **persist
 and are instant after a restart**, keyed `(asset id, updatedAt)` in their own directory. And
@@ -183,8 +182,17 @@ vectors" guard `Local`'s key derivation — **they do not**, they pin `fnv1a` it
 an enum discriminant silently invalidating every thumbnail on disk. A concrete filename is now pinned
 (`a_known_local_identity_keeps_its_filename_for_ever`). And "no `VERSION` bump" was too glib: the RTHM
 header carries the identity's own fields, so there are two layouts — `VERSION_LOCAL` 1,
-`VERSION_REMOTE` 2. ⚠ The local **Dates** section is still oldest-first while the Immich timeline is
-newest-first; flipping Dates too is its own decision.
+`VERSION_REMOTE` 2. ✅ **Both date trees now order the same way** — **years newest first, months chronological inside
+them**, settled by use in two steps (fully ascending, then fully descending, then mixed: a year's
+months running backwards is not how anyone thinks about a year). `capture_days` orders
+`1 DESC, 2, 3`. ⚠ `date_tree::group` needed no change either time, because it groups on *change*
+rather than on direction — its doc used to claim it "relies on ascending", which was narrower than
+the truth and would have sent someone looking for a rewrite that was not needed.
+
+✅ **`jpeg`/`jpg` and `tiff`/`tif` are one format each in the Library's format chips** (2026-09-23).
+⚠ `hidden_formats` is persisted, so a config from before then can hold `"jpeg"`; both sides are
+canonicalised, so a legacy value keeps hiding JPEGs instead of silently matching nothing. RAW
+extensions are genuinely distinct formats and are untouched.
 
 ✅ **Immich, slice 1 — merged and confirmed by use (2026-09-22).** A sixth rail
 section beside Folders and Collections lists the server's albums; the ordinary grid fills from
