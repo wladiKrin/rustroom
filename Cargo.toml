@@ -23,6 +23,20 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/wladiKrin/rustroom"
 
+# ⚠⚠ **Measured 2026-09-23, and it is not what it looks like.** `target/debug` had reached
+# **85 GB across 2.39 million files** on a volume at 88% full. A *warm* `cargo test --workspace`
+# is **1 s** — fingerprinting that tree is not slow. But anything **cold** cost minutes: the first
+# run of the test binaries after a build took **437 s with zero compiles**, and `ls`/`du` on
+# `target/debug/deps` exceeded a two-minute timeout. The cost is filesystem work on a tree that
+# should never have got that big.
+#
+# ⚠ `line-tables-only` keeps file and line numbers in panics and backtraces — which is what this
+# project actually reads — and drops the variable-level DWARF a step debugger would want. Set it
+# back to `true` for a session where you need to inspect locals in a debugger; the cost is the tree
+# growing again.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"

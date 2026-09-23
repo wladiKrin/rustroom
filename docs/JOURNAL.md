@@ -151,6 +151,76 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-23 — why the gate felt slow: three hypotheses, two of them wrong
+
+The user asked whether the gate could be made faster as the project grows. Answered by measurement,
+and **the first two answers were wrong** — recorded here because both were plausible enough to have
+shipped as advice.
+
+**What was measured** (`cargo test`, wall clock against what libtest reports as execution):
+
+| | wall | libtest execution |
+|---|---|---|
+| `-p pipeline` | **295 s** | 1.71 s |
+| `-p xmp` | **286 s** | **0.00 s** |
+| `-p lens-profile` | 185 s, then 31 s | 2.40 s |
+| `-p catalog` | **122 s** | 0.22 s |
+| golden tests | — | **0.30 s** |
+| `--workspace --no-run`, **warm** | **1 s** | — |
+| `--workspace <filter>`, first run | **437 s, zero compiles** | — |
+| `--workspace <filter>`, repeat | **1 s** | — |
+
+**⛔ Wrong hypothesis 1: unoptimised code.** There are no `[profile]` sections, so everything builds
+at `opt-level = 0` — which for an image-processing codebase looks like the obvious answer. It is not:
+the **golden tests run in 0.30 s** and the whole `lens-profile` suite in **2.40 s**. Execution is
+~2 s out of runs taking minutes. `opt-level` would buy nothing measurable.
+
+**⛔ Wrong hypothesis 2: fingerprinting a huge tree.** `target/` was **90 GB across 2.39 million
+files** on a volume at 88%, and `cargo test -p lens-profile --no-run` cost **31 s with zero
+compiles** — so Cargo stat'ing that tree looked like the cause. Then a **warm `--workspace --no-run`
+came back in 1 second** over the same 2.39 M files. Fingerprinting is not slow. `cargo metadata` is
+**0 s**, so resolution is not either.
+
+**✅ What it actually is, two things.** **(1) Mode switching.** `-p <crate>` resolves features for one
+crate's subgraph; `--workspace` unifies across members. Different fingerprints, so **every switch
+rebuilds** — 43 s to 531 s measured, and it is why the per-crate runs above each cost minutes for
+two seconds of tests. ⚠⚠ **Per-crate runs were advised earlier in the same session and that advice
+was backwards**; the correct loop is `cargo test --workspace <name-filter>`. **(2) Cold filesystem
+work.** The 437 s run compiled **nothing** — it was the first *execution* of the test binaries after
+a build, read cold out of an 85 GB tree; the identical command repeated took **1 s** off the page
+cache. `ls` and `du` on `target/debug/deps` both exceeded a two-minute timeout, which is the same
+fact from another angle.
+
+**✅ The result, measured after.** `target/debug` **85 GB → ~4.8 GB** (whole `target/` 90 GB → 10 GB;
+disk 88% → 78% full, 86 GB back). The **cold first execution went 437 s → 11 s, about 40×**. The warm
+case stayed at **1 s**, as predicted — it was never the problem. A full clean rebuild of all 275
+crates is **134 s**, which is *cheaper than a single mode-switch rebuild used to be* (531 s), because
+that figure included cold reads of the bloated tree.
+
+**⚠⚠ And the whole gate is 79 SECONDS, not the 15–30 minutes six documents claimed** —
+`cargo fmt --all -- --check` instant, `cargo clippy --workspace --all-targets -- -D warnings` **62 s**
+into its own target dir *on a cold first build*, `cargo test --workspace` **16 s**. All three exit 0,
+74 goldens, nothing failed.
+
+**⛔⛔ THIS CORRECTS THE 2026-09-19 ENTRY BELOW, AND THE WRONG PART WAS ITS CONCLUSION.** That entry
+measured the `_dyld_start` stall correctly — ~22 s before `main` on a fresh binary, 4 ms on the
+second launch — and then said *"Not a code problem and **not fixable from here**; budget for it."*
+**It was fixable.** `_dyld_start` has to read, verify and map the whole binary, so that wait scales
+with binary size, and full-DWARF debug binaries were enormous. Shrink the debug info and the stall
+collapses. ⚠ The "not fixable" verdict is what propagated into **six** documents and stopped anyone
+looking — the exact shape of this repo's own standing lesson that a claim restated often enough
+stops being checked. **A correct measurement with a wrong conclusion attached is more dangerous than
+no measurement**, because it closes the question.
+
+**What changed.** `target/debug` deleted (85 GB of the 90; `target/release` kept), and
+`[profile.dev] debug = "line-tables-only"` added so it does not grow back — panics and backtraces
+keep file and line, a step debugger loses locals, and the trade is stated at the setting.
+`CLAUDE.md` gained the one-mode rule and the separate clippy target dir.
+
+⚠ **A measurement lost to haste:** per-binary debug sizes were never captured, because the `rm`
+had already started when that command ran. The binaries are gone, so the number is unavailable
+rather than estimated.
+
 ### 2026-09-22 — M9.1 slice 1: Immich albums browse and download on open
 
 Shape **A** of `docs/BACKLOG.md`'s Immich entry: an asset becomes a local file in a cache

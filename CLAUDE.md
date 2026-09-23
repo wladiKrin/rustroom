@@ -118,6 +118,22 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   - **A stage** → `pipeline/src/stages/<name>.rs`, one per file. **An edit parameter** → `edit-model`, *plus* its `EditGroups` group, `merge_from`'s destructure and the three exhaustive fixtures. **Logic behind a gesture** → a lib module taking plain types (the `crop_tool`/`mask_tool`/`panel_order` pattern); **the gesture itself** → the bin module.
   - **Two questions that catch most misplacements:** *can this be tested without opening a window?* (if yes and it is in a bin module, it is in the wrong place) and *would a second caller want this?* (if yes it is a lib module, not a private helper).
   - ⚠ **If a file you are editing already exceeds ~600 lines, say so in your report** rather than silently adding to it.
+- **⚠⚠ ONE CARGO INVOCATION MODE PER SESSION — measured 2026-09-23, and it is the whole reason the
+  gate ever felt slow.** A **warm** `cargo test --workspace` is **1 second**. Alternating it with
+  `cargo test -p <crate>` costs **43–531 s every switch**, because `-p` resolves features for one
+  crate's subgraph while `--workspace` unifies them across all members — different fingerprints, so
+  each switch rebuilds. **Filter by test name, never by package:**
+  `cargo test --workspace immich_source`. ⚠ Give clippy its own directory for the same reason — a
+  different rustc wrapper evicts rustc's own artifacts:
+  `CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --all-targets -- -D warnings`.
+  ⚠ Two hypotheses were measured and **wrong**: test execution (the whole `lens-profile` suite runs
+  in **2.4 s**, the goldens in **0.30 s**, so `opt-level` buys nothing) and fingerprint cost (1 s warm
+  over 2.39 M files). The cost was **cold filesystem work**: `target/debug` had reached **85 GB**, and
+  a fresh binary's `_dyld_start` wait scales with its size. Fixed by
+  `[profile.dev] debug = "line-tables-only"` — cold run **437 s → 11 s**, tree **90 → 10 GB**.
+  ⚠⚠ **THE WHOLE GATE IS ~79 SECONDS** (fmt instant, clippy 62 s cold, tests 16 s). Any document
+  saying it is 15–30 minutes predates 2026-09-23 and is wrong; so is the 2026-09-19 journal note
+  calling the stall "not fixable from here".
 - **Color correctness is first-class** — validate against references early.
 - **Design the GPU seam now, build it later.** Don't leak CPU-specific types into the pipeline interface.
 - Avoid platform-specific assumptions (paths, file dialogs, GPU backend) so Win/macOS stay cheap.
@@ -144,7 +160,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2683 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **19 commits
+**2683 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **21 commits
 ahead of `origin/main` — not pushed; the user pushes.** The CI workflow was fixed for the runner's
 disk on 2026-09-21 and is unverified until the next push.
 
