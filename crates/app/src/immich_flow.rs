@@ -237,3 +237,96 @@ impl RustroomApp {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rustroom_app::immich_list_cache as list_cache;
+
+    fn album(id: &str, count: u32, modified: Option<&str>) -> immich::AlbumSummary {
+        immich::AlbumSummary {
+            id: id.to_string(),
+            album_name: format!("album {id}"),
+            asset_count: count,
+            last_modified_asset_timestamp: modified.map(|s| s.to_string()),
+        }
+    }
+
+    /// ⚠⚠ **The seam the module tests could not reach.** `immich_list_cache` proves that a matching
+    /// validator hits and a differing one misses; nothing there proves the validator is built from
+    /// the right two fields of the **right album**. Two albums with different counts, so a lookup
+    /// that ignored the id and took the first row would fail here — and every module test would
+    /// still have passed, because both halves would agree with each other on the wrong album.
+    ///
+    /// ⚠ Verified by sabotage: replacing the `find` with `albums.first()` fails this test.
+    #[test]
+    fn an_albums_validator_is_its_own_count_and_last_modified() {
+        let mut app = crate::test_app::for_test();
+        app.immich_albums = Some(Ok(vec![
+            album("a", 872, Some("2026-08-14T08:29:23.862Z")),
+            album("b", 112, Some("2026-06-14T12:11:35.623Z")),
+        ]));
+        assert_eq!(
+            app.album_validator("b"),
+            Some(list_cache::Validator::Album {
+                asset_count: 112,
+                last_modified: Some("2026-06-14T12:11:35.623Z".to_string()),
+            })
+        );
+    }
+
+    /// ⚠ An album the rail does not list cannot be validated, so it must refetch rather than guess.
+    #[test]
+    fn an_unknown_album_has_no_validator() {
+        let mut app = crate::test_app::for_test();
+        app.immich_albums = Some(Ok(vec![album("a", 1, Some("x"))]));
+        assert!(app.album_validator("nope").is_none());
+    }
+
+    /// ⚠⚠ The three states of the rail's list — never fetched, failed, empty — must all yield no
+    /// validator. A failed fetch especially: treating it as "nothing changed" would pin a stale grid
+    /// in place for as long as the server stayed unreachable.
+    #[test]
+    fn no_album_list_and_a_failed_one_both_yield_no_validator() {
+        let mut app = crate::test_app::for_test();
+        assert!(app.album_validator("a").is_none(), "never fetched");
+        app.immich_albums = Some(Err("offline".to_string()));
+        assert!(app.album_validator("a").is_none(), "failed");
+        app.immich_albums = Some(Ok(vec![]));
+        assert!(app.album_validator("a").is_none(), "empty");
+    }
+
+    #[test]
+    fn a_buckets_validator_is_that_months_count() {
+        let mut app = crate::test_app::for_test();
+        app.immich_buckets = Some(Ok(vec![
+            immich::Bucket {
+                time_bucket: "2026-08-01".to_string(),
+                count: 76,
+            },
+            immich::Bucket {
+                time_bucket: "2026-07-01".to_string(),
+                count: 5,
+            },
+        ]));
+        assert_eq!(
+            app.bucket_validator("2026-07-01"),
+            Some(list_cache::Validator::Bucket { count: 5 })
+        );
+        assert!(app.bucket_validator("2026-06-01").is_none());
+    }
+
+    /// ⚠⚠ With no server configured there is no cache directory, so a lookup must answer `None`
+    /// rather than reaching for `dirs::cache_dir()` and reading, or writing, anything at all. This is
+    /// also what keeps this test module out of the real user cache directory.
+    #[test]
+    fn with_no_server_configured_nothing_is_looked_up_or_written() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = String::new();
+        app.settings.immich_key = String::new();
+        app.immich_albums = Some(Ok(vec![album("a", 1, Some("x"))]));
+        assert!(app.immich_cached_album("a").is_none());
+        assert!(app.immich_lists_dir().is_none());
+        // And a store with no validator is a no-op, which is what an un-fetched rail produces.
+        app.remember_immich_list(list_cache::Key::Album("a".into()), None, &[]);
+    }
+}
