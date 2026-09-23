@@ -164,7 +164,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-23)
+### State (2026-09-24)
 
 **2797 tests** (goldens unmoved since 2026-09-18). No branch; `main` is **5 commits ahead of
 `origin/main`** — the user last pushed `f4d7633`; still never push.
@@ -180,24 +180,28 @@ from `SECTIONS`, so that would mean splitting the `Color` edit group **and the S
 change, with a version bump. The block deliberately claims no group and is not resettable.
 `grep -n 'made legible' docs/JOURNAL.md`.
 
-✅ **Immich slice 3 — marks that persist (2026-09-23, confirmed by use).** Ratings, flags, labels and
-keywords on an Immich photo now survive a restart. ⚠⚠ **Two links were broken and the second was
-invisible:** the openers never called `sync_folder`, *and* `sync_folder` keyed rows on
-`CatalogEntry::file_name` while every read side derives its key from a **`Path`**. Identical for a local
-file; an Immich cache path is `<uuid>.<ext>` while `file_name` is the camera's name. **The catalog now
-keys on the path**, and `CatalogEntry::file_name`'s doc says it is a display name and not the key.
-⚠ One folder row **per server**, never per album — an asset reached two ways is one photo with one
-identity. ⚠ All Photos and smart collections show an Immich photo only once its file is on disk, through
-one shared `row_is_browsable`; **Immich rows only**, so an absent local file stays visible.
-`grep -n 'Immich slice 3' docs/JOURNAL.md`.
+✅ **Immich, slices 1–3 — all merged and confirmed by use (2026-09-22/24).** A rail section lists the
+server's albums and a **Timeline** of months; the grid fills from server thumbnails with nothing
+downloaded; opening a photo caches the original and re-enters `open_path`. Thumbnails persist, keyed
+`(asset id, updatedAt)`, under a **byte budget with LRU eviction** (two stores, 5120 MB each — there was
+**none** before). Asset lists are stored and revalidated against **`(assetCount,
+lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`. ⋯ → **Reindex** refetches. **Marks persist**: Immich
+assets get catalog rows, **one folder per server, never per album**. The rail reads **"immich
+(downloaded)"** and counts only supported images. A hand-painted **circled ↓** marks downloaded photos in
+an Immich grid. ⚠ **No catalog migration — `db.rs` stays at v7.** Specs under
+`docs/superpowers/specs/2026-09-2*-immich-*`; `grep -n 'Immich slice' docs/JOURNAL.md`.
 
-✅ **The rail says "immich (downloaded)" and counts what is there; downloaded photos are marked.** ⚠ The
-count lied twice — 981 catalog rows, then 34 files against 18 photos, because a **`.json` sidecar sits
-beside every edited photo**. `present_names` is one `read_dir` filtered through `catalog::is_supported`,
-which is what `scan_folder` counts, so the two agree by construction. ⚠⚠ The indicator is
-**hand-painted**: the bundled Phosphor's `post` table is **version 3.0 — no glyph names** — so a
-codepoint can be verified as present but **not** as the right picture. Grid marks are 10–20 pt with
-their own scale, and the reject cross is scaled beside its own glyph (`×` is U+00D7 and draws small).
+⚠⚠ **The Immich invariants that are easy to break again:** the catalog keys a row on the **path's** own
+file name, never `CatalogEntry::file_name` (a cache path is `<uuid>.<ext>` while that field is the
+camera's name, so rows written under it can never be found again); `row_is_browsable` hides an absent
+**Immich** row from catalog-wide views but **never** an absent local one, because the unplugged-drive rule
+is a different question; and `present_names` is one `read_dir` filtered through `catalog::is_supported`,
+never a stat per thumbnail.
+
+⚠ **Out of scope by decision:** eviction of cached originals, the OS keychain (the API key is **plaintext**
+in `settings.json`), reading Immich's own `rating`/`isFavorite`, and **write-back** (needs `asset.update`
+on a key the help text says to keep read-only). ⚠ The **rail's** album and bucket lists are still
+refetched every launch; only the *asset* lists are cached.
 
 ⚠ **Auto-advance is a Settings toggle** — *"Move to the next photo after rating"* — and already `true` in
 the user's `settings.json`, so **changing the Rust default would not change his behaviour**. The default
@@ -227,28 +231,6 @@ version bump with migration, and a channel selector. Costs written down in
 parameter counts itself. ⚠ `History::steps_since` is **gone**, having lost its only caller. ✅ **Reindex
 is a plain button**, not a ⋯ menu holding one item.
 `grep -n 'counts difference, not history steps' docs/JOURNAL.md`.
-
-✅ **Reindex refetches from Immich, and asset lists are persisted** (2026-09-23). ⋯ → Reindex drops the
-album's session-map entry — checked *before* the validator — and refetches; lists revalidate against
-**`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`. ⚠⚠ It needed `ImmichWorker`'s single
-`pending_list` flag **split in two**, since it covered both list kinds and dropped one silently.
-
-✅ **Immich slice 2's three use-found defects are fixed** (2026-09-23) — a `null` `thumbhash`, a click
-discarded by a shared guard, and no feedback while the server worked. Lessons under **Standing
-lessons**. ⚠ CI was fixed for the runner's disk on 2026-09-21 and the user has since pushed, so **it
-should have run** — worth checking.
-
-✅ **Immich slices 1 and 2 — merged and confirmed by use (2026-09-22/23).** A rail section lists the
-server's albums and a **Timeline** of years and months; the grid fills from server thumbnails with
-nothing downloaded; opening a photo fetches the original into a cache directory and re-enters
-`open_path`. Thumbnails persist, keyed `(asset id, updatedAt)`, and `ThumbStore` finally has a **byte
-budget with LRU eviction** — two of them, 5120 MB each — having had **none** since M8.2. ⚠ **No catalog
-migration: `db.rs` stays at v7**, which is what shape A bought. Specs
-`2026-09-22-immich-browse-design.md`, `2026-09-23-immich-timeline-design.md`;
-`grep -n 'M9.1 slice' docs/JOURNAL.md`. ⚠ Both date trees order years newest-first with months
-chronological inside (`capture_days`: `1 DESC, 2, 3`), and `date_tree::group` groups on *change*, not
-direction. **`jpeg`/`jpg` and `tiff`/`tif` are one format each** in the Library chips, both sides
-canonicalised because `hidden_formats` is persisted.
 
 ✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
 as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
