@@ -120,10 +120,16 @@ pub struct Asset {
     /// The name the file had on the camera — what the grid shows, never the UUID.
     pub original_file_name: String,
     pub original_mime_type: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    /// Base64 thumbhash. Carried for the blurred placeholder; unused in this slice.
-    pub thumbhash: String,
+    /// ⚠⚠ `Option`, because the schema marks these `required: true` **and** `nullable: true` —
+    /// "required" means the key is present, not that it has a value. Carried, not used.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Base64 thumbhash. Carried for the blurred placeholder; unused so far.
+    ///
+    /// ⚠⚠ **`Option` for the same reason, and this one was found in use**: an asset whose thumbnail
+    /// has not been generated sends `null`, and deserialisation happens before the image filter, so a
+    /// single such asset failed an entire month of the timeline.
+    pub thumbhash: Option<String>,
     /// RFC 3339. Kept as a string here and parsed in `app`, so this crate needs no time crate.
     pub file_modified_at: String,
     /// When the asset record last changed, RFC 3339.
@@ -243,6 +249,28 @@ mod tests {
 
     /// ⚠ `updatedAt` versions a cached thumbnail, so it must really be present. The captured
     /// reply confirms it.
+    /// ⚠⚠ **The bug this test exists for, reported in use 2026-09-23:** opening February 2026 failed
+    /// with *"invalid type: null, expected a string"*. `thumbhash` is marked `required: true` **and**
+    /// `nullable: true` in the schema — "required" here means the key is present, **not** that it has
+    /// a value. An asset whose thumbnail has not been generated, or a video, sends `null`, and because
+    /// deserialisation happens before the image filter, **one such asset failed a whole month**.
+    ///
+    /// ⚠ `width` and `height` carry the same pair of flags. Those three are the only nullable fields
+    /// this DTO models — audited against the schema rather than guessed at, after the first fix
+    /// attempt would have been "make thumbhash optional and see".
+    #[test]
+    fn a_null_thumbhash_width_or_height_parses_rather_than_failing_the_page() {
+        let json = r#"{"id":"11111111-1111-4111-8111-111111111111","type":"IMAGE",
+            "originalFileName":"pending.jpg","width":null,"height":null,"thumbhash":null,
+            "fileModifiedAt":"2026-02-03T10:00:00.000Z","updatedAt":"2026-02-03T10:00:00.000Z"}"#;
+        let a: Asset =
+            serde_json::from_str(json).expect("a null thumbhash must not fail the parse");
+        assert_eq!(a.original_file_name, "pending.jpg");
+        assert!(a.thumbhash.is_none());
+        assert!(a.width.is_none());
+        assert!(a.height.is_none());
+    }
+
     #[test]
     fn a_real_reply_carries_updated_at() {
         let r: SearchResponse = serde_json::from_str(SEARCH_REAL).expect("must parse");
@@ -258,8 +286,10 @@ mod tests {
         assert_eq!(a.original_file_name, "IMG-20240823-WA0000.jpg");
         assert_eq!(a.original_mime_type.as_deref(), Some("image/jpeg"));
         assert!(matches!(a.asset_type, AssetType::Image));
-        assert!(!a.thumbhash.is_empty());
-        assert_eq!((a.width, a.height), (1200, 1600));
+        // ⚠ Present in *this* captured reply, but the type is Option because the schema marks it
+        // nullable — see `a_null_thumbhash_width_or_height_parses_rather_than_failing_the_page`.
+        assert_eq!(a.thumbhash.as_deref(), Some("pfcJHQT3aM1GyGb3lVqHllY3cDAE"));
+        assert_eq!((a.width, a.height), (Some(1200), Some(1600)));
         assert_eq!(a.file_modified_at, "2024-08-23T14:22:56.000Z");
     }
 

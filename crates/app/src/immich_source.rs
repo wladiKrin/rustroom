@@ -394,9 +394,9 @@ mod tests {
             asset_type: kind,
             original_file_name: name.to_string(),
             original_mime_type: None,
-            width: 100,
-            height: 100,
-            thumbhash: "x".into(),
+            width: Some(100),
+            height: Some(100),
+            thumbhash: Some("x".into()),
             file_modified_at: "2025-08-14T09:21:33.000Z".into(),
             updated_at: "2026-01-01T00:00:00.000Z".into(),
         }
