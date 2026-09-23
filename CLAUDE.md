@@ -99,8 +99,9 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 14 stages (incl. geometry, noise_reduction, dehaze, saturation, hsl, local_contrast, vignette, sharpening) + spatial::{box_blur, gaussian_blur, wide_blur, min_filter, guided_filter} + build_pipeline / build_pipeline_split(_in_region) / build_prefix_steps + PrefixStep/PrefixStepKey/PrefixKey + Region + tail_kernel_radius + golden tests
 │   ├── export/               # ✅ to_rgb8 + save (JPEG/PNG/TIFF) + metadata::{ExportMetadata, FileMetadata, MetadataScope} — the full XMP packet (M6.2) + watermark + output_sharpen
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
+│   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album, `Asset`/`AlbumSummary`/`Bucket`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is 681 lines after W0 (2026-09-01); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel (egui lives here, not in the lib)
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,116** lines (it said 681 until 2026-09-23 — check, do not quote); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -163,18 +164,27 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-22)
+### State (2026-09-23)
 
-**2732 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **19 commits
-ahead of `origin/main` — not pushed; the user pushes.**
+**2742 tests** (goldens unmoved since 2026-09-18). Branch **`immich-list-cache`**, 7 commits, gated
+green; `main` is **19 commits ahead of `origin/main` — not pushed; the user pushes.**
 
-✅ **Immich slice 2's three use-found defects are fixed and confirmed (2026-09-23)**, all behind a
-green suite: a **`null` `thumbhash`** failed a whole month (`required: true` does **not** mean
-non-null — `nullable` sits beside it); a **second album click was silently discarded** because opens
-shared the automatic list fetch's guard; and switching *felt* slow because clicking gave **no feedback
-at all** while the server spent a couple of seconds on ~900 KB of metadata. Asset lists are now kept
-for the session, so switching back is instant. `grep -n 'three defects found by using' docs/JOURNAL.md`. The CI workflow was fixed for the runner's
-disk on 2026-09-21 and is unverified until the next push.
+🟡 **Immich asset lists are persisted (2026-09-23) — green, NOT YET SEEN IN USE.** A new lib module
+`immich_list_cache` writes each fetched list to `<cache>/rustroom/immich/<host_slug>-lists/`, and a
+click tries the session map, then the stored list **if its validator still matches**, then a fetch.
+The album validator is **`(assetCount, lastModifiedAssetTimestamp)`** — ⚠⚠ **not `updatedAt`, which
+the captured reply shows identical for every album**; a bucket's is its count alone. ⚠ Validate first:
+no validator (list never fetched, failed, or album unknown) means **no hit and no write**, so a stale
+grid is never shown. ⚠⚠ The lists directory is a **sibling** of the originals because
+`is_immich_path` is `starts_with(root)` and `asset_id_of` is a path stem. Spec
+`2026-09-23-immich-list-cache-design.md`; `grep -n 'asset lists persisted' docs/JOURNAL.md`.
+
+✅ **Immich slice 2's three use-found defects are fixed and confirmed (2026-09-23):** a **`null`
+`thumbhash`** failed a whole month (⚠⚠ `required: true` does **not** mean non-null — `nullable` sits
+beside it); a second album click was **silently discarded** by a shared guard; and switching *felt*
+slow because a click gave **no feedback** for the couple of seconds the server spent on ~900 KB.
+`grep -n 'three defects found by using' docs/JOURNAL.md`. ⚠ The CI workflow was fixed for the runner's
+disk on 2026-09-21 and is **unverified until the next push**.
 
 ✅ **Immich, slice 2 — merged and confirmed by use (2026-09-23).** A **Timeline** of
 years and months beside Albums, newest first, from one `GET /timeline/buckets`; a month opens through
@@ -255,20 +265,30 @@ outcome; the measurements, the retractions and the things that went wrong live i
 safe *because* the intended default matched `bool`'s. Flipping it to `true` would have loaded
 **`false`** for every existing settings file. Pinned by a test that fails when the attribute returns.
 
-### ▶ Next action — the GPU port is finished; what is left is not GPU work
+### ▶ Next action — see the list cache in use, then Immich slice 3 or the leftovers
 
-⚠⚠ **Everything on the agreed GPU order is done, declined with numbers, or blocked on a considered
-trade.** Do not go looking for the next port; there isn't one.
+**First: `immich-list-cache` is green but unseen.** Open an album, quit, relaunch, open the same album
+— it should fill with **no wait**. Then add a photo to it in Immich and confirm it refetches. ⚠ Every
+Immich defect so far was found by use, not by a test.
+
+⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
+not go looking for the next port; there isn't one.
 
 **Live candidates, none urgent:**
+
+0. **Immich slice 3** — catalog rows, so **ratings/flags/labels persist on Immich photos** (they do
+   not today), and two-way sync. ⚠ The largest remaining gap in the integration, and the only one the
+   user would notice. ⚠ The album/bucket **rail lists** are also still refetched every launch; only
+   *asset* lists are cached.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
    per sample because packing four into a word would race. **A considered trade, not an oversight.**
 2. **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. Now a
    ~120-site diff. ⚠ Its own change, never folded into another.
-3. **`crates/lens-profile/src/lib.rs` is 949 lines**; `batch_export/worker.rs` is 1,127 (accepted —
-   ~190 of code, the rest its own tests).
+3. **`crates/lens-profile/src/lib.rs` is 949 lines**, **`crates/app/src/immich_source.rs` is 821**
+   and `main.rs` is **1,116**; `batch_export/worker.rs` is 1,127 (accepted — ~190 of code, the rest
+   its own tests).
 4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
 
 ⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
@@ -280,58 +300,20 @@ use), the GPU-side coverage cache (re-priced downward).
 question (1024 is the largest capacity keeping 3 workgroups on a 16 KB device) that no M2 run
 settles.
 
-### The agreed systematic order (GPU port)
+### The GPU port — closed
 
-⚠ **Structural, not popularity-driven.** The catalogue's 40 sidecars describe those folders and
-**not** what a photographer does; three milestones leaned on that scan and it must not be cited as
-a prioritisation argument again.
+⚠⚠ **Finished. There is no next item on the agreed order, and this is the third document to say so.**
+All five rows are done, declined with numbers, or blocked on a considered trade; **18 of the 21 stages
+that `impl PipelineStage` have GPU twins**, and the three that do not — `geometry`, `perspective`,
+`spot_removal` — are **deliberate**, not pending. Region scoping (M8.8) answered the first two without
+a shader; spot removal was **measured and closed unbuilt** (0.05–0.4 ms of work against
+`GpuBrushRaster`'s ~1.6 ms floor, 1.28 of it a fixed download).
 
-⚠⚠ **But "the user has not been using Rustroom yet" is NO LONGER TRUE, and that line sat here
-unchallenged for days.** On 2026-09-18 alone, use found the export/preview divergence, the
-already-rendered double render **and** the missing thumbnail look — none of which any test caught.
-**Real use is now the best signal this project has**; the sidecar scan is still not.
-
-| # | Item | State |
-|---|---|---|
-| 1 | Finish the per-pixel tail | ✅ done (M8.3m–p) |
-| 2 | Noise reduction on the GPU | ✅ done, M8.3q — an NR drag ~207 → ~142 ms, 1.45–1.46× |
-| 3 | Port **lens correction** | ✅ **done, M8.9** — ⚠ its *value* was re-priced, not the work; see below |
-| 4 | Mask coverage + the blend | ✅ done, M8.11 |
-| 5 | **Spot removal** | ⛔ **CLOSED 2026-09-18 — measured, not worth doing.** See below |
-
-✅ **THE ORDER IS FULLY RESOLVED. There is no next item on it.** Rows 1–4 are built and confirmed;
-row 5 is closed on a measurement. Anything further is in `docs/BACKLOG.md` with numbers attached.
-
-**⚠⚠ ITEM 3 IS DONE, AND THIS LIST SAID OTHERWISE FOR A DAY.** `crates/gpu-pipeline/src/lens_correction.rs`
-is 722 lines, wired at `accelerate.rs:320`, gated by `lens_correction_is_accelerated_only_when_a_profile_is_in_hand`
-— M8.9 shipped it and it is confirmed by use. **The 🟡 this row used to carry meant its *value* was
-re-priced, and was read as unfinished work.** A status column must say whether the code exists, and
-nothing else.
-
-**⚠ What was re-priced, 2026-09-15 by M8.8, which took the other route first.** Giving the stage an
-`input_rect_for`/`apply_region` pair took a cold 1:1 entry's prefix from **1689–1869 → 218–225 ms**
-without a line of shader; lens correction is then 118 ms of that 221. **So the port's value had
-already moved to EXPORT** — whole-buffer, sequential, still paying 650–696 ms a photo — and M8.10
-then made those photos run four-wide, against a wall clock ~3× shorter than when it was proposed.
-Measured after the fact: the port saves ~550 ms of a ~11.4 s export, **under 5%**.
-
-**✅ Re-verified against the tree 2026-09-17: 18 of 21 pipeline stages have GPU twins**, and only
-**three** lack one: `geometry`, `perspective` and `spot_removal`.
-
-**⛔ ALL THREE ARE NOW DELIBERATE RATHER THAN PENDING, so the GPU port is effectively COMPLETE.**
-`geometry` and `perspective` were answered by M8.8's region scoping rather than a shader. And
-**spot removal was measured on 2026-09-18 and closed without being built**: realistic retouching is
-**0.05–0.4 ms** on a **cached prefix stage**, against `GpuBrushRaster`'s measured **~1.6 ms floor**
-(1.28 of it a fixed download), so a port would very likely make it *slower*. ⚠ **Do not re-propose
-it from the agreed order alone** — "last unported" is not "worth doing". `docs/BACKLOG.md` carries
-the table and the two caveats that would reopen it.
-
-⚠⚠ **This said "18 of 23" until 2026-09-17, which invited the wrong subtraction** — 23 − 18 = 5, and
-only three are unported. `crates/pipeline/src/stages/` holds **23 files**, of which **21 implement
-`PipelineStage`**: `hue_table` and `mask_coverage` implement none and are helpers folded into `hsl`
-and `mask`. ⚠ Two twins are also renamed rather than missing — `color_grading` → `grading.rs`,
-`sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
-`impl PipelineStage for`, not by file.**
+⚠ **Do not go looking for the next port, and do not re-propose from a list alone** — "last unported"
+is not "worth doing". The order, with what each row cost and why, is in `docs/JOURNAL.md`
+(`grep -n "agreed order" docs/JOURNAL.md`); the declines with their numbers are in `docs/BACKLOG.md`.
+⚠ Count stages by `impl PipelineStage for`, never by filename: two stages are helpers and two twins
+are renamed, so a filename comparison undercounts.
 
 ### Open items
 
@@ -352,9 +334,17 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
 - Move `PrefixCache`'s tests into `prefix_cache.rs`.
 - ⚠ **M7.3b is DEFERRED, not done.**
-- ⚠ `crates/lens-profile/src/lib.rs` is **949** lines. (`batch_export/worker.rs` is 1,127
+- ⚠ `crates/lens-profile/src/lib.rs` is **949** lines and `crates/app/src/immich_source.rs` is **821**
+  — both past the ~600 threshold and both wanting a split. (`batch_export/worker.rs` is 1,127
   deliberately — ~190 of code, the rest its own tests, and its module header says so.)
-- The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.**
+- The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
+  adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
+  `thumb_store`'s use a counter as well and are the pattern to copy.
+- ⚠ **Immich marks do not persist** (no catalog rows), the **API key is plaintext** in `settings.json`
+  (no keychain), and there is **no eviction for the cached originals** — all three out of scope by
+  decision, not oversights.
+- ⚠ The **rail's** album and bucket lists are refetched on every launch; only the *asset* lists are
+  cached (2026-09-23).
 
 ### The open question M8.11 did not settle
 
@@ -370,6 +360,12 @@ asking then rather than now.
   double-application test named three of five fields and was therefore blind to a whole milestone —
   the real sabotage left it at `1 passed` while six goldens failed. Read this before adding anything
   to `adjustment_stages`.
+- **⚠⚠ A TEST'S DOC COMMENT IS A CLAIM ABOUT WHAT IT CATCHES, AND AN UNVERIFIED ONE IS WORSE THAN
+  NONE.** On 2026-09-23 a new test's comment said reading `updated_at` instead "would have produced a
+  cache that never invalidates" — `AlbumSummary` has no such field, so that sabotage is impossible and
+  the comment advertised a guard the test did not provide. ⚠ **Run the sabotage, then describe the one
+  you ran.** Two tests did fail when the `find` became `first()`; that is what the comment now says.
+  Same family as the enumerating guard above: a reassuring sentence is not a guard.
 - **⚠⚠ A gate run before the last commit describes a tree nobody shipped.** M8.9's tip had to be
   re-gated before merging, which caught an unformatted commit checked only with `cargo build`.
   **Re-gate the tip, and read each exit code from its own command.**
