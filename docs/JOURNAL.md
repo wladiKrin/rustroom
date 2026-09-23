@@ -211,6 +211,87 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-24 — the Color section, made legible, and a guard that refused to pass vacuously
+
+Branch `color-section-clarity`, merged and **confirmed by use**. **2,797 tests**, clippy and fmt clean,
+the **74 goldens unmoved** — no `Edits` field changed, so no sidecar or golden movement at all.
+
+**The input was a review, not a bug.** An amateur photographer found the Develop panel's **Color**
+section confusing. ⚠ Grounded rather than taken on trust — the section held **~40 values behind 15
+sliders, two segmented selectors, a wheel and a checkbox**, and two nameable causes:
+
+1. ⚠⚠ **"Saturation" appeared three times in one section, meaning three different things** — the global
+   slider, HSL's channel, and the grading wheel's slider. "Hue" and "Luminance" twice each.
+   `hsl_bands.rs`'s own comment had already recorded hitting the same hazard from the other side.
+2. It bundled **three mental models** with nothing naming them: *more colour overall*, *change one
+   colour*, *tint by brightness*.
+
+⚠ **The capability was never the problem and was not reduced.** Naming and grouping are free, and that
+is what changed.
+
+**What shipped** (user chose A+B+C of four offered): HSL and Color Grading moved inside an **`ADVANCED
+COLOR`** block, **closed by default**, under `ADJUST INDIVIDUAL COLORS` and `TINT BY TONE`, with `HSL`
+and `color grading` carried in hovers for whoever searches for them. A newcomer meets **two sliders**.
+
+**One rename: the grading wheel's `Saturation` → `Strength`.** ⚠⚠ The global slider and HSL's channel
+both mean **the image's chroma**; this one means **how much tint is applied** — the same word for the
+opposite subject. ⚠ `Hue` and `Luminance` were deliberately **left alone**: they repeat by *word* but
+not by *meaning*, and Lightroom labels its wheels the same way. **A collision of words is not
+automatically a collision of meanings, and only the latter misleads.**
+
+**⚠⚠ "Three sections" turned out to be unbuildable as asked, and saying so was the work.**
+`Section::name()` returns `EDIT_GROUP_NAMES[i]`, `edit_groups()` is *derived* from `SECTIONS`, and those
+names drive the Sync dialog and "Reset adjustments" — so three real sections meant **splitting the
+`Color` edit group**: a new `EditGroups` field, `merge_from`'s destructure, three exhaustive fixtures, a
+serde default on a persisted struct, and **three Sync checkboxes where there is one**. The groupings
+landed as named blocks inside the section instead, claiming no group. Splitting it stays its own change.
+
+## The guard, and the three ways it refused to pass vacuously
+
+The test is a **role filter over whatever sliders exist** — every AccessKit node carrying both a label
+and a numeric value — asserting **no two are equal**. Not a list of expected labels: a second
+"Saturation" added tomorrow fails it with nothing to maintain.
+
+⚠⚠ **It also asserts its own sample is large enough before checking anything, and that line earned its
+keep three times in one sitting:**
+
+1. The Color **section** is collapsed by default as well as the block inside it, so a first version saw
+   **eleven unrelated sliders** from White Balance and Tone and would have passed.
+2. `CollapsingState::set_open` mutates the loaded struct; without **`store()`** nothing reaches egui's
+   memory and the header re-loads its default.
+3. ⚠⚠ **`ui.make_persistent_id` is relative to the Ui's id stack.** The block's header is created inside
+   the *section's nested body*, so the id computed at the top level was **never** the block's — forcing
+   it opened nothing at all.
+
+Each surfaced as *"the advanced block did not open, so this would guard nothing"* rather than as a green
+test. **A test that can only fail loudly is worth more than one that is merely correct today** — and the
+fix was to stop fiddling with ids and drive the existing `RangePanel` harness, clicking the headers the
+way a user does.
+
+⚠ **Two existing tests were silently depending on grading being visible** and failed with *"no widget
+labelled Midtones was drawn"*. They now open the block first. Anything else reaching into Color needs
+the same step.
+
+⚠ **A residual collision, accepted with a reason:** HSL's channel selector still offers a `Saturation`
+*tab* while the global `Saturation` *slider* is visible above it when the block is open. Every editor
+names that channel Saturation, so renaming costs recognition; the guard is scoped to **sliders**, which
+is where the misleading pair was. If it still trips someone, the answer is the block name, not a rename.
+
+⚠ `crates/app/src/develop/panel/adjustments.rs` is **1,185 lines** and this added a nesting level to it.
+On the split list with `immich_source.rs`.
+
+## The correction that came out of the brainstorm
+
+⚠⚠ **I had the history of per-channel RGB curves backwards** and said so. I framed them as "a fourth way
+to do colour" that would worsen the reported confusion. They are in **Photoshop, Lightroom, Camera Raw,
+Capture One, darktable, RawTherapee, Affinity and GIMP** — they are the *original* grading tool, and the
+shadows/midtones/highlights **wheels are the friendlier interface built over them**. Rustroom has the
+approachable version and not the classic one, which is the reverse of how most photographers learned.
+
+⚠ And the user's choice of C makes them nearly free: the tone curve lives in **Tone**, not Color, so a
+channel selector defaulting to the composite adds **no row and no section** — a beginner who never
+touches it sees exactly today's widget. Sequenced next, as their own spec.
+
 ### 2026-09-23 — Immich slice 3: marks that persist, and two fixtures that hid the bug
 
 Branches `immich-catalog-rows` and `immich-presence`, merged and **confirmed by use**. **2,795 tests**,

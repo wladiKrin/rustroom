@@ -166,8 +166,19 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-23)
 
-**2795 tests** (goldens unmoved since 2026-09-18). No branch; `main` is **24 commits ahead of
-`origin/main`** — the user last pushed `074c62f`; still never push.
+**2797 tests** (goldens unmoved since 2026-09-18). No branch; `main` is **5 commits ahead of
+`origin/main`** — the user last pushed `f4d7633`; still never push.
+
+✅ **The Color section, made legible (2026-09-24, confirmed by use).** An amateur's review found it
+confusing: **~40 values behind 15 sliders, two selectors and a wheel**, with **"Saturation" naming three
+different things**. HSL and Color Grading now sit inside **`ADVANCED COLOR`**, closed by default, under
+`ADJUST INDIVIDUAL COLORS` / `TINT BY TONE` with the jargon in hovers — a newcomer meets **two sliders**.
+The grading wheel's `Saturation` → **`Strength`**; ⚠ `Hue` and `Luminance` stay, because they repeat by
+*word* and not by *meaning*, and only the latter misleads.
+⚠⚠ **Not three real sections:** `Section::name()` is `EDIT_GROUP_NAMES[i]` and `edit_groups()` is derived
+from `SECTIONS`, so that would mean splitting the `Color` edit group **and the Sync dialog** — its own
+change, with a version bump. The block deliberately claims no group and is not resettable.
+`grep -n 'made legible' docs/JOURNAL.md`.
 
 ✅ **Immich slice 3 — marks that persist (2026-09-23, confirmed by use).** Ratings, flags, labels and
 keywords on an Immich photo now survive a restart. ⚠⚠ **Two links were broken and the second was
@@ -217,13 +228,10 @@ parameter counts itself. ⚠ `History::steps_since` is **gone**, having lost its
 is a plain button**, not a ⋯ menu holding one item.
 `grep -n 'counts difference, not history steps' docs/JOURNAL.md`.
 
-✅ **Reindex refetches from Immich, and asset lists are persisted** (2026-09-23, both confirmed by
-use). ⋯ → Reindex removes the album's entry from the session map — checked *before* the validator and
-never invalidated — and refetches. Lists are stored per album/month and revalidated against
-**`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`, which the captured reply shows
-identical for every album. ⚠⚠ Reindex needed `ImmichWorker`'s single `pending_list` flag **split in
-two**: it covered both `Albums` and `Buckets`, so one of two requests in a frame was dropped silently.
-`grep -n 'Reindex refetches\|asset lists persisted' docs/JOURNAL.md`.
+✅ **Reindex refetches from Immich, and asset lists are persisted** (2026-09-23). ⋯ → Reindex drops the
+album's session-map entry — checked *before* the validator — and refetches; lists revalidate against
+**`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`. ⚠⚠ It needed `ImmichWorker`'s single
+`pending_list` flag **split in two**, since it covered both list kinds and dropped one silently.
 
 ✅ **Immich slice 2's three use-found defects are fixed** (2026-09-23) — a `null` `thumbhash`, a click
 discarded by a shared guard, and no feedback while the server worked. Lessons under **Standing
@@ -394,6 +402,14 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   `thumbhash` then failed a whole month of the timeline. ⚠ When a field turns out to be nullable,
   **audit every field against the schema** rather than patching the one that broke: two more were
   waiting. And when an endpoint's shape matters, get a **captured reply** before writing the DTO.
+- **⚠⚠ MAKE A TEST ASSERT ITS SAMPLE IS BIG ENOUGH BEFORE IT ASSERTS ANYTHING ABOUT IT.** The Color
+  duplicate-label guard (2026-09-24) checks `labels.len() > 12` first, and that line caught **three**
+  separate ways it would otherwise have passed while opening nothing: the Color *section* is collapsed by
+  default as well as the block inside it; `CollapsingState::set_open` needs **`store()`** or nothing
+  reaches egui's memory; and ⚠⚠ **`ui.make_persistent_id` is relative to the Ui's id stack**, so an id
+  computed outside a nested body is a different id. **A guard over "whatever exists" must prove it found
+  anything** — otherwise an empty query is indistinguishable from a clean result, which is the same shape
+  as a substring filter running zero tests and exiting 0.
 - **⚠⚠ AND THE SHARPER FORM, PAID FOR A SECOND TIME TWO DAYS LATER: A FIXTURE THAT MAKES TWO DIFFERENT
   THINGS EQUAL CANNOT SEE A BUG ABOUT TELLING THEM APART.** Slice 3's `asset("one")` gave
   `original_file_name: "one.jpg"`, so the UUID-derived cache path and the display name **coincided** —
