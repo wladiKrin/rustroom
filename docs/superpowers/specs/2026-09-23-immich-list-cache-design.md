@@ -77,6 +77,13 @@ enum Validator {
 ⚠ `last_modified` is `Option` because the field is not in the schema's required list — the one place
 this design does trust the schema, and it costs nothing to tolerate its absence.
 
+⚠⚠ **`immich::AlbumSummary` does not carry it yet.** It is `{ id, album_name, asset_count }`; the DTO was
+deliberately narrowed and `lastModifiedAssetTimestamp` was not needed until now. Add
+`pub last_modified_asset_timestamp: Option<String>` to it — `albums_real.json` is a captured reply and
+already contains the field, so the test that parses it can assert the value rather than merely that it
+deserialises. **Caught by spec self-review; the implementer would otherwise have hit it at the first
+compile.**
+
 **API.**
 
 ```rust
@@ -94,8 +101,12 @@ list that deserialises to garbage.
 **The flow at a click**, extending what `collections_panel` already does:
 
 1. `app.immich_assets` (in memory) → open now.
-2. Otherwise `list_cache::load` with the validator built from the rail's own album/bucket list → open
-   now, and populate the in-memory map so the next switch skips even the read.
+2. Otherwise `list_cache::load` with the validator built **in `collections_panel`, where the click is
+   applied**, from `app.immich_albums` / `app.immich_buckets` — the rail's own already-fetched lists.
+   Find the clicked album or bucket in there by id, build the `Validator` from its fields, and on a hit
+   open now and populate the in-memory map so the next switch skips even the read.
+   ⚠ If the rail's list is somehow absent, there is no validator and therefore no hit: fall through to
+   step 3 rather than loading unvalidated.
 3. Otherwise request as today, and `store` on arrival beside the existing in-memory insert.
 
 ⚠ Step 2 needs the rail's list to be in hand, which it is: the section fetches `/albums` or
