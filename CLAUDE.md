@@ -166,8 +166,31 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-23)
 
-**2777 tests** (goldens unmoved since 2026-09-18). No branch. ⚠ The user **pushed** through
-`074c62f` on 2026-09-23; `main` is **6 commits ahead of `origin/main`** — still never push.
+**2795 tests** (goldens unmoved since 2026-09-18). No branch; `main` is **24 commits ahead of
+`origin/main`** — the user last pushed `074c62f`; still never push.
+
+✅ **Immich slice 3 — marks that persist (2026-09-23, confirmed by use).** Ratings, flags, labels and
+keywords on an Immich photo now survive a restart. ⚠⚠ **Two links were broken and the second was
+invisible:** the openers never called `sync_folder`, *and* `sync_folder` keyed rows on
+`CatalogEntry::file_name` while every read side derives its key from a **`Path`**. Identical for a local
+file; an Immich cache path is `<uuid>.<ext>` while `file_name` is the camera's name. **The catalog now
+keys on the path**, and `CatalogEntry::file_name`'s doc says it is a display name and not the key.
+⚠ One folder row **per server**, never per album — an asset reached two ways is one photo with one
+identity. ⚠ All Photos and smart collections show an Immich photo only once its file is on disk, through
+one shared `row_is_browsable`; **Immich rows only**, so an absent local file stays visible.
+`grep -n 'Immich slice 3' docs/JOURNAL.md`.
+
+✅ **The rail says "immich (downloaded)" and counts what is there; downloaded photos are marked.** ⚠ The
+count lied twice — 981 catalog rows, then 34 files against 18 photos, because a **`.json` sidecar sits
+beside every edited photo**. `present_names` is one `read_dir` filtered through `catalog::is_supported`,
+which is what `scan_folder` counts, so the two agree by construction. ⚠⚠ The indicator is
+**hand-painted**: the bundled Phosphor's `post` table is **version 3.0 — no glyph names** — so a
+codepoint can be verified as present but **not** as the right picture. Grid marks are 10–20 pt with
+their own scale, and the reject cross is scaled beside its own glyph (`×` is U+00D7 and draws small).
+
+⚠ **Auto-advance is a Settings toggle** — *"Move to the next photo after rating"* — and already `true` in
+the user's `settings.json`, so **changing the Rust default would not change his behaviour**. The default
+stays as `settings.rs` records it.
 
 ✅ **The histogram survives a peak (2026-09-23, confirmed by use).** Square root with bins 0 and 255
 **out of the scale**, in `histogram::normalised`/`envelope` — one function pair for the panel and the
@@ -194,56 +217,30 @@ parameter counts itself. ⚠ `History::steps_since` is **gone**, having lost its
 is a plain button**, not a ⋯ menu holding one item.
 `grep -n 'counts difference, not history steps' docs/JOURNAL.md`.
 
-✅ **Reindex refetches from Immich (2026-09-23) — merged and confirmed by use.**
-On an Immich album or month, ⋯ → Reindex persists the session, compacts copy numbering, **removes that
-album's entry from `immich_assets`** (the one load-bearing line — the session map is checked *before*
-the validator and was never invalidated, so a change in Immich appeared only on a relaunch), and asks
-for the matching rail list plus the asset list. ⚠⚠ This needed `ImmichWorker`'s single `pending_list`
-flag **split in two**: it covered both `Albums` and `Buckets`, so one of two requests in a frame was
-dropped silently and a bucket reply cleared an outstanding album fetch. The rail survived that by
-re-requesting every frame; a one-shot Reindex would not have. Spec
-`2026-09-23-immich-reindex-design.md`; `grep -n 'Reindex refetches' docs/JOURNAL.md`.
-
-✅ **Immich asset lists are persisted (2026-09-23) — merged and confirmed by use.**
-One release run wrote **8 lists / 2,155 assets / 618 KB**, all internally consistent, no panic, no
-`.tmp` left (one holds **1,022** assets, above `PAGE_SIZE`, so paging is complete). ⚠ What remains
-unverified is that a **relaunch opens one with no wait**. ⚠ Measured at **280–303 B/asset** — the
-spec's ~175 KB per 872-asset album was **wrong** (really 238 KB; ~9.8 MB for 35k, not ~7). A new lib module
-`immich_list_cache` writes each fetched list to `<cache>/rustroom/immich/<host_slug>-lists/`, and a
-click tries the session map, then the stored list **if its validator still matches**, then a fetch.
-The album validator is **`(assetCount, lastModifiedAssetTimestamp)`** — ⚠⚠ **not `updatedAt`, which
-the captured reply shows identical for every album**; a bucket's is its count alone. ⚠ Validate first:
-no validator (list never fetched, failed, or album unknown) means **no hit and no write**, so a stale
-grid is never shown. ⚠⚠ The lists directory is a **sibling** of the originals because
-`is_immich_path` is `starts_with(root)` and `asset_id_of` is a path stem. Spec
-`2026-09-23-immich-list-cache-design.md`; `grep -n 'asset lists persisted' docs/JOURNAL.md`.
+✅ **Reindex refetches from Immich, and asset lists are persisted** (2026-09-23, both confirmed by
+use). ⋯ → Reindex removes the album's entry from the session map — checked *before* the validator and
+never invalidated — and refetches. Lists are stored per album/month and revalidated against
+**`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`, which the captured reply shows
+identical for every album. ⚠⚠ Reindex needed `ImmichWorker`'s single `pending_list` flag **split in
+two**: it covered both `Albums` and `Buckets`, so one of two requests in a frame was dropped silently.
+`grep -n 'Reindex refetches\|asset lists persisted' docs/JOURNAL.md`.
 
 ✅ **Immich slice 2's three use-found defects are fixed** (2026-09-23) — a `null` `thumbhash`, a click
-discarded by a shared guard, and no feedback while the server worked. Their lessons are under
-**Standing lessons**; `grep -n 'three defects found by using' docs/JOURNAL.md`. ⚠ The CI workflow was
-fixed for the runner's disk on 2026-09-21; **the user has now pushed, so it should have run** — worth
-checking.
+discarded by a shared guard, and no feedback while the server worked. Lessons under **Standing
+lessons**. ⚠ CI was fixed for the runner's disk on 2026-09-21 and the user has since pushed, so **it
+should have run** — worth checking.
 
-✅ **Immich slices 1 and 2 — merged and confirmed by use (2026-09-22/23).** A sixth rail section
-lists the server's albums and a **Timeline** of years and months; a grid fills from server thumbnails
-with nothing downloaded; opening a photo fetches the original into a cache directory and re-enters
-`open_path`, after which every existing path applies unchanged. Immich thumbnails persist, keyed
-`(asset id, updatedAt)`, and `ThumbStore` finally has a **byte budget with LRU eviction** — two of
-them, 5120 MB each in Settings, on separate directories. It had **no eviction at all** since M8.2.
-⚠ **No catalog migration — `db.rs` stays at v7**, which is what shape A bought. Specs
+✅ **Immich slices 1 and 2 — merged and confirmed by use (2026-09-22/23).** A rail section lists the
+server's albums and a **Timeline** of years and months; the grid fills from server thumbnails with
+nothing downloaded; opening a photo fetches the original into a cache directory and re-enters
+`open_path`. Thumbnails persist, keyed `(asset id, updatedAt)`, and `ThumbStore` finally has a **byte
+budget with LRU eviction** — two of them, 5120 MB each — having had **none** since M8.2. ⚠ **No catalog
+migration: `db.rs` stays at v7**, which is what shape A bought. Specs
 `2026-09-22-immich-browse-design.md`, `2026-09-23-immich-timeline-design.md`;
-`grep -n 'M9.1 slice' docs/JOURNAL.md`.
-
-⚠ **Immich, out of scope by decision:** catalog rows (**so marks do not persist on Immich photos**),
-eviction of cached originals, the OS keychain (the API key is **plaintext** in `settings.json`),
-write-back. ⚠ Slice 1's three defects — the missing `assets` field, `nextPage` paging, the absent
-`catalog::sort` — are in the journal and their lesson is under **Standing lessons**.
-
-✅ **Settled; detail in the journal:** the thumbnail store pins a concrete filename rather than
-trusting "pinned hash vectors" (which pin `fnv1a`, not `Identity`'s key), and RTHM has two layouts —
-`VERSION_LOCAL` 1, `VERSION_REMOTE` 2. **Both date trees** order years newest-first with months
-chronological inside (`capture_days` orders `1 DESC, 2, 3`); ⚠ `date_tree::group` groups on *change*,
-not direction, so it needed no change either time.
+`grep -n 'M9.1 slice' docs/JOURNAL.md`. ⚠ Both date trees order years newest-first with months
+chronological inside (`capture_days`: `1 DESC, 2, 3`), and `date_tree::group` groups on *change*, not
+direction. **`jpeg`/`jpg` and `tiff`/`tif` are one format each** in the Library chips, both sides
+canonicalised because `hidden_formats` is persisted.
 
 ✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
 as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
@@ -327,9 +324,8 @@ helpers and two twins are renamed, so a filename comparison undercounts.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
   adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
   `thumb_store`'s use a counter as well and are the pattern to copy.
-- ⚠ **Immich marks do not persist** (no catalog rows), the **API key is plaintext** in `settings.json`
-  (no keychain), and there is **no eviction for the cached originals** — all three out of scope by
-  decision, not oversights.
+- ⚠ **Immich: the API key is plaintext** in `settings.json` (no keychain) and there is **no eviction for
+  the cached originals** — both out of scope by decision. ✅ Marks **do** persist since slice 3.
 - ⚠ The **rail's** album and bucket lists are refetched on every launch; only the *asset* lists are
   cached (2026-09-23).
 
@@ -398,6 +394,13 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   `thumbhash` then failed a whole month of the timeline. ⚠ When a field turns out to be nullable,
   **audit every field against the schema** rather than patching the one that broke: two more were
   waiting. And when an endpoint's shape matters, get a **captured reply** before writing the DTO.
+- **⚠⚠ AND THE SHARPER FORM, PAID FOR A SECOND TIME TWO DAYS LATER: A FIXTURE THAT MAKES TWO DIFFERENT
+  THINGS EQUAL CANNOT SEE A BUG ABOUT TELLING THEM APART.** Slice 3's `asset("one")` gave
+  `original_file_name: "one.jpg"`, so the UUID-derived cache path and the display name **coincided** —
+  and four row tests passed against a catalog that could never find its own rows. ⚠ Sabotage did not
+  catch it either, because the sabotage was orthogonal to the bug. **What caught it was querying the
+  user's real `catalog.db`.** ⚠ When a test is about two identifiers agreeing, make the fixture's two
+  identifiers look nothing alike, and add a test that guards the fixture itself.
 - **⚠⚠ A FIXTURE YOU WROTE IS NOT EVIDENCE ABOUT SOMETHING YOU DO NOT CONTROL.** M9.1's
   `album.json` was hand-written and described *in its own plan* as "trimmed from `GET
   /albums/{id}`". It asserted an `assets` array that endpoint has never returned. The test passed

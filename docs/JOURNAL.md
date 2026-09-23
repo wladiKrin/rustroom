@@ -211,6 +211,91 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-23 — Immich slice 3: marks that persist, and two fixtures that hid the bug
+
+Branches `immich-catalog-rows` and `immich-presence`, merged and **confirmed by use**. **2,795 tests**,
+clippy and fmt clean, the **74 goldens unmoved**.
+
+**Scope: local only**, the user's choice of three. Nothing is sent to Immich, so the read-only API key
+the Settings help text asks for stays sufficient. ⛔ Reading Immich's own `rating`/`isFavorite`, and
+writing anything back, stay out: write-back needs `asset.update`, which the help text tells the user
+**not** to grant, and would let a bug here alter their library.
+
+**The cause was two links of one chain.** The Immich openers never called `sync_folder`, so no `photos`
+row existed — and `Catalog::set_marks` opens with `let Some(id) = self.photo_id(..)? else { return
+Ok(()) }`, so with no row it **returns success and does nothing**. ⚠ `test_app::catalog_library`'s own
+doc had already written that trap down: *"on an uncatalogued library it silently does nothing… The
+assertion fails against perfectly correct rating code."*
+
+**⚠⚠ AND THEN IT STILL DID NOT WORK, BECAUSE MY FIXTURE MADE TWO DIFFERENT THINGS EQUAL.** Rows were
+being created — **109 of them in the real catalog** — but `sync_folder` keyed them on
+`CatalogEntry::file_name` while every read side (`photo_id`, `marks_in`, `all_photos`) derives its key
+from a `Path` through `split()`. For a local file the two are identical, which is why this survived
+since the catalog was written. An Immich cache path is `<uuid>.<ext>` while `file_name` carries the
+camera's name for the grid to show, so a row went in as `IMG-20231218-WA0011.jpg` and was looked up as
+`<uuid>.jpg`.
+
+⚠⚠ **My test fixture wrote `asset("one")` with `original_file_name: "one.jpg"`, so the UUID-derived
+path name and the display name *coincided*** — and four row tests passed against a catalog that could
+never find its own rows. Sabotaging `record_assets` did not catch it either, because that sabotage was
+orthogonal to the bug. **What caught it was querying the user's real `catalog.db`**, which showed 109
+rows and **zero** marks. The fixture now uses names as unlike each other as a real UUID and a real
+camera filename, and a test guards the fixture itself. `CatalogEntry::file_name` now says in its own
+doc that it is a display name and **not** the key.
+
+⚠ **This is the second instance of the same lesson in two days** — the first was the fabricated
+`album.json`. *A fixture you wrote is not evidence*, and the sharper form of it: **a fixture that makes
+two different things equal cannot see a bug about telling them apart.**
+
+**Design decisions that held up:**
+
+- **One folder row per server, never per album.** An asset reached through two albums, or through an
+  album and the timeline, is **one photo with one identity**; a folder per album would give it two rows
+  and two independent sets of marks. Pinned by a test.
+- **Rows accumulate and are never removed** — `sync_folder`'s *absence is not deletion*, which is what
+  makes a mark on an asset you have not looked at for a month still be there.
+- **An undownloaded asset can be marked**, straight from a server thumbnail. Its row is complete enough
+  without a file.
+- **All Photos and smart collections show an Immich photo only once its file is on disk** (the user's
+  call, matching the line he drew for slice 2), through **one** shared `row_is_browsable` so the two
+  readers cannot drift. ⚠⚠ **Immich rows only:** a local folder on an unplugged drive also keeps rows
+  whose files are absent, on purpose, and hiding those is a different question nobody asked.
+
+**Then three follow-ups from use, and a count that lied twice.**
+
+The Folders rail had started showing the cache folder as `https___immich_example` with
+**981** beside it — every catalog row — against 17 files. Renamed to **"immich (downloaded)"** (renamed
+rather than hidden: clicking it opens the cache directory, which really does hold the downloaded
+photos). The count became `present_names().len()` — and then read **34** against 17. ⚠⚠ **The cache
+directory holds a `.json` sidecar beside every edited photo**, so counting files counted each edited
+one twice. It now filters through `catalog::is_supported`, which is what `scan_folder` counts, so the
+two agree **by construction rather than by coincidence**.
+
+**A circled down-arrow marks the downloaded photos, hand-painted, and that was forced.** `icons.rs`
+requires every codepoint to be verified against the bundled Phosphor 2.1.2 TTF because *"four separate
+features in this project have picked a glyph that turned out to be absent"*. I parsed the font: its
+`post` table is **version 3.0 — no glyph names** — so a codepoint can be verified as *present* but
+**not** as the right picture, and shipping the wrong icon looks fine while being wrong. A circle and
+three strokes need no verification, as the histogram's clipping marks already do.
+
+⚠ **A near-miss on per-frame work.** The first working version cloned the present set into the grid's
+draw closure: it compiled, and would have allocated ~1,000 short strings **every frame**. Disjoint
+field borrows — `&app.immich_present` beside `&mut app.library` — avoid it entirely, and the decision
+is precomputed as one bool per entry so `shows_download_badge` stays the only place that decides.
+
+⚠ **The grid's marks are larger** (7–13 → 10–20 pt) with their own scale rather than the filename
+caption's, and the **reject cross is scaled again beside its own glyph**: `×` is U+00D7 and occupies far
+less of its em box than `★` or `⚑`, so the compensation belongs with the glyph, not with the row.
+Scaled rather than swapped for `✕`, which risks tofu.
+
+⚠ **Auto-advance needed no code.** *"Rating moves me to the next photo"* is already
+`Settings::auto_advance`, already `true` in the user's `settings.json` — so **changing the Rust default
+would not have changed his behaviour**; the file wins. The toggle is the fix, and saying so was the
+honest answer rather than a silent non-fix.
+
+⚠ `crates/app/src/immich_source.rs` is now **864 lines**, further past the ~600 threshold and still on
+the open list as wanting a split.
+
 ### 2026-09-23 — the histogram's scale, and a frozen temperature found beside it
 
 Branch `histogram-and-panel`, four commits, merged and **confirmed by use**. **2,777 tests**, clippy
