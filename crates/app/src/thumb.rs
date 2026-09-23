@@ -184,19 +184,24 @@ pub fn cell_with(
 /// ⚠ A translucent black disc with white ink rather than an accent colour, so it stays legible over a
 /// blown sky and over a dark frame alike.
 fn paint_downloaded(p: &egui::Painter, rect: egui::Rect, after: Option<f32>) {
-    const R: f32 = 6.0;
+    // ⚠ Proportional to the cell with a floor and a ceiling, rather than a fixed radius: the grid's
+    // cell size is a slider, and a mark that does not grow with it reads as a speck at large sizes.
+    // ⚠ Enlarged on the same 2026-09-23 call as the marks row.
+    let r = (rect.height() * 0.075).clamp(8.0, 16.0);
     const PAD: f32 = 3.0;
     let left = match after {
         Some(x) => x + PAD,
         None => rect.left() + PAD,
     };
-    let c = egui::pos2(left + R, rect.top() + PAD + R);
-    p.circle_filled(c, R, egui::Color32::from_black_alpha(150));
-    let stroke = egui::Stroke::new(1.4, egui::Color32::WHITE);
-    let tip = c + egui::vec2(0.0, 2.7);
-    p.line_segment([c + egui::vec2(0.0, -3.0), tip], stroke);
-    p.line_segment([c + egui::vec2(-2.7, 0.0), tip], stroke);
-    p.line_segment([c + egui::vec2(2.7, 0.0), tip], stroke);
+    let c = egui::pos2(left + r, rect.top() + PAD + r);
+    p.circle_filled(c, r, egui::Color32::from_black_alpha(150));
+    // ⚠ Every offset is a fraction of `r`, so the arrow keeps its proportions at any radius rather
+    // than turning into a dot inside a big disc.
+    let stroke = egui::Stroke::new((r * 0.23).max(1.4), egui::Color32::WHITE);
+    let tip = c + egui::vec2(0.0, r * 0.45);
+    p.line_segment([c + egui::vec2(0.0, -r * 0.5), tip], stroke);
+    p.line_segment([c + egui::vec2(-r * 0.45, 0.0), tip], stroke);
+    p.line_segment([c + egui::vec2(r * 0.45, 0.0), tip], stroke);
 }
 
 /// The marks row's height for a glyph of `size` points.
@@ -212,7 +217,10 @@ pub fn marks_row_height(size: f32) -> f32 {
 /// read as part of the photograph until you look twice, and a rating you have to look twice
 /// for is one you miss while culling.
 pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size: f32) {
-    let size = size.clamp(7.0, 13.0);
+    // ⚠ 10–20, up from 7–13 (user's call, 2026-09-23): the stars, the reject cross and the colour
+    // chip were legible but small, and they are what the grid is *read* for while culling. The floor
+    // rises with the ceiling so a small cell does not shrink them back to unreadable.
+    let size = size.clamp(10.0, 20.0);
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(width, marks_row_height(size)),
         egui::Sense::hover(),

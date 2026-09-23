@@ -97,6 +97,13 @@ const MARK_NONE: &str = "☐ ";
 /// ⚠ **The catalog queries live in here**, which egui runs only while the menu is open — reading
 /// them beside the grid would run three queries at 60 Hz, the `apply_view_demosaic` mistake in
 /// another costume.
+/// How much larger the grid's marks are drawn than its filename caption.
+///
+/// ⚠ 1.6 (user's call, 2026-09-23): the stars, the reject cross and the colour chip were legible but
+/// small. They are what a culling pass actually reads, so they are not tied to the caption's size.
+/// ⚠ `thumb::marks_row` clamps the result, so this cannot make them absurd on a huge cell.
+const MARK_SCALE: f32 = 1.6;
+
 pub fn cell_menu(
     ui: &mut egui::Ui,
     catalog: Option<&catalog::db::Catalog>,
@@ -592,7 +599,16 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             rename = Some((e.id.clone(), r));
                                         }
                                         ui.visuals_mut().override_text_color = None;
-                                        thumb::marks_row(ui, box_size.x, marks, name_size);
+                                        // ⚠ The marks get their **own** size, not the filename's:
+                                        // they are what the grid is read for while culling, and the
+                                        // caption is not. Scales with the cell exactly as
+                                        // `name_size` does, then `marks_row` clamps it.
+                                        thumb::marks_row(
+                                            ui,
+                                            box_size.x,
+                                            marks,
+                                            name_size * MARK_SCALE,
+                                        );
                                     });
                                 })
                                 .response
