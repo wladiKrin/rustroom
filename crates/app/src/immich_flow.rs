@@ -92,6 +92,18 @@ impl RustroomApp {
         // loader sorts here. Omitting it made the library sort setting silently do nothing for an
         // album — found by reading the other five, not by a test.
         catalog::sort(&mut scan, self.settings.library_sort);
+        // ⚠⚠ Without this there is no `photos` row, and `set_marks` then returns `Ok(())` having
+        // done **nothing** — which is how every rating, flag and label on an Immich photo used to
+        // disappear, with nothing failing. See `immich_catalog::record_assets` for why the folder is
+        // the server's cache root rather than the album.
+        //
+        // ⚠ Logged and ignored on failure, exactly as `open_folder_at` does: a catalog that cannot be
+        // written must not stop the album opening.
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = rustroom_app::immich_catalog::record_assets(cat, &root, &scan) {
+                eprintln!("catalog: {e}");
+            }
+        }
         let n = self.open_scan(
             ctx,
             LibrarySource::ImmichAlbum {
@@ -132,6 +144,13 @@ impl RustroomApp {
         let root = immich_source::cache_root(&conn.url);
         let mut scan = immich_source::entries_from_assets(assets, &root);
         catalog::sort(&mut scan, self.settings.library_sort);
+        // ⚠ Rows for the marks, as in `open_immich_album` above — the reasoning is there and in
+        // `immich_catalog::record_assets`, not repeated here.
+        if let Some(cat) = &self.catalog {
+            if let Err(e) = rustroom_app::immich_catalog::record_assets(cat, &root, &scan) {
+                eprintln!("catalog: {e}");
+            }
+        }
         let n = self.open_scan(
             ctx,
             LibrarySource::ImmichBucket {
