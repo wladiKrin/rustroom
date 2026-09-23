@@ -131,6 +131,11 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
   over 2.39 M files). The cost was **cold filesystem work**: `target/debug` had reached **85 GB**, and
   a fresh binary's `_dyld_start` wait scales with its size. Fixed by
   `[profile.dev] debug = "line-tables-only"` — cold run **437 s → 11 s**, tree **90 → 10 GB**.
+  ⚠ A `SessionStart` hook (`scripts/target-budget.sh`, wired in the untracked
+  `.claude/settings.local.json`) warns when `target/` passes **250,000 files** — a healthy tree here
+  is ~37k, and the pathological one was **2.39 M**, of which ~98.5% were stale because **Cargo never
+  garbage-collects**. It counts files rather than bytes, bounded by `find | head`, so it costs at
+  most ~1.3 s however large the tree is; a `du` would be slowest exactly when it most needs to run.
   ⚠⚠ **THE WHOLE GATE IS ~79 SECONDS** (fmt instant, clippy 62 s cold, tests 16 s). Any document
   saying it is 15–30 minutes predates 2026-09-23 and is wrong; so is the 2026-09-19 journal note
   calling the stall "not fixable from here".
