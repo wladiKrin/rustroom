@@ -345,6 +345,20 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **A concrete filename, pinned on purpose.** The vectors above pin `fnv1a`; the test
+    /// beside this one pins that the parts *matter*. **Neither pins the mapping itself**, so a
+    /// change to `key_bytes` — adding an enum discriminant, reordering the fields, widening a
+    /// type — would silently turn every thumbnail already on a user's disk into a miss, with the
+    /// whole suite still green. This is the only thing standing between that change and a cache
+    /// everybody silently loses.
+    #[test]
+    fn a_known_local_identity_keeps_its_filename_for_ever() {
+        assert_eq!(
+            ident("/photos/a.RAF", 100, 200).file_name(),
+            "f89fcaaf26f07b00.rthm"
+        );
+    }
+
     #[test]
     fn the_filename_is_flat_and_filesystem_safe() {
         // A source path contains separators and may contain anything else; the cache directory
