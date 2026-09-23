@@ -236,6 +236,13 @@ pub(crate) fn white_balance(
     });
 }
 
+/// The `Advanced color` block's persistent id.
+///
+/// ⚠ A shared constant rather than a literal in two places: the test that forces the block open has to
+/// name the same id the panel does, and a silently mismatched id would leave that test passing against
+/// a block it never opened.
+const ADVANCED_ID: &str = "color_advanced";
+
 /// 1667 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
 /// disagree about which end is warm.
 ///
@@ -634,6 +641,116 @@ mod tests {
         assert!(
             slider_coolest_k >= solve_max_k,
             "the slider stops at {slider_coolest_k:.0} K but the solve can return {solve_max_k:.0} K"
+        );
+    }
+
+    /// Lay out the whole adjustments panel and report what it calls its sliders.
+    ///
+    /// ⚠ `Advanced color` is forced **open** through its own `CollapsingState` id, because with it
+    /// closed this sees two sliders, passes, and guards nothing.
+    fn color_slider_labels(ctx: &egui::Context, open_advanced: bool) -> Vec<String> {
+        let mut edits = edit_model::Edits::default();
+        let mut channel = HslChannel::default();
+        let mut range = color_wheel::GradeRange::Shadows;
+        let mut show_range = false;
+        let mut view = None;
+        let buffer = core_image::ImageBuf::new(8, 8);
+        crate::test_ui::slider_labels(ctx, |ui| {
+            // ⚠ The Color **section** starts collapsed too, so forcing only the inner block open showed
+            // nothing but White Balance and Tone — the size assertion caught that rather than letting
+            // the test pass on eleven unrelated sliders.
+            let open = |ui: &mut egui::Ui, id: &str| {
+                egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    ui.make_persistent_id(id),
+                    true,
+                )
+                .set_open(true);
+                // ⚠ `set_open` mutates the loaded struct; without `store` nothing reaches egui's memory
+                // and the header re-loads its default. The size assertion is what surfaced that.
+                let mut st = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    ui.make_persistent_id(id),
+                    true,
+                );
+                st.set_open(true);
+                st.store(ui.ctx());
+            };
+            open(ui, SECTIONS[2].name());
+            if open_advanced {
+                open(ui, ADVANCED_ID);
+            }
+            show(
+                ui,
+                &mut edits,
+                &mut channel,
+                GradeUi {
+                    range: &mut range,
+                    show_range: &mut show_range,
+                    view: &mut view,
+                },
+                SourceInfo {
+                    lens: None,
+                    lens_profile_found: false,
+                    wb_baseline: color::wb::Illuminant::new(5000.0, 0.0),
+                    baseline_ev: None,
+                    buffer: &buffer,
+                    hist: None,
+                },
+                None,
+                &mut Edited::default(),
+            );
+        })
+    }
+
+    /// ⚠⚠ **The review, as a test.** An amateur photographer found the Color section confusing, and a
+    /// concrete cause was that **"Saturation" named three different things in it** — the global slider,
+    /// HSL's channel and the grading wheel's slider. `hsl_bands.rs` had already recorded hitting the
+    /// same hazard from the other side.
+    ///
+    /// ⚠ A **role filter** over whatever sliders exist, never a list of expected labels: a second
+    /// "Saturation" added tomorrow fails this with nothing to maintain.
+    #[test]
+    fn no_two_sliders_in_the_adjustments_panel_share_a_name() {
+        let ctx = crate::test_ui::ctx();
+        let labels = color_slider_labels(&ctx, true);
+        assert!(
+            labels.len() > 12,
+            "the advanced block did not open, so this would guard nothing: {labels:?}"
+        );
+        let mut seen = std::collections::HashMap::<&str, usize>::new();
+        for l in &labels {
+            *seen.entry(l.as_str()).or_default() += 1;
+        }
+        let mut dupes: Vec<&str> = seen
+            .iter()
+            .filter(|(_, &n)| n > 1)
+            .map(|(l, _)| *l)
+            .collect();
+        dupes.sort_unstable();
+        assert!(
+            dupes.is_empty(),
+            "these slider names appear more than once: {dupes:?} (all: {labels:?})"
+        );
+        assert!(
+            labels.iter().any(|l| l == "Strength"),
+            "the grading wheel's amount should read Strength: {labels:?}"
+        );
+    }
+
+    /// ⚠ Closed by default, which is the change: a newcomer meets the two intensity sliders and not the
+    /// forty values behind HSL and grading.
+    #[test]
+    fn the_advanced_color_block_is_closed_by_default() {
+        let ctx = crate::test_ui::ctx();
+        let labels = color_slider_labels(&ctx, false);
+        assert!(
+            labels.iter().any(|l| l == "Vibrance"),
+            "Vibrance must stay visible: {labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l == "Blending"),
+            "grading must start hidden: {labels:?}"
         );
     }
 
