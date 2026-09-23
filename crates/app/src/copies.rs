@@ -235,28 +235,19 @@ impl RustroomApp {
     ///   whatever becomes the new copy 1, which is worse than losing it.
     /// - It re-reads every sidecar and re-scans the directory, so files added or deleted outside
     ///   Rustroom appear here.
-    pub(crate) fn reindex(&mut self, ctx: &egui::Context) {
-        let Some(LibrarySource::Folder(dir)) = self.library.as_ref().map(|l| l.source.clone())
-        else {
-            // ⚠ Reindex renumbers copies in a *folder*. A collection has no single folder to
-            // re-read, and renumbering photos you are merely viewing would be surprising.
-            self.status =
-                "Reindex works on a folder, not a collection, a date or All Photos".into();
-            return;
-        };
-        // ⚠ Written first: a compaction rewrites the sidecar this photo's edits belong in, so an
-        // unsaved change would otherwise be lost or land on a renumbered copy.
-        self.persist_current_session();
-
-        // ⚠ Re-scanning is what picks up files added or removed outside the app; the ordering
-        // itself is re-applied by `rebuild_entries`, from the chosen sort order.
-        let Ok(scan) = catalog::scan_folder(&dir) else {
-            self.status = "Could not read the folder".into();
-            return;
-        };
-
+     /// Close gaps in the copy numbering of every photo in `scan`, and let go of the undo state and
+    /// catalog rows of every copy that moved. Returns how many copies were renumbered.
+    ///
+    /// ⚠ Shared by the folder and the Immich branches of [`Self::reindex`]. Extracted verbatim; the
+    /// three characterisation tests were written **first**, because `reindex` had none at all and
+    /// "the existing tests still pass" would otherwise have proved nothing.
+    ///
+    /// ⚠⚠ The caller must have called `persist_current_session` first — a compaction rewrites the
+    /// sidecar the open photo's edits belong in, so an unsaved change would otherwise be lost or land
+    /// on a renumbered copy.
+    fn compact_copy_numbering(&mut self, scan: &[catalog::CatalogEntry]) -> usize {
         let mut renumbered = 0usize;
-        for e in &scan {
+        for e in scan {
             let mut sidecar = sidecar::load_all(&e.path);
             let moves = sidecar.compact();
             if moves.is_empty() {
@@ -283,6 +274,31 @@ impl RustroomApp {
                 }
             }
         }
+
+        renumbered
+    }
+
+   pub(crate) fn reindex(&mut self, ctx: &egui::Context) {
+        let Some(LibrarySource::Folder(dir)) = self.library.as_ref().map(|l| l.source.clone())
+        else {
+            // ⚠ Reindex renumbers copies in a *folder*. A collection has no single folder to
+            // re-read, and renumbering photos you are merely viewing would be surprising.
+            self.status =
+                "Reindex works on a folder, not a collection, a date or All Photos".into();
+            return;
+        };
+        // ⚠ Written first: a compaction rewrites the sidecar this photo's edits belong in, so an
+        // unsaved change would otherwise be lost or land on a renumbered copy.
+        self.persist_current_session();
+
+        // ⚠ Re-scanning is what picks up files added or removed outside the app; the ordering
+        // itself is re-applied by `rebuild_entries`, from the chosen sort order.
+        let Ok(scan) = catalog::scan_folder(&dir) else {
+            self.status = "Could not read the folder".into();
+            return;
+        };
+
+        let renumbered = self.compact_copy_numbering(&scan);
 
         // ⚠ The open photo may itself have been renumbered, so it is reopened by *path* at copy
         // 0 rather than by an id that might no longer exist.
