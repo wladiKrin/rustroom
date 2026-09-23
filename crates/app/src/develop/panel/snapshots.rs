@@ -63,7 +63,14 @@ fn drift_text(
     // ⚠ With no snapshot the row still says something useful: how many changes the photo has
     // taken since it was opened (user's call, 2026-09-21, replacing "no snapshots yet").
     let Some((label, edits)) = latest else {
-        return match history.undo_depth() {
+        // ⚠⚠ Measured against the state the photo **opened** in, never `undo_depth()`. That counts
+        // *entries*, so resetting an adjustment left "2 changes so far" on a photo where nothing
+        // differed — reported in use 2026-09-23.
+        //
+        // ⚠ And the baseline is the opened edits, not `Edits::default()`: a photo that opened warm
+        // from its sidecar has *changed* when it is reset to neutral.
+        let opened = history.initial();
+        return match current.changed_parameters(opened) {
             0 => "no changes yet".to_string(),
             1 => "1 change so far".to_string(),
             n => format!("{n} changes so far"),
@@ -72,12 +79,17 @@ fn drift_text(
     if edits == current {
         return format!("same as “{label}”");
     }
-    match history.steps_since(|e| e == edits) {
-        Some(1) => format!("1 change since “{label}”"),
-        Some(k) => format!("{k} changes since “{label}”"),
-        // ⚠ The snapshot's state is nowhere on the undo side — undone past, or restored and
-        // then undone — so there is no count to give, only the fact.
-        None => format!("changed since “{label}”"),
+    // ⚠⚠ **What DIFFERS, never how many history steps happened.** This counted steps back to the
+    // snapshot's state until 2026-09-23, so setting a slider, resetting it and setting it again read
+    // as **3 changes since “Warm”** while the present differed from the snapshot in one parameter.
+    // Reported in use twice: the first fix corrected only the no-snapshot branch above, because the
+    // case tested was returning *to* the reference rather than passing through it.
+    match current.changed_parameters(edits) {
+        // ⚠ Unreachable — `edits == current` is handled above — but "0 changes" would be a poor way
+        // to discover that had changed.
+        0 => format!("same as “{label}”"),
+        1 => format!("1 change since “{label}”"),
+        k => format!("{k} changes since “{label}”"),
     }
 }
 
@@ -662,14 +674,138 @@ mod tests {
             super::drift_text(Some(("Warm", &base)), &more, &h),
             "2 changes since “Warm”"
         );
+        // ⚠ A snapshot state the history never held is no longer a special case: the count comes
+        // from what differs, so it answers with a number. `elsewhere` differs from `more` in both
+        // exposure and contrast.
         let elsewhere = Edits {
             exposure: -1.0,
             ..Default::default()
         };
         assert_eq!(
             super::drift_text(Some(("Warm", &elsewhere)), &more, &h),
-            "changed since “Warm”"
+            "2 changes since “Warm”"
         );
+    }
+
+    /// ⚠⚠ **Reported in use, 2026-09-23.** Reset an adjustment and the Now row still said changes had
+    /// been made: the no-snapshot branch asked `undo_depth()`, which counts *entries*, so a value set
+    /// and then set back read as two changes with nothing different. The count has to be measured
+    /// against the state the photo opened in, not against the length of the undo stack.
+    #[test]
+    fn resetting_back_to_the_opened_state_reports_no_changes() {
+        use edit_model::Edits;
+        let base = Edits::default();
+        let warm = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let mut h = rustroom_app::history::History::new(base.clone());
+        h.push(warm.clone());
+        h.push(base.clone()); // reset
+        assert_eq!(h.undo_depth(), 2, "the entries are still there");
+        assert_eq!(
+            super::drift_text(None, &base, &h),
+            "no changes yet",
+            "but nothing differs from how the photo opened"
+        );
+    }
+
+    /// ⚠⚠ **Reported in use 2026-09-23, AFTER a first fix that corrected only the no-snapshot
+    /// branch.** With a snapshot taken at exposure 0.5: set exposure, reset it, set it again, and the
+    /// row said **"3 changes since “Warm”"** — three history steps back to the snapshot's state —
+    /// while the present differed from that snapshot in exactly one parameter.
+    ///
+    /// ⚠ The first fix missed this because the case tested was returning *to* the reference state,
+    /// which step-counting handles correctly. Passing *through* it and ending elsewhere is what
+    /// inflates, and that is the shape a "reset" actually has.
+    #[test]
+    fn passing_through_the_snapshot_state_does_not_inflate_the_count() {
+        use edit_model::Edits;
+        let e = |v: f32| Edits {
+            exposure: v,
+            ..Default::default()
+        };
+        let neutral = Edits::default();
+        let snap = e(0.5);
+
+        let mut h = rustroom_app::history::History::new(neutral.clone());
+        h.push(snap.clone()); // the state the snapshot holds
+        h.push(e(1.0)); // set exposure
+        h.push(neutral.clone()); // reset it
+        h.push(e(0.8)); // set it again
+        assert_eq!(h.undo_depth(), 4, "four entries were pushed");
+
+        assert_eq!(
+            super::drift_text(Some(("Warm", &snap)), &e(0.8), &h),
+            "1 change since “Warm”",
+            "one parameter differs from the snapshot, whatever route got here"
+        );
+    }
+
+    /// ⚠ And the same route back to the snapshot's own state reads as no drift at all.
+    #[test]
+    fn returning_to_the_snapshot_state_reads_as_the_same() {
+        use edit_model::Edits;
+        let snap = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let mut h = rustroom_app::history::History::new(Edits::default());
+        h.push(snap.clone());
+        h.push(Edits::default());
+        h.push(snap.clone());
+        assert_eq!(
+            super::drift_text(Some(("Warm", &snap)), &snap, &h),
+            "same as “Warm”"
+        );
+    }
+
+    /// ⚠ A photo that opened **with** edits from its sidecar: the baseline is those edits, not
+    /// `Edits::default()`. Resetting to neutral is then a real change and must still be counted.
+    #[test]
+    fn a_photo_opened_with_edits_measures_against_those_edits() {
+        use edit_model::Edits;
+        let opened = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let neutral = Edits::default();
+        let mut h = rustroom_app::history::History::new(opened.clone());
+        h.push(neutral.clone());
+        assert_eq!(
+            super::drift_text(None, &neutral, &h),
+            "1 change so far",
+            "resetting a photo that opened warm IS a change"
+        );
+        h.push(opened.clone());
+        assert_eq!(
+            super::drift_text(None, &opened, &h),
+            "no changes yet",
+            "and going back to how it opened is not"
+        );
+    }
+
+    /// ⚠ Counting from the **most recent** visit to the opened state, which is the convention the
+    /// snapshot branch already uses for "n changes since “Warm”". Set, reset, set again is one change
+    /// away from the original, not three.
+    #[test]
+    fn the_count_runs_from_the_last_time_the_edits_were_back_at_the_start() {
+        use edit_model::Edits;
+        let base = Edits::default();
+        let a = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let b = Edits {
+            contrast: 10.0,
+            ..Default::default()
+        };
+        let mut h = rustroom_app::history::History::new(base.clone());
+        h.push(a);
+        h.push(base.clone());
+        h.push(b.clone());
+        assert_eq!(h.undo_depth(), 3);
+        assert_eq!(super::drift_text(None, &b, &h), "1 change so far");
     }
 
     /// The row the photo is at reports selected; after an edit it no longer does; and both

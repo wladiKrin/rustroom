@@ -1786,6 +1786,63 @@ impl Edits {
         probe.merge_from(self, EditGroups::only(group));
         probe != *other
     }
+
+    /// How many individual edit parameters differ between `self` and `other`.
+    ///
+    /// ⚠⚠ **Derived from serialisation, deliberately, and not from a field list.** `Edits` has 25
+    /// top-level fields and no `#[serde(skip)]` anywhere, so every parameter — including one added
+    /// tomorrow — is counted without anybody remembering to add it. A hand-written list would report
+    /// **zero** changes for a new field, which is the exact failure mode this repo's hardest-won
+    /// lesson is about: a guard that enumerates stops guarding the moment the list grows.
+    ///
+    /// ⚠ Why it exists: the snapshot strip used to count *history steps* back to the reference state,
+    /// so setting a slider, resetting it and setting it again read as three changes when the present
+    /// differed from the reference in one parameter. Reported in use twice.
+    ///
+    /// Granularity, chosen and not accidental:
+    /// - nested objects are **recursed into**, so three HSL sliders are three changes, not one;
+    /// - a list counts **one per differing element** and is not recursed into, so adding a mask is one
+    ///   change rather than the twenty fields that mask contains.
+    pub fn changed_parameters(&self, other: &Edits) -> usize {
+        // ⚠ A fallback that still answers, rather than a panic or a silent zero: `serde_json` refuses
+        // non-finite floats, and a NaN reaching an edit field must not take the panel down. "They
+        // differ, by at least one thing" is true and useless, which is the right shape for a case
+        // that should not arise.
+        let (Ok(a), Ok(b)) = (serde_json::to_value(self), serde_json::to_value(other)) else {
+            return usize::from(self != other);
+        };
+        count_value_differences(&a, &b)
+    }
+}
+
+/// The recursion behind [`Edits::changed_parameters`].
+fn count_value_differences(a: &serde_json::Value, b: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    if a == b {
+        return 0;
+    }
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            // ⚠ The **union** of keys: a field carrying `skip_serializing_if` is absent on one side
+            // and present on the other, and that is a difference rather than something to skip.
+            let mut keys: Vec<&str> = x.keys().chain(y.keys()).map(|k| k.as_str()).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            keys.iter()
+                .map(|k| match (x.get(*k), y.get(*k)) {
+                    (Some(av), Some(bv)) => count_value_differences(av, bv),
+                    _ => 1,
+                })
+                .sum()
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            let shared = x.len().min(y.len());
+            let differing = (0..shared).filter(|&i| x[i] != y[i]).count();
+            differing + x.len().abs_diff(y.len())
+        }
+        // ⚠ Two different shapes, or two different scalars: one change, not a recursion.
+        _ => 1,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1798,6 +1855,102 @@ pub enum EditLoadError {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⚠⚠ **Reported in use twice, 2026-09-23.** The snapshot strip counted *history steps* back to the
+    /// reference state, so setting exposure, resetting it and setting it again read as **3 changes**
+    /// when the present differed from the snapshot in exactly one parameter. This counts what differs.
+    #[test]
+    fn one_changed_slider_is_one_changed_parameter() {
+        let a = Edits::default();
+        let b = Edits {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(a.changed_parameters(&b), 1);
+        assert_eq!(b.changed_parameters(&a), 1, "and it is symmetric");
+    }
+
+    #[test]
+    fn identical_edits_have_no_changed_parameters() {
+        let a = Edits {
+            exposure: 0.5,
+            contrast: 10.0,
+            ..Default::default()
+        };
+        assert_eq!(a.changed_parameters(&a.clone()), 0);
+    }
+
+    /// ⚠ The distinction the user asked for: two sliders is two, not one. A count of edit *groups*
+    /// would have said one, because exposure and contrast share the Tone group.
+    #[test]
+    fn two_changed_sliders_are_two_changed_parameters() {
+        let a = Edits::default();
+        let b = Edits {
+            exposure: 0.5,
+            contrast: 10.0,
+            ..Default::default()
+        };
+        assert_eq!(a.changed_parameters(&b), 2);
+    }
+
+    /// ⚠⚠ **The staleness guard, and the reason this is derived from serialisation rather than a field
+    /// list.** `Edits` has 25 top-level fields and no `#[serde(skip)]`, so every parameter — including
+    /// one added tomorrow — is visible to the count. Any two `Edits` that differ must report at least
+    /// one change; a hand-written list would silently report zero for a new field.
+    #[test]
+    fn any_difference_at_all_counts_as_at_least_one() {
+        let base = Edits::default();
+        // Sweep every edit group, which by construction covers every field of `Edits`.
+        for (g, name) in EDIT_GROUP_NAMES.iter().enumerate() {
+            let mut other = base.clone();
+            other.merge_from(&all_nonneutral(), EditGroups::only(g));
+            if other == base {
+                continue;
+            }
+            assert!(
+                base.changed_parameters(&other) > 0,
+                "group {g} ({name}) differs but counted zero changes"
+            );
+        }
+    }
+
+    /// ⚠ Nested objects are recursed into, so three HSL sliders read as three changes rather than one.
+    #[test]
+    fn nested_parameters_are_counted_individually() {
+        let a = Edits::default();
+        let mut b = a.clone();
+        b.hsl.bands[0].hue = 10.0;
+        b.hsl.bands[1].saturation = 20.0;
+        assert_eq!(a.changed_parameters(&b), 2);
+    }
+
+    fn spot(at: f32) -> Spot {
+        Spot {
+            centre: [at, at],
+            source: [at + 0.1, at],
+            radius: 0.05,
+            feather: 50.0,
+            mode: SpotMode::default(),
+        }
+    }
+
+    /// ⚠ A list counts **one per differing element**, deliberately not recursed into: adding a mask is
+    /// one change, not the twenty fields that mask happens to contain.
+    #[test]
+    fn adding_one_list_element_is_one_change() {
+        let a = Edits::default();
+        let mut b = a.clone();
+        b.spots.push(spot(0.5));
+        assert_eq!(a.changed_parameters(&b), 1);
+        let mut c = b.clone();
+        c.spots.push(spot(0.25));
+        assert_eq!(
+            a.changed_parameters(&c),
+            2,
+            "two added spots are two changes"
+        );
+    }
+
     use super::*;
 
     #[test]

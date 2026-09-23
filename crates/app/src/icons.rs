@@ -70,7 +70,12 @@ pub const FILTER: char = '\u{e266}';
 pub const SORT: char = '\u{e444}';
 /// `export` — the Develop toolbar's Export button.
 pub const EXPORT: char = '\u{eaf0}';
-/// `dots-three` — the "more" menu that holds Reindex.
+/// `dots-three` — a "more" menu.
+///
+/// ⚠ **Nothing draws this as of 2026-09-23.** It held the ⋯ menu that wrapped Reindex, which became a
+/// button of its own once it was clear the menu never held anything else. Kept, glyph and all, because
+/// the next Library action wanting that corner will want the menu back — and because `ALL`'s coverage
+/// sweep is what proves the glyph is in the bundled font.
 pub const MORE: char = '\u{e1fe}';
 /// `arrows-out-simple` — the thumbnail-size slider's glyph.
 pub const THUMB_SIZE: char = '\u{e0a6}';
