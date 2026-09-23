@@ -119,13 +119,33 @@ const QUALITY: u8 = 90;
 #[derive(Debug, Clone)]
 pub struct ThumbStore {
     dir: PathBuf,
+    /// Bytes this directory may hold. `u64::MAX` means "no limit", which is what tests pass.
+    budget: u64,
+    /// Bytes written since the last sweep.
+    ///
+    /// ⚠⚠ A **deliberate, documented departure** from "holds a `PathBuf` and nothing else" above.
+    /// An atomic keeps the store `Send + Sync` with no lock, which is what lets six loader workers
+    /// keep sharing one. It is a counter, not an index — the filesystem is still the index.
+    ///
+    /// ⚠ `Arc` so `Clone` survives, and because two handles on one directory *should* share the
+    /// accounting rather than each keeping its own idea of how much has been written.
+    written: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ThumbStore {
     /// The directory is injected so tests run against a temp dir and never touch the real home
     /// directory — the `PresetStore` and `SettingsStore` pattern.
-    pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+    ///
+    /// ⚠ Sweeps once here, so a store left over budget by a lowered setting is corrected without
+    /// waiting for enough writes to trigger one.
+    pub fn new(dir: PathBuf, budget_bytes: u64) -> Self {
+        let s = Self {
+            dir,
+            budget: budget_bytes,
+            written: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+        s.sweep();
+        s
     }
 
     /// `<platform config dir>/rustroom/thumbs/`.
@@ -133,13 +153,70 @@ impl ThumbStore {
     /// ⚠ That is **not** `~/.config` everywhere — `dirs::config_dir()` follows each platform's own
     /// convention: `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` on Linux,
     /// `%APPDATA%` on Windows. Falls back to a relative path, which keeps this infallible.
-    pub fn user_default() -> Self {
-        Self::new(
-            dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("rustroom")
-                .join("thumbs"),
-        )
+    fn user_dir() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("rustroom")
+            .join("thumbs")
+    }
+
+    /// The local thumbnail cache.
+    pub fn user_default(budget_bytes: u64) -> Self {
+        Self::new(Self::user_dir(), budget_bytes)
+    }
+
+    /// The Immich thumbnail cache — a **sibling** directory.
+    ///
+    /// ⚠⚠ Separate from the local one on purpose: accounting is then just `size_bytes()` per
+    /// directory, and neither budget's sweep can reach the other's entries. The alternative — one
+    /// directory with a kind marker in the RTHM header — would mean reading every entry's header
+    /// just to add up its bytes.
+    pub fn immich_default(budget_bytes: u64) -> Self {
+        Self::new(Self::user_dir().join("immich"), budget_bytes)
+    }
+
+    /// Delete oldest-first until the directory is within budget.
+    ///
+    /// ⚠ Best-effort throughout: an entry that will not delete is skipped, exactly as `clear()`
+    /// already does. A sweep must never be able to stop a folder opening.
+    pub fn sweep(&self) {
+        if self.budget == u64::MAX {
+            return;
+        }
+        let Ok(d) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        let mut entries: Vec<(PathBuf, std::time::SystemTime, u64)> = Vec::new();
+        let mut total: u64 = 0;
+        for e in d.flatten() {
+            let p = e.path();
+            let Ok(m) = e.metadata() else { continue };
+            if !m.is_file() {
+                continue;
+            }
+            // ⚠ Litter from an interrupted `put`, not an entry: removed rather than counted.
+            if p.extension().is_some_and(|x| x == "tmp") {
+                let _ = std::fs::remove_file(&p);
+                continue;
+            }
+            let when = m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            total += m.len();
+            entries.push((p, when, m.len()));
+        }
+        if total <= self.budget {
+            return;
+        }
+        // ⚠ Oldest first, and mtime is the **touch** time rather than the write time — `get`
+        // updates it, which is what makes this LRU instead of FIFO.
+        entries.sort_by_key(|(_, when, _)| *when);
+        for (p, _, len) in entries {
+            if total <= self.budget {
+                break;
+            }
+            if std::fs::remove_file(&p).is_ok() {
+                total = total.saturating_sub(len);
+            }
+        }
     }
 
     /// Where this store keeps its files, for the Settings readout.
@@ -161,6 +238,17 @@ impl ThumbStore {
         // miss rather than a thumbnail of an unexpected size reaching the grid.
         if rgba.width() as usize != w || rgba.height() as usize != h {
             return None;
+        }
+        // ⚠⚠ This one syscall is what makes eviction LRU instead of FIFO. Without it an entry's
+        // mtime is its write time, so the sweep would discard the folder you revisit most — the
+        // exact opposite of what a cache is for. Negligible against a measured 1.26 ms read.
+        //
+        // ⚠ Best-effort: a read-only cache directory must still serve hits.
+        if let Ok(f) = std::fs::File::options()
+            .write(true)
+            .open(self.dir.join(id.file_name()))
+        {
+            let _ = f.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()));
         }
         Some(Thumbnail {
             width: w,
@@ -191,6 +279,21 @@ impl ThumbStore {
         }
         if std::fs::rename(&tmp, self.dir.join(id.file_name())).is_err() {
             let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        // ⚠ Not a sweep per `put`: `size_bytes()` walks the directory, so that would be a
+        // directory scan per thumbnail. Amortised instead — one sweep per tenth of the budget
+        // written, which bounds the overshoot without an index.
+        if self.budget != u64::MAX {
+            let n = bytes.len() as u64;
+            let before = self
+                .written
+                .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+            let slack = (self.budget / 10).max(1);
+            if before + n >= slack {
+                self.written.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.sweep();
+            }
         }
     }
     /// Total bytes on disk.
@@ -345,6 +448,156 @@ mod tests {
         );
     }
 
+    /// Write `n` padded entries into `dir`, oldest first, and return their paths.
+    ///
+    /// ⚠⚠ Writes through a store with **no budget**, so the fixture cannot be evicted while it is
+    /// being built. The test then constructs its own budgeted store over the same directory, whose
+    /// constructor sweep is what is under test. An earlier version wrote through the budgeted store
+    /// and the zero-budget case deleted each entry before it could be padded — the code behaving
+    /// correctly, and the fixture unable to cope.
+    ///
+    /// ⚠ mtimes are set explicitly rather than relying on write order: a filesystem with coarse
+    /// timestamps would make "oldest" arbitrary, and that ordering is what every eviction test here
+    /// rests on.
+    fn fill(dir: &Path, n: usize, each: usize) -> Vec<PathBuf> {
+        let writer = ThumbStore::new(dir.to_path_buf(), u64::MAX);
+        let mut out = Vec::new();
+        for i in 0..n {
+            let id = ident(&format!("/photos/{i}.RAF"), i as i64, each as u64);
+            let t = Thumbnail {
+                width: 1,
+                height: 1,
+                rgba: vec![0u8; 4],
+            };
+            writer.put(&id, &t);
+            let p = dir.join(id.file_name());
+            let mut bytes = std::fs::read(&p).unwrap();
+            bytes.resize(each.max(bytes.len()), 0);
+            std::fs::write(&p, &bytes).unwrap();
+            let f = std::fs::File::options().write(true).open(&p).unwrap();
+            let when = std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(1_000_000 + i as u64 * 60);
+            f.set_times(std::fs::FileTimes::new().set_modified(when))
+                .unwrap();
+            out.push(p);
+        }
+        out
+    }
+
+    /// Write `n` entries through `store` at their natural size, padding nothing.
+    ///
+    /// ⚠ Used where the store's **own** byte accounting matters: `fill` pads files after `put`
+    /// returns, so the store would account the bytes it actually wrote while the directory grew
+    /// behind its back.
+    fn write_entries(store: &ThumbStore, n: usize) {
+        for i in 0..n {
+            let id = ident(&format!("/photos/{i}.RAF"), i as i64, 1);
+            let t = Thumbnail {
+                width: 8,
+                height: 8,
+                rgba: vec![(i % 251) as u8; 8 * 8 * 4],
+            };
+            store.put(&id, &t);
+        }
+    }
+
+    #[test]
+    fn a_sweep_brings_an_over_budget_directory_under_it() {
+        let dir = TempDir::new("sweep_under");
+        let paths = fill(&dir.0, 10, 10 * 1024);
+        // ⚠ The constructor sweeps, which is what is under test here.
+        let store = ThumbStore::new(dir.0.clone(), 50 * 1024);
+        assert!(
+            store.size_bytes() <= 50 * 1024,
+            "still {} bytes",
+            store.size_bytes()
+        );
+        // ⚠ The NEWEST must survive — a cache that kept the oldest would be useless.
+        assert!(
+            paths.last().unwrap().exists(),
+            "the newest entry was evicted"
+        );
+        assert!(!paths[0].exists(), "the oldest entry survived");
+    }
+
+    /// ⚠ A budget of 0 must not panic or loop.
+    #[test]
+    fn a_zero_budget_empties_the_store_without_panicking() {
+        let dir = TempDir::new("sweep_zero");
+        fill(&dir.0, 3, 1024);
+        let store = ThumbStore::new(dir.0.clone(), 0);
+        assert_eq!(store.size_bytes(), 0);
+    }
+
+    /// ⚠ A `.tmp` left by an interrupted `put` is litter, not a cache entry: deleted on sight
+    /// rather than counted towards the budget.
+    #[test]
+    fn a_leftover_tmp_is_deleted_by_a_sweep() {
+        let dir = TempDir::new("sweep_tmp");
+        let store = ThumbStore::new(dir.0.clone(), 1024 * 1024);
+        let stray = dir.0.join("deadbeefdeadbeef.rthm.tmp");
+        std::fs::write(&stray, vec![0u8; 4096]).unwrap();
+        store.sweep();
+        assert!(!stray.exists(), "a stray .tmp survived the sweep");
+    }
+
+    /// ⚠ An absent directory is not an error — the store must work before anything is cached.
+    #[test]
+    fn a_sweep_on_an_absent_directory_does_nothing() {
+        let dir = TempDir::new("sweep_absent");
+        let store = ThumbStore::new(dir.0.join("not-created-yet"), 1024);
+        store.sweep();
+    }
+
+    /// ⚠⚠ **The difference between LRU and FIFO, and it is the whole point.** Without a touch on
+    /// read, an entry's mtime is when it was *written*, so a sweep evicts the folder you revisit
+    /// most. This reads the oldest entry and then requires it to survive a sweep that must evict.
+    #[test]
+    fn reading_an_entry_saves_it_from_the_next_sweep() {
+        let dir = TempDir::new("lru_touch");
+        let paths = fill(&dir.0, 4, 10 * 1024);
+        let reader = ThumbStore::new(dir.0.clone(), u64::MAX);
+        let oldest = ident("/photos/0.RAF", 0, 10 * 1024);
+        assert!(
+            reader.get(&oldest).is_some(),
+            "the entry must be readable first"
+        );
+        // ⚠ The budgeted store's constructor sweep is what must now spare it.
+        let _swept = ThumbStore::new(dir.0.clone(), 30 * 1024);
+        assert!(
+            paths[0].exists(),
+            "the entry that was just read was evicted anyway — the touch is not working"
+        );
+        assert!(!paths[1].exists(), "an untouched older entry should have gone");
+    }
+
+    /// ⚠ Enough writes must trigger a sweep on their own, or a long session could exceed the
+    /// budget without limit.
+    ///
+    /// ⚠⚠ **Self-calibrating**: the same writes go into an unbudgeted store to learn what they
+    /// naturally cost, and the budget is derived from that. An earlier version guessed the entry
+    /// size, and `fill`'s padding meant the store accounted a few hundred bytes while the directory
+    /// grew to 120 KB — a test that failed against correct code.
+    #[test]
+    fn writing_past_a_tenth_of_the_budget_triggers_a_sweep() {
+        let a = TempDir::new("write_trigger_unbounded");
+        let unbounded = ThumbStore::new(a.0.clone(), u64::MAX);
+        write_entries(&unbounded, 40);
+        let natural = unbounded.size_bytes();
+        assert!(natural > 0, "the fixture wrote nothing");
+
+        let b = TempDir::new("write_trigger_budgeted");
+        let budget = (natural / 4).max(1);
+        let budgeted = ThumbStore::new(b.0.clone(), budget);
+        write_entries(&budgeted, 40);
+        // ⚠ No explicit sweep: the puts themselves must have kept it in hand.
+        assert!(
+            budgeted.size_bytes() <= budget * 2,
+            "writing triggered no sweep: {} bytes against a {budget} budget",
+            budgeted.size_bytes()
+        );
+    }
+
     /// ⚠⚠ **A concrete filename, pinned on purpose.** The vectors above pin `fnv1a`; the test
     /// beside this one pins that the parts *matter*. **Neither pins the mapping itself**, so a
     /// change to `key_bytes` — adding an enum discriminant, reordering the fields, widening a
@@ -402,7 +655,9 @@ mod tests {
         }
 
         fn store(&self) -> ThumbStore {
-            ThumbStore::new(self.0.clone())
+            // ⚠ No limit: an eviction test builds its own store with an explicit budget, and
+            // every other test here would be made nondeterministic by one.
+            ThumbStore::new(self.0.clone(), u64::MAX)
         }
 
         fn entries(&self) -> Vec<String> {
@@ -552,7 +807,7 @@ mod tests {
         let dir = TempDir::new("unwritable");
         let f = dir.0.join("a-file");
         std::fs::write(&f, b"x").unwrap();
-        let store = ThumbStore::new(f.join("thumbs"));
+        let store = ThumbStore::new(f.join("thumbs"), u64::MAX);
         let id = ident("/photos/a.RAF", 1, 1);
         store.put(&id, &thumb(16, 16));
         assert!(store.get(&id).is_none());

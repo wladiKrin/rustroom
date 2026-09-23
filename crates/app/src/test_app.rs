@@ -294,7 +294,8 @@ pub fn library_of(n: usize) -> Library {
         cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
         last_want: Vec::new(),
         selection: Selection::default(),
-        loader: ThumbLoader::new(color::OutputSpace::Srgb, || {}),
+        // ⚠ No limit: a test must never evict, or its own fixtures could vanish mid-run.
+        loader: ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, || {}),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
         captures: std::collections::HashMap::new(),

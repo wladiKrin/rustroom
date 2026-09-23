@@ -56,7 +56,11 @@ impl RustroomApp {
             .effective_display_space(self.os_manages_colour);
         if let Some(lib) = self.library.as_mut() {
             let ctx2 = ctx.clone();
-            lib.loader = ThumbLoader::new(space, move || ctx2.request_repaint());
+            lib.loader = ThumbLoader::new(
+                space,
+                self.settings.thumb_budget_mb as u64 * 1024 * 1024,
+                move || ctx2.request_repaint(),
+            );
             // ⚠ Every cached thumbnail was converted at load, so they all describe the old space.
             lib.cache.clear();
             // ⚠ And the want-list, or `sync_thumb_window` compares against a list that is now

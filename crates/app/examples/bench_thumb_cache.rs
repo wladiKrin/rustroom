@@ -178,7 +178,7 @@ fn main() {
     // next time it opens that folder.
     let tmp = std::env::temp_dir().join(format!("rustroom_bench_thumbs_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
-    let store = rustroom_app::thumb_store::ThumbStore::new(tmp.clone());
+    let store = rustroom_app::thumb_store::ThumbStore::new(tmp.clone(), u64::MAX);
 
     println!(
         "\n── the real store, over the same {} entries ───────────",

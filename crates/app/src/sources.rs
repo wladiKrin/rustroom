@@ -197,7 +197,8 @@ impl RustroomApp {
         let space = self
             .settings
             .effective_display_space(self.os_manages_colour);
-        let loader = ThumbLoader::new(space, move || ctx2.request_repaint());
+        let budget = self.settings.thumb_budget_mb as u64 * 1024 * 1024;
+        let loader = ThumbLoader::new(space, budget, move || ctx2.request_repaint());
         self.library = Some(Library {
             source,
             scan,

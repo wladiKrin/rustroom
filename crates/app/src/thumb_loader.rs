@@ -287,9 +287,13 @@ impl ThumbLoader {
     /// `on_progress` is called after each thumbnail (e.g. `ctx.request_repaint`).
     pub fn new(
         display_space: color::OutputSpace,
+        thumb_budget_bytes: u64,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
-        let store = crate::thumb_store::ThumbStore::user_default();
+        // ⚠ The budget is a parameter rather than read from `Settings` here: the store is a lib
+        // module and must not depend on the settings loader. ⚠ It is read once, so a change takes
+        // effect at the next folder open — which is what rebuilds this loader.
+        let store = crate::thumb_store::ThumbStore::user_default(thumb_budget_bytes);
         // ⚠ Captured here for the ThumbStore's own stated reason — it keeps `ThumbLoader::new`'s
         // signature, and therefore its four call sites, untouched.
         let looks = crate::looks::LookStore::user_default(
@@ -627,7 +631,7 @@ mod tests {
     #[test]
     fn streams_results_keyed_by_path_even_on_failure() {
         // Non-existent files fail extraction -> thumb is None, but a result still streams.
-        let loader = ThumbLoader::new(color::OutputSpace::Srgb, || {});
+        let loader = ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, || {});
         loader.want(&paths(2));
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);
@@ -1154,7 +1158,7 @@ mod tests {
             .save(&photo)
             .unwrap();
 
-        let store = crate::thumb_store::ThumbStore::new(dir.join("thumbs"));
+        let store = crate::thumb_store::ThumbStore::new(dir.join("thumbs"), u64::MAX);
         let n = AtomicUsize::new(0);
         let extract = |p: &std::path::Path| {
             n.fetch_add(1, Ordering::Relaxed);
@@ -1225,7 +1229,7 @@ mod tests {
     fn a_file_changed_on_disk_is_extracted_again() {
         let dir = carrier_dir("changed");
         let photo = dir.join("a.png");
-        let store = crate::thumb_store::ThumbStore::new(dir.join("thumbs"));
+        let store = crate::thumb_store::ThumbStore::new(dir.join("thumbs"), u64::MAX);
         let n = AtomicUsize::new(0);
         let extract = |p: &std::path::Path| {
             n.fetch_add(1, Ordering::Relaxed);

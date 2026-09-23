@@ -41,6 +41,8 @@ pub struct SettingsDraft {
     display_space: color::OutputSpace,
     immich_url: String,
     immich_key: String,
+    thumb_budget_mb: u32,
+    immich_thumb_budget_mb: u32,
 }
 
 impl SettingsDraft {
@@ -63,6 +65,8 @@ impl SettingsDraft {
             display_space: s.display_space,
             immich_url: s.immich_url.clone(),
             immich_key: s.immich_key.clone(),
+            thumb_budget_mb: s.thumb_budget_mb,
+            immich_thumb_budget_mb: s.immich_thumb_budget_mb,
         }
     }
 
@@ -137,6 +141,14 @@ impl SettingsDraft {
             );
             // ⚠ Forget the album list: it belongs to whatever server was configured before.
             app.immich_albums = None;
+            plain = true;
+        }
+        if self.thumb_budget_mb != app.settings.thumb_budget_mb {
+            app.settings.thumb_budget_mb = self.thumb_budget_mb;
+            plain = true;
+        }
+        if self.immich_thumb_budget_mb != app.settings.immich_thumb_budget_mb {
+            app.settings.immich_thumb_budget_mb = self.immich_thumb_budget_mb;
             plain = true;
         }
         if plain {
@@ -328,7 +340,9 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
 
                     theme::sub_label(ui, "Thumbnail cache");
                     ui.horizontal(|ui| {
-                        let store = rustroom_app::thumb_store::ThumbStore::user_default();
+                        let store = rustroom_app::thumb_store::ThumbStore::user_default(
+                            d.thumb_budget_mb as u64 * 1024 * 1024,
+                        );
                         let bytes = *app
                             .thumb_cache_bytes
                             .get_or_insert_with(|| store.size_bytes());
