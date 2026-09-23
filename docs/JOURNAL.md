@@ -151,6 +151,85 @@ goldens unmoved.
   one closure. Reported; the collision and save-preset dialogs are the natural split if it
   grows again.
 
+### 2026-09-23 — M9.1 slice 2: a thumbnail budget, persisted remote thumbnails, and the timeline
+
+**Confirmed by use, 2026-09-23:** the Timeline lists years and months and opens one; **thumbnails are
+instant after a restart**, which is the whole point of part 2 and the one claim no test could make.
+Then one change on the strength of use: the tree now reads **newest first**. Spec
+`2026-09-23-immich-timeline-design.md`, plan `2026-09-23-immich-timeline.md`.
+
+**Three ordered parts, and the order was the point.** The budget shipped first because part 2 widened
+a hole open since M8.2 — `ThumbStore` had **no eviction at all**: no budget, no prune, only `clear()`.
+
+**Part 1.** Two budgets in `Settings`, MB, 5120 each, on **separate directories** so neither sweep can
+reach the other's entries. Sweeps run at construction and once per tenth of the budget written, never
+per `put` (`size_bytes()` walks the directory). ⚠⚠ Eviction is **LRU only because `get` touches the
+entry's mtime** — without that, mtime is the *write* time and the sweep discards the folder you
+revisit most, the exact opposite of what a cache is for. One `File::set_times` against a measured
+1.26 ms read.
+
+**Part 2.** `Identity` is an enum so a not-yet-downloaded asset can be cached, keyed
+`(asset id, updatedAt)`. `updatedAt` rather than `thumbhash`: the latter tracks appearance more
+tightly but is a tiny perceptual hash that could survive a re-encode unchanged, under-invalidating,
+while `updatedAt` over-invalidates and costs one refetch.
+
+**Part 3.** One `GET /timeline/buckets` builds the tree with counts; a month opens through the same
+`open_scan` path an album does, via a generalised `Client::search(&Filter)` that keeps slice 1's
+hard-won paging rules rather than reimplementing them.
+
+⚠ **Why a tree and not infinite scroll, and the reason is the working set.** `open_scan` builds a
+`Library` eagerly — `entries::build` plus a sidecar read per row, 4.6 ms per 830. A month-sized bucket
+keeps each one at **35–1,183 rows** on the captured data, the same order as the 830-photo folder this
+project has actually measured. A flat grid over ~35,000 assets would be one eager pass of all of it.
+
+**⚠⚠ THE SPEC WAS WRONG ABOUT ITS OWN SAFETY NET, AND TASK 1 EXISTS BECAUSE OF IT.** It claimed the
+file's "pinned hash vectors" guard `Local`'s key derivation. **They do not** — they pin `fnv1a` itself
+and assert that each part of the identity *matters*. **Nothing pinned the `Identity` → filename
+mapping**, so adding an enum discriminant would have silently turned every thumbnail on every user's
+disk into a miss with the whole suite green. A concrete filename was pinned **first**, before
+`Identity` was touched: `ident("/photos/a.RAF", 100, 200)` → `f89fcaaf26f07b00.rthm`, computed offline
+by reimplementing `fnv1a` and `key_bytes` in Python against the three published vectors, then
+**verified against the real code**, which agreed.
+
+⚠ **And "no `VERSION` bump" was too glib.** The RTHM header carries the identity's own fields — the
+check that turns a hash collision into a miss rather than someone else's photograph — and a remote
+asset has no path, mtime or size to put there. So there are **two layouts**: `VERSION_LOCAL` stays
+**1**, which is what keeps existing caches hitting, and `VERSION_REMOTE` is **2**. The version field
+was already documented as exactly this discriminator.
+
+**⚠⚠ Task boundaries in the plan were wrong, and the shape is worth remembering.** Tasks 3, 4 and 5
+are **not separable**: task 3 changes `ThumbStore::new`'s signature, so nothing compiles until every
+call site is fixed (task 5), and the bytes-written counter is **dead code** until task 4 uses it —
+which `-D warnings` fails on. The plan's instruction to "run only the filter above for now" was simply
+impossible. **A task that changes a signature owns its call sites.**
+
+**⚠⚠ Both test failures in part 1 were the fixture, and one of them proved the code right.** `fill`
+padded each entry by reading it back *after* `put`; with a zero budget the write-triggered sweep had
+already deleted it, which is precisely what a zero budget means. And padding behind the store's back
+meant it accounted the bytes it really wrote while the directory reached 120 KB. `fill` now writes
+through an **unbudgeted** store, and the write-trigger test **calibrates its budget from what the same
+writes naturally cost** instead of guessing entry sizes.
+
+**⚠ The compiler helped in one place and could not in another.** `pump_immich`'s match is
+**exhaustive**, so both new `Outcome` variants were a hard error until handled. The **seven
+`LibrarySource` matches all use catch-alls**, so `ImmichBucket` compiled silently and each was
+reviewed by hand. The one that would have been *visible*: the Dates highlight yields no periods, so
+browsing an Immich month does not light up a local date row. **Exhaustiveness earns its keep;
+catch-alls hide.**
+
+⚠ Guards that caught real mistakes again: the exhaustive `Settings` round-trip literal, `test_app`'s
+exhaustive `RustroomApp`, `immich_source`'s `asset()` helper and three inline DTO JSON literals — all
+of them missing the newly required `updatedAt`.
+
+⚠ **Two smaller traps worth not repeating.** `cargo test --workspace 'a|b|c'` is a **substring**
+filter, not a regex: it exited **0 having run nothing**, the same "0 tests looks like a pass" shape as
+slice 1. And two scripted edits aborted on stale match strings because `cargo fmt` had reformatted the
+blocks since the plan was written — a plan's code snippets go stale the moment fmt runs.
+
+⚠ `immich_source`'s two pre-existing temp dirs are built from the process id **alone**, with no
+counter — the exact collision `thumb_store::TempDir`'s own doc says has already bitten this repo. The
+new test uses a counter; **the two existing ones should get one.**
+
 ### 2026-09-23 — why the gate felt slow: three hypotheses, two of them wrong
 
 The user asked whether the gate could be made faster as the project grows. Answered by measurement,

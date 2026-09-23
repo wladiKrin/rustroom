@@ -165,9 +165,26 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-22)
 
-**2683 tests** on `main` (goldens unmoved since 2026-09-18). No branch exists; `main` is **21 commits
-ahead of `origin/main` — not pushed; the user pushes.** The CI workflow was fixed for the runner's
+**2717 tests** (goldens unmoved since 2026-09-18). ⚠ **Branch `immich-timeline` is 12 commits ahead
+of `main` and not merged** — ask before starting anything on top of it. `main` matches
+`origin/main`; **never push, the user pushes.** The CI workflow was fixed for the runner's
 disk on 2026-09-21 and is unverified until the next push.
+
+✅ **Immich, slice 2 — built and confirmed by use (2026-09-23), on the branch.** A **Timeline** of
+years and months beside Albums, newest first, from one `GET /timeline/buckets`; a month opens through
+`open_scan` like an album via a generalised `Client::search(&Filter)`. Immich thumbnails now **persist
+and are instant after a restart**, keyed `(asset id, updatedAt)` in their own directory. And
+`ThumbStore` finally has a **byte budget with LRU eviction** — two of them, MB, 5120 each in Settings,
+on separate directories so neither sweep reaches the other's entries. It had **no eviction at all**
+since M8.2. Spec `2026-09-23-immich-timeline-design.md`; `grep -n 'M9.1 slice 2' docs/JOURNAL.md`.
+
+⚠⚠ **Two things the spec got wrong and the code corrected.** It claimed the store's "pinned hash
+vectors" guard `Local`'s key derivation — **they do not**, they pin `fnv1a` itself, so nothing stopped
+an enum discriminant silently invalidating every thumbnail on disk. A concrete filename is now pinned
+(`a_known_local_identity_keeps_its_filename_for_ever`). And "no `VERSION` bump" was too glib: the RTHM
+header carries the identity's own fields, so there are two layouts — `VERSION_LOCAL` 1,
+`VERSION_REMOTE` 2. ⚠ The local **Dates** section is still oldest-first while the Immich timeline is
+newest-first; flipping Dates too is its own decision.
 
 ✅ **Immich, slice 1 — merged and confirmed by use (2026-09-22).** A sixth rail
 section beside Folders and Collections lists the server's albums; the ordinary grid fills from
