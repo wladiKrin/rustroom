@@ -218,12 +218,11 @@ grid is never shown. ⚠⚠ The lists directory is a **sibling** of the original
 `is_immich_path` is `starts_with(root)` and `asset_id_of` is a path stem. Spec
 `2026-09-23-immich-list-cache-design.md`; `grep -n 'asset lists persisted' docs/JOURNAL.md`.
 
-✅ **Immich slice 2's three use-found defects are fixed and confirmed (2026-09-23):** a **`null`
-`thumbhash`** failed a whole month (⚠⚠ `required: true` does **not** mean non-null — `nullable` sits
-beside it); a second album click was **silently discarded** by a shared guard; and switching *felt*
-slow because a click gave **no feedback** for the couple of seconds the server spent on ~900 KB.
-`grep -n 'three defects found by using' docs/JOURNAL.md`. ⚠ The CI workflow was fixed for the runner's
-disk on 2026-09-21 and is **unverified until the next push**.
+✅ **Immich slice 2's three use-found defects are fixed** (2026-09-23) — a `null` `thumbhash`, a click
+discarded by a shared guard, and no feedback while the server worked. Their lessons are under
+**Standing lessons**; `grep -n 'three defects found by using' docs/JOURNAL.md`. ⚠ The CI workflow was
+fixed for the runner's disk on 2026-09-21; **the user has now pushed, so it should have run** — worth
+checking.
 
 ✅ **Immich slices 1 and 2 — merged and confirmed by use (2026-09-22/23).** A sixth rail section
 lists the server's albums and a **Timeline** of years and months; a grid fills from server thumbnails
@@ -296,18 +295,15 @@ settles.
 
 ### The GPU port — closed
 
-⚠⚠ **Finished. There is no next item on the agreed order, and this is the third document to say so.**
-All five rows are done, declined with numbers, or blocked on a considered trade; **18 of the 21 stages
-that `impl PipelineStage` have GPU twins**, and the three that do not — `geometry`, `perspective`,
-`spot_removal` — are **deliberate**, not pending. Region scoping (M8.8) answered the first two without
-a shader; spot removal was **measured and closed unbuilt** (0.05–0.4 ms of work against
-`GpuBrushRaster`'s ~1.6 ms floor, 1.28 of it a fixed download).
+⚠⚠ **Finished, and three documents now say so.** **18 of the 21 stages that `impl PipelineStage`** have
+GPU twins; the three without — `geometry`, `perspective`, `spot_removal` — are **deliberate**, not
+pending. Region scoping (M8.8) answered the first two without a shader, and spot removal was
+**measured and closed unbuilt** (0.05–0.4 ms of work against `GpuBrushRaster`'s ~1.6 ms floor).
 
-⚠ **Do not go looking for the next port, and do not re-propose from a list alone** — "last unported"
-is not "worth doing". The order, with what each row cost and why, is in `docs/JOURNAL.md`
-(`grep -n "agreed order" docs/JOURNAL.md`); the declines with their numbers are in `docs/BACKLOG.md`.
-⚠ Count stages by `impl PipelineStage for`, never by filename: two stages are helpers and two twins
-are renamed, so a filename comparison undercounts.
+⚠ **Do not re-propose from a list alone** — "last unported" is not "worth doing". The order with each
+row's cost is in `docs/JOURNAL.md` (`grep -n "agreed order" docs/JOURNAL.md`); the declines with their
+numbers are in `docs/BACKLOG.md`. ⚠ Count by `impl PipelineStage for`, never by filename: two stages are
+helpers and two twins are renamed, so a filename comparison undercounts.
 
 ### Open items
 
