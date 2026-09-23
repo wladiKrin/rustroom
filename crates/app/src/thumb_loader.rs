@@ -288,6 +288,7 @@ impl ThumbLoader {
     pub fn new(
         display_space: color::OutputSpace,
         thumb_budget_bytes: u64,
+        immich_budget_bytes: u64,
         on_progress: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         // ⚠ The budget is a parameter rather than read from `Settings` here: the store is a lib
@@ -307,6 +308,10 @@ impl ThumbLoader {
         // ⚠ The shared **cell**, not a snapshot of the connection: pasting a key in Settings must
         // not rebuild the loader, because a rebuild drops the open folder's whole thumbnail cache.
         let immich = crate::immich_source::shared();
+        // ⚠ Captured here for the same reason as the local store, and with its own budget: the two
+        // caches live in separate directories so neither sweep can reach the other's entries.
+        let immich_versions = crate::immich_source::shared_versions();
+        let immich_store = crate::thumb_store::ThumbStore::immich_default(immich_budget_bytes);
         Self::with_loader(
             // ⚠⚠ Thumbnails always use the **default** resampler, deliberately, and do not follow
             // `Settings.resampler` (user's call, 2026-09-01). Honouring it was tried first and is
@@ -321,7 +326,12 @@ impl ThumbLoader {
                 // declines and the ordinary local path — on-disk store included — takes over with
                 // no special case at all. For every non-Immich photo it is one `is_file` and one
                 // mutex read.
-                if let Some(t) = crate::immich_source::remote_thumbnail(&immich, r.id.file()) {
+                if let Some(t) = crate::immich_source::remote_thumbnail(
+                    &immich,
+                    &immich_versions,
+                    &immich_store,
+                    r.id.file(),
+                ) {
                     return Some(t);
                 }
                 load_thumbnail(
@@ -631,7 +641,7 @@ mod tests {
     #[test]
     fn streams_results_keyed_by_path_even_on_failure() {
         // Non-existent files fail extraction -> thumb is None, but a result still streams.
-        let loader = ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, || {});
+        let loader = ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {});
         loader.want(&paths(2));
         let results = collect(&loader, 2);
         assert_eq!(results.len(), 2);

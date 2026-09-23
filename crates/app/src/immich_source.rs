@@ -74,7 +74,14 @@ pub fn is_cached(path: &Path) -> bool {
 /// ⚠ Skips videos and anything `catalog::is_supported` rejects. Its `RAW_EXTENSIONS` is narrower
 /// than Immich's (no `pef`, `srw`, `3fr`, `iiq`), so some RAWs on the server are genuinely not
 /// editable here. Skipped assets are **absent**, not greyed out.
-pub fn entries_from_album(assets: &[immich::Asset], root: &Path) -> Vec<catalog::CatalogEntry> {
+pub fn entries_from_assets(assets: &[immich::Asset], root: &Path) -> Vec<catalog::CatalogEntry> {
+    // ⚠ Record each asset's version while we have it, so the thumbnail loader can key its cache
+    // entries. Done here because this is the one place a library's assets all pass through.
+    if let Ok(mut m) = shared_versions().lock() {
+        for a in assets {
+            m.insert(a.id.clone(), a.updated_at.clone());
+        }
+    }
     assets
         .iter()
         .filter(|a| a.asset_type == immich::AssetType::Image)
@@ -210,6 +217,25 @@ pub fn shared() -> SharedConnection {
         .clone()
 }
 
+/// Asset id → its `updatedAt`, for versioning cached thumbnails.
+pub type SharedVersions = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
+
+/// The process-wide cell holding the versions of the assets currently on show.
+///
+/// ⚠⚠ A second cell rather than a field on `ThumbRequest`, which carries only `id` and `edits`.
+/// Widening that would touch the whole thumbnail pipeline to pass a string the loader needs only
+/// for Immich photos. Same `OnceLock` idiom as [`shared`], for the same reason.
+///
+/// ⚠ Filled by [`entries_from_assets`] when a library is built, so the loader always has the
+/// version of whatever is on screen. An asset missing from the map simply gets no cache entry — a
+/// miss, never a wrong one.
+pub fn shared_versions() -> SharedVersions {
+    static STATE: std::sync::OnceLock<SharedVersions> = std::sync::OnceLock::new();
+    STATE
+        .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .clone()
+}
+
 /// Point the shared cell at whatever the settings now say.
 pub fn refresh_shared(s: &crate::settings::Settings) {
     if let Ok(mut slot) = shared().lock() {
@@ -223,12 +249,16 @@ pub fn refresh_shared(s: &crate::settings::Settings) {
 /// ⚠⚠ Declines for an already-cached file, so a downloaded photo falls through to the ordinary
 /// local path — on-disk store included — with no special case at all.
 ///
-/// ⚠ The on-disk `ThumbStore` is deliberately **not** used here: its key is `(path, mtime, size)`
-/// from `fs::metadata`, which cannot be built for a file that does not exist. The in-memory
-/// `ThumbCache` still applies, keyed on `PhotoId` as it already is, so the cost is that album
-/// thumbnails re-fetch after a restart. Accepted for this slice; the fix is a key of
-/// `(asset id, updated_at)`.
-pub fn remote_thumbnail(shared: &SharedConnection, path: &Path) -> Option<core_image::Thumbnail> {
+/// ⚠ Consults the on-disk store first and writes on success, keyed on
+/// `(asset id, updatedAt)` — which is why `Identity` is an enum. Album thumbnails therefore survive
+/// a restart; before slice 2 they re-fetched every time, because the store could not key a file
+/// that does not exist.
+pub fn remote_thumbnail(
+    shared: &SharedConnection,
+    versions: &SharedVersions,
+    store: &crate::thumb_store::ThumbStore,
+    path: &Path,
+) -> Option<core_image::Thumbnail> {
     if is_cached(path) {
         return None;
     }
@@ -237,9 +267,25 @@ pub fn remote_thumbnail(shared: &SharedConnection, path: &Path) -> Option<core_i
         return None;
     }
     let id = asset_id_of(path)?;
+    // ⚠ The on-disk store first: a hit is a local read against an HTTP round trip. An asset with
+    // no known version is simply not cached — a miss, never a wrongly-keyed entry.
+    let key = versions
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&id).cloned())
+        .map(|v| crate::thumb_store::Identity::remote(&id, &v));
+    if let Some(k) = &key {
+        if let Some(t) = store.get(k) {
+            return Some(t);
+        }
+    }
     let client = immich::Client::new(&conn.url, &conn.key).ok()?;
     let bytes = client.thumbnail(&id, immich::Size::Thumbnail).ok()?;
-    decode_thumbnail(&bytes)
+    let thumb = decode_thumbnail(&bytes)?;
+    if let Some(k) = &key {
+        store.put(k, &thumb);
+    }
+    Some(thumb)
 }
 
 #[cfg(test)]
@@ -256,6 +302,7 @@ mod tests {
             height: 100,
             thumbhash: "x".into(),
             file_modified_at: "2025-08-14T09:21:33.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
         }
     }
 
@@ -357,7 +404,7 @@ mod tests {
                 immich::AssetType::Image,
             ),
         ];
-        let entries = entries_from_album(&assets, root);
+        let entries = entries_from_assets(&assets, root);
         let names: Vec<&str> = entries.iter().map(|e| e.file_name.as_str()).collect();
         assert_eq!(names, vec!["DSCF1234.RAF", "holiday snap.JPG"]);
     }
@@ -370,7 +417,7 @@ mod tests {
             "DSCF1234.RAF",
             immich::AssetType::Image,
         );
-        let e = &entries_from_album(&[a], root)[0];
+        let e = &entries_from_assets(&[a], root)[0];
         let secs = e
             .modified
             .duration_since(std::time::UNIX_EPOCH)
@@ -391,7 +438,7 @@ mod tests {
             immich::AssetType::Image,
         );
         a.file_modified_at = "not a date".into();
-        let entries = entries_from_album(&[a], root);
+        let entries = entries_from_assets(&[a], root);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].modified, std::time::UNIX_EPOCH);
     }
@@ -477,7 +524,13 @@ mod tests {
                 key: "k".into(),
             })));
         assert!(
-            remote_thumbnail(&shared, &p).is_none(),
+            remote_thumbnail(
+                &shared,
+                &shared_versions(),
+                &crate::thumb_store::ThumbStore::new(dir.join("store"), u64::MAX),
+                &p
+            )
+            .is_none(),
             "an already-downloaded photo must not be fetched"
         );
         let _ = std::fs::remove_file(&p);
@@ -490,7 +543,16 @@ mod tests {
     fn an_unconfigured_connection_declines_without_touching_the_network() {
         let shared: SharedConnection = std::sync::Arc::new(std::sync::Mutex::new(None));
         let p = std::path::Path::new("/nonexistent/rustroom/11111111.RAF");
-        assert!(remote_thumbnail(&shared, p).is_none());
+        assert!(remote_thumbnail(
+            &shared,
+            &shared_versions(),
+            &crate::thumb_store::ThumbStore::new(
+                std::env::temp_dir().join("rustroom_unconf_store"),
+                u64::MAX
+            ),
+            p
+        )
+        .is_none());
     }
 
     #[test]
@@ -554,7 +616,7 @@ mod tests {
                 )
             })
             .collect();
-        let entries = entries_from_album(&assets, root);
+        let entries = entries_from_assets(&assets, root);
         assert_eq!(entries.len(), 5);
         assert!(entries.iter().all(|e| e.edited.is_none()));
         assert!(entries.iter().all(|e| !is_cached(&e.path)));

@@ -114,6 +114,13 @@ pub struct Asset {
     pub thumbhash: String,
     /// RFC 3339. Kept as a string here and parsed in `app`, so this crate needs no time crate.
     pub file_modified_at: String,
+    /// When the asset record last changed, RFC 3339.
+    ///
+    /// ⚠ Used as the **cache version** for this asset's thumbnail — see
+    /// `app`'s `thumb_store::Identity::Remote`. A favourite toggle changes it and costs one
+    /// refetch, which is the deliberate trade against `thumbhash`, whose perceptual hash could
+    /// survive a re-encode unchanged.
+    pub updated_at: String,
 }
 
 #[cfg(test)]
@@ -200,6 +207,14 @@ mod tests {
         );
     }
 
+    /// ⚠ `updatedAt` versions a cached thumbnail, so it must really be present. The captured
+    /// reply confirms it.
+    #[test]
+    fn a_real_reply_carries_updated_at() {
+        let r: SearchResponse = serde_json::from_str(SEARCH_REAL).expect("must parse");
+        assert_eq!(r.assets.items[0].updated_at, "2026-04-27T12:34:32.784Z");
+    }
+
     /// ⚠ The asset fields this DTO requires are all present in a real reply — the ones the cache
     /// path and the thumbnail depend on.
     #[test]
@@ -250,7 +265,7 @@ mod tests {
     fn an_unknown_field_is_ignored_rather_than_failing() {
         let json = r#"{"id":"11111111-1111-4111-8111-111111111111","type":"IMAGE",
             "originalFileName":"a.RAF","width":1,"height":1,"thumbhash":"x",
-            "fileModifiedAt":"2025-08-14T09:21:33.000Z","somethingNewIn3_3":true}"#;
+            "fileModifiedAt":"2025-08-14T09:21:33.000Z","updatedAt":"2026-01-01T00:00:00.000Z","somethingNewIn3_3":true}"#;
         let a: Asset =
             serde_json::from_str(json).expect("an unknown field must not fail the parse");
         assert_eq!(a.original_file_name, "a.RAF");
@@ -261,7 +276,7 @@ mod tests {
     fn a_missing_mime_type_is_none_not_an_error() {
         let json = r#"{"id":"11111111-1111-4111-8111-111111111111","type":"IMAGE",
             "originalFileName":"a.RAF","width":1,"height":1,"thumbhash":"x",
-            "fileModifiedAt":"2025-08-14T09:21:33.000Z"}"#;
+            "fileModifiedAt":"2025-08-14T09:21:33.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}"#;
         let a: Asset = serde_json::from_str(json).expect("a missing mime type must parse");
         assert!(a.original_mime_type.is_none());
     }
@@ -271,7 +286,7 @@ mod tests {
     fn an_unknown_asset_type_is_other_not_a_parse_failure() {
         let json = r#"{"id":"11111111-1111-4111-8111-111111111111","type":"AUDIO",
             "originalFileName":"a.mp3","width":0,"height":0,"thumbhash":"x",
-            "fileModifiedAt":"2025-08-14T09:21:33.000Z"}"#;
+            "fileModifiedAt":"2025-08-14T09:21:33.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}"#;
         let a: Asset = serde_json::from_str(json).expect("an unknown type must parse");
         assert!(matches!(a.asset_type, AssetType::Other));
     }

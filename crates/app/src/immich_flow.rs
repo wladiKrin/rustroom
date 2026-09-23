@@ -29,7 +29,7 @@ impl RustroomApp {
             return 0;
         };
         let root = immich_source::cache_root(&conn.url);
-        let mut scan = immich_source::entries_from_album(assets, &root);
+        let mut scan = immich_source::entries_from_assets(assets, &root);
         // ⚠⚠ `open_scan` is documented as taking an **already-sorted** scan, and every other
         // loader sorts here. Omitting it made the library sort setting silently do nothing for an
         // album — found by reading the other five, not by a test.

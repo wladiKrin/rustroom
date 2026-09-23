@@ -59,6 +59,7 @@ impl RustroomApp {
             lib.loader = ThumbLoader::new(
                 space,
                 self.settings.thumb_budget_mb as u64 * 1024 * 1024,
+                self.settings.immich_thumb_budget_mb as u64 * 1024 * 1024,
                 move || ctx2.request_repaint(),
             );
             // ⚠ Every cached thumbnail was converted at load, so they all describe the old space.

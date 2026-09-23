@@ -295,7 +295,7 @@ pub fn library_of(n: usize) -> Library {
         last_want: Vec::new(),
         selection: Selection::default(),
         // ⚠ No limit: a test must never evict, or its own fixtures could vanish mid-run.
-        loader: ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, || {}),
+        loader: ThumbLoader::new(color::OutputSpace::Srgb, u64::MAX, u64::MAX, || {}),
         visible: Vec::new(),
         marks: std::collections::HashMap::new(),
         captures: std::collections::HashMap::new(),
