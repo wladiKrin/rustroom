@@ -219,8 +219,8 @@ mod tests {
         let luts = ToneCurveStage::new(&[[0.0, 0.0], [0.5, 0.9], [1.0, 1.0]]).luts();
         assert_eq!(luts.len(), 4);
         assert!(luts[0][LUT_SIZE / 2] > 0.8, "the composite is curved");
-        for c in 1..4 {
-            let mid = luts[c][LUT_SIZE / 2];
+        for (c, lut) in luts.iter().enumerate().skip(1) {
+            let mid = lut[LUT_SIZE / 2];
             assert!(
                 (mid - 0.5).abs() < 2e-3,
                 "channel {c} should be identity: {mid}"
