@@ -7,7 +7,7 @@
 //! ⚠ Every struct ignores unknown fields (serde's default) and every enum has an `Other`
 //! fallback, so a server upgrade that adds a field or a kind does not break browsing.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// `GET /server/about` — the version probe.
 #[derive(Debug, Clone, Deserialize)]
@@ -109,7 +109,10 @@ pub enum NextPage {
 ///
 /// ⚠ `Other` catches anything Immich adds later. Without it one unknown kind would fail the
 /// whole album's parse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// ⚠ `Serialize` because a stored asset list is written back as JSON. `#[serde(other)]` is a
+/// deserialise-only attribute, so `Other` writes as `"Other"` and reads back through that same
+/// fallback — round-tripped by a test rather than assumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AssetType {
     #[serde(rename = "IMAGE")]
     Image,
@@ -120,7 +123,10 @@ pub enum AssetType {
 }
 
 /// One asset, narrowed to what the browse grid and the download need.
-#[derive(Debug, Clone, Deserialize)]
+/// ⚠ `Serialize` is here for the on-disk asset-list cache (`app`'s `immich_list_cache`). The other
+/// DTOs in this file stay read-only deliberately: a type that can be written invites someone to
+/// write it, and nothing else here is ever sent anywhere.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
     pub id: String,
@@ -365,6 +371,47 @@ mod tests {
         let a: Asset =
             serde_json::from_str(json).expect("an unknown field must not fail the parse");
         assert_eq!(a.original_file_name, "a.RAF");
+    }
+
+    /// ⚠⚠ A stored list is a `Vec<Asset>` written back out as JSON, so `Asset` has to serialise as
+    /// well as deserialise — it derived only `Deserialize`.
+    ///
+    /// ⚠ `AssetType` carries `#[serde(other)]`, which is a **deserialise-only** attribute. This
+    /// round-trips all three variants rather than assuming the enum survives a write: `Other` must
+    /// come back as `Other`, not fail and not silently become `Image`.
+    #[test]
+    fn an_asset_round_trips_through_json_including_an_unknown_type() {
+        let json = r#"[{"id":"11111111-1111-4111-8111-111111111111","type":"IMAGE",
+            "originalFileName":"a.RAF","originalMimeType":"image/x-fuji-raf","width":10,"height":20,
+            "thumbhash":"t","fileModifiedAt":"2025-01-01T00:00:00.000Z",
+            "updatedAt":"2025-01-02T00:00:00.000Z"},
+            {"id":"22222222-2222-4222-8222-222222222222","type":"VIDEO",
+            "originalFileName":"b.MP4","width":null,"height":null,"thumbhash":null,
+            "fileModifiedAt":"2025-01-01T00:00:00.000Z",
+            "updatedAt":"2025-01-02T00:00:00.000Z"},
+            {"id":"33333333-3333-4333-8333-333333333333","type":"AUDIO",
+            "originalFileName":"c.mp3","width":null,"height":null,"thumbhash":null,
+            "fileModifiedAt":"2025-01-01T00:00:00.000Z",
+            "updatedAt":"2025-01-02T00:00:00.000Z"}]"#;
+        let before: Vec<Asset> = serde_json::from_str(json).expect("must parse");
+        let written = serde_json::to_string(&before).expect("must serialise");
+        let after: Vec<Asset> = serde_json::from_str(&written).expect("must parse back");
+
+        assert_eq!(after.len(), 3);
+        assert!(matches!(after[0].asset_type, AssetType::Image));
+        assert!(matches!(after[1].asset_type, AssetType::Video));
+        assert!(
+            matches!(after[2].asset_type, AssetType::Other),
+            "an unknown type must survive a write as Other, not become Image"
+        );
+        assert_eq!(after[0].original_file_name, "a.RAF");
+        assert_eq!(
+            after[0].original_mime_type.as_deref(),
+            Some("image/x-fuji-raf")
+        );
+        assert_eq!((after[0].width, after[0].height), (Some(10), Some(20)));
+        assert!(after[1].thumbhash.is_none());
+        assert_eq!(after[0].updated_at, "2025-01-02T00:00:00.000Z");
     }
 
     /// ⚠ `originalMimeType` is optional in the spec. A missing one must not fail the album.
