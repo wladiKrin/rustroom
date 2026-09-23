@@ -6,7 +6,9 @@
 pub mod dto;
 pub mod error;
 
-pub use dto::{About, AlbumSummary, Asset, AssetType, NextPage, SearchAssets, SearchResponse};
+pub use dto::{
+    About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse,
+};
 pub use error::Error;
 
 use std::io::Write;
@@ -40,6 +42,36 @@ impl Size {
             Size::Thumbnail => "thumbnail",
             Size::Preview => "preview",
             Size::Fullsize => "fullsize",
+        }
+    }
+}
+
+/// What a search is scoped to.
+///
+/// ⚠⚠ One type for both, so an album and a month share the paged loop, its `nextPage`-before-
+/// `nextCursor` rule and its round-trip ceiling. Those were learned from a real server and must not
+/// be reimplemented per caller.
+pub enum Filter {
+    /// ⚠ `albumIds` is deprecated in 3.2.0 and is still the only way to scope a search to an
+    /// album: `isNotInAlbum` is deprecated too, and the timeline endpoints omit `originalFileName`,
+    /// which decides the cache path's extension and so the decoder. A deliberate dependency.
+    Album(String),
+    /// RFC 3339 bounds: `after` inclusive, `before` exclusive.
+    TakenBetween { after: String, before: String },
+}
+
+impl Filter {
+    /// The request body for one page.
+    ///
+    /// ⚠ Crate-visible so the two shapes can be asserted without a server.
+    pub(crate) fn body(&self, size: u32) -> serde_json::Value {
+        match self {
+            Filter::Album(id) => serde_json::json!({ "albumIds": [id], "size": size }),
+            Filter::TakenBetween { after, before } => serde_json::json!({
+                "takenAfter": after,
+                "takenBefore": before,
+                "size": size,
+            }),
         }
     }
 }
@@ -172,18 +204,33 @@ impl Client {
     ///
     /// ⚠ Paged by `cursor`, which is not deprecated, rather than by `page`, which is.
     pub fn album(&self, id: &str) -> Result<Vec<Asset>, Error> {
+        self.search(&Filter::Album(id.to_string()))
+    }
+
+    /// `GET /timeline/buckets` — the whole library's month list with counts, in one call.
+    ///
+    /// ⚠ Monthly on a real 3.2.0 server, and the endpoint takes no size parameter, so the
+    /// granularity is the server's. `buckets_real.json` is the captured evidence.
+    pub fn buckets(&self) -> Result<Vec<Bucket>, Error> {
+        self.get_json("/timeline/buckets")
+    }
+
+    /// Every asset matching `filter`, following the server's paging to the last page.
+    ///
+    /// ⚠⚠ **`POST /search/metadata`, not `GET /albums/{id}`.** `AlbumResponseDto` carries
+    /// `assetCount` and **no assets**, so the obvious endpoint cannot answer this at all — it fails
+    /// with "missing field `assets`", which is how that was found in use.
+    ///
+    /// ⚠⚠ Paging follows **whichever** signal the reply carries. A real 3.2.0 server answers with
+    /// `nextCursor: null` and `nextPage: "2"`, so a cursor-only loop returns a **silently truncated**
+    /// result; cursors are honoured first in case a later server switches to them.
+    pub fn search(&self, filter: &Filter) -> Result<Vec<Asset>, Error> {
         let mut out: Vec<Asset> = Vec::new();
         let mut next: Option<NextPage> = None;
         // ⚠ A hard ceiling on round trips. A server that paged for ever would otherwise hang the
         // worker thread silently; 1000 pages at the maximum page size is a million assets.
         for _ in 0..1000 {
-            let mut body = serde_json::json!({
-                "albumIds": [id],
-                "size": PAGE_SIZE,
-            });
-            // ⚠⚠ Whichever the previous reply asked for. A real 3.2.0 server pages by **number**
-            // and leaves `nextCursor` null, so a cursor-only loop returns a silently truncated
-            // album; cursors are honoured first in case a later server switches to them.
+            let mut body = filter.body(PAGE_SIZE);
             match &next {
                 Some(NextPage::Cursor(c)) => {
                     body["cursor"] = serde_json::Value::String(c.clone());
@@ -281,6 +328,26 @@ mod tests {
     fn an_empty_url_or_key_is_refused_before_any_request() {
         assert!(Client::new("", "k").is_err());
         assert!(Client::new("https://photos.example.com", "").is_err());
+    }
+
+    #[test]
+    fn an_album_filter_and_a_date_filter_are_different_bodies() {
+        let a = Filter::Album("6f2e1a94-0c44-4f51-8a7d-9b1c2e3f4a5b".into());
+        let d = Filter::TakenBetween {
+            after: "2025-11-01T00:00:00.000Z".into(),
+            before: "2025-12-01T00:00:00.000Z".into(),
+        };
+        let ab = a.body(PAGE_SIZE);
+        let db = d.body(PAGE_SIZE);
+        assert!(
+            ab.get("albumIds").is_some(),
+            "an album filter sends albumIds"
+        );
+        assert!(ab.get("takenAfter").is_none());
+        assert_eq!(db["takenAfter"], "2025-11-01T00:00:00.000Z");
+        assert_eq!(db["takenBefore"], "2025-12-01T00:00:00.000Z");
+        assert!(db.get("albumIds").is_none());
+        assert_eq!(db["size"], PAGE_SIZE);
     }
 
     /// ⚠⚠ The size values are Immich's `AssetMediaSize` spelling. A typo here is a 400 at runtime

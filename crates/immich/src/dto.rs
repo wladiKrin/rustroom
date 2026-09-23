@@ -24,6 +24,18 @@ pub struct AlbumSummary {
     pub asset_count: u32,
 }
 
+/// One row of `GET /timeline/buckets`.
+///
+/// ⚠ `time_bucket` is `YYYY-MM-DD`, and on a real 3.2.0 server it is always the **first of a
+/// month** — the endpoint takes no size parameter, so the granularity is the server's choice.
+/// Captured and pinned rather than assumed.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bucket {
+    pub time_bucket: String,
+    pub count: u32,
+}
+
 /// `POST /search/metadata` — one page of results.
 ///
 /// ⚠⚠ **This is how an album's assets are fetched, and `GET /albums/{id}` is not.**
@@ -134,6 +146,12 @@ mod tests {
     /// scrubbed of the owner id, the storage paths and the checksums. It is the only evidence that
     /// `nextCursor` is null while `nextPage` is set — the schema does not say so anywhere.
     const SEARCH_REAL: &str = include_str!("../tests/fixtures/search_real.json");
+    /// ⚠⚠ **Captured**, not constructed: a real `GET /timeline/buckets` reply. It is the only
+    /// evidence that buckets are monthly and newest-first — the endpoint takes no size parameter, so
+    /// granularity is the server's choice and the schema does not state it. ⚠ Three months are
+    /// dropped from it deliberately, so a **gap** is exercised; a tree builder that assumed
+    /// contiguity would pass on a dense fixture and fail on a real library.
+    const BUCKETS_REAL: &str = include_str!("../tests/fixtures/buckets_real.json");
     /// ⚠⚠ **A real reply from a real server**, captured 2026-09-22 and scrubbed of the owner's
     /// name and email. The others in this directory are shaped from the OpenAPI schema; this one
     /// is not, and that difference matters — a hand-written `album.json` once asserted that
@@ -167,6 +185,22 @@ mod tests {
         assert_eq!(v[0].id, "a6e6f5aa-8be7-454e-9328-82dc0cc2ab2b");
         assert_eq!(v[1].album_name, "Rom");
         assert_eq!(v[1].asset_count, 112);
+    }
+
+    #[test]
+    fn a_real_buckets_reply_is_monthly_newest_first_with_counts() {
+        let v: Vec<Bucket> = serde_json::from_str(BUCKETS_REAL).expect("buckets must parse");
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[0].time_bucket, "2026-08-01");
+        assert_eq!(v[0].count, 76);
+        assert!(
+            v.iter().all(|b| b.time_bucket.ends_with("-01")),
+            "every bucket must be the first of a month"
+        );
+        assert!(
+            v[0].time_bucket > v[1].time_bucket,
+            "the server returns newest first"
+        );
     }
 
     #[test]

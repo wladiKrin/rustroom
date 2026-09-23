@@ -1,0 +1,8 @@
+[
+  { "timeBucket": "2026-08-01", "count": 76 },
+  { "timeBucket": "2026-07-01", "count": 233 },
+  { "timeBucket": "2026-06-01", "count": 45 },
+  { "timeBucket": "2026-05-01", "count": 436 },
+  { "timeBucket": "2026-04-01", "count": 146 },
+  { "timeBucket": "2025-12-01", "count": 189 }
+]
