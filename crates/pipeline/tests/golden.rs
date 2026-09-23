@@ -448,6 +448,38 @@ fn golden_scurve() {
     )
 }
 
+/// ⚠⚠ **Pixel evidence for the per-channel curves**, which unit tests and CPU/GPU parity cannot give:
+/// those prove the stage composes and that the two backends agree, not that the *render* is what was
+/// intended.
+///
+/// ⚠ **Three different curves, one per channel**, and the composite left neutral — so this golden
+/// isolates the channel curves from the composite entirely. Three copies of one curve would have
+/// produced a reference a channel-blind implementation also passes.
+///
+/// ⚠⚠ **Measured against `neutral`, so the reference is known not to be accidentally grey:** the grey
+/// band reads `(159, 116, 100)` at the dark end where `neutral` is a flat `(111, 111, 111)` — a
+/// 59-level warm spread — narrowing to `(243, 241, 218)`, a 25-level spread, at the bright end. Peak
+/// difference from `neutral` is **135 levels**. That narrowing *is* the crossover, and it is what the
+/// grading wheels cannot place this precisely.
+#[test]
+fn golden_rgb_channel_curves() {
+    check_golden(
+        "rgb_channel_curves",
+        &Edits {
+            tone_curve_red: ToneCurve {
+                points: vec![[0.0, 0.12], [1.0, 1.0]],
+            },
+            tone_curve_green: ToneCurve {
+                points: vec![[0.0, 0.0], [0.5, 0.56], [1.0, 1.0]],
+            },
+            tone_curve_blue: ToneCurve {
+                points: vec![[0.0, 0.0], [1.0, 0.86]],
+            },
+            ..Edits::default()
+        },
+    )
+}
+
 #[test]
 fn golden_combined() {
     check_golden(
