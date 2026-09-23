@@ -254,12 +254,12 @@ pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size:
         );
         right -= size + 5.0;
     }
-    if let Some((glyph, colour)) = flag_glyph(marks.flag) {
+    if let Some((glyph, colour, scale)) = flag_glyph(marks.flag) {
         p.text(
             egui::pos2(right, y),
             egui::Align2::RIGHT_CENTER,
             glyph,
-            egui::FontId::proportional(size),
+            egui::FontId::proportional(size * scale),
             colour,
         );
     }
@@ -271,10 +271,17 @@ pub fn marks_row(ui: &mut egui::Ui, width: f32, marks: catalog::db::Marks, size:
 /// bundled font and would have shipped as tofu boxes — caught by `every_mark_glyph_is_renderable`,
 /// the same finding the rail's four glyphs produced. ⚠ The flag is also the better symbol:
 /// Lightroom's "pick" *is* a flag.
-fn flag_glyph(flag: catalog::db::Flag) -> Option<(&'static str, egui::Color32)> {
+/// The flag's glyph, its colour, and **how much to scale it** for the size the row asked for.
+///
+/// ⚠⚠ The scale compensates for the glyph's own proportions, not for a preference about flags. `×` is
+/// U+00D7, the multiplication sign, which occupies far less of its em box than `★` or `⚑` — so at an
+/// identical font size it reads visibly smaller, which is what "make the reject cross even larger"
+/// was about (user, 2026-09-23). ⚠ Scaling the glyph rather than swapping in a heavier one such as
+/// `✕`: a different codepoint risks a tofu box, and `×` is known to render in the bundled fonts.
+fn flag_glyph(flag: catalog::db::Flag) -> Option<(&'static str, egui::Color32, f32)> {
     match flag {
-        catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120))),
-        catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110))),
+        catalog::db::Flag::Pick => Some(("⚑", egui::Color32::from_rgb(120, 220, 120), 1.0)),
+        catalog::db::Flag::Reject => Some(("×", egui::Color32::from_rgb(230, 110, 110), 1.7)),
         catalog::db::Flag::None => None,
     }
 }
@@ -327,13 +334,14 @@ pub(crate) fn paint_marks(
             );
             x += size * 0.8;
         }
-        let flag_glyph = flag_glyph(marks.flag);
-        if let Some((glyph, colour)) = flag_glyph {
+        // ⚠ The same per-glyph scale as `marks_row`, so the filmstrip's overlay and the grid's row
+        // cannot disagree about how big a reject cross is.
+        if let Some((glyph, colour, scale)) = flag_glyph(marks.flag) {
             p.text(
                 egui::pos2(rect.right() - pad, y),
                 egui::Align2::RIGHT_TOP,
                 glyph,
-                egui::FontId::proportional(size),
+                egui::FontId::proportional(size * scale),
                 colour,
             );
         }
