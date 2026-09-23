@@ -238,9 +238,10 @@ pub(crate) fn white_balance(
 
 /// The `Advanced color` block's persistent id.
 ///
-/// ⚠ A shared constant rather than a literal in two places: the test that forces the block open has to
-/// name the same id the panel does, and a silently mismatched id would leave that test passing against
-/// a block it never opened.
+/// ⚠ Named rather than a bare literal, so the block's identity is one thing to find. ⚠ The tests open it
+/// by **clicking its header**, not by this id: `ui.make_persistent_id` is relative to the Ui's id stack,
+/// and this header is created inside the section's nested body, so an id computed anywhere else is a
+/// different id — which is how a first attempt at those tests passed while opening nothing.
 const ADVANCED_ID: &str = "color_advanced";
 
 /// 1667 K – 25000 K, as mireds. ⚠ Stored the way the slider draws them, so the two cannot
@@ -373,60 +374,98 @@ pub fn show(
         // already-saturated colour far more readily, so it is the one offered second.
         ed.slider(ui, &mut edits.vibrance, -100.0..=100.0, "Vibrance");
         ed.slider(ui, &mut edits.saturation, -100.0..=100.0, "Saturation");
-        ui.separator();
-        // ⚠ Shared with a mask's own HSL block — see `hsl_bands`. One layout learned once.
-        hsl_bands::show(ui, &mut edits.hsl, hsl_channel, ed);
 
-        // ⚠ A sub-label, not a nested CollapsingHeader — the idiom already used for the
-        // Presence block inside Tone. Colour grading belongs to the `Color` edit group, and a
-        // header here would put the panel and the Sync dialog out of step.
-        // ⚠⚠ "Show range" is A VIEW MODE, not an edit — `visualize`'s rule. It writes two
-        // session fields and never `Edits`, so it re-renders (`ed.changed`) without a history
-        // entry. On the sub-label row, right-aligned, because it is a toggle for exactly the
-        // range selector under it (2026-09-19; it sat below Balance before, next to nothing it
-        // belonged to).
-        theme::sub_label_with(ui, "Color Grading", |ui| {
-            ui.checkbox(show_grade_range, "Show range").on_hover_text(
-                "Tints the photograph where the selected range reaches. Affects only what you \
-                 see — never the render, the export or the histogram.",
-            );
-        });
-        theme::segmented(
-            ui,
-            grade_range,
-            &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
-        );
-        let diameter = ui.available_width().min(188.0);
-        {
-            // Scoped so the borrow of `color_grading` ends before Blending and Balance,
-            // which need the struct itself.
-            color_wheel::show(ui, &mut edits.color_grading, *grade_range, diameter, ed);
-            let w = grade_range.wheel_mut(&mut edits.color_grading);
-            ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
-            ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Saturation");
-            ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
-        }
-        ui.separator();
-        let g = &mut edits.color_grading;
-        // ⚠⚠ **Blending and Balance are shared by all four wheels, and that is correct rather
-        // than an oversight** — they are properties of the *range decomposition*, not of any one
-        // wheel: Blending sets how far the shadow, midtone and highlight weights overlap and
-        // Balance slides all three centres together. Lightroom places them the same way, below
-        // the wheels rather than inside one.
+        // ⚠⚠ **Closed by default, and that is the change.** A newcomer opening Color met ~40 values
+        // behind 15 sliders, two segmented selectors and a wheel; they now meet **two sliders**, with
+        // everything else one click away behind a name that says what it is for (user's call,
+        // 2026-09-24, after an amateur photographer's review).
         //
-        // ⚠ Separated because without it they sit flush against Hue/Saturation/Luminance, which
-        // *are* per-wheel. A caption saying so was tried and removed (user's call, 2026-09-02) —
-        // the hairline carries it.
-        ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
-        ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
-        // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
-        // checkbox and the selector are both in scope. Change-guarded: this body runs every
-        // frame, and an unguarded write would request a render sixty times a second.
-        let wanted = show_grade_range.then(|| grade_range.view()).flatten();
-        if *grade_view != wanted {
-            *grade_view = wanted;
-            ed.changed = true;
-        }
+        // ⚠ Not `resettable`: only the section's own header resets the `Color` group, or two reset
+        // affordances would claim to reset different things — and this one would reset less than it
+        // appeared to.
+        //
+        // ⚠⚠ **Not a `Section`.** `Section::name()` is `EDIT_GROUP_NAMES[i]` and `edit_groups()` is
+        // *derived* from `SECTIONS`, so a real section here would claim an edit group that does not
+        // exist and put the panel and the Sync dialog out of step — the hazard both this file and
+        // `hsl_bands.rs` already warn about. Splitting the `Color` group into three is its own change,
+        // with a version bump and three Sync checkboxes where there is one.
+        let mut adv = super::section::header(
+            ui,
+            ui.make_persistent_id(ADVANCED_ID),
+            false,
+            super::section::Header::new("Advanced color"),
+        );
+        adv.state.show_body_unindented(ui, |ui| {
+            theme::sub_label_hover(
+                ui,
+                "Adjust individual colors",
+                "HSL — shift the hue, saturation or brightness of one color at a time, leaving the \
+                 others alone.",
+            );
+            // ⚠ Shared with a mask's own HSL block — see `hsl_bands`. One layout learned once.
+            hsl_bands::show(ui, &mut edits.hsl, hsl_channel, ed);
+
+            // ⚠ A sub-label rather than a header of its own: colour grading belongs to the `Color`
+            // edit group, and a *second* header claiming a group would put the panel and the Sync
+            // dialog out of step. ⚠ It now sits inside `Advanced color`, which is a collapsible that
+            // deliberately claims **no** group — see its own note above. Two levels, not three, which
+            // is the line `hsl_bands.rs` records.
+            // ⚠⚠ "Show range" is A VIEW MODE, not an edit — `visualize`'s rule. It writes two
+            // session fields and never `Edits`, so it re-renders (`ed.changed`) without a history
+            // entry. On the sub-label row, right-aligned, because it is a toggle for exactly the
+            // range selector under it (2026-09-19; it sat below Balance before, next to nothing it
+            // belonged to).
+            // ⚠ Plain language visible, the jargon in the hover on the block above it. `sub_label_with`
+            // has no hover parameter and the trailing closure owns the right of the row, so "color
+            // grading" is carried by the checkbox's hover rather than half-added here.
+            theme::sub_label_with(ui, "Tint by tone", |ui| {
+                ui.checkbox(show_grade_range, "Show range").on_hover_text(
+                    "Tints the photograph where the selected range reaches. Affects only what you \
+                 see — never the render, the export or the histogram.",
+                );
+            });
+            theme::segmented(
+                ui,
+                grade_range,
+                &color_wheel::GradeRange::ALL.map(|r| (r, r.label())),
+            );
+            let diameter = ui.available_width().min(188.0);
+            {
+                // Scoped so the borrow of `color_grading` ends before Blending and Balance,
+                // which need the struct itself.
+                color_wheel::show(ui, &mut edits.color_grading, *grade_range, diameter, ed);
+                let w = grade_range.wheel_mut(&mut edits.color_grading);
+                ed.slider(ui, &mut w.hue, 0.0..=360.0, "Hue");
+                // ⚠⚠ `Strength`, not `Saturation`: the global Saturation slider and HSL's Saturation channel both
+                // mean **the image's chroma**, while this means **how much tint is applied** — the same word
+                // for the opposite subject, and a named cause of the "the Color section is confusing" review
+                // (2026-09-24). ⚠ `Hue` and `Luminance` are deliberately left alone: they repeat by word but
+                // not by meaning, and Lightroom labels its wheels the same way.
+                ed.slider(ui, &mut w.saturation, 0.0..=100.0, "Strength");
+                ed.slider(ui, &mut w.luminance, -100.0..=100.0, "Luminance");
+            }
+            ui.separator();
+            let g = &mut edits.color_grading;
+            // ⚠⚠ **Blending and Balance are shared by all four wheels, and that is correct rather
+            // than an oversight** — they are properties of the *range decomposition*, not of any one
+            // wheel: Blending sets how far the shadow, midtone and highlight weights overlap and
+            // Balance slides all three centres together. Lightroom places them the same way, below
+            // the wheels rather than inside one.
+            //
+            // ⚠ Separated because without it they sit flush against Hue/Saturation/Luminance, which
+            // *are* per-wheel. A caption saying so was tried and removed (user's call, 2026-09-02) —
+            // the hairline carries it.
+            ed.slider(ui, &mut g.blending, 0.0..=100.0, "Blending");
+            ed.slider(ui, &mut g.balance, -100.0..=100.0, "Balance");
+            // ⚠ Two inputs, one value on the wire, derived here because this is the one place the
+            // checkbox and the selector are both in scope. Change-guarded: this body runs every
+            // frame, and an unguarded write would request a render sixty times a second.
+            let wanted = show_grade_range.then(|| grade_range.view()).flatten();
+            if *grade_view != wanted {
+                *grade_view = wanted;
+                ed.changed = true;
+            }
+        });
     });
 
     section(ui, SECTIONS[3], false, edits, ed, |ui, edits, ed| {
@@ -644,65 +683,6 @@ mod tests {
         );
     }
 
-    /// Lay out the whole adjustments panel and report what it calls its sliders.
-    ///
-    /// ⚠ `Advanced color` is forced **open** through its own `CollapsingState` id, because with it
-    /// closed this sees two sliders, passes, and guards nothing.
-    fn color_slider_labels(ctx: &egui::Context, open_advanced: bool) -> Vec<String> {
-        let mut edits = edit_model::Edits::default();
-        let mut channel = HslChannel::default();
-        let mut range = color_wheel::GradeRange::Shadows;
-        let mut show_range = false;
-        let mut view = None;
-        let buffer = core_image::ImageBuf::new(8, 8);
-        crate::test_ui::slider_labels(ctx, |ui| {
-            // ⚠ The Color **section** starts collapsed too, so forcing only the inner block open showed
-            // nothing but White Balance and Tone — the size assertion caught that rather than letting
-            // the test pass on eleven unrelated sliders.
-            let open = |ui: &mut egui::Ui, id: &str| {
-                egui::collapsing_header::CollapsingState::load_with_default_open(
-                    ui.ctx(),
-                    ui.make_persistent_id(id),
-                    true,
-                )
-                .set_open(true);
-                // ⚠ `set_open` mutates the loaded struct; without `store` nothing reaches egui's memory
-                // and the header re-loads its default. The size assertion is what surfaced that.
-                let mut st = egui::collapsing_header::CollapsingState::load_with_default_open(
-                    ui.ctx(),
-                    ui.make_persistent_id(id),
-                    true,
-                );
-                st.set_open(true);
-                st.store(ui.ctx());
-            };
-            open(ui, SECTIONS[2].name());
-            if open_advanced {
-                open(ui, ADVANCED_ID);
-            }
-            show(
-                ui,
-                &mut edits,
-                &mut channel,
-                GradeUi {
-                    range: &mut range,
-                    show_range: &mut show_range,
-                    view: &mut view,
-                },
-                SourceInfo {
-                    lens: None,
-                    lens_profile_found: false,
-                    wb_baseline: color::wb::Illuminant::new(5000.0, 0.0),
-                    baseline_ev: None,
-                    buffer: &buffer,
-                    hist: None,
-                },
-                None,
-                &mut Edited::default(),
-            );
-        })
-    }
-
     /// ⚠⚠ **The review, as a test.** An amateur photographer found the Color section confusing, and a
     /// concrete cause was that **"Saturation" named three different things in it** — the global slider,
     /// HSL's channel and the grading wheel's slider. `hsl_bands.rs` had already recorded hitting the
@@ -712,8 +692,11 @@ mod tests {
     /// "Saturation" added tomorrow fails this with nothing to maintain.
     #[test]
     fn no_two_sliders_in_the_adjustments_panel_share_a_name() {
-        let ctx = crate::test_ui::ctx();
-        let labels = color_slider_labels(&ctx, true);
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(false);
+        p.click(&ctx, "Color");
+        p.click(&ctx, "Advanced color");
+        let labels = p.slider_labels(&ctx);
         assert!(
             labels.len() > 12,
             "the advanced block did not open, so this would guard nothing: {labels:?}"
@@ -742,8 +725,10 @@ mod tests {
     /// forty values behind HSL and grading.
     #[test]
     fn the_advanced_color_block_is_closed_by_default() {
-        let ctx = crate::test_ui::ctx();
-        let labels = color_slider_labels(&ctx, false);
+        let ctx = instant_ctx();
+        let mut p = RangePanel::new(false);
+        p.click(&ctx, "Color");
+        let labels = p.slider_labels(&ctx);
         assert!(
             labels.iter().any(|l| l == "Vibrance"),
             "Vibrance must stay visible: {labels:?}"
@@ -882,6 +867,47 @@ mod tests {
             }
         }
 
+        /// What the panel calls its sliders, as laid out right now.
+        ///
+        /// ⚠ Through the same harness the clicks go through, so "open the section, then open the block"
+        /// is expressed the way a user does it. An earlier version forced the collapsing state by id and
+        /// silently missed: `ui.make_persistent_id` is **relative to the Ui's id stack**, and the block's
+        /// header is created inside the section's nested body, so the id computed at the top level was
+        /// never the block's.
+        fn slider_labels(&mut self, ctx: &egui::Context) -> Vec<String> {
+            let Self {
+                edits,
+                channel,
+                grade,
+                show_range,
+                view,
+                ed,
+                buf,
+            } = self;
+            crate::test_ui::slider_labels(ctx, |ui| {
+                show(
+                    ui,
+                    edits,
+                    channel,
+                    GradeUi {
+                        range: grade,
+                        show_range,
+                        view,
+                    },
+                    SourceInfo {
+                        lens: None,
+                        lens_profile_found: false,
+                        wb_baseline: color::wb::Illuminant::new(5000.0, 0.0),
+                        baseline_ev: None,
+                        buffer: buf,
+                        hist: None,
+                    },
+                    None,
+                    ed,
+                );
+            })
+        }
+
         /// Click `label` in the panel; `ed` reports that one frame.
         fn click(&mut self, ctx: &egui::Context, label: &str) {
             let Self {
@@ -1013,6 +1039,9 @@ mod tests {
         let mut p = RangePanel::new(false);
         let before = p.edits.clone();
         p.click(&ctx, "Color");
+        // ⚠ Grading moved inside `Advanced color` (2026-09-24); without this the harness finds
+        // nothing to click and the test fails on a missing widget rather than on its subject.
+        p.click(&ctx, "Advanced color");
         p.click(&ctx, "Show range");
         assert!(p.show_range, "the checkbox did not take");
         assert_eq!(
@@ -1053,6 +1082,9 @@ mod tests {
         // sighted user tells the two apart by where they sit; the label query cannot.
         p.click(&ctx, "Tone");
         p.click(&ctx, "Color");
+        // ⚠ Grading moved inside `Advanced color` (2026-09-24); without this the harness finds
+        // nothing to click and the test fails on a missing widget rather than on its subject.
+        p.click(&ctx, "Advanced color");
         p.click(&ctx, "Midtones");
         assert_eq!(
             p.view,
