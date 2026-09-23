@@ -499,6 +499,19 @@ struct RustroomApp {
     /// ⚠ Cleared whenever the URL or the key is edited, or a stale "Connected" would sit under
     /// credentials it was never tested against.
     immich_test: Option<Result<String, String>>,
+    /// Which album or bucket the user has just clicked, while its assets are on the way.
+    ///
+    /// ⚠⚠ Clicking one is a **couple of seconds** — the server returns the whole album's metadata,
+    /// ~900 KB for 872 assets. Without this the rail's highlight follows `library.source`, which does
+    /// not change until the reply lands, so the click looked like it had done nothing. Reported in
+    /// use, 2026-09-23.
+    immich_opening: Option<String>,
+    /// Asset lists already fetched this session, keyed by album id or bucket identifier.
+    ///
+    /// ⚠ In memory only, so switching **back** to something already opened is instant while a first
+    /// visit still pays the round trip. ~260 KB per 872-asset album. Persisting it across restarts is
+    /// a further change with a staleness rule to decide, not a side effect of this one.
+    immich_assets: std::collections::HashMap<String, Vec<immich::Asset>>,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
@@ -595,6 +608,20 @@ impl RustroomApp {
         // time the first album could be browsed — otherwise every thumbnail would decline until
         // Settings happened to be opened and applied.
         rustroom_app::immich_source::refresh_shared(&settings);
+        // ⚠⚠ The thumbnail caches are swept **here**, once, rather than in `ThumbStore::new` —
+        // which `ThumbLoader::new` calls on every library open, making it ~2,500 stats per album
+        // click. This is the moment a store can be over budget with nothing having been written:
+        // the budget was lowered while the app was closed.
+        //
+        // ⚠ Off the UI thread: it walks two directories, and nothing downstream waits on it.
+        {
+            let local = settings.thumb_budget_mb as u64 * 1024 * 1024;
+            let immich = settings.immich_thumb_budget_mb as u64 * 1024 * 1024;
+            std::thread::spawn(move || {
+                rustroom_app::thumb_store::ThumbStore::user_default(local).sweep();
+                rustroom_app::thumb_store::ThumbStore::immich_default(immich).sweep();
+            });
+        }
         // ⚠ Opened once, at startup. A failure is reported and then ignored — see the field.
         let catalog = match catalog::db::Catalog::open(&catalog::db::Catalog::user_default_path()) {
             Ok(c) => Some(c),
@@ -696,6 +723,8 @@ impl RustroomApp {
             immich_albums: None,
             immich_buckets: None,
             immich_test: None,
+            immich_opening: None,
+            immich_assets: Default::default(),
             settings,
             catalog,
             modal: Modal::None,

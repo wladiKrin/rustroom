@@ -103,10 +103,14 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                 );
             }
             for a in albums {
-                let selected = matches!(
-                    app.library.as_ref().map(|l| &l.source),
-                    Some(crate::LibrarySource::ImmichAlbum { id, .. }) if id == &a.id
-                );
+                // ⚠⚠ Lit while its assets are still on the way, too. The server takes a couple of
+                // seconds over a large album, and without this the row you clicked stays dark the
+                // whole time — indistinguishable from a click that did nothing.
+                let selected = app.immich_opening.as_deref() == Some(a.id.as_str())
+                    || matches!(
+                        app.library.as_ref().map(|l| &l.source),
+                        Some(crate::LibrarySource::ImmichAlbum { id, .. }) if id == &a.id
+                    );
                 let r = list_row::row(
                     ui,
                     RowSpec {
@@ -160,11 +164,13 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         .show(ui, |ui| {
                             for m in &y.months {
                                 let label = format!("{} {}", month_name(m.month), y.year);
-                                let selected = matches!(
-                                    app.library.as_ref().map(|l| &l.source),
-                                    Some(crate::LibrarySource::ImmichBucket { bucket, .. })
-                                        if bucket == &m.bucket
-                                );
+                                let selected = app.immich_opening.as_deref()
+                                    == Some(m.bucket.as_str())
+                                    || matches!(
+                                        app.library.as_ref().map(|l| &l.source),
+                                        Some(crate::LibrarySource::ImmichBucket { bucket, .. })
+                                            if bucket == &m.bucket
+                                    );
                                 let r = list_row::row(
                                     ui,
                                     RowSpec {

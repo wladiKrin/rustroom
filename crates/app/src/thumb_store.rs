@@ -191,16 +191,20 @@ impl ThumbStore {
     /// The directory is injected so tests run against a temp dir and never touch the real home
     /// directory — the `PresetStore` and `SettingsStore` pattern.
     ///
-    /// ⚠ Sweeps once here, so a store left over budget by a lowered setting is corrected without
-    /// waiting for enough writes to trigger one.
+    /// ⚠⚠ **Does NOT sweep.** It used to, "so a store left over budget by a lowered setting is
+    /// corrected" — but `ThumbLoader::new` builds **two** of these on every library open, and a sweep
+    /// walks the directory and stats every entry. With ~2,500 cached thumbnails that was ~2,500 stats
+    /// on the UI thread every time an album was clicked. Reported in use, 2026-09-23.
+    ///
+    /// ⚠ The budget is still enforced: `put` sweeps once per tenth of the budget written, and
+    /// [`Self::sweep`] is called explicitly at startup and when a budget changes — the two moments a
+    /// store can be over budget with nothing having been written.
     pub fn new(dir: PathBuf, budget_bytes: u64) -> Self {
-        let s = Self {
+        Self {
             dir,
             budget: budget_bytes,
             written: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        };
-        s.sweep();
-        s
+        }
     }
 
     /// `<platform config dir>/rustroom/thumbs/`.
@@ -605,8 +609,8 @@ mod tests {
     fn a_sweep_brings_an_over_budget_directory_under_it() {
         let dir = TempDir::new("sweep_under");
         let paths = fill(&dir.0, 10, 10 * 1024);
-        // ⚠ The constructor sweeps, which is what is under test here.
         let store = ThumbStore::new(dir.0.clone(), 50 * 1024);
+        store.sweep();
         assert!(
             store.size_bytes() <= 50 * 1024,
             "still {} bytes",
@@ -626,6 +630,7 @@ mod tests {
         let dir = TempDir::new("sweep_zero");
         fill(&dir.0, 3, 1024);
         let store = ThumbStore::new(dir.0.clone(), 0);
+        store.sweep();
         assert_eq!(store.size_bytes(), 0);
     }
 
@@ -662,8 +667,8 @@ mod tests {
             reader.get(&oldest).is_some(),
             "the entry must be readable first"
         );
-        // ⚠ The budgeted store's constructor sweep is what must now spare it.
-        let _swept = ThumbStore::new(dir.0.clone(), 30 * 1024);
+        // ⚠ The sweep must now spare it.
+        ThumbStore::new(dir.0.clone(), 30 * 1024).sweep();
         assert!(
             paths[0].exists(),
             "the entry that was just read was evicted anyway — the touch is not working"

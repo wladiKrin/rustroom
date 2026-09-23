@@ -608,16 +608,32 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         crate::immich_panel::Action::None => {}
         crate::immich_panel::Action::Refresh => app.request_immich_albums(),
         crate::immich_panel::Action::Open { id, name } => {
-            app.immich
-                .request(rustroom_app::immich_worker::Job::Album { id, name });
+            // ⚠⚠ Already fetched this session: open it now rather than waiting a couple of seconds
+            // for the same reply again. This is what makes switching back and forth feel instant.
+            if let Some(assets) = app.immich_assets.get(&id).cloned() {
+                app.open_immich_album(ctx, id, name, &assets);
+            } else {
+                // ⚠ Feedback **before** the request, or the click looks like it did nothing: the
+                // rail's highlight follows `library.source`, which will not change for seconds.
+                app.immich_opening = Some(id.clone());
+                app.status = format!("Loading “{name}” from Immich…");
+                app.immich
+                    .request(rustroom_app::immich_worker::Job::Album { id, name });
+            }
         }
         crate::immich_panel::Action::RefreshBuckets => {
             app.immich
                 .request(rustroom_app::immich_worker::Job::Buckets);
         }
         crate::immich_panel::Action::OpenBucket { bucket, label } => {
-            app.immich
-                .request(rustroom_app::immich_worker::Job::Bucket { bucket, label });
+            if let Some(assets) = app.immich_assets.get(&bucket).cloned() {
+                app.open_immich_bucket(ctx, bucket, label, &assets);
+            } else {
+                app.immich_opening = Some(bucket.clone());
+                app.status = format!("Loading {label} from Immich…");
+                app.immich
+                    .request(rustroom_app::immich_worker::Job::Bucket { bucket, label });
+            }
         }
     }
 

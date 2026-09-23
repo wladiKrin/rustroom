@@ -103,18 +103,28 @@ impl RustroomApp {
                     bucket,
                     label,
                     result,
-                } => match result {
-                    Ok(assets) => {
-                        self.open_immich_bucket(ctx, bucket, label, &assets);
+                } => {
+                    self.immich_opening = None;
+                    match result {
+                        Ok(assets) => {
+                            self.immich_assets.insert(bucket.clone(), assets.clone());
+                            self.open_immich_bucket(ctx, bucket, label, &assets);
+                        }
+                        Err(e) => self.status = format!("Could not open {label}: {e}"),
                     }
-                    Err(e) => self.status = format!("Could not open {label}: {e}"),
-                },
-                Outcome::Album { id, name, result } => match result {
-                    Ok(assets) => {
-                        self.open_immich_album(ctx, id, name, &assets);
+                }
+                Outcome::Album { id, name, result } => {
+                    self.immich_opening = None;
+                    match result {
+                        Ok(assets) => {
+                            // ⚠ Remembered so switching back is instant — the round trip is a
+                            // couple of seconds for a large album.
+                            self.immich_assets.insert(id.clone(), assets.clone());
+                            self.open_immich_album(ctx, id, name, &assets);
+                        }
+                        Err(e) => self.status = format!("Could not open “{name}”: {e}"),
                     }
-                    Err(e) => self.status = format!("Could not open “{name}”: {e}"),
-                },
+                }
                 // ⚠ Into the dialog's own field, never the status line: the status line is behind
                 // the modal, so the answer to the Test button was invisible.
                 Outcome::About(Ok(v)) => self.immich_test = Some(Ok(v)),
