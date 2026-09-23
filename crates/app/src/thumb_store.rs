@@ -47,12 +47,26 @@ use std::path::{Path, PathBuf};
 /// within the same second *and* to exactly the same length. Recorded rather than guarded, because
 /// guarding it means hashing content.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Identity {
-    pub path: PathBuf,
-    /// Nanoseconds since the Unix epoch. **Signed**, so a pre-1970 timestamp is representable
-    /// rather than an error.
-    pub mtime_ns: i64,
-    pub size: u64,
+pub enum Identity {
+    /// A source file at a particular version.
+    Local {
+        path: PathBuf,
+        /// Nanoseconds since the Unix epoch. **Signed**, so a pre-1970 timestamp is representable
+        /// rather than an error.
+        mtime_ns: i64,
+        size: u64,
+    },
+    /// A remote asset at a particular version.
+    ///
+    /// ⚠⚠ Needs **no filesystem at all** — the entire reason this became an enum. `Identity::of`
+    /// stats a file, and an Immich asset that has not been downloaded has none.
+    ///
+    /// ⚠ `version` is Immich's `updatedAt`, not its `thumbhash`. `thumbhash` tracks appearance more
+    /// tightly but is a tiny perceptual hash that could survive a re-encode unchanged —
+    /// under-invalidating. `updatedAt` over-invalidates instead (a favourite toggle costs one
+    /// refetch), which matches this file's rule that an entry is never cached under a guessed
+    /// identity.
+    Remote { asset_id: String, version: String },
 }
 
 impl Identity {
@@ -68,21 +82,50 @@ impl Identity {
             // Before 1970. Representable, and the sign is what makes it distinguishable.
             Err(e) => -i64::try_from(e.duration().as_nanos()).ok()?,
         };
-        Some(Self {
+        Some(Identity::Local {
             path: path.to_path_buf(),
             mtime_ns,
             size: m.len(),
         })
     }
 
+    /// A remote asset's identity, built without touching the filesystem.
+    pub fn remote(asset_id: &str, version: &str) -> Self {
+        Identity::Remote {
+            asset_id: asset_id.to_string(),
+            version: version.to_string(),
+        }
+    }
+
     /// The bytes the filename hash is taken over. Kept separate from [`Self::file_name`] so a test
     /// can reason about the input without reproducing the hash.
     fn key_bytes(&self) -> Vec<u8> {
         let mut v = Vec::new();
-        v.extend_from_slice(self.path.to_string_lossy().as_bytes());
-        v.push(0);
-        v.extend_from_slice(&self.mtime_ns.to_le_bytes());
-        v.extend_from_slice(&self.size.to_le_bytes());
+        match self {
+            // ⚠⚠ **BYTE-IDENTICAL to the pre-enum version, and it must stay that way.** Any change
+            // here turns every thumbnail already on a user's disk into a miss, for nothing — and
+            // nothing else would fail. `a_known_local_identity_keeps_its_filename_for_ever` is the
+            // only thing guarding it.
+            //
+            // ⚠ No discriminant byte is added, deliberately: `Remote` entries live in a **different
+            // directory**, so the two variants can never collide, and a discriminant would break
+            // every existing `Local` key to buy nothing.
+            Identity::Local {
+                path,
+                mtime_ns,
+                size,
+            } => {
+                v.extend_from_slice(path.to_string_lossy().as_bytes());
+                v.push(0);
+                v.extend_from_slice(&mtime_ns.to_le_bytes());
+                v.extend_from_slice(&size.to_le_bytes());
+            }
+            Identity::Remote { asset_id, version } => {
+                v.extend_from_slice(asset_id.as_bytes());
+                v.push(0);
+                v.extend_from_slice(version.as_bytes());
+            }
+        }
         v
     }
 
@@ -96,12 +139,24 @@ impl Identity {
 /// The magic at the start of every entry.
 const MAGIC: &[u8; 4] = b"RTHM";
 
-/// The on-disk format version.
+/// The on-disk format version of a **local** entry.
 ///
 /// ⚠ Bump this whenever the header or the payload encoding changes. An entry with the wrong
 /// version is a **miss**, so a bump invalidates cleanly instead of reinterpreting old bytes as
 /// the new format — which is the failure a bare `.jpg` on disk could not protect against.
-const VERSION: u16 = 1;
+///
+/// ⚠⚠ **Still 1, deliberately.** A local entry's header bytes are unchanged by the `Identity` enum,
+/// so every thumbnail already on a user's disk keeps hitting. Bumping it would have cost everyone
+/// their cache — ~190 ms per entry to rebuild, about 26 s for an 830-photo folder — for nothing.
+const VERSION_LOCAL: u16 = 1;
+
+/// The on-disk format version of a **remote** entry.
+///
+/// ⚠⚠ A second layout rather than a bump, because the header carries the identity's own fields and
+/// a remote asset has no path, mtime or size to put there. The version field is already the layout
+/// discriminator this file documents, so an entry says which shape it is and a mismatch is a clean
+/// miss. Remote entries also live in their own directory, so the two can never actually meet.
+const VERSION_REMOTE: u16 = 2;
 
 /// JPEG quality for the payload.
 ///
@@ -347,19 +402,44 @@ fn decode_header<'a>(bytes: &'a [u8], want: &Identity) -> Option<(usize, usize, 
     if take(&mut p, 4)? != MAGIC {
         return None;
     }
-    if u16::from_le_bytes(take(&mut p, 2)?.try_into().ok()?) != VERSION {
-        return None;
-    }
+    let version = u16::from_le_bytes(take(&mut p, 2)?.try_into().ok()?);
     let w = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
     let h = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
-    let mtime_ns = i64::from_le_bytes(take(&mut p, 8)?.try_into().ok()?);
-    let size = u64::from_le_bytes(take(&mut p, 8)?.try_into().ok()?);
-    let path_len = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
-    let path = std::str::from_utf8(take(&mut p, path_len)?).ok()?;
-    // ⚠⚠ The identity check is what turns a hash collision into a miss rather than someone
-    // else's photograph in the grid.
-    if mtime_ns != want.mtime_ns || size != want.size || path != want.path.to_string_lossy() {
-        return None;
+    // ⚠⚠ The identity check below is what turns a hash collision into a miss rather than someone
+    // else's photograph in the grid. Each variant checks the fields it actually has.
+    match want {
+        Identity::Local {
+            path: want_path,
+            mtime_ns: want_mtime,
+            size: want_size,
+        } => {
+            if version != VERSION_LOCAL {
+                return None;
+            }
+            let mtime_ns = i64::from_le_bytes(take(&mut p, 8)?.try_into().ok()?);
+            let size = u64::from_le_bytes(take(&mut p, 8)?.try_into().ok()?);
+            let path_len = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+            let path = std::str::from_utf8(take(&mut p, path_len)?).ok()?;
+            if mtime_ns != *want_mtime || size != *want_size || path != want_path.to_string_lossy()
+            {
+                return None;
+            }
+        }
+        Identity::Remote {
+            asset_id: want_id,
+            version: want_version,
+        } => {
+            if version != VERSION_REMOTE {
+                return None;
+            }
+            let id_len = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+            let asset_id = std::str::from_utf8(take(&mut p, id_len)?).ok()?;
+            let ver_len = u32::from_le_bytes(take(&mut p, 4)?.try_into().ok()?) as usize;
+            let asset_version = std::str::from_utf8(take(&mut p, ver_len)?).ok()?;
+            if asset_id != want_id || asset_version != want_version {
+                return None;
+            }
+        }
     }
     Some((w, h, bytes.get(p..)?))
 }
@@ -386,16 +466,35 @@ fn encode_entry(id: &Identity, thumb: &Thumbnail) -> Option<Vec<u8>> {
         )
         .ok()?;
 
-    let path = id.path.to_string_lossy();
-    let mut out = Vec::with_capacity(jpeg.len() + path.len() + 34);
+    let mut out = Vec::with_capacity(jpeg.len() + 128);
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&VERSION.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(thumb.width).ok()?.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(thumb.height).ok()?.to_le_bytes());
-    out.extend_from_slice(&id.mtime_ns.to_le_bytes());
-    out.extend_from_slice(&id.size.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(path.len()).ok()?.to_le_bytes());
-    out.extend_from_slice(path.as_bytes());
+    // ⚠⚠ A local entry's bytes after this point are **exactly** what they were before the
+    // `Identity` enum, which is what keeps every thumbnail already on disk a hit.
+    match id {
+        Identity::Local {
+            path,
+            mtime_ns,
+            size,
+        } => {
+            let path = path.to_string_lossy();
+            out.extend_from_slice(&VERSION_LOCAL.to_le_bytes());
+            out.extend_from_slice(&u32::try_from(thumb.width).ok()?.to_le_bytes());
+            out.extend_from_slice(&u32::try_from(thumb.height).ok()?.to_le_bytes());
+            out.extend_from_slice(&mtime_ns.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&u32::try_from(path.len()).ok()?.to_le_bytes());
+            out.extend_from_slice(path.as_bytes());
+        }
+        Identity::Remote { asset_id, version } => {
+            out.extend_from_slice(&VERSION_REMOTE.to_le_bytes());
+            out.extend_from_slice(&u32::try_from(thumb.width).ok()?.to_le_bytes());
+            out.extend_from_slice(&u32::try_from(thumb.height).ok()?.to_le_bytes());
+            out.extend_from_slice(&u32::try_from(asset_id.len()).ok()?.to_le_bytes());
+            out.extend_from_slice(asset_id.as_bytes());
+            out.extend_from_slice(&u32::try_from(version.len()).ok()?.to_le_bytes());
+            out.extend_from_slice(version.as_bytes());
+        }
+    }
     out.extend_from_slice(&jpeg);
     Some(out)
 }
@@ -417,7 +516,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn ident(path: &str, mtime: i64, size: u64) -> Identity {
-        Identity {
+        Identity::Local {
             path: PathBuf::from(path),
             mtime_ns: mtime,
             size,
@@ -595,6 +694,74 @@ mod tests {
             budgeted.size_bytes() <= budget * 2,
             "writing triggered no sweep: {} bytes against a {budget} budget",
             budgeted.size_bytes()
+        );
+    }
+
+    /// ⚠⚠ The remote header layout must agree with itself in both directions. It is a **second**
+    /// layout — version 2 — because the header carries the identity's own fields and a remote asset
+    /// has no path, mtime or size to put there.
+    #[test]
+    fn a_remote_thumbnail_round_trips_through_the_store() {
+        let dir = TempDir::new("remote_round_trip");
+        let store = dir.store();
+        let id = Identity::remote("11111111-1111-4111-8111-111111111111", "v1");
+        let t = Thumbnail {
+            width: 3,
+            height: 2,
+            rgba: vec![9u8; 3 * 2 * 4],
+        };
+        store.put(&id, &t);
+        let got = store.get(&id).expect("a remote entry must come back");
+        assert_eq!((got.width, got.height), (3, 2));
+    }
+
+    /// ⚠ A remote entry read under a **different version** is a miss, not someone else's pixels —
+    /// the same rule the local layout already follows.
+    #[test]
+    fn a_remote_entry_under_a_stale_version_is_a_miss() {
+        let dir = TempDir::new("remote_stale");
+        let store = dir.store();
+        let t = Thumbnail {
+            width: 1,
+            height: 1,
+            rgba: vec![0u8; 4],
+        };
+        store.put(&Identity::remote("abc", "v1"), &t);
+        assert!(
+            store.get(&Identity::remote("abc", "v2")).is_none(),
+            "a stale version must not serve the old thumbnail"
+        );
+    }
+
+    /// ⚠⚠ A remote identity must need **no filesystem at all** — that is the entire reason for the
+    /// enum. `Identity::of` stats a file, and an Immich asset that has not been downloaded has none.
+    #[test]
+    fn a_remote_identity_needs_no_file_and_changes_with_its_version() {
+        let a = Identity::remote(
+            "11111111-1111-4111-8111-111111111111",
+            "2026-04-27T12:34:32.784Z",
+        );
+        let b = Identity::remote(
+            "11111111-1111-4111-8111-111111111111",
+            "2026-04-27T12:34:33.000Z",
+        );
+        let c = Identity::remote(
+            "22222222-2222-4222-8222-222222222222",
+            "2026-04-27T12:34:32.784Z",
+        );
+        assert_ne!(a.file_name(), b.file_name(), "a new version is a new entry");
+        assert_ne!(
+            a.file_name(),
+            c.file_name(),
+            "a different asset is a different entry"
+        );
+        assert_eq!(
+            a.file_name(),
+            Identity::remote(
+                "11111111-1111-4111-8111-111111111111",
+                "2026-04-27T12:34:32.784Z"
+            )
+            .file_name()
         );
     }
 
