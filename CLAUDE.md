@@ -99,9 +99,9 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 14 stages (incl. geometry, noise_reduction, dehaze, saturation, hsl, local_contrast, vignette, sharpening) + spatial::{box_blur, gaussian_blur, wide_blur, min_filter, guided_filter} + build_pipeline / build_pipeline_split(_in_region) / build_prefix_steps + PrefixStep/PrefixStepKey/PrefixKey + Region + tail_kernel_radius + golden tests
 │   ├── export/               # ✅ to_rgb8 + save (JPEG/PNG/TIFF) + metadata::{ExportMetadata, FileMetadata, MetadataScope} — the full XMP packet (M6.2) + watermark + output_sharpen
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
-│   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album, `Asset`/`AlbumSummary`/`Bucket`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
+│   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album/stacks/**upload** (+ `multipart.rs`, hand-rolled — ureq has none), `Asset`/`AlbumSummary`/`Bucket`/`Upload`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache/immich_upload; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -166,8 +166,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2823 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
-branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
+**2848 tests**, **75 goldens** (unmoved). Branch **`immich-upload`**, 16 commits, gated green. ⚠ **Run the git command above rather than trusting a number here** — the user
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 
@@ -258,19 +257,20 @@ not go looking for the next port; there isn't one.
 
 **Live candidates, in the order the user has shown interest:**
 
-0. **Immich: uploading edited photos** ⬜ — **brainstorm started 2026-09-24.** Closes the loop this
-   integration was for: an edit currently lands on local disk and never returns to where the photos live.
-   The export XMP packet already carries rating/label/keywords, so marks ride *inside the file* with no
-   permission to modify anything. ⚠ The hard parts are **duplicates** (re-export → a second asset;
-   checksum dedup cannot see it) and that the **read-only key property is lost either way** — mitigation
-   under design is a *second, optional* upload key. Notes in `docs/BACKLOG.md`.
-   ⛔ **Two-way sync is DECLINED (2026-09-24, the user's call — not a deferral):** it **mutates**
-   authoritative assets, needs **`asset.update`**, and runs **unattended**, which removes the found-by-use
-   safety net exactly where the blast radius is largest. ⚠⚠ **Do not re-propose it from a list** — the
-   table of reasons and the conditions for reopening it are in `docs/BACKLOG.md`.
-   ⚠ Still unbuilt and out of scope by decision: reading Immich's own `rating`/`isFavorite`, the OS
-   keychain (**the key is plaintext**), and automatic eviction of cached originals — slice 4 is the
-   **manual** half.
+0. ✅ **Immich upload is BUILT and confirmed by use (2026-09-24)** — an export can also upload each
+   written file, for **any** photo, at its capture date. `ExportOptions.upload_target:
+   Option<UploadTarget>` is deliberately **not** Immich-named, so the integration can later be
+   switched off with "no mention of immich at all"; a separate **`immich_upload_key`** keeps browsing
+   read-only as a property of the *credential*. ✅ Measured: `fileCreatedAt` is the **capture** time,
+   and a byte-identical re-upload returns **200 `duplicate`** with the asset count unchanged.
+   ⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`** (168-value enum) — that verified
+   fact is the whole basis of upload-over-sync. `grep -n 'Uploading edited photos' docs/JOURNAL.md`.
+   ⛔ **Two-way sync is DECLINED (the user's call, not a deferral)** — it *mutates* authoritative
+   assets and runs unattended, removing the found-by-use safety net where the blast radius is
+   largest. ⚠⚠ **Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
+   ⬜ **Next Immich items, recorded as backlog notes:** make the integration **completely optional**
+   behind one gate, and **Rustroom-side stacking awareness** — the server now has **2,379 stacks**
+   (a one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every pair.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
