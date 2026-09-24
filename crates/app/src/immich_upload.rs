@@ -24,7 +24,10 @@ pub enum Availability {
 
 /// Whether uploading can be offered, given the settings.
 pub fn availability(s: &Settings) -> Availability {
-    if s.immich_url.trim().is_empty() || s.immich_key.trim().is_empty() {
+    // ⚠⚠ Through `connection`, **never** the raw fields: that function is the one gate the whole
+    // integration hangs on, and reading `immich_url`/`immich_key` here would be a second condition
+    // that the master toggle does not reach.
+    if crate::immich_source::connection(s).is_none() {
         return Availability::NotConfigured;
     }
     if s.immich_upload_key.trim().is_empty() {
@@ -322,5 +325,25 @@ mod tests {
         let got = created_at_text(UploadDate::Captured, None, None);
         assert_ne!(got, "1970-01-01T00:00:00.000Z");
         assert!(got.ends_with('Z') && got.len() == 24, "shape: {got}");
+    }
+
+    /// ⚠⚠ **The one predicate must reach the surface built before it.** The export dialog's Location
+    /// ticks are drawn on `Availability::NotConfigured`, and `availability` reads the connection — so
+    /// the master toggle hides them with no change to the dialog at all. This is what "one gate"
+    /// buys, stated as a test.
+    #[test]
+    fn the_master_toggle_reaches_the_export_ticks() {
+        let mut s = settings_with("https://h", "browse", "up");
+        assert_eq!(
+            availability(&s),
+            Availability::Ready,
+            "a fully configured Immich must be Ready"
+        );
+        s.immich_enabled = false;
+        assert_eq!(
+            availability(&s),
+            Availability::NotConfigured,
+            "the toggle must read as NotConfigured, which is what hides the ticks entirely"
+        );
     }
 }

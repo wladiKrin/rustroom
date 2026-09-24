@@ -153,6 +153,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     }
                                     // ⚠ Once, not per row.
                                     let immich_root = app.immich_cache_root();
+                                    // ⚠ One read of the gate for the whole loop; `connection` is the
+                                    // single predicate the integration hangs on.
+                                    let immich_on =
+                                        rustroom_app::immich_source::connection(&app.settings)
+                                            .is_some();
                                     for f in &folders {
                                         // ⚠ The basename is what fits and what identifies; the full
                                         // path is the hover. ⚠ Except the Immich cache root, whose
@@ -161,6 +166,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         let shown = rustroom_app::immich_catalog::folder_display_name(
                                             &f.path,
                                             immich_root.as_deref(),
+                                            immich_on,
                                         );
                                         // ⚠⚠ A catalog row exists for every asset **browsed**, while
                                         // the count beside a folder is a statement about that
@@ -178,7 +184,14 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             app.library.as_ref().map(|l| &l.source),
                                             Some(crate::LibrarySource::Folder(p)) if p == &f.path
                                         );
-                                        let path = f.path.to_string_lossy();
+                                        // ⚠⚠ Not the raw path: for the cache root with the
+                                        // integration off, the path itself says "immich" and names
+                                        // the server. See `folder_hover`.
+                                        let path = rustroom_app::immich_catalog::folder_hover(
+                                            &f.path,
+                                            immich_root.as_deref(),
+                                            immich_on,
+                                        );
                                         let r = list_row::row(
                                             ui,
                                             RowSpec {
@@ -556,6 +569,22 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         })
                             }
                             PanelSection::Immich => {
+                                // ⚠⚠ **Not drawn at all when the integration is off** — the
+                                // requirement is "no mention of immich at all", and a disabled or
+                                // empty section is still a mention. ⚠ This also removes the empty
+                                // "Immich" section a user who never configured it used to see: the
+                                // gate is `connection()`, which is `None` when unconfigured too.
+                                if rustroom_app::immich_source::connection(&app.settings).is_none() {
+                                    // ⚠⚠ **Push the slot rather than just `continue`ing.** `tops` is
+                                    // index-aligned with `order` and feeds `panel_order::drop_index`,
+                                    // whose result indexes **`order`** when a drag settles. A bare
+                                    // `continue` shortened `tops` and put every drop one slot off
+                                    // past this section — caught while writing this, not by a test.
+                                    // A zero-height slot is indistinguishable from dropping on the
+                                    // next section, which is the right behaviour for an absent one.
+                                    tops.push(top);
+                                    continue;
+                                }
                                 let n = crate::immich_panel::header_count(app);
                                 section(ui, &mut sections.immich, "sec_immich", "Immich", &n, |ui| {
                                     immich_action = crate::immich_panel::body(app, ui);
@@ -570,6 +599,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             drag_released = true;
                         }
                     }
+
+                    // ⚠⚠ The invariant a hidden section can break: `drop_index` returns an index
+                    // into `tops`, and `moved` applies it to `order`. If a section is skipped without
+                    // pushing its slot, every drop past it lands one place off.
+                    debug_assert_eq!(
+                        tops.len(),
+                        order.len(),
+                        "tops must stay index-aligned with the section order"
+                    );
 
                     // ⚠ Painted after every section, so the line sits on top of them rather than
                     // under the next one.
@@ -939,6 +977,51 @@ mod tests {
         assert!(
             click_title(events, false),
             "and expanding with it must persist too"
+        );
+    }
+
+    /// ⚠⚠ **THE REQUIREMENT AS A TEST, NOT AS A LIST OF PLACES TO REMEMBER.** With the integration
+    /// off, nothing the panel draws may say "immich" — checked over every label the accessibility
+    /// tree reports, which is what the harness can see. A list of surfaces to check by hand is how
+    /// "no mention at all" stops being true.
+    ///
+    /// ⚠ Both halves: the section is **present** when configured and **absent** when the toggle is
+    /// off. An absence alone would pass against a panel that drew nothing.
+    #[test]
+    fn the_immich_section_appears_only_when_the_integration_is_on() {
+        let labels = |enabled: bool| -> Vec<String> {
+            let ctx = crate::test_ui::ctx();
+            let mut app = crate::test_app::for_test();
+            app.settings.immich_enabled = enabled;
+            app.settings.immich_url = "https://immich.example".to_string();
+            app.settings.immich_key = "a-key".to_string();
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                super::show(&mut app, ui, &ctx);
+            })
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect()
+        };
+
+        let on = labels(true);
+        assert!(
+            on.iter().any(|l| l == "Immich"),
+            "the section must be there when configured and enabled: {on:?}"
+        );
+
+        let off = labels(false);
+        // ⚠ The sample assertion: the panel really drew, so the absence below means something.
+        assert!(
+            off.iter().any(|l| l == "Folders"),
+            "the panel did not draw at all: {off:?}"
+        );
+        let leaked: Vec<&String> = off
+            .iter()
+            .filter(|l| l.to_lowercase().contains("immich"))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "these labels still mention Immich with it switched off: {leaked:?}"
         );
     }
 }

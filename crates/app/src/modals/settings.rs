@@ -39,6 +39,7 @@ pub struct SettingsDraft {
     erase_drag: EraseDrag,
     drag_quality: DragQuality,
     display_space: color::OutputSpace,
+    immich_enabled: bool,
     immich_url: String,
     immich_key: String,
     immich_upload_key: String,
@@ -64,6 +65,7 @@ impl SettingsDraft {
             erase_drag: s.erase_drag,
             drag_quality: s.drag_quality,
             display_space: s.display_space,
+            immich_enabled: s.immich_enabled,
             immich_url: s.immich_url.clone(),
             immich_key: s.immich_key.clone(),
             immich_upload_key: s.immich_upload_key.clone(),
@@ -115,6 +117,14 @@ impl SettingsDraft {
         }
         if self.auto_advance != app.settings.auto_advance {
             app.settings.auto_advance = self.auto_advance;
+            plain = true;
+        }
+        if self.immich_enabled != app.settings.immich_enabled {
+            app.settings.immich_enabled = self.immich_enabled;
+            // ⚠⚠ The shared thumbnail cell must be re-pointed, or a disabled integration keeps
+            // serving server thumbnails until the next restart — `connection` is now `None`, so this
+            // clears it.
+            rustroom_app::immich_source::refresh_shared(&app.settings);
             plain = true;
         }
         // ⚠⚠ Applied plainly, **not** through `set_connection`. That accessor owns the *browse*
@@ -480,7 +490,24 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                         );
                 }
                 _ => {
-                    egui::Grid::new("settings_immich")
+                    // ⚠⚠ **The master toggle, above everything and outside the grid.** This tab is the
+                    // one place Immich is named when the integration is off — hiding the tab too would
+                    // leave no way back on. Everything below is hidden while it is unticked, so the
+                    // tab holds a switch and nothing else.
+                    ui.checkbox(&mut d.immich_enabled, "Enable Immich")
+                        .on_hover_text(
+                            "When off, Immich disappears from the rest of Rustroom — the left \
+                             panel, the export dialog and the toolbar. Nothing is deleted: photos \
+                             you have already downloaded stay on this computer under “Downloaded \
+                             photos”, with their edits and marks, and everything comes back when \
+                             you switch it on again.",
+                        );
+                    // ⚠ An `if` rather than an early `return`: the match happens to be the last
+                    // thing in this closure today, so a `return` works — and would silently skip
+                    // anything a later change added after it.
+                    if d.immich_enabled {
+                        ui.add_space(GAP);
+                        egui::Grid::new("settings_immich")
                         .num_columns(2)
                         .spacing([12.0, GAP])
                         .show(ui, |ui| {
@@ -580,19 +607,19 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             });
                             ui.end_row();
                         });
-                    ui.add_space(GAP);
-                    theme::sub_label(ui, "Thumbnail cache");
-                    ui.horizontal(|ui| {
-                        let store = rustroom_app::thumb_store::ThumbStore::immich_default(
-                            d.immich_thumb_budget_mb as u64 * 1024 * 1024,
-                        );
-                        // ⚠ `size_bytes()` walks the directory, so it is computed when the dialog
-                        // opens and cached — never in a body, which runs sixty times a second.
-                        let bytes = *app
-                            .immich_thumb_cache_bytes
-                            .get_or_insert_with(|| store.size_bytes());
-                        ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
-                        if ui
+                        ui.add_space(GAP);
+                        theme::sub_label(ui, "Thumbnail cache");
+                        ui.horizontal(|ui| {
+                            let store = rustroom_app::thumb_store::ThumbStore::immich_default(
+                                d.immich_thumb_budget_mb as u64 * 1024 * 1024,
+                            );
+                            // ⚠ `size_bytes()` walks the directory, so it is computed when the dialog
+                            // opens and cached — never in a body, which runs sixty times a second.
+                            let bytes = *app
+                                .immich_thumb_cache_bytes
+                                .get_or_insert_with(|| store.size_bytes());
+                            ui.label(format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0));
+                            if ui
                             .button("Clear")
                             .on_hover_text(
                                 "Thumbnails downloaded from Immich, so an album you have opened \
@@ -605,8 +632,8 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             store.clear();
                             app.immich_thumb_cache_bytes = Some(0);
                         }
-                    });
-                    ui.add(
+                        });
+                        ui.add(
                         egui::Slider::new(&mut d.immich_thumb_budget_mb, 512..=51200)
                             .step_by(512.0)
                             .text("MB budget"),
@@ -616,12 +643,13 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                          budget, so neither can evict the other's entries.",
                     );
 
-                    crate::theme::hint(
-                        ui,
-                        "Albums appear in the Immich section of the left panel. Photos are \
+                        crate::theme::hint(
+                            ui,
+                            "Albums appear in the Immich section of the left panel. Photos are \
                          downloaded when you open them, and your edits are saved beside the \
                          downloaded copy — nothing is written back to the server.",
-                    );
+                        );
+                    }
                 }
             }
         },

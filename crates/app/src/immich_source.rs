@@ -175,6 +175,16 @@ pub struct Connection {
 /// ⚠⚠ **The only reader of `Settings::immich_key`.** Everything else asks for a `Connection`, so
 /// moving the key into the OS keychain later changes this function and nothing else.
 pub fn connection(s: &crate::settings::Settings) -> Option<Connection> {
+    // ⚠⚠ **THE ONE GATE FOR THE WHOLE INTEGRATION.** Nine call sites read the connection through
+    // this function — the worker's fetcher, `refresh_shared`, `immich_panel`, `copies`,
+    // `immich_flow` — so a single condition here makes every one of them decline, and no surface
+    // needs to grow its own `if immich_enabled`. That is deliberate: the requirement is "no mention
+    // of immich at all" when it is off, and a list of places to remember is how that stops being
+    // true. `remote_thumbnail` already declines without a connection, so downloaded photos fall
+    // through to the ordinary local path with no special case.
+    if !s.immich_enabled {
+        return None;
+    }
     let url = s.immich_url.trim();
     let key = s.immich_key.trim();
     if url.is_empty() || key.is_empty() {
@@ -892,5 +902,39 @@ mod tests {
         assert!(is_cached(&p));
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// ⚠⚠ **The one gate, and both halves asserted** — `None` when the toggle is off *despite a
+    /// perfectly good URL and key*, and `Some` when it is on. An absence alone would pass against a
+    /// function that always returned `None`.
+    #[test]
+    fn the_gate_turns_a_working_connection_off() {
+        let on = crate::settings::Settings {
+            immich_enabled: true,
+            immich_url: "https://immich.example".to_string(),
+            immich_key: "a-key".to_string(),
+            ..crate::settings::Settings::default()
+        };
+        assert!(
+            connection(&on).is_some(),
+            "a configured server must connect"
+        );
+
+        let off = crate::settings::Settings {
+            immich_enabled: false,
+            ..on.clone()
+        };
+        assert!(
+            connection(&off).is_none(),
+            "the gate must win over a valid URL and key"
+        );
+
+        // ⚠ And the pre-existing rule is unchanged: enabled but unconfigured is still `None`, so the
+        // gate did not become the *only* condition.
+        let bare = crate::settings::Settings {
+            immich_url: String::new(),
+            ..on
+        };
+        assert!(connection(&bare).is_none());
     }
 }

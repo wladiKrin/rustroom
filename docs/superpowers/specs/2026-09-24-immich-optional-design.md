@@ -105,9 +105,16 @@ working through the local path they already use.
 **The name.** `immich_catalog::folder_display_name` returns `"immich (downloaded)"` for the cache root.
 With the integration off it returns **`"Downloaded photos"`**.
 
-⚠ Checked: folder rows in the rail do **not** hover their path — the only `on_hover_text` in
-`collections_panel` is the rule button — so the rename is sufficient and the real path
-(`~/Library/Caches/rustroom/immich/<server>`, which contains the word) never reaches the screen.
+⚠⚠ **CORRECTED during implementation: the rename is NOT sufficient, because the row hovers its full
+path.** An earlier draft of this section claimed folder rows do not — based on grepping
+`on_hover_text`, which misses it, because the rail builds rows through `list_row::RowSpec { hover:
+&path, .. }`. The real path is `~/Library/Caches/rustroom/immich/<server>`, so hovering "Downloaded
+photos" would show both the word **and** the server name.
+
+So the **hover is replaced too** when the integration is off: `"Photos downloaded to this computer"`
+instead of the path. ⚠ That loses genuinely useful information — where the files actually are — and it
+is accepted only because *"no mention of immich at all"* was explicit. It is the one place this design
+withholds a fact from the user, and it is worth re-reading if the requirement ever softens.
 
 ⚠ `folder_display_name` therefore needs to know whether the integration is on. It already takes
 `immich_root: Option<&Path>`, and **passing `None` when disabled** gives exactly the ordinary-folder
