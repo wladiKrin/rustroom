@@ -774,14 +774,14 @@ mod tests {
     /// unconfigured Immich must draw **no** Upload section, not a disabled one. The whole point of
     /// the requirement is that a user who does not use Immich never sees the word.
     #[test]
-    fn without_immich_configured_the_upload_section_is_absent() {
+    fn without_immich_configured_the_delivery_section_is_absent() {
         let drawn = with_app(|app| {
             app.settings.immich_url.clear();
             app.settings.immich_key.clear();
         });
         assert!(
-            !drawn.iter().any(|l| l == "Upload"),
-            "an Upload section was drawn with no Immich configured: {drawn:?}"
+            !drawn.iter().any(|l| l == "Delivery"),
+            "a Delivery section was drawn with no Immich configured: {drawn:?}"
         );
         // ⚠ The sample assertion: the dialog really did draw, so the absence above means something.
         assert!(
@@ -793,15 +793,62 @@ mod tests {
     /// ⚠ Configured but with no upload key: the section appears and the control is **disabled**,
     /// because a control that vanishes reads as a bug — this file's own convention, three tests up.
     #[test]
-    fn with_immich_but_no_upload_key_the_section_appears() {
+    fn with_immich_but_no_upload_key_the_delivery_section_appears() {
         let drawn = with_app(|app| {
             app.settings.immich_url = "https://immich.example".to_string();
             app.settings.immich_key = "browse-key".to_string();
             app.settings.immich_upload_key.clear();
         });
         assert!(
-            drawn.iter().any(|l| l == "Upload"),
-            "the Upload section should appear once Immich is configured: {drawn:?}"
+            drawn.iter().any(|l| l == "Delivery"),
+            "the Delivery section should appear once Immich is configured: {drawn:?}"
         );
+    }
+
+    /// ⚠⚠ **The section is COLLAPSED by default, so its body is not laid out** — a first version of
+    /// this test looked for "Files only" without opening it and failed against correct code. That is
+    /// the same vacuous-guard shape as the Color section's: a query that finds nothing passes
+    /// silently, so here it would have *failed* silently for the wrong reason. It is opened the way a
+    /// user opens it: by clicking the header.
+    #[test]
+    fn the_three_delivery_modes_and_the_date_are_offered() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.library = Some(test_app::library_of(2));
+        app.library.as_mut().unwrap().selection.select_indices(&[0]);
+        app.settings.immich_url = "https://immich.example".to_string();
+        app.settings.immich_key = "browse-key".to_string();
+        app.settings.immich_upload_key = "upload-key".to_string();
+
+        // Closed first: the body is genuinely absent, which is what makes the click meaningful.
+        let closed: Vec<String> =
+            test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect();
+        assert!(
+            closed.iter().any(|l| l == "Delivery"),
+            "the section header must be there to click: {closed:?}"
+        );
+        assert!(
+            !closed.iter().any(|l| l == "Files only"),
+            "the body must start collapsed, or this test proves nothing"
+        );
+
+        test_ui::click(&ctx, "Delivery", |_| super::settings(&mut app, &ctx));
+        let open: Vec<String> =
+            test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect();
+
+        for want in [
+            "Files only",
+            "Immich only",
+            "Files and Immich",
+            "Original date",
+        ] {
+            assert!(open.iter().any(|l| l == want), "{want:?} missing: {open:?}");
+        }
     }
 }

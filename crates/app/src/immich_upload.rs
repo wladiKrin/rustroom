@@ -3,6 +3,7 @@
 //!
 //! ⚠ **No egui here.** This is the testable half; the dialog lives in `modals::export`.
 
+use crate::batch_export::UploadDate;
 use crate::settings::Settings;
 use std::path::Path;
 
@@ -57,21 +58,32 @@ pub fn config(s: &Settings) -> Option<UploadConfig> {
     })
 }
 
-/// `fileCreatedAt` for a photo: **its capture time**, never now.
+/// Which second an uploaded photo is dated with.
 ///
-/// ⚠⚠ **Naive wall-clock rendered as if UTC, and that is measured rather than chosen.**
-/// `Capture::taken` is naive local wall-clock by its own rule. Immich did exactly this to the
-/// sibling JPEG of a real pair: EXIF `DateTimeOriginal` `20:41:34` became
-/// `fileCreatedAt: 2026-08-12T20:41:34.000Z`. Matching that convention is what makes an uploaded
-/// edit land at **the same `fileCreatedAt` as its original**, which is the property that matters
-/// and the one to verify by use.
+/// ⚠⚠ **A pure function of four values, and deliberately so** — this is the whole date decision, and
+/// it must be checkable without a window, a server or a file on disk.
 ///
-/// ⚠ Falls back to the source file's mtime when EXIF has no date — some PNG/TIFF sources have none
-/// at all. Falls back to the epoch only if even that fails, which is visibly wrong in the timeline
-/// rather than silently plausible.
-pub fn created_at_text(capture: &core_image::Capture, source: &Path) -> String {
-    let secs = capture.taken.or_else(|| mtime_secs(source)).unwrap_or(0);
-    utc_text(secs)
+/// ⚠⚠ **THERE IS NO FILE-MTIME FALLBACK ANY MORE, AND ITS REMOVAL IS THE POINT.** `Captured` used to
+/// fall back to the source file's mtime; for a file in the Immich cache that is **when Rustroom
+/// downloaded it**, so a photo whose date could not be read was filed under the download date — a
+/// wrong answer that *looked* plausible, which is the worst kind. An absent value now yields `now`:
+/// the photo lands at the top of the timeline where it is noticed, and nothing invents a past.
+pub fn upload_seconds(which: UploadDate, taken: Option<i64>, edited: Option<i64>, now: i64) -> i64 {
+    match which {
+        UploadDate::Captured => taken.unwrap_or(now),
+        UploadDate::Edited => edited.unwrap_or(now),
+        UploadDate::Uploaded => now,
+    }
+}
+
+/// [`upload_seconds`] as the string Immich's `fileCreatedAt` wants.
+///
+/// ⚠⚠ Naive wall-clock rendered as if UTC, which is **measured rather than chosen**: Immich did
+/// exactly this to the sibling JPEG of a real RAW+JPEG pair, turning EXIF `20:41:34` into
+/// `fileCreatedAt: 2026-08-12T20:41:34.000Z`. Matching it is what puts an uploaded edit at the same
+/// `fileCreatedAt` as its original.
+pub fn created_at_text(which: UploadDate, taken: Option<i64>, edited: Option<i64>) -> String {
+    utc_text(upload_seconds(which, taken, edited, now_secs()))
 }
 
 /// `fileModifiedAt`: the exported file's own mtime.
@@ -203,52 +215,6 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **The actual bug this guards is "the edit landed at today's date".** So it asserts the
-    /// exact string for a known capture time, and separately that the result is not now.
-    #[test]
-    fn the_created_date_is_the_capture_time_not_now() {
-        // 2026-08-27T10:00:00 wall-clock
-        let c = core_image::Capture {
-            taken: Some(1_787_824_800),
-            ..core_image::Capture::default()
-        };
-        let got = created_at_text(&c, Path::new("/nonexistent-on-purpose"));
-        assert_eq!(got, "2026-08-27T10:00:00.000Z");
-        assert_ne!(
-            got,
-            utc_text(now_secs()),
-            "the capture time must not be replaced by the upload time"
-        );
-    }
-
-    /// ⚠ The discriminating case for the fallback: no EXIF date, so the file's mtime is used.
-    #[test]
-    fn a_photo_with_no_exif_date_falls_back_to_the_file_mtime() {
-        let dir = temp_dir("mtime");
-        let f = dir.join("x.png");
-        std::fs::write(&f, b"x").unwrap();
-
-        let c = core_image::Capture::default();
-        assert_eq!(c.taken, None, "the fixture must have no EXIF date");
-        let got = created_at_text(&c, &f);
-
-        assert_ne!(got, "1970-01-01T00:00:00.000Z", "the mtime was not used");
-        assert_eq!(got.len(), 24, "unexpected shape: {got}");
-        assert!(got.ends_with('Z'), "unexpected shape: {got}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// ⚠ A missing file and no EXIF is the only case that reaches the epoch, and it must be
-    /// *visibly* wrong rather than plausibly recent.
-    #[test]
-    fn with_no_date_and_no_file_the_result_is_the_epoch() {
-        let c = core_image::Capture::default();
-        assert_eq!(
-            created_at_text(&c, Path::new("/nonexistent-on-purpose")),
-            "1970-01-01T00:00:00.000Z"
-        );
-    }
-
     /// ⚠⚠ **The bug this guards is a note that never appears.** `record` writes against the
     /// exported copy and this reads the same copy; an earlier draft of the plan wrote copy 0
     /// unconditionally, which would have silenced the note for **every virtual copy**. So this uses
@@ -303,5 +269,58 @@ mod tests {
         // ⚠ Trimmed, or a pasted key with a trailing newline becomes an unauthorized header.
         assert_eq!(c.base_url, "https://h");
         assert_eq!(c.key, "up");
+    }
+
+    /// ⚠⚠ **`Captured` WITH NO CAPTURE DATE MUST YIELD THE UPLOAD TIME, NOT A FILE MTIME.** The
+    /// removed fallback used the source file's mtime, which for a file in the Immich cache is *when
+    /// Rustroom downloaded it* — so a photo whose date could not be read was filed under the
+    /// download date. This is the regression guard for that.
+    #[test]
+    fn each_date_option_picks_its_own_source() {
+        let now = 1_800_000_000;
+        let taken = Some(1_763_559_144); // 2025-11-19T13:32:24
+        let edited = Some(1_790_000_000);
+
+        assert_eq!(
+            upload_seconds(UploadDate::Captured, taken, edited, now),
+            1_763_559_144
+        );
+        assert_eq!(
+            upload_seconds(UploadDate::Edited, taken, edited, now),
+            1_790_000_000
+        );
+        assert_eq!(
+            upload_seconds(UploadDate::Uploaded, taken, edited, now),
+            now
+        );
+
+        // ⚠ The absent cases fall to `now` — never to a plausible-looking past.
+        assert_eq!(upload_seconds(UploadDate::Captured, None, edited, now), now);
+        assert_eq!(upload_seconds(UploadDate::Edited, taken, None, now), now);
+    }
+
+    /// ⚠ The discriminating negative: `Captured` must not quietly use the edit date when the capture
+    /// date is missing. Two fallbacks pointing at each other would make the options
+    /// indistinguishable.
+    #[test]
+    fn a_missing_capture_date_does_not_borrow_the_edit_date() {
+        let now = 1_800_000_000;
+        let got = upload_seconds(UploadDate::Captured, None, Some(1_790_000_000), now);
+        assert_eq!(got, now, "Captured fell back to the edit date");
+    }
+
+    /// ⚠ The formatted form, so the wire value is pinned and not just the seconds.
+    #[test]
+    fn the_created_text_formats_the_chosen_second() {
+        let taken = Some(1_787_824_800); // 2026-08-27T10:00:00 wall-clock
+        assert_eq!(
+            created_at_text(UploadDate::Captured, taken, None),
+            "2026-08-27T10:00:00.000Z"
+        );
+        // ⚠ No capture date means *now*, so the safe assertions are that it is neither the epoch nor
+        // the old mtime behaviour; the exact second is the clock's.
+        let got = created_at_text(UploadDate::Captured, None, None);
+        assert_ne!(got, "1970-01-01T00:00:00.000Z");
+        assert!(got.ends_with('Z') && got.len() == 24, "shape: {got}");
     }
 }
