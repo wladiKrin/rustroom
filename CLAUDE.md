@@ -167,8 +167,8 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 ### State (2026-09-24)
 
 **2823 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
-branch, tree clean; `main` is **9 commits ahead of `origin/main`** — the user last pushed `a1169c4`.
-⚠ Still never push.
+branch, tree clean; `main` is **2 commits ahead of `origin/main`** — the user last pushed
+**`f5fa37b`**, and that push is what produced the CI result below. ⚠ Still never push.
 
 ✅ **CI on Linux is verified green again (2026-09-24)** — the first real result since the workflow was
 fixed for the runner's disk on 2026-09-21. It failed once, on
