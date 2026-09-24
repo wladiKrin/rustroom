@@ -5,9 +5,11 @@
 
 pub mod dto;
 pub mod error;
+pub mod multipart;
 
 pub use dto::{
-    About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse,
+    About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse, Upload,
+    UploadStatus,
 };
 pub use error::Error;
 
@@ -291,6 +293,90 @@ impl Client {
         file.flush().map_err(|e| Error::Io(e.to_string()))?;
         Ok(())
     }
+
+    /// `POST /assets` — upload `file` as a **new** asset, returning its id and whether the
+    /// server considered it a duplicate.
+    ///
+    /// ⚠⚠ Requires **`asset.upload`** on the key, which is a grant *separate from*
+    /// `asset.update`: a key that can do this **cannot modify or delete existing assets**. That
+    /// separation is the whole reason uploading was built and two-way sync was declined.
+    ///
+    /// ⚠ `created` and `modified` are pre-formatted strings, because the two carry **different
+    /// conventions** and only the caller knows which: capture time is naive wall-clock rendered as
+    /// if UTC (matching what Immich itself did to the sibling JPEG of a real pair), while a file
+    /// mtime is a true instant. See `immich_upload` in the app.
+    ///
+    /// ⚠ The body is built **in memory**. An export already holds a whole decoded image (the
+    /// export worker's own comment measures one at 298 MiB), so a 15 MB JPEG here is not the
+    /// constraint that matters.
+    pub fn upload(
+        &self,
+        file: &Path,
+        filename: &str,
+        created: &str,
+        modified: &str,
+    ) -> Result<Upload, Error> {
+        let bytes = std::fs::read(file).map_err(|e| Error::Io(e.to_string()))?;
+        let boundary = multipart::boundary_absent_from(&bytes);
+        let body = multipart::body(
+            &boundary,
+            &[
+                multipart::Part::Text {
+                    name: "fileCreatedAt",
+                    value: created,
+                },
+                multipart::Part::Text {
+                    name: "fileModifiedAt",
+                    value: modified,
+                },
+                multipart::Part::Text {
+                    name: "filename",
+                    value: filename,
+                },
+                multipart::Part::File {
+                    name: "assetData",
+                    filename,
+                    content_type: content_type_of(filename),
+                    bytes: &bytes,
+                },
+            ],
+        );
+        let mut res = self
+            .agent
+            .post(self.url("/assets"))
+            .header("x-api-key", &self.key)
+            .header(
+                "Content-Type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header("Accept", "application/json")
+            .send(&body[..])
+            .map_err(map_ureq)?;
+        let text = res
+            .body_mut()
+            .with_config()
+            .limit(JSON_LIMIT)
+            .read_to_string()
+            .map_err(|e| Error::Decode(e.to_string()))?;
+        serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))
+    }
+}
+
+/// The media type for an exported file, from its extension.
+///
+/// ⚠ Only the formats `export` can write. A default of `application/octet-stream` is deliberate:
+/// Immich sniffs the content anyway, and guessing wrongly is worse than not guessing.
+fn content_type_of(filename: &str) -> &'static str {
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".tif") || lower.ends_with(".tiff") {
+        "image/tiff"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 /// Map a `ureq` failure onto this crate's error, keeping the status distinction the UI needs.
@@ -357,5 +443,15 @@ mod tests {
         assert_eq!(Size::Thumbnail.as_str(), "thumbnail");
         assert_eq!(Size::Preview.as_str(), "preview");
         assert_eq!(Size::Fullsize.as_str(), "fullsize");
+    }
+
+    #[test]
+    fn a_content_type_follows_the_extension() {
+        assert_eq!(content_type_of("a.JPG"), "image/jpeg");
+        assert_eq!(content_type_of("a.jpeg"), "image/jpeg");
+        assert_eq!(content_type_of("a.png"), "image/png");
+        assert_eq!(content_type_of("a.tiff"), "image/tiff");
+        // ⚠ Not a guess: an unknown extension says so rather than claiming JPEG.
+        assert_eq!(content_type_of("a.weird"), "application/octet-stream");
     }
 }

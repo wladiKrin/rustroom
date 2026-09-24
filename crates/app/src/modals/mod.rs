@@ -59,6 +59,13 @@ pub enum Modal {
     SyncSettings,
     /// Choosing where and how to export the selection.
     ExportSettings,
+    /// An upload did not confirm, and the file is at `at`. Raised for the **first** one in a run.
+    ///
+    /// ⚠ A notice, not a question: there is nothing to decide, and the export is still running.
+    UploadUnconfirmed {
+        at: std::path::PathBuf,
+        why: String,
+    },
     /// Naming a new export preset. Returns to `ExportSettings` when closed, so the export
     /// dialog does not vanish underneath the user.
     SaveExportPreset {
@@ -165,6 +172,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Settings,
         Shortcuts,
         About,
+        UploadUnconfirmed,
     }
     let which = match &app.modal {
         Modal::None => Which::None,
@@ -172,6 +180,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Modal::PasteSettings => Which::Paste,
         Modal::SyncSettings => Which::Sync,
         Modal::ExportSettings => Which::Export,
+        Modal::UploadUnconfirmed { .. } => Which::UploadUnconfirmed,
         Modal::SaveExportPreset { .. } => Which::SaveExport,
         Modal::ConfirmDeleteExportPreset { .. } => Which::ConfirmDeleteExport,
         Modal::ConfirmDeletePreset { .. } => Which::ConfirmDelete,
@@ -203,6 +212,7 @@ pub fn draw(app: &mut RustroomApp, ctx: &egui::Context) {
         Which::Settings => settings::show(app, ctx),
         Which::Shortcuts => shortcuts(app, ctx),
         Which::About => about(app, ctx),
+        Which::UploadUnconfirmed => export::upload_unconfirmed(app, ctx),
     }
 
     let still_open = !matches!(app.modal, Modal::None) || app.export_collision.is_some();

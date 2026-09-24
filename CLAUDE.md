@@ -99,9 +99,9 @@ opensource_lightroom/
 │   ├── pipeline/             # ✅ PipelineStage + 14 stages (incl. geometry, noise_reduction, dehaze, saturation, hsl, local_contrast, vignette, sharpening) + spatial::{box_blur, gaussian_blur, wide_blur, min_filter, guided_filter} + build_pipeline / build_pipeline_split(_in_region) / build_prefix_steps + PrefixStep/PrefixStepKey/PrefixKey + Region + tail_kernel_radius + golden tests
 │   ├── export/               # ✅ to_rgb8 + save (JPEG/PNG/TIFF) + metadata::{ExportMetadata, FileMetadata, MetadataScope} — the full XMP packet (M6.2) + watermark + output_sharpen
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
-│   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album, `Asset`/`AlbumSummary`/`Bucket`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
+│   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album/stacks/**upload** (+ `multipart.rs`, hand-rolled — ureq has none), `Asset`/`AlbumSummary`/`Bucket`/`Upload`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,116** lines (it said 681 until 2026-09-23 — check, do not quote); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache/immich_upload; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -166,27 +166,18 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2823 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
-branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
+**2863 tests**, **75 goldens** (unmoved). No branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 
-✅ **CI on Linux is verified green again (2026-09-24)** — the first real result since the workflow was
-fixed for the runner's disk on 2026-09-21. It failed once, on
-`immich_list_cache::tests::a_hostile_key_cannot_escape_the_directory`: a **test** that asserted an
-**absolute path's existence** and so passed on macOS and failed on Linux without ever reading the code.
-`safe_name::sanitize` was correct throughout. ⚠ Read shape **(e)** in *Standing lessons* before writing
-another traversal test.
+✅ **CI on Linux verified green (2026-09-24)** after one failure — a test asserting an absolute path's
+existence, fixed; see shape **(e)** in *Standing lessons*.
 
-✅ **Immich slice 4 — Download and Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its load-bearing
-change is a **bounded download queue**: `request` spawns a thread per job and `in_flight` only *dedupes*, so
-a bulk album request would have spawned **872 threads** — sabotage-measured at 30 concurrent against a cap
-of **4**. ⚠ Start the next job **after** `in_flight.remove` or the cap stalls one short for ever; and
-`cancel_downloads` must return dropped ids to the free pool. ⚠⚠ **Removal deletes only the image** — the
-sidecar (`<filename>.json` **appended**) keeps the edits, the catalog row the marks, the thumbnail the
-speed, and `cache_path`'s byte-identical re-download is what reattaches them. The key is read-only, so it
-*cannot* touch the server. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
-
+✅ **Immich slice 4 — Download / Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its
+load-bearing part is a **bounded download queue** (cap **4**): `request` spawns a thread per job, so
+a bulk album would have spawned **872**. ⚠ Start the next job **after** `in_flight.remove`.
+⚠⚠ **Removal deletes only the image** — sidecar, catalog row and thumbnail survive, and
+`cache_path`'s byte-identical re-download reattaches them. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
 ✅ **Per-channel RGB tone curves (2026-09-24, confirmed by use).** Red/Green/Blue beside the composite on
 one widget, selector defaulting to RGB. ⚠⚠ Almost no colour science changed: `ToneCurveStage::apply` was
 already `map_samples`, so the composite was **always** a per-channel operation with one shared table — the
@@ -203,17 +194,12 @@ and `Luminance` stay: they repeat by *word*, not by *meaning*). ⚠⚠ **Not thr
 splitting the `Color` edit group **and the Sync dialog** — its own change. `grep -n 'made legible'
 docs/JOURNAL.md`.
 
-✅ **Immich, slices 1–3 — all merged and confirmed by use (2026-09-22/24).** A rail section lists the
-server's albums and a **Timeline** of months; the grid fills from server thumbnails with nothing
-downloaded; opening a photo caches the original and re-enters `open_path`. Thumbnails persist, keyed
-`(asset id, updatedAt)`, under a **byte budget with LRU eviction** (two stores, 5120 MB each — there was
-**none** before). Asset lists are stored and revalidated against **`(assetCount,
-lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`. ⋯ → **Reindex** refetches. **Marks persist**: Immich
-assets get catalog rows, **one folder per server, never per album**. The rail reads **"immich
-(downloaded)"** and counts only supported images. A hand-painted **circled ↓** marks downloaded photos in
-an Immich grid. ⚠ **No catalog migration — `db.rs` stays at v7.** Specs under
-`docs/superpowers/specs/2026-09-2*-immich-*`; `grep -n 'Immich slice' docs/JOURNAL.md`.
-
+✅ **Immich slices 1–3 — merged, confirmed by use (2026-09-22/24):** albums + a **Timeline** in
+the rail, server thumbnails with nothing downloaded, download-on-open, persisted thumbnails and
+asset lists (validator **`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`), ⋯ →
+**Reindex** refetching, and **marks persisting** via catalog rows — **one folder per server**.
+⚠ **No catalog migration for these; `db.rs` went to v8 only for the date re-read.**
+`grep -n 'Immich slice' docs/JOURNAL.md`.
 ⚠⚠ **The Immich invariants that are easy to break again:** the catalog keys a row on the **path's** own
 file name, never `CatalogEntry::file_name` (a cache path is `<uuid>.<ext>` while that field is the
 camera's name, so rows written under it can never be found again); `row_is_browsable` hides an absent
@@ -255,26 +241,43 @@ merged and confirmed by use. ⚠ The measurements, the three defects of one shap
 `#[serde(default)]` trap that would have shipped `false` to every existing settings file are in
 `docs/JOURNAL.md` — `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 
-### ▶ Next action — Immich slice 4 (the user asked for it), or the leftovers
+### ▶ Next action — Immich upload (brainstorm in progress), or the leftovers
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
 not go looking for the next port; there isn't one.
 
 **Live candidates, in the order the user has shown interest:**
 
-0. **Immich: two-way sync** ⬜ — the only unbuilt Immich slice. ⚠⚠ Write-back needs **`asset.update`** on
-   the API key, which the Settings help text tells the user **not** to grant, and it would let a bug here
-   alter their library. Also unbuilt: reading Immich's own `rating`/`isFavorite`, the OS keychain (**the key
-   is plaintext**), and automatic eviction of cached originals — slice 4 is the **manual** half.
+0. ✅ **Immich upload BUILT and confirmed by use (2026-09-24), delivery reconciled into Location.**
+   An export delivers to **files, Immich, or both** — one `ExportOptions.destination: Destination`
+   (`Files`/`Target`/`Both`/`Nowhere`), deliberately **not** Immich-named so the integration can later
+   be switched off with "no mention of immich at all". Immich-only **stages in a temp dir, deletes on
+   a CONFIRMED upload, and rescues into the export folder otherwise**. ⚠⚠ Never delete on an attempt:
+   an SSL/EOF means the *response* was lost, measured 4-in-2,373 with none actually failing to apply.
+   The upload date is `Captured`/`Edited`/`Uploaded`; ⚠⚠ **there is no mtime fallback — it filed an
+   unreadable date under the DOWNLOAD time**, and `Edited` is read at **plan** time because recording
+   an upload bumps the sidecar's mtime. A separate **`immich_upload_key`** keeps browsing read-only as
+   a property of the *credential*: ⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`**
+   (168-value enum), which is the whole basis of upload-over-sync.
+   `grep -n 'export delivery' docs/JOURNAL.md`.
+   ⛔ **Two-way sync is DECLINED (the user's call — not a deferral):** it *mutates* authoritative
+   assets and runs unattended, removing the found-by-use safety net where the blast radius is largest.
+   ⚠⚠ **Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
+   ⬜ **Next Immich items, recorded as backlog notes:** make the integration **completely optional**
+   behind one gate, and **Rustroom-side stacking awareness** — the server has **2,379 stacks** (a
+   one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every pair.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
    per sample because packing four into a word would race. **A considered trade, not an oversight.**
 2. **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. Now a
    ~120-site diff. ⚠ Its own change, never folded into another.
-3. **`crates/lens-profile/src/lib.rs` is 949 lines**, **`crates/app/src/immich_source.rs` is 821**
-   and `main.rs` is **1,116**; `batch_export/worker.rs` is 1,127 (accepted — ~190 of code, the rest
-   its own tests).
+3. ⚠⚠ **This row used to rank files by TOTAL lines, contradicting the *Open items* rule directly
+   below it — re-measured by code 2026-09-24, and NONE of the four is over the ~600 threshold:**
+   `lens-profile/src/lib.rs` **500** (of 949), `batch_export/worker.rs` **439** (of 1,264),
+   `immich_source.rs` **411** (of 896), `main.rs` **78** (of 1,147). The genuinely large files are the
+   four in *Open items* — `edit-model` 1,883, `pipeline` 1,810, `catalog/db.rs` 1,730,
+   `settings.rs` 1,046. ⚠ Measure with `awk '/#\[cfg\(test\)\]/{exit} {n++}'` before quoting any of this.
 4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
 
 ⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
@@ -323,8 +326,10 @@ helpers and two twins are renamed, so a filename comparison undercounts.
   - **Wrongly listed and actually fine:** `immich_source.rs` is **411** (not 896), `render_engine.rs` is
     **169** of 4,800, `develop/canvas/mod.rs` is **16** of 2,136. ⚠ `adjustments.rs` is **610**, barely
     over — not the "~1,250" its total suggests.
-  - ⚠ `batch_export/worker.rs` was always described correctly (~190 of code), which is the precedent the
-    rest of this entry should have followed from the start.
+  - ⚠⚠ **`batch_export/worker.rs`'s own figures went stale too, and this entry used to hold them up as
+    the precedent** — it said *"1,127 — ~190 of code"*; re-measured 2026-09-24 it is **1,264 total / 439
+    code**. The *method* was the precedent worth keeping, not the numbers: a measurement written down
+    once decays exactly like the totals this entry was created to correct. **Re-measure, never requote.**
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
   adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
   `thumb_store`'s use a counter as well and are the pattern to copy.

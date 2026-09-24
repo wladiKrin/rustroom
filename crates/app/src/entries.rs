@@ -126,6 +126,7 @@ mod tests {
             edits: Edits::default(),
             snapshots: Vec::new(),
             snapshot_hwm: 0,
+            uploads: Vec::new(),
         }
     }
 

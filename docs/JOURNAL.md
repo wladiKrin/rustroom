@@ -211,6 +211,170 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-24 — export delivery: files, Immich or both, reconciled into Location
+
+Branch `immich-upload`, **2,863 tests**, 75 goldens unmoved, gated green, **confirmed by use**. Two
+specs on top of the upload milestone, both driven by using the thing.
+
+#### ✅ Delivery became a choice, then became part of Location
+
+The first upload version made an export write files **and** upload. The user: *"I might not have to
+carry the exports when they're already in immich."* So `upload_target: Option<UploadTarget>` became a
+single **`Destination`** field — `Files` / `Target` / `Both` / `Nowhere` — which makes "keep nothing
+and upload nothing" a state `can_export` refuses rather than one two booleans can stumble into.
+
+Then, after using *that*: *"I'm unhappy with the name and it being a separate thing from location."*
+⚠ **"Where does this go" is one question, and it was being asked half at the top of the dialog and
+half at the bottom.** So **Delivery folded into Location** — which, being already the first section, is
+also the requested "move it to the top", with no reordering invented. Two ticks: **Local** carrying the
+folder row, **Immich** carrying the date dropdown. `export_summary::delivery` was **deleted**, not left
+unused.
+
+⚠⚠ **With Immich unconfigured, Location draws exactly what it drew before any of this: the folder row
+and no ticks.** A lone "Local" tick with nowhere else to go is a control that cannot mean anything, and
+one unconditional shape is the cheapest way to keep *"no mention of immich at all"* true. The test
+asserts `Local`, `Immich`, `Delivery` and `Original date` are all **absent** while `Location` and
+`Choose…` are present — the sample assertion is what stops it passing because the dialog simply did
+not draw.
+
+#### ✅ Staging: delete on confirmation, rescue on doubt
+
+Immich-only stages each file in a per-run temp directory. On a **confirmed** upload it is deleted; on a
+failure it is **moved into the export folder** and `unconfirmed` reports **where it actually landed**,
+not the temp path.
+
+⚠⚠ **Deleted only on confirmation, never on an attempt.** An SSL/EOF error means the *response* was
+lost, not that the server rejected the file — 4 of 2,373 writes failed that way during the same day's
+stacking migration and **none had actually failed to apply**. ⚠ The user chose the shape whose
+rescue path runs least often, so it is pinned by a test that forces a failure against a closed port on
+loopback; sabotaging the rescue leaves the export folder empty (`held []`).
+
+#### ✅ The date is an option, and the misleading fallback is gone
+
+`UploadDate::{Captured, Edited, Uploaded}`. ⚠⚠ **The mtime fallback was removed and that was the
+point:** `Captured` used to fall back to the source file's mtime, which for a file in the Immich cache
+is *when Rustroom downloaded it* — so a photo whose date could not be read was filed under the download
+date, **a wrong answer that looked right**. An absent date now yields the **upload time**, so the photo
+lands at the top of the timeline where it is noticed.
+
+⚠⚠ **`Edited` is read at PLAN time.** `immich_upload::record` writes the upload into the photo's
+sidecar, which bumps the very mtime `edited_at` reads — read late, "the edit date" silently becomes
+"the date of the last upload", and differs between the first upload and every one after.
+
+✅ For a **single** photo the resolved date is shown beside the dropdown, computed by calling the same
+`upload_seconds` the upload calls — a second formatting would be a second implementation that can
+disagree, and the whole point is that it can be trusted. It needed `when::stamp`, which carries the
+**year**; `when::short` drops it, which is right for a snapshot judged against today and useless for
+"where do I look in Immich".
+
+#### ✅ A failed upload says so
+
+`ExportEvent::UploadUnconfirmed` → a notice naming where the file is and that it was **not** deleted.
+⚠⚠ **The "first only" guard is `AtomicBool::swap(true)`, not a load-then-store** — the export pool is
+`width`-wide, so several photos can fail in the same instant and a load-then-store would race two
+modals open. The test asserts **one** event and **two** report entries for a two-photo failure; the
+pair is what makes it discriminating. ⚠ The wording is *"did not confirm"*, never *"failed"*, for the
+SSL/EOF reason above — telling the user it failed could have them upload a second copy. ⚠ Sized
+`Standard` rather than `Compact` after use: a full path plus two hints wrapped too tightly.
+
+#### ⚠⚠ Three things this work got wrong about itself
+
+1. **A spec section was false because a code comment was.** The delivery spec asserted the export
+   worker is "a single sequential loop"; it is a **`width`-wide `thread::scope` pool**. The source was
+   `batch_export/mod.rs`'s own module doc, which still said *"Sequential on purpose"* long after the
+   concurrency work. Both corrected, and the module doc now says to check `run` before requoting it.
+2. **A planned test was dropped rather than written.** It compared two identical export runs, which
+   proves *determinism*, not "unchanged by the upload field" — shape **(c)** of the standing lesson.
+   The 75 unmoved goldens and a no-connection control test are the real guard.
+3. **A scripted insertion orphaned an attribute, for the second time in one session.** `Uploader` went
+   in between `#[allow(clippy::too_many_arguments)]` and `fn run`, leaving the allow on a `static`,
+   where it is legal and silent; a later second allow masked it. ⚠ The
+   `git diff | grep '^-' | grep '///'` check catches lost **comments** and not lost **attributes**.
+
+⚠ **A test of mine also failed against correct code**: the old Delivery section was collapsed by
+default, so its body was never laid out and a label query found nothing. Rewritten to click the header
+as a user would, and it now asserts the body **starts** collapsed so it cannot pass vacuously.
+
+### 2026-09-24 — Immich stacking (2,379 pairs) and uploading edited photos; two-way sync declined
+
+Branch `immich-upload`, **2,848 tests**, 75 goldens unmoved, gated green. Two features and one
+decline, all in one session.
+
+#### ⛔ Two-way sync: DECLINED, with reasons
+
+The user's instinct, not mine to overrule: *"I'm unsure about the two-way sync, I feel like it's too
+dangerous."* The distinction that decided it is **mutating versus creating**, and it is now
+**verified rather than argued**: the 3.2.0 permission enum has **168** values, among them
+**`asset.upload` as a grant separate from `asset.update`**. An upload-capable key **cannot modify or
+delete existing assets**. Sync needed `asset.update`, ran unattended over a whole library and was
+irreversible. ⚠⚠ The argument that actually settled it was from **this repo's own record**: every
+Immich defect so far was found *by use*, never by the green suite — which works because the user was
+looking when it broke. A background sweep removes that safety net exactly where the blast radius is
+largest. Full table in `docs/BACKLOG.md`; **do not re-propose it from a list.**
+
+#### ✅ Stacking 2,379 RAW+JPEG pairs — a one-time migration, verified
+
+Measured against the user's own server (v3.2.0, 16,139 assets, 2,514 `.raf`): **2,379** stem pairs,
+of which Immich's **perceptual** duplicate detection had found **30 (1.3%)**, and **no auto-stacking
+setting exists** in v3.2.0's config. So Immich will not do this for anyone.
+
+⚠⚠ **THE MISTAKE THIS ALMOST MADE, AND IT WAS REAL RATHER THAN HYPOTHETICAL: PAIR ON (STEM, CAPTURE
+TIME), NEVER ON STEM ALONE.** This camera's counter has **wrapped** — `DSCF0236.JPG` exists for a
+**2024-03-25** photo *and* a **2023-07-04** one. Stem-only grouping would have offered the 2024
+`.RAF` a 2023 `.JPG` as its partner and **stacked two unrelated photos, hiding one from the
+timeline**, silently. Keying on `(stem, fileCreatedAt)` resolved it exactly *and* recovered all 44
+groups a stem-only 1:1 rule had to reject: **2,334 → 2,378** clean pairs.
+
+Run as an audited script: dry run → 5-pair batch → verify → rest, every stack id logged. Final state
+**2,379 stacks / 4,758 assets**, a dry run finding **zero pairs left**, and **16,117 assets unchanged**
+— nothing deleted. ⚠ **4 of 2,373 writes failed on SSL/EOF**; each was checked via
+`GET /assets/{id}` and **none had half-applied**, then a re-run picked them up. That check is the
+reason the upload path reports failures as *unconfirmed* and never retries.
+
+⚠⚠ **Three API traps, none visible in the schema:** `POST /search/metadata` reports **`stack: null`
+even for a stacked asset** while `GET /assets/{id}` reports it correctly; **`withStacked` is inverted**
+(`true` *collapses* stacks — measured 80 → 79 for one stack); and `PUT /stacks/{id}` takes **only**
+`primaryAssetId`, so there is **no "add to stack"**. ✅ `DELETE /stacks` is bulk, so the whole
+migration reverses in one call from `~/rustroom-immich-stacks-2026-09-24.jsonl`.
+
+#### ✅ Uploading edited photos — an export destination, confirmed by use
+
+Spec `2026-09-24-immich-upload-design.md`, plan `2026-09-24-immich-upload.md`. The user's scope:
+plain upload into the timeline, **any photo** (not only Immich-sourced ones), no library-wide sweep.
+That last point is what makes it an **export delivery target** rather than an Immich feature — the
+Export dialog already answers every question an upload has.
+
+`ExportOptions` gains **`upload_target: Option<UploadTarget>`**, deliberately *not* an Immich-named
+field, because the integration must later be switchable off with *"no mention of immich at all"*.
+A separate **`immich_upload_key`** keeps browsing read-only as a property of the **credential**
+rather than of our code being right. New `crates/immich/src/multipart.rs` (ureq has no helper),
+new lib module `immich_upload`, per-file upload inside the existing pool.
+
+✅ **Confirmed by use, and the two numbers that matter:** the uploaded edit's **`fileCreatedAt` is
+2026-09-22T21:01:06Z** — the capture time — while `createdAt` is the upload time. The "it landed at
+today's date" trap did not happen. And a byte-identical re-upload replied **HTTP 200
+`{"status":"duplicate","id":…}`** with the asset count **16,118 before and after**, so the server
+really does dedupe and create nothing.
+
+⚠⚠ **THE SPEC WAS WRONG AND THE CODE'S OWN DOC WAS WHY.** §7 asserted the export worker is "a single
+sequential loop". It is a **`width`-wide `thread::scope` pool**. The source of the error was
+`batch_export/mod.rs`'s module doc, which still said *"Sequential on purpose"* long after the
+concurrency work — so a stale doc comment propagated into a spec I had told the user looked right.
+**Both are corrected**, and the module doc now says to check `run` before requoting it.
+
+⚠ **A weak test was dropped rather than written.** The plan's Task 10 compared two identical export
+runs, which proves *determinism*, not "unchanged by the upload field" — shape **(c)** of this repo's
+own lesson. The 75 unmoved goldens plus a no-connection control test are the real guard.
+
+⚠ **Line counts re-measured, and four were stale:** `worker.rs` **1,264 total / 439 code** (documented
+as "1,127 / ~190"), `immich_source.rs` 896/411, `main.rs` 1,147/**78**, `lens-profile` 949/**500**.
+`CLAUDE.md`'s next-action list had been ranking them by *total* while its own Open Items entry says
+to measure by code. Both corrected.
+
+⚠ **Three sabotages run, not assumed:** one CRLF→LF fails the byte-exact multipart test; deleting the
+Settings apply block fails with *"Apply dropped the upload key"*; routing an upload error into
+`failed` fails with a connection-refused message that also proves the upload really attempted.
+
 ### 2026-09-24 — the first CI failure since the workflow was fixed, and it was a test that had never tested anything
 
 Branch `fix-hostile-key-test`. **The first real CI result since the workflow was fixed for the

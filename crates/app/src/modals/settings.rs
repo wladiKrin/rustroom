@@ -41,6 +41,7 @@ pub struct SettingsDraft {
     display_space: color::OutputSpace,
     immich_url: String,
     immich_key: String,
+    immich_upload_key: String,
     thumb_budget_mb: u32,
     immich_thumb_budget_mb: u32,
 }
@@ -65,6 +66,7 @@ impl SettingsDraft {
             display_space: s.display_space,
             immich_url: s.immich_url.clone(),
             immich_key: s.immich_key.clone(),
+            immich_upload_key: s.immich_upload_key.clone(),
             thumb_budget_mb: s.thumb_budget_mb,
             immich_thumb_budget_mb: s.immich_thumb_budget_mb,
         }
@@ -113,6 +115,13 @@ impl SettingsDraft {
         }
         if self.auto_advance != app.settings.auto_advance {
             app.settings.auto_advance = self.auto_advance;
+            plain = true;
+        }
+        // ⚠⚠ Applied plainly, **not** through `set_connection`. That accessor owns the *browse*
+        // connection; the upload key is a separate credential and must not join it, or the
+        // read-only guarantee browsing relies on would quietly acquire a write grant.
+        if self.immich_upload_key != app.settings.immich_upload_key {
+            app.settings.immich_upload_key = self.immich_upload_key.clone();
             plain = true;
         }
         if self.immich_url != app.settings.immich_url || self.immich_key != app.settings.immich_key
@@ -506,6 +515,25 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                             );
                             ui.end_row();
 
+                            // ⚠⚠ Its own field on purpose. Browsing, thumbnails and the rail run
+                            // constantly and unattended; giving that traffic a write-capable key
+                            // would make "browsing cannot write" depend on our code being right
+                            // rather than on the credential. See `Settings::immich_upload_key`.
+                            ui.label("Upload key");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut d.immich_upload_key)
+                                    .password(true)
+                                    .desired_width(260.0),
+                            )
+                            .on_hover_text(
+                                "Optional, and used only when an export uploads. Paste a key \
+                                 granted asset.upload — that grant is separate from asset.update, \
+                                 so it cannot modify or delete photos already on the server. Leave \
+                                 it empty to keep uploading switched off. ⚠ Stored in plain text in \
+                                 settings.json, like the key above.",
+                            );
+                            ui.end_row();
+
                             if before != (d.immich_url.clone(), d.immich_key.clone()) {
                                 app.immich_test = None;
                             }
@@ -674,5 +702,41 @@ mod tests {
         app.modal = Modal::Settings;
         settle(&ctx, &mut app);
         assert_eq!(app.settings_draft.as_ref().map(|d| d.auto_lens), Some(true));
+    }
+
+    /// ⚠⚠ **The failure this catches is a field added to the draft but forgotten in `apply`** — the
+    /// dialog then looks right, accepts the typing, and silently discards it on Apply. A text field
+    /// cannot be exercised by clicking a label, so the draft is set directly and Apply is clicked.
+    ///
+    /// ⚠ It also pins that the upload key does **not** ride on the browse connection: applying it
+    /// alone must leave `immich_key` untouched.
+    #[test]
+    fn the_upload_key_survives_apply_and_leaves_the_browse_key_alone() {
+        let (ctx, mut app) = open_settings();
+        settle(&ctx, &mut app);
+        assert!(
+            app.settings.immich_upload_key.is_empty(),
+            "the fixture must start with no upload key"
+        );
+        let browse_before = app.settings.immich_key.clone();
+
+        app.settings_draft
+            .as_mut()
+            .expect("the draft exists once the dialog has been shown")
+            .immich_upload_key = "pasted-upload-key".to_string();
+
+        assert!(
+            app.settings.immich_upload_key.is_empty(),
+            "the draft must not land before Apply"
+        );
+        test_ui::click(&ctx, "Apply", |_| show(&mut app, &ctx));
+        assert_eq!(
+            app.settings.immich_upload_key, "pasted-upload-key",
+            "Apply dropped the upload key"
+        );
+        assert_eq!(
+            app.settings.immich_key, browse_before,
+            "the browse key must not change when only the upload key does"
+        );
     }
 }

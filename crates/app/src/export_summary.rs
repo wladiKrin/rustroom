@@ -9,6 +9,20 @@ use crate::export_presets::ExportPreset;
 
 /// The folder's last component, `(none chosen)`, or the name with ` (missing)`.
 pub fn location(o: &ExportOptions) -> String {
+    use crate::batch_export::Destination;
+    // ⚠⚠ Delivery folded in here on 2026-09-24: "where does this go" is **one** question, and it used
+    // to be asked half at the top of the dialog and half at the bottom. `delivery()` is gone, not
+    // merely unused.
+    match o.destination {
+        Destination::Nowhere => "(nowhere chosen)".to_string(),
+        Destination::Target(_) => format!("Immich, {}", o.upload_date.label().to_lowercase()),
+        Destination::Files => folder(o),
+        Destination::Both(_) => format!("{} + Immich", folder(o)),
+    }
+}
+
+/// The destination folder's last component, `(none chosen)`, or the name with ` (missing)`.
+fn folder(o: &ExportOptions) -> String {
     if o.dest_dir.as_os_str().is_empty() {
         return "(none chosen)".to_string();
     }
@@ -84,6 +98,12 @@ pub fn matching_preset<'a>(presets: &'a [ExportPreset], o: &ExportOptions) -> Op
 /// The footer's note: the preset the options equal, else `changed from “X”` when one was
 /// picked, else nothing.
 pub fn footer_note(presets: &[ExportPreset], selected: Option<&str>, o: &ExportOptions) -> String {
+    // ⚠⚠ The reason wins over the preset name. Export is dark in this state, and a note reading
+    // "Web" beside a dead button explains nothing — this project's rule is that an unusable control
+    // goes dark, which only works when something says why.
+    if o.destination.is_nowhere() {
+        return "Choose at least one destination".to_string();
+    }
     match (matching_preset(presets, o), selected) {
         (Some(m), _) => m.to_string(),
         (None, Some(s)) => format!("changed from “{s}”"),
@@ -149,5 +169,58 @@ mod tests {
             "changed from “Web”"
         );
         assert_eq!(footer_note(&presets, None, &other), "");
+    }
+
+    /// ⚠ Every section header in this dialog says its own state, so a collapsed dialog reads as a
+    /// description of the export — and since Delivery folded in, that includes where it is delivered.
+    #[test]
+    fn the_location_summary_covers_all_four_destinations() {
+        use crate::batch_export::{Destination, UploadDate, UploadTarget};
+        let mut o = ExportOptions {
+            dest_dir: std::path::PathBuf::from("/nope/exports"),
+            ..ExportOptions::default()
+        };
+        // ⚠ A folder that does not exist is marked, which is the pre-existing behaviour folding in
+        // must not lose.
+        assert_eq!(location(&o), "exports (missing)");
+
+        o.destination = Destination::Target(UploadTarget::Immich);
+        assert_eq!(location(&o), "Immich, original date");
+
+        o.destination = Destination::Both(UploadTarget::Immich);
+        o.upload_date = UploadDate::Uploaded;
+        assert_eq!(location(&o), "exports (missing) + Immich");
+
+        o.destination = Destination::Nowhere;
+        assert_eq!(location(&o), "(nowhere chosen)");
+    }
+
+    /// ⚠⚠ The footer must say **why** Export is dark, or the dark button is unexplained.
+    #[test]
+    fn the_footer_note_explains_a_destination_of_nowhere() {
+        use crate::batch_export::Destination;
+        let o = ExportOptions {
+            destination: Destination::Nowhere,
+            ..ExportOptions::default()
+        };
+        assert_eq!(
+            footer_note(&[], None, &o),
+            "Choose at least one destination"
+        );
+        // ⚠ The reason outranks a matching preset name, which would otherwise be shown instead.
+        let preset = ExportPreset {
+            name: "Web".into(),
+            options: o.clone(),
+        };
+        assert_eq!(
+            footer_note(&[preset], Some("Web"), &o),
+            "Choose at least one destination"
+        );
+        // ⚠ And with a real destination the note goes back to what it always said.
+        let ok = ExportOptions {
+            destination: Destination::Files,
+            ..o
+        };
+        assert_eq!(footer_note(&[], None, &ok), "");
     }
 }

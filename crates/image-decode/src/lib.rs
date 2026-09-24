@@ -263,6 +263,47 @@ mod tests {
             std::fs::remove_file(&path).ok();
         }
     }
+
+    /// ⚠⚠ **THE REAL BYTES FROM A REAL SCANNER, captured 2026-09-24**, not invented: a Fuji
+    /// SP-3000 writes `DateTimeOriginal` as this exact placeholder while putting the true date in
+    /// `DateTimeDigitized`. Reading only the first tag gave every film scan **no capture date**,
+    /// which cost the Library's date grouping, date sorting, the `{date}` token, the exported XMP
+    /// and an Immich upload's `fileCreatedAt`.
+    #[test]
+    fn a_blank_date_placeholder_falls_through_to_the_next_tag() {
+        let placeholder = b"    :  :     :  :  ".to_vec();
+        let real = b"2025:11:19 13:32:24".to_vec();
+
+        // On its own the placeholder yields nothing — the precondition for the bug.
+        assert_eq!(first_parsable_date(&[Some(placeholder.clone())]), None);
+
+        // With a usable tag behind it, the real date is found.
+        let got = first_parsable_date(&[Some(placeholder.clone()), Some(real.clone())])
+            .expect("the second tag should be used");
+        let want = naive_seconds(exif::DateTime::from_ascii(&real).unwrap()).unwrap();
+        assert_eq!(got, want);
+
+        // ⚠ Nothing usable anywhere is still `None`, rather than a zero that would file the
+        // photograph under 1970.
+        assert_eq!(first_parsable_date(&[Some(placeholder), None]), None);
+    }
+
+    /// ⚠ The order matters: a real `DateTimeOriginal` must win over the later tags, or a re-saved
+    /// file's modification stamp would override its actual capture time.
+    #[test]
+    fn the_first_usable_date_wins() {
+        let first = b"2020:01:02 03:04:05".to_vec();
+        let second = b"2025:11:19 13:32:24".to_vec();
+        let got = first_parsable_date(&[Some(first.clone()), Some(second)]).unwrap();
+        let want = naive_seconds(exif::DateTime::from_ascii(&first).unwrap()).unwrap();
+        assert_eq!(got, want, "an earlier candidate must not be skipped");
+    }
+
+    #[test]
+    fn no_date_candidates_at_all_is_none() {
+        assert_eq!(first_parsable_date(&[]), None);
+        assert_eq!(first_parsable_date(&[None, None]), None);
+    }
 }
 
 /// Read an image file's EXIF, if it has any.
@@ -284,14 +325,7 @@ pub fn read_capture(path: &Path) -> Result<Capture, ImageDecodeError> {
     let make = string_of(&ex, exif::Tag::Make).unwrap_or_default();
     let model = string_of(&ex, exif::Tag::Model).unwrap_or_default();
     Ok(Capture {
-        taken: ex
-            .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
-            .and_then(|f| match &f.value {
-                exif::Value::Ascii(v) => v.first().cloned(),
-                _ => None,
-            })
-            .and_then(|b| exif::DateTime::from_ascii(&b).ok())
-            .and_then(naive_seconds),
+        taken: capture_seconds(&ex),
         camera: Capture::camera_name(&make, &model),
         lens: string_of(&ex, exif::Tag::LensModel),
         iso: ex
@@ -333,6 +367,53 @@ fn rational_of(ex: &exif::Exif, tag: exif::Tag) -> Option<f32> {
         _ => return None,
     };
     (v.is_finite() && v > 0.0).then_some(v as f32)
+}
+
+/// The raw ASCII value of `tag`, if the file carries one.
+fn ascii_of(ex: &exif::Exif, tag: exif::Tag) -> Option<Vec<u8>> {
+    ex.get_field(tag, exif::In::PRIMARY)
+        .and_then(|f| match &f.value {
+            exif::Value::Ascii(v) => v.first().cloned(),
+            _ => None,
+        })
+}
+
+/// When the shutter fired, from the first date tag that actually parses.
+///
+/// ⚠⚠ **THREE TAGS IN ORDER, AND THE FALLBACK IS NOT BELT-AND-BRACES — it is the fix for a real
+/// bug found by use on 2026-09-24.** A Fuji **SP-3000** film scanner writes
+/// `DateTimeOriginal` as the placeholder `"    :  :     :  :  "` — present, blank, unparsable —
+/// while putting the real date in **both** `DateTimeDigitized` and `DateTime`. Reading only
+/// `DateTimeOriginal` therefore yielded **no capture date at all** for every scan, which silently
+/// cost the Library's date grouping, date sorting, the `{date}` filename token, the exported XMP
+/// packet and an Immich upload's `fileCreatedAt`. Immich reads the same files correctly, which is
+/// how the gap became visible.
+///
+/// ⚠ The order is deliberate: `DateTimeOriginal` is *the* capture time when it is real, so it wins;
+/// `DateTimeDigitized` is when the image was made digital, which for a scan is the closest thing
+/// there is; `DateTime` is last because it is the file's own modification stamp and a re-save can
+/// move it.
+///
+/// ⚠ A tag that fails to parse is **skipped rather than fatal**, which is what makes the
+/// placeholder fall through instead of poisoning the answer.
+fn capture_seconds(ex: &exif::Exif) -> Option<i64> {
+    first_parsable_date(&[
+        ascii_of(ex, exif::Tag::DateTimeOriginal),
+        ascii_of(ex, exif::Tag::DateTimeDigitized),
+        ascii_of(ex, exif::Tag::DateTime),
+    ])
+}
+
+/// The first candidate that parses as a date, as naive wall-clock seconds.
+///
+/// ⚠ Separated from [`capture_seconds`] so the **ordering** is testable without building an
+/// `exif::Exif`, which this crate's tests cannot do.
+fn first_parsable_date(candidates: &[Option<Vec<u8>>]) -> Option<i64> {
+    candidates
+        .iter()
+        .flatten()
+        .filter_map(|b| exif::DateTime::from_ascii(b).ok())
+        .find_map(naive_seconds)
 }
 
 /// ⚠ Interpreted as **wall-clock**, matching the RAW reader — EXIF's `DateTimeOriginal` carries no

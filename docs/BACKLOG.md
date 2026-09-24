@@ -1269,9 +1269,10 @@ its stack table; **neither has ever been added**, and that table now records so.
 
 ## Immich integration (recorded 2026-08-26 — slices 1–4 BUILT, 2026-09-22/24)
 
-**Status:** ✅ **slices 1, 2, 3 and 4 are built, merged and confirmed by use.** The only slice left is
-**two-way sync** — which was *not* what slice 3 turned out to be, see the correction below — and it is
-**blocked on a permission the user is told not to grant**, not on effort. Three smaller gaps are out of
+**Status:** ✅ **slices 1, 2, 3 and 4 are built, merged and confirmed by use.**
+⛔ **Two-way sync is DECLINED — 2026-09-24, the user's call, and it is not a deferral.** Its successor is
+**uploading edited photos** (⬜, next), which is a different operation and a safer one. See *Two-way sync —
+declined* below before re-proposing anything that writes to the server. Three smaller gaps stay out of
 scope by decision: the OS keychain (the API key is **plaintext** in `settings.json`), **automatic**
 eviction of cached originals (slice 4 built the *manual* half), and reading Immich's own
 `rating`/`isFavorite`.
@@ -1302,10 +1303,7 @@ mean pulling tens of gigabytes of RAW.
 3. **~~Two-way sync~~ — ⚠⚠ THE SLICE THAT GOT BUILT IS NOT THE SLICE WRITTEN HERE.** Asked in
    brainstorming on 2026-09-23, the user chose **local only** of three options offered: catalog rows so
    marks persist in Rustroom, and **nothing sent to Immich**. ✅ Built and confirmed by use.
-   ⚠ Two-way sync is therefore still **unbuilt**, and its reasons for being deferred are now sharper
-   than "it is larger": write-back needs **`asset.update`** on the API key, which the Settings help text
-   explicitly tells the user *not* to grant, and it would let a bug in Rustroom alter their library.
-   Colour labels and reject flags have no Immich equivalent in any case.
+   ⛔ Two-way sync itself is now **declined outright** — see *Two-way sync — declined* below.
 4. **Cache management — a Download button and a Discard button (requested 2026-09-24).** See below.
 
 ### ✅ ANSWERED 2026-09-22 — the original is the original. Do not re-research this.
@@ -1334,6 +1332,197 @@ and a real server pages by **`nextPage`** while leaving `nextCursor` null. Neith
 from the OpenAPI schema, and both were found by a real reply. **Before the next Immich slice, capture
 a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
 lessons.
+
+### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons — not a deferral)
+
+⚠⚠ **Do not re-propose this from a list of "unbuilt Immich slices". It was considered and refused on
+its merits, and the thing that replaces it is *not* a smaller version of it.** The user's words:
+*"I'm unsure about the two-way sync, I feel like it's too dangerous."*
+
+**The distinction that decided it is MUTATING versus CREATING**, not "writing versus not writing":
+
+| | two-way sync | uploading an edit |
+|---|---|---|
+| operation | **overwrites** fields on an asset Immich treats as authoritative | **creates a new** asset |
+| permission | **`asset.update`** — can rewrite *any* asset | a separate upload grant, which **cannot touch existing assets** |
+| worst case | the user's real library silently altered, **no undo** | clutter — extra assets, deletable in Immich's own UI |
+| trigger | background, continuous, **unattended** | one deliberate action |
+| reversible | no | yes |
+
+`Permission` is a ~150-value enum, so these are genuinely **separate grants** — an upload key is not
+"sync, but politer".
+
+⚠⚠ **The row that actually settles it is the TRIGGER, and the argument is from this repo's own record.**
+Every Immich defect so far — the missing `assets` field, `nextPage`, the `null` `thumbhash`, the catalog
+key — was found **by use, never by the green suite**. That works because the user was looking at the
+thing when it broke. A background sweep over a whole library **removes that safety net exactly where the
+blast radius is largest**: *"300 photos got the wrong rating three weeks ago"* is not a bug this
+project's feedback loop can catch. ⚠ This is the same standing lesson as *"almost every GUI-wiring
+defect here was found by USE"*, pointed at a feature instead of at a milestone.
+
+**And the payoff was thin regardless:** colour labels and reject flags have **no Immich equivalent**, so
+only ratings and favourites could ever have round-tripped.
+
+⚠ **What would have to change for this to be reopened** — stated so a future reader does not have to
+re-derive it: a way to make the write **attended and reversible** (per-photo, confirmed, with the prior
+value recoverable), *and* a reason the additive path below cannot serve the same need. Neither exists
+today.
+
+### ✅ Uploading edited photos to Immich — BUILT and confirmed by use (2026-09-24)
+
+✅ **Extended the same day, twice, both from use:** delivery is a three-way choice (**files, Immich, or
+both**) rather than a flag on a file write, and it lives inside **Location** rather than a section of
+its own — *"where does this go"* is one question. The upload date is an option
+(`Captured`/`Edited`/`Uploaded`) with the **mtime fallback removed**, a single photo shows the resolved
+date beside the dropdown, and the first unconfirmed upload of a run raises a notice naming where the
+file is. Specs `2026-09-24-export-delivery-design.md` and `2026-09-24-location-reconciled-design.md`;
+`grep -n 'export delivery' docs/JOURNAL.md`.
+
+**Status:** ✅ built, gated green, **confirmed by use**. Spec
+`docs/superpowers/specs/2026-09-24-immich-upload-design.md`, plan
+`docs/superpowers/plans/2026-09-24-immich-upload.md`; `grep -n 'Uploading edited photos' docs/JOURNAL.md`.
+
+✅ **The two properties only a real server could settle, both measured 2026-09-24:** the uploaded
+edit's **`fileCreatedAt` is its capture time** (2026-09-22T21:01:06Z) while `createdAt` is the upload
+time — so the "it landed at today's date" trap did not happen; and a byte-identical re-upload replied
+**HTTP 200 `{"status":"duplicate","id":…}`** with the asset count **16,118 before and after**, so the
+server dedupes and creates nothing. ⚠ The DTO fixture is now **captured**, not constructed, and its
+doc says so — it also records two things the schema did not: field order is `status` then `id`, and a
+duplicate is **200**, not 201.
+
+⚠ **Shipped narrower than the section below imagined, by decision:** plain upload into the timeline;
+**any** photo, not only Immich-sourced ones; no albums; not stacked with the original; no
+library-wide "upload everything edited" sweep. Each remains its own later change.
+
+**Why this was the stronger feature, not merely the safer one.** This document's own framing is *"Immich
+stores and shares, Rustroom edits"* — and that loop is **currently broken**: an edit lands on local disk
+and never returns to where the photos live and are shared. Sync would have moved *metadata the user can
+already see in Rustroom*; upload moves **the thing they made**.
+
+✅ **It also delivers much of what sync promised, additively.** `export/src/metadata.rs` already writes
+a full XMP packet carrying **rating, label, keywords, title, caption, rights and creator**, so an
+uploaded edit carries its marks *inside the file* — no permission to modify anything.
+⚠⚠ **UNVERIFIED:** whether Immich maps XMP `Rating` onto its own rating field on ingest. That is a claim
+about Immich, and this integration has been bitten four times by claims about Immich taken from a schema
+or from memory. **Capture a real reply before designing around it.**
+
+⚠ **The design problems, which are not the HTTP call:**
+
+- **Duplicates.** Nudge a slider, re-export, upload → a second asset, and **checksum dedup will not catch
+  it because the bytes differ**. ⚠⚠ The tempting fix — replace the previous upload — means **delete**,
+  which drags the whole declined danger back in. Leaning: record the uploaded asset id in the **sidecar**
+  and surface *"already uploaded on ‹date›"*, leaving the choice to the user.
+- **The read-only key property is lost either way — this is the honest cost.** Mitigation worth
+  designing: a **second, optional key** for uploads, so the browse path (constant, unattended) *literally
+  cannot write* and the write capability exists only on the key behind one deliberate button. Same spirit
+  as slice 4's *"this cannot touch the server"* hover, but enforced by the **credential** rather than by
+  our code being correct.
+- **Where does it land?** A "Rustroom edits" album needs **`album.write`** — another grant. The
+  original's own album is the alternative.
+- **Stacking the edit beside its RAW** would be ideal. ⚠ Another unverified claim about Immich's API.
+
+### ✅ Immich stacking — VERIFIED AGAINST THE USER'S OWN SERVER, 2026-09-24
+
+⚠⚠ **Everything here was measured against `immich.example` running **v3.2.0**, with the
+OpenAPI spec taken from Immich's repo at the *same* version. It is not from memory and not from the
+public docs.** The library: **16,139 assets**, 12,286 `.jpg`, 2,514 `.raf`.
+
+**The contract.** `POST /stacks` takes one required field, `assetIds`, documented **"Asset IDs (first
+becomes primary, min 2)"** — so *the caller chooses the primary by ordering*. Returns
+`StackResponseDto {id, primaryAssetId, assets[]}`. Also `GET`/`DELETE /stacks`, `GET`/`PUT /stacks/{id}`,
+`DELETE /stacks/{id}/assets/{assetId}`.
+
+**Permissions — 168 values, and the ones that matter are SEPARATE grants:**
+`stack.create`/`read`/`update`/`delete`, and **`asset.upload` distinct from `asset.update`**.
+✅ Stacking needs only **`stack.create`** and touches **no asset field**. ✅ The user's existing key already
+has it (tested: `201`). ⚠⚠ **This is the verified basis of the whole upload-over-sync argument**: an
+upload-capable key *cannot* modify or delete existing assets.
+
+⚠⚠ **THREE TRAPS, none of them visible in the schema:**
+
+1. **`POST /search/metadata` reports `stack: null` even for a stacked asset**, while
+   `GET /assets/{id}` reports `{id, primaryAssetId, assetCount}` correctly. Search is the endpoint
+   Rustroom lists with, and a per-asset GET over 16k assets is not viable — so **"is this already
+   stacked?" must come from enumerating `GET /stacks` once.** A constructed fixture asserting
+   `Asset.stack` from a search reply would pass and be wrong.
+2. **`withStacked` is INVERTED from how it reads.** On `GET /timeline/bucket`, `withStacked=true`
+   *collapses* stacks (primaries only) and `false` shows every member. Measured on Aug-2026:
+   **80 → 79** for one stack. Anyone would read the name the other way round.
+3. **Immich's `duplicates` endpoint is PERCEPTUAL, not filename-based** — `machineLearning.duplicateDetection`
+   (`maxDistance` 0.01). It found **30** of **2,379** RAW+JPEG pairs (**1.3%**). It is not the tool for
+   pairing, and there is **no auto-stacking setting anywhere in v3.2.0's config**.
+
+⚠⚠ **THE MISTAKE THIS ALMOST MADE, and it was real rather than hypothetical: PAIR ON (STEM, CAPTURE
+TIME), NEVER ON STEM ALONE.** This camera's counter has **wrapped**, so `DSCF0236.JPG` exists for a
+**2024-03-25** photo *and* a **2023-07-04** one. Grouping by stem alone offers the 2024 `.RAF` a 2023
+`.JPG` as its partner — which would have **stacked two unrelated photos and hidden one from the
+timeline**. Keying on `(stem, fileCreatedAt)` resolved it exactly and *also* recovered all 44 groups a
+stem-only 1:1 rule had to reject: **2,334 → 2,378 clean pairs**, reconciling to 2,379 with the one
+already stacked.
+
+⚠⚠ **`PUT /stacks/{id}` accepts ONLY `primaryAssetId` — there is NO "add asset to stack".** It can flip
+which half is the timeline face (so a JPEG-primary choice is reversible without unstacking), but adding a
+third member means **`DELETE /stacks/{id}` then `POST /stacks` with all three ids** — a dissolve-and-
+rebuild, not an additive call. ⚠ This is a real cost on any *"upload the edit and stack it with its
+original"* design. ✅ Conversely **`DELETE /stacks` takes a bulk `BulkIdsDto {ids}`**, so the entire
+migration is reversible in **one call**.
+
+**The one-time migration** was run as an audited script (dry run → 5-pair batch → verify → rest), each
+created stack id logged for reversal, JPEG first so the camera rendering stays the timeline face.
+⚠ It is idempotent: it re-reads `GET /stacks` every run and skips what exists.
+
+⚠⚠ **THE RUSTROOM-SIDE HALF IS NOT FREE AND IS NOT DONE.** Rustroom lists via `search/metadata`, which
+has no stacking awareness *and does not report `stack`*, so **Rustroom's grid still shows both halves of
+every stacked pair** while Immich's timeline collapses them. Any "stack pairs" feature in the app owes a
+grid that honours stacks — fed from a `GET /stacks` enumeration, not from the listing.
+
+### ⬜ Rustroom-side stacking awareness (backlog item, requested 2026-09-24)
+
+**Status:** ⬜ wanted, unblocked, not specced. Raised the moment the server-side migration landed:
+Immich's timeline now collapses **2,378** RAW+JPEG pairs, and **Rustroom's grid still shows both halves**,
+so the two views of the same library disagree.
+
+**Why it is not free.** Rustroom lists assets with `POST /search/metadata`, which is stacking-blind **and
+returns `stack: null` even for a stacked asset** (verified — see above). So the app cannot learn stack
+membership from the listing it already makes. The shape that works:
+
+- Enumerate `GET /stacks` **once per refresh** and build `HashSet<asset id> → stack`, the same
+  fetch-then-index move `present_names` uses for downloads.
+- Hide non-primary members from the Immich grid by default, mirroring Immich's own behaviour.
+- ⚠ **Cache it like the asset lists.** `immich_list_cache` already stores lists against a validator;
+  a stack enumeration wants the same treatment or it is another per-launch refetch — the gap the rail's
+  album and bucket lists still have.
+
+⚠ **Open questions, none blocking:** does the grid want a *stack badge* and a way to see the hidden
+member (Immich shows a stack icon and lets you page through), or is hiding enough? And should a
+Rustroom-initiated **pair-and-stack** action exist in the app at all, or was the one-time script the whole
+job? ⚠⚠ If it does exist in-app, it inherits every safeguard the script needed — above all
+**pair on `(stem, capture time)`, never on stem alone**, which this library proves is not paranoia.
+
+### ⬜ Immich must be COMPLETELY optional — one gate, no mentions when off (requested 2026-09-24)
+
+**Status:** ⬜ wanted, unblocked, not specced. The user's words: *"the whole immich integration should in
+the end be completely optional … a toggle in the immich header in settings with which one can completely
+disable the immich support, i.e. in that case there should be **no mention of immich at all**."*
+
+⚠⚠ **"No mention at all" is a stronger requirement than "the feature does nothing", and it is the reason
+this is worth designing BEFORE more surfaces exist.** Every Immich surface must consult **one predicate**,
+not its own conditional. Today the surfaces are: the **rail section**, the **Settings tab**, the grid's
+**circled ↓ badge**, the toolbar's **Download / Remove downloads** buttons, the Immich **progress line**,
+the **Timeline** date tree, and — once built — the Export dialog's **upload section**. A gate retrofitted
+across surfaces that assume Immich exists is the expensive version of this change.
+
+⚠ **This is why `ExportOptions` gains `upload_target: Option<UploadTarget>` and NOT an Immich-named
+field** (see the upload spec). The `export` side never learns the word "Immich"; it knows only that a
+delivery target may exist. With the integration off, the enum offers no variant, the dialog draws no
+section, and the worker skips the step — the persisted value stays in the file and is simply never read,
+which is also what keeps re-enabling lossless.
+
+⚠ **Open questions:** does disabling **hide or delete** the caches (`immich/` originals, the two thumbnail
+stores, the list cache)? Leaning **hide** — deleting on a toggle would destroy downloads the user may want
+back, and slice 4 already gives them an explicit *Remove downloads*. And what happens to **catalog rows**
+for Immich assets — `row_is_browsable` already hides absent Immich rows, so this may fall out for free,
+but it wants checking rather than assuming.
 
 ### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
 

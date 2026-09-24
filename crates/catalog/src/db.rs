@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
 /// The schema this build expects. Bump it whenever [`Catalog::migrate`] gains a step.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// What can go wrong talking to the catalog.
 ///
@@ -421,6 +421,32 @@ impl Catalog {
                      PRIMARY KEY (folder_id, file_name)
                  );
                  PRAGMA user_version = 7;
+                 COMMIT;",
+            )?;
+        }
+        if from < 8 {
+            // ⚠⚠ **A one-time re-read, not a schema change** — and the only reason a migration is
+            // needed at all is that `files_without_capture` queues a file only when it has **no
+            // capture row**, so a row already stored with `taken IS NULL` would never be looked at
+            // again.
+            //
+            // Until 2026-09-24 the JPEG reader took the capture time from `DateTimeOriginal` alone.
+            // A Fuji **SP-3000** film scanner writes that tag as the placeholder
+            // `"    :  :     :  :  "` while putting the real date in `DateTimeDigitized` **and**
+            // `DateTime`, so every such scan was stored with no date — which silently cost the date
+            // grouping, date sorting, the `{date}` filename token, the exported XMP and an Immich
+            // upload's `fileCreatedAt`. The reader now falls back through all three tags, and these
+            // rows have to be dropped for the background pass to pick them up.
+            //
+            // ⚠ Only rows with **no date** are dropped. A row that already has one is left alone:
+            // re-reading it could only produce the same answer, and the pass is not free.
+            //
+            // ⚠ A photo that genuinely carries no date at all is simply re-read once and stored
+            // NULL again, which is the correct outcome and costs one EXIF read.
+            self.conn.execute_batch(
+                "BEGIN;
+                 DELETE FROM photo_capture WHERE taken IS NULL;
+                 PRAGMA user_version = 8;
                  COMMIT;",
             )?;
         }
@@ -3499,5 +3525,66 @@ mod tests {
         let k = c.create_keyword("Paris", None).unwrap();
         c.assign_keyword(k, Path::new("/a/one.RAF")).unwrap();
         assert_eq!(c.keyword_delete_scope(k).unwrap(), (0, 1));
+    }
+
+    /// ⚠⚠ **The v8 migration exists so a fixed reader is actually SEEN.** `files_without_capture`
+    /// queues a file only when it has **no capture row**, so the 2026-09-24 date-reader fix — an
+    /// SP-3000 writes `DateTimeOriginal` as a blank placeholder and the real date in
+    /// `DateTimeDigitized` — would have changed nothing for photos already scanned. Dropping the
+    /// **dateless** rows is what re-queues them.
+    ///
+    /// ⚠ And a row that already has a date must be **left alone**: re-reading it could only produce
+    /// the same answer, and the background pass is not free. That is the discriminating half.
+    #[test]
+    fn the_v8_migration_requeues_only_the_dateless_captures() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.sync_folder(
+            Path::new("/a"),
+            &entries_in("/a", &["dated.JPG", "blank.JPG"]),
+        )
+        .unwrap();
+
+        // One photo whose date was read, one whose date came back empty — the SP-3000 shape.
+        cat.set_capture(
+            Path::new("/a/dated.JPG"),
+            &Capture {
+                taken: Some(1_763_559_144),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        cat.set_capture(
+            Path::new("/a/blank.JPG"),
+            &Capture {
+                taken: None,
+                camera: Some("FUJI PHOTO FILM CO., LTD. SP-3000".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            cat.files_without_capture(Path::new("/a"))
+                .unwrap()
+                .is_empty(),
+            "both rows exist, so nothing is queued — the precondition for the bug"
+        );
+
+        // Re-run the migration from version 7, as an existing database would.
+        cat.conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+        cat.migrate().unwrap();
+
+        assert_eq!(cat.version().unwrap(), 8);
+        assert_eq!(
+            cat.files_without_capture(Path::new("/a")).unwrap(),
+            vec!["blank.JPG".to_string()],
+            "only the dateless capture should be re-queued"
+        );
+        // ⚠ The one that had a date keeps it — untouched, not merely re-queued-and-restored.
+        assert_eq!(
+            cat.capture_of(Path::new("/a/dated.JPG"))
+                .unwrap()
+                .and_then(|c| c.taken),
+            Some(1_763_559_144)
+        );
     }
 }

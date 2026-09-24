@@ -32,6 +32,15 @@ pub enum ExportEvent {
     Collision {
         dest: PathBuf,
     },
+    /// An upload did not confirm, and the file is at `at`. Sent for the **first** one only.
+    ///
+    /// ⚠⚠ The run **keeps going** — a network that dropped one upload has not invalidated the rest.
+    /// ⚠ The report's `unconfirmed` list still holds every one; this is an addition for the first,
+    /// not a replacement.
+    UploadUnconfirmed {
+        at: PathBuf,
+        why: String,
+    },
     Finished(ExportReport),
 }
 
@@ -41,6 +50,16 @@ pub struct ExportReport {
     pub skipped: usize,
     pub failed: Vec<(PathBuf, String)>,
     pub cancelled: bool,
+    /// Files the server confirmed it stored (whether `created` or `duplicate`).
+    pub uploaded: usize,
+    /// Files written but whose upload did not confirm, with why.
+    ///
+    /// ⚠⚠ **"Unconfirmed", not "failed", and never retried automatically.** An SSL/EOF error
+    /// means the *response* was lost, not that the server rejected the upload — measured on this
+    /// tailnet during the 2026-09-24 stacking migration, 4 writes in 2,373 failed that way and
+    /// **none had applied**, but that had to be *checked* rather than assumed. An automatic retry
+    /// is how one edit becomes three assets.
+    pub unconfirmed: Vec<(PathBuf, String)>,
 }
 
 /// A running batch export.
@@ -82,6 +101,10 @@ impl ExportWorker {
         // ⚠ Where creative looks are read from. `None` means none are available, and every photo
         // then exports as though its `.cube` were missing — the documented fallback.
         looks_dir: Option<std::path::PathBuf>,
+        // ⚠ `None` means "write to disk only", which is the ordinary case and not an error. A
+        // narrow struct rather than `Settings`, so the worker cannot read preferences that are none
+        // of its business — see `immich_upload::UploadConfig`.
+        upload: Option<crate::immich_upload::UploadConfig>,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
@@ -100,6 +123,7 @@ impl ExportWorker {
                 render,
                 width,
                 &looks,
+                upload,
             );
         });
         Self {
@@ -140,6 +164,18 @@ struct Planned {
     dest: PathBuf,
     edits: Edits,
     meta: export::FileMetadata,
+    /// ⚠ Carried for the upload's `fileCreatedAt`, which must be the **capture** time.
+    capture: core_image::Capture,
+    /// ⚠⚠ Carried so an upload is recorded against the copy that was exported. Writing copy 0
+    /// instead would silence the dialog's "already uploaded" note for every virtual copy.
+    copy: u32,
+    /// The sidecar's mtime, for `UploadDate::Edited`.
+    ///
+    /// ⚠⚠ **Settled HERE, at plan time, and not at upload time.** `immich_upload::record` writes
+    /// the upload into the photo's sidecar, which bumps that very mtime — and `edited_at` *is* that
+    /// mtime. Read late, "the edit date" silently becomes "the date of the last upload", and would
+    /// differ between the first upload and every one after.
+    edited_at: Option<i64>,
 }
 
 /// Settle every filename and every collision, without decoding anything.
@@ -169,6 +205,13 @@ fn plan(
     decisions: &Receiver<Decision>,
     cancel: &AtomicBool,
     report: &mut ExportReport,
+    // ⚠ The directory files are actually written to: the staging directory under Immich-only, and
+    // `opts.dest_dir` otherwise. `opts` is still passed for everything else.
+    out_dir: &Path,
+    // ⚠⚠ False for a staging run: a **fresh temp directory cannot collide with anything**, so
+    // asking the user about one would be a question with no meaning. ⚠ `claimed` still applies —
+    // two sources sharing a stem must not overwrite each other inside the staging directory.
+    check_collisions: bool,
 ) -> Option<Vec<Planned>> {
     // Names produced during this run. ⚠ Without this, two sources sharing a stem
     // (`a.RAF`, `a.jpg`) would silently overwrite each other in an empty folder.
@@ -188,6 +231,9 @@ fn plan(
             ..
         } = job;
         let source = id.path.clone();
+        // ⚠ A second handle, because `source` is moved into the `Planned` literal below and the
+        // sidecar's mtime has to be read from the same path.
+        let source_for_edit = source.clone();
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             break;
@@ -208,8 +254,34 @@ fn plan(
             taken: capture.taken,
             camera: capture.camera.as_deref(),
         });
-        let mut dest = dest_named(&opts.dest_dir, &base, 0, opts.format);
-        if claimed.contains(&dest) || dest.exists() {
+        let mut dest = dest_named(out_dir, &base, 0, opts.format);
+        // ⚠ Under a staging run only `claimed` matters: the directory is new, so `exists()` can
+        // only ever be a name this same run already reserved.
+        if claimed.contains(&dest) || (check_collisions && dest.exists()) {
+            if !check_collisions {
+                // ⚠ Two sources sharing a stem inside the staging directory — resolved silently by
+                // suffixing, because there is no user-visible file to ask about.
+                let mut i = 1;
+                loop {
+                    let candidate = dest_named(out_dir, &base, i, opts.format);
+                    if !claimed.contains(&candidate) {
+                        dest = candidate;
+                        break;
+                    }
+                    i += 1;
+                }
+                claimed.insert(dest.clone());
+                out.push(Planned {
+                    source,
+                    dest,
+                    edits,
+                    meta,
+                    capture,
+                    copy: id.copy,
+                    edited_at: sidecar_seconds(&source_for_edit),
+                });
+                continue;
+            }
             let collision = match remembered {
                 Some(c) => c,
                 None => {
@@ -250,7 +322,7 @@ fn plan(
                     loop {
                         // ⚠ The *same* base, so "Keep both" appends `-N` to whatever the
                         // template produced rather than quietly falling back to the old naming.
-                        let candidate = dest_named(&opts.dest_dir, &base, i, opts.format);
+                        let candidate = dest_named(out_dir, &base, i, opts.format);
                         if !claimed.contains(&candidate) && !candidate.exists() {
                             dest = candidate;
                             break;
@@ -267,6 +339,9 @@ fn plan(
             dest,
             edits,
             meta,
+            capture,
+            copy: id.copy,
+            edited_at: sidecar_seconds(&source_for_edit),
         });
     }
     Some(out)
@@ -305,6 +380,116 @@ fn resolve_looks(
     out
 }
 
+/// The photo's sidecar mtime in seconds, for `UploadDate::Edited`.
+fn sidecar_seconds(photo: &Path) -> Option<i64> {
+    crate::sidecar::edited_at(photo).and_then(|t| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs() as i64)
+    })
+}
+
+/// A per-run directory for files that are uploaded and **not kept**.
+///
+/// ⚠ Keyed on the process id **and** a counter — `immich_list_cache`'s pattern. The two sites in
+/// `immich_source` that key on the pid alone are the ones **not** to copy: two runs in one process
+/// would otherwise share a directory.
+static STAGE_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Make the staging directory for a run, or `None` if it cannot be created.
+///
+/// ⚠ `None` is not fatal: the caller falls back to `dest_dir`, which is worse for tidiness and much
+/// better than failing a whole export over a temp directory.
+fn staging_dir() -> Option<PathBuf> {
+    let d = std::env::temp_dir().join(format!(
+        "rustroom_export_stage_{}_{}",
+        std::process::id(),
+        STAGE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&d).ok().map(|_| d)
+}
+
+/// Move a staged file somewhere the user will find it, returning where it ended up.
+///
+/// ⚠⚠ The **least-exercised path** in this feature, which is why it has its own test rather than a
+/// reading. A file whose upload did not confirm must not be swept with the temp directory.
+///
+/// ⚠ Returns the *temp* path when there is nowhere to move it or the move fails — a path that does
+/// not exist is worse than an ugly one, and `unconfirmed` is the one place the user looks.
+fn rescue(staged: &Path, dest_dir: &Path) -> PathBuf {
+    if !destination_ready(dest_dir) {
+        return staged.to_path_buf();
+    }
+    let Some(name) = staged.file_name() else {
+        return staged.to_path_buf();
+    };
+    let to = dest_dir.join(name);
+    // ⚠ `rename` first: a same-filesystem move is atomic and instant. It fails across devices, and
+    // a temp directory very often is one, so copy-then-remove is the fallback rather than the plan.
+    if std::fs::rename(staged, &to).is_ok() {
+        return to;
+    }
+    match std::fs::copy(staged, &to) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(staged);
+            to
+        }
+        Err(_) => staged.to_path_buf(),
+    }
+}
+
+/// The upload half of a run.
+///
+/// ⚠ Built **once per run**, outside the worker pool: it holds the `Client`, and constructing one
+/// per photo would re-parse the URL for every photograph for no reason.
+struct Uploader {
+    client: immich::Client,
+    host: String,
+}
+
+impl Uploader {
+    /// `None` when the connection will not build — a malformed URL, say. Not an error: the export
+    /// still runs and every photo is reported unconfirmed, which is visible without being fatal.
+    fn new(cfg: crate::immich_upload::UploadConfig) -> Option<Self> {
+        let client = immich::Client::new(&cfg.base_url, &cfg.key).ok()?;
+        Some(Self {
+            client,
+            host: cfg.base_url,
+        })
+    }
+
+    /// Upload one written file. `Err` carries a message for `unconfirmed`.
+    #[allow(clippy::too_many_arguments)]
+    fn send(
+        &self,
+        exported: &Path,
+        capture: &core_image::Capture,
+        source: &Path,
+        copy: u32,
+        which: UploadDate,
+        edited_at: Option<i64>,
+    ) -> Result<(), String> {
+        let filename = exported
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| "the exported file has no usable name".to_string())?;
+        let created = crate::immich_upload::created_at_text(which, capture.taken, edited_at);
+        let modified = crate::immich_upload::modified_at_text(exported);
+        let up = self
+            .client
+            .upload(exported, filename, &created, &modified)
+            .map_err(|e| e.to_string())?;
+        // ⚠ Recorded against the SOURCE photo's sidecar, not the exported file: the sidecar belongs
+        // to the photo, and under Immich-only the export is deleted moments later.
+        crate::immich_upload::record(source, copy, &self.host, &up);
+        Ok(())
+    }
+}
+
+// ⚠ Mirrors `spawn`'s parameter list, which carries the same allow. ⚠⚠ Ten arguments is past the
+// point where a `RunConfig { render, width, looks, upload }` would read better — noted rather than
+// done here, because changing this signature churns the concurrency carrier tests and belongs in its
+// own change.
 #[allow(clippy::too_many_arguments)]
 fn run(
     jobs: Vec<ExportJob>,
@@ -316,6 +501,7 @@ fn run(
     render: ExportRender,
     width: usize,
     looks: &std::collections::HashMap<String, Arc<pipeline::lut::Cube>>,
+    upload: Option<crate::immich_upload::UploadConfig>,
 ) {
     let mut report = ExportReport::default();
     // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
@@ -323,6 +509,21 @@ fn run(
     // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
     // the old way beats no folder at all.
     let template = Template::parse(&opts.filename_template).unwrap_or_default();
+
+    // ⚠ Built here rather than in `spawn`, the same rule `resolve_looks` follows: this is the
+    // worker thread, and the UI thread that starts an export should not do the work.
+    let uploader = upload.and_then(Uploader::new);
+
+    // ⚠⚠ Immich-only stages here and keeps nothing; `Files`/`Both` write straight to `dest_dir`.
+    // ⚠ Falls back to `dest_dir` when a temp directory cannot be made — the export is worth more
+    // than the tidiness.
+    let staging = (!opts.destination.keeps_files())
+        .then(staging_dir)
+        .flatten();
+    let out_dir = staging.clone().unwrap_or_else(|| opts.dest_dir.clone());
+    // ⚠⚠ **`swap(true)`, not a load-then-store.** The pool is `width`-wide, so several photos can
+    // fail in the same instant; `swap` makes exactly one of them win and open exactly one pop-up.
+    let told = AtomicBool::new(false);
 
     let Some(planned) = plan(
         jobs,
@@ -332,6 +533,8 @@ fn run(
         &decisions,
         &cancel,
         &mut report,
+        &out_dir,
+        staging.is_none(),
     ) else {
         return;
     };
@@ -369,6 +572,9 @@ fn run(
             let planned = &planned;
             let opts = &opts;
             let cancel = &cancel;
+            let uploader = uploader.as_ref();
+            let staging = &staging;
+            let told = &told;
             s.spawn(move || loop {
                 if cancel.load(Ordering::Relaxed) {
                     shared.lock().expect("export report").cancelled = true;
@@ -409,6 +615,19 @@ fn run(
                 let outcome = decoded.and_then(|src| {
                     export_one(src, &p.edits, &p.dest, opts, render, &p.meta, look)
                 });
+                // ⚠⚠ Only after a successful write, and it can never turn a success into a
+                // failure. The exported file is the deliverable; the upload is delivery.
+                let upload = match (&outcome, uploader) {
+                    (Ok(()), Some(u)) => Some(u.send(
+                        &p.dest,
+                        &p.capture,
+                        &p.source,
+                        p.copy,
+                        opts.upload_date,
+                        p.edited_at,
+                    )),
+                    _ => None,
+                };
                 {
                     // ⚠ `failed` is now in **completion** order, which is nondeterministic. Any
                     // test comparing it must sort or compare as a set.
@@ -416,6 +635,35 @@ fn run(
                     match outcome {
                         Ok(()) => r.exported += 1,
                         Err(e) => r.failed.push((p.source.clone(), e)),
+                    }
+                    match upload {
+                        // ⚠⚠ Deleted **only** on a confirmed upload. An SSL/EOF error means the
+                        // *response* was lost, not that the server rejected the file — 4 of 2,373
+                        // writes failed that way on this network and **none had actually failed to
+                        // apply**. Deleting on anything less would destroy work on a flaky link.
+                        Some(Ok(())) => {
+                            r.uploaded += 1;
+                            if staging.is_some() {
+                                let _ = std::fs::remove_file(&p.dest);
+                            }
+                        }
+                        Some(Err(e)) => {
+                            let at = if staging.is_some() {
+                                rescue(&p.dest, &opts.dest_dir)
+                            } else {
+                                p.dest.clone()
+                            };
+                            // ⚠ The first one only, and the send is outside nothing — it is a
+                            // channel push, so it cannot block the worker holding this lock.
+                            if !told.swap(true, Ordering::Relaxed) {
+                                let _ = events.send(ExportEvent::UploadUnconfirmed {
+                                    at: at.clone(),
+                                    why: e.clone(),
+                                });
+                            }
+                            r.unconfirmed.push((at, e));
+                        }
+                        None => {}
                     }
                 }
 
@@ -433,6 +681,12 @@ fn run(
         }
     });
     let report = shared.into_inner().expect("export report");
+
+    // ⚠ Only when empty. A staging directory still holding files is **not** an error — it means
+    // something did not confirm and could not be rescued, and `unconfirmed` already names each one.
+    if let Some(dir) = &staging {
+        let _ = std::fs::remove_dir(dir);
+    }
 
     let _ = events.send(ExportEvent::Finished(report));
 }
@@ -590,25 +844,34 @@ mod tests {
         // button stays lit over a typo.
         let d = TempDir::new("can_export");
         let good = templated(&d, "{name}-{seq:3}");
-        assert!(can_export(&good));
+        assert!(can_export(&good, true));
         assert!(
-            !can_export(&ExportOptions {
-                filename_template: "{camrea}".into(),
-                ..good.clone()
-            }),
+            !can_export(
+                &ExportOptions {
+                    filename_template: "{camrea}".into(),
+                    ..good.clone()
+                },
+                true
+            ),
             "an unknown token must stop the run"
         );
         assert!(
-            !can_export(&ExportOptions {
-                dest_dir: PathBuf::new(),
-                ..good.clone()
-            }),
+            !can_export(
+                &ExportOptions {
+                    dest_dir: PathBuf::new(),
+                    ..good.clone()
+                },
+                true
+            ),
             "an unset destination must stop the run"
         );
-        assert!(!can_export(&ExportOptions {
-            dest_dir: d.0.join("gone"),
-            ..good
-        }));
+        assert!(!can_export(
+            &ExportOptions {
+                dest_dir: d.0.join("gone"),
+                ..good
+            },
+            true
+        ));
     }
 
     #[test]
@@ -786,6 +1049,7 @@ mod tests {
                 CPU,
                 width,
                 None,
+                None,
             );
             let report = finished(&worker);
             assert_eq!(
@@ -827,6 +1091,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
+            None,
             None,
         );
         let mut collisions = 0;
@@ -1054,6 +1319,7 @@ mod tests {
             CPU,
             1,
             None,
+            None,
         );
         let report = finished(&worker);
         assert!(report.cancelled);
@@ -1089,6 +1355,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
+            None,
             None,
         );
 
@@ -1130,6 +1397,7 @@ mod tests {
             flag,
             CPU,
             1,
+            None,
             None,
         );
 
@@ -1259,6 +1527,208 @@ mod tests {
             dest_for(&dir, Path::new("/in/a.RAF"), 0, None, 3, ExportFormat::Jpeg),
             dir.join("a-3.jpg"),
             "an original that collides is unchanged from before this feature"
+        );
+    }
+
+    /// ⚠⚠ **A FAILED UPLOAD MUST NOT FAIL THE EXPORT.** The file is on disk; a flaky network
+    /// destroying a batch export would be far worse than an unuploaded file. The connection points
+    /// at a closed port on loopback, which is the failure shape and refuses immediately rather than
+    /// waiting on a timeout — so this is deterministic and fast, with no server involved.
+    #[test]
+    fn a_failed_upload_still_exports_the_file_and_is_reported_unconfirmed() {
+        let d = TempDir::new("upload_fail");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            // ⚠ Port 1 on loopback: nothing listens, so the connection is refused at once.
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let report = finished(&worker);
+        assert_eq!(report.exported, 1, "the export itself must succeed");
+        assert!(
+            report.failed.is_empty(),
+            "an upload failure is not an export failure: {:?}",
+            report.failed
+        );
+        assert!(d.0.join("a.jpg").exists(), "the file must still be written");
+        assert_eq!(report.uploaded, 0, "nothing was uploaded");
+        assert_eq!(
+            report.unconfirmed.len(),
+            1,
+            "the failure must be reported, not swallowed"
+        );
+    }
+
+    /// ⚠ The control: with no connection nothing is attempted and nothing is reported, so the
+    /// counters above cannot be passing for an unrelated reason.
+    #[test]
+    fn no_upload_connection_means_no_upload_reporting() {
+        let d = TempDir::new("upload_off");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(report.exported, 1);
+        assert_eq!(report.uploaded, 0);
+        assert!(
+            report.unconfirmed.is_empty(),
+            "nothing should be reported when nothing was attempted"
+        );
+    }
+
+    /// ⚠⚠ **THE LEAST-EXERCISED PATH, AND THE REASON THIS SHAPE WAS CHOSEN OVER TWO SIMPLER ONES.**
+    /// Immich-only stages in a temp directory; when the upload does not confirm the file must end up
+    /// in the export folder, findable, rather than swept with the temp directory. Forced with a
+    /// closed port on loopback, which refuses at once rather than waiting on a timeout.
+    #[test]
+    fn an_unconfirmed_upload_moves_the_staged_file_into_the_export_folder() {
+        let d = TempDir::new("stage_fail");
+        let mut o = opts(&d, None);
+        o.destination = Destination::Target(UploadTarget::Immich);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let report = finished(&worker);
+        assert_eq!(report.exported, 1, "the render and write still succeeded");
+        assert_eq!(report.uploaded, 0);
+        assert_eq!(report.unconfirmed.len(), 1);
+        let landed = d.0.join("a.jpg");
+        assert!(
+            landed.exists(),
+            "the staged file must be moved where the user can find it; the folder held {:?}",
+            std::fs::read_dir(&d.0)
+                .unwrap()
+                .flatten()
+                .map(|e| e.path())
+                .collect::<Vec<_>>()
+        );
+        // ⚠ And the report must name where it actually is, not the temp path it was written to.
+        assert_eq!(report.unconfirmed[0].0, landed);
+    }
+
+    /// ⚠ The control for the staging half: with no target at all, `Files` keeps its file exactly
+    /// where it always did. Without this the move above could pass against a mode that never staged.
+    #[test]
+    fn files_only_keeps_the_file_in_the_export_folder() {
+        let d = TempDir::new("files_only");
+        let o = opts(&d, None);
+        assert_eq!(o.destination, Destination::Files);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(report.exported, 1);
+        assert!(d.0.join("a.jpg").exists());
+        assert!(report.unconfirmed.is_empty());
+    }
+
+    /// ⚠⚠ **A staging run must never leave a file in the temp directory.** The confirmed-delete half
+    /// needs a server, so this pins the reachable half: whatever happens, the file the report names
+    /// is inside the export folder and exists. Without it, "Immich only" could quietly strand files
+    /// somewhere the user never looks.
+    #[test]
+    fn a_staging_run_never_leaves_a_file_in_the_temp_directory() {
+        let d = TempDir::new("stage_tidy");
+        let mut o = opts(&d, None);
+        o.destination = Destination::Target(UploadTarget::Immich);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let report = finished(&worker);
+        let at = &report.unconfirmed[0].0;
+        assert!(
+            at.starts_with(&d.0),
+            "the file was left outside the export folder at {at:?}"
+        );
+        assert!(at.exists(), "the reported path must exist");
+    }
+
+    /// ⚠⚠ **"Just once for the first one" is the requirement, so the pair is what makes this
+    /// discriminating:** two photos fail, and there must be **one** event and **two** report entries.
+    /// Asserting only the event count would pass against a run that lost the second failure entirely.
+    #[test]
+    fn only_the_first_unconfirmed_upload_raises_the_notice() {
+        let d = TempDir::new("told_once");
+        let mut o = opts(&d, None);
+        o.destination = Destination::Both(UploadTarget::Immich);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            // ⚠ Width 1 so the two failures are ordered; the `swap` guard is what makes the wide
+            // case safe, and a width of 1 is the case whose counts are deterministic.
+            1,
+            None,
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let mut notices = 0;
+        let mut report = None;
+        while let Ok(ev) = worker.events().recv() {
+            match ev {
+                ExportEvent::UploadUnconfirmed { at, .. } => {
+                    notices += 1;
+                    assert!(at.exists(), "the notice must name a file that exists");
+                }
+                ExportEvent::Finished(r) => {
+                    report = Some(r);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let report = report.expect("the worker ended without a Finished event");
+        assert_eq!(notices, 1, "exactly one notice for a run with two failures");
+        assert_eq!(
+            report.unconfirmed.len(),
+            2,
+            "both failures must still be reported"
         );
     }
 }

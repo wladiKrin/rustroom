@@ -156,6 +156,30 @@ pub struct Asset {
     pub updated_at: String,
 }
 
+/// The reply to `POST /assets`.
+///
+/// ⚠ Fields per the 3.2.0 spec's `AssetMediaResponseDto`, whose `required` is `["id", "status"]`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Upload {
+    pub id: String,
+    pub status: UploadStatus,
+}
+
+/// Whether the server stored a new asset or recognised the bytes.
+///
+/// ⚠⚠ `Duplicate` is **not an error**: Immich checksums the upload, and re-sending byte-identical
+/// data returns the *existing* asset's id. That is what makes a repeated upload of the same export
+/// harmless with no client-side guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UploadStatus {
+    Created,
+    Duplicate,
+    /// ⚠ A value this build does not know. The asset exists; only the label is unfamiliar.
+    #[serde(other)]
+    Other,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +456,42 @@ mod tests {
             "fileModifiedAt":"2025-08-14T09:21:33.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}"#;
         let a: Asset = serde_json::from_str(json).expect("an unknown type must parse");
         assert!(matches!(a.asset_type, AssetType::Other));
+    }
+
+    /// ✅ **CAPTURED from a real 3.2.0 server on 2026-09-24**, not constructed — a re-upload of an
+    /// already-uploaded file, byte for byte, replying **HTTP 200** with exactly this body. The
+    /// asset count was 16,118 before and after, so the server really did dedupe and create
+    /// nothing.
+    ///
+    /// ⚠⚠ The previous version of this test was hand-written from the OpenAPI schema and said so.
+    /// It is replaced because a constructed fixture proves only self-consistency — M9.1's
+    /// `album.json` asserted an `assets` field that endpoint has never returned and passed against
+    /// 2,678 green tests. **Note what the real reply shows that the schema did not:** the field
+    /// order is `status` then `id`, and a duplicate is **200**, not 201.
+    #[test]
+    fn an_upload_reply_deserialises() {
+        // The captured duplicate reply, verbatim.
+        let dup: Upload = serde_json::from_str(
+            r#"{"status":"duplicate","id":"83d3bcc5-043b-47a0-a0db-9025d96f7a17"}"#,
+        )
+        .unwrap();
+        assert_eq!(dup.status, UploadStatus::Duplicate);
+        assert_eq!(dup.id, "83d3bcc5-043b-47a0-a0db-9025d96f7a17");
+
+        // ⚠ `created` is the same shape with the other status word — the first upload of that same
+        // file returned it, and the asset it names is the one the duplicate above points back to.
+        let created: Upload = serde_json::from_str(
+            r#"{"status":"created","id":"83d3bcc5-043b-47a0-a0db-9025d96f7a17"}"#,
+        )
+        .unwrap();
+        assert_eq!(created.status, UploadStatus::Created);
+    }
+
+    /// ⚠ An unknown status must not fail the whole upload — the asset exists either way, and a
+    /// future Immich adding a third value should not make a successful upload read as an error.
+    #[test]
+    fn an_unknown_upload_status_is_tolerated() {
+        let u: Upload = serde_json::from_str(r#"{"id":"x","status":"something-new"}"#).unwrap();
+        assert_eq!(u.status, UploadStatus::Other);
     }
 }
