@@ -338,11 +338,20 @@ impl RustroomApp {
                             }
                             ui.separator();
                         }
+                        immich_cache_buttons(self, ui);
+                        // ⚠ A bulk Immich download reports itself the same way an export does, and
+                        // cancels the same way — one idiom for a long background job.
+                        let immich_progress = self.immich_download_progress();
                         if !self.export_progress.is_empty() {
                             if ui.button("Cancel").clicked() {
                                 self.cancel_export();
                             }
                             ui.label(&self.export_progress);
+                        } else if !immich_progress.is_empty() {
+                            if ui.button("Cancel").clicked() {
+                                self.cancel_immich_downloads();
+                            }
+                            ui.label(&immich_progress);
                         } else if !self.status.is_empty() {
                             ui.weak(&self.status);
                         }
@@ -608,6 +617,60 @@ fn mode_switch(ui: &mut egui::Ui, mode: &mut LibraryMode) {
             accent: false,
         },
     );
+}
+
+/// Download and Remove downloads, for the current selection.
+///
+/// ⚠ **Library only, Immich sources only, and only with a selection.** A local photo is always
+/// "downloaded", so these are meaningless on a folder — and drawing a disabled pair on every folder is
+/// worse than drawing none.
+///
+/// ⚠⚠ **"Remove downloads", never "Discard" or "Delete".** The action *cannot* reach the server — the API
+/// key is read-only by the Settings help text's own instruction — and "discard" beside a photograph reads
+/// as throwing the photograph away, with a hover as the only correction (user's call, 2026-09-24).
+fn immich_cache_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    if app.view != AppView::Library {
+        return;
+    }
+    let immich = matches!(
+        app.library.as_ref().map(|l| &l.source),
+        Some(LibrarySource::ImmichAlbum { .. }) | Some(LibrarySource::ImmichBucket { .. })
+    );
+    if !immich {
+        return;
+    }
+    // ⚠ From the ordinary selection — the same question Export asks, so "these twelve" means one thing.
+    let picked: Vec<std::path::PathBuf> = app
+        .library
+        .as_ref()
+        .map(|l| {
+            l.selection
+                .iter()
+                .filter_map(|i| l.entries.get(i))
+                .map(|e| e.id.path.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let any = !picked.is_empty();
+
+    if ui
+        .add_enabled(any, egui::Button::new("Download"))
+        .on_hover_text("Download the selected photos now, so they are available offline")
+        .clicked()
+    {
+        app.download_assets(&picked);
+    }
+    if ui
+        .add_enabled(any, egui::Button::new("Remove downloads"))
+        .on_hover_text(
+            "Deletes only the local copies of the selected photos. They stay on your Immich server, \
+             and your edits and ratings are kept.",
+        )
+        .clicked()
+    {
+        app.remove_downloaded(&picked);
+    }
+    ui.separator();
 }
 
 /// The Develop toolbar's Export button: the bar's one accent-filled control.

@@ -642,6 +642,41 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     .request(rustroom_app::immich_worker::Job::Album { id, name });
             }
         }
+        // ⚠⚠ The asset list is needed to know *which* files to act on, and the rail may not have it.
+        // Reuse the click path's own three steps — session map, then the stored list, then a fetch —
+        // rather than inventing a fourth way to get one. ⚠ If it has to be fetched, say so instead of
+        // silently doing nothing; the user pressed a button.
+        crate::immich_panel::Action::DownloadAlbum { id, name } => {
+            match app.immich_album_assets(&id) {
+                Some(assets) => {
+                    let paths = app.immich_paths_for(&assets);
+                    app.download_assets(&paths);
+                }
+                None => {
+                    app.status =
+                        format!("Opening “{name}” first — press Download again once it loads");
+                    app.immich_opening = Some(id.clone());
+                    app.immich
+                        .request(rustroom_app::immich_worker::Job::Album { id, name });
+                }
+            }
+        }
+        crate::immich_panel::Action::RemoveAlbum { id, name } => {
+            match app.immich_album_assets(&id) {
+                Some(assets) => {
+                    let paths = app.immich_paths_for(&assets);
+                    app.remove_downloaded(&paths);
+                }
+                None => {
+                    app.status = format!(
+                        "Opening “{name}” first — press Remove downloads again once it loads"
+                    );
+                    app.immich_opening = Some(id.clone());
+                    app.immich
+                        .request(rustroom_app::immich_worker::Job::Album { id, name });
+                }
+            }
+        }
         crate::immich_panel::Action::RefreshBuckets => {
             app.immich
                 .request(rustroom_app::immich_worker::Job::Buckets);

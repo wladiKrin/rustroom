@@ -524,6 +524,14 @@ struct RustroomApp {
     /// ⚠⚠ Cached because the alternative is a stat per thumbnail per frame. Refreshed at startup, when
     /// an Immich library opens, and by one insert per completed download — never per frame.
     immich_present: std::collections::HashSet<std::ffi::OsString>,
+    /// The asset ids a **bulk** download is still waiting on, and how many it asked for.
+    ///
+    /// ⚠⚠ A set rather than a counter, so opening a single photo while a bulk download runs cannot
+    /// corrupt the progress: that open's completion is simply not in this set. A `done`/`total` pair
+    /// would have counted it.
+    immich_download_pending: std::collections::HashSet<String>,
+    /// How many the current bulk download asked for; `0` when none is running.
+    immich_download_total: usize,
     /// The one catalog. `None` when it could not be opened.
     ///
     /// ⚠⚠ **Invisible by design.** Nothing in the UI mentions it; it exists so that collections
@@ -746,6 +754,8 @@ impl RustroomApp {
                     )
                 })
                 .unwrap_or_default(),
+            immich_download_pending: Default::default(),
+            immich_download_total: 0,
             settings,
             catalog,
             modal: Modal::None,

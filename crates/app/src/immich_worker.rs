@@ -77,6 +77,17 @@ struct Msg {
     outcome: Outcome,
 }
 
+/// How many originals download at once.
+///
+/// ⚠⚠ **Four, and a queue rather than a thread per job.** [`ImmichWorker::request`] spawns a thread and
+/// `in_flight` only *dedupes* — it bounds nothing — so before this a bulk request for an 872-asset album
+/// meant **872 threads and 872 concurrent HTTP requests** at one self-hosted server.
+///
+/// ⚠ The number follows `batch_export`'s four-wide default because these are network-bound against a
+/// single machine; the *mechanism* is the queue below, not that precedent. ⚠ A guess, not a
+/// measurement — one named constant to change when there is one.
+pub const MAX_CONCURRENT_DOWNLOADS: usize = 4;
+
 /// Where the partial download lives until it is complete.
 ///
 /// ⚠ A suffix rather than a sibling directory, so a crash leaves the evidence next to the thing
@@ -112,6 +123,10 @@ pub struct ImmichWorker {
     pending_albums: bool,
     /// Whether the **bucket list** fetch is outstanding. See [`Self::pending_albums`].
     pending_buckets: bool,
+    /// Downloads waiting for a slot — see [`MAX_CONCURRENT_DOWNLOADS`].
+    ///
+    /// ⚠ Only `Job::Original` ever queues. A list fetch is one request and an open is never delayed.
+    queued: std::collections::VecDeque<Job>,
 }
 
 impl ImmichWorker {
@@ -126,6 +141,7 @@ impl ImmichWorker {
             open_seq: 0,
             pending_albums: false,
             pending_buckets: false,
+            queued: std::collections::VecDeque::new(),
         }
     }
 
@@ -180,6 +196,42 @@ impl ImmichWorker {
         };
 
         let seq = matches!(job, Job::Album { .. } | Job::Bucket { .. }).then_some(self.open_seq);
+
+        // ⚠⚠ Past the cap, a download **waits** instead of spawning. `in_flight` already holds this
+        // asset's id — the dedupe above inserted it — so a queued asset is still deduped, and `poll`
+        // starts the next one as each completes.
+        if matches!(job, Job::Original { .. }) && self.in_flight.len() > MAX_CONCURRENT_DOWNLOADS {
+            self.queued.push_back(job);
+            return;
+        }
+        self.spawn(job, asset_id, seq);
+    }
+
+    /// How many downloads are waiting for a slot.
+    pub fn queued_downloads(&self) -> usize {
+        self.queued.len()
+    }
+
+    /// Drop everything still waiting; returns how many were dropped.
+    ///
+    /// ⚠⚠ The **in-flight** downloads are deliberately left to finish — `DecodeWorker`'s idiom, which
+    /// this project follows everywhere: *superseded work is abandoned, not aborted.* Killing a download
+    /// mid-write would leave a `.part` file, which [`part_path`] exists to make survivable but which
+    /// there is no reason to create on purpose.
+    pub fn cancel_downloads(&mut self) -> usize {
+        let n = self.queued.len();
+        // ⚠ The ids of dropped jobs must leave `in_flight`, or those assets could never be requested
+        // again for the life of the process.
+        for job in self.queued.drain(..) {
+            if let Job::Original { asset_id, .. } = job {
+                self.in_flight.remove(&asset_id);
+            }
+        }
+        n
+    }
+
+    /// The one place work starts, so `request` and `poll` cannot drift about how.
+    fn spawn(&self, job: Job, asset_id: Option<String>, seq: Option<u64>) {
         let fetch = self.fetch.clone();
         let tx = self.tx.clone();
         let on_done = self.on_done.clone();
@@ -203,6 +255,17 @@ impl ImmichWorker {
         while let Ok(msg) = self.rx.try_recv() {
             if let Some(id) = &msg.asset_id {
                 self.in_flight.remove(id);
+                // ⚠⚠ **After** the removal, not before: the cap counts `in_flight`, so starting the
+                // next job first would see the finished one as still live and stall the queue one short
+                // for ever. ⚠ This is the half that makes the queue drain — without it a bulk request
+                // runs its first four and silently stops.
+                if let Some(next) = self.queued.pop_front() {
+                    let id = match &next {
+                        Job::Original { asset_id, .. } => Some(asset_id.clone()),
+                        _ => None,
+                    };
+                    self.spawn(next, id, None);
+                }
             }
             // ⚠ Each reply clears **its own** flag. Clearing a shared one let a bucket reply free an
             // album fetch that was still running.
@@ -496,6 +559,108 @@ mod tests {
             || {},
         );
         (w, seen)
+    }
+
+    /// ⚠⚠ **The whole point of the queue.** `request` spawns a thread per job and `in_flight` only
+    /// *dedupes*, so before this an 872-asset album meant **872 threads and 872 concurrent HTTP
+    /// requests** at the user's own server.
+    ///
+    /// ⚠ Counts **concurrent** entries, not total calls: a fetcher counting calls would pass against no
+    /// queue at all. ⚠ And it asserts the fixture actually overlaps, or the cap proves nothing.
+    #[test]
+    fn no_more_than_the_cap_download_at_once() {
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let (l, pk) = (live.clone(), peak.clone());
+        let mut w = ImmichWorker::new(
+            Arc::new(move |_job: Job| {
+                let n = l.fetch_add(1, Ordering::SeqCst) + 1;
+                pk.fetch_max(n, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                l.fetch_sub(1, Ordering::SeqCst);
+                Outcome::Original {
+                    dest: PathBuf::from("x"),
+                    result: Ok(()),
+                }
+            }),
+            || {},
+        );
+        const N: usize = 30;
+        for i in 0..N {
+            w.request(Job::Original {
+                asset_id: format!("a{i}"),
+                dest: PathBuf::from(format!("/tmp/rr_dl_{i}.jpg")),
+            });
+        }
+        let mut done = 0;
+        settle(&mut w, |w| {
+            done += w.poll().len();
+            done >= N
+        });
+        assert_eq!(done, N, "every queued download must eventually run");
+
+        let got = peak.load(Ordering::SeqCst);
+        assert!(
+            got > 1,
+            "the fixture never overlapped, so the cap proves nothing (peak {got})"
+        );
+        assert!(
+            got <= MAX_CONCURRENT_DOWNLOADS + 1,
+            "{got} downloads ran at once; the cap is {MAX_CONCURRENT_DOWNLOADS}"
+        );
+    }
+
+    /// ⚠ Cancel clears the **queue** and leaves the in-flight to finish — `DecodeWorker`'s idiom.
+    /// ⚠⚠ And it must return the dropped ids to `in_flight`'s free pool, or those assets could never be
+    /// requested again for the life of the process.
+    #[test]
+    fn cancelling_drops_the_queue_and_frees_those_assets() {
+        let mut w = ImmichWorker::new(
+            Arc::new(|_job: Job| {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                Outcome::Original {
+                    dest: PathBuf::from("x"),
+                    result: Ok(()),
+                }
+            }),
+            || {},
+        );
+        for i in 0..20 {
+            w.request(Job::Original {
+                asset_id: format!("b{i}"),
+                dest: PathBuf::from(format!("/tmp/rr_c_{i}.jpg")),
+            });
+        }
+        assert!(
+            w.queued_downloads() > 0,
+            "the fixture must have queued something"
+        );
+        let dropped = w.cancel_downloads();
+        assert!(dropped > 0);
+        assert_eq!(w.queued_downloads(), 0);
+        assert_eq!(w.cancel_downloads(), 0, "a second cancel is a no-op");
+
+        // ⚠ A dropped asset can be asked for again.
+        w.request(Job::Original {
+            asset_id: "b19".to_string(),
+            dest: PathBuf::from("/tmp/rr_c_19.jpg"),
+        });
+        assert!(
+            w.queued_downloads() > 0 || w.is_downloading("b19"),
+            "a cancelled asset must be requestable again"
+        );
+    }
+
+    /// ⚠ The single-photo path is unchanged: one request never queues.
+    #[test]
+    fn a_lone_download_never_queues() {
+        let (mut w, _seen) = worker_recording_jobs();
+        w.request(Job::Original {
+            asset_id: "solo".to_string(),
+            dest: PathBuf::from("/tmp/rr_solo.jpg"),
+        });
+        assert_eq!(w.queued_downloads(), 0);
+        assert!(w.is_downloading("solo"));
     }
 
     /// ⚠⚠ **The regression test for a shared guard.** One `pending_list` flag covered both list kinds,

@@ -11,12 +11,61 @@ use crate::RustroomApp;
 use eframe::egui;
 
 /// What a click in this section asked for.
+/// The row actions an Immich album or month row offers, given what is already downloaded.
+///
+/// ⚠⚠ **Only the applicable ones.** Nothing to download when every photo is here; nothing to remove when
+/// none is (user's call, 2026-09-24) — a button that cannot do anything is worse than no button.
+///
+/// ⚠ `downloaded` is `None` when the asset list is not in hand, and then **both** are offered: the rail
+/// genuinely does not know, and pressing one loads the list and says to press again. Guessing "neither"
+/// would make an album unreachable.
+///
+/// ⚠⚠ **Both glyphs are verified against the bundled fonts, by parsing their cmaps.** `\u{2b07}` is in
+/// NotoEmoji **and** emoji-icon-font, both of which egui puts in the `Proportional` family, and NotoEmoji
+/// is monochrome so it takes the painter's colour. `\u{d7}` is in Ubuntu-Light and is what the Folders
+/// rail's Forget already uses. ⚠ The first attempt used `\u{2193}` and `\u{2715}`: the first is in **Hack
+/// only**, which is the *Monospace* family, and the second is in **no bundled font at all** — so both
+/// shipped as grey squares, reported immediately. `icons.rs`'s doc warns about exactly this, and four
+/// features had already paid for it.
+fn row_actions(downloaded: Option<(usize, usize)>) -> Vec<list_row::RowAction<'static>> {
+    let download = list_row::RowAction {
+        glyph: '\u{2b07}',
+        verb: "Download",
+        hover: "Download every photo here now, so they are available offline",
+        enabled: true,
+    };
+    let remove = list_row::RowAction {
+        glyph: '\u{d7}',
+        verb: "Remove downloads",
+        hover:
+            "Deletes only the local copies. The photos stay on your Immich server, and your edits \
+                and ratings are kept.",
+        enabled: true,
+    };
+    match downloaded {
+        None => vec![download, remove],
+        Some((0, _)) => vec![download],
+        Some((have, total)) if have >= total => vec![remove],
+        Some(_) => vec![download, remove],
+    }
+}
+
 pub enum Action {
     None,
     /// Ask the server for its albums.
     Refresh,
     /// Open this album.
     Open {
+        id: String,
+        name: String,
+    },
+    /// Predownload every photo in this album.
+    DownloadAlbum {
+        id: String,
+        name: String,
+    },
+    /// Delete the local copies of this album's photos. ⚠ Never touches the server.
+    RemoveAlbum {
         id: String,
         name: String,
     },
@@ -111,6 +160,8 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         app.library.as_ref().map(|l| &l.source),
                         Some(crate::LibrarySource::ImmichAlbum { id, .. }) if id == &a.id
                     );
+                // ⚠ `None` when the asset list is not in hand — see `row_actions`.
+                let acts = row_actions(app.immich_downloaded_of(&a.id));
                 let r = list_row::row(
                     ui,
                     RowSpec {
@@ -121,7 +172,7 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         selected,
                         indent: 0.0,
                         hover: "Photos are downloaded when you open them",
-                        actions: &[],
+                        actions: &acts,
                     },
                 );
                 if r.clicked {
@@ -129,6 +180,24 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         id: a.id.clone(),
                         name: a.album_name.clone(),
                     };
+                }
+                // ⚠⚠ Read by **verb**, not by index. The slice's length now varies with what is
+                // downloaded, so a hard-coded `0`/`1` would download when you meant to remove as soon as
+                // one of the two was absent — which is the whole point of them being absent.
+                match r.action.and_then(|i| acts.get(i)).map(|a| a.verb) {
+                    Some("Download") => {
+                        action = Action::DownloadAlbum {
+                            id: a.id.clone(),
+                            name: a.album_name.clone(),
+                        }
+                    }
+                    Some("Remove downloads") => {
+                        action = Action::RemoveAlbum {
+                            id: a.id.clone(),
+                            name: a.album_name.clone(),
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
