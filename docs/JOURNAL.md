@@ -274,6 +274,38 @@ draws the panel headlessly and asserts **no label contains "immich"** when off, 
 backticks as command substitution**. One commit message absorbed a real binary's help text before being
 amended with `-F -` and a quoted heredoc. The other 29 were unaffected — checked, not assumed.
 
+#### ⚠⚠ Three defects the gate shipped, all found by use, and one was not what I assumed
+
+**1. "The name still changes" — and the rename I had already reverted was not the cause.**
+`immich_cache_root` went through `connection()`, so switching Immich off made it `None`, and
+`folder_display_name(path, None)` falls through to the directory's **basename**: the Folders row showed
+the raw host slug `https___…`. ⚠ **A path is not a behaviour.** It is now derived from the URL alone,
+and the gate stays only on what *acts* on the server. The user's report named the symptom exactly and I
+still had to go and find a second mechanism — reverting the thing I had built was not enough.
+
+**2. The connection died while the Test button said "connected".** Turning Immich off and on again
+re-pointed the shared thumbnail cell but **not the worker**, which holds a *snapshot* of the
+connection — so browsing stayed dead until a restart, while Test, which builds its own client from what
+is typed, kept succeeding. ⚠⚠ **The url/key branch's own comment already said the worker has to be
+rebuilt.** Giving the switch its own branch is what lost it. There is now **one branch for every input
+to `connection()`**, so the class of bug cannot recur.
+
+**3. The Location header still read "Immich, original date" while the ticks were hidden** — leaving
+Export dark with **no visible control to change it**, and leaking the word into a UI meant to have no
+mention of it. An unreachable target is coerced back to `Files` in the **draft**, never in a saved
+preset.
+
+⚠⚠ **AND MY FIRST TEST FOR (3) PASSED WITH THE FIX SABOTAGED.** It searched the drawn labels for
+"immich" — but a section's **trailing summary is painted**, which the headless harness cannot read, and
+`export_summary`'s own module doc says exactly that. I wrote the test anyway. Rewritten to assert
+`app.export_draft` after the dialog runs, which *is* observable, with a control that a reachable target
+survives; both directions sabotage-checked. ⚠ Same family as the vacuous Color-section guard: **a query
+that finds nothing passes silently.**
+
+⚠ The switch's label is **14 pt**, not `section_font`'s 11 (user's call, on use): at the section size a
+consequential decision read as one more small control. An explicit size rather than a resolved
+`TextStyle`, so there is no style to miss in a bare harness `Context`.
+
 ### 2026-09-24 — export delivery: files, Immich or both, reconciled into Location
 
 Branch `immich-upload`, **2,863 tests**, 75 goldens unmoved, gated green, **confirmed by use**. Two

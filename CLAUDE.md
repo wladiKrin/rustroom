@@ -166,7 +166,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2870 tests**, **75 goldens** (unmoved). Branch **`immich-optional`**, gated green. ⚠ **Run the git command above rather than trusting a number here** — the user
+**2873 tests**, **75 goldens** (unmoved). No branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 

@@ -343,8 +343,13 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     const H: f32 = 22.0;
     const W: f32 = 40.0;
     const PAD: f32 = 2.0;
+    /// ⚠ Larger than `section_font`'s 11 pt on purpose (user's call, 2026-09-24): this switch marks a
+    /// consequential decision, and a label at the same size as every section header read as one more
+    /// small control. An explicit size rather than a resolved `TextStyle`, so there is no style to
+    /// miss in a bare harness `Context` — the panic `section_font`'s own doc warns about.
+    const LABEL_PT: f32 = 14.0;
     let gap = ui.spacing().item_spacing.x;
-    let font = theme::section_font(ui.style());
+    let font = egui::FontId::proportional(LABEL_PT);
     let text_w = ui.fonts_mut(|f| {
         f.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::WHITE)
             .size()
