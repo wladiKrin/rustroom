@@ -1267,11 +1267,14 @@ its stack table; **neither has ever been added**, and that table now records so.
 
 **Do not treat this as a parsing job.** The parsing is the easy half.
 
-## Immich integration (recorded 2026-08-26 — slices 1–3 BUILT, 2026-09-22/24)
+## Immich integration (recorded 2026-08-26 — slices 1–4 BUILT, 2026-09-22/24)
 
-**Status:** ✅ **slices 1, 2 and 3 are built, merged and confirmed by use.** What remains is **slice 4**
-(the cache-management buttons, requested 2026-09-24) and **two-way sync**, which was *not* what slice 3
-turned out to be — see the correction below.
+**Status:** ✅ **slices 1, 2, 3 and 4 are built, merged and confirmed by use.** The only slice left is
+**two-way sync** — which was *not* what slice 3 turned out to be, see the correction below — and it is
+**blocked on a permission the user is told not to grant**, not on effort. Three smaller gaps are out of
+scope by decision: the OS keychain (the API key is **plaintext** in `settings.json`), **automatic**
+eviction of cached originals (slice 4 built the *manual* half), and reading Immich's own
+`rating`/`isFavorite`.
 
 The user self-hosts an **Immich** server holding all their photos, and wants to open them in
 Rustroom by giving a URL and credentials.
@@ -1334,9 +1337,19 @@ lessons.
 
 ### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
 
-**Status:** 🟡 wanted, not blocked, not specced. The user's words: *"I'd like there to be a 'download'
-button, that allows me to predownload e.g. an album or selection of images from immich, as well as a
-discard or delete button."*
+**Status:** ✅ **BUILT, merged and confirmed by use (2026-09-24).** Spec
+`docs/superpowers/specs/2026-09-24-immich-download-discard-design.md`; `grep -n 'Immich slice 4'
+docs/JOURNAL.md`. The user's words were: *"I'd like there to be a 'download' button, that allows me to
+predownload e.g. an album or selection of images from immich, as well as a discard or delete button."*
+
+✅ **Every open question below was answered by building it, and the answers are worth keeping** because
+each was a real decision: the buttons live in **both** places (rail *and* toolbar, and each hides itself
+when it does not apply); the word is **"Remove downloads"**, it cannot touch the server, and the hover
+says so; the **sidecar, catalog row and thumbnail all survive** a removal, which is what makes
+`cache_path`'s byte-identical re-download reattach the work; progress is a line with a **Cancel**, behind
+a **bounded queue capped at 4** — without it a bulk album request would have spawned **872 threads**; and
+a bulk download deliberately **does not open** anything, because *"opening an image and downloading it
+are two distinct things"*.
 
 **Why it follows naturally.** Everything needed already exists and is confirmed by use:
 `immich_worker`'s `Job::Original` downloads one asset to its deterministic cache path;
