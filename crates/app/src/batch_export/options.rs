@@ -91,6 +91,16 @@ pub struct ExportOptions {
     pub output_sharpening: OutputSharpening,
     /// Where the files land and what happens afterwards. **M6.1e — stored, inert.**
     pub delivery: Delivery,
+    /// Where the exported file is delivered **in addition to** `dest_dir`. `None` = disk only.
+    ///
+    /// ⚠⚠ **Deliberately NOT named for a service.** The Immich integration must be switchable
+    /// off with *"no mention of immich at all"* (`docs/BACKLOG.md`), so `export` knows only that a
+    /// delivery target may exist. A field called `immich` here could not be hidden later without
+    /// renaming every call site.
+    ///
+    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, and adding
+    /// it per field implies a guarantee it is not the source of — `space` above says the same.
+    pub upload_target: Option<UploadTarget>,
 }
 
 // ⚠⚠ These three **live in the `export` crate** (M6.1b/c/d) and are re-exported here, so no call
@@ -120,6 +130,15 @@ pub enum PostExportAction {
     #[default]
     Nothing,
     RevealInFileManager,
+}
+
+/// A destination an export can be delivered to besides the filesystem.
+///
+/// ⚠ One variant today, and that is not a placeholder — it is the only target that exists.
+/// ⚠⚠ **Append variants, never insert**: this is serialised into settings and export presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UploadTarget {
+    Immich,
 }
 
 /// The template every export used before templating existed, and the default.
@@ -166,6 +185,7 @@ impl Default for ExportOptions {
             watermark: Watermark::default(),
             output_sharpening: OutputSharpening::default(),
             delivery: Delivery::default(),
+            upload_target: None,
         }
     }
 }
@@ -292,5 +312,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// ⚠ The default must be "disk only", so an existing user's next export is unchanged.
+    #[test]
+    fn upload_is_off_by_default() {
+        assert_eq!(ExportOptions::default().upload_target, None);
+    }
+
+    /// ⚠⚠ The container-level `#[serde(default)]` is what makes this safe. An options file written
+    /// before this field existed must still load — the same guarantee
+    /// `an_options_file_from_before_the_delivery_fields_still_loads` pins for M6.1.
+    #[test]
+    fn an_options_file_from_before_upload_still_loads() {
+        let json = r#"{"dest_dir":"/tmp","quality":90}"#;
+        let o: ExportOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(o.upload_target, None);
+        assert_eq!(o.quality, 90);
+    }
+
+    #[test]
+    fn the_upload_target_round_trips() {
+        let mut o = ExportOptions::default();
+        o.upload_target = Some(UploadTarget::Immich);
+        let back: ExportOptions =
+            serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(back.upload_target, Some(UploadTarget::Immich));
     }
 }
