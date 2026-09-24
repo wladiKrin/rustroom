@@ -1436,6 +1436,13 @@ timeline**. Keying on `(stem, fileCreatedAt)` resolved it exactly and *also* rec
 stem-only 1:1 rule had to reject: **2,334 → 2,378 clean pairs**, reconciling to 2,379 with the one
 already stacked.
 
+⚠⚠ **`PUT /stacks/{id}` accepts ONLY `primaryAssetId` — there is NO "add asset to stack".** It can flip
+which half is the timeline face (so a JPEG-primary choice is reversible without unstacking), but adding a
+third member means **`DELETE /stacks/{id}` then `POST /stacks` with all three ids** — a dissolve-and-
+rebuild, not an additive call. ⚠ This is a real cost on any *"upload the edit and stack it with its
+original"* design. ✅ Conversely **`DELETE /stacks` takes a bulk `BulkIdsDto {ids}`**, so the entire
+migration is reversible in **one call**.
+
 **The one-time migration** was run as an audited script (dry run → 5-pair batch → verify → rest), each
 created stack id logged for reversal, JPEG first so the camera rendering stays the timeline face.
 ⚠ It is idempotent: it re-reads `GET /stacks` every run and skips what exists.
@@ -1444,6 +1451,29 @@ created stack id logged for reversal, JPEG first so the camera rendering stays t
 has no stacking awareness *and does not report `stack`*, so **Rustroom's grid still shows both halves of
 every stacked pair** while Immich's timeline collapses them. Any "stack pairs" feature in the app owes a
 grid that honours stacks — fed from a `GET /stacks` enumeration, not from the listing.
+
+### ⬜ Rustroom-side stacking awareness (backlog item, requested 2026-09-24)
+
+**Status:** ⬜ wanted, unblocked, not specced. Raised the moment the server-side migration landed:
+Immich's timeline now collapses **2,378** RAW+JPEG pairs, and **Rustroom's grid still shows both halves**,
+so the two views of the same library disagree.
+
+**Why it is not free.** Rustroom lists assets with `POST /search/metadata`, which is stacking-blind **and
+returns `stack: null` even for a stacked asset** (verified — see above). So the app cannot learn stack
+membership from the listing it already makes. The shape that works:
+
+- Enumerate `GET /stacks` **once per refresh** and build `HashSet<asset id> → stack`, the same
+  fetch-then-index move `present_names` uses for downloads.
+- Hide non-primary members from the Immich grid by default, mirroring Immich's own behaviour.
+- ⚠ **Cache it like the asset lists.** `immich_list_cache` already stores lists against a validator;
+  a stack enumeration wants the same treatment or it is another per-launch refetch — the gap the rail's
+  album and bucket lists still have.
+
+⚠ **Open questions, none blocking:** does the grid want a *stack badge* and a way to see the hidden
+member (Immich shows a stack icon and lets you page through), or is hiding enough? And should a
+Rustroom-initiated **pair-and-stack** action exist in the app at all, or was the one-time script the whole
+job? ⚠⚠ If it does exist in-app, it inherits every safeguard the script needed — above all
+**pair on `(stem, capture time)`, never on stem alone**, which this library proves is not paranoia.
 
 ### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
 
