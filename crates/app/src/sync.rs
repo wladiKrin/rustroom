@@ -214,6 +214,7 @@ mod tests {
                     },
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 },
                 CopyEntry {
                     copy: 1,
@@ -224,6 +225,7 @@ mod tests {
                     },
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 },
             ],
             copy_hwm: 0,

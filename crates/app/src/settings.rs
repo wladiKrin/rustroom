@@ -542,6 +542,21 @@ pub struct Settings {
     /// (`asset.read`, `asset.view`, `asset.download`, `album.read`). A key that cannot write
     /// cannot damage the library if this file leaks, which is what bounds the exposure.
     pub immich_key: String,
+    /// A **separate** key, granted `asset.upload`, used only when an export uploads.
+    ///
+    /// ⚠⚠ **Two keys rather than one with the grant added, and the reason is structural.**
+    /// Browsing, thumbnails and the rail run constantly and unattended; with one key every one of
+    /// those requests would travel with a write-capable credential. Two keys make "browsing cannot
+    /// write" a property of the **credential** rather than of our code being correct.
+    ///
+    /// ⚠ `asset.upload` is a grant *separate from* `asset.update` (verified against the 3.2.0
+    /// permission enum, 168 values), so even this key **cannot modify or delete** existing assets.
+    ///
+    /// ⚠ Plaintext, like [`Self::immich_key`]. The OS keychain remains out of scope by decision —
+    /// and a write-capable key in plaintext deserves the warning more, so the help text says so.
+    ///
+    /// Empty means uploading is unavailable; see [`crate::immich_upload::availability`].
+    pub immich_upload_key: String,
     /// Byte budget for the **local** thumbnail cache, in megabytes.
     ///
     /// ⚠⚠ No field-level `#[serde(default)]`. The struct carries a container-level one, so a
@@ -788,6 +803,7 @@ impl Default for Settings {
             hidden_formats: crate::format_filter::FormatFilter::default(),
             immich_url: String::new(),
             immich_key: String::new(),
+            immich_upload_key: String::new(),
             thumb_budget_mb: 5120,
             immich_thumb_budget_mb: 5120,
             confirm_preset_delete: true,
@@ -1504,6 +1520,9 @@ mod tests {
             // report "the server rejected the API key" — so the round trip must cover it.
             immich_url: "https://photos.example.com".to_string(),
             immich_key: "round-trip-key".to_string(),
+            // ⚠ Deliberately different from `immich_key`: the round trip must prove the two
+            // keys are carried as *separate* fields, not one value written twice.
+            immich_upload_key: "round-trip-upload-key".to_string(),
             // Non-default so a field re-defaulted on load cannot pass.
             thumb_budget_mb: 2048,
             immich_thumb_budget_mb: 1024,
@@ -2356,5 +2375,26 @@ mod tests {
             loaded.auto_advance,
             "an existing settings file must get the feature, not silently opt out of it"
         );
+    }
+
+    #[test]
+    fn the_upload_key_defaults_to_empty_and_round_trips() {
+        assert!(Settings::default().immich_upload_key.is_empty());
+        let s = Settings {
+            immich_upload_key: "upload-key".to_string(),
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.immich_upload_key, "upload-key");
+    }
+
+    /// ⚠ A settings file from before this field must still load — the browse key and URL survive.
+    #[test]
+    fn a_settings_file_from_before_the_upload_key_still_loads() {
+        let json = r#"{"immich_url":"https://h","immich_key":"browse"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.immich_url, "https://h");
+        assert_eq!(s.immich_key, "browse");
+        assert!(s.immich_upload_key.is_empty());
     }
 }

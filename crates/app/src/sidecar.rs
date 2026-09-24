@@ -94,6 +94,20 @@ impl Snapshot {
     }
 }
 
+/// One upload of this copy to one Immich server.
+///
+/// ⚠ `status` is the server's own word (`created` / `duplicate`) kept as **text** rather than as an
+/// enum: it is a record of what happened, and a future value should read back rather than fail.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UploadRecord {
+    /// The server this went to, so a second server is not mistaken for the first.
+    pub host: String,
+    pub asset_id: String,
+    pub status: String,
+    /// When Rustroom uploaded it, ISO-8601 UTC.
+    pub at: String,
+}
+
 /// One version of a photo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopyEntry {
@@ -117,6 +131,17 @@ pub struct CopyEntry {
     pub label: Option<String>,
     #[serde(default)]
     pub edits: Edits,
+    /// Uploads of this copy to Immich, newest last. Empty for a copy never uploaded.
+    ///
+    /// ⚠⚠ **Field-level `#[serde(default)]` only.** A container-level one on `Sidecar` itself is
+    /// the documented data-loss trap — see `load_all`'s doc comment. This is safe for the same
+    /// reason the `snapshots` field below is: the entry's other fields keep their own defaults and
+    /// nothing about `Sidecar::copies` changes.
+    ///
+    /// ⚠ A list, not one record: uploading the same copy twice after further editing is the correct
+    /// outcome, and the history of that is worth keeping.
+    #[serde(default)]
+    pub uploads: Vec<UploadRecord>,
     /// This copy's named saved states, oldest first.
     ///
     /// ⚠ **Per copy, not per file**, because each copy has its own `Edits` and so its own
@@ -237,6 +262,7 @@ impl Sidecar {
                 edits: Edits::default(),
                 snapshots: vec![snapshot],
                 snapshot_hwm: n,
+                uploads: Vec::new(),
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -279,6 +305,7 @@ impl Sidecar {
                 edits,
                 snapshots: Vec::new(),
                 snapshot_hwm: 0,
+                uploads: Vec::new(),
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -297,6 +324,7 @@ impl Sidecar {
                 edits: Edits::default(),
                 snapshots: Vec::new(),
                 snapshot_hwm: 0,
+                uploads: Vec::new(),
             }),
         }
         self.copies.sort_by_key(|c| c.copy);
@@ -472,6 +500,7 @@ pub fn load_all(photo: &Path) -> Sidecar {
                     // A sidecar this old predates snapshots by definition.
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 }],
                 // A sidecar this old predates the mark; copy 0 is the only number in use.
                 copy_hwm: 0,
@@ -668,6 +697,7 @@ mod tests {
                     },
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 },
                 CopyEntry {
                     copy: 3,
@@ -678,6 +708,7 @@ mod tests {
                     },
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 },
             ],
             copy_hwm: 0,
@@ -788,6 +819,7 @@ mod tests {
                 edits: Edits::default(),
                 snapshots: Vec::new(),
                 snapshot_hwm: 0,
+                uploads: Vec::new(),
             });
         }
         s.copies.retain(|c| c.copy != 1);
@@ -806,6 +838,7 @@ mod tests {
             edits: Edits::default(),
             snapshots: Vec::new(),
             snapshot_hwm: 0,
+            uploads: Vec::new(),
         });
         assert!(s.is_neutral(), "a neutral, unnamed original only");
 
@@ -817,6 +850,7 @@ mod tests {
                     edits: Edits::default(),
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 },
                 CopyEntry {
                     copy: 1,
@@ -824,6 +858,7 @@ mod tests {
                     edits: Edits::default(),
                     snapshots: Vec::new(),
                     snapshot_hwm: 0,
+                    uploads: Vec::new(),
                 },
             ],
             copy_hwm: 0,
@@ -839,6 +874,7 @@ mod tests {
             edits,
             snapshots: Vec::new(),
             snapshot_hwm: 0,
+            uploads: Vec::new(),
         });
         s
     }
@@ -902,6 +938,7 @@ mod tests {
                         },
                         snapshots: Vec::new(),
                         snapshot_hwm: 0,
+                        uploads: Vec::new(),
                     },
                     CopyEntry {
                         copy: 1,
@@ -912,6 +949,7 @@ mod tests {
                         },
                         snapshots: Vec::new(),
                         snapshot_hwm: 0,
+                        uploads: Vec::new(),
                     },
                 ],
                 copy_hwm: 0,
@@ -1448,5 +1486,34 @@ mod snapshot_tests {
     #[test]
     fn snapshots_of_an_absent_copy_is_empty() {
         assert!(Sidecar::default().snapshots_of(7).is_empty());
+    }
+
+    /// ⚠ Keyed by **host**: the same photo may be uploaded to two servers, and a bare "uploaded"
+    /// flag would lie on the second one.
+    #[test]
+    fn an_upload_record_round_trips_per_host() {
+        let mut sc = Sidecar::default();
+        sc.set_edits(0, Edits::default());
+        sc.copies[0].uploads.push(UploadRecord {
+            host: "immich.example".to_string(),
+            asset_id: "abc".to_string(),
+            status: "created".to_string(),
+            at: "2026-09-24T12:00:00.000Z".to_string(),
+        });
+        let back: Sidecar = serde_json::from_str(&serde_json::to_string(&sc).unwrap()).unwrap();
+        assert_eq!(back.copies[0].uploads.len(), 1);
+        assert_eq!(back.copies[0].uploads[0].asset_id, "abc");
+    }
+
+    /// ⚠⚠ A sidecar written before this field must still load **with its edits intact** — the
+    /// container-level-`serde(default)` trap this file documents is about `Sidecar`; this field is
+    /// on `CopyEntry` and takes a **field-level** default only.
+    #[test]
+    fn a_copy_entry_from_before_uploads_still_loads() {
+        let json = r#"{"copy":0,"edits":{"exposure":1.5}}"#;
+        let e: CopyEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(e.copy, 0);
+        assert_eq!(e.edits.exposure, 1.5, "the edits must survive");
+        assert!(e.uploads.is_empty());
     }
 }

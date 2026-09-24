@@ -333,8 +333,10 @@ mod tests {
 
     #[test]
     fn the_upload_target_round_trips() {
-        let mut o = ExportOptions::default();
-        o.upload_target = Some(UploadTarget::Immich);
+        let o = ExportOptions {
+            upload_target: Some(UploadTarget::Immich),
+            ..ExportOptions::default()
+        };
         let back: ExportOptions =
             serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
         assert_eq!(back.upload_target, Some(UploadTarget::Immich));
