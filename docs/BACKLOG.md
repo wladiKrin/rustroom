@@ -1368,9 +1368,25 @@ re-derive it: a way to make the write **attended and reversible** (per-photo, co
 value recoverable), *and* a reason the additive path below cannot serve the same need. Neither exists
 today.
 
-### ⬜ Uploading edited photos to Immich — the successor (brainstorm started 2026-09-24)
+### ✅ Uploading edited photos to Immich — BUILT and confirmed by use (2026-09-24)
 
-**Why this is the stronger feature, not merely the safer one.** This document's own framing is *"Immich
+**Status:** ✅ built, gated green, **confirmed by use**. Spec
+`docs/superpowers/specs/2026-09-24-immich-upload-design.md`, plan
+`docs/superpowers/plans/2026-09-24-immich-upload.md`; `grep -n 'Uploading edited photos' docs/JOURNAL.md`.
+
+✅ **The two properties only a real server could settle, both measured 2026-09-24:** the uploaded
+edit's **`fileCreatedAt` is its capture time** (2026-09-22T21:01:06Z) while `createdAt` is the upload
+time — so the "it landed at today's date" trap did not happen; and a byte-identical re-upload replied
+**HTTP 200 `{"status":"duplicate","id":…}`** with the asset count **16,118 before and after**, so the
+server dedupes and creates nothing. ⚠ The DTO fixture is now **captured**, not constructed, and its
+doc says so — it also records two things the schema did not: field order is `status` then `id`, and a
+duplicate is **200**, not 201.
+
+⚠ **Shipped narrower than the section below imagined, by decision:** plain upload into the timeline;
+**any** photo, not only Immich-sourced ones; no albums; not stacked with the original; no
+library-wide "upload everything edited" sweep. Each remains its own later change.
+
+**Why this was the stronger feature, not merely the safer one.** This document's own framing is *"Immich
 stores and shares, Rustroom edits"* — and that loop is **currently broken**: an edit lands on local disk
 and never returns to where the photos live and are shared. Sync would have moved *metadata the user can
 already see in Rustroom*; upload moves **the thing they made**.

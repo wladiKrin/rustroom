@@ -458,22 +458,33 @@ mod tests {
         assert!(matches!(a.asset_type, AssetType::Other));
     }
 
-    /// ⚠⚠ **CONSTRUCTED, NOT CAPTURED.** Built from the 3.2.0 OpenAPI spec's
-    /// `AssetMediaResponseDto`, so it proves only that this DTO matches the *schema*. This repo
-    /// has been bitten four times by exactly that gap — `album.json` asserted an `assets` field
-    /// the endpoint never returns. **Replace this with a captured reply the first time a real
-    /// upload succeeds.**
+    /// ✅ **CAPTURED from a real 3.2.0 server on 2026-09-24**, not constructed — a re-upload of an
+    /// already-uploaded file, byte for byte, replying **HTTP 200** with exactly this body. The
+    /// asset count was 16,118 before and after, so the server really did dedupe and create
+    /// nothing.
+    ///
+    /// ⚠⚠ The previous version of this test was hand-written from the OpenAPI schema and said so.
+    /// It is replaced because a constructed fixture proves only self-consistency — M9.1's
+    /// `album.json` asserted an `assets` field that endpoint has never returned and passed against
+    /// 2,678 green tests. **Note what the real reply shows that the schema did not:** the field
+    /// order is `status` then `id`, and a duplicate is **200**, not 201.
     #[test]
     fn an_upload_reply_deserialises() {
-        let created: Upload = serde_json::from_str(
-            r#"{"id":"ad41fe4c-9226-460b-8e35-8ebacdc3a0ce","status":"created"}"#,
+        // The captured duplicate reply, verbatim.
+        let dup: Upload = serde_json::from_str(
+            r#"{"status":"duplicate","id":"83d3bcc5-043b-47a0-a0db-9025d96f7a17"}"#,
         )
         .unwrap();
-        assert_eq!(created.id, "ad41fe4c-9226-460b-8e35-8ebacdc3a0ce");
-        assert_eq!(created.status, UploadStatus::Created);
-
-        let dup: Upload = serde_json::from_str(r#"{"id":"x","status":"duplicate"}"#).unwrap();
         assert_eq!(dup.status, UploadStatus::Duplicate);
+        assert_eq!(dup.id, "83d3bcc5-043b-47a0-a0db-9025d96f7a17");
+
+        // ⚠ `created` is the same shape with the other status word — the first upload of that same
+        // file returned it, and the asset it names is the one the duplicate above points back to.
+        let created: Upload = serde_json::from_str(
+            r#"{"status":"created","id":"83d3bcc5-043b-47a0-a0db-9025d96f7a17"}"#,
+        )
+        .unwrap();
+        assert_eq!(created.status, UploadStatus::Created);
     }
 
     /// ⚠ An unknown status must not fail the whole upload — the asset exists either way, and a
