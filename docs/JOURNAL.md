@@ -211,6 +211,56 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-24 — Immich made completely optional behind one gate
+
+Branch `immich-optional`. **2,870 tests**, 75 goldens unmoved, gated green.
+
+**The requirement was stronger than "the feature does nothing":** *"no mention of immich at all"* when
+it is off. ⚠⚠ **And it cost almost nothing because `connection()` already existed as a choke point** —
+the only place the URL and key are read, with **nine call sites** routing through it (the worker's
+fetcher, `refresh_shared`, `immich_panel`, `copies`, `immich_flow`). One condition inside it makes every
+one of them decline. `availability()` was changed to consult `connection()` rather than the raw fields,
+which is why **the export Location ticks needed no change at all** — the payoff of having built the
+gate's seed during the upload milestone.
+
+⚠⚠ **`immich_enabled` defaults to `true`, and that is the `gpu_tail` trap.** `Settings` carries a
+container-level `#[serde(default)]`, so a missing field takes whatever `Default` says — `false` would
+have made Immich **vanish on upgrade** for anyone using it. Pinned by a test that also loads a
+pre-field settings file and asserts Immich survives.
+
+⚠ **The Settings tab stays**, holding the toggle: hiding it would leave no way back on. Everything
+below the toggle hides, so the tab becomes a switch and nothing else.
+
+✅ **A wart fixed on the way:** `PanelSection::Immich` was drawn **unconditionally**, so a user who
+never configured Immich saw an empty rail section called "Immich". The same predicate removes it.
+
+✅ **The downloads stay usable** — the user's call of three options. They are real local JPEGs, so
+hiding them would put the user's own work out of reach, and it needs no special case because
+`remote_thumbnail` already declines once an original is present. The folder is renamed **"Downloaded
+photos"**.
+
+⚠⚠ **The rename alone was NOT enough, and the spec said it was.** An earlier draft claimed folder
+rows do not hover their path — based on grepping `on_hover_text`, which misses it, because the rail
+builds rows through `list_row::RowSpec { hover: &path, .. }`. The real path is
+`~/Library/Caches/rustroom/immich/<server>`, so hovering "Downloaded photos" would have shown both the
+word **and** the server's name. `folder_hover` now returns *"Photos downloaded to this computer"* when
+off. ⚠ That withholds a genuine fact (where the files are) and is the one such place in this design;
+the spec is corrected in place and says so.
+
+⚠⚠ **A BUG I INTRODUCED WHILE WRITING IT, CAUGHT BY READING RATHER THAN BY A TEST.** Skipping the rail
+section with a bare `continue` shortened `tops` — which is **index-aligned with the section order** and
+feeds `panel_order::drop_index`, whose result is applied to the *full* order when a drag settles. Every
+drag-reorder past the hidden section would have landed **one slot off**. Fixed by pushing the slot
+before continuing, and a `debug_assert_eq!(tops.len(), order.len())` now states the invariant.
+
+⚠ **The requirement is a test, not a checklist:** `the_immich_section_appears_only_when_the_integration_is_on`
+draws the panel headlessly and asserts **no label contains "immich"** when off, with a sample assertion
+(`Folders` is present) so the absence means something. Sabotage-verified: removing the gate fails it.
+
+⚠ **A shell mistake worth remembering:** `git commit -m "…`backticked`…"` in **zsh runs the
+backticks as command substitution**. One commit message absorbed a real binary's help text before being
+amended with `-F -` and a quoted heredoc. The other 29 were unaffected — checked, not assumed.
+
 ### 2026-09-24 — export delivery: files, Immich or both, reconciled into Location
 
 Branch `immich-upload`, **2,863 tests**, 75 goldens unmoved, gated green, **confirmed by use**. Two
