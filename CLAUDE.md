@@ -170,6 +170,13 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 branch, tree clean; `main` is **9 commits ahead of `origin/main`** — the user last pushed `a1169c4`.
 ⚠ Still never push.
 
+✅ **CI on Linux is verified green again (2026-09-24)** — the first real result since the workflow was
+fixed for the runner's disk on 2026-09-21. It failed once, on
+`immich_list_cache::tests::a_hostile_key_cannot_escape_the_directory`: a **test** that asserted an
+**absolute path's existence** and so passed on macOS and failed on Linux without ever reading the code.
+`safe_name::sanitize` was correct throughout. ⚠ Read shape **(e)** in *Standing lessons* before writing
+another traversal test.
+
 ✅ **Immich slice 4 — Download and Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its load-bearing
 change is a **bounded download queue**: `request` spawns a thread per job and `in_flight` only *dedupes*, so
 a bulk album request would have spawned **872 threads** — sabotage-measured at 30 concurrent against a cap
@@ -347,7 +354,13 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   two orders differ by >0.05 *before* asserting which happened; the GPU whole-chain test asserts the render
   differs from `neutral` before comparing backends. **(d)** When a threshold you invented fails, **find the
   real number** rather than lowering the bar — the histogram's sqrt reaches 2.2% where I asserted 5%, and
-  the test was rewritten around the measurement with a note not to weaken it.
+  the test was rewritten around the measurement with a note not to weaken it. **(e)** An assertion about
+  an **absolute path** tests the host, not the code: `!dir.join("../../../etc/passwd").exists()` is a
+  *lexical* join, so it probed `/var/folders/mt/etc/passwd` on macOS (absent → green for three days) and
+  **`/etc/passwd` on the Linux runner** (present on every Linux box → red). It never read anything the
+  module wrote. ⚠ **Assert on the path the code DERIVES and on the directory the test itself created** —
+  `immich_source`'s `a_hostile_original_name_cannot_escape_the_cache_directory` is the shape to copy. This
+  was the **first CI result after the 2026-09-21 workflow fix**, and the only failure in 985.
 - **⚠⚠ A CLAIM YOU DID NOT RUN IS NOT A FINDING — INCLUDING A CLAIM ABOUT A TEST.** Twice in two days:
   I reported *"the snapshot branch never had this bug"* from reading one line of a two-branch function,
   and the user found it the same day; and a test's doc comment advertised catching a sabotage that
