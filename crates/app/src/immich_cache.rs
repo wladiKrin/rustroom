@@ -97,7 +97,7 @@ mod tests {
             "the fixture must use the real sidecar naming, or it proves nothing"
         );
 
-        let out = remove_downloads(&[img.clone()], None);
+        let out = remove_downloads(std::slice::from_ref(&img), None);
 
         assert_eq!(
             out,
