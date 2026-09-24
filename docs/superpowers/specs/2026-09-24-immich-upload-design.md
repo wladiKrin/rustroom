@@ -200,9 +200,26 @@ Per-file, inside the existing loop, so all three come from machinery that exists
   none had applied — but that had to be *checked*, not assumed. So a failed upload is reported as
   **"unconfirmed"**, never retried automatically. An automatic retry is how one edit becomes three
   assets.
-- ⚠ Sequential, one file at a time. The download path needed a bounded queue because it fanned out a
-  thread per asset; the export worker is already a single sequential loop, so it needs no cap — and
-  uploading full-size JPEGs in parallel would be the wrong thing to add anyway.
+- ⚠⚠ **CORRECTED 2026-09-24, while writing the plan: the export worker is NOT sequential.** An earlier
+  draft of this section said it was "a single sequential loop", which is false — `run` opens a
+  **`width`-wide `thread::scope` pool** over a shared cursor, where `width = Settings::export_width()`
+  = `export_concurrency` clamped to `[1, cores]`, and each worker does a whole photo (decode, render,
+  write). The worker's own comments say so: *"with several in flight"*, *"abandons up to `width`
+  decodes"*, *"`failed` is now in **completion** order, which is nondeterministic"*.
+
+  The consequences, both accepted for v1 and neither hidden:
+  1. **Up to `width` uploads run concurrently.** This is already **bounded**, so unlike the download
+     path — which fanned out a thread per asset and needed `MAX_CONCURRENT_DOWNLOADS` — **no new cap is
+     required**. ⚠ But note `width` is tuned for **decode CPU and peak memory** (`width` whole photos),
+     *not* for a network link, so on a many-core machine it may be more parallel uploading than a
+     self-hosted server wants. It is user-adjustable, which is the v1 answer.
+  2. ⚠ **An upload occupies a decode slot while it runs**, so upload latency reduces export throughput.
+     Inherent to doing the upload inline in the pool.
+
+  ⚠ **The escape hatch if this proves slow in use:** move the upload to a separate single-threaded
+  stage fed by a channel, which decouples throughput and uploads one file at a time. Deliberately not
+  built now — it is more machinery than a first version needs, and whether it is wanted is a question
+  for after this has been seen working.
 
 ---
 
