@@ -5,6 +5,7 @@
 
 pub mod dto;
 pub mod error;
+pub mod multipart;
 
 pub use dto::{
     About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse,
