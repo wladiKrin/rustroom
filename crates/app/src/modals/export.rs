@@ -104,6 +104,24 @@ fn watermark_body(ui: &mut egui::Ui, opts: &mut ExportOptions) {
     ui.add(egui::Slider::new(&mut opts.watermark.opacity, 0..=100).text("Opacity"));
 }
 
+/// The destination-folder row: a Choose button and the path.
+///
+/// ⚠ Extracted when Location absorbed Delivery, so the one row is drawn identically whether or not
+/// the Immich ticks are present.
+fn folder_row(ui: &mut egui::Ui, opts: &ExportOptions, pick_dir: &mut bool) {
+    ui.horizontal(|ui| {
+        if ui.button("Choose…").clicked() {
+            *pick_dir = true;
+        }
+        let shown = if opts.dest_dir.as_os_str().is_empty() {
+            "(none chosen)".to_string()
+        } else {
+            opts.dest_dir.display().to_string()
+        };
+        ui.label(shown);
+    });
+}
+
 /// One summarised, collapsible section of the dialog.
 fn section(
     ui: &mut egui::Ui,
@@ -171,6 +189,27 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     // ⚠ The first photo of the run, matching how `sample` previews `{seq}` = 1.
     let already_uploaded = jobs.first().and_then(|j| {
         rustroom_app::immich_upload::uploaded_note(&j.id.path, j.id.copy, &upload_host)
+    });
+    // ⚠⚠ **Only for a single photo, and computed by the same `upload_seconds` the upload calls** — a
+    // second formatting of "what the date will be" is a second implementation that can disagree with
+    // the first, and the whole point of showing it is that it can be trusted. For a selection each
+    // photo has its own capture and edit date, so one number would be a lie.
+    let resolved_date = jobs.first().filter(|_| jobs.len() == 1).map(|j| {
+        let edited = rustroom_app::sidecar::edited_at(&j.id.path).and_then(|s| {
+            s.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs() as i64)
+        });
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        rustroom_app::when::stamp(rustroom_app::immich_upload::upload_seconds(
+            opts.upload_date,
+            j.capture.taken,
+            edited,
+            now,
+        ))
     });
     let mut delete_named: Option<String> = None;
     // ⚠ Option C of the canvas "Rustroom Export" (2026-09-22): the presets as a list on the
@@ -252,17 +291,93 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         &export_summary::location(&opts),
                         true,
                         |ui| {
-                            ui.horizontal(|ui| {
-                                if ui.button("Choose…").clicked() {
-                                    pick_dir = true;
+                            // ⚠⚠ **With Immich unconfigured this draws exactly what it drew before
+                            // the whole delivery feature existed: the folder row and no ticks.** A
+                            // lone "Local" tick with nowhere else to go is a control that cannot
+                            // mean anything, and one unconditional shape is the easiest way to keep
+                            // "no mention of immich at all" true.
+                            let choosable = upload_avail
+                                != rustroom_app::immich_upload::Availability::NotConfigured;
+                            if choosable {
+                                let mut local = opts.destination.keeps_files();
+                                let mut immich = opts.destination.target().is_some();
+                                let before = (local, immich);
+                                ui.checkbox(&mut local, "Local");
+                                ui.indent("export_local", |ui| {
+                                    // ⚠ Enabled even when unticked, so the folder can be chosen
+                                    // before ticking it — and because it is still where a failed
+                                    // upload lands under Immich-only.
+                                    folder_row(ui, &opts, &mut pick_dir);
+                                });
+
+                                let ready = upload_avail
+                                    == rustroom_app::immich_upload::Availability::Ready;
+                                let r = ui
+                                    .add_enabled(ready, egui::Checkbox::new(&mut immich, "Immich"));
+                                if !ready {
+                                    r.on_disabled_hover_text(
+                                        "Set an Upload key in Settings → Immich first. Browsing \
+                                         uses a read-only key, which cannot upload.",
+                                    );
                                 }
-                                let shown = if opts.dest_dir.as_os_str().is_empty() {
-                                    "(none chosen)".to_string()
-                                } else {
-                                    opts.dest_dir.display().to_string()
-                                };
-                                ui.label(shown);
-                            });
+                                ui.indent("export_immich", |ui| {
+                                    ui.add_enabled_ui(immich, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Date");
+                                            egui::ComboBox::from_id_salt("upload_date")
+                                                .selected_text(opts.upload_date.label())
+                                                .show_ui(ui, |ui| {
+                                                    for d in
+                                                        rustroom_app::batch_export::UploadDate::ALL
+                                                    {
+                                                        ui.selectable_value(
+                                                            &mut opts.upload_date,
+                                                            d,
+                                                            d.label(),
+                                                        );
+                                                    }
+                                                });
+                                            // ⚠⚠ The **resolved** moment, for one photo only —
+                                            // computed by the same `upload_seconds` the upload
+                                            // calls, so the preview cannot disagree with what
+                                            // actually happens. For a selection each photo has its
+                                            // own date and one number would be a lie.
+                                            if let Some(when) = &resolved_date {
+                                                ui.label(
+                                                    egui::RichText::new(format!("→ {when}")).weak(),
+                                                )
+                                                .on_hover_text(
+                                                    "The date this photo will carry in Immich.",
+                                                );
+                                            }
+                                        });
+                                        if let Some(note) = &already_uploaded {
+                                            // ⚠⚠ Informs, never blocks — a re-export after editing
+                                            // IS a new picture, and replacing the old asset would
+                                            // mean deleting one.
+                                            ui.label(egui::RichText::new(note).weak())
+                                                .on_hover_text(
+                                                    "Uploading again adds a second photo to \
+                                                     Immich. Immich recognises a byte-identical \
+                                                     re-upload and keeps only one.",
+                                                );
+                                        }
+                                    });
+                                });
+
+                                if (local, immich) != before {
+                                    opts.destination = match (local, immich) {
+                                        (true, false) => Destination::Files,
+                                        (false, true) => Destination::Target(UploadTarget::Immich),
+                                        (true, true) => Destination::Both(UploadTarget::Immich),
+                                        // ⚠ Reachable on purpose: Export goes dark and the footer
+                                        // note says why.
+                                        (false, false) => Destination::Nowhere,
+                                    };
+                                }
+                            } else {
+                                folder_row(ui, &opts, &mut pick_dir);
+                            }
                         },
                     );
                     let first = match Template::parse(&opts.filename_template) {
@@ -383,74 +498,6 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         false,
                         |ui| watermark_body(ui, &mut opts),
                     );
-                    // ⚠⚠ Drawn only when Immich is configured, and it holds **every** Immich
-                    // mention in this dialog — which is what keeps "switch it off and no mention
-                    // remains" a single condition rather than a list of places to remember.
-                    if upload_avail != rustroom_app::immich_upload::Availability::NotConfigured {
-                        section(
-                            ui,
-                            "Delivery",
-                            &export_summary::delivery(&opts),
-                            false,
-                            |ui| {
-                                let ready = upload_avail
-                                    == rustroom_app::immich_upload::Availability::Ready;
-                                let mut mode = opts.destination;
-                                let r = ui.add_enabled_ui(ready, |ui| {
-                                    crate::segmented::segmented(
-                                        ui,
-                                        &mut mode,
-                                        &[
-                                            (Destination::Files, "Files only"),
-                                            (
-                                                Destination::Target(UploadTarget::Immich),
-                                                "Immich only",
-                                            ),
-                                            (
-                                                Destination::Both(UploadTarget::Immich),
-                                                "Files and Immich",
-                                            ),
-                                        ],
-                                    )
-                                });
-                                if ready {
-                                    opts.destination = mode;
-                                } else {
-                                    r.response.on_disabled_hover_text(
-                                        "Set an Upload key in Settings → Immich first. Browsing \
-                                         uses a read-only key, which cannot upload.",
-                                    );
-                                }
-                                // ⚠ Disabled rather than hidden when nothing is uploaded: it has
-                                // nothing to act on, and a control that vanishes reads as a bug.
-                                ui.add_enabled_ui(opts.destination.target().is_some(), |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label("Date");
-                                        egui::ComboBox::from_id_salt("upload_date")
-                                            .selected_text(opts.upload_date.label())
-                                            .show_ui(ui, |ui| {
-                                                for d in rustroom_app::batch_export::UploadDate::ALL
-                                                {
-                                                    ui.selectable_value(
-                                                        &mut opts.upload_date,
-                                                        d,
-                                                        d.label(),
-                                                    );
-                                                }
-                                            });
-                                    });
-                                });
-                                if let Some(note) = &already_uploaded {
-                                    // ⚠⚠ Informs, never blocks — a re-export after editing IS a new
-                                    // picture, and replacing the old asset would mean deleting one.
-                                    ui.label(egui::RichText::new(note).weak()).on_hover_text(
-                                        "Uploading again adds a second photo to Immich. Immich \
-                                         recognises a byte-identical re-upload and keeps only one.",
-                                    );
-                                }
-                            },
-                        );
-                    }
                 });
             });
         },
@@ -547,6 +594,45 @@ pub fn save_preset(app: &mut RustroomApp, ctx: &egui::Context) {
     } else {
         Modal::SaveExportPreset { name }
     };
+}
+
+/// Telling the user an upload did not confirm, and where the file is.
+///
+/// ⚠⚠ **A notice, not a question.** There is nothing to decide: the file was **not** deleted, it is
+/// on disk, and the export is very likely still running. So one button, and the text names the path.
+///
+/// ⚠ "Did not confirm" rather than "failed", and that wording is load-bearing: an SSL/EOF error means
+/// the *response* was lost, not that the server rejected the file — 4 of 2,373 writes failed that way
+/// on this network and **none had actually failed to apply**. Telling the user it failed could have
+/// them upload a second copy.
+pub fn upload_unconfirmed(app: &mut RustroomApp, ctx: &egui::Context) {
+    let Modal::UploadUnconfirmed { at, why } = &app.modal else {
+        return;
+    };
+    let (at, why) = (at.clone(), why.clone());
+    let out = dialog(
+        ctx,
+        &mut app.settings,
+        "upload_unconfirmed",
+        "Upload not confirmed",
+        theme::DialogSize::Compact,
+        Footer::confirm("OK", true, ""),
+        |ui| {
+            ui.label("An upload did not confirm, so the file was kept rather than removed.");
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(at.display().to_string()).monospace());
+            ui.add_space(4.0);
+            theme::hint(ui, &format!("The server said: {why}"));
+            theme::hint(
+                ui,
+                "It may still have arrived — Immich recognises a byte-identical re-upload and keeps \
+                 only one, so exporting it again is safe.",
+            );
+        },
+    );
+    if out.primary || out.dismissed {
+        app.modal = Modal::None;
+    }
 }
 
 /// Confirming an export-preset deletion.
@@ -770,85 +856,56 @@ mod tests {
         assert_eq!(lit(&mut app), Some(false));
     }
 
-    /// ⚠⚠ **"No mention of immich at all" when the integration is off** (`docs/BACKLOG.md`) — so an
-    /// unconfigured Immich must draw **no** Upload section, not a disabled one. The whole point of
-    /// the requirement is that a user who does not use Immich never sees the word.
+    /// ⚠⚠ **"No mention of immich at all" when the integration is off** (`docs/BACKLOG.md`) — and
+    /// since Delivery folded into Location, that means Location must draw its folder row and **no
+    /// ticks**: a lone "Local" tick with nowhere else to go is a control that cannot mean anything.
     #[test]
-    fn without_immich_configured_the_delivery_section_is_absent() {
+    fn without_immich_configured_location_has_no_ticks() {
         let drawn = with_app(|app| {
             app.settings.immich_url.clear();
             app.settings.immich_key.clear();
         });
+        for absent in ["Local", "Immich", "Delivery", "Original date"] {
+            assert!(
+                !drawn.iter().any(|l| l == absent),
+                "{absent:?} was drawn with no Immich configured: {drawn:?}"
+            );
+        }
+        // ⚠ The sample assertions: Location drew, and its folder row is still there — so the
+        // absences above mean something.
         assert!(
-            !drawn.iter().any(|l| l == "Delivery"),
-            "a Delivery section was drawn with no Immich configured: {drawn:?}"
+            drawn.iter().any(|l| l == "Location"),
+            "the Location section is missing: {drawn:?}"
         );
-        // ⚠ The sample assertion: the dialog really did draw, so the absence above means something.
         assert!(
-            drawn.iter().any(|l| l == "Watermark"),
-            "the dialog did not draw at all: {drawn:?}"
+            drawn.iter().any(|l| l == "Choose…"),
+            "the folder row must remain: {drawn:?}"
         );
     }
 
-    /// ⚠ Configured but with no upload key: the section appears and the control is **disabled**,
-    /// because a control that vanishes reads as a bug — this file's own convention, three tests up.
+    /// ⚠ Configured: both ticks appear inside Location, along with the date dropdown. Location is
+    /// **open by default**, so unlike the old Delivery section nothing has to be clicked first.
     #[test]
-    fn with_immich_but_no_upload_key_the_delivery_section_appears() {
+    fn with_immich_configured_location_offers_both_ticks_and_the_date() {
         let drawn = with_app(|app| {
             app.settings.immich_url = "https://immich.example".to_string();
             app.settings.immich_key = "browse-key".to_string();
-            app.settings.immich_upload_key.clear();
+            app.settings.immich_upload_key = "upload-key".to_string();
         });
-        assert!(
-            drawn.iter().any(|l| l == "Delivery"),
-            "the Delivery section should appear once Immich is configured: {drawn:?}"
-        );
-    }
-
-    /// ⚠⚠ **The section is COLLAPSED by default, so its body is not laid out** — a first version of
-    /// this test looked for "Files only" without opening it and failed against correct code. That is
-    /// the same vacuous-guard shape as the Color section's: a query that finds nothing passes
-    /// silently, so here it would have *failed* silently for the wrong reason. It is opened the way a
-    /// user opens it: by clicking the header.
-    #[test]
-    fn the_three_delivery_modes_and_the_date_are_offered() {
-        let ctx = test_ui::ctx();
-        let mut app = test_app::for_test();
-        app.library = Some(test_app::library_of(2));
-        app.library.as_mut().unwrap().selection.select_indices(&[0]);
-        app.settings.immich_url = "https://immich.example".to_string();
-        app.settings.immich_key = "browse-key".to_string();
-        app.settings.immich_upload_key = "upload-key".to_string();
-
-        // Closed first: the body is genuinely absent, which is what makes the click meaningful.
-        let closed: Vec<String> =
-            test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
-                .into_iter()
-                .map(|(l, _)| l)
-                .collect();
-        assert!(
-            closed.iter().any(|l| l == "Delivery"),
-            "the section header must be there to click: {closed:?}"
-        );
-        assert!(
-            !closed.iter().any(|l| l == "Files only"),
-            "the body must start collapsed, or this test proves nothing"
-        );
-
-        test_ui::click(&ctx, "Delivery", |_| super::settings(&mut app, &ctx));
-        let open: Vec<String> =
-            test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx))
-                .into_iter()
-                .map(|(l, _)| l)
-                .collect();
-
         for want in [
-            "Files only",
-            "Immich only",
-            "Files and Immich",
+            "Location",
+            "Local",
+            "Immich",
+            "Date",
             "Original date",
+            "Choose…",
         ] {
-            assert!(open.iter().any(|l| l == want), "{want:?} missing: {open:?}");
+            assert!(
+                drawn.iter().any(|l| l == want),
+                "{want:?} missing: {drawn:?}"
+            );
         }
+        // ⚠ And the retired section name must be gone, not merely unused.
+        assert!(!drawn.iter().any(|l| l == "Delivery"), "{drawn:?}");
     }
 }

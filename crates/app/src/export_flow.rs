@@ -195,6 +195,13 @@ impl RustroomApp {
                     self.export_collision = Some(dest);
                     self.export_apply_all = false;
                 }
+                ExportEvent::UploadUnconfirmed { at, why } => {
+                    // ⚠⚠ Raised **during** the run, deliberately: a file whose upload did not
+                    // confirm is important enough to say at once rather than at the end. The export
+                    // keeps going. ⚠ No dialog can be open here — every collision is settled up
+                    // front in `plan`, before anything is rendered or uploaded.
+                    self.modal = crate::modals::Modal::UploadUnconfirmed { at, why };
+                }
                 ExportEvent::Finished(report) => finished = Some(report),
             }
         }

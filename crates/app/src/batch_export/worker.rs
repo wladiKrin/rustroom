@@ -32,6 +32,15 @@ pub enum ExportEvent {
     Collision {
         dest: PathBuf,
     },
+    /// An upload did not confirm, and the file is at `at`. Sent for the **first** one only.
+    ///
+    /// ⚠⚠ The run **keeps going** — a network that dropped one upload has not invalidated the rest.
+    /// ⚠ The report's `unconfirmed` list still holds every one; this is an addition for the first,
+    /// not a replacement.
+    UploadUnconfirmed {
+        at: PathBuf,
+        why: String,
+    },
     Finished(ExportReport),
 }
 
@@ -512,6 +521,9 @@ fn run(
         .then(staging_dir)
         .flatten();
     let out_dir = staging.clone().unwrap_or_else(|| opts.dest_dir.clone());
+    // ⚠⚠ **`swap(true)`, not a load-then-store.** The pool is `width`-wide, so several photos can
+    // fail in the same instant; `swap` makes exactly one of them win and open exactly one pop-up.
+    let told = AtomicBool::new(false);
 
     let Some(planned) = plan(
         jobs,
@@ -562,6 +574,7 @@ fn run(
             let cancel = &cancel;
             let uploader = uploader.as_ref();
             let staging = &staging;
+            let told = &told;
             s.spawn(move || loop {
                 if cancel.load(Ordering::Relaxed) {
                     shared.lock().expect("export report").cancelled = true;
@@ -640,6 +653,14 @@ fn run(
                             } else {
                                 p.dest.clone()
                             };
+                            // ⚠ The first one only, and the send is outside nothing — it is a
+                            // channel push, so it cannot block the worker holding this lock.
+                            if !told.swap(true, Ordering::Relaxed) {
+                                let _ = events.send(ExportEvent::UploadUnconfirmed {
+                                    at: at.clone(),
+                                    why: e.clone(),
+                                });
+                            }
                             r.unconfirmed.push((at, e));
                         }
                         None => {}
@@ -1662,5 +1683,52 @@ mod tests {
             "the file was left outside the export folder at {at:?}"
         );
         assert!(at.exists(), "the reported path must exist");
+    }
+
+    /// ⚠⚠ **"Just once for the first one" is the requirement, so the pair is what makes this
+    /// discriminating:** two photos fail, and there must be **one** event and **two** report entries.
+    /// Asserting only the event count would pass against a run that lost the second failure entirely.
+    #[test]
+    fn only_the_first_unconfirmed_upload_raises_the_notice() {
+        let d = TempDir::new("told_once");
+        let mut o = opts(&d, None);
+        o.destination = Destination::Both(UploadTarget::Immich);
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF", "b.RAF"]),
+            o,
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            // ⚠ Width 1 so the two failures are ordered; the `swap` guard is what makes the wide
+            // case safe, and a width of 1 is the case whose counts are deterministic.
+            1,
+            None,
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let mut notices = 0;
+        let mut report = None;
+        while let Ok(ev) = worker.events().recv() {
+            match ev {
+                ExportEvent::UploadUnconfirmed { at, .. } => {
+                    notices += 1;
+                    assert!(at.exists(), "the notice must name a file that exists");
+                }
+                ExportEvent::Finished(r) => {
+                    report = Some(r);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let report = report.expect("the worker ended without a Finished event");
+        assert_eq!(notices, 1, "exactly one notice for a run with two failures");
+        assert_eq!(
+            report.unconfirmed.len(),
+            2,
+            "both failures must still be reported"
+        );
     }
 }

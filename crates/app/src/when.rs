@@ -23,6 +23,18 @@ pub fn short(taken: i64, now: i64) -> String {
     }
 }
 
+/// An absolute stamp with the **year**: `19 Nov 2025, 13:32`.
+///
+/// ⚠⚠ Distinct from [`short`] on purpose. `short` drops the year because a snapshot is judged
+/// against *now* and almost always recent; this one answers "where do I look for this photograph",
+/// where a missing year makes the answer useless. ⚠ Local wall-clock seconds, the same convention.
+pub fn stamp(secs: i64) -> String {
+    match chrono::DateTime::from_timestamp(secs, 0) {
+        Some(t) => t.format("%-d %b %Y, %H:%M").to_string(),
+        None => "—".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,5 +51,14 @@ mod tests {
         // ⚠ Calendar days, not 24-hour spans: 23:50 seen at 00:10 is yesterday.
         let late = 1_789_948_200; // 2026-09-20 23:50:00
         assert_eq!(short(late, late + 20 * 60), "yesterday 23:50");
+    }
+
+    /// ⚠ The year is the whole reason this exists beside `short` — a 2025 photograph rendered as
+    /// "Nov 19 13:32" does not say where to look.
+    #[test]
+    fn a_stamp_carries_the_year() {
+        // 2025-11-19T13:32:24
+        assert_eq!(stamp(1_763_559_144), "19 Nov 2025, 13:32");
+        assert_eq!(stamp(0), "1 Jan 1970, 00:00");
     }
 }

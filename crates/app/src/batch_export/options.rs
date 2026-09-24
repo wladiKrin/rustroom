@@ -156,6 +156,18 @@ pub enum Destination {
     Target(UploadTarget),
     /// Both.
     Both(UploadTarget),
+    /// Neither tick set.
+    ///
+    /// ⚠⚠ **Appended, never inserted, and not the default.** Both ticks can be cleared, and
+    /// [`can_export`] then refuses this while the footer note says why — chosen over refusing the
+    /// click or auto-ticking the other box, because a checkbox that silently ignores a click, or one
+    /// that changes a control the user did not touch, is worse than a dark button with a sentence
+    /// beside it.
+    ///
+    /// ⚠ `keeps_files()` is false and `target()` is `None` here, so every existing caller already
+    /// treats it as "write nothing, upload nothing" — which is right, and `can_export` is the only
+    /// thing standing between it and a pointless run.
+    Nowhere,
 }
 
 impl Destination {
@@ -164,10 +176,15 @@ impl Destination {
         matches!(self, Destination::Files | Destination::Both(_))
     }
 
+    /// Whether this delivers anywhere at all. ⚠ The one thing `can_export` must refuse.
+    pub fn is_nowhere(self) -> bool {
+        matches!(self, Destination::Nowhere)
+    }
+
     /// The upload target, when there is one.
     pub fn target(self) -> Option<UploadTarget> {
         match self {
-            Destination::Files => None,
+            Destination::Files | Destination::Nowhere => None,
             Destination::Target(t) | Destination::Both(t) => Some(t),
         }
     }
@@ -262,6 +279,9 @@ impl Default for ExportOptions {
 /// pre-flight check belongs (a subfolder that will not sanitize, say), so the dialog keeps asking
 /// one question.
 pub fn can_export(opts: &ExportOptions, upload_ready: bool) -> bool {
+    if opts.destination.is_nowhere() {
+        return false;
+    }
     let folder_ok = !opts.destination.keeps_files() || destination_ready(&opts.dest_dir);
     // ⚠⚠ A destination naming a target it cannot reach must not start: a preset saved as
     // "Immich only" would otherwise run with nowhere to put anything once the key was removed.
@@ -405,7 +425,12 @@ mod tests {
                 d.keeps_files() || d.target().is_some(),
                 "{d:?} delivers nowhere"
             );
+            assert!(!d.is_nowhere());
         }
+        // ⚠ And the one state that deliberately delivers nowhere says so on every accessor.
+        assert!(Destination::Nowhere.is_nowhere());
+        assert!(!Destination::Nowhere.keeps_files());
+        assert_eq!(Destination::Nowhere.target(), None);
         assert!(!Destination::Target(UploadTarget::Immich).keeps_files());
         assert!(Destination::Both(UploadTarget::Immich).keeps_files());
         assert_eq!(
@@ -497,5 +522,41 @@ mod tests {
             &no_dir(Destination::Both(UploadTarget::Immich)),
             true
         ));
+    }
+
+    /// ⚠⚠ Unticking both destinations must darken Export, which is the whole reason `Nowhere` exists
+    /// as a representable state rather than being prevented in the UI.
+    #[test]
+    fn nowhere_can_never_start_a_run() {
+        let o = ExportOptions {
+            dest_dir: std::env::temp_dir(),
+            destination: Destination::Nowhere,
+            ..ExportOptions::default()
+        };
+        // ⚠ Refused with a good folder *and* a working upload — so the refusal is about the
+        // destination and nothing else.
+        assert!(!can_export(&o, true));
+        assert!(!can_export(&o, false));
+        // ⚠ The control: the same options with a destination do start, or this proves nothing.
+        assert!(can_export(
+            &ExportOptions {
+                destination: Destination::Files,
+                ..o.clone()
+            },
+            false
+        ));
+    }
+
+    #[test]
+    fn nowhere_round_trips() {
+        let o = ExportOptions {
+            destination: Destination::Nowhere,
+            ..ExportOptions::default()
+        };
+        let back: ExportOptions =
+            serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(back.destination, Destination::Nowhere);
+        // ⚠ And the default is still Files, so an existing user is untouched by this addition.
+        assert_eq!(ExportOptions::default().destination, Destination::Files);
     }
 }
