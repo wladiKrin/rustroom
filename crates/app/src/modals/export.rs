@@ -163,6 +163,14 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
         n => format!("Export {n} photos"),
     };
     let note = export_summary::footer_note(&presets, selected.as_deref(), &opts);
+    // ⚠⚠ Both read **before** the closure, which borrows `app.settings` mutably through `dialog`
+    // — the borrow shape this file's own comment says has cost a compile error here twice.
+    let upload_avail = rustroom_app::immich_upload::availability(&app.settings);
+    let upload_host = app.settings.immich_url.trim().to_string();
+    // ⚠ The first photo of the run, matching how `sample` previews `{seq}` = 1.
+    let already_uploaded = jobs.first().and_then(|j| {
+        rustroom_app::immich_upload::uploaded_note(&j.id.path, j.id.copy, &upload_host)
+    });
     let mut delete_named: Option<String> = None;
     // ⚠ Option C of the canvas "Rustroom Export" (2026-09-22): the presets as a list on the
     // left, the settings as summarised, collapsible sections on the right — a collapsed
@@ -366,6 +374,44 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         false,
                         |ui| watermark_body(ui, &mut opts),
                     );
+                    // ⚠⚠ Drawn only when Immich is configured. `NotConfigured` must render
+                    // **nothing** — the requirement is "no mention of immich at all" when the
+                    // integration is off (`docs/BACKLOG.md`).
+                    if upload_avail != rustroom_app::immich_upload::Availability::NotConfigured {
+                        section(ui, "Upload", &export_summary::upload(&opts), false, |ui| {
+                            let ready =
+                                upload_avail == rustroom_app::immich_upload::Availability::Ready;
+                            let mut on = opts.upload_target.is_some();
+                            // ⚠ Disabled, never hidden, when there is no upload key: a control
+                            // that vanishes reads as a bug, and this project has taken that
+                            // back out once already.
+                            let r = ui.add_enabled(
+                                ready,
+                                egui::Checkbox::new(&mut on, "Upload to Immich after export"),
+                            );
+                            if ready {
+                                if r.changed() {
+                                    opts.upload_target = on.then_some(
+                                        rustroom_app::batch_export::UploadTarget::Immich,
+                                    );
+                                }
+                            } else {
+                                r.on_disabled_hover_text(
+                                    "Set an Upload key in Settings → Immich first. Browsing \
+                                         uses a read-only key, which cannot upload.",
+                                );
+                            }
+                            if let Some(note) = &already_uploaded {
+                                // ⚠⚠ Informs, never blocks — uploading again is still allowed,
+                                // because a re-export after editing IS a new picture.
+                                // Replacing the old asset would mean deleting one.
+                                ui.label(egui::RichText::new(note).weak()).on_hover_text(
+                                    "Uploading again adds a second photo to Immich. Immich \
+                                         recognises a byte-identical re-upload and keeps only one.",
+                                );
+                            }
+                        });
+                    }
                 });
             });
         },
@@ -683,5 +729,40 @@ mod tests {
         assert_eq!(lit(&mut app), Some(true));
         app.export_draft.quality = app.export_draft.quality.wrapping_add(1);
         assert_eq!(lit(&mut app), Some(false));
+    }
+
+    /// ⚠⚠ **"No mention of immich at all" when the integration is off** (`docs/BACKLOG.md`) — so an
+    /// unconfigured Immich must draw **no** Upload section, not a disabled one. The whole point of
+    /// the requirement is that a user who does not use Immich never sees the word.
+    #[test]
+    fn without_immich_configured_the_upload_section_is_absent() {
+        let drawn = with_app(|app| {
+            app.settings.immich_url.clear();
+            app.settings.immich_key.clear();
+        });
+        assert!(
+            !drawn.iter().any(|l| l == "Upload"),
+            "an Upload section was drawn with no Immich configured: {drawn:?}"
+        );
+        // ⚠ The sample assertion: the dialog really did draw, so the absence above means something.
+        assert!(
+            drawn.iter().any(|l| l == "Watermark"),
+            "the dialog did not draw at all: {drawn:?}"
+        );
+    }
+
+    /// ⚠ Configured but with no upload key: the section appears and the control is **disabled**,
+    /// because a control that vanishes reads as a bug — this file's own convention, three tests up.
+    #[test]
+    fn with_immich_but_no_upload_key_the_section_appears() {
+        let drawn = with_app(|app| {
+            app.settings.immich_url = "https://immich.example".to_string();
+            app.settings.immich_key = "browse-key".to_string();
+            app.settings.immich_upload_key.clear();
+        });
+        assert!(
+            drawn.iter().any(|l| l == "Upload"),
+            "the Upload section should appear once Immich is configured: {drawn:?}"
+        );
     }
 }

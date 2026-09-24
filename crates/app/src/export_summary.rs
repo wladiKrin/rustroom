@@ -74,6 +74,14 @@ pub fn watermark(o: &ExportOptions) -> String {
 }
 
 /// The preset whose options equal `o`, if any.
+/// The Upload section's trailing summary — every section header in this dialog says its own state.
+pub fn upload(o: &ExportOptions) -> String {
+    match o.upload_target {
+        None => "Off".to_string(),
+        Some(crate::batch_export::UploadTarget::Immich) => "Immich".to_string(),
+    }
+}
+
 pub fn matching_preset<'a>(presets: &'a [ExportPreset], o: &ExportOptions) -> Option<&'a str> {
     presets
         .iter()
@@ -149,5 +157,13 @@ mod tests {
             "changed from “Web”"
         );
         assert_eq!(footer_note(&presets, None, &other), "");
+    }
+
+    #[test]
+    fn the_upload_summary_says_which_state_it_is_in() {
+        let mut o = ExportOptions::default();
+        assert_eq!(upload(&o), "Off");
+        o.upload_target = Some(crate::batch_export::UploadTarget::Immich);
+        assert_eq!(upload(&o), "Immich");
     }
 }
