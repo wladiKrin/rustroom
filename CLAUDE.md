@@ -101,7 +101,7 @@ opensource_lightroom/
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album, `Asset`/`AlbumSummary`/`Bucket`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,116** lines (it said 681 until 2026-09-23 — check, do not quote); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -171,12 +171,8 @@ branch, tree clean. ⚠ **Run the git command above rather than trusting a numbe
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 
-✅ **CI on Linux is verified green again (2026-09-24)** — the first real result since the workflow was
-fixed for the runner's disk on 2026-09-21. It failed once, on
-`immich_list_cache::tests::a_hostile_key_cannot_escape_the_directory`: a **test** that asserted an
-**absolute path's existence** and so passed on macOS and failed on Linux without ever reading the code.
-`safe_name::sanitize` was correct throughout. ⚠ Read shape **(e)** in *Standing lessons* before writing
-another traversal test.
+✅ **CI on Linux verified green (2026-09-24)** after one failure — a test asserting an absolute path's
+existence, fixed; see shape **(e)** in *Standing lessons*.
 
 ✅ **Immich slice 4 — Download and Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its load-bearing
 change is a **bounded download queue**: `request` spawns a thread per job and `in_flight` only *dedupes*, so
@@ -281,9 +277,12 @@ not go looking for the next port; there isn't one.
    per sample because packing four into a word would race. **A considered trade, not an oversight.**
 2. **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. Now a
    ~120-site diff. ⚠ Its own change, never folded into another.
-3. **`crates/lens-profile/src/lib.rs` is 949 lines**, **`crates/app/src/immich_source.rs` is 821**
-   and `main.rs` is **1,116**; `batch_export/worker.rs` is 1,127 (accepted — ~190 of code, the rest
-   its own tests).
+3. ⚠⚠ **This row used to rank files by TOTAL lines, contradicting the *Open items* rule directly
+   below it — re-measured by code 2026-09-24, and NONE of the four is over the ~600 threshold:**
+   `lens-profile/src/lib.rs` **500** (of 949), `batch_export/worker.rs` **439** (of 1,264),
+   `immich_source.rs` **411** (of 896), `main.rs` **78** (of 1,147). The genuinely large files are the
+   four in *Open items* — `edit-model` 1,883, `pipeline` 1,810, `catalog/db.rs` 1,730,
+   `settings.rs` 1,046. ⚠ Measure with `awk '/#\[cfg\(test\)\]/{exit} {n++}'` before quoting any of this.
 4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
 
 ⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
@@ -332,8 +331,10 @@ helpers and two twins are renamed, so a filename comparison undercounts.
   - **Wrongly listed and actually fine:** `immich_source.rs` is **411** (not 896), `render_engine.rs` is
     **169** of 4,800, `develop/canvas/mod.rs` is **16** of 2,136. ⚠ `adjustments.rs` is **610**, barely
     over — not the "~1,250" its total suggests.
-  - ⚠ `batch_export/worker.rs` was always described correctly (~190 of code), which is the precedent the
-    rest of this entry should have followed from the start.
+  - ⚠⚠ **`batch_export/worker.rs`'s own figures went stale too, and this entry used to hold them up as
+    the precedent** — it said *"1,127 — ~190 of code"*; re-measured 2026-09-24 it is **1,264 total / 439
+    code**. The *method* was the precedent worth keeping, not the numbers: a measurement written down
+    once decays exactly like the totals this entry was created to correct. **Re-measure, never requote.**
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
   adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
   `thumb_store`'s use a counter as well and are the pattern to copy.
