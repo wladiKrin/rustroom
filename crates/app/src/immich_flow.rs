@@ -90,6 +90,24 @@ impl RustroomApp {
         list_cache::store(&dir, &key, &v, assets);
     }
 
+    /// How many of this album's photos are downloaded, out of how many — or `None` when its asset list
+    /// is not in hand.
+    ///
+    /// ⚠ `None` rather than `Some((0, 0))`: "we do not know" and "there is nothing here" lead to
+    /// different buttons, and collapsing them would hide the action that loads the list.
+    pub(crate) fn immich_downloaded_of(&self, id: &str) -> Option<(usize, usize)> {
+        let assets = self.immich_album_assets(id)?;
+        let paths = self.immich_paths_for(&assets);
+        let have = paths
+            .iter()
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| self.immich_present.contains(n))
+            })
+            .count();
+        Some((have, paths.len()))
+    }
+
     /// An album's asset list if it is in hand — the session map, then the stored list.
     ///
     /// ⚠ Deliberately does **not** fetch: a row action that silently started a network request would be
@@ -110,6 +128,45 @@ impl RustroomApp {
             .into_iter()
             .map(|e| e.path)
             .collect()
+    }
+
+    /// One finished original download.
+    ///
+    /// ⚠ Its own method so a test can drive the **branch that actually runs**, rather than calling
+    /// `open_path` directly and proving nothing about `pump_immich`.
+    pub(crate) fn finish_immich_download(
+        &mut self,
+        ctx: &egui::Context,
+        dest: std::path::PathBuf,
+        result: Result<(), String>,
+    ) {
+        match result {
+            Ok(()) => {
+                // ⚠ One insert rather than re-reading the directory: this download's own path
+                // is already in hand, and it is what the grid's indicator reads.
+                if let Some(name) = dest.file_name() {
+                    self.immich_present.insert(name.to_os_string());
+                }
+                // ⚠⚠ Only a **bulk** member advances the count. A single photo opened while a
+                // bulk runs is simply not in the set, which is why this is a set and not a
+                // counter.
+                let bulk = immich_source::asset_id_of(&dest)
+                    .is_some_and(|id| self.immich_download_pending.remove(&id));
+                if bulk && self.immich_download_pending.is_empty() {
+                    self.status = format!("Downloaded {} photos", self.immich_download_total);
+                    self.immich_download_total = 0;
+                }
+                // ⚠⚠ **A predownload must NOT open anything.** Reported in use: pressing Download
+                // threw the user into Develop on photo after photo. *Downloading* and *opening*
+                // are two acts, and only the second is a request to look at something — which is
+                // why opening a photo is a double-click and this is a button.
+                if !bulk {
+                    self.open_path(ctx, PhotoId::original(dest));
+                    self.view = AppView::Develop;
+                }
+            }
+            Err(e) => self.status = format!("Download failed: {e}"),
+        }
     }
 
     /// Predownload every asset in `paths` that is not already here.
@@ -172,17 +229,31 @@ impl RustroomApp {
     /// ⚠⚠ Nothing here reaches the server, and it cannot: the API key is read-only by the Settings help
     /// text's own instruction. See `immich_cache::remove_downloads` for what is deliberately left behind.
     pub(crate) fn remove_downloaded(&mut self, paths: &[std::path::PathBuf]) {
+        // ⚠⚠ **The open photo is removed too, and Develop is emptied** (user's call, 2026-09-24,
+        // overriding the earlier decision to skip it). Removing everything *except* the one you are
+        // looking at is a surprising exception, and the session is closed first so no render is holding
+        // a file that is about to vanish.
+        //
+        // ⚠ `persist_current_session` first, so the edits reach the sidecar — which the removal keeps.
+        // Without this, removing the open photo would discard whatever had not settled.
         let open = self.session.as_ref().map(|s| s.path.clone());
-        let out = rustroom_app::immich_cache::remove_downloads(paths, open.as_deref());
+        if let Some(open) = &open {
+            if paths.iter().any(|p| p == open) {
+                self.persist_current_session();
+                self.session = None;
+                self.view = AppView::Library;
+            }
+        }
+        let out = rustroom_app::immich_cache::remove_downloads(paths);
         // ⚠ So the rail's count and the grid's ↓ agree with the disk immediately.
         self.refresh_immich_present();
-        self.status = match (out.removed, out.skipped_open) {
-            (0, 0) => "Nothing to remove — these are not downloaded".to_string(),
-            (n, 0) => format!("Removed {n} local copies — they are still on Immich"),
-            // ⚠ Said out loud rather than silently doing less than asked.
-            (n, s) => format!(
-                "Removed {n} local copies; skipped {s} still open — they are still on Immich"
-            ),
+        self.status = if out.removed == 0 {
+            "Nothing to remove — these are not downloaded".to_string()
+        } else {
+            format!(
+                "Removed {} local copies — they are still on Immich",
+                out.removed
+            )
         };
     }
 
@@ -338,33 +409,9 @@ impl RustroomApp {
                 // the modal, so the answer to the Test button was invisible.
                 Outcome::About(Ok(v)) => self.immich_test = Some(Ok(v)),
                 Outcome::About(Err(e)) => self.immich_test = Some(Err(e)),
-                Outcome::Original { dest, result } => match result {
-                    // ⚠⚠ The file is now where the `PhotoId` always said it was, so the ordinary
-                    // open path applies with no special case — and the view switch mirrors
-                    // `open_entry`, which is the shape that already exists.
-                    Ok(()) => {
-                        // ⚠ One insert rather than re-reading the directory: this download's own path
-                        // is already in hand, and it is what the grid's indicator reads.
-                        if let Some(name) = dest.file_name() {
-                            self.immich_present.insert(name.to_os_string());
-                        }
-                        // ⚠⚠ Only a **bulk** member advances the count. A single photo opened while a
-                        // bulk runs is simply not in the set, which is why this is a set and not a
-                        // counter.
-                        if let Some(id) = immich_source::asset_id_of(&dest) {
-                            if self.immich_download_pending.remove(&id)
-                                && self.immich_download_pending.is_empty()
-                            {
-                                self.status =
-                                    format!("Downloaded {} photos", self.immich_download_total);
-                                self.immich_download_total = 0;
-                            }
-                        }
-                        self.open_path(ctx, PhotoId::original(dest));
-                        self.view = AppView::Develop;
-                    }
-                    Err(e) => self.status = format!("Download failed: {e}"),
-                },
+                Outcome::Original { dest, result } => {
+                    self.finish_immich_download(ctx, dest, result)
+                }
             }
         }
     }
@@ -403,6 +450,66 @@ mod tests {
             asset_count: count,
             last_modified_asset_timestamp: modified.map(|s| s.to_string()),
         }
+    }
+
+    /// ⚠⚠ **Reported in use: pressing Download threw the user into Develop, photo after photo.**
+    /// *Downloading* and *opening* are two acts, and only the second is a request to look at something —
+    /// which is why opening a photo is a double-click and this is a button.
+    ///
+    /// ⚠ Driven through `pump_immich`'s own arm rather than by calling `open_path` directly, so it tests
+    /// the branch that actually ran.
+    #[test]
+    fn a_bulk_download_completing_does_not_open_anything() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        app.settings.immich_key = "k".to_string();
+
+        // ⚠⚠ Set explicitly, because `test_app::for_test` starts in **Develop** — without this the
+        // assertion below fails against correct code, and its sibling passes without proving anything.
+        app.view = crate::AppView::Library;
+        // A bulk is running and this asset belongs to it.
+        app.immich_download_total = 2;
+        app.immich_download_pending = ["aaa".to_string(), "bbb".to_string()].into_iter().collect();
+        let root = app.immich_cache_root().unwrap();
+
+        app.finish_immich_download(&ctx, root.join("aaa.jpg"), Ok(()));
+
+        assert!(app.session.is_none(), "a predownload must not open a photo");
+        assert!(
+            matches!(app.view, crate::AppView::Library),
+            "and must not switch to Develop"
+        );
+        assert!(
+            app.immich_download_pending.contains("bbb"),
+            "the other one is still pending"
+        );
+        assert_eq!(app.immich_download_total, 2, "still running");
+    }
+
+    /// ⚠ The other half: a photo downloaded because it was **opened** still opens. Without this the fix
+    /// above could have disabled opening altogether and nothing would have failed.
+    #[test]
+    fn a_download_that_was_an_open_still_opens() {
+        let ctx = egui::Context::default();
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        app.settings.immich_key = "k".to_string();
+        let root = app.immich_cache_root().unwrap();
+        // ⚠⚠ **Library first, or this test is vacuous**: `for_test` starts in Develop, so "it reached
+        // Develop" would be true before the call. Asserted as a real transition.
+        app.view = crate::AppView::Library;
+        assert!(
+            app.immich_download_pending.is_empty(),
+            "no bulk is running, which is what makes this an open"
+        );
+
+        app.finish_immich_download(&ctx, root.join("ccc.jpg"), Ok(()));
+
+        assert!(
+            matches!(app.view, crate::AppView::Develop),
+            "an open must reach Develop"
+        );
     }
 
     /// ⚠ An asset already on disk is not asked for again — what makes pressing Download twice cheap.

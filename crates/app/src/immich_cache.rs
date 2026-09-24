@@ -10,15 +10,13 @@
 //!
 //! ⚠ **No egui.** A lib module, testable with no window and no server.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// What a removal did, for the status line to report.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Removed {
     /// Files actually deleted.
     pub removed: usize,
-    /// Skipped because the photo is open in Develop — see [`remove_downloads`].
-    pub skipped_open: usize,
 }
 
 /// Delete the cached originals at `paths`, leaving everything else alone.
@@ -38,20 +36,18 @@ pub struct Removed {
 /// not a download, and `catalog::is_supported` is the same test `present_names` uses — so what this
 /// removes and what the rail counts cannot disagree.
 ///
-/// ⚠⚠ **The open photo is skipped, not deleted beneath its session.** A render reading a file that
-/// vanishes is the one way this feature could crash, and the count is returned so the status line can
-/// say so rather than silently doing less than asked.
+/// ⚠⚠ **The photo open in Develop is removed like any other** (user's call, 2026-09-24). An earlier
+/// version skipped it, on the grounds that a render reading a vanishing file is how this crashes — but
+/// removing everything *except* the one you are looking at is a surprising exception. **The caller closes
+/// the session first**, which is why this function needs no notion of "open" at all — see
+/// `RustroomApp::remove_downloaded`.
 ///
 /// ⚠ A file that is already gone is **not** an error: pressing the button twice must not report a
 /// failure.
-pub fn remove_downloads(paths: &[PathBuf], open: Option<&Path>) -> Removed {
+pub fn remove_downloads(paths: &[PathBuf]) -> Removed {
     let mut out = Removed::default();
     for p in paths {
         if !catalog::is_supported(p) {
-            continue;
-        }
-        if open == Some(p.as_path()) {
-            out.skipped_open += 1;
             continue;
         }
         // ⚠ `is_file` first, so an absent path is silently fine rather than an error to report.
@@ -97,15 +93,9 @@ mod tests {
             "the fixture must use the real sidecar naming, or it proves nothing"
         );
 
-        let out = remove_downloads(std::slice::from_ref(&img), None);
+        let out = remove_downloads(std::slice::from_ref(&img));
 
-        assert_eq!(
-            out,
-            Removed {
-                removed: 1,
-                skipped_open: 0
-            }
-        );
+        assert_eq!(out, Removed { removed: 1 });
         assert!(!img.exists(), "the cached original must go");
         assert!(car.exists(), "the sidecar must NOT — it holds the edits");
         assert_eq!(
@@ -113,29 +103,6 @@ mod tests {
             b"{\"version\":7}",
             "and be untouched, not merely present"
         );
-    }
-
-    /// ⚠ The open photo is skipped rather than deleted under its render, and **counted**, so the status
-    /// can say it did less than asked instead of silently doing so.
-    #[test]
-    fn the_open_photo_is_skipped_and_counted() {
-        let d = temp_dir("open");
-        let a = d.join("a.jpg");
-        let b = d.join("b.jpg");
-        std::fs::write(&a, b"x").unwrap();
-        std::fs::write(&b, b"x").unwrap();
-
-        let out = remove_downloads(&[a.clone(), b.clone()], Some(&a));
-
-        assert_eq!(
-            out,
-            Removed {
-                removed: 1,
-                skipped_open: 1
-            }
-        );
-        assert!(a.exists(), "the open photo must survive");
-        assert!(!b.exists());
     }
 
     /// ⚠ Only images. A sidecar, a note or a leftover `.part` in the cache directory is not a download —
@@ -152,7 +119,7 @@ mod tests {
             })
             .collect();
 
-        let out = remove_downloads(&keep, None);
+        let out = remove_downloads(&keep);
 
         assert_eq!(out.removed, 0, "nothing here is a downloaded photo");
         for p in &keep {
@@ -165,7 +132,7 @@ mod tests {
     fn an_absent_file_is_not_an_error() {
         let d = temp_dir("absent");
         let img = d.join("gone.jpg");
-        assert_eq!(remove_downloads(&[img], None), Removed::default());
+        assert_eq!(remove_downloads(&[img]), Removed::default());
     }
 
     /// ⚠ The ordinary case, so the counts are not only exercised by the edge cases.
@@ -179,14 +146,8 @@ mod tests {
                 p
             })
             .collect();
-        let out = remove_downloads(&files, None);
-        assert_eq!(
-            out,
-            Removed {
-                removed: 5,
-                skipped_open: 0
-            }
-        );
+        let out = remove_downloads(&files);
+        assert_eq!(out, Removed { removed: 5 });
         assert!(files.iter().all(|p| !p.exists()));
     }
 }
