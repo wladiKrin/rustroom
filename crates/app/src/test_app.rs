@@ -115,6 +115,8 @@ pub fn for_test() -> RustroomApp {
         immich_opening: None,
         immich_assets: Default::default(),
         immich_present: Default::default(),
+        immich_download_pending: Default::default(),
+        immich_download_total: 0,
         metadata: rustroom_app::metadata_scanner::MetadataScanner::new(|| {}),
         camera_profiles_cache: Vec::new(),
         compare_view: Default::default(),

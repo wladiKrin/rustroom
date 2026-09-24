@@ -11,12 +11,51 @@ use crate::RustroomApp;
 use eframe::egui;
 
 /// What a click in this section asked for.
+/// The row actions every Immich album and month row offers, in order.
+///
+/// ⚠⚠ **`RowOut::action` is an index into this slice**, so the two must be read by *position*. Named
+/// constants rather than `0` and `1`, because an off-by-one here would remove when you meant to
+/// download — the worst confusion available in this feature.
+const ACT_DOWNLOAD: usize = 0;
+const ACT_REMOVE: usize = 1;
+
+/// ⚠ One slice, shared by the album rows and the month rows, so the two cannot offer different verbs or
+/// put them in a different order.
+fn row_actions() -> [list_row::RowAction<'static>; 2] {
+    [
+        list_row::RowAction {
+            glyph: '↓',
+            verb: "Download",
+            hover: "Download every photo here now, so they are available offline",
+            enabled: true,
+        },
+        list_row::RowAction {
+            glyph: '✕',
+            verb: "Remove downloads",
+            hover:
+                "Deletes only the local copies. The photos stay on your Immich server, and your \
+                    edits and ratings are kept.",
+            enabled: true,
+        },
+    ]
+}
+
 pub enum Action {
     None,
     /// Ask the server for its albums.
     Refresh,
     /// Open this album.
     Open {
+        id: String,
+        name: String,
+    },
+    /// Predownload every photo in this album.
+    DownloadAlbum {
+        id: String,
+        name: String,
+    },
+    /// Delete the local copies of this album's photos. ⚠ Never touches the server.
+    RemoveAlbum {
         id: String,
         name: String,
     },
@@ -121,7 +160,7 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         selected,
                         indent: 0.0,
                         hover: "Photos are downloaded when you open them",
-                        actions: &[],
+                        actions: &row_actions(),
                     },
                 );
                 if r.clicked {
@@ -129,6 +168,21 @@ pub fn body(app: &RustroomApp, ui: &mut egui::Ui) -> Action {
                         id: a.id.clone(),
                         name: a.album_name.clone(),
                     };
+                }
+                match r.action {
+                    Some(ACT_DOWNLOAD) => {
+                        action = Action::DownloadAlbum {
+                            id: a.id.clone(),
+                            name: a.album_name.clone(),
+                        }
+                    }
+                    Some(ACT_REMOVE) => {
+                        action = Action::RemoveAlbum {
+                            id: a.id.clone(),
+                            name: a.album_name.clone(),
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

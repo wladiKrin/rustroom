@@ -90,6 +90,102 @@ impl RustroomApp {
         list_cache::store(&dir, &key, &v, assets);
     }
 
+    /// An album's asset list if it is in hand — the session map, then the stored list.
+    ///
+    /// ⚠ Deliberately does **not** fetch: a row action that silently started a network request would be
+    /// indistinguishable from one that did nothing. The caller decides what to say.
+    pub(crate) fn immich_album_assets(&self, id: &str) -> Option<Vec<immich::Asset>> {
+        self.immich_assets
+            .get(id)
+            .cloned()
+            .or_else(|| self.immich_cached_album(id))
+    }
+
+    /// The cache paths these assets occupy — the same derivation the grid uses, never a second one.
+    pub(crate) fn immich_paths_for(&self, assets: &[immich::Asset]) -> Vec<std::path::PathBuf> {
+        let Some(root) = self.immich_cache_root() else {
+            return Vec::new();
+        };
+        immich_source::entries_from_assets(assets, &root)
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
+    }
+
+    /// Predownload every asset in `paths` that is not already here.
+    ///
+    /// ⚠ Assets already on disk are **skipped**, which is what makes pressing the button twice cheap
+    /// rather than a second full download.
+    ///
+    /// ⚠⚠ The worker queues past `MAX_CONCURRENT_DOWNLOADS`, so this may hand it hundreds of jobs
+    /// safely — before that queue existed, an 872-asset album would have spawned 872 threads.
+    pub(crate) fn download_assets(&mut self, paths: &[std::path::PathBuf]) {
+        let wanted: Vec<(String, std::path::PathBuf)> = paths
+            .iter()
+            .filter(|p| {
+                !p.file_name()
+                    .is_some_and(|n| self.immich_present.contains(n))
+            })
+            .filter_map(|p| immich_source::asset_id_of(p).map(|id| (id, p.clone())))
+            .collect();
+
+        if wanted.is_empty() {
+            self.status = "Every photo here is already downloaded".to_string();
+            return;
+        }
+        self.immich_download_total = wanted.len();
+        self.immich_download_pending = wanted.iter().map(|(id, _)| id.clone()).collect();
+        for (asset_id, dest) in wanted {
+            self.immich.request(Job::Original { asset_id, dest });
+        }
+        self.status = self.immich_download_progress();
+    }
+
+    /// What the status line says while a bulk download runs, or empty when none is.
+    pub(crate) fn immich_download_progress(&self) -> String {
+        if self.immich_download_total == 0 {
+            return String::new();
+        }
+        let done = self
+            .immich_download_total
+            .saturating_sub(self.immich_download_pending.len());
+        format!(
+            "Downloading {done} of {} from Immich…",
+            self.immich_download_total
+        )
+    }
+
+    /// Abandon whatever is still queued. ⚠ The in-flight few finish — see `cancel_downloads`.
+    pub(crate) fn cancel_immich_downloads(&mut self) {
+        let dropped = self.immich.cancel_downloads();
+        self.immich_download_pending.clear();
+        self.immich_download_total = 0;
+        self.status = if dropped == 0 {
+            "Nothing left to cancel".to_string()
+        } else {
+            format!("Stopped — {dropped} downloads not started")
+        };
+    }
+
+    /// Delete the local copies of `paths`, keeping every edit and mark.
+    ///
+    /// ⚠⚠ Nothing here reaches the server, and it cannot: the API key is read-only by the Settings help
+    /// text's own instruction. See `immich_cache::remove_downloads` for what is deliberately left behind.
+    pub(crate) fn remove_downloaded(&mut self, paths: &[std::path::PathBuf]) {
+        let open = self.session.as_ref().map(|s| s.path.clone());
+        let out = rustroom_app::immich_cache::remove_downloads(paths, open.as_deref());
+        // ⚠ So the rail's count and the grid's ↓ agree with the disk immediately.
+        self.refresh_immich_present();
+        self.status = match (out.removed, out.skipped_open) {
+            (0, 0) => "Nothing to remove — these are not downloaded".to_string(),
+            (n, 0) => format!("Removed {n} local copies — they are still on Immich"),
+            // ⚠ Said out loud rather than silently doing less than asked.
+            (n, s) => format!(
+                "Removed {n} local copies; skipped {s} still open — they are still on Immich"
+            ),
+        };
+    }
+
     /// Show one Immich album's photos, downloading nothing.
     ///
     /// ⚠⚠ Goes through `open_scan`, the one place a `Library` is constructed, exactly like a
@@ -252,6 +348,18 @@ impl RustroomApp {
                         if let Some(name) = dest.file_name() {
                             self.immich_present.insert(name.to_os_string());
                         }
+                        // ⚠⚠ Only a **bulk** member advances the count. A single photo opened while a
+                        // bulk runs is simply not in the set, which is why this is a set and not a
+                        // counter.
+                        if let Some(id) = immich_source::asset_id_of(&dest) {
+                            if self.immich_download_pending.remove(&id)
+                                && self.immich_download_pending.is_empty()
+                            {
+                                self.status =
+                                    format!("Downloaded {} photos", self.immich_download_total);
+                                self.immich_download_total = 0;
+                            }
+                        }
                         self.open_path(ctx, PhotoId::original(dest));
                         self.view = AppView::Develop;
                     }
@@ -295,6 +403,46 @@ mod tests {
             asset_count: count,
             last_modified_asset_timestamp: modified.map(|s| s.to_string()),
         }
+    }
+
+    /// ⚠ An asset already on disk is not asked for again — what makes pressing Download twice cheap.
+    #[test]
+    fn a_download_skips_what_is_already_present() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        app.settings.immich_key = "k".to_string();
+        let root = std::path::Path::new("/cache/immich/host");
+        let here = root.join("aaa.jpg");
+        let missing = root.join("bbb.jpg");
+        app.immich_present.insert("aaa.jpg".into());
+
+        app.download_assets(&[here, missing]);
+
+        assert_eq!(app.immich_download_total, 1, "only the absent one");
+        assert!(app.immich_download_pending.contains("bbb"));
+        assert!(!app.immich_download_pending.contains("aaa"));
+    }
+
+    /// ⚠ And when there is nothing to do it says so rather than showing a progress line that never moves.
+    #[test]
+    fn a_download_of_only_present_assets_says_so_and_starts_nothing() {
+        let mut app = crate::test_app::for_test();
+        app.settings.immich_url = "https://example.invalid".to_string();
+        app.settings.immich_key = "k".to_string();
+        app.immich_present.insert("aaa.jpg".into());
+
+        app.download_assets(&[std::path::PathBuf::from("/cache/immich/host/aaa.jpg")]);
+
+        assert_eq!(app.immich_download_total, 0);
+        assert!(app.immich_download_pending.is_empty());
+        assert!(app.status.contains("already downloaded"), "{}", app.status);
+    }
+
+    /// ⚠ The progress line is empty when nothing is running, so the toolbar has nothing to draw.
+    #[test]
+    fn the_progress_line_is_empty_when_no_download_is_running() {
+        let app = crate::test_app::for_test();
+        assert!(app.immich_download_progress().is_empty());
     }
 
     /// ⚠⚠ **The seam the module tests could not reach.** `immich_list_cache` proves that a matching
