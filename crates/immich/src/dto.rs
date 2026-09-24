@@ -156,6 +156,30 @@ pub struct Asset {
     pub updated_at: String,
 }
 
+/// The reply to `POST /assets`.
+///
+/// ⚠ Fields per the 3.2.0 spec's `AssetMediaResponseDto`, whose `required` is `["id", "status"]`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Upload {
+    pub id: String,
+    pub status: UploadStatus,
+}
+
+/// Whether the server stored a new asset or recognised the bytes.
+///
+/// ⚠⚠ `Duplicate` is **not an error**: Immich checksums the upload, and re-sending byte-identical
+/// data returns the *existing* asset's id. That is what makes a repeated upload of the same export
+/// harmless with no client-side guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UploadStatus {
+    Created,
+    Duplicate,
+    /// ⚠ A value this build does not know. The asset exists; only the label is unfamiliar.
+    #[serde(other)]
+    Other,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +456,31 @@ mod tests {
             "fileModifiedAt":"2025-08-14T09:21:33.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}"#;
         let a: Asset = serde_json::from_str(json).expect("an unknown type must parse");
         assert!(matches!(a.asset_type, AssetType::Other));
+    }
+
+    /// ⚠⚠ **CONSTRUCTED, NOT CAPTURED.** Built from the 3.2.0 OpenAPI spec's
+    /// `AssetMediaResponseDto`, so it proves only that this DTO matches the *schema*. This repo
+    /// has been bitten four times by exactly that gap — `album.json` asserted an `assets` field
+    /// the endpoint never returns. **Replace this with a captured reply the first time a real
+    /// upload succeeds.**
+    #[test]
+    fn an_upload_reply_deserialises() {
+        let created: Upload = serde_json::from_str(
+            r#"{"id":"ad41fe4c-9226-460b-8e35-8ebacdc3a0ce","status":"created"}"#,
+        )
+        .unwrap();
+        assert_eq!(created.id, "ad41fe4c-9226-460b-8e35-8ebacdc3a0ce");
+        assert_eq!(created.status, UploadStatus::Created);
+
+        let dup: Upload = serde_json::from_str(r#"{"id":"x","status":"duplicate"}"#).unwrap();
+        assert_eq!(dup.status, UploadStatus::Duplicate);
+    }
+
+    /// ⚠ An unknown status must not fail the whole upload — the asset exists either way, and a
+    /// future Immich adding a third value should not make a successful upload read as an error.
+    #[test]
+    fn an_unknown_upload_status_is_tolerated() {
+        let u: Upload = serde_json::from_str(r#"{"id":"x","status":"something-new"}"#).unwrap();
+        assert_eq!(u.status, UploadStatus::Other);
     }
 }
