@@ -265,19 +265,40 @@ mod tests {
     }
 
     /// ⚠⚠ A key comes from the server. It must not be able to escape the directory.
+    ///
+    /// ⚠⚠ **ASSERT ON THE PATH THIS CODE DERIVES, NEVER ON WHETHER SOME ABSOLUTE PATH EXISTS.**
+    /// This test used to read `!dir.join("../../../etc/passwd").exists()` — and `Path::join` is
+    /// *lexical*, it resolves nothing. Under a macOS temp dir (`/var/folders/…/T`) that pointed at a
+    /// nonexistent `/var/folders/mt/etc/passwd` and passed; on the Linux runner (`/tmp`) it resolved
+    /// to **`/etc/passwd`, which exists on every Linux box**, and failed. So the assertion never
+    /// examined this module at all — it reported whether an unrelated system file was present, and
+    /// it was green on the author's machine for exactly that reason. CI caught it on 2026-09-24.
+    /// `immich_source`'s `a_hostile_original_name_cannot_escape_the_cache_directory` is the shape to
+    /// copy: it checks the *derived* path and never touches disk.
     #[test]
     fn a_hostile_key_cannot_escape_the_directory() {
         let dir = temp_dir("hostile");
         let key = Key::Album("../../../etc/passwd".into());
-        store(&dir, &key, &album_validator(1, "x"), &[asset("one")]);
+
+        // The derived name is the part under this module's control: no separator, no dot-segment.
+        let name = key.file_name();
         assert!(
-            !dir.join("../../../etc/passwd").exists(),
-            "a file was written outside the cache"
+            !name.contains('/') && !name.contains('\\') && !name.contains(".."),
+            "the file name can still escape: {name:?}"
         );
-        // And whatever it did write must sit directly inside the directory.
-        for e in std::fs::read_dir(&dir).unwrap().flatten() {
-            assert_eq!(e.path().parent().unwrap(), dir.as_path());
-        }
+
+        store(&dir, &key, &album_validator(1, "x"), &[asset("one")]);
+
+        // And what it wrote is that one file, sitting directly inside the directory — no subtree.
+        let written: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(written.len(), 1, "expected one file, got {written:?}");
+        assert_eq!(written[0].parent().unwrap(), dir.as_path());
+        assert_eq!(written[0].file_name().unwrap(), std::ffi::OsStr::new(&name));
+
         // It must still be readable through the same key, so an odd id is cached rather than lost.
         assert!(load(&dir, &key, &album_validator(1, "x")).is_some());
     }

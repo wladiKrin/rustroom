@@ -211,6 +211,62 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-24 — the first CI failure since the workflow was fixed, and it was a test that had never tested anything
+
+Branch `fix-hostile-key-test`. **The first real CI result since the workflow was fixed for the
+runner's disk on 2026-09-21**, which `CLAUDE.md` had flagged as "unverified until the next push".
+The answer: **one failure out of 985 in `app`** —
+`immich_list_cache::tests::a_hostile_key_cannot_escape_the_directory`, green on macOS for three
+days, red on Linux.
+
+**⚠⚠ The code was never at risk. The assertion was meaningless on both platforms.** The test read:
+
+```rust
+store(&dir, &key, ...);                 // key = Key::Album("../../../etc/passwd")
+assert!(!dir.join("../../../etc/passwd").exists(), "a file was written outside the cache");
+```
+
+`Path::join` is **lexical** — it resolves nothing, it concatenates. So the path asserted about was
+`<tempdir>/../../../etc/passwd`, and *what that means depends entirely on how deep the temp dir is*:
+
+| platform | temp dir | the probed path resolves to | result |
+|---|---|---|---|
+| macOS | `/var/folders/mt/zsy…/T` | `/var/folders/mt/etc/passwd` | absent → **passed** |
+| Linux CI | `/tmp` | **`/etc/passwd`** | present on every Linux box → **failed** |
+
+So the assertion reported **whether an unrelated system file existed**. It never read a byte this
+module wrote, under either outcome. `safe_name::sanitize` was and is correct —
+`"../../../etc/passwd"` → `"_________etc_passwd"`, one file directly inside the directory — and
+`load` round-trips it, which the test's *other* two assertions already proved. The green macOS run
+and the red Linux run were both accidents of `mkstemp` layout.
+
+**The fix asserts on the path this module derives**, which is the half under its control:
+
+```rust
+let name = key.file_name();
+assert!(!name.contains('/') && !name.contains('\\') && !name.contains(".."), ...);
+store(...);
+let written: Vec<_> = read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+assert_eq!(written.len(), 1);                            // one file, no subtree
+assert_eq!(written[0].file_name().unwrap(), OsStr::new(&name));
+```
+
+⚠ **Sabotage run, not imagined:** dropping `sanitize` from `file_name` fails at the derived-name
+assertion (`immich_list_cache.rs:285`). The *old* test would not reliably have caught that same
+sabotage on macOS — the write would land at a resolved path the probe wasn't looking at.
+
+⚠ **`immich_source`'s `a_hostile_original_name_cannot_escape_the_cache_directory` is the shape to
+copy, and it was already in the tree**: it asserts `p.parent() == root` and
+`!p.to_string_lossy().contains("..")` on the *derived* path and never touches disk. `looks.rs`'s
+`a_name_that_escapes_the_looks_folder_is_refused` is the other good shape — it asserts a
+**refusal**. A sweep for `join("..` / `/etc/passwd` across `crates/*/src` found those two and the
+broken one; **only the broken one probed the filesystem with a lexical `..` path.**
+
+**Gate:** fmt 0, clippy 0, `cargo test --workspace` 0 — **2,823 passing**, each exit code read from
+its own command. ⚠ A pipe swallowed the first clippy status because `${PIPESTATUS[0]}` is a *bash*
+idiom and this shell is **zsh** (`$pipestatus[1]`, 1-indexed); re-run without the pipe. That is the
+same "read each exit code from its own command" rule the M8.9 lesson states, failing in a new way.
+
 ### 2026-09-24 — Immich slice 4: Download and Remove downloads, and a glyph trap the repo had already warned about
 
 Branch `immich-download-discard`, merged and **confirmed by use**. **2,823 tests**, clippy and fmt clean,
