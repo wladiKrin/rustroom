@@ -10,6 +10,8 @@
 //!   and the Library's layout mode, where the row is shared with other controls and a
 //!   full-width control would take it all.
 //! - [`chip`] is one item on its own: a toggle with a dot — the format filter.
+//! - [`switch`] is a chunky sliding toggle for a **consequential** on/off — enabling the Immich
+//!   integration. A checkbox reads as one setting among many; this reads as a decision.
 
 use crate::theme;
 use eframe::egui;
@@ -322,6 +324,104 @@ pub fn chip(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     r
 }
 
+/// A chunky sliding switch: a track with a knob that moves left to right, filled with the **accent**
+/// when on.
+///
+/// ⚠ For a **consequential** on/off, not for an ordinary preference. A tick box reads as one setting
+/// among many, and enabling or disabling a whole integration is not that (user's call, 2026-09-24).
+///
+/// ⚠⚠ **`mark_changed()` is required**, and this is the lesson `chip` paid for: a hand-drawn widget
+/// that does not say it changed leaves every `changed()` reader seeing nothing, and the control reads
+/// as "not clickable".
+///
+/// ⚠⚠ **The `enabled` gate is required too.** A hand-drawn widget gets no greying and no click gate
+/// from `add_enabled_ui` for free.
+///
+/// ⚠ `WidgetInfo::selected` with the label, so the headless harness reaches it by label exactly as it
+/// reaches a checkbox — `test_ui::click(ctx, "Enable Immich", …)` works.
+pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    const H: f32 = 22.0;
+    const W: f32 = 40.0;
+    const PAD: f32 = 2.0;
+    /// ⚠ Larger than `section_font`'s 11 pt on purpose (user's call, 2026-09-24): this switch marks a
+    /// consequential decision, and a label at the same size as every section header read as one more
+    /// small control. An explicit size rather than a resolved `TextStyle`, so there is no style to
+    /// miss in a bare harness `Context` — the panic `section_font`'s own doc warns about.
+    const LABEL_PT: f32 = 14.0;
+    let gap = ui.spacing().item_spacing.x;
+    let font = egui::FontId::proportional(LABEL_PT);
+    let text_w = ui.fonts_mut(|f| {
+        f.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::WHITE)
+            .size()
+            .x
+    });
+    let (rect, mut r) =
+        ui.allocate_exact_size(egui::vec2(W + gap + text_w, H), egui::Sense::click());
+    let enabled = ui.is_enabled();
+    let was = *on;
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, was, label));
+    if enabled && r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+
+    let v = ui.visuals().clone();
+    let track = egui::Rect::from_min_size(rect.min, egui::vec2(W, H));
+    let painter = ui.painter_at(rect);
+
+    // ⚠ Animated by egui's own `animate_bool`, keyed on the response id, so the knob slides rather
+    // than jumping — which is the whole point of a switch over a tick.
+    let t = ui.ctx().animate_bool(r.id, *on);
+    let fill = if *on {
+        // ⚠ `selection.bg_fill` **is** the accent: the theme sets it from `Accent`, and every other
+        // hand-drawn control here reads it the same way rather than reaching for a private helper.
+        v.selection.bg_fill
+    } else {
+        v.widgets.inactive.bg_fill
+    };
+    let fill = if enabled {
+        fill
+    } else {
+        // ⚠ Hand-drawn, so the greying is ours to do.
+        fill.gamma_multiply(0.4)
+    };
+    painter.rect_filled(track, H / 2.0, fill);
+    if r.hovered() && enabled {
+        painter.rect_stroke(
+            track,
+            H / 2.0,
+            v.widgets.hovered.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    let kr = H / 2.0 - PAD;
+    let cx = track.left() + PAD + kr + t * (W - 2.0 * (PAD + kr));
+    painter.circle_filled(
+        egui::pos2(cx, track.center().y),
+        kr,
+        if enabled {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::from_gray(0x88)
+        },
+    );
+
+    let text_color = if enabled {
+        v.widgets.active.fg_stroke.color
+    } else {
+        v.widgets.noninteractive.fg_stroke.color
+    };
+    painter.text(
+        egui::pos2(track.right() + gap, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        text_color,
+    );
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +508,40 @@ mod tests {
         // ⚠ The format filter reads `changed()`, not the flag — a chip that flips the flag
         // silently is one nothing downstream notices.
         assert!(changed, "the chip did not report the change");
+    }
+
+    /// ⚠⚠ **The two things a hand-drawn toggle gets wrong**, both of which `chip` shipped once: a
+    /// click that does not flip it, and a flip that never reports `changed()` — which makes every
+    /// caller read it as "not clickable".
+    #[test]
+    fn a_switch_flips_and_reports_the_change() {
+        let ctx = crate::test_ui::ctx();
+        let mut on = false;
+        let mut changed = 0;
+        crate::test_ui::click(&ctx, "Enable Immich", |ui| {
+            if switch(ui, &mut on, "Enable Immich").changed() {
+                changed += 1;
+            }
+        });
+        assert!(on, "the click must flip it");
+        assert_eq!(changed, 1, "it must report the change exactly once");
+    }
+
+    /// ⚠ And a disabled switch neither flips nor reports — the gate a hand-drawn widget has to do
+    /// for itself, since `add_enabled_ui` cannot do it.
+    #[test]
+    fn a_disabled_switch_does_not_flip() {
+        let ctx = crate::test_ui::ctx();
+        let mut on = false;
+        let mut changed = 0;
+        crate::test_ui::click(&ctx, "Enable Immich", |ui| {
+            ui.add_enabled_ui(false, |ui| {
+                if switch(ui, &mut on, "Enable Immich").changed() {
+                    changed += 1;
+                }
+            });
+        });
+        assert!(!on, "a disabled switch must not flip");
+        assert_eq!(changed, 0);
     }
 }

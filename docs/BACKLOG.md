@@ -1499,7 +1499,18 @@ Rustroom-initiated **pair-and-stack** action exist in the app at all, or was the
 job? ⚠⚠ If it does exist in-app, it inherits every safeguard the script needed — above all
 **pair on `(stem, capture time)`, never on stem alone**, which this library proves is not paranoia.
 
-### ⬜ Immich must be COMPLETELY optional — one gate, no mentions when off (requested 2026-09-24)
+### ✅ Immich is COMPLETELY optional behind one gate — BUILT 2026-09-24
+
+**Status:** ✅ built, gated green. `Settings.immich_enabled` (default **true**, the `gpu_tail` trap) is
+read **only** through `immich_source::connection`, the single choke point nine call sites already used —
+so no surface grew its own condition and the export ticks needed no change. The Settings tab stays
+(it holds the toggle); the rail section, the toolbar actions, the grid badge and the export ticks all
+vanish. The downloaded folder **stays visible**, renamed *"Downloaded photos"*, with its **hover
+replaced too** — the path itself says "immich" and names the server. ⚠ That withholds where the files
+are, accepted because the requirement was explicit. `grep -n 'completely optional' docs/JOURNAL.md`.
+
+⬜ **Still open, deliberately:** deleting or evicting caches on disable (nothing is deleted today), and
+the OS keychain.
 
 **Status:** ⬜ wanted, unblocked, not specced. The user's words: *"the whole immich integration should in
 the end be completely optional … a toggle in the immich header in settings with which one can completely

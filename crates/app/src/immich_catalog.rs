@@ -62,6 +62,13 @@ pub fn shows_download_badge(
 /// looks like a host slug keeps its own name.
 pub fn folder_display_name(path: &Path, immich_root: Option<&Path>) -> String {
     if immich_root == Some(path) {
+        // ⚠⚠ **The name is the same whether or not the integration is switched on** (user's call,
+        // 2026-09-24, revising their own "no mention of immich at all"). A neutral "Downloaded
+        // photos" was built first and taken back out: these are the user's photographs and they
+        // know where they came from, so a name that hides it helps nobody.
+        //
+        // ⚠ Which also means the row's hover stays the real path — the `folder_hover` helper that
+        // existed to blank it is gone.
         return "immich (downloaded)".to_string();
     }
     path.file_name()

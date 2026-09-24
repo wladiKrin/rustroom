@@ -556,6 +556,22 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         })
                             }
                             PanelSection::Immich => {
+                                // ⚠⚠ **Not drawn at all when the integration is off** — the
+                                // requirement is "no mention of immich at all", and a disabled or
+                                // empty section is still a mention. ⚠ This also removes the empty
+                                // "Immich" section a user who never configured it used to see: the
+                                // gate is `connection()`, which is `None` when unconfigured too.
+                                if rustroom_app::immich_source::connection(&app.settings).is_none() {
+                                    // ⚠⚠ **Push the slot rather than just `continue`ing.** `tops` is
+                                    // index-aligned with `order` and feeds `panel_order::drop_index`,
+                                    // whose result indexes **`order`** when a drag settles. A bare
+                                    // `continue` shortened `tops` and put every drop one slot off
+                                    // past this section — caught while writing this, not by a test.
+                                    // A zero-height slot is indistinguishable from dropping on the
+                                    // next section, which is the right behaviour for an absent one.
+                                    tops.push(top);
+                                    continue;
+                                }
                                 let n = crate::immich_panel::header_count(app);
                                 section(ui, &mut sections.immich, "sec_immich", "Immich", &n, |ui| {
                                     immich_action = crate::immich_panel::body(app, ui);
@@ -570,6 +586,15 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             drag_released = true;
                         }
                     }
+
+                    // ⚠⚠ The invariant a hidden section can break: `drop_index` returns an index
+                    // into `tops`, and `moved` applies it to `order`. If a section is skipped without
+                    // pushing its slot, every drop past it lands one place off.
+                    debug_assert_eq!(
+                        tops.len(),
+                        order.len(),
+                        "tops must stay index-aligned with the section order"
+                    );
 
                     // ⚠ Painted after every section, so the line sits on top of them rather than
                     // under the next one.
@@ -939,6 +964,87 @@ mod tests {
         assert!(
             click_title(events, false),
             "and expanding with it must persist too"
+        );
+    }
+
+    /// ⚠⚠ **The requirement as a test rather than a list of places to remember** — with the
+    /// integration off, the panel must not offer the Immich **section**.
+    ///
+    /// ⚠⚠ **One deliberate exception, and it is the user revising their own rule (2026-09-24):** the
+    /// downloaded folder keeps the name **"immich (downloaded)"** whether or not the integration is
+    /// on, because those are their photographs and they know where they came from. So this asserts
+    /// the *section* is gone and that nothing else mentions it — not that the word is absent
+    /// entirely, which would be a claim the design no longer makes.
+    ///
+    /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
+    /// a panel that drew nothing.
+    #[test]
+    fn the_immich_section_appears_only_when_the_integration_is_on() {
+        let labels = |enabled: bool| -> Vec<String> {
+            let ctx = crate::test_ui::ctx();
+            let mut app = crate::test_app::for_test();
+            app.settings.immich_enabled = enabled;
+            app.settings.immich_url = "https://immich.example".to_string();
+            app.settings.immich_key = "a-key".to_string();
+            crate::test_ui::labelled_centres(&ctx, Vec::new(), |ui| {
+                super::show(&mut app, ui, &ctx);
+            })
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect()
+        };
+
+        let on = labels(true);
+        assert!(
+            on.iter().any(|l| l == "Immich"),
+            "the section must be there when configured and enabled: {on:?}"
+        );
+
+        let off = labels(false);
+        // ⚠ The sample assertion: the panel really drew, so the absence below means something.
+        assert!(
+            off.iter().any(|l| l == "Folders"),
+            "the panel did not draw at all: {off:?}"
+        );
+        assert!(
+            !off.iter().any(|l| l == "Immich"),
+            "the Immich section is still offered with it switched off: {off:?}"
+        );
+        // ⚠ Nothing *else* may mention it either — the downloaded folder's row is the one allowed
+        // name, and it is not drawn by this fixture, so anything matching here is a leak.
+        let leaked: Vec<&String> = off
+            .iter()
+            .filter(|l| l.to_lowercase().contains("immich"))
+            .filter(|l| *l != "immich (downloaded)")
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "these labels still mention Immich with it switched off: {leaked:?}"
+        );
+    }
+
+    /// ⚠⚠ **The bug the user reported as "the name still changes", and the rename was NOT the
+    /// cause.** `immich_cache_root` went through `connection`, so switching Immich off made it
+    /// `None` — and `folder_display_name(path, None)` falls through to the directory's basename, so
+    /// the Folders row started showing the raw host slug `https___…` instead of
+    /// "immich (downloaded)". A path is not a behaviour, so it is derived from the URL alone.
+    #[test]
+    fn the_downloaded_folder_keeps_its_name_with_immich_switched_off() {
+        let name_for = |enabled: bool| -> String {
+            let mut app = crate::test_app::for_test();
+            app.settings.immich_enabled = enabled;
+            app.settings.immich_url = "https://immich.example".to_string();
+            app.settings.immich_key = "a-key".to_string();
+            let root = app
+                .immich_cache_root()
+                .expect("the cache root is a path, and the URL is set");
+            rustroom_app::immich_catalog::folder_display_name(&root, Some(root.as_path()))
+        };
+        assert_eq!(name_for(true), "immich (downloaded)");
+        assert_eq!(
+            name_for(false),
+            "immich (downloaded)",
+            "switching Immich off must not rename the folder"
         );
     }
 }

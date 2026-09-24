@@ -166,7 +166,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2863 tests**, **75 goldens** (unmoved). No branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
+**2873 tests**, **75 goldens** (unmoved). No branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 
@@ -263,9 +263,16 @@ not go looking for the next port; there isn't one.
    ⛔ **Two-way sync is DECLINED (the user's call — not a deferral):** it *mutates* authoritative
    assets and runs unattended, removing the found-by-use safety net where the blast radius is largest.
    ⚠⚠ **Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
-   ⬜ **Next Immich items, recorded as backlog notes:** make the integration **completely optional**
-   behind one gate, and **Rustroom-side stacking awareness** — the server has **2,379 stacks** (a
-   one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every pair.
+   ✅ **Immich is now COMPLETELY OPTIONAL behind one gate (2026-09-24).** `Settings.immich_enabled`
+   is read **only** through **`immich_source::connection`** — the single choke point nine call sites
+   already used — so no surface has its own condition and the export ticks needed no change.
+   ⚠⚠ **Default `true`: the `gpu_tail` trap**, since `false` would make Immich vanish on upgrade.
+   ⚠ The Settings tab **stays** (it holds the toggle). The downloads stay visible as **"Downloaded
+   photos"**, hover included — the path itself says "immich". `grep -n 'completely optional'
+   docs/JOURNAL.md`.
+   ⬜ **The one Immich item left:** **Rustroom-side stacking awareness** — the server has **2,379
+   stacks** (a one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every
+   pair.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`

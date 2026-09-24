@@ -530,6 +530,19 @@ pub struct Settings {
     ///
     /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, so a
     /// missing field already reads as `String::default()`, which is the right "not configured".
+    /// Whether the Immich integration exists at all.
+    ///
+    /// ⚠⚠ **Defaults to `true`, and that is the `gpu_tail` trap rather than laziness.** `Settings`
+    /// carries a **container-level** `#[serde(default)]`, so a missing field takes whatever `Default`
+    /// says — and defaulting this to `false` would make Immich **vanish on upgrade** for anyone
+    /// already using it. `the_immich_gate_defaults_to_on` pins it so a later tidy-up cannot flip it.
+    ///
+    /// ⚠ A fresh user loses nothing to the `true` default: with no URL or key
+    /// [`crate::immich_source::connection`] is `None` anyway, so every surface is already hidden.
+    ///
+    /// ⚠ Read **only** through `connection`, which is the one gate every Immich surface routes
+    /// through — see that function for why there is no second condition anywhere.
+    pub immich_enabled: bool,
     pub immich_url: String,
     /// The Immich API key.
     ///
@@ -801,6 +814,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hidden_formats: crate::format_filter::FormatFilter::default(),
+            immich_enabled: true,
             immich_url: String::new(),
             immich_key: String::new(),
             immich_upload_key: String::new(),
@@ -1519,6 +1533,9 @@ mod tests {
             // included: it is the one field whose loss would be silent — browsing would simply
             // report "the server rejected the API key" — so the round trip must cover it.
             immich_url: "https://photos.example.com".to_string(),
+            // ⚠ Not the default, so the round trip actually carries it — and `false` is the
+            // interesting value here, since `true` would pass even if the field were dropped.
+            immich_enabled: false,
             immich_key: "round-trip-key".to_string(),
             // ⚠ Deliberately different from `immich_key`: the round trip must prove the two
             // keys are carried as *separate* fields, not one value written twice.
@@ -2396,5 +2413,30 @@ mod tests {
         assert_eq!(s.immich_url, "https://h");
         assert_eq!(s.immich_key, "browse");
         assert!(s.immich_upload_key.is_empty());
+    }
+
+    /// ⚠⚠ **The default must be ON, or Immich vanishes on upgrade for anyone already using it** —
+    /// the container-level `#[serde(default)]` means a settings file written before this field takes
+    /// whatever `Default` says. This is the `gpu_tail` trap, pinned.
+    #[test]
+    fn the_immich_gate_defaults_to_on() {
+        assert!(Settings::default().immich_enabled);
+        // The upgrade case, stated as data: a file with a working Immich setup and no gate field.
+        let s: Settings =
+            serde_json::from_str(r#"{"immich_url":"https://h","immich_key":"k"}"#).unwrap();
+        assert!(
+            s.immich_enabled,
+            "an existing user's Immich must survive the upgrade"
+        );
+    }
+
+    #[test]
+    fn the_immich_gate_round_trips() {
+        let s = Settings {
+            immich_enabled: false,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(!back.immich_enabled);
     }
 }

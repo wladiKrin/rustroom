@@ -44,8 +44,21 @@ impl RustroomApp {
     /// ⚠ `None` when no server is configured, which leaves every catalog row browsable rather than
     /// hiding things because a setting is blank.
     pub(crate) fn immich_cache_root(&self) -> Option<std::path::PathBuf> {
-        let conn = immich_source::connection(&self.settings)?;
-        Some(immich_source::cache_root(&conn.url))
+        // ⚠⚠ **Derived from the URL alone, NOT through `connection`** — a path is not a behaviour.
+        // Going through the gate meant that switching Immich off made this `None`, and
+        // `folder_display_name` then fell through to the directory's basename: the Folders row
+        // stopped reading "immich (downloaded)" and started showing the raw host slug
+        // `https___host_example`. Found by use, 2026-09-24 — the user's report was "the name still
+        // changes", and the rename I had *already* reverted was not the cause.
+        //
+        // ⚠ The gate belongs where behaviour is gated. Everything that *acts* on the server still
+        // goes through `connection`; this only says where the downloads live, which is true whether
+        // or not the integration is switched on.
+        let url = self.settings.immich_url.trim();
+        if url.is_empty() {
+            return None;
+        }
+        Some(immich_source::cache_root(url))
     }
 
     /// Re-read which of this server's assets are on disk.

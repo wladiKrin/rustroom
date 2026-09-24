@@ -211,6 +211,101 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-24 — Immich made completely optional behind one gate
+
+Branch `immich-optional`. **2,870 tests**, 75 goldens unmoved, gated green.
+
+**The requirement was stronger than "the feature does nothing":** *"no mention of immich at all"* when
+it is off. ⚠⚠ **And it cost almost nothing because `connection()` already existed as a choke point** —
+the only place the URL and key are read, with **nine call sites** routing through it (the worker's
+fetcher, `refresh_shared`, `immich_panel`, `copies`, `immich_flow`). One condition inside it makes every
+one of them decline. `availability()` was changed to consult `connection()` rather than the raw fields,
+which is why **the export Location ticks needed no change at all** — the payoff of having built the
+gate's seed during the upload milestone.
+
+⚠⚠ **`immich_enabled` defaults to `true`, and that is the `gpu_tail` trap.** `Settings` carries a
+container-level `#[serde(default)]`, so a missing field takes whatever `Default` says — `false` would
+have made Immich **vanish on upgrade** for anyone using it. Pinned by a test that also loads a
+pre-field settings file and asserts Immich survives.
+
+⚠ **The Settings tab stays**, holding the toggle: hiding it would leave no way back on. Everything
+below the toggle hides, so the tab becomes a switch and nothing else.
+
+✅ **A wart fixed on the way:** `PanelSection::Immich` was drawn **unconditionally**, so a user who
+never configured Immich saw an empty rail section called "Immich". The same predicate removes it.
+
+✅ **The downloads stay usable** — the user's call of three options. They are real local JPEGs, so
+hiding them would put the user's own work out of reach, and it needs no special case because
+`remote_thumbnail` already declines once an original is present.
+
+⚠⚠ **The rename was built, then REVERSED BY THE USER, and the detour found a real bug in the spec.**
+The folder was first renamed **"Downloaded photos"**, and a `folder_hover` helper was added because the
+rename alone leaked: the spec claimed folder rows do not hover their path — wrong, based on grepping
+`on_hover_text`, which misses it, because the rail builds rows through
+`list_row::RowSpec { hover: &path, .. }`, and the real path
+`~/Library/Caches/rustroom/immich/<server>` says the word **and** names the server. Then: *"Can we keep
+the immich (downloaded) name."* Both were removed again.
+
+⚠ **So "no mention of immich at all" now has one stated exception — the user relaxing their own
+requirement**, and the reasoning is sound: those are their photographs, they know where they came from,
+and a name that hides it helps nobody. ⚠ The test was **rescoped** to assert the *section* is absent
+rather than that the word is, because the broader assertion is no longer a claim the design makes —
+leaving it would have been a test asserting something untrue that happened to pass on a fixture with no
+Immich folder.
+
+✅ **A chunky sliding switch, not a tick box** — also the user's call on seeing it: *"this is quite a
+big operation"*. `segmented::switch` lives beside `chip` and copies its two hard-won lessons —
+**`mark_changed()`**, without which every `changed()` reader sees nothing and the control reads as "not
+clickable", and an explicit **`enabled` gate**, because a hand-drawn widget gets no greying from
+`add_enabled_ui`. The knob slides via `Context::animate_bool` (the first use of it in this codebase) and
+the on state is `visuals().selection.bg_fill`, which *is* the accent.
+
+⚠⚠ **A BUG I INTRODUCED WHILE WRITING IT, CAUGHT BY READING RATHER THAN BY A TEST.** Skipping the rail
+section with a bare `continue` shortened `tops` — which is **index-aligned with the section order** and
+feeds `panel_order::drop_index`, whose result is applied to the *full* order when a drag settles. Every
+drag-reorder past the hidden section would have landed **one slot off**. Fixed by pushing the slot
+before continuing, and a `debug_assert_eq!(tops.len(), order.len())` now states the invariant.
+
+⚠ **The requirement is a test, not a checklist:** `the_immich_section_appears_only_when_the_integration_is_on`
+draws the panel headlessly and asserts **no label contains "immich"** when off, with a sample assertion
+(`Folders` is present) so the absence means something. Sabotage-verified: removing the gate fails it.
+
+⚠ **A shell mistake worth remembering:** `git commit -m "…`backticked`…"` in **zsh runs the
+backticks as command substitution**. One commit message absorbed a real binary's help text before being
+amended with `-F -` and a quoted heredoc. The other 29 were unaffected — checked, not assumed.
+
+#### ⚠⚠ Three defects the gate shipped, all found by use, and one was not what I assumed
+
+**1. "The name still changes" — and the rename I had already reverted was not the cause.**
+`immich_cache_root` went through `connection()`, so switching Immich off made it `None`, and
+`folder_display_name(path, None)` falls through to the directory's **basename**: the Folders row showed
+the raw host slug `https___…`. ⚠ **A path is not a behaviour.** It is now derived from the URL alone,
+and the gate stays only on what *acts* on the server. The user's report named the symptom exactly and I
+still had to go and find a second mechanism — reverting the thing I had built was not enough.
+
+**2. The connection died while the Test button said "connected".** Turning Immich off and on again
+re-pointed the shared thumbnail cell but **not the worker**, which holds a *snapshot* of the
+connection — so browsing stayed dead until a restart, while Test, which builds its own client from what
+is typed, kept succeeding. ⚠⚠ **The url/key branch's own comment already said the worker has to be
+rebuilt.** Giving the switch its own branch is what lost it. There is now **one branch for every input
+to `connection()`**, so the class of bug cannot recur.
+
+**3. The Location header still read "Immich, original date" while the ticks were hidden** — leaving
+Export dark with **no visible control to change it**, and leaking the word into a UI meant to have no
+mention of it. An unreachable target is coerced back to `Files` in the **draft**, never in a saved
+preset.
+
+⚠⚠ **AND MY FIRST TEST FOR (3) PASSED WITH THE FIX SABOTAGED.** It searched the drawn labels for
+"immich" — but a section's **trailing summary is painted**, which the headless harness cannot read, and
+`export_summary`'s own module doc says exactly that. I wrote the test anyway. Rewritten to assert
+`app.export_draft` after the dialog runs, which *is* observable, with a control that a reachable target
+survives; both directions sabotage-checked. ⚠ Same family as the vacuous Color-section guard: **a query
+that finds nothing passes silently.**
+
+⚠ The switch's label is **14 pt**, not `section_font`'s 11 (user's call, on use): at the section size a
+consequential decision read as one more small control. An explicit size rather than a resolved
+`TextStyle`, so there is no style to miss in a bare harness `Context`.
+
 ### 2026-09-24 — export delivery: files, Immich or both, reconciled into Location
 
 Branch `immich-upload`, **2,863 tests**, 75 goldens unmoved, gated green, **confirmed by use**. Two
