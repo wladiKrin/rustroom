@@ -1475,6 +1475,31 @@ Rustroom-initiated **pair-and-stack** action exist in the app at all, or was the
 job? ⚠⚠ If it does exist in-app, it inherits every safeguard the script needed — above all
 **pair on `(stem, capture time)`, never on stem alone**, which this library proves is not paranoia.
 
+### ⬜ Immich must be COMPLETELY optional — one gate, no mentions when off (requested 2026-09-24)
+
+**Status:** ⬜ wanted, unblocked, not specced. The user's words: *"the whole immich integration should in
+the end be completely optional … a toggle in the immich header in settings with which one can completely
+disable the immich support, i.e. in that case there should be **no mention of immich at all**."*
+
+⚠⚠ **"No mention at all" is a stronger requirement than "the feature does nothing", and it is the reason
+this is worth designing BEFORE more surfaces exist.** Every Immich surface must consult **one predicate**,
+not its own conditional. Today the surfaces are: the **rail section**, the **Settings tab**, the grid's
+**circled ↓ badge**, the toolbar's **Download / Remove downloads** buttons, the Immich **progress line**,
+the **Timeline** date tree, and — once built — the Export dialog's **upload section**. A gate retrofitted
+across surfaces that assume Immich exists is the expensive version of this change.
+
+⚠ **This is why `ExportOptions` gains `upload_target: Option<UploadTarget>` and NOT an Immich-named
+field** (see the upload spec). The `export` side never learns the word "Immich"; it knows only that a
+delivery target may exist. With the integration off, the enum offers no variant, the dialog draws no
+section, and the worker skips the step — the persisted value stays in the file and is simply never read,
+which is also what keeps re-enabling lossless.
+
+⚠ **Open questions:** does disabling **hide or delete** the caches (`immich/` originals, the two thumbnail
+stores, the list cache)? Leaning **hide** — deleting on a toggle would destroy downloads the user may want
+back, and slice 4 already gives them an explicit *Remove downloads*. And what happens to **catalog rows**
+for Immich assets — `row_is_browsable` already hides absent Immich rows, so this may fall out for free,
+but it wants checking rather than assuming.
+
 ### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
 
 **Status:** ✅ **BUILT, merged and confirmed by use (2026-09-24).** Spec
