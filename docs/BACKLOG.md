@@ -1397,6 +1397,54 @@ or from memory. **Capture a real reply before designing around it.**
   original's own album is the alternative.
 - **Stacking the edit beside its RAW** would be ideal. ⚠ Another unverified claim about Immich's API.
 
+### ✅ Immich stacking — VERIFIED AGAINST THE USER'S OWN SERVER, 2026-09-24
+
+⚠⚠ **Everything here was measured against `immich.example` running **v3.2.0**, with the
+OpenAPI spec taken from Immich's repo at the *same* version. It is not from memory and not from the
+public docs.** The library: **16,139 assets**, 12,286 `.jpg`, 2,514 `.raf`.
+
+**The contract.** `POST /stacks` takes one required field, `assetIds`, documented **"Asset IDs (first
+becomes primary, min 2)"** — so *the caller chooses the primary by ordering*. Returns
+`StackResponseDto {id, primaryAssetId, assets[]}`. Also `GET`/`DELETE /stacks`, `GET`/`PUT /stacks/{id}`,
+`DELETE /stacks/{id}/assets/{assetId}`.
+
+**Permissions — 168 values, and the ones that matter are SEPARATE grants:**
+`stack.create`/`read`/`update`/`delete`, and **`asset.upload` distinct from `asset.update`**.
+✅ Stacking needs only **`stack.create`** and touches **no asset field**. ✅ The user's existing key already
+has it (tested: `201`). ⚠⚠ **This is the verified basis of the whole upload-over-sync argument**: an
+upload-capable key *cannot* modify or delete existing assets.
+
+⚠⚠ **THREE TRAPS, none of them visible in the schema:**
+
+1. **`POST /search/metadata` reports `stack: null` even for a stacked asset**, while
+   `GET /assets/{id}` reports `{id, primaryAssetId, assetCount}` correctly. Search is the endpoint
+   Rustroom lists with, and a per-asset GET over 16k assets is not viable — so **"is this already
+   stacked?" must come from enumerating `GET /stacks` once.** A constructed fixture asserting
+   `Asset.stack` from a search reply would pass and be wrong.
+2. **`withStacked` is INVERTED from how it reads.** On `GET /timeline/bucket`, `withStacked=true`
+   *collapses* stacks (primaries only) and `false` shows every member. Measured on Aug-2026:
+   **80 → 79** for one stack. Anyone would read the name the other way round.
+3. **Immich's `duplicates` endpoint is PERCEPTUAL, not filename-based** — `machineLearning.duplicateDetection`
+   (`maxDistance` 0.01). It found **30** of **2,379** RAW+JPEG pairs (**1.3%**). It is not the tool for
+   pairing, and there is **no auto-stacking setting anywhere in v3.2.0's config**.
+
+⚠⚠ **THE MISTAKE THIS ALMOST MADE, and it was real rather than hypothetical: PAIR ON (STEM, CAPTURE
+TIME), NEVER ON STEM ALONE.** This camera's counter has **wrapped**, so `DSCF0236.JPG` exists for a
+**2024-03-25** photo *and* a **2023-07-04** one. Grouping by stem alone offers the 2024 `.RAF` a 2023
+`.JPG` as its partner — which would have **stacked two unrelated photos and hidden one from the
+timeline**. Keying on `(stem, fileCreatedAt)` resolved it exactly and *also* recovered all 44 groups a
+stem-only 1:1 rule had to reject: **2,334 → 2,378 clean pairs**, reconciling to 2,379 with the one
+already stacked.
+
+**The one-time migration** was run as an audited script (dry run → 5-pair batch → verify → rest), each
+created stack id logged for reversal, JPEG first so the camera rendering stays the timeline face.
+⚠ It is idempotent: it re-reads `GET /stacks` every run and skips what exists.
+
+⚠⚠ **THE RUSTROOM-SIDE HALF IS NOT FREE AND IS NOT DONE.** Rustroom lists via `search/metadata`, which
+has no stacking awareness *and does not report `stack`*, so **Rustroom's grid still shows both halves of
+every stacked pair** while Immich's timeline collapses them. Any "stack pairs" feature in the app owes a
+grid that honours stacks — fed from a `GET /stacks` enumeration, not from the listing.
+
 ### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
 
 **Status:** ✅ **BUILT, merged and confirmed by use (2026-09-24).** Spec
