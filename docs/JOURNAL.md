@@ -211,6 +211,87 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-24 — Immich slice 4: Download and Remove downloads, and a glyph trap the repo had already warned about
+
+Branch `immich-download-discard`, merged and **confirmed by use**. **2,823 tests**, clippy and fmt clean,
+**75 goldens unmoved**.
+
+**Asked for in one sentence:** *"a 'download' button, that allows me to predownload e.g. an album or
+selection of images from immich, as well as a discard or delete button."* Two jobs: take a working set
+offline, and get the space back — the other half of the *"no eviction for cached originals"* gap that had
+been out of scope since slice 1.
+
+## The load-bearing change: a bounded queue
+
+⚠⚠ **`ImmichWorker::request` spawns a thread per job, and `in_flight` only *dedupes* — it bounds
+nothing.** A bulk request for the user's 872-asset `analog` album would have spawned **872 threads and 872
+concurrent HTTP requests at one self-hosted server.** Found while writing the spec, not by running it.
+
+Downloads past **`MAX_CONCURRENT_DOWNLOADS` = 4** queue; `poll` starts the next as each completes.
+⚠ **Sabotage-verified: removing the queueing branch lets 30 run at once against a cap of 4.** The test
+counts *concurrent* entries rather than total calls — counting calls would pass against no queue at all —
+and asserts the fixture actually overlapped first.
+
+⚠ Two details that took thought: starting the next job happens **after** `in_flight.remove`, or the cap
+counts the finished job as live and stalls the queue one short for ever; and `cancel_downloads` **returns
+the dropped ids to `in_flight`'s free pool**, without which a cancelled asset could never be requested
+again for the life of the process. Cancel leaves the in-flight four to finish — `DecodeWorker`'s idiom,
+*abandoned not aborted*, which also avoids deliberately creating `.part` files.
+
+## Removal, and what it must not touch
+
+⚠⚠ **The feature rests on a property that already existed and was already documented**: `cache_path`'s doc
+says *"re-downloading an evicted or deleted file must restore byte-identical identity"*, because the path
+comes from the asset UUID and nothing else. So a removed photo re-downloads to the same path and its edits
+reattach.
+
+Three things survive: the **sidecar** (`sidecar::path` appends `.json` to the *whole* filename, so removing
+`abc.jpg` cannot touch `abc.jpg.json`), the **catalog row** (marks, and `row_is_browsable` already hides an
+absent Immich row), and the **thumbnail** (own directory, own budget — removing originals must not make
+browsing slow again). ⚠ Sabotage-verified: adding a sidecar deletion fails with *"the sidecar must NOT — it
+holds the edits"*. **Safe by construction is still asserted on disk**, because that is the shape of claim
+this project has been wrong about twice in a week.
+
+⚠ Named **"Remove downloads"**, the user's choice of three: the action *cannot* reach the server — the key
+is read-only by the Settings help text's own instruction — and "discard" beside a photograph reads as
+throwing the photograph away, with a hover as the only correction.
+
+## ⚠⚠ Five things came back from use, and the first was a trap this repo had already written down
+
+1. **The row glyphs shipped as grey squares.** I chose `↓` and `✕` without checking them, and
+   `icons.rs`'s own doc says every codepoint must be verified against the bundled font *"because four
+   separate features in this project have picked a glyph that turned out to be absent"*. Parsing every
+   bundled cmap settled it: **`↓` (U+2193) is in Hack only — the *Monospace* family** — and **`✕` (U+2715)
+   is in no bundled font at all.** Now `⬇` (U+2B07), present in **both** NotoEmoji and emoji-icon-font,
+   which egui puts in `Proportional`, and monochrome so it takes the painter's colour; and `×` (U+00D7)
+   from Ubuntu-Light, the glyph Folders' Forget already uses. **Fifth occurrence of a warning written for
+   exactly this.**
+2. **Actions only when applicable** — nothing to download when all are here, nothing to remove when none
+   is. ⚠ `None` when the asset list is not in hand, and then **both** are offered, because the rail
+   genuinely does not know and guessing "neither" would make the album unreachable.
+   ⚠⚠ The slice's length now varies, so the clicked action is read by its **verb**, not by index: a
+   hard-coded `0`/`1` would download when you meant to remove the moment one was absent.
+3. **A predownload opened every photo it fetched**, throwing the user into Develop repeatedly.
+   *Downloading* and *opening* are two acts and only the second asks to look at something. The completion
+   arm became its own `finish_immich_download` method so the test drives **the branch that runs**.
+4. **Remove downloads now removes the open photo and empties Develop**, overriding my earlier decision to
+   skip it: removing everything *except* the one you are looking at is a surprising exception. The session
+   is persisted first (so edits reach the sidecar, which the removal keeps) and closed before the file
+   goes. ⚠ The skip logic and `Removed::skipped_open` were **deleted**, not left unused.
+5. Hovers reworded to say the photos stay on the server.
+
+## Two failures of my own, one of them repeated
+
+⚠⚠ **I committed with clippy at 101 for the second time in three days**, having written the standing lesson
+about it and put it in this plan's own conventions. The cause was not carelessness in reading: I had been
+batching `fmt && clippy && test && git commit` into **one invocation**, so the commit ran regardless of the
+middle result. **Splitting the gate from the commit caught a real failure on the very next task** — four
+dead-code errors from verbs not yet wired, with nothing committed. That split is the actual fix.
+
+⚠ And both new view tests needed their fixture corrected: `test_app::for_test` starts in **Develop**, so the
+new assertion failed against correct code *and its sibling passed while proving nothing*. The
+"comparison between two things that are the same" lesson, landing on me the same day I consolidated it.
+
 ### 2026-09-24 — per-channel RGB tone curves, and four guards that were sabotaged rather than trusted
 
 Branch `rgb-tone-curves`, nine commits, merged and **confirmed by use**. **2,811 tests**, clippy and fmt

@@ -17,6 +17,19 @@ const TINT: f32 = 0.18;
 /// One action cell at the right edge of a row.
 pub struct RowAction<'a> {
     /// The painted glyph — `×`, `+`, `−`, or an icon-font character.
+    ///
+    /// ⚠⚠ **VERIFY THE CODEPOINT AGAINST THE BUNDLED FONTS BEFORE USING IT HERE.** This is drawn with
+    /// `FontId::proportional`, whose family is **Ubuntu-Light → NotoEmoji → emoji-icon-font → Phosphor**
+    /// (`theme::install_fonts` adds the last at `FontPriority::Lowest`). A codepoint in **Hack** does not
+    /// render here — Hack is the *Monospace* family only.
+    ///
+    /// ⚠ On 2026-09-24 the Immich rail shipped `↓` and `✕` as **grey squares**: `↓` (U+2193) is in Hack
+    /// alone, and `✕` (U+2715) is in **no bundled font at all**. `icons.rs` carries the same warning and
+    /// records four earlier features paying for it; that one was the fifth, and the reason this note is
+    /// *here* is that the mistake is made while writing a `RowAction`, not while reading `icons.rs`.
+    ///
+    /// ⚠ Known good: `×` U+00D7, `+` U+002B, `−` U+2212 (Ubuntu-Light) and `⬇` U+2B07 (NotoEmoji, which is
+    /// monochrome and so takes the painter's colour). Anything else: parse the cmaps first.
     pub glyph: char,
     /// The verb for a screen reader; the cell is named "{verb} {row name}".
     pub verb: &'a str,

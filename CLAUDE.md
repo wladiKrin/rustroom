@@ -166,9 +166,18 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2811 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
-branch, tree clean, and ✅ **`main` is level with `origin/main`** — the user has pushed everything through
-`a1169c4`. ⚠ Still never push.
+**2823 tests**, **75 goldens** (the 74 unmoved since 2026-09-18, plus one for the channel curves). No
+branch, tree clean; `main` is **9 commits ahead of `origin/main`** — the user last pushed `a1169c4`.
+⚠ Still never push.
+
+✅ **Immich slice 4 — Download and Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its load-bearing
+change is a **bounded download queue**: `request` spawns a thread per job and `in_flight` only *dedupes*, so
+a bulk album request would have spawned **872 threads** — sabotage-measured at 30 concurrent against a cap
+of **4**. ⚠ Start the next job **after** `in_flight.remove` or the cap stalls one short for ever; and
+`cancel_downloads` must return dropped ids to the free pool. ⚠⚠ **Removal deletes only the image** — the
+sidecar (`<filename>.json` **appended**) keeps the edits, the catalog row the marks, the thumbnail the
+speed, and `cache_path`'s byte-identical re-download is what reattaches them. The key is read-only, so it
+*cannot* touch the server. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
 
 ✅ **Per-channel RGB tone curves (2026-09-24, confirmed by use).** Red/Green/Blue beside the composite on
 one widget, selector defaulting to RGB. ⚠⚠ Almost no colour science changed: `ToneCurveStage::apply` was
@@ -179,16 +188,12 @@ space and the input clamp are **inherited, not re-decided**, which is why the 74
 decision. ⚠ No `version` bump; a test guards old sidecars, not a number.
 `grep -n 'per-channel RGB tone curves' docs/JOURNAL.md`.
 
-✅ **The Color section, made legible (2026-09-24, confirmed by use).** An amateur's review found it
-confusing: **~40 values behind 15 sliders, two selectors and a wheel**, with **"Saturation" naming three
-different things**. HSL and Color Grading now sit inside **`ADVANCED COLOR`**, closed by default, under
-`ADJUST INDIVIDUAL COLORS` / `TINT BY TONE` with the jargon in hovers — a newcomer meets **two sliders**.
-The grading wheel's `Saturation` → **`Strength`**; ⚠ `Hue` and `Luminance` stay, because they repeat by
-*word* and not by *meaning*, and only the latter misleads.
-⚠⚠ **Not three real sections:** `Section::name()` is `EDIT_GROUP_NAMES[i]` and `edit_groups()` is derived
-from `SECTIONS`, so that would mean splitting the `Color` edit group **and the Sync dialog** — its own
-change, with a version bump. The block deliberately claims no group and is not resettable.
-`grep -n 'made legible' docs/JOURNAL.md`.
+✅ **The Color section, made legible** (2026-09-24) — HSL and grading behind **`ADVANCED COLOR`**, closed
+by default, so a newcomer meets **two sliders**; the grading wheel's `Saturation` → **`Strength`** (⚠ `Hue`
+and `Luminance` stay: they repeat by *word*, not by *meaning*). ⚠⚠ **Not three real sections:**
+`Section::name()` is `EDIT_GROUP_NAMES[i]` and `edit_groups()` derives from `SECTIONS`, so that would mean
+splitting the `Color` edit group **and the Sync dialog** — its own change. `grep -n 'made legible'
+docs/JOURNAL.md`.
 
 ✅ **Immich, slices 1–3 — all merged and confirmed by use (2026-09-22/24).** A rail section lists the
 server's albums and a **Timeline** of months; the grid fills from server thumbnails with nothing
@@ -217,29 +222,13 @@ refetched every launch; only the *asset* lists are cached.
 the user's `settings.json`, so **changing the Rust default would not change his behaviour**. The default
 stays as `settings.rs` records it.
 
-✅ **The histogram survives a peak (2026-09-23, confirmed by use).** Square root with bins 0 and 255
-**out of the scale**, in `histogram::normalised`/`envelope` — one function pair for the panel and the
-tone curve's ghost, which each computed their own linear maximum before. ⚠⚠ Measured, and the limit is
-pinned: 0.7 → 7.2 px at 100:1, but only 1.6 px at 2000:1, because sqrt compresses a ratio by its own
-square root. **The test says not to fix that by lowering its threshold.** Ghost 0.15 → 0.35; the curve
-centred like the colour wheel; the panel 320 pt. `grep -n "histogram's scale" docs/JOURNAL.md`.
-
-⚠⚠ **A slider must never clamp a value it was merely handed.** `DragValue::range()` clamps *existing*
-values by default and reports the clamp as `changed()`, so opening certain photos **froze Temp at a
-slider limit** while the preset still read "As Shot". Fixed with `clamp_existing_to_range(false)` plus a
-Temp range of **1667 K** matching `color::wb::solve_xy`'s own clamp, with a test comparing the two
-bounds. ⚠ Not a regression from any recent work — possible since 2026-09-01. ⚠ Any slider handed an
-out-of-range stored value now **displays** it rather than rewriting it.
-
-⚠ The **tone curve's space** is a live question nobody has answered: it runs in **linear light**, where a
-gentle S is aggressive. That is long-standing and is what the widget plots — but moving it to a
-gamma-encoded space would **move every golden**, so it is its own change and has never been specced.
-
-✅ **The Now row counts what DIFFERS, not history steps** (2026-09-23). `Edits::changed_parameters`,
-⚠⚠ **derived from serialisation, never a field list** — 25 fields, no `#[serde(skip)]`, so a new
-parameter counts itself. ⚠ `History::steps_since` is **gone**, having lost its only caller. ✅ **Reindex
-is a plain button**, not a ⋯ menu holding one item.
-`grep -n 'counts difference, not history steps' docs/JOURNAL.md`.
+✅ **The histogram survives a peak** (2026-09-23) — sqrt with bins 0 and 255 **out of the scale**, one
+function pair for the panel and the curve's ghost. ⚠⚠ Measured, and the limit pinned: 0.7 → 7.2 px at
+100:1, but only 1.6 px at 2000:1, because sqrt compresses a ratio by its own square root. **The test says
+not to fix that by lowering its threshold.** ✅ **The Now row counts what DIFFERS**, via
+`Edits::changed_parameters` — ⚠⚠ derived from **serialisation, never a field list**, so a new parameter
+counts itself. ⚠ Grid marks 10–20 pt; the reject cross scaled beside its own glyph (`×` draws small).
+`grep -n "histogram's scale\|counts difference" docs/JOURNAL.md`.
 
 ✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
 as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
@@ -265,12 +254,10 @@ not go looking for the next port; there isn't one.
 
 **Live candidates, in the order the user has shown interest:**
 
-0. ⭐ **Immich slice 4 — a Download button and a Discard button (asked for 2026-09-24).** Predownload an
-   album or a selection; free the space again afterwards. ⚠ Everything it needs already exists and is
-   confirmed by use (`Job::Original`, `present_names`, the grid's ↓, the selection model). ⚠⚠ **"Discard"
-   must not touch the server** — the key is read-only and stays so — and it must **not** remove sidecars
-   or catalog rows, or it would silently destroy edits. Open questions and the reasoning are in
-   `docs/BACKLOG.md` under *Slice 4*. **Specced nowhere yet; brainstorm first.**
+0. **Immich: two-way sync** ⬜ — the only unbuilt Immich slice. ⚠⚠ Write-back needs **`asset.update`** on
+   the API key, which the Settings help text tells the user **not** to grant, and it would let a bug here
+   alter their library. Also unbuilt: reading Immich's own `rating`/`isFavorite`, the OS keychain (**the key
+   is plaintext**), and automatic eviction of cached originals — slice 4 is the **manual** half.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
@@ -393,13 +380,18 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   question"* note in `docs/BACKLOG.md` against the code before trusting it.
 - **⚠ Almost every GUI-wiring defect in this repo was found by USE, not by a test.** A milestone is
   not closed when it is green; it is closed when it has been seen.
-- **⚠⚠ AN OPENAPI SCHEMA DESCRIBES WHAT A SERVER *MAY* SEND, NOT WHAT IT *DOES*.** Three defects in
-  two days, every one invisible to a green suite and obvious within a minute of real use: a
-  hand-written fixture asserting a field the endpoint never returns; paging by `nextCursor` when the
-  server sends `nextPage`; and reading `required` **without reading `nullable` beside it** — a `null`
-  `thumbhash` then failed a whole month of the timeline. ⚠ When a field turns out to be nullable,
-  **audit every field against the schema** rather than patching the one that broke: two more were
-  waiting. And when an endpoint's shape matters, get a **captured reply** before writing the DTO.
+- **⚠⚠ ASK THE ARTEFACT, NOT THE DESCRIPTION OF IT — twice over, and both cost real bugs.**
+  **(a) An OpenAPI schema describes what a server *may* send, not what it *does*.** Three Immich defects,
+  each invisible to a green suite and obvious in a minute of use: `GET /albums/{id}` returns **no `assets`
+  field**; a real server pages by **`nextPage`** while leaving `nextCursor` null; and `required: true` does
+  **not** mean non-null — `nullable` sits beside it, and one `null` `thumbhash` failed a whole month.
+  ⚠ When one field turns out nullable, **audit them all** — two more were waiting. **Capture a real reply
+  before writing a DTO.**
+  **(b) A font's advertised character set is not its cmap.** The Immich rail shipped `↓` and `✕` as grey
+  squares: `↓` is in **Hack only**, which is the *Monospace* family, and `✕` is in **no bundled font at
+  all**. ⚠ `icons.rs` already carried this warning and recorded four features paying for it; that was the
+  fifth, so the warning now also sits on **`RowAction::glyph`** — where the mistake is actually made.
+  **Parse the cmap.**
 - **⚠⚠ BEFORE DECLARING SOMETHING "ONLY USE CAN VERIFY", LOOK FOR THE HARNESS THAT ALREADY ALMOST COVERS
   IT.** I twice told the user that preview-versus-export parity for the RGB curves was the one thing only
   he could check. `a_colorimetric_frame_renders_the_same_picture_on_the_gpu` already existed — it just ran
