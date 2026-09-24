@@ -185,6 +185,19 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
     // ⚠⚠ Both read **before** the closure, which borrows `app.settings` mutably through `dialog`
     // — the borrow shape this file's own comment says has cost a compile error here twice.
     let upload_avail = rustroom_app::immich_upload::availability(&app.settings);
+    // ⚠⚠ **A destination naming a target that is not reachable is coerced back to Files.** Without
+    // this, switching Immich off left a preset saying "Immich only" with **no visible control to
+    // change it** — the ticks are not drawn — so Export stayed dark and the Location header still
+    // read "Immich, original date", which is also the word leaking into a UI that is supposed to
+    // have no mention of it. Found by use, 2026-09-24.
+    //
+    // ⚠ The **draft** is coerced, never a saved preset: the preset still says what it says, and
+    // re-enabling Immich brings its meaning back.
+    if upload_avail == rustroom_app::immich_upload::Availability::NotConfigured
+        && opts.destination.target().is_some()
+    {
+        opts.destination = Destination::Files;
+    }
     let upload_host = app.settings.immich_url.trim().to_string();
     // ⚠ The first photo of the run, matching how `sample` previews `{seq}` = 1.
     let already_uploaded = jobs.first().and_then(|j| {
@@ -909,5 +922,61 @@ mod tests {
         }
         // ⚠ And the retired section name must be gone, not merely unused.
         assert!(!drawn.iter().any(|l| l == "Delivery"), "{drawn:?}");
+    }
+
+    /// ⚠⚠ **The bug the user reported: the Location header still read "Immich, original date" while
+    /// the ticks were hidden.** A persisted `Target` destination with Immich unreachable left Export
+    /// dark with **no visible control to change it**, and leaked the word into a UI that is supposed
+    /// to have no mention of it.
+    ///
+    /// ⚠⚠ **Asserted on the DRAFT, not on the drawn labels** — and the first version of this test
+    /// was vacuous for exactly that reason: it looked for "immich" among the labels, but a section's
+    /// trailing summary is **painted**, which the harness cannot read (`export_summary`'s own module
+    /// doc says so). It passed with the fix sabotaged. What is observable is `app.export_draft` after
+    /// the dialog runs, which is where the coercion lands.
+    #[test]
+    fn an_unreachable_destination_is_coerced_back_to_files() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.library = Some(test_app::library_of(2));
+        app.library.as_mut().unwrap().selection.select_indices(&[0]);
+        app.settings.immich_url.clear();
+        app.settings.immich_key.clear();
+        // A preset saved while Immich worked, now unreachable.
+        app.export_draft.destination = rustroom_app::batch_export::Destination::Target(
+            rustroom_app::batch_export::UploadTarget::Immich,
+        );
+
+        let _ = test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx));
+
+        assert_eq!(
+            app.export_draft.destination,
+            rustroom_app::batch_export::Destination::Files,
+            "an unreachable target must be coerced, or Export stays dark with the cause hidden"
+        );
+    }
+
+    /// ⚠ The control: with Immich reachable the destination is **left alone**, or the coercion would
+    /// quietly undo the user's choice every time the dialog opened.
+    #[test]
+    fn a_reachable_destination_is_left_alone() {
+        let ctx = test_ui::ctx();
+        let mut app = test_app::for_test();
+        app.library = Some(test_app::library_of(2));
+        app.library.as_mut().unwrap().selection.select_indices(&[0]);
+        app.settings.immich_url = "https://immich.example".to_string();
+        app.settings.immich_key = "browse-key".to_string();
+        app.settings.immich_upload_key = "upload-key".to_string();
+        let wanted = rustroom_app::batch_export::Destination::Target(
+            rustroom_app::batch_export::UploadTarget::Immich,
+        );
+        app.export_draft.destination = wanted;
+
+        let _ = test_ui::labelled_centres(&ctx, Vec::new(), |_| super::settings(&mut app, &ctx));
+
+        assert_eq!(
+            app.export_draft.destination, wanted,
+            "a reachable target must survive the dialog"
+        );
     }
 }

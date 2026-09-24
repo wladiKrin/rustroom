@@ -119,14 +119,6 @@ impl SettingsDraft {
             app.settings.auto_advance = self.auto_advance;
             plain = true;
         }
-        if self.immich_enabled != app.settings.immich_enabled {
-            app.settings.immich_enabled = self.immich_enabled;
-            // ⚠⚠ The shared thumbnail cell must be re-pointed, or a disabled integration keeps
-            // serving server thumbnails until the next restart — `connection` is now `None`, so this
-            // clears it.
-            rustroom_app::immich_source::refresh_shared(&app.settings);
-            plain = true;
-        }
         // ⚠⚠ Applied plainly, **not** through `set_connection`. That accessor owns the *browse*
         // connection; the upload key is a separate credential and must not join it, or the
         // read-only guarantee browsing relies on would quietly acquire a write grant.
@@ -134,8 +126,18 @@ impl SettingsDraft {
             app.settings.immich_upload_key = self.immich_upload_key.clone();
             plain = true;
         }
-        if self.immich_url != app.settings.immich_url || self.immich_key != app.settings.immich_key
+        // ⚠⚠ **ONE branch for EVERY input to `connection` — the URL, the key, and the master
+        // switch.** An earlier version gave the switch its own branch that only re-pointed the
+        // shared thumbnail cell, so turning Immich off and then on again left the **worker** holding
+        // a snapshot of a `None` connection and browsing stayed dead until the next restart, while
+        // the Test button — which builds its own client from what is typed — still said "connected".
+        // Found by use, 2026-09-24. The comment three lines down already said the worker has to be
+        // rebuilt; splitting the condition is exactly what lost it.
+        if self.immich_url != app.settings.immich_url
+            || self.immich_key != app.settings.immich_key
+            || self.immich_enabled != app.settings.immich_enabled
         {
+            app.settings.immich_enabled = self.immich_enabled;
             // ⚠ Through the accessor, which is the only writer of those two fields — so moving
             // the key to the OS keychain later changes one file rather than this one too.
             rustroom_app::immich_source::set_connection(

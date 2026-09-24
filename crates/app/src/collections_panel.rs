@@ -1022,4 +1022,29 @@ mod tests {
             "these labels still mention Immich with it switched off: {leaked:?}"
         );
     }
+
+    /// ⚠⚠ **The bug the user reported as "the name still changes", and the rename was NOT the
+    /// cause.** `immich_cache_root` went through `connection`, so switching Immich off made it
+    /// `None` — and `folder_display_name(path, None)` falls through to the directory's basename, so
+    /// the Folders row started showing the raw host slug `https___…` instead of
+    /// "immich (downloaded)". A path is not a behaviour, so it is derived from the URL alone.
+    #[test]
+    fn the_downloaded_folder_keeps_its_name_with_immich_switched_off() {
+        let name_for = |enabled: bool| -> String {
+            let mut app = crate::test_app::for_test();
+            app.settings.immich_enabled = enabled;
+            app.settings.immich_url = "https://immich.example".to_string();
+            app.settings.immich_key = "a-key".to_string();
+            let root = app
+                .immich_cache_root()
+                .expect("the cache root is a path, and the URL is set");
+            rustroom_app::immich_catalog::folder_display_name(&root, Some(root.as_path()))
+        };
+        assert_eq!(name_for(true), "immich (downloaded)");
+        assert_eq!(
+            name_for(false),
+            "immich (downloaded)",
+            "switching Immich off must not rename the folder"
+        );
+    }
 }
