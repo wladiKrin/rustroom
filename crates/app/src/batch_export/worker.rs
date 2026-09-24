@@ -679,25 +679,34 @@ mod tests {
         // button stays lit over a typo.
         let d = TempDir::new("can_export");
         let good = templated(&d, "{name}-{seq:3}");
-        assert!(can_export(&good));
+        assert!(can_export(&good, true));
         assert!(
-            !can_export(&ExportOptions {
-                filename_template: "{camrea}".into(),
-                ..good.clone()
-            }),
+            !can_export(
+                &ExportOptions {
+                    filename_template: "{camrea}".into(),
+                    ..good.clone()
+                },
+                true
+            ),
             "an unknown token must stop the run"
         );
         assert!(
-            !can_export(&ExportOptions {
-                dest_dir: PathBuf::new(),
-                ..good.clone()
-            }),
+            !can_export(
+                &ExportOptions {
+                    dest_dir: PathBuf::new(),
+                    ..good.clone()
+                },
+                true
+            ),
             "an unset destination must stop the run"
         );
-        assert!(!can_export(&ExportOptions {
-            dest_dir: d.0.join("gone"),
-            ..good
-        }));
+        assert!(!can_export(
+            &ExportOptions {
+                dest_dir: d.0.join("gone"),
+                ..good
+            },
+            true
+        ));
     }
 
     #[test]

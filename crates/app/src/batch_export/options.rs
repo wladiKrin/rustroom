@@ -91,16 +91,19 @@ pub struct ExportOptions {
     pub output_sharpening: OutputSharpening,
     /// Where the files land and what happens afterwards. **M6.1e — stored, inert.**
     pub delivery: Delivery,
-    /// Where the exported file is delivered **in addition to** `dest_dir`. `None` = disk only.
+    /// Where this export delivers what it renders.
     ///
-    /// ⚠⚠ **Deliberately NOT named for a service.** The Immich integration must be switchable
-    /// off with *"no mention of immich at all"* (`docs/BACKLOG.md`), so `export` knows only that a
-    /// delivery target may exist. A field called `immich` here could not be hidden later without
-    /// renaming every call site.
+    /// ⚠⚠ **One field rather than a flag beside a folder**, so "keep nothing and upload nothing" is
+    /// **unrepresentable** instead of guarded. ⚠ Named for the *role*, never the service: `export`
+    /// must stay able to lose the Immich integration with *"no mention of immich at all"*.
     ///
-    /// ⚠ No field-level `#[serde(default)]`: the struct carries a container-level one, and adding
-    /// it per field implies a guarantee it is not the source of — `space` above says the same.
-    pub upload_target: Option<UploadTarget>,
+    /// ⚠ This replaced a day-old `upload_target: Option<UploadTarget>`. A preset written with that
+    /// field still **loads** — the container-level `#[serde(default)]` sees to it — but comes back as
+    /// `Files`, so the upload preference is re-ticked once. Pinned by
+    /// `an_options_file_from_before_the_destination_still_loads`.
+    pub destination: Destination,
+    /// Which moment an uploaded photo is dated with. Ignored when nothing is uploaded.
+    pub upload_date: UploadDate,
 }
 
 // ⚠⚠ These three **live in the `export` crate** (M6.1b/c/d) and are re-exported here, so no call
@@ -139,6 +142,66 @@ pub enum PostExportAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UploadTarget {
     Immich,
+}
+
+/// Where an export run delivers what it renders.
+///
+/// ⚠⚠ **Append variants, never insert** — serialised into presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Destination {
+    /// Write files and keep them. The default, and what every export did before this.
+    #[default]
+    Files,
+    /// Deliver to the target only — **no local copy is kept**.
+    Target(UploadTarget),
+    /// Both.
+    Both(UploadTarget),
+}
+
+impl Destination {
+    /// Whether a file survives the run, which is what decides if a folder is required.
+    pub fn keeps_files(self) -> bool {
+        matches!(self, Destination::Files | Destination::Both(_))
+    }
+
+    /// The upload target, when there is one.
+    pub fn target(self) -> Option<UploadTarget> {
+        match self {
+            Destination::Files => None,
+            Destination::Target(t) | Destination::Both(t) => Some(t),
+        }
+    }
+}
+
+/// Which moment an uploaded photo is dated with.
+///
+/// ⚠ The user's framing: there are *"valid arguments for all of these cases"*, so it is an option
+/// rather than a rule. ⚠⚠ **Append variants, never insert.**
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum UploadDate {
+    /// The original photograph's own capture date. The default.
+    #[default]
+    Captured,
+    /// When this photo's edits were last changed.
+    Edited,
+    /// When the upload happens.
+    Uploaded,
+}
+
+impl UploadDate {
+    pub const ALL: [UploadDate; 3] = [
+        UploadDate::Captured,
+        UploadDate::Edited,
+        UploadDate::Uploaded,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            UploadDate::Captured => "Original date",
+            UploadDate::Edited => "Edit date",
+            UploadDate::Uploaded => "Upload date",
+        }
+    }
 }
 
 /// The template every export used before templating existed, and the default.
@@ -185,7 +248,8 @@ impl Default for ExportOptions {
             watermark: Watermark::default(),
             output_sharpening: OutputSharpening::default(),
             delivery: Delivery::default(),
-            upload_target: None,
+            destination: Destination::Files,
+            upload_date: UploadDate::Captured,
         }
     }
 }
@@ -197,8 +261,12 @@ impl Default for ExportOptions {
 /// can see rather than something to verify by clicking. ⚠ And it is the place any *later*
 /// pre-flight check belongs (a subfolder that will not sanitize, say), so the dialog keeps asking
 /// one question.
-pub fn can_export(opts: &ExportOptions) -> bool {
-    destination_ready(&opts.dest_dir) && Template::parse(&opts.filename_template).is_ok()
+pub fn can_export(opts: &ExportOptions, upload_ready: bool) -> bool {
+    let folder_ok = !opts.destination.keeps_files() || destination_ready(&opts.dest_dir);
+    // ⚠⚠ A destination naming a target it cannot reach must not start: a preset saved as
+    // "Immich only" would otherwise run with nowhere to put anything once the key was removed.
+    let target_ok = opts.destination.target().is_none() || upload_ready;
+    folder_ok && target_ok && Template::parse(&opts.filename_template).is_ok()
 }
 
 #[cfg(test)]
@@ -314,31 +382,120 @@ mod tests {
         }
     }
 
-    /// ⚠ The default must be "disk only", so an existing user's next export is unchanged.
+    /// ⚠ The default must keep files and upload nothing, so an existing user's next export is
+    /// unchanged.
     #[test]
-    fn upload_is_off_by_default() {
-        assert_eq!(ExportOptions::default().upload_target, None);
+    fn the_default_destination_is_files_only() {
+        let d = ExportOptions::default().destination;
+        assert_eq!(d, Destination::Files);
+        assert!(d.keeps_files());
+        assert_eq!(d.target(), None);
     }
 
-    /// ⚠⚠ The container-level `#[serde(default)]` is what makes this safe. An options file written
-    /// before this field existed must still load — the same guarantee
-    /// `an_options_file_from_before_the_delivery_fields_still_loads` pins for M6.1.
+    /// ⚠⚠ "Upload nothing and keep nothing" must be **unrepresentable**, which is the whole reason
+    /// this is one field rather than a flag beside a folder.
     #[test]
-    fn an_options_file_from_before_upload_still_loads() {
-        let json = r#"{"dest_dir":"/tmp","quality":90}"#;
-        let o: ExportOptions = serde_json::from_str(json).unwrap();
-        assert_eq!(o.upload_target, None);
+    fn every_destination_delivers_somewhere() {
+        for d in [
+            Destination::Files,
+            Destination::Target(UploadTarget::Immich),
+            Destination::Both(UploadTarget::Immich),
+        ] {
+            assert!(
+                d.keeps_files() || d.target().is_some(),
+                "{d:?} delivers nowhere"
+            );
+        }
+        assert!(!Destination::Target(UploadTarget::Immich).keeps_files());
+        assert!(Destination::Both(UploadTarget::Immich).keeps_files());
+        assert_eq!(
+            Destination::Both(UploadTarget::Immich).target(),
+            Some(UploadTarget::Immich)
+        );
+    }
+
+    #[test]
+    fn a_destination_round_trips() {
+        for d in [
+            Destination::Files,
+            Destination::Target(UploadTarget::Immich),
+            Destination::Both(UploadTarget::Immich),
+        ] {
+            let o = ExportOptions {
+                destination: d,
+                ..ExportOptions::default()
+            };
+            let back: ExportOptions =
+                serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+            assert_eq!(back.destination, d);
+        }
+    }
+
+    /// ⚠⚠ An options file written before this field, **and one written with the day-old
+    /// `upload_target`**, must both still load. The second loses only the upload preference — never
+    /// the preset — which is the cost this replacement accepts rather than shimming.
+    #[test]
+    fn an_options_file_from_before_the_destination_still_loads() {
+        let o: ExportOptions = serde_json::from_str(r#"{"dest_dir":"/tmp","quality":90}"#).unwrap();
+        assert_eq!(o.destination, Destination::Files);
         assert_eq!(o.quality, 90);
+
+        let stale: ExportOptions =
+            serde_json::from_str(r#"{"quality":77,"upload_target":"Immich"}"#).unwrap();
+        assert_eq!(stale.quality, 77, "the rest of the preset must survive");
+        assert_eq!(
+            stale.destination,
+            Destination::Files,
+            "the retired field is ignored, not honoured"
+        );
     }
 
     #[test]
-    fn the_upload_target_round_trips() {
-        let o = ExportOptions {
-            upload_target: Some(UploadTarget::Immich),
+    fn the_default_upload_date_is_the_originals() {
+        assert_eq!(ExportOptions::default().upload_date, UploadDate::Captured);
+    }
+
+    /// ⚠⚠ `can_export` must refuse a target the settings cannot serve, or a preset saved as
+    /// "Immich only" starts a run with **nowhere to put anything** once the key is gone.
+    #[test]
+    fn can_export_needs_a_folder_only_when_files_are_kept() {
+        let tmp = std::env::temp_dir();
+        let with_dir = |d: Destination| ExportOptions {
+            dest_dir: tmp.clone(),
+            destination: d,
             ..ExportOptions::default()
         };
-        let back: ExportOptions =
-            serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
-        assert_eq!(back.upload_target, Some(UploadTarget::Immich));
+        let no_dir = |d: Destination| ExportOptions {
+            dest_dir: std::path::PathBuf::new(),
+            destination: d,
+            ..ExportOptions::default()
+        };
+
+        assert!(can_export(&with_dir(Destination::Files), false));
+        assert!(!can_export(&no_dir(Destination::Files), false));
+
+        // Immich-only needs no folder at all …
+        assert!(can_export(
+            &no_dir(Destination::Target(UploadTarget::Immich)),
+            true
+        ));
+        // … but does need uploading to be possible.
+        assert!(!can_export(
+            &no_dir(Destination::Target(UploadTarget::Immich)),
+            false
+        ));
+        // Both needs the folder *and* the upload.
+        assert!(can_export(
+            &with_dir(Destination::Both(UploadTarget::Immich)),
+            true
+        ));
+        assert!(!can_export(
+            &with_dir(Destination::Both(UploadTarget::Immich)),
+            false
+        ));
+        assert!(!can_export(
+            &no_dir(Destination::Both(UploadTarget::Immich)),
+            true
+        ));
     }
 }

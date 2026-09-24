@@ -9,6 +9,7 @@ use crate::list_row::{self, RowAction, RowSpec};
 use crate::{theme, Modal, RustroomApp};
 use eframe::egui;
 use rustroom_app::batch_export::{banding_warning, can_export, Collision, Decision, ExportOptions};
+use rustroom_app::batch_export::{Destination, UploadTarget};
 use rustroom_app::batch_export::{Watermark, WatermarkCorner};
 use rustroom_app::export_presets::ExportPreset;
 use rustroom_app::export_summary;
@@ -182,7 +183,15 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
         "export_settings",
         &title,
         theme::DialogSize::Wide,
-        Footer::confirm("Export", can_export(&opts), "Cancel").note(&note),
+        Footer::confirm(
+            "Export",
+            can_export(
+                &opts,
+                upload_avail == rustroom_app::immich_upload::Availability::Ready,
+            ),
+            "Cancel",
+        )
+        .note(&note),
         |ui| {
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(
@@ -374,43 +383,73 @@ pub fn settings(app: &mut RustroomApp, ctx: &egui::Context) {
                         false,
                         |ui| watermark_body(ui, &mut opts),
                     );
-                    // ⚠⚠ Drawn only when Immich is configured. `NotConfigured` must render
-                    // **nothing** — the requirement is "no mention of immich at all" when the
-                    // integration is off (`docs/BACKLOG.md`).
+                    // ⚠⚠ Drawn only when Immich is configured, and it holds **every** Immich
+                    // mention in this dialog — which is what keeps "switch it off and no mention
+                    // remains" a single condition rather than a list of places to remember.
                     if upload_avail != rustroom_app::immich_upload::Availability::NotConfigured {
-                        section(ui, "Upload", &export_summary::upload(&opts), false, |ui| {
-                            let ready =
-                                upload_avail == rustroom_app::immich_upload::Availability::Ready;
-                            let mut on = opts.upload_target.is_some();
-                            // ⚠ Disabled, never hidden, when there is no upload key: a control
-                            // that vanishes reads as a bug, and this project has taken that
-                            // back out once already.
-                            let r = ui.add_enabled(
-                                ready,
-                                egui::Checkbox::new(&mut on, "Upload to Immich after export"),
-                            );
-                            if ready {
-                                if r.changed() {
-                                    opts.upload_target = on.then_some(
-                                        rustroom_app::batch_export::UploadTarget::Immich,
+                        section(
+                            ui,
+                            "Delivery",
+                            &export_summary::delivery(&opts),
+                            false,
+                            |ui| {
+                                let ready = upload_avail
+                                    == rustroom_app::immich_upload::Availability::Ready;
+                                let mut mode = opts.destination;
+                                let r = ui.add_enabled_ui(ready, |ui| {
+                                    crate::segmented::segmented(
+                                        ui,
+                                        &mut mode,
+                                        &[
+                                            (Destination::Files, "Files only"),
+                                            (
+                                                Destination::Target(UploadTarget::Immich),
+                                                "Immich only",
+                                            ),
+                                            (
+                                                Destination::Both(UploadTarget::Immich),
+                                                "Files and Immich",
+                                            ),
+                                        ],
+                                    )
+                                });
+                                if ready {
+                                    opts.destination = mode;
+                                } else {
+                                    r.response.on_disabled_hover_text(
+                                        "Set an Upload key in Settings → Immich first. Browsing \
+                                         uses a read-only key, which cannot upload.",
                                     );
                                 }
-                            } else {
-                                r.on_disabled_hover_text(
-                                    "Set an Upload key in Settings → Immich first. Browsing \
-                                         uses a read-only key, which cannot upload.",
-                                );
-                            }
-                            if let Some(note) = &already_uploaded {
-                                // ⚠⚠ Informs, never blocks — uploading again is still allowed,
-                                // because a re-export after editing IS a new picture.
-                                // Replacing the old asset would mean deleting one.
-                                ui.label(egui::RichText::new(note).weak()).on_hover_text(
-                                    "Uploading again adds a second photo to Immich. Immich \
+                                // ⚠ Disabled rather than hidden when nothing is uploaded: it has
+                                // nothing to act on, and a control that vanishes reads as a bug.
+                                ui.add_enabled_ui(opts.destination.target().is_some(), |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Date");
+                                        egui::ComboBox::from_id_salt("upload_date")
+                                            .selected_text(opts.upload_date.label())
+                                            .show_ui(ui, |ui| {
+                                                for d in rustroom_app::batch_export::UploadDate::ALL
+                                                {
+                                                    ui.selectable_value(
+                                                        &mut opts.upload_date,
+                                                        d,
+                                                        d.label(),
+                                                    );
+                                                }
+                                            });
+                                    });
+                                });
+                                if let Some(note) = &already_uploaded {
+                                    // ⚠⚠ Informs, never blocks — a re-export after editing IS a new
+                                    // picture, and replacing the old asset would mean deleting one.
+                                    ui.label(egui::RichText::new(note).weak()).on_hover_text(
+                                        "Uploading again adds a second photo to Immich. Immich \
                                          recognises a byte-identical re-upload and keeps only one.",
-                                );
-                            }
-                        });
+                                    );
+                                }
+                            },
+                        );
                     }
                 });
             });

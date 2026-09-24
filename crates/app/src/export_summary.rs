@@ -74,12 +74,19 @@ pub fn watermark(o: &ExportOptions) -> String {
 }
 
 /// The preset whose options equal `o`, if any.
-/// The Upload section's trailing summary — every section header in this dialog says its own state.
-pub fn upload(o: &ExportOptions) -> String {
-    match o.upload_target {
-        None => "Off".to_string(),
-        Some(crate::batch_export::UploadTarget::Immich) => "Immich".to_string(),
-    }
+/// The Delivery section's trailing summary — every section header in this dialog says its own state.
+///
+/// ⚠ The date is named only when something is uploaded: under "Files only" it has nothing to act on
+/// and mentioning it would be noise.
+pub fn delivery(o: &ExportOptions) -> String {
+    use crate::batch_export::Destination;
+    let mode = match o.destination {
+        Destination::Files => return "Files only".to_string(),
+        Destination::Target(_) => "Immich only",
+        Destination::Both(_) => "Files and Immich",
+    };
+    // ⚠ Lower-cased so the phrase reads as one sentence rather than two labels.
+    format!("{mode}, {}", o.upload_date.label().to_lowercase())
 }
 
 pub fn matching_preset<'a>(presets: &'a [ExportPreset], o: &ExportOptions) -> Option<&'a str> {
@@ -159,11 +166,19 @@ mod tests {
         assert_eq!(footer_note(&presets, None, &other), "");
     }
 
+    /// ⚠ Every section header in this dialog says its own state, so a collapsed dialog reads as a
+    /// description of the export.
     #[test]
-    fn the_upload_summary_says_which_state_it_is_in() {
+    fn the_delivery_summary_says_the_mode_and_the_date() {
+        use crate::batch_export::{Destination, UploadDate, UploadTarget};
         let mut o = ExportOptions::default();
-        assert_eq!(upload(&o), "Off");
-        o.upload_target = Some(crate::batch_export::UploadTarget::Immich);
-        assert_eq!(upload(&o), "Immich");
+        assert_eq!(delivery(&o), "Files only");
+
+        o.destination = Destination::Target(UploadTarget::Immich);
+        assert_eq!(delivery(&o), "Immich only, original date");
+
+        o.destination = Destination::Both(UploadTarget::Immich);
+        o.upload_date = UploadDate::Uploaded;
+        assert_eq!(delivery(&o), "Files and Immich, upload date");
     }
 }

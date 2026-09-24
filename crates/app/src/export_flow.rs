@@ -102,7 +102,7 @@ impl RustroomApp {
         let opts = self.export_draft.clone();
         let demosaic = opts.demosaic;
         // ⚠ Read **before** `opts` is moved into `spawn`.
-        let opts_upload_wanted = opts.upload_target.is_some();
+        let opts_upload_wanted = opts.destination.target().is_some();
         let export_profile = self.camera_profile_path();
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
