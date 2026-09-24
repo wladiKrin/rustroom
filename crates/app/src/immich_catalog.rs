@@ -60,41 +60,20 @@ pub fn shows_download_badge(
 ///
 /// ⚠ Compared against the **configured** root, not against the shape of the name: a folder that merely
 /// looks like a host slug keeps its own name.
-pub fn folder_display_name(path: &Path, immich_root: Option<&Path>, enabled: bool) -> String {
+pub fn folder_display_name(path: &Path, immich_root: Option<&Path>) -> String {
     if immich_root == Some(path) {
-        // ⚠⚠ **Renamed rather than hidden when the integration is off** (user's call): these are real
-        // local JPEGs with edits and marks, and hiding them would put the user's own work out of
-        // reach. But the requirement is "no mention of immich at all", so the name must not say it.
+        // ⚠⚠ **The name is the same whether or not the integration is switched on** (user's call,
+        // 2026-09-24, revising their own "no mention of immich at all"). A neutral "Downloaded
+        // photos" was built first and taken back out: these are the user's photographs and they
+        // know where they came from, so a name that hides it helps nobody.
         //
-        // ⚠ The real path is `~/Library/Caches/rustroom/immich/<server>` and *does* contain the word
-        // — checked 2026-09-24: folder rows in the rail do not hover their path (the only
-        // `on_hover_text` in `collections_panel` is the rule button), so the rename is sufficient.
-        return if enabled {
-            "immich (downloaded)".to_string()
-        } else {
-            "Downloaded photos".to_string()
-        };
+        // ⚠ Which also means the row's hover stays the real path — the `folder_hover` helper that
+        // existed to blank it is gone.
+        return "immich (downloaded)".to_string();
     }
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
-}
-
-/// A folder row's hover: its full path, or a neutral phrase for the cache root when the integration
-/// is off.
-///
-/// ⚠⚠ **Exists because the rename alone is not enough.** The rail builds rows through
-/// `list_row::RowSpec { hover: &path, .. }`, so the real path
-/// `~/Library/Caches/rustroom/immich/<server>` would put the word — and the server's name — on screen
-/// under a folder called "Downloaded photos".
-///
-/// ⚠ This is the one place the design withholds a fact from the user (where the files are), accepted
-/// only because *"no mention of immich at all"* was explicit.
-pub fn folder_hover(path: &Path, immich_root: Option<&Path>, enabled: bool) -> String {
-    if !enabled && immich_root == Some(path) {
-        return "Photos downloaded to this computer".to_string();
-    }
-    path.to_string_lossy().to_string()
 }
 
 /// Whether a catalog row should appear in a **catalog-wide** view — All Photos, or a smart collection.
@@ -318,17 +297,14 @@ mod tests {
     #[test]
     fn the_immich_cache_root_is_shown_as_immich_downloaded() {
         let root = Path::new("/c/rustroom/immich/https___host_example");
-        assert_eq!(
-            folder_display_name(root, Some(root), true),
-            "immich (downloaded)"
-        );
+        assert_eq!(folder_display_name(root, Some(root)), "immich (downloaded)");
     }
 
     #[test]
     fn any_other_folder_keeps_its_basename() {
         let root = Path::new("/c/rustroom/immich/https___host_example");
         assert_eq!(
-            folder_display_name(Path::new("/Users/me/Pictures/Iceland"), Some(root), true),
+            folder_display_name(Path::new("/Users/me/Pictures/Iceland"), Some(root)),
             "Iceland"
         );
     }
@@ -338,15 +314,11 @@ mod tests {
     #[test]
     fn nothing_is_renamed_without_the_configured_root() {
         let lookalike = Path::new("/somewhere/https___host_example");
-        assert_eq!(
-            folder_display_name(lookalike, None, true),
-            "https___host_example"
-        );
+        assert_eq!(folder_display_name(lookalike, None), "https___host_example");
         assert_eq!(
             folder_display_name(
                 lookalike,
-                Some(Path::new("/c/rustroom/immich/https___other")),
-                true
+                Some(Path::new("/c/rustroom/immich/https___other"))
             ),
             "https___host_example"
         );
@@ -391,46 +363,5 @@ mod tests {
     fn with_no_server_configured_every_row_is_browsable() {
         let dir = temp_dir("noserver");
         assert!(row_is_browsable(&dir.join("anything.jpg"), None));
-    }
-
-    /// ⚠⚠ **Renamed, not hidden, when the integration is off** — the downloads are real local photos
-    /// with edits, and the requirement is only that nothing on screen says "immich".
-    #[test]
-    fn the_cache_root_is_neutrally_named_when_immich_is_off() {
-        let root = Path::new("/c/rustroom/immich/https___host_example");
-        assert_eq!(
-            folder_display_name(root, Some(root), false),
-            "Downloaded photos"
-        );
-        // ⚠ The control: with the integration on it still says what it says today.
-        assert_eq!(
-            folder_display_name(root, Some(root), true),
-            "immich (downloaded)"
-        );
-        // ⚠ And an ordinary folder is untouched either way — the gate must not rename everything.
-        let other = Path::new("/Users/me/Pictures/Iceland");
-        assert_eq!(folder_display_name(other, Some(root), false), "Iceland");
-        assert_eq!(folder_display_name(other, Some(root), true), "Iceland");
-    }
-
-    /// ⚠⚠ The rename alone leaks the path through the row's hover — this is the other half.
-    #[test]
-    fn the_cache_roots_hover_hides_the_path_when_immich_is_off() {
-        let root = Path::new("/c/rustroom/immich/https___host_example");
-        let off = folder_hover(root, Some(root), false);
-        assert_eq!(off, "Photos downloaded to this computer");
-        assert!(!off.contains("immich"), "the hover still says it: {off}");
-        assert!(!off.contains("host_example"), "the server leaked: {off}");
-
-        // ⚠ The controls: with the integration on it is the path, and an ordinary folder is always
-        // its path either way — the gate must not blank every hover.
-        assert_eq!(folder_hover(root, Some(root), true), root.to_string_lossy());
-        let other = Path::new("/Users/me/Pictures/Iceland");
-        for enabled in [true, false] {
-            assert_eq!(
-                folder_hover(other, Some(root), enabled),
-                other.to_string_lossy()
-            );
-        }
     }
 }

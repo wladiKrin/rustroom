@@ -494,12 +494,14 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                     // one place Immich is named when the integration is off — hiding the tab too would
                     // leave no way back on. Everything below is hidden while it is unticked, so the
                     // tab holds a switch and nothing else.
-                    ui.checkbox(&mut d.immich_enabled, "Enable Immich")
+                    // ⚠ A switch rather than a tick box: enabling or disabling a whole integration
+                    // is a decision, not one preference among many (user's call, 2026-09-24).
+                    crate::segmented::switch(ui, &mut d.immich_enabled, "Enable Immich")
                         .on_hover_text(
                             "When off, Immich disappears from the rest of Rustroom — the left \
                              panel, the export dialog and the toolbar. Nothing is deleted: photos \
-                             you have already downloaded stay on this computer under “Downloaded \
-                             photos”, with their edits and marks, and everything comes back when \
+                             you have already downloaded stay under “immich (downloaded)” in \
+                             Folders, with their edits and marks, and everything comes back when \
                              you switch it on again.",
                         );
                     // ⚠ An `if` rather than an early `return`: the match happens to be the last

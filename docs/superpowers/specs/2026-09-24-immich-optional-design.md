@@ -17,7 +17,13 @@ The user's requirement, from 2026-09-24:
 doing before more surfaces exist: a gate retrofitted across code that assumes Immich exists is the
 expensive version of this change.
 
-⚠ **The Settings tab is the one exception, and it has to be.** It holds the toggle; hiding it would
+⚠ **The control is a chunky sliding switch, not a tick box** — the user's call after seeing it:
+enabling or disabling a whole integration is a decision, not one preference among many. It lives in
+`segmented.rs` beside `chip`, whose two hard-won lessons it copies: `mark_changed()`, without which
+every `changed()` reader sees nothing, and an explicit `enabled` gate, because a hand-drawn widget gets
+no greying from `add_enabled_ui`.
+
+⚠ **The Settings tab is the one exception, and it has to be.** It holds the switch; hiding it would
 leave no way back on. So "no mention" means the *working* UI — rail, toolbar, grid, export, Folders.
 Settings is where features are turned on and off, so naming one there is not a mention, it is the
 control.
@@ -78,7 +84,7 @@ anyway, so every surface is already hidden.
 | surface | with Immich off | how |
 |---|---|---|
 | rail section `PanelSection::Immich` | **not drawn** | the section is skipped when `connection()` is `None` — which also removes the empty section an unconfigured user sees today |
-| Settings → Immich tab | **stays**, holding the toggle; everything below it hidden | the one deliberate exception |
+| Settings → Immich tab | **stays**, holding the switch; everything below it hidden | the one deliberate exception |
 | Export → Location ticks | already absent | `availability` → `NotConfigured`, no change needed |
 | toolbar Reindex / Download / Remove downloads, and their hovers | unreachable | already conditional on `LibrarySource::ImmichAlbum`/`ImmichBucket`, which cannot be entered with no rail section |
 | grid's circled ↓ badge | unreachable | same — conditional on the source being Immich |
@@ -102,24 +108,22 @@ present** — its own doc says so: *"a downloaded photo falls through to the ord
 store included — with no special case at all."* So thumbnails, editing, export and marks all keep
 working through the local path they already use.
 
-**The name.** `immich_catalog::folder_display_name` returns `"immich (downloaded)"` for the cache root.
-With the integration off it returns **`"Downloaded photos"`**.
+**The name.** ⚠⚠ **REVISED BY THE USER AFTER SEEING IT (2026-09-24): the folder keeps
+"immich (downloaded)" whether or not the integration is on**, and its hover keeps the real path.
 
-⚠⚠ **CORRECTED during implementation: the rename is NOT sufficient, because the row hovers its full
-path.** An earlier draft of this section claimed folder rows do not — based on grepping
-`on_hover_text`, which misses it, because the rail builds rows through `list_row::RowSpec { hover:
-&path, .. }`. The real path is `~/Library/Caches/rustroom/immich/<server>`, so hovering "Downloaded
-photos" would show both the word **and** the server name.
+A neutral **"Downloaded photos"** was built first, together with a `folder_hover` helper that replaced
+the path — because the path itself (`~/Library/Caches/rustroom/immich/<server>`) says the word *and*
+names the server. Both were then taken back out: *"Can we keep the immich (downloaded) name."*
 
-So the **hover is replaced too** when the integration is off: `"Photos downloaded to this computer"`
-instead of the path. ⚠ That loses genuinely useful information — where the files actually are — and it
-is accepted only because *"no mention of immich at all"* was explicit. It is the one place this design
-withholds a fact from the user, and it is worth re-reading if the requirement ever softens.
+⚠ **So "no mention of immich at all" now has one stated exception, and it is the user relaxing their
+own requirement.** The reasoning is sound: those are their photographs, they know where they came from,
+and a name that hides it helps nobody while making the folder harder to recognise. The test asserts the
+**section** is absent rather than that the word is, which is the claim the design actually makes.
 
-⚠ `folder_display_name` therefore needs to know whether the integration is on. It already takes
-`immich_root: Option<&Path>`, and **passing `None` when disabled** gives exactly the ordinary-folder
-behaviour for free — except that the name would then be the host slug. So it gains an explicit third
-state rather than an overloaded `None`; the plan settles the signature.
+⚠ Worth recording anyway, because it was a real finding: the earlier draft of this section claimed
+folder rows do not hover their path, based on grepping `on_hover_text` — which misses it, because the
+rail builds rows through `list_row::RowSpec { hover: &path, .. }`. If the requirement ever tightens
+again, that is the second place to change.
 
 ---
 
@@ -144,13 +148,18 @@ folder visible as an ordinary folder they are exactly right as they are.
    `Some` when it is true. ⚠ The pair is what makes it discriminating.
 3. `availability()` is `NotConfigured` when disabled, so the export ticks vanish — proving the one
    predicate reaches the surface built before it.
-4. `folder_display_name` returns `"Downloaded photos"` when disabled and `"immich (downloaded)"` when
-   enabled, for the same path.
+4. `folder_display_name` returns `"immich (downloaded)"` for the cache root **regardless of the
+   toggle** — the user's revision, and the test says so rather than implying a rename that no longer
+   happens.
 5. ⚠⚠ **The rail section is absent when disabled and present when configured** — both halves, because
    an absence alone passes against a panel that drew nothing.
-6. ⚠ **No visible string contains "immich" when disabled**, asserted over the labels the headless
-   harness reports for the rail and the export dialog. That is the requirement stated as a test rather
-   than as a list of places to remember.
+6. ⚠ **The rail offers no Immich *section* when disabled, and nothing else mentions it** — asserted
+   over the labels the headless harness reports, with the downloaded folder's row as the one allowed
+   name. The requirement as a test rather than a list of places to remember.
+7. ⚠⚠ **The switch flips on a click and reports `changed()`** — both of which `chip` shipped wrong
+   once, and a hand-drawn widget that does not `mark_changed()` reads as "not clickable". Plus a
+   disabled switch that neither flips nor reports, since `add_enabled_ui` cannot gate a hand-drawn
+   control.
 7. The 75 goldens stay unmoved — nothing here touches rendering.
 
 **Only use can settle:**

@@ -153,11 +153,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     }
                                     // ⚠ Once, not per row.
                                     let immich_root = app.immich_cache_root();
-                                    // ⚠ One read of the gate for the whole loop; `connection` is the
-                                    // single predicate the integration hangs on.
-                                    let immich_on =
-                                        rustroom_app::immich_source::connection(&app.settings)
-                                            .is_some();
                                     for f in &folders {
                                         // ⚠ The basename is what fits and what identifies; the full
                                         // path is the hover. ⚠ Except the Immich cache root, whose
@@ -166,7 +161,6 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                         let shown = rustroom_app::immich_catalog::folder_display_name(
                                             &f.path,
                                             immich_root.as_deref(),
-                                            immich_on,
                                         );
                                         // ⚠⚠ A catalog row exists for every asset **browsed**, while
                                         // the count beside a folder is a statement about that
@@ -184,14 +178,7 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             app.library.as_ref().map(|l| &l.source),
                                             Some(crate::LibrarySource::Folder(p)) if p == &f.path
                                         );
-                                        // ⚠⚠ Not the raw path: for the cache root with the
-                                        // integration off, the path itself says "immich" and names
-                                        // the server. See `folder_hover`.
-                                        let path = rustroom_app::immich_catalog::folder_hover(
-                                            &f.path,
-                                            immich_root.as_deref(),
-                                            immich_on,
-                                        );
+                                        let path = f.path.to_string_lossy();
                                         let r = list_row::row(
                                             ui,
                                             RowSpec {
@@ -980,13 +967,17 @@ mod tests {
         );
     }
 
-    /// ⚠⚠ **THE REQUIREMENT AS A TEST, NOT AS A LIST OF PLACES TO REMEMBER.** With the integration
-    /// off, nothing the panel draws may say "immich" — checked over every label the accessibility
-    /// tree reports, which is what the harness can see. A list of surfaces to check by hand is how
-    /// "no mention at all" stops being true.
+    /// ⚠⚠ **The requirement as a test rather than a list of places to remember** — with the
+    /// integration off, the panel must not offer the Immich **section**.
     ///
-    /// ⚠ Both halves: the section is **present** when configured and **absent** when the toggle is
-    /// off. An absence alone would pass against a panel that drew nothing.
+    /// ⚠⚠ **One deliberate exception, and it is the user revising their own rule (2026-09-24):** the
+    /// downloaded folder keeps the name **"immich (downloaded)"** whether or not the integration is
+    /// on, because those are their photographs and they know where they came from. So this asserts
+    /// the *section* is gone and that nothing else mentions it — not that the word is absent
+    /// entirely, which would be a claim the design no longer makes.
+    ///
+    /// ⚠ Both halves: present when configured, absent when off. An absence alone would pass against
+    /// a panel that drew nothing.
     #[test]
     fn the_immich_section_appears_only_when_the_integration_is_on() {
         let labels = |enabled: bool| -> Vec<String> {
@@ -1015,9 +1006,16 @@ mod tests {
             off.iter().any(|l| l == "Folders"),
             "the panel did not draw at all: {off:?}"
         );
+        assert!(
+            !off.iter().any(|l| l == "Immich"),
+            "the Immich section is still offered with it switched off: {off:?}"
+        );
+        // ⚠ Nothing *else* may mention it either — the downloaded folder's row is the one allowed
+        // name, and it is not drawn by this fixture, so anything matching here is a leak.
         let leaked: Vec<&String> = off
             .iter()
             .filter(|l| l.to_lowercase().contains("immich"))
+            .filter(|l| *l != "immich (downloaded)")
             .collect();
         assert!(
             leaked.is_empty(),

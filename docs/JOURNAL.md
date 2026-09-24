@@ -236,16 +236,29 @@ never configured Immich saw an empty rail section called "Immich". The same pred
 
 ✅ **The downloads stay usable** — the user's call of three options. They are real local JPEGs, so
 hiding them would put the user's own work out of reach, and it needs no special case because
-`remote_thumbnail` already declines once an original is present. The folder is renamed **"Downloaded
-photos"**.
+`remote_thumbnail` already declines once an original is present.
 
-⚠⚠ **The rename alone was NOT enough, and the spec said it was.** An earlier draft claimed folder
-rows do not hover their path — based on grepping `on_hover_text`, which misses it, because the rail
-builds rows through `list_row::RowSpec { hover: &path, .. }`. The real path is
-`~/Library/Caches/rustroom/immich/<server>`, so hovering "Downloaded photos" would have shown both the
-word **and** the server's name. `folder_hover` now returns *"Photos downloaded to this computer"* when
-off. ⚠ That withholds a genuine fact (where the files are) and is the one such place in this design;
-the spec is corrected in place and says so.
+⚠⚠ **The rename was built, then REVERSED BY THE USER, and the detour found a real bug in the spec.**
+The folder was first renamed **"Downloaded photos"**, and a `folder_hover` helper was added because the
+rename alone leaked: the spec claimed folder rows do not hover their path — wrong, based on grepping
+`on_hover_text`, which misses it, because the rail builds rows through
+`list_row::RowSpec { hover: &path, .. }`, and the real path
+`~/Library/Caches/rustroom/immich/<server>` says the word **and** names the server. Then: *"Can we keep
+the immich (downloaded) name."* Both were removed again.
+
+⚠ **So "no mention of immich at all" now has one stated exception — the user relaxing their own
+requirement**, and the reasoning is sound: those are their photographs, they know where they came from,
+and a name that hides it helps nobody. ⚠ The test was **rescoped** to assert the *section* is absent
+rather than that the word is, because the broader assertion is no longer a claim the design makes —
+leaving it would have been a test asserting something untrue that happened to pass on a fixture with no
+Immich folder.
+
+✅ **A chunky sliding switch, not a tick box** — also the user's call on seeing it: *"this is quite a
+big operation"*. `segmented::switch` lives beside `chip` and copies its two hard-won lessons —
+**`mark_changed()`**, without which every `changed()` reader sees nothing and the control reads as "not
+clickable", and an explicit **`enabled` gate**, because a hand-drawn widget gets no greying from
+`add_enabled_ui`. The knob slides via `Context::animate_bool` (the first use of it in this codebase) and
+the on state is `visuals().selection.bg_fill`, which *is* the accent.
 
 ⚠⚠ **A BUG I INTRODUCED WHILE WRITING IT, CAUGHT BY READING RATHER THAN BY A TEST.** Skipping the rail
 section with a bare `continue` shortened `tops` — which is **index-aligned with the section order** and
