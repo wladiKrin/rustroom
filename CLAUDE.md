@@ -166,22 +166,18 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2848 tests**, **75 goldens** (unmoved). Branch **`immich-upload`**, 16 commits, gated green. ⚠ **Run the git command above rather than trusting a number here** — the user
+**2863 tests**, **75 goldens** (unmoved). No branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 
 ✅ **CI on Linux verified green (2026-09-24)** after one failure — a test asserting an absolute path's
 existence, fixed; see shape **(e)** in *Standing lessons*.
 
-✅ **Immich slice 4 — Download and Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its load-bearing
-change is a **bounded download queue**: `request` spawns a thread per job and `in_flight` only *dedupes*, so
-a bulk album request would have spawned **872 threads** — sabotage-measured at 30 concurrent against a cap
-of **4**. ⚠ Start the next job **after** `in_flight.remove` or the cap stalls one short for ever; and
-`cancel_downloads` must return dropped ids to the free pool. ⚠⚠ **Removal deletes only the image** — the
-sidecar (`<filename>.json` **appended**) keeps the edits, the catalog row the marks, the thumbnail the
-speed, and `cache_path`'s byte-identical re-download is what reattaches them. The key is read-only, so it
-*cannot* touch the server. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
-
+✅ **Immich slice 4 — Download / Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its
+load-bearing part is a **bounded download queue** (cap **4**): `request` spawns a thread per job, so
+a bulk album would have spawned **872**. ⚠ Start the next job **after** `in_flight.remove`.
+⚠⚠ **Removal deletes only the image** — sidecar, catalog row and thumbnail survive, and
+`cache_path`'s byte-identical re-download reattaches them. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
 ✅ **Per-channel RGB tone curves (2026-09-24, confirmed by use).** Red/Green/Blue beside the composite on
 one widget, selector defaulting to RGB. ⚠⚠ Almost no colour science changed: `ToneCurveStage::apply` was
 already `map_samples`, so the composite was **always** a per-channel operation with one shared table — the
@@ -198,17 +194,12 @@ and `Luminance` stay: they repeat by *word*, not by *meaning*). ⚠⚠ **Not thr
 splitting the `Color` edit group **and the Sync dialog** — its own change. `grep -n 'made legible'
 docs/JOURNAL.md`.
 
-✅ **Immich, slices 1–3 — all merged and confirmed by use (2026-09-22/24).** A rail section lists the
-server's albums and a **Timeline** of months; the grid fills from server thumbnails with nothing
-downloaded; opening a photo caches the original and re-enters `open_path`. Thumbnails persist, keyed
-`(asset id, updatedAt)`, under a **byte budget with LRU eviction** (two stores, 5120 MB each — there was
-**none** before). Asset lists are stored and revalidated against **`(assetCount,
-lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`. ⋯ → **Reindex** refetches. **Marks persist**: Immich
-assets get catalog rows, **one folder per server, never per album**. The rail reads **"immich
-(downloaded)"** and counts only supported images. A hand-painted **circled ↓** marks downloaded photos in
-an Immich grid. ⚠ **No catalog migration — `db.rs` stays at v7.** Specs under
-`docs/superpowers/specs/2026-09-2*-immich-*`; `grep -n 'Immich slice' docs/JOURNAL.md`.
-
+✅ **Immich slices 1–3 — merged, confirmed by use (2026-09-22/24):** albums + a **Timeline** in
+the rail, server thumbnails with nothing downloaded, download-on-open, persisted thumbnails and
+asset lists (validator **`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`), ⋯ →
+**Reindex** refetching, and **marks persisting** via catalog rows — **one folder per server**.
+⚠ **No catalog migration for these; `db.rs` went to v8 only for the date re-read.**
+`grep -n 'Immich slice' docs/JOURNAL.md`.
 ⚠⚠ **The Immich invariants that are easy to break again:** the catalog keys a row on the **path's** own
 file name, never `CatalogEntry::file_name` (a cache path is `<uuid>.<ext>` while that field is the
 camera's name, so rows written under it can never be found again); `row_is_browsable` hides an absent
@@ -257,20 +248,24 @@ not go looking for the next port; there isn't one.
 
 **Live candidates, in the order the user has shown interest:**
 
-0. ✅ **Immich upload is BUILT and confirmed by use (2026-09-24)** — an export can also upload each
-   written file, for **any** photo, at its capture date. `ExportOptions.upload_target:
-   Option<UploadTarget>` is deliberately **not** Immich-named, so the integration can later be
-   switched off with "no mention of immich at all"; a separate **`immich_upload_key`** keeps browsing
-   read-only as a property of the *credential*. ✅ Measured: `fileCreatedAt` is the **capture** time,
-   and a byte-identical re-upload returns **200 `duplicate`** with the asset count unchanged.
-   ⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`** (168-value enum) — that verified
-   fact is the whole basis of upload-over-sync. `grep -n 'Uploading edited photos' docs/JOURNAL.md`.
-   ⛔ **Two-way sync is DECLINED (the user's call, not a deferral)** — it *mutates* authoritative
-   assets and runs unattended, removing the found-by-use safety net where the blast radius is
-   largest. ⚠⚠ **Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
+0. ✅ **Immich upload BUILT and confirmed by use (2026-09-24), delivery reconciled into Location.**
+   An export delivers to **files, Immich, or both** — one `ExportOptions.destination: Destination`
+   (`Files`/`Target`/`Both`/`Nowhere`), deliberately **not** Immich-named so the integration can later
+   be switched off with "no mention of immich at all". Immich-only **stages in a temp dir, deletes on
+   a CONFIRMED upload, and rescues into the export folder otherwise**. ⚠⚠ Never delete on an attempt:
+   an SSL/EOF means the *response* was lost, measured 4-in-2,373 with none actually failing to apply.
+   The upload date is `Captured`/`Edited`/`Uploaded`; ⚠⚠ **there is no mtime fallback — it filed an
+   unreadable date under the DOWNLOAD time**, and `Edited` is read at **plan** time because recording
+   an upload bumps the sidecar's mtime. A separate **`immich_upload_key`** keeps browsing read-only as
+   a property of the *credential*: ⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`**
+   (168-value enum), which is the whole basis of upload-over-sync.
+   `grep -n 'export delivery' docs/JOURNAL.md`.
+   ⛔ **Two-way sync is DECLINED (the user's call — not a deferral):** it *mutates* authoritative
+   assets and runs unattended, removing the found-by-use safety net where the blast radius is largest.
+   ⚠⚠ **Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
    ⬜ **Next Immich items, recorded as backlog notes:** make the integration **completely optional**
-   behind one gate, and **Rustroom-side stacking awareness** — the server now has **2,379 stacks**
-   (a one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every pair.
+   behind one gate, and **Rustroom-side stacking awareness** — the server has **2,379 stacks** (a
+   one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every pair.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`

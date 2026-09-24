@@ -1370,6 +1370,14 @@ today.
 
 ### ✅ Uploading edited photos to Immich — BUILT and confirmed by use (2026-09-24)
 
+✅ **Extended the same day, twice, both from use:** delivery is a three-way choice (**files, Immich, or
+both**) rather than a flag on a file write, and it lives inside **Location** rather than a section of
+its own — *"where does this go"* is one question. The upload date is an option
+(`Captured`/`Edited`/`Uploaded`) with the **mtime fallback removed**, a single photo shows the resolved
+date beside the dropdown, and the first unconfirmed upload of a run raises a notice naming where the
+file is. Specs `2026-09-24-export-delivery-design.md` and `2026-09-24-location-reconciled-design.md`;
+`grep -n 'export delivery' docs/JOURNAL.md`.
+
 **Status:** ✅ built, gated green, **confirmed by use**. Spec
 `docs/superpowers/specs/2026-09-24-immich-upload-design.md`, plan
 `docs/superpowers/plans/2026-09-24-immich-upload.md`; `grep -n 'Uploading edited photos' docs/JOURNAL.md`.

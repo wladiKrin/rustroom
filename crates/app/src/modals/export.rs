@@ -615,7 +615,9 @@ pub fn upload_unconfirmed(app: &mut RustroomApp, ctx: &egui::Context) {
         &mut app.settings,
         "upload_unconfirmed",
         "Upload not confirmed",
-        theme::DialogSize::Compact,
+        // ⚠ `Standard`, not `Compact`: this carries a full path and two hints, which `Compact` —
+        // sized for "a sentence and two buttons" — wrapped too tightly to read (user's call, on use).
+        theme::DialogSize::Standard,
         Footer::confirm("OK", true, ""),
         |ui| {
             ui.label("An upload did not confirm, so the file was kept rather than removed.");
