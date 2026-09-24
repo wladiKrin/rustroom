@@ -1269,9 +1269,10 @@ its stack table; **neither has ever been added**, and that table now records so.
 
 ## Immich integration (recorded 2026-08-26 — slices 1–4 BUILT, 2026-09-22/24)
 
-**Status:** ✅ **slices 1, 2, 3 and 4 are built, merged and confirmed by use.** The only slice left is
-**two-way sync** — which was *not* what slice 3 turned out to be, see the correction below — and it is
-**blocked on a permission the user is told not to grant**, not on effort. Three smaller gaps are out of
+**Status:** ✅ **slices 1, 2, 3 and 4 are built, merged and confirmed by use.**
+⛔ **Two-way sync is DECLINED — 2026-09-24, the user's call, and it is not a deferral.** Its successor is
+**uploading edited photos** (⬜, next), which is a different operation and a safer one. See *Two-way sync —
+declined* below before re-proposing anything that writes to the server. Three smaller gaps stay out of
 scope by decision: the OS keychain (the API key is **plaintext** in `settings.json`), **automatic**
 eviction of cached originals (slice 4 built the *manual* half), and reading Immich's own
 `rating`/`isFavorite`.
@@ -1302,10 +1303,7 @@ mean pulling tens of gigabytes of RAW.
 3. **~~Two-way sync~~ — ⚠⚠ THE SLICE THAT GOT BUILT IS NOT THE SLICE WRITTEN HERE.** Asked in
    brainstorming on 2026-09-23, the user chose **local only** of three options offered: catalog rows so
    marks persist in Rustroom, and **nothing sent to Immich**. ✅ Built and confirmed by use.
-   ⚠ Two-way sync is therefore still **unbuilt**, and its reasons for being deferred are now sharper
-   than "it is larger": write-back needs **`asset.update`** on the API key, which the Settings help text
-   explicitly tells the user *not* to grant, and it would let a bug in Rustroom alter their library.
-   Colour labels and reject flags have no Immich equivalent in any case.
+   ⛔ Two-way sync itself is now **declined outright** — see *Two-way sync — declined* below.
 4. **Cache management — a Download button and a Discard button (requested 2026-09-24).** See below.
 
 ### ✅ ANSWERED 2026-09-22 — the original is the original. Do not re-research this.
@@ -1334,6 +1332,70 @@ and a real server pages by **`nextPage`** while leaving `nextCursor` null. Neith
 from the OpenAPI schema, and both were found by a real reply. **Before the next Immich slice, capture
 a real response for every endpoint it touches** — see the fixture lesson in `CLAUDE.md`'s standing
 lessons.
+
+### ⛔ Two-way sync — DECLINED 2026-09-24 (the user's call, with reasons — not a deferral)
+
+⚠⚠ **Do not re-propose this from a list of "unbuilt Immich slices". It was considered and refused on
+its merits, and the thing that replaces it is *not* a smaller version of it.** The user's words:
+*"I'm unsure about the two-way sync, I feel like it's too dangerous."*
+
+**The distinction that decided it is MUTATING versus CREATING**, not "writing versus not writing":
+
+| | two-way sync | uploading an edit |
+|---|---|---|
+| operation | **overwrites** fields on an asset Immich treats as authoritative | **creates a new** asset |
+| permission | **`asset.update`** — can rewrite *any* asset | a separate upload grant, which **cannot touch existing assets** |
+| worst case | the user's real library silently altered, **no undo** | clutter — extra assets, deletable in Immich's own UI |
+| trigger | background, continuous, **unattended** | one deliberate action |
+| reversible | no | yes |
+
+`Permission` is a ~150-value enum, so these are genuinely **separate grants** — an upload key is not
+"sync, but politer".
+
+⚠⚠ **The row that actually settles it is the TRIGGER, and the argument is from this repo's own record.**
+Every Immich defect so far — the missing `assets` field, `nextPage`, the `null` `thumbhash`, the catalog
+key — was found **by use, never by the green suite**. That works because the user was looking at the
+thing when it broke. A background sweep over a whole library **removes that safety net exactly where the
+blast radius is largest**: *"300 photos got the wrong rating three weeks ago"* is not a bug this
+project's feedback loop can catch. ⚠ This is the same standing lesson as *"almost every GUI-wiring
+defect here was found by USE"*, pointed at a feature instead of at a milestone.
+
+**And the payoff was thin regardless:** colour labels and reject flags have **no Immich equivalent**, so
+only ratings and favourites could ever have round-tripped.
+
+⚠ **What would have to change for this to be reopened** — stated so a future reader does not have to
+re-derive it: a way to make the write **attended and reversible** (per-photo, confirmed, with the prior
+value recoverable), *and* a reason the additive path below cannot serve the same need. Neither exists
+today.
+
+### ⬜ Uploading edited photos to Immich — the successor (brainstorm started 2026-09-24)
+
+**Why this is the stronger feature, not merely the safer one.** This document's own framing is *"Immich
+stores and shares, Rustroom edits"* — and that loop is **currently broken**: an edit lands on local disk
+and never returns to where the photos live and are shared. Sync would have moved *metadata the user can
+already see in Rustroom*; upload moves **the thing they made**.
+
+✅ **It also delivers much of what sync promised, additively.** `export/src/metadata.rs` already writes
+a full XMP packet carrying **rating, label, keywords, title, caption, rights and creator**, so an
+uploaded edit carries its marks *inside the file* — no permission to modify anything.
+⚠⚠ **UNVERIFIED:** whether Immich maps XMP `Rating` onto its own rating field on ingest. That is a claim
+about Immich, and this integration has been bitten four times by claims about Immich taken from a schema
+or from memory. **Capture a real reply before designing around it.**
+
+⚠ **The design problems, which are not the HTTP call:**
+
+- **Duplicates.** Nudge a slider, re-export, upload → a second asset, and **checksum dedup will not catch
+  it because the bytes differ**. ⚠⚠ The tempting fix — replace the previous upload — means **delete**,
+  which drags the whole declined danger back in. Leaning: record the uploaded asset id in the **sidecar**
+  and surface *"already uploaded on ‹date›"*, leaving the choice to the user.
+- **The read-only key property is lost either way — this is the honest cost.** Mitigation worth
+  designing: a **second, optional key** for uploads, so the browse path (constant, unattended) *literally
+  cannot write* and the write capability exists only on the key behind one deliberate button. Same spirit
+  as slice 4's *"this cannot touch the server"* hover, but enforced by the **credential** rather than by
+  our code being correct.
+- **Where does it land?** A "Rustroom edits" album needs **`album.write`** — another grant. The
+  original's own album is the alternative.
+- **Stacking the edit beside its RAW** would be ideal. ⚠ Another unverified claim about Immich's API.
 
 ### Slice 4 — a Download button and a Discard button (requested 2026-09-24)
 

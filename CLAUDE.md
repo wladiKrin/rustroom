@@ -255,17 +255,26 @@ merged and confirmed by use. ⚠ The measurements, the three defects of one shap
 `#[serde(default)]` trap that would have shipped `false` to every existing settings file are in
 `docs/JOURNAL.md` — `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 
-### ▶ Next action — Immich slice 4 (the user asked for it), or the leftovers
+### ▶ Next action — Immich upload (brainstorm in progress), or the leftovers
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
 not go looking for the next port; there isn't one.
 
 **Live candidates, in the order the user has shown interest:**
 
-0. **Immich: two-way sync** ⬜ — the only unbuilt Immich slice. ⚠⚠ Write-back needs **`asset.update`** on
-   the API key, which the Settings help text tells the user **not** to grant, and it would let a bug here
-   alter their library. Also unbuilt: reading Immich's own `rating`/`isFavorite`, the OS keychain (**the key
-   is plaintext**), and automatic eviction of cached originals — slice 4 is the **manual** half.
+0. **Immich: uploading edited photos** ⬜ — **brainstorm started 2026-09-24.** Closes the loop this
+   integration was for: an edit currently lands on local disk and never returns to where the photos live.
+   The export XMP packet already carries rating/label/keywords, so marks ride *inside the file* with no
+   permission to modify anything. ⚠ The hard parts are **duplicates** (re-export → a second asset;
+   checksum dedup cannot see it) and that the **read-only key property is lost either way** — mitigation
+   under design is a *second, optional* upload key. Notes in `docs/BACKLOG.md`.
+   ⛔ **Two-way sync is DECLINED (2026-09-24, the user's call — not a deferral):** it **mutates**
+   authoritative assets, needs **`asset.update`**, and runs **unattended**, which removes the found-by-use
+   safety net exactly where the blast radius is largest. ⚠⚠ **Do not re-propose it from a list** — the
+   table of reasons and the conditions for reopening it are in `docs/BACKLOG.md`.
+   ⚠ Still unbuilt and out of scope by decision: reading Immich's own `rating`/`isFavorite`, the OS
+   keychain (**the key is plaintext**), and automatic eviction of cached originals — slice 4 is the
+   **manual** half.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
