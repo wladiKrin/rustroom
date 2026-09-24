@@ -138,6 +138,9 @@ fn one_run(files: &[PathBuf], dest: &Path, width: usize, demosaic: raw_decode::D
         render,
         width,
         None,
+        // ⚠ No upload: this benchmark times decode, render and write. A network call in the loop
+        // would make the numbers meaningless.
+        None,
     );
     // Drain to completion. ⚠ A collision here would block forever — the fresh directory above is
     // what makes that unreachable rather than something to answer.

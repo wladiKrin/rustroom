@@ -41,6 +41,16 @@ pub struct ExportReport {
     pub skipped: usize,
     pub failed: Vec<(PathBuf, String)>,
     pub cancelled: bool,
+    /// Files the server confirmed it stored (whether `created` or `duplicate`).
+    pub uploaded: usize,
+    /// Files written but whose upload did not confirm, with why.
+    ///
+    /// ⚠⚠ **"Unconfirmed", not "failed", and never retried automatically.** An SSL/EOF error
+    /// means the *response* was lost, not that the server rejected the upload — measured on this
+    /// tailnet during the 2026-09-24 stacking migration, 4 writes in 2,373 failed that way and
+    /// **none had applied**, but that had to be *checked* rather than assumed. An automatic retry
+    /// is how one edit becomes three assets.
+    pub unconfirmed: Vec<(PathBuf, String)>,
 }
 
 /// A running batch export.
@@ -82,6 +92,10 @@ impl ExportWorker {
         // ⚠ Where creative looks are read from. `None` means none are available, and every photo
         // then exports as though its `.cube` were missing — the documented fallback.
         looks_dir: Option<std::path::PathBuf>,
+        // ⚠ `None` means "write to disk only", which is the ordinary case and not an error. A
+        // narrow struct rather than `Settings`, so the worker cannot read preferences that are none
+        // of its business — see `immich_upload::UploadConfig`.
+        upload: Option<crate::immich_upload::UploadConfig>,
     ) -> Self {
         let (event_tx, events) = channel();
         let (decisions, decision_rx) = channel();
@@ -100,6 +114,7 @@ impl ExportWorker {
                 render,
                 width,
                 &looks,
+                upload,
             );
         });
         Self {
@@ -140,6 +155,11 @@ struct Planned {
     dest: PathBuf,
     edits: Edits,
     meta: export::FileMetadata,
+    /// ⚠ Carried for the upload's `fileCreatedAt`, which must be the **capture** time.
+    capture: core_image::Capture,
+    /// ⚠⚠ Carried so an upload is recorded against the copy that was exported. Writing copy 0
+    /// instead would silence the dialog's "already uploaded" note for every virtual copy.
+    copy: u32,
 }
 
 /// Settle every filename and every collision, without decoding anything.
@@ -267,6 +287,8 @@ fn plan(
             dest,
             edits,
             meta,
+            capture,
+            copy: id.copy,
         });
     }
     Some(out)
@@ -306,6 +328,56 @@ fn resolve_looks(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The upload half of a run.
+///
+/// ⚠ Built **once per run**, outside the worker pool: it holds the `Client`, and constructing one
+/// per photo would re-parse the URL for every photograph for no reason.
+struct Uploader {
+    client: immich::Client,
+    host: String,
+}
+
+impl Uploader {
+    /// `None` when the connection will not build — a malformed URL, say. Not an error: the export
+    /// still runs and every photo is reported unconfirmed, which is visible without being fatal.
+    fn new(cfg: crate::immich_upload::UploadConfig) -> Option<Self> {
+        let client = immich::Client::new(&cfg.base_url, &cfg.key).ok()?;
+        Some(Self {
+            client,
+            host: cfg.base_url,
+        })
+    }
+
+    /// Upload one written file. `Err` carries a message for `unconfirmed`.
+    fn send(
+        &self,
+        exported: &Path,
+        capture: &core_image::Capture,
+        source: &Path,
+        copy: u32,
+    ) -> Result<(), String> {
+        let filename = exported
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| "the exported file has no usable name".to_string())?;
+        let created = crate::immich_upload::created_at_text(capture, source);
+        let modified = crate::immich_upload::modified_at_text(exported);
+        let up = self
+            .client
+            .upload(exported, filename, &created, &modified)
+            .map_err(|e| e.to_string())?;
+        // ⚠ Recorded against the SOURCE photo's sidecar, not the exported file: the sidecar belongs
+        // to the photo, and the export is a derived artefact the user may delete.
+        crate::immich_upload::record(source, copy, &self.host, &up);
+        Ok(())
+    }
+}
+
+// ⚠ Mirrors `spawn`'s parameter list, which carries the same allow. ⚠⚠ Ten arguments is past the
+// point where a `RunConfig { render, width, looks, upload }` would read better — noted rather than
+// done here, because changing this signature churns the concurrency carrier tests and belongs in its
+// own change.
+#[allow(clippy::too_many_arguments)]
 fn run(
     jobs: Vec<ExportJob>,
     opts: ExportOptions,
@@ -316,6 +388,7 @@ fn run(
     render: ExportRender,
     width: usize,
     looks: &std::collections::HashMap<String, Arc<pipeline::lut::Cube>>,
+    upload: Option<crate::immich_upload::UploadConfig>,
 ) {
     let mut report = ExportReport::default();
     // ⚠ Parsed **once** per run, not per photo. ⚠ A template that will not parse falls back to
@@ -323,6 +396,10 @@ fn run(
     // invalid one, so the only way to get here is a hand-edited preset file — and a folder named
     // the old way beats no folder at all.
     let template = Template::parse(&opts.filename_template).unwrap_or_default();
+
+    // ⚠ Built here rather than in `spawn`, the same rule `resolve_looks` follows: this is the
+    // worker thread, and the UI thread that starts an export should not do the work.
+    let uploader = upload.and_then(Uploader::new);
 
     let Some(planned) = plan(
         jobs,
@@ -369,6 +446,7 @@ fn run(
             let planned = &planned;
             let opts = &opts;
             let cancel = &cancel;
+            let uploader = uploader.as_ref();
             s.spawn(move || loop {
                 if cancel.load(Ordering::Relaxed) {
                     shared.lock().expect("export report").cancelled = true;
@@ -409,6 +487,12 @@ fn run(
                 let outcome = decoded.and_then(|src| {
                     export_one(src, &p.edits, &p.dest, opts, render, &p.meta, look)
                 });
+                // ⚠⚠ Only after a successful write, and it can never turn a success into a
+                // failure. The exported file is the deliverable; the upload is delivery.
+                let upload = match (&outcome, uploader) {
+                    (Ok(()), Some(u)) => Some(u.send(&p.dest, &p.capture, &p.source, p.copy)),
+                    _ => None,
+                };
                 {
                     // ⚠ `failed` is now in **completion** order, which is nondeterministic. Any
                     // test comparing it must sort or compare as a set.
@@ -416,6 +500,11 @@ fn run(
                     match outcome {
                         Ok(()) => r.exported += 1,
                         Err(e) => r.failed.push((p.source.clone(), e)),
+                    }
+                    match upload {
+                        Some(Ok(())) => r.uploaded += 1,
+                        Some(Err(e)) => r.unconfirmed.push((p.dest.clone(), e)),
+                        None => {}
                     }
                 }
 
@@ -786,6 +875,7 @@ mod tests {
                 CPU,
                 width,
                 None,
+                None,
             );
             let report = finished(&worker);
             assert_eq!(
@@ -827,6 +917,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
+            None,
             None,
         );
         let mut collisions = 0;
@@ -1054,6 +1145,7 @@ mod tests {
             CPU,
             1,
             None,
+            None,
         );
         let report = finished(&worker);
         assert!(report.cancelled);
@@ -1089,6 +1181,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             CPU,
             1,
+            None,
             None,
         );
 
@@ -1130,6 +1223,7 @@ mod tests {
             flag,
             CPU,
             1,
+            None,
             None,
         );
 
@@ -1259,6 +1353,67 @@ mod tests {
             dest_for(&dir, Path::new("/in/a.RAF"), 0, None, 3, ExportFormat::Jpeg),
             dir.join("a-3.jpg"),
             "an original that collides is unchanged from before this feature"
+        );
+    }
+
+    /// ⚠⚠ **A FAILED UPLOAD MUST NOT FAIL THE EXPORT.** The file is on disk; a flaky network
+    /// destroying a batch export would be far worse than an unuploaded file. The connection points
+    /// at a closed port on loopback, which is the failure shape and refuses immediately rather than
+    /// waiting on a timeout — so this is deterministic and fast, with no server involved.
+    #[test]
+    fn a_failed_upload_still_exports_the_file_and_is_reported_unconfirmed() {
+        let d = TempDir::new("upload_fail");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            // ⚠ Port 1 on loopback: nothing listens, so the connection is refused at once.
+            Some(crate::immich_upload::UploadConfig {
+                base_url: "http://127.0.0.1:1".to_string(),
+                key: "irrelevant".to_string(),
+            }),
+        );
+        let report = finished(&worker);
+        assert_eq!(report.exported, 1, "the export itself must succeed");
+        assert!(
+            report.failed.is_empty(),
+            "an upload failure is not an export failure: {:?}",
+            report.failed
+        );
+        assert!(d.0.join("a.jpg").exists(), "the file must still be written");
+        assert_eq!(report.uploaded, 0, "nothing was uploaded");
+        assert_eq!(
+            report.unconfirmed.len(),
+            1,
+            "the failure must be reported, not swallowed"
+        );
+    }
+
+    /// ⚠ The control: with no connection nothing is attempted and nothing is reported, so the
+    /// counters above cannot be passing for an unrelated reason.
+    #[test]
+    fn no_upload_connection_means_no_upload_reporting() {
+        let d = TempDir::new("upload_off");
+        let worker = ExportWorker::spawn(
+            jobs(&d, &["a.RAF"]),
+            opts(&d, None),
+            ok_decode(),
+            Arc::new(AtomicBool::new(false)),
+            CPU,
+            1,
+            None,
+            None,
+        );
+        let report = finished(&worker);
+        assert_eq!(report.exported, 1);
+        assert_eq!(report.uploaded, 0);
+        assert!(
+            report.unconfirmed.is_empty(),
+            "nothing should be reported when nothing was attempted"
         );
     }
 }

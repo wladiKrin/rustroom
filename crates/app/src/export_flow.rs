@@ -101,6 +101,8 @@ impl RustroomApp {
         }
         let opts = self.export_draft.clone();
         let demosaic = opts.demosaic;
+        // ⚠ Read **before** `opts` is moved into `spawn`.
+        let opts_upload_wanted = opts.upload_target.is_some();
         let export_profile = self.camera_profile_path();
         self.export_progress = format!("Exporting 0 of {}…", jobs.len());
         self.export_collision = None;
@@ -142,6 +144,18 @@ impl RustroomApp {
                 .dir()
                 .to_path_buf(),
             ),
+            // ⚠⚠ From `Settings`, and `None` unless the *upload* key is set — the browse key is
+            // never used here, which is the point of it being a second field. ⚠ Read when the run
+            // begins, so a key pasted mid-session applies to the next export without a restart.
+            //
+            // ⚠ `opts.upload_target` decides whether uploading was *asked for*; this decides
+            // whether it is *possible*. Both must hold, and the dialog cannot offer the checkbox
+            // when it is not.
+            if opts_upload_wanted {
+                rustroom_app::immich_upload::config(&self.settings)
+            } else {
+                None
+            },
         ));
     }
 

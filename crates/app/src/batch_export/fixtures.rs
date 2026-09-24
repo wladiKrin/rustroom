@@ -98,6 +98,9 @@ pub(crate) fn run_export(
         CPU,
         1,
         None,
+        // ⚠ No upload: this helper exercises naming, collisions and cancellation, and an export
+        // that uploads is its own test with its own connection.
+        None,
     );
     let mut answers = answer.into_iter();
     let mut events = Vec::new();

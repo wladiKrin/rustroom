@@ -32,6 +32,31 @@ pub fn availability(s: &Settings) -> Availability {
     Availability::Ready
 }
 
+/// The connection an export run uploads with.
+///
+/// ⚠⚠ **A narrow struct rather than passing `Settings` into the export worker.** The worker settles
+/// filenames and renders photographs; giving it the whole preferences object would let any future
+/// change in there reach code that has no business reading it. This also keeps the credential's one
+/// reader obvious.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadConfig {
+    pub base_url: String,
+    /// ⚠ The **upload** key, never the browse key.
+    pub key: String,
+}
+
+/// The upload connection, or `None` when uploading is not possible — which is the ordinary
+/// "disk only" case, not an error.
+pub fn config(s: &Settings) -> Option<UploadConfig> {
+    if availability(s) != Availability::Ready {
+        return None;
+    }
+    Some(UploadConfig {
+        base_url: s.immich_url.trim().to_string(),
+        key: s.immich_upload_key.trim().to_string(),
+    })
+}
+
 /// `fileCreatedAt` for a photo: **its capture time**, never now.
 ///
 /// ⚠⚠ **Naive wall-clock rendered as if UTC, and that is measured rather than chosen.**
@@ -266,5 +291,17 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⚠ `config` must be `None` for every state that is not `Ready`, so the worker cannot be
+    /// handed a half-set connection.
+    #[test]
+    fn a_config_exists_only_when_everything_is_ready() {
+        assert!(config(&settings_with("", "", "")).is_none());
+        assert!(config(&settings_with("https://h", "browse", "")).is_none());
+        let c = config(&settings_with("  https://h  ", "browse", "  up  ")).unwrap();
+        // ⚠ Trimmed, or a pasted key with a trailing newline becomes an unauthorized header.
+        assert_eq!(c.base_url, "https://h");
+        assert_eq!(c.key, "up");
     }
 }
