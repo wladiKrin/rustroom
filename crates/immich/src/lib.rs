@@ -8,8 +8,8 @@ pub mod error;
 pub mod multipart;
 
 pub use dto::{
-    About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse, Upload,
-    UploadStatus,
+    About, AlbumSummary, Asset, AssetType, Bucket, NextPage, SearchAssets, SearchResponse, Stack,
+    StackMember, Upload, UploadStatus,
 };
 pub use error::Error;
 
@@ -207,6 +207,16 @@ impl Client {
     /// ⚠ Paged by `cursor`, which is not deprecated, rather than by `page`, which is.
     pub fn album(&self, id: &str) -> Result<Vec<Asset>, Error> {
         self.search(&Filter::Album(id.to_string()))
+    }
+
+    /// `GET /stacks` — every stack the key can see, in one call.
+    ///
+    /// ⚠⚠ **6.6 MB for 2,379 stacks, measured twice at ~2.9 s**, because the reply embeds the full
+    /// asset DTO for every member. There is no lean mode: the endpoint's only parameter is
+    /// `primaryAssetId`. So callers keep a **projection** rather than this, and fetch it off the UI
+    /// thread — see `immich_stack_cache`.
+    pub fn stacks(&self) -> Result<Vec<Stack>, Error> {
+        self.get_json("/stacks")
     }
 
     /// `GET /timeline/buckets` — the whole library's month list with counts, in one call.

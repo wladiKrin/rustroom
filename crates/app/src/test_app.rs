@@ -131,6 +131,7 @@ pub fn for_test() -> RustroomApp {
         compare_candidate: None,
         last_view: AppView::Develop,
         library: None,
+        immich_stacks: Default::default(),
         session: None,
         pending: None,
         decoder: DecodeWorker::new(stub, 2, || {}),
@@ -311,6 +312,7 @@ pub fn library_of_names(names: &[&str]) -> Library {
             enabled: true,
             ..Default::default()
         },
+        &Default::default(),
         &Default::default(),
     );
     let mut lib = Library {

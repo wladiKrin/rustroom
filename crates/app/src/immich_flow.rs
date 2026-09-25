@@ -9,6 +9,7 @@ use crate::{AppView, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::immich_list_cache as list_cache;
 use rustroom_app::immich_source;
+use rustroom_app::immich_stack_cache as stack_cache;
 use rustroom_app::immich_worker::{Job, Outcome};
 use rustroom_app::photo_id::PhotoId;
 
@@ -43,6 +44,33 @@ impl RustroomApp {
     ///
     /// ⚠ `None` when no server is configured, which leaves every catalog row browsable rather than
     /// hiding things because a setting is blank.
+    /// Where this server's stack projection lives, or `None` with no server configured.
+    pub(crate) fn immich_stacks_path(&self) -> Option<std::path::PathBuf> {
+        let url = self.settings.immich_url.trim();
+        if url.is_empty() {
+            return None;
+        }
+        Some(stack_cache::stacks_path(url))
+    }
+
+    /// Load the stored projection, and ask for a fresh one if there is none.
+    ///
+    /// ⚠ Called at startup and after Reindex drops the file. ⚠⚠ A fetch is requested only when the
+    /// file is **absent**, because there is no validator to check a present one against — freshness
+    /// rests on Reindex, which `immich_stack_cache`'s doc states as a limitation rather than hides.
+    pub(crate) fn load_immich_stacks(&mut self) {
+        let Some(path) = self.immich_stacks_path() else {
+            return;
+        };
+        match stack_cache::load(&path) {
+            Some(p) => self.immich_stacks = p,
+            None => {
+                self.immich_stacks = Default::default();
+                self.immich.request(Job::Stacks);
+            }
+        }
+    }
+
     pub(crate) fn immich_cache_root(&self) -> Option<std::path::PathBuf> {
         // ⚠⚠ **Derived from the URL alone, NOT through `connection`** — a path is not a behaviour.
         // Going through the gate meant that switching Immich off made this `None`, and
@@ -378,6 +406,21 @@ impl RustroomApp {
             match outcome {
                 Outcome::Albums(result) => self.immich_albums = Some(result),
                 Outcome::Buckets(result) => self.immich_buckets = Some(result),
+                Outcome::Stacks(result) => {
+                    // ⚠⚠ A failure is a **miss, never an error**: the projection stays empty, the grid
+                    // shows both halves, and nothing is reported. A cache that can stop a folder
+                    // opening is worse than no cache — `immich_list_cache`'s rule.
+                    if let Ok(stacks) = result {
+                        self.immich_stacks = stack_cache::project(&stacks);
+                        if let Some(p) = self.immich_stacks_path() {
+                            stack_cache::store(&p, &self.immich_stacks);
+                        }
+                        // ⚠ The grid was grouped with the old (empty) map, so it must be **rebuilt** —
+                        // patching it would leave `selection` and `view_region` on a stale list.
+                        self.rebuild_entries(None);
+                        ctx.request_repaint();
+                    }
+                }
                 Outcome::Bucket {
                     bucket,
                     label,

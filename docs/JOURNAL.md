@@ -211,6 +211,61 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-25 — honouring Immich's server-side stacks
+
+Branch `immich-stacks`, **2,897 tests**, 75 goldens unmoved, gated green, confirmed by use. The second
+half of the stacking work, and the last open Immich item.
+
+⚠⚠ **THE WHOLE FEATURE IS ONE FUNCTION.** `stack::key_of_with` returns `(cache_root, "stack:<id>")`
+for an asset the server has stacked and the stem key otherwise — so collapsing, expanding, the count
+badge, Stack all / Expand all, the primary rule and the order guarantee all work **unchanged**. One
+grouping implementation rather than two, and an **empty map is byte-identical to before** for every
+local folder. That was the reason to shape it this way rather than build a parallel path.
+
+⚠ Local stacking could never help here: `cache_path` names files `<asset UUID>.<ext>`, so no two share
+a stem — measured, **0 pairs against 2,913 assets** where both camera folders are 100%.
+
+#### The payload, measured rather than assumed
+
+`GET /stacks` is **6.3 MB and ~2.9 s (timed twice)**, because it embeds the **full asset DTO** for every
+member — 20-plus fields — when two UUIDs are needed. There is no lean mode: the endpoint's only
+parameter is `primaryAssetId`. So `immich_stack_cache` keeps a **projection**, and on the real data that
+is **472 KB for all 2,379 stacks — a 13× reduction**. Fetched as `Job::Stacks` on the worker so nothing
+blocks; cached to disk; dropped by Reindex.
+
+⚠⚠ **No validator is possible, and it is written down as a limitation rather than hidden.** Asset
+lists revalidate on `(assetCount, lastModifiedAssetTimestamp)`; `StackResponseDto` carries only `id`,
+`primaryAssetId` and `assets`. **So a stack made in Immich does not appear until ⋯ → Reindex** — the
+user's call, of three options offered.
+
+⚠ `Job::Stacks` got **its own in-flight flag**, never sharing one with the list kinds: a guard shared
+by two callers with different retry behaviour is a bug waiting for the one that does not retry, which
+`pending_list` already was for exactly this pair of jobs.
+
+#### Invariants measured on the real reply, and deliberately not relied on
+
+| measured | value |
+|---|---|
+| stacks | 2,379, **all exactly 2 members** |
+| member ids | 4,758, **all distinct** — an asset is in at most one stack |
+| primary also a member | **2,379 of 2,379** |
+
+⚠⚠ **These are facts about this server today, not guarantees from the API**, so the code depends on
+none of them: a stack of fewer than two members is **dropped** (it would render a badge reading "1",
+which `Stack::count`'s doc forbids) and an asset in two stacks resolves to the **last**,
+deterministically rather than to whatever the hash map happened to keep.
+
+⚠ The DTO fixture is **captured** from the real server and says so, with a companion test that unknown
+member fields are **ignored** — the "ask the artefact" failure this integration has hit four times.
+
+#### The primary, and the divergence it buys
+
+The **local** `Stacking::primary` rule decides (user's call), so *Show* in Appearance means one thing
+wherever a photo came from. ⚠ The server's `primaryAssetId` is parsed and **deliberately unused for
+display**, kept only so the fixture cannot drift from the reply. ⚠⚠ **Consequence stated before
+shipping rather than discovered:** the 2026-09-24 migration gave those stacks **JPEG** as primary, so an
+untouched pair shows the **RAW** in Rustroom while Immich's own UI shows the JPEG.
+
 ### 2026-09-25 — stacks: same-stem files as one grid cell, independent of Immich
 
 Branch `local-stacking`, **2,887 tests**, 75 goldens unmoved, gated green, confirmed by use.

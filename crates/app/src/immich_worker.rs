@@ -29,6 +29,11 @@ pub enum Job {
     Albums,
     /// `GET /timeline/buckets` — the whole library's month list, in one call.
     Buckets,
+    /// `GET /stacks` — every stack, in one call.
+    ///
+    /// ⚠⚠ **6.6 MB, ~2.9 s measured**, which is exactly why it is a job rather than an inline call:
+    /// the grid regroups when it lands and nothing blocks meanwhile.
+    Stacks,
     /// One month of the timeline: a date-ranged search.
     Bucket { bucket: String, label: String },
     /// `GET /albums/{id}`.
@@ -45,6 +50,7 @@ pub enum Outcome {
     About(Result<String, String>),
     Albums(Result<Vec<immich::AlbumSummary>, String>),
     Buckets(Result<Vec<immich::Bucket>, String>),
+    Stacks(Result<Vec<immich::Stack>, String>),
     Bucket {
         bucket: String,
         label: String,
@@ -123,6 +129,7 @@ pub struct ImmichWorker {
     pending_albums: bool,
     /// Whether the **bucket list** fetch is outstanding. See [`Self::pending_albums`].
     pending_buckets: bool,
+    pending_stacks: bool,
     /// Downloads waiting for a slot — see [`MAX_CONCURRENT_DOWNLOADS`].
     ///
     /// ⚠ Only `Job::Original` ever queues. A list fetch is one request and an open is never delayed.
@@ -141,6 +148,7 @@ impl ImmichWorker {
             open_seq: 0,
             pending_albums: false,
             pending_buckets: false,
+            pending_stacks: false,
             queued: std::collections::VecDeque::new(),
         }
     }
@@ -182,6 +190,16 @@ impl ImmichWorker {
                     return;
                 }
                 self.pending_buckets = true;
+                None
+            }
+            Job::Stacks => {
+                // ⚠ Its own flag, never shared with the list kinds: a guard shared by two callers
+                // with different retry behaviour is a bug waiting for the one that does not retry —
+                // which `pending_list` already was, for exactly this pair of jobs.
+                if self.pending_stacks {
+                    return;
+                }
+                self.pending_stacks = true;
                 None
             }
             // ⚠⚠ A **user-initiated open is never dropped.** It used to share the guard above, so
@@ -272,6 +290,7 @@ impl ImmichWorker {
             match msg.outcome {
                 Outcome::Albums(_) => self.pending_albums = false,
                 Outcome::Buckets(_) => self.pending_buckets = false,
+                Outcome::Stacks(_) => self.pending_stacks = false,
                 _ => {}
             }
             // ⚠⚠ A superseded open is **dropped here**, not acted on: its grid would otherwise land
@@ -360,6 +379,7 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
                         result: Err(e),
                     },
                     Job::Buckets => Outcome::Buckets(Err(e)),
+                    Job::Stacks => Outcome::Stacks(Err(e)),
                     Job::Bucket { bucket, label } => Outcome::Bucket {
                         bucket,
                         label,
@@ -382,6 +402,7 @@ pub fn live_fetcher(conn: Option<crate::immich_source::Connection>) -> FetchFn {
                 Outcome::Album { id, name, result }
             }
             Job::Buckets => Outcome::Buckets(client.buckets().map_err(|e| e.to_string())),
+            Job::Stacks => Outcome::Stacks(client.stacks().map_err(|e| e.to_string())),
             Job::Bucket { bucket, label } => {
                 // ⚠ The bucket identifier is `YYYY-MM-DD`; the search wants the whole month.
                 let range = bucket
@@ -553,6 +574,7 @@ mod tests {
                 rec.lock().unwrap().push(job.clone());
                 match job {
                     Job::Buckets => Outcome::Buckets(Ok(vec![])),
+                    Job::Stacks => Outcome::Stacks(Ok(vec![])),
                     _ => Outcome::Albums(Ok(vec![])),
                 }
             }),

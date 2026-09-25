@@ -1488,7 +1488,19 @@ docs/JOURNAL.md`.
 ever share a stem — measured: **0 pairs** against 2,913 cached assets, where the two camera folders are
 100%. Pairing on that server is a *server-side* fact.
 
-### ⬜ Honouring Immich's own stacks (the remaining half, requested 2026-09-24)
+### ✅ Honouring Immich's own stacks — BUILT 2026-09-25 (the Immich integration is complete)
+
+✅ **One function does it:** `stack::key_of_with` keys a stacked asset on `(cache_root, "stack:<id>")`
+instead of its stem, so all of local stacking applies unchanged and an empty map is byte-identical to
+before. `GET /stacks` is **6.3 MB / ~2.9 s** (full asset DTO per member), so a **472 KB projection** is
+cached — 13× — fetched as `Job::Stacks` off the UI thread and dropped by Reindex.
+⚠⚠ **No validator exists**, so freshness rests on Reindex alone. ⚠ The local *Show* rule picks the
+primary, so untouched pairs show the RAW where Immich's UI shows the JPEG.
+`grep -n "server-side stacks" docs/JOURNAL.md`.
+
+⛔ **Still out of scope by decision:** creating or removing stacks from Rustroom (`stack.create` and
+`stack.delete` are grants the browse key does not have), reconciling the primary with Immich's, and
+two-way sync.
 
 **Status:** ⬜ wanted, unblocked, not specced. Raised the moment the server-side migration landed:
 Immich's timeline now collapses **2,378** RAW+JPEG pairs, and **Rustroom's grid still shows both halves**,

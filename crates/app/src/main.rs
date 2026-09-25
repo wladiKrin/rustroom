@@ -317,6 +317,15 @@ struct RustroomApp {
     /// to remember to clear the status line.
     last_view: AppView,
     library: Option<Library>,
+    /// The server's stacks, reduced to asset→stack. Empty until fetched, and empty is "no grouping".
+    ///
+    /// ⚠⚠ On the app rather than on `Library`, because it is a fact about the **server** and outlives
+    /// any one album: opening five albums must not mean five 6.6 MB fetches, which is the mistake the
+    /// asset-list cache was built to fix.
+    ///
+    /// ⚠ Loaded from `immich_stack_cache` at startup and refreshed only by ⋯ → Reindex — there is no
+    /// validator to do better, which that module's doc explains.
+    immich_stacks: rustroom_app::immich_stack_cache::Projection,
     session: Option<Session>,
     pending: Option<PendingOpen>,
     decoder: DecodeWorker,
@@ -659,7 +668,7 @@ impl RustroomApp {
                 None
             }
         };
-        Self {
+        let mut app = Self {
             // ⚠ From the settings, not `default()`: the format filter is persisted and this is
             // where it is read back — see `Settings::initial_filter`.
             filter: settings.initial_filter(),
@@ -678,6 +687,7 @@ impl RustroomApp {
             compare_view: Default::default(),
             last_view: AppView::default(),
             library: None,
+            immich_stacks: Default::default(),
             session: None,
             pending: None,
             // ⚠ No profile at startup: nothing is open, so no camera is known. `open_path`
@@ -775,7 +785,13 @@ impl RustroomApp {
             // ⚠ Empty until a photo opens: the looks directory is scanned once per photo in
             // `session_flow`, never at startup and never per frame.
             looks: Default::default(),
-        }
+        };
+        // ⚠⚠ After construction rather than in the literal: it reads the settings the struct now
+        // holds, and it may **request a fetch** on the worker the struct now owns. ⚠ Cheap when the
+        // file exists — a 350 KB read — and when it does not, the ~2.9 s happens on the worker while
+        // the grid shows both halves.
+        app.load_immich_stacks();
+        app
     }
 }
 
