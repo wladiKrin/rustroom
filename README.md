@@ -97,10 +97,5 @@ cargo run --release -p app        # builds and runs the `Rustroom` binary
 
 ## License
 
-**GPL-3.0-or-later**, declared in `[workspace.package]` and inherited by every crate.
-
-⚠ The full licence text is not yet checked in — see `M10.1` in the plan. Add it with:
-
-```bash
-curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt -o LICENSE
-```
+**GPL-3.0-or-later** — see [`LICENSE`](LICENSE) for the full text. Declared in
+`[workspace.package]` and inherited by every crate.
