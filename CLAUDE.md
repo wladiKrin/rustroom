@@ -4,17 +4,14 @@ Project-specific guidance for Claude Code working in this repository.
 
 **Rustroom** — an open-source alternative to Adobe Lightroom. (Binary: `rustroom`. Repo folder: `~/Projects/rustroom`. Note: the Obsidian planning-notes folder is still named `opensource_lightroom`.)
 
-> **⚠️ Maintain this file — and keep it SMALL.** Update the architecture, crate layout, stack,
-> conventions or status sections here whenever they meaningfully change. **But the history goes
-> in `docs/JOURNAL.md`, not here.** This file is loaded into context in full, every session: it
-> reached **1.2 MB (~337,000 tokens)** on 2026-09-16 by accumulating a session-by-session
-> narrative, which is more than a whole context window before any work starts.
+> **⚠️ Maintain this file — and keep it SMALL.** Update architecture, crate layout, stack, conventions
+> and status here when they meaningfully change; **the history goes in `docs/JOURNAL.md`, not here.**
+> This file loads in full every session, and it reached **1.2 MB (~337,000 tokens)** on 2026-09-16 by
+> accumulating a session-by-session narrative — more than a whole context window before any work starts.
 >
-> **⚠⚠ The rule that keeps it small: NEVER append a superseded block.** Overwrite the live state
-> in place and move the previous version into `docs/JOURNAL.md`. Twenty-four blocks marked
-> *"⚠ Superseded"* had stacked up in here, every one of them already recorded in git history and
-> in `docs/superpowers/`. **Target: this file stays under ~400 lines.** If a milestone writeup
-> wants more room, it belongs in the journal.
+> **⚠⚠ The rule that keeps it small: NEVER append a superseded block.** Overwrite the live state in
+> place and move the old version to the journal. Twenty-four *"⚠ Superseded"* blocks had stacked up
+> here, every one already recorded in git history. **Target: under ~400 lines.**
 
 ## What this is
 
@@ -164,7 +161,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 >
 > **⚠ The history is in `docs/JOURNAL.md`** — 94 dated sections, newest first, every milestone's measurements, retractions and uncaught sabotages. **Grep it, never read it whole:** `grep -n '^### ' docs/JOURNAL.md` for the index, `grep -n 'M8\.11' docs/JOURNAL.md` for one milestone.
 
-### State (2026-09-24)
+### State (2026-09-25)
 
 **2897 tests**, **75 goldens** (unmoved). No branch, tree clean.
 
@@ -178,29 +175,24 @@ shipped. ⚠ `smart_sources` deliberately does **not** group: it evaluates every
 within a folder. ⚠ Settings → Appearance; `enabled` defaults **true** (the `gpu_tail` trap).
 ⚠⚠ **Both folder-content predicates (`formats_present`, `folder_overrides_hidden`) read the SCAN, not
 the grouped entries** — reading `entries` made the JPEG chip flicker and silently disabled the hidden-
-format override in an all-paired folder. `grep -n 'stacks: same-stem' docs/JOURNAL.md`. ⚠ **Run the git command above rather than trusting a number here** — the user
-pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
-**includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
+format override in an all-paired folder. `grep -n 'stacks: same-stem' docs/JOURNAL.md`.
 
-✅ **CI on Linux verified green (2026-09-24)** after one failure — a test asserting an absolute path's
-existence, fixed; see shape **(e)** in *Standing lessons*.
+⚠⚠ **Run the git command above rather than trusting any count here** — this block was wrong about the
+push state twice on 2026-09-24. ⚠ Still never push. ✅ CI on Linux is green; its one failure was a test
+asserting an absolute path's existence — shape **(e)** in *Standing lessons*.
 
 ✅ **Immich slice 4 — Download / Remove downloads (2026-09-24, confirmed by use).** ⚠⚠ Its
 load-bearing part is a **bounded download queue** (cap **4**): `request` spawns a thread per job, so
 a bulk album would have spawned **872**. ⚠ Start the next job **after** `in_flight.remove`.
 ⚠⚠ **Removal deletes only the image** — sidecar, catalog row and thumbnail survive, and
 `cache_path`'s byte-identical re-download reattaches them. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
-✅ **Per-channel RGB tone curves** (2026-09-24) — ⚠⚠ almost no colour science changed: `apply` was
-already `map_samples`, so the composite was **always** per-channel with one shared table, and the 74
-goldens stayed byte-identical. ⚠ Composite first, then the channel; `CurveChannel` lives on the
-**session**, never `Edits`. ✅ **The Color section, made legible** (2026-09-24) — HSL and grading behind
-**`ADVANCED COLOR`**, closed by default. ⚠⚠ Not three real sections: `Section::name()` is
-`EDIT_GROUP_NAMES[i]`, so that would split the `Color` edit group **and** the Sync dialog.
-✅ **The histogram survives a peak** (2026-09-23) — sqrt with bins 0 and 255 out of the scale;
-⚠⚠ measured, and the test says **not** to fix its 2.2%-at-2000:1 limit by lowering the threshold.
-✅ **The Now row counts what DIFFERS** via `Edits::changed_parameters`, ⚠⚠ derived from
-**serialisation, never a field list**. `grep -n 'per-channel RGB\|made legible\|histogram.s scale'
-docs/JOURNAL.md`.
+✅ **Landed 2026-09-23/24, all confirmed by use:** per-channel RGB tone curves (⚠⚠ `apply` was already
+`map_samples`, so the goldens stayed byte-identical); the **Color section** behind `ADVANCED COLOR`
+(⚠⚠ not three real sections — that would split the `Color` edit group *and* the Sync dialog); the
+**histogram's** sqrt scale with bins 0 and 255 out of it (⚠⚠ the test says **not** to fix its
+2.2%-at-2000:1 limit by lowering the threshold); and the **Now row counting what DIFFERS** via
+`Edits::changed_parameters`, ⚠⚠ derived from **serialisation, never a field list**.
+`grep -n 'per-channel RGB\|made legible\|histogram.s scale' docs/JOURNAL.md`.
 
 ⚠⚠ **The Immich invariants that are easy to break again:** the catalog keys a row on the **path's** own
 file name, never `CatalogEntry::file_name`; `row_is_browsable` hides an absent **Immich** row from
@@ -210,24 +202,18 @@ are **plaintext**), reading Immich's own `rating`/`isFavorite`. ⚠ The **rail's
 are still refetched every launch; only *asset* lists are cached. ⚠ **Auto-advance is a Settings toggle**
 already `true` in the user's file, so changing the Rust default would not change his behaviour.
 
-✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
-as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
-**snapshot timeline** (2026-09-21), the **top bar and Library in one language** (2026-09-20), and the
-five **panel reworks** (Develop, Masks, Geometry, Retouch, Presets) plus the mask off switch
-(2026-09-18/19/20).
+✅ **Merged and confirmed by use, specs under `docs/superpowers/specs/`:** the Export dialog, the
+dialogs in one language, the snapshot timeline, the top bar and Library, and the five panel reworks
+plus the mask off switch (2026-09-18 → 22).
 
-⚠⚠ **This block is the LIVE STATE, not a changelog.** Every milestone below is one line with its
-outcome; the measurements, the retractions and the things that went wrong live in
-`docs/JOURNAL.md`. This section reached a full screen of per-milestone tables twice — that is the
-1.2 MB failure in miniature. **Overwrite it; do not append to it.**
+⚠⚠ **This block is the LIVE STATE, not a changelog — overwrite it, never append.** It reached a full
+screen of per-milestone tables twice, which is the 1.2 MB failure in miniature.
 
-**Landed 2026-09-18** — M8.13, M8.14, the `batch_export.rs` split, the rendering seam reaching export
-and thumbnails, `ProfileRendering` becoming a required argument, and the GPU tail on by default: all
-merged and confirmed by use. ⚠ The measurements, the three defects of one shape, and the one-word
-`#[serde(default)]` trap that would have shipped `false` to every existing settings file are in
-`docs/JOURNAL.md` — `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
+**Landed 2026-09-18, all confirmed by use:** M8.13, M8.14, the `batch_export.rs` split, the rendering
+seam reaching export and thumbnails, `ProfileRendering` as a required argument, and the GPU tail on by
+default. `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 
-### ▶ Next action — Immich upload (brainstorm in progress), or the leftovers
+### ▶ Next action — the leftovers; Immich is complete
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
 not go looking for the next port; there isn't one.
@@ -271,12 +257,8 @@ not go looking for the next port; there isn't one.
    per sample because packing four into a word would race. **A considered trade, not an oversight.**
 2. **Rename `ProfileRendering` → `TailRendering`** — `look` is not a camera-profile field. Now a
    ~120-site diff. ⚠ Its own change, never folded into another.
-3. ⚠⚠ **This row used to rank files by TOTAL lines, contradicting the *Open items* rule directly
-   below it — re-measured by code 2026-09-24, and NONE of the four is over the ~600 threshold:**
-   `lens-profile/src/lib.rs` **500** (of 949), `batch_export/worker.rs` **439** (of 1,264),
-   `immich_source.rs` **411** (of 896), `main.rs` **78** (of 1,147). The genuinely large files are the
-   four in *Open items* — `edit-model` 1,883, `pipeline` 1,810, `catalog/db.rs` 1,730,
-   `settings.rs` 1,046. ⚠ Measure with `awk '/#\[cfg\(test\)\]/{exit} {n++}'` before quoting any of this.
+3. File sizes — ⚠ **in *Open items* only, measured by code.** A list kept in two places is how this
+   file reached 1.2 MB.
 4. Move `PrefixCache`'s tests into `prefix_cache.rs`.
 
 ⛔ **Declined with numbers, and the numbers are in `docs/BACKLOG.md` — do not re-propose from the
@@ -290,15 +272,12 @@ settles.
 
 ### The GPU port — closed
 
-⚠⚠ **Finished, and three documents now say so.** **18 of the 21 stages that `impl PipelineStage`** have
-GPU twins; the three without — `geometry`, `perspective`, `spot_removal` — are **deliberate**, not
-pending. Region scoping (M8.8) answered the first two without a shader, and spot removal was
-**measured and closed unbuilt** (0.05–0.4 ms of work against `GpuBrushRaster`'s ~1.6 ms floor).
-
-⚠ **Do not re-propose from a list alone** — "last unported" is not "worth doing". The order with each
-row's cost is in `docs/JOURNAL.md` (`grep -n "agreed order" docs/JOURNAL.md`); the declines with their
-numbers are in `docs/BACKLOG.md`. ⚠ Count by `impl PipelineStage for`, never by filename: two stages are
-helpers and two twins are renamed, so a filename comparison undercounts.
+⚠⚠ **Finished.** **18 of the 21 stages that `impl PipelineStage`** have GPU twins; `geometry`,
+`perspective` and `spot_removal` are **deliberate** omissions, not pending — region scoping (M8.8)
+answered the first two and spot removal was measured and closed unbuilt. ⚠ **Do not re-propose from a
+list alone**; the order with each row's cost is in `docs/JOURNAL.md` (`grep -n "agreed order"`) and the
+declines with their numbers in `docs/BACKLOG.md`. ⚠ Count by `impl PipelineStage for`, never by
+filename — two stages are helpers and two twins renamed, so filenames undercount.
 
 ### Open items
 
@@ -309,39 +288,28 @@ helpers and two twins are renamed, so a filename comparison undercounts.
 - **A GPU-side mask coverage cache** — ✅ measured 2026-09-16; the ceiling missed 4–8×. ⚠⚠ The cost
   is **not transfer**: a serial u8→u32 repack and a 4×-inflated download wire. **Fix those two
   first** — mechanical, no design question. Re-price after.
-- ⚠ **The u8 coverage wire**, the **`ProfileRendering` → `TailRendering`** rename and **`MAX_TILE_DABS`**
-  are listed with their numbers and their blockers under **▶ Next action** above — not repeated here,
-  because a list kept in two places is how this file reached 1.2 MB.
+- ⚠ **The u8 coverage wire**, the **`ProfileRendering` → `TailRendering`** rename, **`MAX_TILE_DABS`** and
+  `PrefixCache`'s test move sit under **▶ Next action** above with their numbers and blockers; the Immich
+  leftovers sit in **State**. Nothing is repeated here — a list in two places is how this file hit 1.2 MB.
 - The prefix-cache eviction fix's **picture** half.
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
-- Move `PrefixCache`'s tests into `prefix_cache.rs`.
 - ⚠ **M7.3b is DEFERRED, not done.**
-- ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL — this list was wrong in both directions until
-  2026-09-24.** Every quoted figure here had been a *total*, and this repo's files carry enormous test
-  tails, so the list named files that are fine and missed the ones that are not. Measured with
-  `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments, which are heavy here):
-  - **Genuinely large, and none was previously listed:** `edit-model/src/lib.rs` **1,883**,
-    `pipeline/src/lib.rs` **1,810**, `catalog/src/db.rs` **1,730**, `app/src/settings.rs` **1,046**.
-  - **Wrongly listed and actually fine:** `immich_source.rs` is **411** (not 896), `render_engine.rs` is
-    **169** of 4,800, `develop/canvas/mod.rs` is **16** of 2,136. ⚠ `adjustments.rs` is **610**, barely
-    over — not the "~1,250" its total suggests.
-  - ⚠⚠ **`batch_export/worker.rs`'s own figures went stale too, and this entry used to hold them up as
-    the precedent** — it said *"1,127 — ~190 of code"*; re-measured 2026-09-24 it is **1,264 total / 439
-    code**. The *method* was the precedent worth keeping, not the numbers: a measurement written down
-    once decays exactly like the totals this entry was created to correct. **Re-measure, never requote.**
+- ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL** — this list was wrong in *both* directions until
+  2026-09-24, because every figure was a total and this repo's files carry enormous test tails. Measure
+  with `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments, which are heavy here).
+  **The genuinely large ones:** `edit-model/src/lib.rs` **1,883**, `pipeline/src/lib.rs` **1,810**,
+  `catalog/src/db.rs` **1,730**, `app/src/settings.rs` **1,046**. ⚠ `adjustments.rs` is **610**, barely
+  over. ⚠⚠ **Re-measure, never requote** — this entry's own precedent figures went stale within a day,
+  so a measurement written down decays exactly like the totals it was created to correct.
 - The **7 temp-dir test-isolation sites** — ⚠⚠ **never run two gates concurrently.** ⚠ `immich_source`
   adds **two more** that key only on the process id, with no counter; `immich_list_cache`'s and
   `thumb_store`'s use a counter as well and are the pattern to copy.
-- ⚠ **Immich: the API key is plaintext** in `settings.json` (no keychain) and there is **no eviction for
-  the cached originals** — both out of scope by decision. ✅ Marks **do** persist since slice 3.
-- ⚠ The **rail's** album and bucket lists are refetched on every launch; only the *asset* lists are
-  cached (2026-09-23).
 
 ### The open question M8.11 did not settle
 
-M8.3j/k/l's inner-chain machinery is reachable **only on the decline path** (a gating brush with a cold
-cache). Kept, pinned with the gating-brush wedge; whether it earns its keep now that a GPU-resident
-brush raster exists is worth asking when something touches it. `grep -n 'accelerate_inner' docs/JOURNAL.md`.
+M8.3j/k/l's inner-chain machinery is reachable **only on the decline path** (a gating brush, cold cache).
+Kept and pinned; whether it still earns its keep is worth asking when something touches it.
+`grep -n 'accelerate_inner' docs/JOURNAL.md`.
 
 ### Standing lessons (the expensive ones — full stories in `docs/JOURNAL.md`)
 
@@ -366,13 +334,15 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   module wrote. ⚠ **Assert on the path the code DERIVES and on the directory the test itself created** —
   `immich_source`'s `a_hostile_original_name_cannot_escape_the_cache_directory` is the shape to copy. This
   was the **first CI result after the 2026-09-21 workflow fix**, and the only failure in 985.
-- **⚠⚠ A CLAIM YOU DID NOT RUN IS NOT A FINDING — INCLUDING A CLAIM ABOUT A TEST.** Twice in two days:
-  I reported *"the snapshot branch never had this bug"* from reading one line of a two-branch function,
-  and the user found it the same day; and a test's doc comment advertised catching a sabotage that
-  `AlbumSummary`'s fields make impossible. ⚠ **Run the other branch before describing it, and run the
-  sabotage before claiming the test catches it** — a probe printing both cases took one command, and the
-  four guards of 2026-09-24 were each sabotage-measured (30.6 levels, 209 levels over 8,248 of 9,216
-  samples, and so on) rather than trusted on a green run.
+- **⚠⚠ A CLAIM YOU DID NOT RUN IS NOT A FINDING — AND A COMMENT ASSERTING ONE IS WORSE, BECAUSE IT
+  OUTLIVES YOU.** Four times now. *(a)* I reported *"the snapshot branch never had this bug"* from one
+  line of a two-branch function; the user found it that day. *(b)* A test's doc advertised catching a
+  sabotage `AlbumSummary`'s fields make impossible. *(c)* ⚠⚠ A comment read *"the ONE place stacking
+  happens"* — there were **two**, so stacking did nothing on folder-open. *(d)* ⚠⚠ A comment argued for
+  reading the **grouped** list "so the two answers cannot differ" — the grouped list had *lost* the
+  count, so "Expand all" silently set an empty set. ⚠ **Run the other branch, run the sabotage, and
+  `grep` the claim before writing it down.** A comment asserting a single call site is not a single call
+  site; a function both callers must go through is.
 - **⚠⚠ AN EDIT POSITIONED BY WALKING OVER COMMENT LINES WILL EVENTUALLY EAT ONE, AND NOTHING IN THE
   GATE CAN SEE IT.** On 2026-09-23 a scripted extraction in `copies.rs` inserted a helper *below* a
   17-line doc block instead of above it — the doc ended up on the wrong function, `reindex` was left
@@ -387,17 +357,22 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
 - **⚠⚠ A gate run before the last commit describes a tree nobody shipped.** M8.9's tip had to be
   re-gated before merging, which caught an unformatted commit checked only with `cargo build`.
   **Re-gate the tip, and read each exit code from its own command.**
-- **⚠⚠ Measure the drag through `RUSTROOM_DEBUG_RENDER`, never a probe row.** M8.6's 12.5–13.3×
-  headline was retracted because `probe_resamplers` priced a *stage* against a resume the real chain
-  never took — it shipped and did nothing on the reporter's chain.
+- **⚠⚠ Measure the drag through `RUSTROOM_DEBUG_RENDER`, never a probe row.** M8.6's 12.5–13.3× was
+  retracted: `probe_resamplers` priced a *stage* against a resume the real chain never took, so it
+  shipped and did nothing.
 - **⚠⚠ A CLAIM RESTATED OFTEN ENOUGH STOPS BEING CHECKED — and it happens to numbers, not just
   blockers.** "NR and dehaze run before geometry" propagated through four documents and was simply
   false. So did the demosaic tier's *"~8 s a photo"*: that was the `Best`→`Fast` gap, quoted for
   four milestones in support of `Best`→`Better`, which measures at **~3.7 s**. ⚠ **Before requoting
   a figure, check which two configurations it compares** — and check any *"blocked on a design
   question"* note in `docs/BACKLOG.md` against the code before trusting it.
-- **⚠ Almost every GUI-wiring defect in this repo was found by USE, not by a test.** A milestone is
-  not closed when it is green; it is closed when it has been seen.
+- **⚠⚠ Almost every GUI-wiring defect here was found by USE, not by a test** — a milestone is closed when
+  it has been *seen*, not when it is green. ⚠⚠ **But that is a fact about what happened, never a reason a
+  thing is unreachable by a test: before saying "only use can verify", look for the harness that already
+  almost covers it.** I twice called RGB-curve preview/export parity unreachable;
+  `a_colorimetric_frame_renders_the_same_picture_on_the_gpu` existed and merely ran on `Edits::default()`,
+  so it missed a `GPU_STAGES` site passing only the composite curve — **which compiles perfectly**. Three
+  channel curves in its fixture made it a one-second check, sabotaged at **209 levels / 8,248 samples**.
 - **⚠⚠ ASK THE ARTEFACT, NOT THE DESCRIPTION OF IT — twice over, and both cost real bugs.**
   **(a) An OpenAPI schema describes what a server *may* send, not what it *does*.** Three Immich defects,
   each invisible to a green suite and obvious in a minute of use: `GET /albums/{id}` returns **no `assets`
@@ -410,13 +385,6 @@ brush raster exists is worth asking when something touches it. `grep -n 'acceler
   all**. ⚠ `icons.rs` already carried this warning and recorded four features paying for it; that was the
   fifth, so the warning now also sits on **`RowAction::glyph`** — where the mistake is actually made.
   **Parse the cmap.**
-- **⚠⚠ BEFORE DECLARING SOMETHING "ONLY USE CAN VERIFY", LOOK FOR THE HARNESS THAT ALREADY ALMOST COVERS
-  IT.** I twice told the user that preview-versus-export parity for the RGB curves was the one thing only
-  he could check. `a_colorimetric_frame_renders_the_same_picture_on_the_gpu` already existed — it just ran
-  on `Edits::default()`, so it could not see a `GPU_STAGES` site passing only the composite curve, and
-  **that site compiles perfectly**. One test with three channel curves turned this project's worst failure
-  shape into a one-second check, sabotage-measured at **209 levels over 8,248 of 9,216 samples**. ⚠ "Found
-  by use" is a fact about what happened, never a reason a thing is unreachable by a test.
 - **⚠⚠ A FIXTURE YOU WROTE IS NOT EVIDENCE ABOUT SOMETHING YOU DO NOT CONTROL.** M9.1's
   `album.json` was hand-written and described *in its own plan* as "trimmed from `GET
   /albums/{id}`". It asserted an `assets` array that endpoint has never returned. The test passed
