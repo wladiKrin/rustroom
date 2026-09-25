@@ -167,7 +167,18 @@ impl RustroomApp {
             }
         }
         catalog::sort(&mut lib.scan, sort);
-        lib.entries = entries::build(&lib.scan, sidecar::load_all);
+        // ⚠⚠ **The ONE place stacking happens.** Every consumer — the grid, the filmstrip,
+        // `selection`, `view_region`, `format_filter` — reads `lib.entries`, and `entries`' own doc
+        // records three sparse-index bugs on this path. Grouping anywhere else would make them
+        // disagree about which row is which photograph.
+        //
+        // ⚠ Note `smart_sources` also calls `entries::build` and must **not** stack: it evaluates
+        // every file against a rule, and a collapsed pair would silently skip the JPEG.
+        lib.entries = rustroom_app::stack::group(
+            entries::build(&lib.scan, sidecar::load_all),
+            &self.settings.stacking,
+            &lib.stack_expanded,
+        );
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
         // from the photo we mean rather than kept. Keeping it would silently select whichever

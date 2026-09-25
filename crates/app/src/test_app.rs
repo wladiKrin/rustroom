@@ -300,6 +300,7 @@ pub fn library_of(n: usize) -> Library {
         source: LibrarySource::Folder(std::path::PathBuf::from("/nonexistent")),
         scan,
         entries,
+        stack_expanded: Default::default(),
         cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
         last_want: Vec::new(),
         selection: Selection::default(),

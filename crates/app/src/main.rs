@@ -204,6 +204,15 @@ struct Library {
     /// whatever the folder happens to hold at that moment.
     scan: Vec<catalog::CatalogEntry>,
     entries: Vec<PhotoEntry>,
+    /// Which stacks the user has expanded, by `stack::StackKey`.
+    ///
+    /// ⚠ **Session state, deliberately not persisted.** Expanding a pair is a momentary "let me see
+    /// the JPEG", not a preference. ⚠ It lives here rather than on `RustroomApp` so opening another
+    /// folder starts collapsed — `Library` is rebuilt, and the keys carry the folder anyway.
+    ///
+    /// ⚠⚠ Changing it must go through `rebuild_entries`, never patch `entries` in place: the grid,
+    /// the filmstrip, `selection` and `view_region` all index into that one list.
+    stack_expanded: std::collections::HashSet<rustroom_app::stack::StackKey>,
     /// Loaded thumbnails, keyed by path and bounded by a byte budget.
     ///
     /// ⚠ Keyed by **path**, so copies of one file share a texture and a re-sort or a rebuild

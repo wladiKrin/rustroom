@@ -219,6 +219,7 @@ impl RustroomApp {
             source,
             scan,
             entries,
+            stack_expanded: Default::default(),
             cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
             last_want: Vec::new(),
             selection: Selection::default(),
