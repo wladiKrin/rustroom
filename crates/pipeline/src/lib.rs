@@ -863,26 +863,23 @@ pub fn build_prefix_steps(
 ) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
-    // ⚠⚠ **THE ORDER, SINCE M7.3b: NR → lens → dehaze → spots → geometry → masked capture.** It
-    // used to be lens → perspective → spots → geometry → NR → dehaze, and two things were wrong with
-    // that. Every resample interpolates, which low-passes and spatially correlates the noise, so NR
-    // was handed blotchy noise after up to three interpolations instead of the per-pixel noise it is
-    // built for. And a straighten drag re-ran NR, dehaze and the masked capture stages on every
-    // frame, because they sat downstream of geometry in the prefix cache. Now the resample is last
-    // and only a geometry edit invalidates it. ⚠ The price, measured in the M7.3b journal entry: an
-    // NR or dehaze drag now re-runs lens correction and the geometry resample behind it.
+    // ⚠⚠ **THE ORDER, SINCE M7.3b: lens → NR → dehaze → spots → geometry → masked capture.** It
+    // used to be lens → perspective → spots → geometry → NR → dehaze, and a straighten, crop or
+    // keystone drag then re-ran NR, dehaze and the masked capture stages on every frame, because
+    // they sat downstream of geometry in the prefix cache. With the one geometric resample last,
+    // only a geometry edit invalidates it. Measured on DSCF6291 at the fit rung (GPU path): a
+    // straighten drag **137 → 35 ms**, a keystone drag 170 → 36.
+    //
+    // ⚠⚠ **It is a SPEED trade, not an image-quality win — the IQ argument was measured and
+    // RETRACTED.** The brainstorm claimed NR ahead of the resamplers would see cleaner, less
+    // correlated noise. On DSCF6708 (ISO 3200) the residual grain's lag-1 correlation was identical
+    // in all four orders tried, and NR *first* left 4-8% MORE grain at the same slider (the
+    // resample's own softening had been helping). The price is on the other drags: NR 102 → 161 ms
+    // and dehaze 54 → 106, which now re-run the resample behind them. Lens stays FIRST because NR
+    // ahead of it cost a further 92 ms per NR drag for no measurable gain. Numbers and the
+    // alternatives are in the M7.3b journal entry.
 
-    // Noise reduction FIRST: it sees the demosaiced source before any interpolation has touched
-    // it. `is_active` rather than a `!= default()` check — Detail and Smoothness are modifiers and
-    // must not insert a stage on their own.
-    if edits.noise_reduction.is_active() {
-        steps.push(PrefixStep {
-            key: PrefixStepKey::NoiseReduction(edits.noise_reduction),
-            stage: Box::new(NoiseReductionStage::new(&edits.noise_reduction, scale)),
-        });
-    }
-
-    // Lens correction next. ⚠ Ahead of geometry: the calibration is defined in the uncropped,
+    // Lens correction first. ⚠ Ahead of geometry: the calibration is defined in the uncropped,
     // unrotated sensor frame. A missing corrector — an unlisted lens, or a JPEG — skips the step
     // silently, which is the ordinary case.
     let lens_correction = edits.applied_lens_correction();
@@ -902,6 +899,17 @@ pub fn build_prefix_steps(
                 )),
             });
         }
+    }
+
+    // Noise reduction before every tonal stage: denoising the source is far easier than
+    // denoising after Exposure, Shadows and the tone curve have amplified the grain. `is_active`
+    // rather than a `!= default()` check — Detail and Smoothness are modifiers and must not insert
+    // a stage on their own.
+    if edits.noise_reduction.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::NoiseReduction(edits.noise_reduction),
+            stage: Box::new(NoiseReductionStage::new(&edits.noise_reduction, scale)),
+        });
     }
 
     // Dehaze: a correction of the capture, so upstream of every tonal stage. ⚠ AFTER lens
@@ -1203,12 +1211,12 @@ fn adjustment_stages(
 /// tonal adjustment, as the global stages of the same name do.
 ///
 /// ⚠⚠ **A recorded asymmetry since M7.3b, not an oversight.** The global pair moved AHEAD of the
-/// resamplers, so they see noise no interpolation has correlated. These masked twins stay AFTER
-/// the geometry, because a mask's coverage is rasterised in frame space (`MaskStage::new_capture`
-/// takes `&edits.geometry`). Moving them would mean mapping every mask kind back through the
-/// homography, the rotation and the lens. So on a straightened photo a masked Luminance 50 acts on
-/// resampled noise while a global one does not; the difference is the one M7.3b removed from the
-/// global path.
+/// geometry resample (for drag speed; see `build_prefix_steps`). These masked twins stay AFTER it,
+/// because a mask's coverage is rasterised in frame space (`MaskStage::new_capture` takes
+/// `&edits.geometry`). Moving them would mean mapping every mask kind back through the homography
+/// and the rotation. So on a straightened photo a masked Luminance 50 acts on noise the rotation
+/// has resampled while a global one does not. M7.3b measured the global version of that
+/// difference at 1-2% of residual grain.
 ///
 /// ⚠⚠ **Dehaze is why the placement is forced rather than preferred.** Its airlight is estimated
 /// from the brightest 0.1% of the buffer it is handed. The tail may run on the visible *region*,
@@ -4775,11 +4783,11 @@ mod tests {
         assert_eq!(names, vec!["lens_correction", "geometry"]);
     }
 
-    /// ⚠⚠ **M7.3b's whole order, with every global prefix stage present, lens included.** NR sees
-    /// the source before any interpolation; lens precedes dehaze so dehaze sees the vignetting
-    /// correction; spots sit pre-perspective; the one geometric resample is last.
+    /// ⚠⚠ **M7.3b's whole order, with every global prefix stage present, lens included.** Lens
+    /// precedes dehaze so dehaze sees the vignetting correction; spots sit pre-perspective; the one
+    /// geometric resample is last, so a geometry drag re-runs nothing else.
     #[test]
-    fn the_prefix_runs_nr_then_lens_then_dehaze_then_spots_then_geometry() {
+    fn the_prefix_runs_lens_nr_dehaze_spots_then_geometry() {
         let edits = Edits {
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 30.0,
@@ -4820,8 +4828,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "noise_reduction",
                 "lens_correction",
+                "noise_reduction",
                 "dehaze",
                 "spot_removal",
                 "geometry"

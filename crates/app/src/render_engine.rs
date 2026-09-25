@@ -1236,7 +1236,7 @@ fn render_cached(
             let t_step = std::time::Instant::now();
             // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
             // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
-            // after noise reduction and lens correction since M7.3b — so substituting up front would
+            // after lens correction and noise reduction since M7.3b — so substituting up front would
             // estimate it from the raw buffer. A slightly different airlight is a different
             // photograph, not an error.
             //
