@@ -214,44 +214,42 @@ screen of per-milestone tables twice, which is the 1.2 MB failure in miniature.
 seam reaching export and thumbnails, `ProfileRendering` as a required argument, and the GPU tail on by
 default. `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 
-### ▶ Next action — the leftovers; Immich is complete
+### ▶ Next action — the plan has a queue now; work it in order
+
+⚠⚠ **RESTRUCTURED 2026-09-25 in `03-plan-of-action.md`** (Obsidian, `private/opensource_lightroom/`).
+Every planned phase closed except **M7.3b**, so the roadmap was re-cut:
+- **Phase 9 is NEW — the ten capability gaps**, as a one-at-a-time checklist ordered cheapest-useful
+  first: **M5.1c** parametric curve · **M6.4c** rendering intents/gamut · **M9.6** defringe · **M9.7**
+  persistent history · **M9.8** keyword re-parenting · **M9.9** folder tree + move tracking · **M9.10**
+  DNG · **M9.11** red-eye · **M9.12** import/ingest · **M9.13** AI subject/sky masks.
+  ⚠⚠ **M5.1c and M6.4c keep their OWN identifiers** — they are sub-slices of closed phases, and minting
+  `M9.x` names for them would put one piece of work under two names. ⚠ Phase 9's new items start at
+  **M9.6** because M9.1–M9.5 are retired, not free.
+- **The old Phase 9 is Phase 10** (integration, cross-platform, release). ⚠ **M9.1 (Immich) KEEPS ITS
+  NAME** inside it — it shipped, and ten references point at that string. M9.2–M9.5 → **M10.2–M10.5**.
+- **M10.1 is new: ship the GPL-3.0 text.** ⚠ The licence is already *declared* (`[workspace.package]`,
+  all 15 crates, and the README); only `LICENSE` is missing. One `curl`. ⚠ Never reproduce a licence
+  from memory.
+
+**▶ The order the user set: finish M7.3b, then Phase 9's checklist from the top.**
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
 not go looking for the next port; there isn't one.
 
-**Live candidates, in the order the user has shown interest:**
+✅ **The Immich integration is COMPLETE (M9.1, 2026-09-22 → 25), and its detail has moved out of this
+section** — it was 34 lines of finished work inside a *next action* list. The invariants worth keeping:
+⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`** (168-value enum), which is the whole
+basis of upload-without-write-back, so upload rides its own **`immich_upload_key`**; ⚠⚠ **never delete
+a staged file on an upload *attempt*** — an SSL/EOF means the *response* was lost, measured 4-in-2,373
+with none actually failing to apply; ⚠⚠ **there is no mtime fallback for the upload date** (it filed an
+unreadable date under the DOWNLOAD time), and `Edited` is read at **plan** time because recording an
+upload bumps the sidecar's mtime; ⚠ `Settings.immich_enabled` is read **only** through
+**`immich_source::connection`**, one choke point, defaulting **true** (the `gpu_tail` trap); ⚠ server
+stacks have **no validator**, so freshness rests on **Reindex** alone. ⛔ **Two-way sync is DECLINED —
+the user's call, not a deferral. Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
+`grep -n 'export delivery\|completely optional\|server-side stacks' docs/JOURNAL.md`.
 
-0. ✅ **Immich upload BUILT and confirmed by use (2026-09-24), delivery reconciled into Location.**
-   An export delivers to **files, Immich, or both** — one `ExportOptions.destination: Destination`
-   (`Files`/`Target`/`Both`/`Nowhere`), deliberately **not** Immich-named so the integration can later
-   be switched off with "no mention of immich at all". Immich-only **stages in a temp dir, deletes on
-   a CONFIRMED upload, and rescues into the export folder otherwise**. ⚠⚠ Never delete on an attempt:
-   an SSL/EOF means the *response* was lost, measured 4-in-2,373 with none actually failing to apply.
-   The upload date is `Captured`/`Edited`/`Uploaded`; ⚠⚠ **there is no mtime fallback — it filed an
-   unreadable date under the DOWNLOAD time**, and `Edited` is read at **plan** time because recording
-   an upload bumps the sidecar's mtime. A separate **`immich_upload_key`** keeps browsing read-only as
-   a property of the *credential*: ⚠⚠ **`asset.upload` is a grant SEPARATE from `asset.update`**
-   (168-value enum), which is the whole basis of upload-over-sync.
-   `grep -n 'export delivery' docs/JOURNAL.md`.
-   ⛔ **Two-way sync is DECLINED (the user's call — not a deferral):** it *mutates* authoritative
-   assets and runs unattended, removing the found-by-use safety net where the blast radius is largest.
-   ⚠⚠ **Do not re-propose it from a list**; the table is in `docs/BACKLOG.md`.
-   ✅ **Immich is now COMPLETELY OPTIONAL behind one gate (2026-09-24).** `Settings.immich_enabled`
-   is read **only** through **`immich_source::connection`** — the single choke point nine call sites
-   already used — so no surface has its own condition and the export ticks needed no change.
-   ⚠⚠ **Default `true`: the `gpu_tail` trap**, since `false` would make Immich vanish on upgrade.
-   ⚠ The Settings tab **stays** (it holds the toggle). The downloads stay visible as **"Downloaded
-   photos"**, hover included — the path itself says "immich". `grep -n 'completely optional'
-   docs/JOURNAL.md`.
-   ✅ **Immich's server-side stacks are honoured (2026-09-25) — the Immich integration is COMPLETE.**
-   ⚠⚠ The whole feature is **one function**: `stack::key_of_with` returns `(cache_root, "stack:<id>")`
-   for a stacked asset and the stem key otherwise, so every piece of local stacking works unchanged and
-   an **empty map is byte-identical to before**. ⚠ `GET /stacks` is **6.3 MB / ~2.9 s** (it embeds the
-   full asset DTO per member), so `immich_stack_cache` keeps a **472 KB projection** — 13× — fetched as
-   `Job::Stacks` off the UI thread. ⚠⚠ **No validator exists** (`StackResponseDto` has no
-   `assetCount`/`lastModified`), so freshness rests on **Reindex** alone. ⚠ The **local** Show rule
-   picks the primary, so untouched pairs show the **RAW** where Immich's UI shows the JPEG.
-   `grep -n "server-side stacks" docs/JOURNAL.md`.
+**The small leftovers, in the order the user has shown interest:**
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
