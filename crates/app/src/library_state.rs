@@ -116,6 +116,28 @@ impl Library {
     }
 }
 
+/// Expand a scan into the browser's rows, **grouped into stacks**.
+///
+/// ⚠⚠ **THE one place browser entries are made, and it exists because there were two.** The
+/// folder-open path in `sources` built them with a bare `entries::build` while `rebuild_entries`
+/// grouped them — so stacking worked after a re-sort and did nothing when a folder was opened,
+/// reported as *"they are not stacked"*, 2026-09-25. ⚠ A comment claiming a single site is **not** a
+/// single site; a function both callers must go through is.
+///
+/// ⚠ A free function taking `&Stacking` rather than a method on `&self`: `rebuild_entries` holds
+/// `self.library` mutably while it needs this, and that function's own rule is "read before the
+/// borrow", because the compiler cannot see that `settings` and `library` are disjoint fields.
+///
+/// ⚠ `smart_sources` deliberately does **not** use this: it evaluates every file against a rule, and
+/// a collapsed pair would silently skip the JPEG.
+pub(crate) fn browser_entries(
+    scan: &[catalog::CatalogEntry],
+    stacking: &rustroom_app::stack::Stacking,
+    expanded: &std::collections::HashSet<rustroom_app::stack::StackKey>,
+) -> Vec<entries::PhotoEntry> {
+    rustroom_app::stack::group(entries::build(scan, sidecar::load_all), stacking, expanded)
+}
+
 impl RustroomApp {
     /// Change how the browser orders a folder, keeping the photo you were looking at selected.
     ///
@@ -153,6 +175,8 @@ impl RustroomApp {
         // compiler only sees that when the read happens first — the rule this file already states
         // for `self.settings`.
         let filter = self.filter.clone();
+        // ⚠ Read before the borrow too, for the reason stated just above.
+        let stacking = self.settings.stacking.clone();
         let Some(lib) = self.library.as_mut() else {
             return;
         };
@@ -167,18 +191,7 @@ impl RustroomApp {
             }
         }
         catalog::sort(&mut lib.scan, sort);
-        // ⚠⚠ **The ONE place stacking happens.** Every consumer — the grid, the filmstrip,
-        // `selection`, `view_region`, `format_filter` — reads `lib.entries`, and `entries`' own doc
-        // records three sparse-index bugs on this path. Grouping anywhere else would make them
-        // disagree about which row is which photograph.
-        //
-        // ⚠ Note `smart_sources` also calls `entries::build` and must **not** stack: it evaluates
-        // every file against a rule, and a collapsed pair would silently skip the JPEG.
-        lib.entries = rustroom_app::stack::group(
-            entries::build(&lib.scan, sidecar::load_all),
-            &self.settings.stacking,
-            &lib.stack_expanded,
-        );
+        lib.entries = browser_entries(&lib.scan, &stacking, &lib.stack_expanded);
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
         // from the photo we mean rather than kept. Keeping it would silently select whichever
@@ -263,5 +276,45 @@ impl RustroomApp {
             lib.captures = map;
             lib.refilter(&filter);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⚠⚠ **The bug the user reported as "they are not stacked", pinned at the function both paths
+    /// now go through.** Stacking was wired into `rebuild_entries` only, so it worked after a
+    /// re-sort and did nothing when a folder was opened — and the comment there *claimed* it was the
+    /// one place entries are built, which was simply false. A comment is not a guard.
+    #[test]
+    fn browser_entries_groups_a_pair_on_every_path() {
+        let scan = |names: &[&str]| -> Vec<catalog::CatalogEntry> {
+            names
+                .iter()
+                .map(|n| catalog::CatalogEntry {
+                    path: std::path::PathBuf::from(format!("/f/{n}")),
+                    file_name: (*n).to_string(),
+                    modified: std::time::SystemTime::UNIX_EPOCH,
+                    edited: None,
+                })
+                .collect()
+        };
+        let on = rustroom_app::stack::Stacking {
+            enabled: true,
+            ..Default::default()
+        };
+        let pair = scan(&["a.JPG", "a.RAF"]);
+
+        // ⚠ The sample assertion: the scan really holds two files, or "grouped to one" is vacuous.
+        assert_eq!(pair.len(), 2);
+        let grouped = browser_entries(&pair, &on, &Default::default());
+        assert_eq!(grouped.len(), 1, "the pair must collapse on the open path");
+        assert!(grouped[0].stack.is_some());
+
+        // ⚠ And the control: with stacking off the same scan yields both rows, so the assertion
+        // above is about grouping rather than about the fixture.
+        let off = rustroom_app::stack::Stacking::default();
+        assert_eq!(browser_entries(&pair, &off, &Default::default()).len(), 2);
     }
 }
