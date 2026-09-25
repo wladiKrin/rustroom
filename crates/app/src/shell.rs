@@ -324,6 +324,7 @@ impl RustroomApp {
                                 reindex_button(self, ui, ctx);
                             }
                             format_chips(self, ui);
+                            stack_buttons(self, ui);
                             if self.library.is_some() {
                                 grid_size_slider(self, ui);
                                 sort_combo(self, ui);
@@ -1004,11 +1005,78 @@ fn sort_combo(app: &mut RustroomApp, ui: &mut egui::Ui) {
 /// ticked, which is both the default and self-evident. An "All" radio alongside per-format
 /// radios would additionally make "RAF and JPG but not PNG" unreachable, which is a real
 /// combination on a mixed folder.
+/// Collapse or expand every stack in the current folder.
+///
+/// ⚠⚠ **Library only, never Develop** — and `format_chips` above records why, having been moved out
+/// of the Develop toolbar for it: "The filter decides what the browser contains, which is a browsing
+/// decision — it has no meaning while a single photo is open, and it sat in the Develop toolbar for
+/// no better reason than living in a shared row." Stacking is the same kind of decision, so putting
+/// these in a shared row would repeat a mistake already corrected once.
+///
+/// ⚠ Drawn only when stacking is on **and** the folder actually holds a stack, the same rule that
+/// hides the format chips in a folder with one format.
+///
+/// ⚠ **"Expand all", not "Unstack all"** (user's call, of three offered). Stacking here is
+/// rule-based rather than manual, so there is nothing to permanently unstack — "Unstack all" could
+/// only mean "expand" while reading like "turn the feature off", which Settings also does. The
+/// ambiguity was on one label only, so only that label changed.
+fn stack_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
+    if !app.settings.stacking.enabled {
+        return;
+    }
+    let Some(lib) = app.library.as_ref() else {
+        return;
+    };
+    // ⚠ Read off the **already grouped** entries rather than recomputed: `stack::group` has just
+    // decided what a stack is, and asking twice invites the two answers to differ.
+    if !lib.entries.iter().any(|e| e.stack.is_some()) {
+        return;
+    }
+    let all_keys = rustroom_app::stack::stacked_keys(&lib.entries);
+    // ⚠ Symmetrical, so each button is lit exactly when it has something to do — a button that greys
+    // out says "already done", where a live one that changes nothing says nothing at all.
+    let state = |want: bool| {
+        lib.entries
+            .iter()
+            .any(|e| e.stack.map(|s| s.expanded == want).unwrap_or(false))
+    };
+    let (any_collapsed, any_expanded) = (state(false), state(true));
+    let mut collapse = false;
+    let mut expand = false;
+    if ui
+        .add_enabled(any_collapsed, egui::Button::new("Expand all"))
+        .on_hover_text("Show every file in every stack in this folder.")
+        .clicked()
+    {
+        expand = true;
+    }
+    if ui
+        .add_enabled(any_expanded, egui::Button::new("Stack all"))
+        .on_hover_text("Collapse every stack in this folder back to one photo each.")
+        .clicked()
+    {
+        collapse = true;
+    }
+    if collapse || expand {
+        if let Some(lib) = app.library.as_mut() {
+            lib.stack_expanded.clear();
+            if expand {
+                lib.stack_expanded = all_keys;
+            }
+        }
+        // ⚠ A rebuild, never a patch — `lib.entries` is what every consumer indexes into.
+        app.rebuild_entries(None);
+    }
+}
+
 fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let formats = app
         .library
         .as_ref()
-        .map(|lib| format_filter::formats_present(&lib.entries))
+        // ⚠⚠ From the **scan**, never the grouped entries: a collapsed pair leaves no JPEG row, so
+        // reading `entries` made the JPEG chip vanish and reappear as stacks were toggled. The
+        // folder still holds those JPEGs, so the control that hides them stays put.
+        .map(|lib| format_filter::formats_of(lib.scan.iter().map(|e| e.path.as_path())))
         .unwrap_or_default();
     // ⚠⚠ The SAME predicate the filtering uses, not a second copy of the rule. When these were
     // two independent conditions, hiding `jpg` and opening a JPEG-only folder drew no chips AND
@@ -1017,10 +1085,8 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // ⚠ A single-format folder still draws its chip (user's call, 2026-09-20: the format and
     // its count should always be visible) — lit, since the override shows everything, and
     // **not clickable**, since a click could only hide the whole grid or do nothing.
-    let single = app
-        .library
-        .as_ref()
-        .is_some_and(|lib| format_filter::folder_overrides_hidden(&lib.entries));
+    // ⚠ The same scan-derived census as the chips, not the grouped entries — see `formats` above.
+    let single = format_filter::folder_overrides_hidden(&formats);
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
     // is what keeps the on-screen order the same as `formats_present` returns.
     //
@@ -1441,5 +1507,50 @@ mod tests {
             got = pressed_command(ui.ctx());
         });
         assert_eq!(got, None, "a bare C typed into a field switched view");
+    }
+
+    /// ⚠⚠ **All three states, because an absence alone passes against a toolbar that drew nothing.**
+    /// The buttons appear only when stacking is on *and* the folder holds a stack — the same rule
+    /// that hides the format chips in a folder with one format.
+    #[test]
+    fn the_stack_buttons_appear_only_when_there_is_something_to_act_on() {
+        let labels = |stacking: bool, paired: bool| -> Vec<String> {
+            let ctx = crate::test_ui::ctx();
+            let mut app = crate::test_app::for_test();
+            app.settings.stacking.enabled = stacking;
+            let names: &[&str] = if paired {
+                &["a.RAF", "a.JPG", "b.RAF"]
+            } else {
+                &["a.RAF", "b.RAF"]
+            };
+            app.library = Some(crate::test_app::library_of_names(names));
+            crate::test_ui::labelled_centres_on(
+                &ctx,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)),
+                Vec::new(),
+                |ui| {
+                    stack_buttons(&mut app, ui);
+                },
+            )
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect()
+        };
+
+        let on_paired = labels(true, true);
+        assert!(
+            on_paired.iter().any(|l| l == "Expand all"),
+            "a folder with a stack must offer them: {on_paired:?}"
+        );
+        assert!(on_paired.iter().any(|l| l == "Stack all"), "{on_paired:?}");
+
+        assert!(
+            labels(true, false).is_empty(),
+            "a folder with no stack must offer nothing"
+        );
+        assert!(
+            labels(false, true).is_empty(),
+            "stacking off must offer nothing even when the folder has pairs"
+        );
     }
 }

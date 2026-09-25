@@ -286,20 +286,38 @@ pub fn open_test_photo(app: &mut RustroomApp, ctx: &egui::Context, w: usize, h: 
 /// ⚠ Exhaustive field literal on purpose, following `for_test`: a new field on `Library` is a
 /// compile error here, which forces a decision about what a test should see.
 pub fn library_of(n: usize) -> Library {
-    let scan: Vec<catalog::CatalogEntry> = (0..n)
-        .map(|i| catalog::CatalogEntry {
-            path: std::path::PathBuf::from(format!("/nonexistent/rustroom_{i:05}.RAF")),
-            file_name: format!("rustroom_{i:05}.RAF"),
+    let names: Vec<String> = (0..n).map(|i| format!("rustroom_{i:05}.RAF")).collect();
+    library_of_names(&names.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// A `Library` of exactly these file names, for tests that care which formats are present —
+/// stacking, above all, where `a.RAF` beside `a.JPG` is the whole point.
+///
+/// ⚠ The entries are grouped by `stack::group` with stacking **on**, which is the default, so a
+/// fixture naming a pair behaves as the real Library does.
+pub fn library_of_names(names: &[&str]) -> Library {
+    let scan: Vec<catalog::CatalogEntry> = names
+        .iter()
+        .map(|n| catalog::CatalogEntry {
+            path: std::path::PathBuf::from(format!("/nonexistent/{n}")),
+            file_name: (*n).to_string(),
             modified: std::time::SystemTime::UNIX_EPOCH,
             edited: None,
         })
         .collect();
-    let entries =
-        rustroom_app::entries::build(&scan, |_| rustroom_app::sidecar::Sidecar::default());
+    let entries = rustroom_app::stack::group(
+        rustroom_app::entries::build(&scan, |_| rustroom_app::sidecar::Sidecar::default()),
+        &rustroom_app::stack::Stacking {
+            enabled: true,
+            ..Default::default()
+        },
+        &Default::default(),
+    );
     let mut lib = Library {
         source: LibrarySource::Folder(std::path::PathBuf::from("/nonexistent")),
         scan,
         entries,
+        stack_expanded: Default::default(),
         cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
         last_want: Vec::new(),
         selection: Selection::default(),

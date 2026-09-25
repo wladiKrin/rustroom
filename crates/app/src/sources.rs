@@ -12,7 +12,6 @@ use crate::library_state::fs_modified;
 use crate::{AppView, Library, LibrarySource, RustroomApp};
 use eframe::egui;
 use rustroom_app::action_log::ActionKind;
-use rustroom_app::entries;
 use rustroom_app::selection::Selection;
 use rustroom_app::sidecar;
 use rustroom_app::thumb_loader::ThumbLoader;
@@ -206,7 +205,14 @@ impl RustroomApp {
         source: LibrarySource,
         scan: Vec<catalog::CatalogEntry>,
     ) -> usize {
-        let entries = entries::build(&scan, sidecar::load_all);
+        // ⚠⚠ **Through `browser_entries`, never a bare `entries::build`.** This is the
+        // folder-open path, and building the rows here without grouping is exactly the bug that
+        // shipped: stacking worked after a re-sort and did nothing when a folder was opened.
+        let entries = crate::library_state::browser_entries(
+            &scan,
+            &self.settings.stacking,
+            &Default::default(),
+        );
         let n = entries.len();
         let ctx2 = ctx.clone();
         let space = self
@@ -219,6 +225,7 @@ impl RustroomApp {
             source,
             scan,
             entries,
+            stack_expanded: Default::default(),
             cache: rustroom_app::thumb_cache::ThumbCache::with_default_budget(),
             last_want: Vec::new(),
             selection: Selection::default(),

@@ -1476,7 +1476,19 @@ has no stacking awareness *and does not report `stack`*, so **Rustroom's grid st
 every stacked pair** while Immich's timeline collapses them. Any "stack pairs" feature in the app owes a
 grid that honours stacks — fed from a `GET /stacks` enumeration, not from the listing.
 
-### ⬜ Rustroom-side stacking awareness (backlog item, requested 2026-09-24)
+### ✅ Local stacking BUILT (2026-09-25) — ⬜ honouring Immich's stacks still open
+
+✅ **Same-stem files group into one grid cell**, independent of Immich: `Pictures/fuji` was **830 cells
+for 415 photographs**, and both camera folders are **100% RAW+JPEG pairs**. A **view grouping only**;
+Settings → Appearance carries the toggle, the primary choice and the participating formats. Spec
+`docs/superpowers/specs/2026-09-25-local-stacking-design.md`; `grep -n 'stacks: same-stem'
+docs/JOURNAL.md`.
+
+⚠⚠ **It does nothing for Immich and cannot.** `cache_path` names files by **asset UUID**, so no two
+ever share a stem — measured: **0 pairs** against 2,913 cached assets, where the two camera folders are
+100%. Pairing on that server is a *server-side* fact.
+
+### ⬜ Honouring Immich's own stacks (the remaining half, requested 2026-09-24)
 
 **Status:** ⬜ wanted, unblocked, not specced. Raised the moment the server-side migration landed:
 Immich's timeline now collapses **2,378** RAW+JPEG pairs, and **Rustroom's grid still shows both halves**,

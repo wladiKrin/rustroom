@@ -211,6 +211,78 @@ and `mask`. ⚠ Two twins are also renamed rather than missing — `color_gradin
 `sharpening` → `sharpen.rs` — so a filename comparison undercounts. **Count by
 `impl PipelineStage for`, not by file.**
 
+### 2026-09-25 — stacks: same-stem files as one grid cell, independent of Immich
+
+Branch `local-stacking`, **2,887 tests**, 75 goldens unmoved, gated green, confirmed by use.
+
+**The user's framing was the right one:** *"this is something that could be independent of immich, as
+my other folders also carry raw and jpeg copies of the same images."* Measured before designing:
+
+| folder | files | photographs | RAW+JPEG pairs |
+|---|---|---|---|
+| `Pictures/fuji` | 830 | **415** | **415 — every one** |
+| `Pictures/fuji_new_new` | 804 | **402** | **402 — every one** |
+| Immich cache | 2,913 | 2,913 | **0** |
+
+⚠⚠ **Both camera folders are 100% pairs — the grid was showing every photograph twice.** And the
+Immich cache has **zero** local pairs, because `cache_path` names files by asset UUID: pairing there is
+a *server-side* fact, which is why these are two features and not one.
+
+⚠ **Not the format filter**, which could already hide `.jpg` globally: this is a Fuji, film
+simulations mean the camera JPEG is often the keeper, so "always hide JPEG" throws away the file you
+sometimes want.
+
+**A view grouping and nothing more** (user's choice of three): edits, sidecars, marks and the catalog
+untouched. Shared marks were offered and declined; shared *edits* were never on the table, since a RAW
+needs demosaic and white balance while a JPEG is already rendered.
+
+✅ **Settings → Appearance:** a toggle, a **Show** dropdown (*Edited, else RAW* / RAW / JPEG) and format
+chips, so the rule is general rather than RAW+JPEG-only. ⚠ `enabled` defaults to **`true`** — the
+`gpu_tail` trap again, since a missing field takes whatever `Default` says and `true` halves the grid on
+first launch. Pinned by a test.
+
+⚠⚠ **STEM ALONE IS SAFE HERE, AND THAT IS A DELIBERATE CONTRAST WITH THE IMMICH MIGRATION THE DAY
+BEFORE.** There, `DSCF0236` named two photographs because the camera's counter had wrapped across
+16,000 assets, and pairing needed `(stem, capture time)`. **Within one folder the filesystem enforces
+uniqueness.** The residual risk of two merged rolls is accepted because this is view-only and one click
+from undone — a different bar, stated rather than assumed.
+
+⚠ **Order preservation and the both-edited tiebreak were both sabotage-verified**: a map-then-flush
+grouping passes every other test and yields `["aaa", "ccc", "bbb"]`; and `Edited, else RAW` falls back
+to the RAW when both are edited, which the design had to invent.
+
+#### ⚠⚠ Four defects, three found by use, and two of them were MY OWN COMMENTS being false
+
+**1. Stacking did nothing when a folder was opened.** Entries are built in **two** places: `sources`
+on folder-open and `rebuild_entries` on re-sort. I wired the second and wrote *"the ONE place stacking
+happens"* in a comment without checking. ⚠⚠ **A comment asserting a single site is not a single site.**
+Fixed with `browser_entries`, a function both paths must go through.
+
+**2. "Expand all" set the expanded set to EMPTY.** `keys` counted members per key — right on an
+ungrouped list, but it was called with the grouped one, where a collapsed stack is **one** row, so
+every count was 1 and the `n > 1` filter dropped them all. ⚠⚠ **And my comment argued for exactly the
+wrong thing**: "read off the already grouped entries … asking twice invites the two answers to differ"
+— the grouped list had *lost* the count. `stacked_keys` reads `stack.is_some()` instead;
+sabotage-verified by restoring the counting version, which yields `{}`.
+
+**3. The format chips vanished and reappeared** as stacks toggled, because `formats_present` read the
+grouped entries. ⚠ The user's reasoning settled it: *"it's not like there are no jpg images around
+anymore, there are still there in the background."* **Which formats a folder holds is a fact about the
+folder; stacking is a fact about the view.**
+
+**4. A defect nobody reported, found while fixing 3:** `folder_overrides_hidden` read the same grouped
+list, so an all-paired folder looked single-format and the override fired — **hiding a format would
+have silently stopped working** in `Pictures/fuji`. Both folder-content predicates now read the scan.
+
+✅ **And one report that was not a bug:** stacking in Immich albums. The wiring is correct — they go
+through `open_scan` → `browser_entries` — but the UUID filenames mean no two share a stem. Honouring
+the server's 2,379 stacks stays the separate item.
+
+⚠ **A scripted insertion orphaned a doc comment for the THIRD time this session** — `rebuild_entries`'
+own block ended up above the new function. The `git diff | grep '^-' | grep '///'` check came back
+clean, because it catches **removed** lines and not **displaced** ones, which is how this got past it
+twice today.
+
 ### 2026-09-24 — Immich made completely optional behind one gate
 
 Branch `immich-optional`. **2,870 tests**, 75 goldens unmoved, gated green.

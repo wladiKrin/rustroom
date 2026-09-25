@@ -38,9 +38,21 @@ fn ext_of(path: &Path) -> Option<String> {
 /// the chip label means once copies exist — how many entries the toggle would hide — and counting
 /// files instead would put a number on screen that does not match what disappears.
 pub fn formats_present(entries: &[PhotoEntry]) -> Vec<(String, usize)> {
+    formats_of(entries.iter().map(|e| e.id.path.as_path()))
+}
+
+/// [`formats_present`] over bare paths — the folder's **own** contents.
+///
+/// ⚠⚠ **The chips must read this, not the grouped entry list.** With stacking on, a collapsed
+/// RAW+JPEG pair leaves no JPEG row at all, so the JPEG chip **vanished and reappeared** as stacks
+/// were expanded and collapsed — "a bit jittery", reported in use 2026-09-25. The user's point is
+/// the right one: the JPEGs are still in the folder, so the control that hides them belongs on
+/// screen. Which formats a folder holds is a fact about the folder, and stacking is a fact about
+/// the view.
+pub fn formats_of<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<(String, usize)> {
     let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
-    for e in entries {
-        if let Some(ext) = ext_of(&e.id.path) {
+    for p in paths {
+        if let Some(ext) = ext_of(p) {
             *counts.entry(ext).or_default() += 1;
         }
     }
@@ -58,8 +70,8 @@ pub fn formats_present(entries: &[PhotoEntry]) -> Vec<(String, usize)> {
 ///
 /// ⚠ Fewer than *two* rather than exactly one: an empty folder, and a folder of extension-less
 /// files, both have nothing to choose between either.
-pub fn folder_overrides_hidden(entries: &[PhotoEntry]) -> bool {
-    formats_present(entries).len() < 2
+pub fn folder_overrides_hidden(formats: &[(String, usize)]) -> bool {
+    formats.len() < 2
 }
 
 /// Which formats are hidden from the browser.
@@ -254,6 +266,7 @@ mod tests {
             id: crate::photo_id::PhotoId::new(PathBuf::from(format!("/f/{name}")), copy),
             file_name: name.to_string(),
             edits: Default::default(),
+            stack: None,
         }
     }
 
@@ -263,20 +276,26 @@ mod tests {
 
     #[test]
     fn a_folder_with_one_format_overrides_the_hidden_set() {
-        assert!(folder_overrides_hidden(&entries(&[
+        assert!(folder_overrides_hidden(&formats_present(&entries(&[
             "a.jpg", "b.JPG", "c.jpg"
-        ])));
-        assert!(folder_overrides_hidden(&entries(&[])));
+        ]))));
+        assert!(folder_overrides_hidden(&formats_present(&entries(&[]))));
         // ⚠ Extension-less files contribute no format, so a folder of them has nothing to choose.
-        assert!(folder_overrides_hidden(&entries(&["notes", "readme"])));
+        assert!(folder_overrides_hidden(&formats_present(&entries(&[
+            "notes", "readme"
+        ]))));
     }
 
     #[test]
     fn a_mixed_folder_does_not_override() {
-        assert!(!folder_overrides_hidden(&folder()));
-        assert!(!folder_overrides_hidden(&entries(&["a.jpg", "b.raf"])));
+        assert!(!folder_overrides_hidden(&formats_present(&folder())));
+        assert!(!folder_overrides_hidden(&formats_present(&entries(&[
+            "a.jpg", "b.raf"
+        ]))));
         // ⚠ Case-folded, so `.JPG` and `.jpg` are ONE format and this folder still overrides.
-        assert!(folder_overrides_hidden(&entries(&["a.JPG", "b.jpg"])));
+        assert!(folder_overrides_hidden(&formats_present(&entries(&[
+            "a.JPG", "b.jpg"
+        ]))));
     }
 
     #[test]

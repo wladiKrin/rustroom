@@ -101,7 +101,7 @@ opensource_lightroom/
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album/stacks/**upload** (+ `multipart.rs`, hand-rolled — ureq has none), `Asset`/`AlbumSummary`/`Bucket`/`Upload`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache/immich_upload; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache/immich_upload/stack; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -166,7 +166,19 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2873 tests**, **75 goldens** (unmoved). No branch, tree clean. ⚠ **Run the git command above rather than trusting a number here** — the user
+**2887 tests**, **75 goldens** (unmoved). No branch, tree clean.
+
+✅ **Stacks — same-stem files as one grid cell (2026-09-25, confirmed by use).** `Pictures/fuji` was
+**830 cells for 415 photographs**; both camera folders are **100% RAW+JPEG pairs**. A **view grouping
+only** — edits, sidecars, marks and the catalog untouched. ⚠⚠ **Grouping happens in
+`library_state::browser_entries`, the function BOTH entry-building paths must go through** — `sources`
+on folder-open and `rebuild_entries` on re-sort. A comment claiming one site is not one site; that bug
+shipped. ⚠ `smart_sources` deliberately does **not** group: it evaluates every file against a rule.
+⚠⚠ **Stem alone is safe here** — unlike the Immich migration, the filesystem enforces uniqueness
+within a folder. ⚠ Settings → Appearance; `enabled` defaults **true** (the `gpu_tail` trap).
+⚠⚠ **Both folder-content predicates (`formats_present`, `folder_overrides_hidden`) read the SCAN, not
+the grouped entries** — reading `entries` made the JPEG chip flicker and silently disabled the hidden-
+format override in an all-paired folder. `grep -n 'stacks: same-stem' docs/JOURNAL.md`. ⚠ **Run the git command above rather than trusting a number here** — the user
 pushed twice on 2026-09-24 while this block said otherwise. He last pushed **`431331f`**, which
 **includes the CI fix**, so the next workflow run is the one that confirms Linux green. ⚠ Still never push.
 
@@ -178,51 +190,25 @@ load-bearing part is a **bounded download queue** (cap **4**): `request` spawns 
 a bulk album would have spawned **872**. ⚠ Start the next job **after** `in_flight.remove`.
 ⚠⚠ **Removal deletes only the image** — sidecar, catalog row and thumbnail survive, and
 `cache_path`'s byte-identical re-download reattaches them. `grep -n 'Immich slice 4' docs/JOURNAL.md`.
-✅ **Per-channel RGB tone curves (2026-09-24, confirmed by use).** Red/Green/Blue beside the composite on
-one widget, selector defaulting to RGB. ⚠⚠ Almost no colour science changed: `ToneCurveStage::apply` was
-already `map_samples`, so the composite was **always** a per-channel operation with one shared table — the
-space and the input clamp are **inherited, not re-decided**, which is why the 74 goldens are byte-identical.
-⚠ **Composite first, then the channel** — a choice, not a verified standard, pinned on both CPU and GPU.
-⚠ `CurveChannel` lives on the **session**, never `Edits`. ⚠ A mask's curve stays composite-only by
-decision. ⚠ No `version` bump; a test guards old sidecars, not a number.
-`grep -n 'per-channel RGB tone curves' docs/JOURNAL.md`.
-
-✅ **The Color section, made legible** (2026-09-24) — HSL and grading behind **`ADVANCED COLOR`**, closed
-by default, so a newcomer meets **two sliders**; the grading wheel's `Saturation` → **`Strength`** (⚠ `Hue`
-and `Luminance` stay: they repeat by *word*, not by *meaning*). ⚠⚠ **Not three real sections:**
-`Section::name()` is `EDIT_GROUP_NAMES[i]` and `edit_groups()` derives from `SECTIONS`, so that would mean
-splitting the `Color` edit group **and the Sync dialog** — its own change. `grep -n 'made legible'
+✅ **Per-channel RGB tone curves** (2026-09-24) — ⚠⚠ almost no colour science changed: `apply` was
+already `map_samples`, so the composite was **always** per-channel with one shared table, and the 74
+goldens stayed byte-identical. ⚠ Composite first, then the channel; `CurveChannel` lives on the
+**session**, never `Edits`. ✅ **The Color section, made legible** (2026-09-24) — HSL and grading behind
+**`ADVANCED COLOR`**, closed by default. ⚠⚠ Not three real sections: `Section::name()` is
+`EDIT_GROUP_NAMES[i]`, so that would split the `Color` edit group **and** the Sync dialog.
+✅ **The histogram survives a peak** (2026-09-23) — sqrt with bins 0 and 255 out of the scale;
+⚠⚠ measured, and the test says **not** to fix its 2.2%-at-2000:1 limit by lowering the threshold.
+✅ **The Now row counts what DIFFERS** via `Edits::changed_parameters`, ⚠⚠ derived from
+**serialisation, never a field list**. `grep -n 'per-channel RGB\|made legible\|histogram.s scale'
 docs/JOURNAL.md`.
 
-✅ **Immich slices 1–3 — merged, confirmed by use (2026-09-22/24):** albums + a **Timeline** in
-the rail, server thumbnails with nothing downloaded, download-on-open, persisted thumbnails and
-asset lists (validator **`(assetCount, lastModifiedAssetTimestamp)`**, ⚠ never `updatedAt`), ⋯ →
-**Reindex** refetching, and **marks persisting** via catalog rows — **one folder per server**.
-⚠ **No catalog migration for these; `db.rs` went to v8 only for the date re-read.**
-`grep -n 'Immich slice' docs/JOURNAL.md`.
 ⚠⚠ **The Immich invariants that are easy to break again:** the catalog keys a row on the **path's** own
-file name, never `CatalogEntry::file_name` (a cache path is `<uuid>.<ext>` while that field is the
-camera's name, so rows written under it can never be found again); `row_is_browsable` hides an absent
-**Immich** row from catalog-wide views but **never** an absent local one, because the unplugged-drive rule
-is a different question; and `present_names` is one `read_dir` filtered through `catalog::is_supported`,
-never a stat per thumbnail.
-
-⚠ **Out of scope by decision:** eviction of cached originals, the OS keychain (the API key is **plaintext**
-in `settings.json`), reading Immich's own `rating`/`isFavorite`, and **write-back** (needs `asset.update`
-on a key the help text says to keep read-only). ⚠ The **rail's** album and bucket lists are still
-refetched every launch; only the *asset* lists are cached.
-
-⚠ **Auto-advance is a Settings toggle** — *"Move to the next photo after rating"* — and already `true` in
-the user's `settings.json`, so **changing the Rust default would not change his behaviour**. The default
-stays as `settings.rs` records it.
-
-✅ **The histogram survives a peak** (2026-09-23) — sqrt with bins 0 and 255 **out of the scale**, one
-function pair for the panel and the curve's ghost. ⚠⚠ Measured, and the limit pinned: 0.7 → 7.2 px at
-100:1, but only 1.6 px at 2000:1, because sqrt compresses a ratio by its own square root. **The test says
-not to fix that by lowering its threshold.** ✅ **The Now row counts what DIFFERS**, via
-`Edits::changed_parameters` — ⚠⚠ derived from **serialisation, never a field list**, so a new parameter
-counts itself. ⚠ Grid marks 10–20 pt; the reject cross scaled beside its own glyph (`×` draws small).
-`grep -n "histogram's scale\|counts difference" docs/JOURNAL.md`.
+file name, never `CatalogEntry::file_name`; `row_is_browsable` hides an absent **Immich** row from
+catalog-wide views but **never** an absent local one; `present_names` is one `read_dir` filtered through
+`catalog::is_supported`. ⚠ Out of scope by decision: eviction of cached originals, the OS keychain (keys
+are **plaintext**), reading Immich's own `rating`/`isFavorite`. ⚠ The **rail's** album and bucket lists
+are still refetched every launch; only *asset* lists are cached. ⚠ **Auto-advance is a Settings toggle**
+already `true` in the user's file, so changing the Rust default would not change his behaviour.
 
 ✅ **All merged and confirmed by use; specs under `docs/superpowers/specs/`:** the **Export dialog**
 as a preset list beside summarised sections and **the dialogs in one language** (2026-09-22), the
@@ -270,9 +256,11 @@ not go looking for the next port; there isn't one.
    ⚠ The Settings tab **stays** (it holds the toggle). The downloads stay visible as **"Downloaded
    photos"**, hover included — the path itself says "immich". `grep -n 'completely optional'
    docs/JOURNAL.md`.
-   ⬜ **The one Immich item left:** **Rustroom-side stacking awareness** — the server has **2,379
-   stacks** (a one-time migration, 2026-09-24) and Rustroom's grid still shows both halves of every
-   pair.
+   ⬜ **The one Immich item left:** **honouring the server's stacks.** ⚠⚠ Local stacking (2026-09-25)
+   does **nothing** for Immich and cannot: `cache_path` names files by **asset UUID**, so no two ever
+   share a stem — measured, **0 pairs** against 2,913 assets. The wiring is already right (Immich goes
+   through `open_scan` → `browser_entries`), so this plugs in at the same place; what it needs is the
+   server's 2,379 stacks read via `GET /stacks` and mapped onto rows.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`

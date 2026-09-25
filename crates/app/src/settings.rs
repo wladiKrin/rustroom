@@ -249,6 +249,12 @@ pub struct Settings {
     /// star selection is about the question you are asking right now, and a stale one that
     /// empties a newly opened folder reads as breakage.
     pub hidden_formats: crate::format_filter::FormatFilter,
+    /// How the browser groups same-stem files — a RAW beside its JPEG.
+    ///
+    /// ⚠⚠ **`hidden_formats` above and `stacking.formats` are two format lists, and the order is
+    /// filter-then-stack**: a hidden format cannot be a stack member, so hiding JPEG globally makes
+    /// stacking a no-op. Both settings are legitimate; this is where that is written down.
+    pub stacking: crate::stack::Stacking,
     /// Ask before deleting a preset. Cleared by "Don't ask again" in that dialog; restored
     /// from the Settings window.
     pub confirm_preset_delete: bool,
@@ -814,6 +820,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hidden_formats: crate::format_filter::FormatFilter::default(),
+            // ⚠ `enabled: true` — see `Stacking::enabled` for why the default is not `false`.
+            stacking: crate::stack::Stacking {
+                enabled: true,
+                ..Default::default()
+            },
             immich_enabled: true,
             immich_url: String::new(),
             immich_key: String::new(),
@@ -1476,6 +1487,13 @@ mod tests {
                 let mut f = crate::format_filter::FormatFilter::default();
                 f.toggle("png");
                 f
+            },
+            // ⚠ Not the default either: `enabled: false` is the interesting value, since `true`
+            // would round-trip even if the field were dropped.
+            stacking: crate::stack::Stacking {
+                enabled: false,
+                primary: crate::stack::StackPrimary::Jpeg,
+                ..Default::default()
             },
             confirm_preset_delete: false,
             confirm_export_preset_delete: false,
@@ -2438,5 +2456,26 @@ mod tests {
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert!(!back.immich_enabled);
+    }
+
+    /// ⚠⚠ **Stacking is ON by default, and that is the `gpu_tail` trap in a new place.** The
+    /// container-level `#[serde(default)]` means a settings file written before this field takes
+    /// whatever `Default` says — and `true` halves the grid on first launch, which is the behaviour
+    /// asked for. Pinned so a later tidy-up cannot flip it in either direction.
+    #[test]
+    fn stacking_is_on_by_default() {
+        assert!(Settings::default().stacking.enabled);
+        assert_eq!(
+            Settings::default().stacking.primary,
+            crate::stack::StackPrimary::EditedElseRaw
+        );
+        // ⚠ Every format takes part by default, which is what makes the rule general.
+        assert!(!Settings::default().stacking.formats.is_active());
+
+        let loaded: Settings = serde_json::from_str(r#"{"immich_url":"https://h"}"#).unwrap();
+        assert!(
+            loaded.stacking.enabled,
+            "a settings file from before the field must load with stacking on"
+        );
     }
 }

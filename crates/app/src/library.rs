@@ -52,6 +52,12 @@ pub enum CellAction {
 /// *after* the frame — so while the menu is drawn `lib.selection` still holds the set that is
 /// about to be replaced. Reading the selection unconditionally would build the menu for photos
 /// the click has already discarded.
+/// The stack count badge's size.
+///
+/// ⚠ Small enough not to crowd a 10 pt thumbnail and large enough to hit — the grid marks settled at
+/// 10–20 pt for the same reason.
+const STACK_BADGE: egui::Vec2 = egui::vec2(18.0, 14.0);
+
 pub fn menu_targets(lib: &crate::Library, clicked: usize) -> Vec<PhotoId> {
     if lib.selection.contains(clicked) {
         lib.selection
@@ -251,6 +257,11 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     // ⚠ Collected inside the grid closure and applied after it: opening a draft writes
     // `app.label_draft`, which the closure cannot reach while it holds `&mut app.library`.
     let mut badge_clicked: Option<(PhotoId, String)> = None;
+    // The stack whose expanded state a click asked to flip.
+    //
+    // ⚠ Collected rather than applied: `lib` is borrowed through the grid closure, and flipping it
+    // must trigger a **rebuild** of `entries` rather than patch the list the closure is indexing.
+    let mut stack_toggle: Option<rustroom_app::stack::StackKey> = None;
     // ⚠ Declared out here, like `open_index` and `rename`: applying it needs `&mut RustroomApp`
     // while the closure below still holds `&mut app.library`.
     // ⚠⚠ **The targets travel WITH the action, and that is the whole safety of auto-advance.**
@@ -532,6 +543,62 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                             downloaded.get(i).copied().unwrap_or(false),
                                         );
                                         let e = &lib.entries[i];
+                                        // ⚠⚠ Drawn **here** rather than inside `cell_with`, and for
+                                        // two reasons: the count badge must be **clickable** while
+                                        // `cell_with` allocates with `Sense::hover()`, and a click
+                                        // in this app has to be *collected* and applied after the
+                                        // closure releases `lib`. ⚠ Top-right, because the Immich
+                                        // download badge already owns the top-left.
+                                        if let Some(st) = e.stack {
+                                            if let Some(k) = rustroom_app::stack::key_of(&e.id.path)
+                                            {
+                                                let full = ui.min_rect();
+                                                let pill = egui::Rect::from_min_size(
+                                                    egui::pos2(
+                                                        full.right() - STACK_BADGE.x - 4.0,
+                                                        full.top() + 4.0,
+                                                    ),
+                                                    STACK_BADGE,
+                                                );
+                                                let r = ui.interact(
+                                                    pill,
+                                                    ui.id().with("stack_badge"),
+                                                    egui::Sense::click(),
+                                                );
+                                                let v = ui.visuals();
+                                                ui.painter().rect_filled(
+                                                    pill,
+                                                    4.0,
+                                                    if r.hovered() {
+                                                        v.selection.bg_fill
+                                                    } else {
+                                                        v.widgets.inactive.bg_fill
+                                                    },
+                                                );
+                                                ui.painter().text(
+                                                    pill.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    // ⚠ `count`, never "1": a lone file is
+                                                    // `stack: None`, so this is always ≥ 2.
+                                                    if st.expanded {
+                                                        "×".to_string()
+                                                    } else {
+                                                        st.count.to_string()
+                                                    },
+                                                    egui::FontId::proportional(11.0),
+                                                    v.strong_text_color(),
+                                                );
+                                                let clicked = r.clicked();
+                                                let _ = r.on_hover_text(if st.expanded {
+                                                    "Collapse this stack"
+                                                } else {
+                                                    "Expand this stack to see every file"
+                                                });
+                                                if clicked {
+                                                    stack_toggle = Some(k);
+                                                }
+                                            }
+                                        }
                                         // ⚠ The selected cell's name is drawn in the strong
                                         // text colour: the border says "selected" at the edge
                                         // of the eye, the name says it where you read.
@@ -681,6 +748,17 @@ pub fn show(app: &mut RustroomApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     if let Some((targets, a)) = mark {
         app.apply_mark_to(&targets, a);
+    }
+    // ⚠⚠ Applied by **rebuilding** the entry list, never by patching it: the grid, the filmstrip,
+    // `selection` and `view_region` all index into `lib.entries`, and `entries`' own doc records
+    // three sparse-index bugs on exactly that. A rebuild is measured at 4.6 ms for 830 files.
+    if let Some(k) = stack_toggle {
+        if let Some(lib) = app.library.as_mut() {
+            if !lib.stack_expanded.remove(&k) {
+                lib.stack_expanded.insert(k);
+            }
+        }
+        app.rebuild_entries(None);
     }
     if let Some((id, text)) = badge_clicked {
         // ⚠ Opening the label draft closes any file-rename draft: two open fields in one cell

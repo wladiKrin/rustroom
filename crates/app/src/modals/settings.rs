@@ -39,12 +39,43 @@ pub struct SettingsDraft {
     erase_drag: EraseDrag,
     drag_quality: DragQuality,
     display_space: color::OutputSpace,
+    stacking: rustroom_app::stack::Stacking,
     immich_enabled: bool,
     immich_url: String,
     immich_key: String,
     immich_upload_key: String,
     thumb_budget_mb: u32,
     immich_thumb_budget_mb: u32,
+}
+
+/// Which formats take part in stacking, as chips.
+///
+/// ⚠⚠ **A lit chip means "takes part", and `FormatFilter` is a set of *hidden* formats** — so the
+/// chip's boolean is the inverse of what the field stores. Reused rather than reinvented because it
+/// already collapses `jpg`/`jpeg` and `tif`/`tiff` into one format each, which stacking needs: a
+/// folder mixing `.JPG` and `.jpeg` must not be two formats.
+///
+/// ⚠ Over the **global** format list, not the open folder's — this is Settings, and `shell`'s
+/// `format_chips` is the folder-scoped one. Two callers, two scopes, deliberately not shared.
+fn stack_format_chips(ui: &mut egui::Ui, s: &mut rustroom_app::stack::Stacking) {
+    let mut seen: Vec<&str> = Vec::new();
+    for ext in catalog::RAW_EXTENSIONS
+        .iter()
+        .chain(catalog::IMAGE_EXTENSIONS)
+    {
+        let c = rustroom_app::format_filter::canonical_ext(ext);
+        if !seen.contains(&c) {
+            seen.push(c);
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
+        for ext in seen {
+            let mut on = !s.formats.is_hidden(ext);
+            if crate::segmented::chip(ui, &mut on, &ext.to_uppercase()).changed() {
+                s.formats.toggle(ext);
+            }
+        }
+    });
 }
 
 impl SettingsDraft {
@@ -65,6 +96,7 @@ impl SettingsDraft {
             erase_drag: s.erase_drag,
             drag_quality: s.drag_quality,
             display_space: s.display_space,
+            stacking: s.stacking.clone(),
             immich_enabled: s.immich_enabled,
             immich_url: s.immich_url.clone(),
             immich_key: s.immich_key.clone(),
@@ -122,6 +154,14 @@ impl SettingsDraft {
         // ⚠⚠ Applied plainly, **not** through `set_connection`. That accessor owns the *browse*
         // connection; the upload key is a separate credential and must not join it, or the
         // read-only guarantee browsing relies on would quietly acquire a write grant.
+        if self.stacking != app.settings.stacking {
+            app.settings.stacking = self.stacking.clone();
+            // ⚠⚠ A **rebuild**, because stacking decides what `entries` contains and every consumer
+            // indexes into that list. Without this the grid keeps the old grouping until the next
+            // folder open — the same shape as the Immich worker that kept a stale connection.
+            app.rebuild_entries(None);
+            plain = true;
+        }
         if self.immich_upload_key != app.settings.immich_upload_key {
             app.settings.immich_upload_key = self.immich_upload_key.clone();
             plain = true;
@@ -294,6 +334,50 @@ pub fn show(app: &mut RustroomApp, ctx: &egui::Context) {
                                 .on_hover_text(
                                     "The accent marks active controls; Neutral turns it off.",
                                 );
+                            ui.end_row();
+
+                            // ⚠ In Appearance because stacking is a **browsing** decision, the same
+                            // reasoning that keeps the format filter out of the Develop toolbar.
+                            ui.label("Stacking");
+                            ui.vertical(|ui| {
+                                ui.checkbox(
+                                    &mut d.stacking.enabled,
+                                    "Group files that share a name",
+                                )
+                                .on_hover_text(
+                                    "A RAW and its JPEG become one cell in the Library, with a \
+                                     badge showing how many files it holds. Click the badge to see \
+                                     them separately. Nothing is hidden or changed on disk — each \
+                                     file keeps its own edits and its own rating.",
+                                );
+                                ui.add_enabled_ui(d.stacking.enabled, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Show");
+                                        egui::ComboBox::from_id_salt("stack_primary")
+                                            .selected_text(d.stacking.primary.label())
+                                            .show_ui(ui, |ui| {
+                                                for pr in rustroom_app::stack::StackPrimary::ALL {
+                                                    ui.selectable_value(
+                                                        &mut d.stacking.primary,
+                                                        pr,
+                                                        pr.label(),
+                                                    );
+                                                }
+                                            })
+                                            .response
+                                            .on_hover_text(
+                                                "Which file a collapsed stack shows and opens. \
+                                                 With “Edited, else RAW” a pair you have worked \
+                                                 on shows the file you worked on; if both are \
+                                                 edited it shows the RAW.",
+                                            );
+                                    });
+                                    // ⚠⚠ The chips are the *participating* formats, and
+                                    // `FormatFilter` is a set of **hidden** ones — so a lit chip
+                                    // means "takes part". Reused for the jpg/jpeg aliasing.
+                                    stack_format_chips(ui, &mut d.stacking);
+                                });
+                            });
                             ui.end_row();
                         });
                 }
