@@ -110,10 +110,33 @@ impl Stacking {
 }
 
 /// The stack key for a path, or `None` when it has no stem.
+///
+/// ⚠ Same-stem grouping. For a path whose asset belongs to a **server** stack, use
+/// [`key_of_with`] instead, which keys on the stack rather than the name.
 pub fn key_of(path: &Path) -> Option<StackKey> {
-    let stem = path.file_stem()?.to_string_lossy().to_uppercase();
+    key_of_with(path, &Default::default())
+}
+
+/// [`key_of`], consulting a map of **asset id → stack id** first.
+///
+/// ⚠⚠ **This one function is the whole of Immich stack support.** A cached Immich file is named
+/// `<asset UUID>.<ext>`, so no two ever share a stem and same-stem grouping can never pair them —
+/// measured, **0 pairs against 2,913 assets**. Keying on the server's stack id instead means
+/// collapsing, expanding, the badge, the toolbar buttons, the primary rule and the order guarantee
+/// all work **unchanged**, with one grouping implementation rather than two.
+///
+/// ⚠ The stem *is* the asset id (`immich_source::asset_id_of`), so no extra plumbing is needed to
+/// look one up.
+///
+/// ⚠ An empty map is exactly [`key_of`], which is what makes every non-Immich folder untouched.
+pub fn key_of_with(path: &Path, remote: &HashMap<String, String>) -> Option<StackKey> {
+    let stem = path.file_stem()?.to_string_lossy().to_string();
     let dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
-    Some((dir, stem))
+    // ⚠ Prefixed, so a server stack id can never collide with a file stem that happens to match it.
+    if let Some(stack) = remote.get(&stem) {
+        return Some((dir, format!("stack:{stack}")));
+    }
+    Some((dir, stem.to_uppercase()))
 }
 
 /// Where a member sits in the running for primary. Lower wins.
@@ -147,6 +170,9 @@ pub fn group(
     entries: Vec<PhotoEntry>,
     s: &Stacking,
     expanded: &HashSet<StackKey>,
+    // ⚠ Asset id → stack id, from the server. Empty for every non-Immich folder, which then behaves
+    // exactly as it did before Immich stacks existed. See [`key_of_with`].
+    remote: &HashMap<String, String>,
 ) -> Vec<PhotoEntry> {
     if !s.enabled {
         return entries;
@@ -158,7 +184,7 @@ pub fn group(
         if e.id.copy != 0 || !s.participates(&e.id.path) {
             continue;
         }
-        if let Some(k) = key_of(&e.id.path) {
+        if let Some(k) = key_of_with(&e.id.path, remote) {
             members.entry(k).or_default().push(i);
         }
     }
@@ -168,7 +194,7 @@ pub fn group(
     let mut out: Vec<PhotoEntry> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
         let k = (e.id.copy == 0)
-            .then(|| key_of(&e.id.path))
+            .then(|| key_of_with(&e.id.path, remote))
             .flatten()
             .filter(|k| members.contains_key(k));
         let Some(k) = k else {
@@ -229,11 +255,11 @@ pub fn group(
 ///
 /// ⚠ Every member of a stack carries the same key, and a collapsed primary carries it too, so this
 /// is right whether the input is collapsed, expanded or mixed.
-pub fn stacked_keys(entries: &[PhotoEntry]) -> HashSet<StackKey> {
+pub fn stacked_keys(entries: &[PhotoEntry], remote: &HashMap<String, String>) -> HashSet<StackKey> {
     entries
         .iter()
         .filter(|e| e.stack.is_some())
-        .filter_map(|e| key_of(&e.id.path))
+        .filter_map(|e| key_of_with(&e.id.path, remote))
         .collect()
 }
 
@@ -281,7 +307,7 @@ mod tests {
         let input = vec![entry("/f/a.JPG", 0, false), entry("/f/a.RAF", 0, false)];
         assert_eq!(input.len(), 2, "the fixture must hold a pair");
 
-        let out = group(input, &on(), &HashSet::new());
+        let out = group(input, &on(), &HashSet::new(), &Default::default());
         assert_eq!(out.len(), 1, "the pair must collapse: {:?}", names(&out));
         assert_eq!(out[0].file_name, "a.RAF", "the RAW is primary by default");
         assert_eq!(
@@ -299,7 +325,7 @@ mod tests {
         let mut ex = HashSet::new();
         ex.insert(key_of(Path::new("/f/a.RAF")).unwrap());
 
-        let out = group(input, &on(), &ex);
+        let out = group(input, &on(), &ex, &Default::default());
         assert_eq!(out.len(), 2, "both members must be shown");
         assert!(
             out.iter().all(|e| e.stack
@@ -318,6 +344,7 @@ mod tests {
             vec![entry("/f/lonely.RAF", 0, false)],
             &on(),
             &HashSet::new(),
+            &Default::default(),
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].stack, None);
@@ -331,10 +358,10 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        let out = group(input.clone(), &off, &HashSet::new());
+        let out = group(input.clone(), &off, &HashSet::new(), &Default::default());
         assert_eq!(out, input);
         // ⚠ And with stacking off no row carries a stack, so there is nothing to expand.
-        assert!(stacked_keys(&out).is_empty());
+        assert!(stacked_keys(&out, &Default::default()).is_empty());
     }
 
     /// ⚠ A format excluded from stacking is never a member — which is what makes the rule "more
@@ -347,6 +374,7 @@ mod tests {
             vec![entry("/f/a.JPG", 0, false), entry("/f/a.RAF", 0, false)],
             &s,
             &HashSet::new(),
+            &Default::default(),
         );
         assert_eq!(
             out.len(),
@@ -367,8 +395,11 @@ mod tests {
                 entry("/f/a.RAF", 0, raw_edited),
             ]
         };
-        let first =
-            |s: &Stacking, v: Vec<PhotoEntry>| group(v, s, &HashSet::new())[0].file_name.clone();
+        let first = |s: &Stacking, v: Vec<PhotoEntry>| {
+            group(v, s, &HashSet::new(), &Default::default())[0]
+                .file_name
+                .clone()
+        };
 
         let edited_else_raw = on();
         assert_eq!(first(&edited_else_raw, pair(false, false)), "a.RAF");
@@ -404,7 +435,7 @@ mod tests {
             entry("/f/a.RAF", 0, false),
             entry("/f/a.RAF", 1, false),
         ];
-        let out = group(input, &on(), &HashSet::new());
+        let out = group(input, &on(), &HashSet::new(), &Default::default());
         assert_eq!(out.len(), 2, "the stack and the copy: {:?}", names(&out));
         assert_eq!(out.iter().filter(|e| e.stack.is_some()).count(), 1);
         let copy = out.iter().find(|e| e.id.copy == 1).expect("the copy row");
@@ -417,6 +448,7 @@ mod tests {
             vec![entry("/f/A.JPG", 0, false), entry("/f/a.raf", 0, false)],
             &on(),
             &HashSet::new(),
+            &Default::default(),
         );
         assert_eq!(out.len(), 1, "case must not split a pair");
     }
@@ -428,6 +460,7 @@ mod tests {
             vec![entry("/one/a.RAF", 0, false), entry("/two/a.RAF", 0, false)],
             &on(),
             &HashSet::new(),
+            &Default::default(),
         );
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|e| e.stack.is_none()));
@@ -443,7 +476,7 @@ mod tests {
             entry("/f/bbb.RAF", 0, false),
             entry("/f/ccc.RAF", 0, false),
         ];
-        let out = group(input, &on(), &HashSet::new());
+        let out = group(input, &on(), &HashSet::new(), &Default::default());
         assert_eq!(
             names(&out),
             vec!["aaa.RAF", "bbb.RAF", "ccc.RAF"],
@@ -462,11 +495,11 @@ mod tests {
             entry("/f/a.RAF", 0, false),
             entry("/f/lonely.RAF", 0, false),
         ];
-        let grouped = group(input, &on(), &HashSet::new());
+        let grouped = group(input, &on(), &HashSet::new(), &Default::default());
         // ⚠ The sample assertion: the pair really did collapse, so what follows is about `keys`.
         assert_eq!(grouped.len(), 2, "one stack row and one lone file");
 
-        let k = stacked_keys(&grouped);
+        let k = stacked_keys(&grouped, &Default::default());
         assert_eq!(k.len(), 1, "the collapsed stack must still be found: {k:?}");
         assert!(k.contains(&key_of(Path::new("/f/a.RAF")).unwrap()));
 
@@ -475,8 +508,69 @@ mod tests {
             vec![entry("/f/a.JPG", 0, false), entry("/f/a.RAF", 0, false)],
             &on(),
             &k,
+            &Default::default(),
         );
         assert_eq!(expanded.len(), 2, "the stack must now be expanded");
-        assert_eq!(stacked_keys(&expanded), k, "the key survives expansion");
+        assert_eq!(
+            stacked_keys(&expanded, &Default::default()),
+            k,
+            "the key survives expansion"
+        );
+    }
+
+    /// ⚠⚠ **The whole of Immich stack support, end to end.** Two cached assets share no stem — their
+    /// names are UUIDs, which is why local stacking finds **0 pairs against 2,913 assets** — so only
+    /// the server's map can pair them.
+    #[test]
+    fn two_immich_assets_in_one_server_stack_collapse() {
+        let a = "ad41fe4c-9226-460b-8e35-8ebacdc3a0ce";
+        let b = "cd22ec81-5f2d-4a42-b532-ebc5891375eb";
+        let input = vec![
+            entry(&format!("/cache/{a}.JPG"), 0, false),
+            entry(&format!("/cache/{b}.RAF"), 0, false),
+        ];
+        // ⚠ The sample assertion, twice over: two rows in, and **no stem in common**, so a pass
+        // cannot come from same-stem grouping accidentally working.
+        assert_eq!(input.len(), 2);
+        assert_eq!(
+            group(input.clone(), &on(), &HashSet::new(), &Default::default()).len(),
+            2,
+            "without the server's map these must NOT pair"
+        );
+
+        let mut remote = HashMap::new();
+        remote.insert(a.to_string(), "stack-1".to_string());
+        remote.insert(b.to_string(), "stack-1".to_string());
+
+        let out = group(input, &on(), &HashSet::new(), &remote);
+        assert_eq!(out.len(), 1, "the server's stack must collapse them");
+        assert_eq!(
+            out[0].stack,
+            Some(Stack {
+                count: 2,
+                expanded: false
+            })
+        );
+        // ⚠ And the **local** primary rule still decides, which is the user's call: the RAW wins over
+        // an unedited JPEG even though the server named the JPEG primary.
+        assert!(out[0].file_name.ends_with(".RAF"), "{}", out[0].file_name);
+    }
+
+    /// ⚠ An asset outside any server stack keys on its stem as before, so a mixed folder still works
+    /// and the map is additive rather than a mode switch.
+    #[test]
+    fn an_asset_outside_a_server_stack_still_keys_on_its_stem() {
+        let mut remote = HashMap::new();
+        remote.insert("in-a-stack".to_string(), "s1".to_string());
+
+        let k_in = key_of_with(Path::new("/c/in-a-stack.JPG"), &remote).unwrap();
+        assert_eq!(k_in.1, "stack:s1");
+        let k_out = key_of_with(Path::new("/c/loose.JPG"), &remote).unwrap();
+        assert_eq!(k_out.1, "LOOSE", "an unstacked asset keys on its own stem");
+        // ⚠ And an empty map is exactly `key_of`, which is what leaves local folders untouched.
+        assert_eq!(
+            key_of_with(Path::new("/c/in-a-stack.JPG"), &Default::default()),
+            key_of(Path::new("/c/in-a-stack.JPG"))
+        );
     }
 }

@@ -346,6 +346,14 @@ impl RustroomApp {
         self.snapshot_rename = None;
 
         self.immich_assets.remove(&key);
+        // ⚠⚠ **Reindex is the ONLY way the stack projection refreshes**, because
+        // `StackResponseDto` carries no `assetCount`/`lastModified` to validate against — stated as a
+        // limitation in `immich_stack_cache`, not hidden. Dropping the file makes
+        // `load_immich_stacks` refetch it.
+        if let Some(p) = self.immich_stacks_path() {
+            rustroom_app::immich_stack_cache::clear(&p);
+        }
+        self.load_immich_stacks();
         self.immich.request(list_job);
         // ⚠ Set before the request so the rail lights up on the press, not on the reply.
         self.immich_opening = Some(key);

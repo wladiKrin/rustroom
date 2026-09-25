@@ -212,6 +212,7 @@ impl RustroomApp {
             &scan,
             &self.settings.stacking,
             &Default::default(),
+            &self.immich_stacks.of_asset,
         );
         let n = entries.len();
         let ctx2 = ctx.clone();

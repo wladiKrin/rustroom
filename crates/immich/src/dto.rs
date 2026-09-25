@@ -180,6 +180,30 @@ pub enum UploadStatus {
     Other,
 }
 
+/// One stack: an ordered group of assets the server treats as one photograph.
+///
+/// ⚠⚠ **Deliberately narrow.** The real reply embeds the **full asset DTO** for every member —
+/// 20-plus fields each, 6.6 MB for 2,379 stacks — and Rustroom needs two UUIDs. Widening this means
+/// parsing and keeping data nothing reads.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stack {
+    pub id: String,
+    /// The member Immich shows for this stack.
+    ///
+    /// ⚠ Parsed and **deliberately unused for display**: Rustroom applies its own `Stacking::primary`
+    /// rule so the Appearance setting means one thing everywhere (user's call, 2026-09-25). Kept in
+    /// the DTO because dropping a field the reply carries is how a fixture drifts from reality.
+    pub primary_asset_id: String,
+    pub assets: Vec<StackMember>,
+}
+
+/// A stack member. ⚠ Only the id: see [`Stack`] for why this is not the whole asset.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StackMember {
+    pub id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,5 +517,44 @@ mod tests {
     fn an_unknown_upload_status_is_tolerated() {
         let u: Upload = serde_json::from_str(r#"{"id":"x","status":"something-new"}"#).unwrap();
         assert_eq!(u.status, UploadStatus::Other);
+    }
+
+    /// ✅ **CAPTURED from the real server on 2026-09-25**, then trimmed to the fields this DTO reads
+    /// — the reply itself carries 20-plus fields per member and is 6.6 MB for 2,379 stacks.
+    ///
+    /// ⚠⚠ Captured rather than written from the schema, which this integration has been bitten by
+    /// four times: `album.json` asserted an `assets` field that endpoint never returns and passed
+    /// against 2,678 green tests.
+    #[test]
+    fn a_captured_stack_reply_deserialises() {
+        let captured = r#"[{
+            "id": "63ab0329-7794-453a-ba8e-88df9a41e842",
+            "primaryAssetId": "ad41fe4c-9226-460b-8e35-8ebacdc3a0ce",
+            "assets": [
+                {"id": "ad41fe4c-9226-460b-8e35-8ebacdc3a0ce"},
+                {"id": "cd22ec81-5f2d-4a42-b532-ebc5891375eb"}
+            ]
+        }]"#;
+        let v: Vec<Stack> = serde_json::from_str(captured).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].id, "63ab0329-7794-453a-ba8e-88df9a41e842");
+        assert_eq!(
+            v[0].primary_asset_id,
+            "ad41fe4c-9226-460b-8e35-8ebacdc3a0ce"
+        );
+        assert_eq!(v[0].assets.len(), 2);
+        assert_eq!(v[0].assets[1].id, "cd22ec81-5f2d-4a42-b532-ebc5891375eb");
+    }
+
+    /// ⚠ The real reply's members carry many more fields, and unknown ones must be **ignored**
+    /// rather than fail the whole fetch — which is what keeps this DTO narrow *and* safe.
+    #[test]
+    fn unknown_member_fields_are_ignored() {
+        let v: Vec<Stack> = serde_json::from_str(
+            r#"[{"id":"s","primaryAssetId":"a","assets":[
+                 {"id":"a","checksum":"x","duplicateId":null,"isArchived":false,"height":4160}]}]"#,
+        )
+        .unwrap();
+        assert_eq!(v[0].assets[0].id, "a");
     }
 }

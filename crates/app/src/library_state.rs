@@ -140,8 +140,15 @@ pub(crate) fn browser_entries(
     scan: &[catalog::CatalogEntry],
     stacking: &rustroom_app::stack::Stacking,
     expanded: &std::collections::HashSet<rustroom_app::stack::StackKey>,
+    // ⚠ The server's asset→stack map, empty for every non-Immich folder. See `stack::key_of_with`.
+    remote: &std::collections::HashMap<String, String>,
 ) -> Vec<entries::PhotoEntry> {
-    rustroom_app::stack::group(entries::build(scan, sidecar::load_all), stacking, expanded)
+    rustroom_app::stack::group(
+        entries::build(scan, sidecar::load_all),
+        stacking,
+        expanded,
+        remote,
+    )
 }
 
 impl RustroomApp {
@@ -183,6 +190,10 @@ impl RustroomApp {
         let filter = self.filter.clone();
         // ⚠ Read before the borrow too, for the reason stated just above.
         let stacking = self.settings.stacking.clone();
+        // ⚠ Read before the borrow, the rule stated just above. Cloned rather than borrowed for
+        // the same reason: `self.immich_stacks` and `self.library` are disjoint but the compiler
+        // cannot see it while one is held mutably.
+        let remote = self.immich_stacks.of_asset.clone();
         let Some(lib) = self.library.as_mut() else {
             return;
         };
@@ -197,7 +208,7 @@ impl RustroomApp {
             }
         }
         catalog::sort(&mut lib.scan, sort);
-        lib.entries = browser_entries(&lib.scan, &stacking, &lib.stack_expanded);
+        lib.entries = browser_entries(&lib.scan, &stacking, &lib.stack_expanded, &remote);
 
         // ⚠ The selection is by *index*, and the indices have just shifted — so it is re-derived
         // from the photo we mean rather than kept. Keeping it would silently select whichever
@@ -314,13 +325,16 @@ mod tests {
 
         // ⚠ The sample assertion: the scan really holds two files, or "grouped to one" is vacuous.
         assert_eq!(pair.len(), 2);
-        let grouped = browser_entries(&pair, &on, &Default::default());
+        let grouped = browser_entries(&pair, &on, &Default::default(), &Default::default());
         assert_eq!(grouped.len(), 1, "the pair must collapse on the open path");
         assert!(grouped[0].stack.is_some());
 
         // ⚠ And the control: with stacking off the same scan yields both rows, so the assertion
         // above is about grouping rather than about the fixture.
         let off = rustroom_app::stack::Stacking::default();
-        assert_eq!(browser_entries(&pair, &off, &Default::default()).len(), 2);
+        assert_eq!(
+            browser_entries(&pair, &off, &Default::default(), &Default::default()).len(),
+            2
+        );
     }
 }
