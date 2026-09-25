@@ -13,6 +13,10 @@
 //!    may be reachable on the CPU for a few lines, which would change what the GPU port is worth.
 //!    This probe reimplements both in parallel to measure that, rather than assuming it.
 //!
+//! ⚠⚠ **Since M7.3b there are two resampling stages, not three**: perspective is
+//! `GeometryStage`'s fused path. The perspective row below times that path with a keystone alone,
+//! and the prefix listing shows lens correction plus ONE geometry step.
+//!
 //! Run: `cargo run --release -p app --example probe_resamplers <raw>`
 
 use core_image::ImageBuf;
@@ -186,7 +190,7 @@ fn main() {
         println!("{ms:8.1} ms   {name}");
         img = step.stage.apply(img);
     }
-    println!("{total:8.1} ms   ALL THREE (the whole resampling prefix)");
+    println!("{total:8.1} ms   ALL OF THEM (the whole resampling prefix)");
 
     // ⚠ The clone alone, so the numbers above are not read as pure resampling: `apply` consumes
     // its input, so every measurement here includes one whole-buffer copy.
@@ -216,9 +220,8 @@ fn main() {
         vertical: 30.0,
         ..Default::default()
     };
-    // ⚠ Reached through `build_prefix_steps` rather than by constructing the stage: `pipeline`
-    // re-exports `GeometryStage` but NOT `PerspectiveStage`, so this is the only route from
-    // outside the crate — and it is also the one the prefix itself takes.
+    // ⚠ Reached through `build_prefix_steps`, the route the prefix itself takes. Since M7.3b a
+    // keystone alone builds the `geometry` step (its fused path); there is no `perspective` step.
     let psteps = pipeline::build_prefix_steps(
         &Edits {
             perspective: pp,
@@ -231,8 +234,8 @@ fn main() {
     );
     let pstage = psteps
         .iter()
-        .find(|s| s.stage.name() == "perspective")
-        .expect("fixture check: there must be a perspective step");
+        .find(|s| s.stage.name() == "geometry")
+        .expect("fixture check: a keystone must build the geometry step");
     let pseq = best_of(3, || pstage.stage.apply(src.clone()));
     let ppar = best_of(3, || perspective_parallel(&src, &pp, &weights));
     println!(
