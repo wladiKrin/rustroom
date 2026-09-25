@@ -1,15 +1,15 @@
 //! Choosing a plausible source for a retouch spot.
 //!
-//! ⚠⚠ **No `ImageBuf`: the search runs over an injected sampler.** `FrameMap::inverse_point`
-//! returns **post-lens, post-perspective** coordinates while `Session.buffer` is the **raw
-//! decode**, so indexing one with the other is wrong by the distortion — recorded at ~3.5% at the
+//! ⚠⚠ **No `ImageBuf`: the search runs over an injected sampler.** `SpotMap::inverse_point`
+//! returns **post-lens, pre-perspective** coordinates (since M7.3b) while `Session.buffer` is the
+//! **raw decode**, so indexing one with the other is wrong by the distortion — recorded at ~3.5% at the
 //! corners, which on a 6246 px frame is ~220 px and therefore *larger than a typical spot radius*.
 //! Near the edges such a search would sample a different piece of the picture, score against the
 //! wrong target, and return a confidently wrong source. Silently.
 //!
 //! ⚠ Taking a closure instead leaves that composition to the caller, keeps this a pure function
-//! with no dependency on `lens_profile` or `perspective`, and lets the tests pass a synthetic
-//! field with no image at all. The `DecodeWorker` injected-decode pattern, for its reason.
+//! with no dependency on `lens_profile`, and lets the tests pass a synthetic field with no image
+//! at all. The `DecodeWorker` injected-decode pattern, for its reason.
 
 use edit_model::Spot;
 

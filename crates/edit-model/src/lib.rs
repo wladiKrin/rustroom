@@ -1560,7 +1560,10 @@ impl Perspective {
 /// because [`SpotMode`]'s `Default` says what an unstated mode means.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Spot {
-    /// Destination centre, normalised per axis over the pre-geometry frame.
+    /// Destination centre, normalised per axis over the **post-lens, pre-perspective** frame —
+    /// since M7.3b, when perspective was fused into the geometry resample. Before that it was the
+    /// post-perspective frame the brush still uses; no sidecar with both spots and an active
+    /// perspective existed when it changed.
     pub centre: [f32; 2],
     /// Source centre, same space.
     pub source: [f32; 2],

@@ -12,16 +12,17 @@
 //! The sabotage was run and is inert. Inventing a test that appeared to cover it would be worse
 //! than saying so.
 //!
-//! ⚠⚠ **Spots are stored pre-geometry and this draws on the post-geometry frame**, so each one
-//! maps forward through [`FrameMap::point`]. Unlike the analytic masks, whose coordinates are
-//! already frame-relative, that mapping is not optional: without it a cropped or straightened
-//! photo draws every spot in the wrong place.
+//! ⚠⚠ **Spots are stored post-lens, PRE-PERSPECTIVE (since M7.3b) and this draws on the
+//! post-geometry frame**, so each one maps forward through [`SpotMap::point`]: the keystone,
+//! then `FrameMap`'s orientation, straighten and crop. Unlike the analytic masks, whose coordinates
+//! are already frame-relative, that mapping is not optional: without it a cropped, straightened
+//! or keystoned photo draws every spot in the wrong place.
 
 use super::navigation::{tool_drag, tool_drag_started};
 use crate::develop::canvas_geom;
 use crate::Session;
 use eframe::egui;
-use pipeline::brush::FrameMap;
+use pipeline::brush::SpotMap;
 use rustroom_app::spot_tool::{self, Handle, SpotTool};
 use rustroom_app::tool::Tool;
 
@@ -85,8 +86,9 @@ pub(super) fn draw_spot_overlay(
         return false;
     }
     let aspect = canvas_geom::frame_aspect(frame_rect);
-    let map = FrameMap::new(
+    let map = SpotMap::new(
         &s.edits.geometry,
+        s.edits.perspective,
         frame_rect.width() as usize,
         frame_rect.height() as usize,
     );
@@ -289,10 +291,12 @@ pub(super) fn draw_spot_overlay(
         let selected = s.selected_spot == Some(i);
         let c = to_screen(&map, sp.centre, frame_rect);
         let src = to_screen(&map, sp.source, frame_rect);
-        // ⚠ `radius_scale` is the source long edge measured in frame pixels — the *same* quantity
-        // the rasterizer multiplies by, so the drawn circle matches the rendered patch by
-        // construction rather than by a second derivation that could drift.
-        let r = sp.radius * map.radius_scale;
+        // ⚠ `radius_scale_at` is the spot space's long edge in frame pixels **where the patch
+        // sits** — the quantity the stage multiplies by, carried through the keystone, which
+        // magnifies one end of the frame and shrinks the other. So the destination and the
+        // source are each sized at their own position.
+        let r = sp.radius * map.radius_scale_at(sp.centre);
+        let r_src = sp.radius * map.radius_scale_at(sp.source);
         // ⚠ Doubled: a dark halo under a light mark. A thin white circle is invisible against a
         // bright sky — the fix the crop overlay needed after being reported.
         //
@@ -308,7 +312,7 @@ pub(super) fn draw_spot_overlay(
             let stroke = egui::Stroke::new(w, col);
             painter.line_segment([c, src], stroke);
             circle(&painter, c, r, stroke);
-            circle(&painter, src, r, stroke);
+            circle(&painter, src, r_src, stroke);
         }
     }
 
@@ -320,12 +324,22 @@ pub(super) fn draw_spot_overlay(
     // shows, so the circle, the slider and the spot that lands cannot disagree.
     match s.spot_drag {
         SpotDrag::Sizing { at, to } if (to - at).length() > CLICK_SLOP => {
-            preview(&painter, at, None, tool.radius * map.radius_scale);
+            preview(
+                &painter,
+                at,
+                None,
+                tool.radius * map.radius_scale_at(to_source(at)),
+            );
         }
         // ⚠ An ⌥-drag keeps the stored radius and is choosing a *source*, so both discs are drawn
         // with a line between them: the gesture's whole content is the pairing.
         SpotDrag::Sourcing { at, to } if (to - at).length() > CLICK_SLOP => {
-            preview(&painter, at, Some(to), tool.radius * map.radius_scale);
+            preview(
+                &painter,
+                at,
+                Some(to),
+                tool.radius * map.radius_scale_at(to_source(at)),
+            );
         }
         _ => {}
     }
@@ -355,7 +369,7 @@ fn preview(painter: &egui::Painter, at: egui::Pos2, source: Option<egui::Pos2>, 
     }
 }
 
-fn to_screen(map: &FrameMap, p: [f32; 2], frame: egui::Rect) -> egui::Pos2 {
+fn to_screen(map: &SpotMap, p: [f32; 2], frame: egui::Rect) -> egui::Pos2 {
     let (x, y) = map.point(p);
     frame.min + egui::vec2(x, y)
 }
@@ -396,29 +410,29 @@ fn place_with_source(
 
 /// A sampler over the spot-removal stage's input space, built from the session.
 ///
-/// ⚠⚠ **`FrameMap::inverse_point` returns post-lens, post-perspective coordinates while
-/// `s.buffer` is the raw decode.** Indexing one with the other is wrong by the distortion — ~3.5%
-/// at the corners, which on a 6246 px frame is ~220 px and therefore larger than a spot radius.
-/// The search would sample a different piece of the picture and return a confidently wrong source,
-/// silently. Both stages expose the inverse, which is exactly the direction needed.
+/// ⚠⚠ **`SpotMap::inverse_point` returns post-lens coordinates while `s.buffer` is the raw
+/// decode.** Indexing one with the other is wrong by the distortion — ~3.5% at the corners, which
+/// on a 6246 px frame is ~220 px and therefore larger than a spot radius. The search would sample a
+/// different piece of the picture and return a confidently wrong source, silently. The lens stage
+/// exposes its inverse, which is exactly the direction needed.
 ///
-/// ⚠ Missing corrections are the identity, not an error: a JPEG has no lens profile and a neutral
-/// perspective is the identity homography, so this degrades to a plain buffer read.
+/// ⚠ **No homography step since M7.3b**: spots live BEFORE the perspective now, so the only map
+/// between spot space and the decode is the lens.
+///
+/// ⚠⚠ **A new approximation M7.3b introduced, stated rather than argued away.** Noise reduction
+/// and dehaze now run AHEAD of spots, and this sampler replays neither, so the auto-pick scores
+/// candidates on pixels the stage never sees. Noise reduction barely matters to a ring mean. Dehaze
+/// is spatially varying and **could** change which candidate scores best. Unmeasured. Replaying it
+/// per click would cost a whole prefix, and a wrong pick costs one drag of the source.
+///
+/// ⚠ A missing correction is the identity, not an error: a JPEG has no lens profile, so this
+/// degrades to a plain buffer read.
 /// ⚠ Returns an **owned** closure: everything it needs is cloned or `Copy`, so it does not borrow
 /// the session and can therefore be built before `draw_spot_overlay` takes `&mut Session`. The
 /// buffer is behind an `Arc`, so "cloning" it copies a pointer.
 pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
     let buf = s.buffer.clone();
     let (w, h) = (buf.width(), buf.height());
-    // ⚠⚠ **`Homography` works in coordinates centred on the frame with half-height = 1**, not in
-    // `[0, 1]`. The exact convention is `GeometryStage`'s fused keystone path's, copied rather than re-derived: a
-    // pixel becomes `((x − cx) / cy, (y − cy) / cy)`, and the mapped point comes back through
-    // `cx + s.0 * cy`. Feeding it `[0, 1]` values would be silently wrong — a plausible-looking
-    // offset rather than an error.
-    let cx = (w as f32 - 1.0) / 2.0;
-    let cy = (h as f32 - 1.0) / 2.0;
-    let hom = (cy > 0.0)
-        .then(|| pipeline::perspective::Homography::from_edits(&s.edits.perspective, cx / cy));
     let corr = s.lens.shot.as_ref().and_then(|shot| {
         lens_profile::Corrector::new(
             &shot.profile,
@@ -435,13 +449,7 @@ pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
     });
     move |p: [f32; 2]| {
         // stage input, `[0, 1]` normalised → pixels
-        let (mut x, mut y) = (p[0] * w as f32, p[1] * h as f32);
-        // → perspective input
-        if let Some(hom) = &hom {
-            let n = hom.source_of(((x - cx) / cy, (y - cy) / cy));
-            x = cx + n.0 * cy;
-            y = cy + n.1 * cy;
-        }
+        let (x, y) = (p[0] * w as f32, p[1] * h as f32);
         match &corr {
             // → lens-correction input, in pixels, **per channel** because TCA displaces them
             // differently. Reading each channel at its own coordinate costs nothing and is more
