@@ -54,7 +54,7 @@ impl PipelineStage for LensCorrectionStage {
         self.render(&src, &corrector, Rect { x: 0, y: 0, w, h })
     }
     /// ⚠⚠ **The margin is frame-global, never a bound on this rect's four mapped corners.** A
-    /// homography sends lines to lines, so [`crate::stages::perspective::PerspectiveStage`] can
+    /// homography sends lines to lines, so [`crate::GeometryStage`]'s fused keystone path can
     /// map four corners and be exact; **a radial map bows every edge**, so the image of a
     /// rectangle is a curved quadrilateral whose extreme can sit at an edge midpoint. A corner
     /// bound would under-estimate, and the failure is a dark band at one edge of the region —
@@ -328,7 +328,7 @@ mod tests {
     /// the rect [`PipelineStage::input_rect_for`] asked for — otherwise `sample_channel_region`
     /// reads black outside the buffer it was given, which is the dark band at the region's edge.
     ///
-    /// ⚠⚠ **Transplanting `PerspectiveStage`'s four-corner bound here passes the equivalence test
+    /// ⚠⚠ **Transplanting the keystone's four-corner bound here passes the equivalence test
     /// and fails this one — but only on the BARREL fixture, and working out why sharpened the
     /// design's own argument.** "A radial map bends lines, so a corner bound is unsound" is too
     /// loose: ptlens is `r_d = r * (b * r^2 + (1 - b))`, so for a **pincushion** correction

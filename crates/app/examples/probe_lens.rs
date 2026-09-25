@@ -267,7 +267,7 @@ fn main() {
 
     // ---- Question 3: how wide a margin does an `input_rect_for` need? ----
     //
-    // ⚠⚠ **A radial map BENDS LINES, so `PerspectiveStage`'s four-corner bound is unsound here.**
+    // ⚠⚠ **A radial map BENDS LINES, so the keystone's four-corner bound is unsound here.**
     // A homography sends lines to lines, so a rect's image is a quadrilateral and the corners
     // bound it; a radial correction bows every edge, and the extreme can sit at an edge midpoint.
     // The bound that *is* sound is the largest displacement anywhere in the frame, since no pixel

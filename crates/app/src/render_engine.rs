@@ -1236,8 +1236,8 @@ fn render_cached(
             let t_step = std::time::Instant::now();
             // ⚠⚠ **The prefix's GPU seam, and it must be here rather than where `steps` is built.**
             // `dehaze::airlight` is estimated from the image the stage is HANDED — the checkpoint
-            // after geometry and noise reduction — so substituting up front would estimate it from
-            // the raw buffer, before the crop. A slightly different airlight is a different
+            // after noise reduction and lens correction since M7.3b — so substituting up front would
+            // estimate it from the raw buffer. A slightly different airlight is a different
             // photograph, not an error.
             //
             // ⚠ The step's `key` is never touched: `PrefixStepKey` is derived from the edits, so a
@@ -2628,7 +2628,8 @@ mod tests {
             "a tail change must not touch the prefix"
         );
 
-        // Dehaze is last in the prefix, so only dehaze re-runs. This is the 86.8 ms case.
+        // ⚠ Since M7.3b the order is NR → dehaze → geometry. A dehaze change resumes after NR and
+        // re-runs dehaze and the geometry resample behind it.
         let dehaze = Edits {
             dehaze: edit_model::Dehaze { amount: 85.0 },
             ..base.clone()
@@ -2645,11 +2646,11 @@ mod tests {
             &mut bc,
         );
         assert_eq!(
-            ran.prefix_stages, 1,
+            ran.prefix_stages, 2,
             "a dehaze change must resume after noise reduction"
         );
 
-        // Noise reduction is second, so NR and dehaze re-run but geometry does not.
+        // Noise reduction is first, so everything re-runs — but the downscale is still reused.
         let nr = Edits {
             noise_reduction: edit_model::NoiseReduction {
                 luminance: 15.0,
@@ -2670,11 +2671,12 @@ mod tests {
             &mut bc,
         );
         assert_eq!(
-            ran.prefix_stages, 2,
-            "an NR change must resume after geometry"
+            ran.prefix_stages, 3,
+            "noise reduction is the first prefix step since M7.3b"
         );
 
-        // Geometry is first, so everything re-runs — but the downscale is still reused.
+        // ⚠⚠ Geometry is LAST since M7.3b, so a straighten re-runs only the resample. This is the
+        // point of the reorder: before it, this was 3 — NR and dehaze on every frame of a drag.
         let geo = Edits {
             geometry: edit_model::Geometry {
                 angle: 9.0,
@@ -2694,8 +2696,8 @@ mod tests {
             &mut bc,
         );
         assert_eq!(
-            ran.prefix_stages, 3,
-            "a geometry change invalidates the whole prefix"
+            ran.prefix_stages, 1,
+            "a geometry change must resume after dehaze"
         );
     }
 
@@ -2747,9 +2749,10 @@ mod tests {
 
     #[test]
     fn a_shrinking_prefix_does_not_serve_the_wrong_checkpoint() {
-        // Turning dehaze off makes the post-NR checkpoint the *final* one. Its key is the same
-        // value it had as a mid, so the tiers must not end up holding it twice with the two
-        // copies free to diverge.
+        // Turning the geometry off makes the post-dehaze checkpoint the *final* one. Its key is
+        // the same value it had as a mid, so the tiers must not end up holding it twice with the
+        // two copies free to diverge. ⚠ The geometry rather than dehaze since M7.3b, because the
+        // geometry is now the prefix's last step.
         let buf = varied();
         let mut cache = PrefixCache::default();
         let mut bc = BrushCache::default();
@@ -2767,7 +2770,7 @@ mod tests {
         );
 
         let without = Edits {
-            dehaze: edit_model::Dehaze::default(),
+            geometry: edit_model::Geometry::default(),
             ..with.clone()
         };
         let (got, ran) = render_cached(
@@ -2783,7 +2786,7 @@ mod tests {
         );
         assert_eq!(
             ran.prefix_stages, 0,
-            "the post-NR checkpoint is now the final one"
+            "the post-dehaze checkpoint is now the final one"
         );
         assert_eq!(
             got.rgba,
@@ -2910,22 +2913,17 @@ mod tests {
             "fixture check: a cold render runs the whole prefix"
         );
 
-        // ⚠ Drag NOISE REDUCTION rather than geometry: geometry is the FIRST prefix step in this
-        // fixture, so moving it invalidates every checkpoint and there is nothing to resume from
-        // whatever the policy. The bug is about a drag that HAS valid upstream work — which is
-        // every real one, since lens correction is on by default and runs first.
+        // ⚠ Drag DEHAZE rather than noise reduction: NR is the FIRST prefix step since M7.3b, so
+        // moving it invalidates every checkpoint and there is nothing to resume from whatever the
+        // policy. The bug is about a drag that HAS valid upstream work.
         let dragged = Edits {
-            noise_reduction: edit_model::NoiseReduction {
-                luminance: 61.0,
-                color: 60.0,
-                ..Default::default()
-            },
+            dehaze: edit_model::Dehaze { amount: 41.0 },
             ..base.clone()
         };
         let (_, ran) = render_with(&buf, &dragged, FrameSpec::fit(16), &mut cache, &mut bc);
         assert!(
             ran.prefix_stages < 3,
-            "the drag must resume at the checkpoint before noise reduction rather than restart, ran {}",
+            "the drag must resume at the checkpoint before dehaze rather than restart, ran {}",
             ran.prefix_stages
         );
     }

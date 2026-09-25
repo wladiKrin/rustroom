@@ -290,7 +290,7 @@ pub trait PipelineStage: Send + Sync {
     /// region's size — a wrong mask, and a coverage cache that thrashes on every pan.
     ///
     /// ⚠ The identity default is correct for every stage in the tree today: lens correction,
-    /// perspective, spot removal, noise reduction, dehaze and the masked capture corrections all
+    /// spot removal, noise reduction, dehaze and the masked capture corrections all
     /// preserve dimensions, and only `GeometryStage` does not. ⚠⚠ It is silently wrong for a
     /// future dim-changing stage, which is what
     /// `every_prefix_stages_output_dims_match_what_it_produces` exists to catch.
@@ -792,9 +792,7 @@ pub fn prefix_airlight(
         // reintroduce the defect in the gesture most likely to expose it.
         if matches!(
             s.key,
-            PrefixStepKey::LensCorrection(..)
-                | PrefixStepKey::Perspective(..)
-                | PrefixStepKey::Geometry(..)
+            PrefixStepKey::LensCorrection(..) | PrefixStepKey::Geometry(..)
         ) {
             continue;
         }
@@ -811,7 +809,7 @@ pub fn prefix_airlight(
 /// nothing failing, and this is the guard that makes forgetting impossible rather than merely
 /// caught by a test.
 ///
-/// ⚠⚠ The three **resampling** stages carry the [`Resampler`] as well as their edits, and it is
+/// ⚠⚠ The two **resampling** stages carry the [`Resampler`] as well as their edits, and it is
 /// not decoration: the kernel is a `Settings` choice rather than an `Edits` field, so nothing
 /// else in the key can see it change. Without it, switching the setting mid-session would serve
 /// checkpoints rendered with the old kernel and the control would look inert — the failure
@@ -826,9 +824,9 @@ pub fn prefix_airlight(
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrefixStepKey {
     LensCorrection(edit_model::LensCorrection, Resampler),
-    Perspective(edit_model::Perspective, Resampler),
     SpotRemoval(Vec<edit_model::Spot>),
-    Geometry(edit_model::Geometry, Resampler),
+    /// ⚠ Carries the perspective since M7.3b: the keystone is part of this stage's one resample.
+    Geometry(edit_model::Geometry, edit_model::Perspective, Resampler),
     NoiseReduction(edit_model::NoiseReduction),
     Dehaze(edit_model::Dehaze),
     /// One mask's capture corrections.
@@ -865,9 +863,28 @@ pub fn build_prefix_steps(
 ) -> Vec<PrefixStep> {
     let mut steps: Vec<PrefixStep> = Vec::new();
 
-    // ⚠ First, ahead of geometry: the calibration is defined in the uncropped, unrotated sensor
-    // frame, so it must precede both the crop and the straighten. A missing corrector — an
-    // unlisted lens, or a JPEG — skips the step silently, which is the ordinary case.
+    // ⚠⚠ **THE ORDER, SINCE M7.3b: NR → lens → dehaze → spots → geometry → masked capture.** It
+    // used to be lens → perspective → spots → geometry → NR → dehaze, and two things were wrong with
+    // that. Every resample interpolates, which low-passes and spatially correlates the noise, so NR
+    // was handed blotchy noise after up to three interpolations instead of the per-pixel noise it is
+    // built for. And a straighten drag re-ran NR, dehaze and the masked capture stages on every
+    // frame, because they sat downstream of geometry in the prefix cache. Now the resample is last
+    // and only a geometry edit invalidates it. ⚠ The price, measured in the M7.3b journal entry: an
+    // NR or dehaze drag now re-runs lens correction and the geometry resample behind it.
+
+    // Noise reduction FIRST: it sees the demosaiced source before any interpolation has touched
+    // it. `is_active` rather than a `!= default()` check — Detail and Smoothness are modifiers and
+    // must not insert a stage on their own.
+    if edits.noise_reduction.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::NoiseReduction(edits.noise_reduction),
+            stage: Box::new(NoiseReductionStage::new(&edits.noise_reduction, scale)),
+        });
+    }
+
+    // Lens correction next. ⚠ Ahead of geometry: the calibration is defined in the uncropped,
+    // unrotated sensor frame. A missing corrector — an unlisted lens, or a JPEG — skips the step
+    // silently, which is the ordinary case.
     let lens_correction = edits.applied_lens_correction();
     if lens_correction.is_active() {
         if let Some(c) = lens {
@@ -887,52 +904,12 @@ pub fn build_prefix_steps(
         }
     }
 
-    // ⚠ Between lens correction and geometry: after the optics, before the crop. See the
-    // stage's own module docs for why that order is forced rather than chosen.
-    if edits.perspective.is_active() {
-        steps.push(PrefixStep {
-            key: PrefixStepKey::Perspective(edits.perspective, resampler),
-            stage: Box::new(stages::perspective::PerspectiveStage::new(
-                edits.perspective,
-                resampler,
-            )),
-        });
-    }
-
-    // ⚠ Between perspective and geometry, i.e. on `GeometryStage`'s **input** — the space brush
-    // strokes are anchored in. A spot is content-referred, so anchoring it here is what makes
-    // "the patch survives a crop" free. See the stage's module docs.
-    if !edits.spots.is_empty() {
-        steps.push(PrefixStep {
-            key: PrefixStepKey::SpotRemoval(edits.spots.clone()),
-            stage: Box::new(SpotRemovalStage::new(&edits.spots)),
-        });
-    }
-
-    // Geometry runs next, so all adjustments operate on the final cropped pixels.
-    if edits.geometry != edit_model::Geometry::default() {
-        steps.push(PrefixStep {
-            key: PrefixStepKey::Geometry(edits.geometry, resampler),
-            stage: Box::new(GeometryStage::new(&edits.geometry, resampler)),
-        });
-    }
-
-    // Noise reduction comes before every adjustment: denoising the source is far easier than
-    // denoising after Exposure, Shadows and the tone curve have amplified the grain.
-    // `is_active` rather than a `!= default()` check — Detail and Smoothness are modifiers and
-    // must not insert a stage on their own.
-    if edits.noise_reduction.is_active() {
-        steps.push(PrefixStep {
-            key: PrefixStepKey::NoiseReduction(edits.noise_reduction),
-            stage: Box::new(NoiseReductionStage::new(&edits.noise_reduction, scale)),
-        });
-    }
-
-    // Dehaze is a correction of the capture, not a grade, so it belongs upstream with noise
-    // reduction — and after it, because dehaze is a contrast stretch that amplifies noise.
+    // Dehaze: a correction of the capture, so upstream of every tonal stage. ⚠ AFTER lens
+    // correction, because it must see the vignetting correction: a darkened corner reads as less
+    // haze. After NR, because dehaze is a contrast stretch that amplifies noise.
     //
-    // ⚠ Being in the prefix is what makes a *frame-global* airlight possible at all: the
-    // prefix always runs whole-buffer, so no region plumbing and no margin growth is needed.
+    // ⚠ Being in the prefix is what makes a *frame-global* airlight possible at all: the prefix
+    // always runs whole-buffer, so no region plumbing and no margin growth is needed.
     if edits.dehaze.is_active() {
         steps.push(PrefixStep {
             key: PrefixStepKey::Dehaze(edits.dehaze),
@@ -943,6 +920,30 @@ pub fn build_prefix_steps(
                 Some(a) => Box::new(DehazeStage::with_airlight(&edits.dehaze, scale, a)),
                 None => Box::new(DehazeStage::new(&edits.dehaze, scale)),
             },
+        });
+    }
+
+    // ⚠⚠ Spots in post-lens, **pre-perspective** space since M7.3b. Before it they sat between
+    // perspective and geometry, and fusing the two resamples deletes that buffer — a pixel edit
+    // cannot live inside a coordinate map. Anchored here, a spot also stays on its blemish when
+    // the keystone changes, which it did not before. After dehaze so a spot drag re-runs only
+    // this and the geometry step.
+    if !edits.spots.is_empty() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::SpotRemoval(edits.spots.clone()),
+            stage: Box::new(SpotRemovalStage::new(&edits.spots)),
+        });
+    }
+
+    // Geometry LAST — orientation, perspective, straighten and crop, in ONE resample (M7.3b) —
+    // so all adjustments downstream operate on the final cropped pixels. ⚠ Inserted for a
+    // perspective alone, too: the keystone lives in this stage now.
+    if edits.geometry != edit_model::Geometry::default() || edits.perspective.is_active() {
+        steps.push(PrefixStep {
+            key: PrefixStepKey::Geometry(edits.geometry, edits.perspective, resampler),
+            stage: Box::new(
+                GeometryStage::new(&edits.geometry, resampler).with_perspective(edits.perspective),
+            ),
         });
     }
 
@@ -1198,9 +1199,16 @@ fn adjustment_stages(
 /// The **prefix** stages for one set of adjustments: the corrections of the capture.
 ///
 /// ⚠⚠ **Its own builder rather than a branch inside [`adjustment_stages`], because these run in
-/// a different half of the pipeline.** Noise reduction and dehaze are placed where the *global*
-/// stages of the same name run — after geometry, before every tonal adjustment — so a masked
-/// Luminance 50 means what a global Luminance 50 means.
+/// a different half of the pipeline.** Noise reduction and dehaze run in the prefix, before every
+/// tonal adjustment, as the global stages of the same name do.
+///
+/// ⚠⚠ **A recorded asymmetry since M7.3b, not an oversight.** The global pair moved AHEAD of the
+/// resamplers, so they see noise no interpolation has correlated. These masked twins stay AFTER
+/// the geometry, because a mask's coverage is rasterised in frame space (`MaskStage::new_capture`
+/// takes `&edits.geometry`). Moving them would mean mapping every mask kind back through the
+/// homography, the rotation and the lens. So on a straightened photo a masked Luminance 50 acts on
+/// resampled noise while a global one does not; the difference is the one M7.3b removed from the
+/// global path.
 ///
 /// ⚠⚠ **Dehaze is why the placement is forced rather than preferred.** Its airlight is estimated
 /// from the brightest 0.1% of the buffer it is handed. The tail may run on the visible *region*,
@@ -1923,7 +1931,7 @@ mod tests {
     #[test]
     fn the_back_projections_are_reachable_through_the_trait_object() {
         // ⚠⚠ **A test on the concrete type cannot tell a trait method from an inherent one.**
-        // `input_rect_for` was written into `impl PerspectiveStage` once by mistake; both its own
+        // `input_rect_for` was written into the inherent impl of the (since deleted) `PerspectiveStage` once by mistake; both its own
         // tests passed, because `s.input_rect_for(..)` resolved to the inherent method — while the
         // TRAIT method still returned the default `None`. `region_plan` calls through
         // `dyn PipelineStage`, so it would have seen the feature as simply absent. Only clippy's
@@ -1957,11 +1965,15 @@ mod tests {
             vertical: 40.0,
             ..Default::default()
         };
-        let per: Box<dyn PipelineStage> =
-            Box::new(crate::stages::perspective::PerspectiveStage::new(
-                p,
+        // ⚠ Since M7.3b the keystone is `GeometryStage`'s fused path, a different `input_rect_for`
+        // branch from the one above, so it is asked separately.
+        let per: Box<dyn PipelineStage> = Box::new(
+            crate::stages::geometry::GeometryStage::new(
+                &edit_model::Geometry::default(),
                 crate::resample::Resampler::CatmullRom,
-            ));
+            )
+            .with_perspective(p),
+        );
         assert!(
             per.input_rect_for(
                 Rect {
@@ -2092,8 +2104,15 @@ mod tests {
     fn a_declining_step_abandons_the_whole_plan() {
         // ⚠⚠ THE structural rule: a whole-buffer step needs a whole-buffer input, so one decline
         // anywhere at or after `start` kills everything above it too.
+        //
+        // ⚠ The straighten gives spot removal a step BELOW it: since M7.3b spots come after dehaze,
+        // and without the geometry they would be last, leaving no contained case to start from.
         let e = Edits {
             dehaze: edit_model::Dehaze { amount: 60.0 },
+            geometry: edit_model::Geometry {
+                angle: 3.0,
+                ..Default::default()
+            },
             spots: vec![edit_model::Spot {
                 centre: [0.5, 0.5],
                 source: [0.3, 0.3],
@@ -2225,10 +2244,18 @@ mod tests {
     }
 
     /// Run a chain both ways and report `(differing samples, worst absolute difference)`.
-    fn chain_vs_whole(e: &Edits, src: &core_image::ImageBuf, visible: Rect) -> (usize, f32) {
+    ///
+    /// ⚠ `min_steps` is the fixture check: a chain shorter than the fixture means some stage the
+    /// test depends on was not inserted, and it would then prove less than its name says.
+    fn chain_vs_whole(
+        e: &Edits,
+        src: &core_image::ImageBuf,
+        visible: Rect,
+        min_steps: usize,
+    ) -> (usize, f32) {
         let steps = steps_for(e);
         assert!(
-            steps.len() >= 2,
+            steps.len() >= min_steps,
             "fixture check: need a real chain, got {}",
             steps.len()
         );
@@ -2336,7 +2363,11 @@ mod tests {
             "lens_correction",
             "fixture check: lens correction must be STEP 0, which is what made the chain abandon"
         );
-        assert_eq!(steps.len(), 3, "fixture check: lens, perspective, geometry");
+        assert_eq!(
+            steps.len(),
+            2,
+            "fixture check: lens, then geometry with the keystone fused into it"
+        );
 
         let src = structured(220, 180);
         let visible = Rect {
@@ -2415,6 +2446,9 @@ mod tests {
             bottom: 0.9,
         };
         let src = structured(220, 180);
+        // ⚠ ONE step since M7.3b: perspective, straighten and crop are a single fused gather now,
+        // which is what M7.3b is for. The multi-gather chain is still pinned byte for byte by
+        // `a_cold_chain_scopes_from_lens_correction` (lens, then the fused geometry).
         let (differing, worst) = chain_vs_whole(
             &e,
             &src,
@@ -2424,6 +2458,7 @@ mod tests {
                 w: 50,
                 h: 40,
             },
+            1,
         );
         assert_eq!(
             differing, 0,
@@ -2468,6 +2503,7 @@ mod tests {
                 w: 50,
                 h: 40,
             },
+            2,
         );
         assert!(
             worst < 1e-5,
@@ -3509,16 +3545,18 @@ mod tests {
     fn a_truncated_prefix_key_ignores_the_stages_below_it() {
         // The whole feature rests on this: two edit sets that agree on the first n prefix
         // stages must share the checkpoint after stage n, however much they differ deeper.
+        //
+        // ⚠ Varies the LAST step (the masked capture correction) so that as many checkpoints as
+        // possible are shared. Since M7.3b dehaze is second, and varying it would leave this
+        // checking only two.
         let a = all_edits();
-        let b = Edits {
-            dehaze: edit_model::Dehaze { amount: 95.0 },
-            ..a.clone()
-        };
+        let mut b = a.clone();
+        b.masks[0].adjustments.noise_reduction.luminance = 95.0;
         let steps_a = build_prefix_steps(&a, RenderScale::FULL, None, Resampler::default(), None);
         let steps_b = build_prefix_steps(&b, RenderScale::FULL, None, Resampler::default(), None);
-        assert_eq!(steps_a.len(), 6);
+        assert_eq!(steps_a.len(), 5);
 
-        // Same up to and including noise reduction...
+        // Same up to and including the geometry...
         for n in 0..=4 {
             assert_eq!(
                 PrefixKey::upto(&steps_a, n, RenderScale::FULL),
@@ -3526,7 +3564,7 @@ mod tests {
                 "checkpoint {n} should be shared"
             );
         }
-        // ...and different once dehaze has run.
+        // ...and different once the masked capture correction has run.
         assert_ne!(
             PrefixKey::upto(&steps_a, 5, RenderScale::FULL),
             PrefixKey::upto(&steps_b, 5, RenderScale::FULL)
@@ -3621,8 +3659,9 @@ mod tests {
         // The tripwire: if a stage is later inserted into the prefix region, this fails and
         // forces PrefixKey to be updated with its parameters.
         //
-        // ⚠ No lens profile is supplied here, so `lens_correction` is absent by construction —
-        // the prefix starts at perspective.
+        // ⚠ No lens profile is supplied here, so `lens_correction` is absent by construction.
+        // ⚠ There is no `perspective` step since M7.3b: the fixture's keystone is inside
+        // `geometry`, which now comes LAST among the global steps.
         let (prefix, tail) = build_pipeline_split(
             &all_edits(),
             RenderScale::FULL,
@@ -3631,11 +3670,10 @@ mod tests {
         assert_eq!(
             prefix.stage_names(),
             vec![
-                "perspective",
-                "spot_removal",
-                "geometry",
                 "noise_reduction",
                 "dehaze",
+                "spot_removal",
+                "geometry",
                 // ⚠ The fixture's mask carries capture corrections, so it contributes a
                 // whole-buffer `MaskStage` here — after the global pair, mirroring the tail's
                 // rule that a mask acts on the global look.
@@ -3764,14 +3802,15 @@ mod tests {
         let base_keys = keys(&base);
         assert_eq!(
             base_keys.len(),
-            6,
-            "all six prefix stages should be active — the five global ones plus the fixture's \
-             masked capture correction"
+            5,
+            "all five prefix steps should be active — NR, dehaze, spots, the geometry (with the \
+             keystone fused in since M7.3b) and the fixture's masked capture correction"
         );
 
         let variants = [
+            // ⚠ The keystone moves the GEOMETRY key since M7.3b — it is part of that step.
             (
-                0,
+                3,
                 Edits {
                     perspective: edit_model::Perspective {
                         vertical: 70.0,
@@ -3781,7 +3820,7 @@ mod tests {
                 },
             ),
             (
-                1,
+                2,
                 Edits {
                     spots: vec![edit_model::Spot {
                         centre: [0.7, 0.7],
@@ -3794,7 +3833,7 @@ mod tests {
                 },
             ),
             (
-                2,
+                3,
                 Edits {
                     geometry: edit_model::Geometry {
                         angle: 7.0,
@@ -3804,7 +3843,7 @@ mod tests {
                 },
             ),
             (
-                3,
+                0,
                 Edits {
                     noise_reduction: edit_model::NoiseReduction {
                         luminance: 80.0,
@@ -3815,7 +3854,7 @@ mod tests {
                 },
             ),
             (
-                4,
+                1,
                 Edits {
                     dehaze: edit_model::Dehaze { amount: 90.0 },
                     ..base.clone()
@@ -3824,7 +3863,7 @@ mod tests {
             // ⚠ The masked capture correction is a prefix step like any other, and its key must
             // move with its own parameters and nothing else — the same property the five above
             // assert, extended to the step this milestone added.
-            (5, {
+            (4, {
                 let mut e = base.clone();
                 e.masks[0].adjustments.noise_reduction.luminance = 90.0;
                 e
@@ -3832,7 +3871,7 @@ mod tests {
         ];
         for (moved, e) in variants {
             let ks = keys(&e);
-            for i in 0..6 {
+            for i in 0..5 {
                 if i == moved {
                     assert_ne!(ks[i], base_keys[i], "step {i} should have changed");
                 } else {
@@ -4393,8 +4432,8 @@ mod tests {
             build_pipeline(&edits, RenderScale::FULL, ProfileRendering::colorimetric())
                 .stage_names(),
             vec![
-                "geometry",
                 "noise_reduction",
+                "geometry",
                 "white_balance",
                 "exposure",
                 "output_transform"
@@ -4734,6 +4773,78 @@ mod tests {
         );
         let names: Vec<&'static str> = steps.iter().map(|s| s.stage.name()).collect();
         assert_eq!(names, vec!["lens_correction", "geometry"]);
+    }
+
+    /// ⚠⚠ **M7.3b's whole order, with every global prefix stage present, lens included.** NR sees
+    /// the source before any interpolation; lens precedes dehaze so dehaze sees the vignetting
+    /// correction; spots sit pre-perspective; the one geometric resample is last.
+    #[test]
+    fn the_prefix_runs_nr_then_lens_then_dehaze_then_spots_then_geometry() {
+        let edits = Edits {
+            noise_reduction: edit_model::NoiseReduction {
+                luminance: 30.0,
+                ..Default::default()
+            },
+            dehaze: edit_model::Dehaze { amount: 40.0 },
+            perspective: edit_model::Perspective {
+                vertical: 20.0,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 2.0,
+                ..Default::default()
+            },
+            lens_correction: Some(edit_model::LensCorrection {
+                distortion: true,
+                ..Default::default()
+            }),
+            spots: vec![edit_model::Spot {
+                centre: [0.5, 0.5],
+                source: [0.3, 0.3],
+                radius: 0.02,
+                feather: 50.0,
+                mode: Default::default(),
+            }],
+            ..Edits::default()
+        };
+        let names: Vec<&'static str> = build_prefix_steps(
+            &edits,
+            RenderScale::FULL,
+            test_corrector(),
+            Resampler::default(),
+            None,
+        )
+        .iter()
+        .map(|s| s.stage.name())
+        .collect();
+        assert_eq!(
+            names,
+            vec![
+                "noise_reduction",
+                "lens_correction",
+                "dehaze",
+                "spot_removal",
+                "geometry"
+            ]
+        );
+    }
+
+    /// ⚠ A keystone with neutral geometry still needs the geometry step: it lives there now.
+    #[test]
+    fn perspective_alone_inserts_the_geometry_step() {
+        let edits = Edits {
+            perspective: edit_model::Perspective {
+                vertical: 20.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        };
+        let names: Vec<&'static str> =
+            build_prefix_steps(&edits, RenderScale::FULL, None, Resampler::default(), None)
+                .iter()
+                .map(|s| s.stage.name())
+                .collect();
+        assert_eq!(names, vec!["geometry"]);
     }
 
     #[test]

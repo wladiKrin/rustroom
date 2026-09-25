@@ -1,9 +1,8 @@
 //! Resampling kernels — how a pixel is read at a fractional coordinate.
 //!
-//! Three stages resample: [`GeometryStage`](crate::GeometryStage)'s straighten,
-//! [`PerspectiveStage`](crate::stages::perspective::PerspectiveStage), and
-//! [`LensCorrectionStage`](crate::LensCorrectionStage). Every one of them goes through this
-//! module, so the kernel is one choice rather than three.
+//! Two stages resample: [`GeometryStage`](crate::GeometryStage) (straighten, and since M7.3b the
+//! perspective keystone in the same pass) and [`LensCorrectionStage`](crate::LensCorrectionStage).
+//! Both go through this module, so the kernel is one choice rather than several.
 //!
 //! ⚠⚠ **THE CHOICE WAS MADE FROM MEASUREMENT, NOT FROM REPUTATION.**
 //! `cargo run --release -p app --example resample_kernels <raw>` measured all four against real

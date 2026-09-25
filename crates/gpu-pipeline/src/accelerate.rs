@@ -1290,7 +1290,9 @@ mod tests {
     fn every_other_prefix_stage_is_left_alone() {
         let Some(ctx) = ctx() else { return };
         let img = hazy(64, 64);
-        for name in ["geometry", "perspective"] {
+        // ⚠ No "perspective" since M7.3b: the keystone is part of the geometry step. Spot removal
+        // is here because it was measured and closed unported (`docs/BACKLOG.md`).
+        for name in ["geometry", "spot_removal"] {
             assert!(
                 accelerate_prefix_stage(
                     name,

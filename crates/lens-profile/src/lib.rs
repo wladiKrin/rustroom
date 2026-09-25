@@ -226,7 +226,7 @@ impl Corrector {
     /// The largest distance any output pixel's source sits from the pixel itself, in pixels.
     ///
     /// ⚠⚠ **FRAME-GLOBAL on purpose, and that is the one real hazard in region-scoping this
-    /// stage.** `PerspectiveStage::input_rect_for` bounds an output rect by its four mapped
+    /// stage.** `GeometryStage`'s fused keystone path bounds an output rect by its four mapped
     /// corners, which is *exact* for a homography because a homography sends lines to lines.
     /// **A radial map bows every edge**, so the image of a rectangle is a curved quadrilateral
     /// whose extreme can sit at an edge midpoint — a corner bound would under-estimate, and the

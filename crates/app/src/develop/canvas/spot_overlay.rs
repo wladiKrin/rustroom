@@ -411,7 +411,7 @@ pub(super) fn sampler_for(s: &Session) -> impl Fn([f32; 2]) -> [f32; 3] {
     let buf = s.buffer.clone();
     let (w, h) = (buf.width(), buf.height());
     // ⚠⚠ **`Homography` works in coordinates centred on the frame with half-height = 1**, not in
-    // `[0, 1]`. The exact convention is `PerspectiveStage`'s, copied rather than re-derived: a
+    // `[0, 1]`. The exact convention is `GeometryStage`'s fused keystone path's, copied rather than re-derived: a
     // pixel becomes `((x − cx) / cy, (y − cy) / cy)`, and the mapped point comes back through
     // `cx + s.0 * cy`. Feeding it `[0, 1]` values would be silently wrong — a plausible-looking
     // offset rather than an error.
