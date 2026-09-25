@@ -1,15 +1,23 @@
 use crate::resample::{self, Resampler, Weights};
 use crate::{PipelineStage, Rect};
 use core_image::ImageBuf;
-use edit_model::{CropRect, Geometry, Orientation, Quarter};
+use edit_model::{CropRect, Geometry, Orientation, Perspective, Quarter};
 use rayon::prelude::*;
 
-/// Orient (quarter turns and mirroring), straighten (a resampled rotation about the centre),
-/// then crop to a normalized rectangle.
+mod fused;
+
+/// Orient (quarter turns and mirroring), correct the keystone, straighten (a resampled rotation
+/// about the centre), then crop to a normalized rectangle.
+///
+/// ⚠⚠ **Perspective lives here since M7.3b**, and with it the whole geometric chain after the
+/// optics resamples ONCE. See [`fused`]. An inactive perspective leaves the original code path
+/// untouched.
 pub struct GeometryStage {
     orientation: Orientation,
     angle_rad: f32,
     crop: CropRect,
+    /// ⚠ Neutral unless [`Self::with_perspective`] says otherwise; `is_active` picks the path.
+    perspective: Perspective,
     /// ⚠ Built once here rather than per pixel: the phase table costs 6144 kernel evaluations.
     weights: Weights,
 }
@@ -20,8 +28,47 @@ impl GeometryStage {
             orientation: g.orientation,
             angle_rad: g.angle.to_radians(),
             crop: g.crop,
+            perspective: Perspective::default(),
             weights: Weights::new(resampler),
         }
+    }
+
+    /// The keystone correction, applied in the same resample as the rest of the geometry.
+    ///
+    /// ⚠ A builder rather than a `new` argument, `ToneCurveStage::with_channels`' shape: every
+    /// caller without a perspective (the tests, `FrameMap`'s agreement suite, the examples) stays
+    /// as it was.
+    pub fn with_perspective(mut self, p: Perspective) -> Self {
+        self.perspective = p;
+        self
+    }
+
+    /// The fused path's map for a source of `(w, h)`, or `None` when the original path runs.
+    ///
+    /// ⚠⚠ **The one predicate for which path runs**, read by `apply`, `apply_region` and
+    /// `input_rect_for`, so a plan built from one can never be executed by the other.
+    fn fused_map(&self, w: usize, h: usize) -> Option<fused::FusedMap> {
+        (self.perspective.is_active() && w >= 2 && h >= 2).then(|| {
+            fused::FusedMap::new(
+                w,
+                h,
+                self.orientation,
+                self.angle_rad,
+                &self.crop,
+                &self.perspective,
+            )
+        })
+    }
+
+    /// The cropped output's size for a source of `(w, h)`, as `(x0, y0, x1, y1)` in the oriented
+    /// canvas.
+    fn oriented_crop(&self, w: usize, h: usize) -> (usize, usize, usize, usize) {
+        let (ow, oh) = if self.orientation.rotate.swaps_axes() {
+            (h, w)
+        } else {
+            (w, h)
+        };
+        crop_bounds(ow, oh, &self.crop)
     }
 }
 
@@ -63,6 +110,16 @@ impl PipelineStage for GeometryStage {
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
+        if let Some(map) = self.fused_map(image.width(), image.height()) {
+            let (x0, y0, x1, y1) = self.oriented_crop(image.width(), image.height());
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                w: x1 - x0,
+                h: y1 - y0,
+            };
+            return fused::render(&crate::RegionSrc::whole(&image), &map, &self.weights, rect);
+        }
         // Orientation first: a lossless whole-image reframe, so the straighten angle and the
         // crop are both expressed in the oriented frame.
         let image = if self.orientation.is_identity() {
@@ -95,6 +152,17 @@ impl PipelineStage for GeometryStage {
     }
 
     fn apply_region(&self, src: &crate::RegionSrc<'_>, rect: Rect) -> Option<ImageBuf> {
+        // ⚠⚠ The FULL image's dimensions, never the slice in hand.
+        if let Some(map) = self.fused_map(src.full.0, src.full.1) {
+            let (x0, y0, x1, y1) = self.oriented_crop(src.full.0, src.full.1);
+            if rect.w == 0 || rect.h == 0 || rect.x + rect.w > x1 - x0 || rect.y + rect.h > y1 - y0
+            {
+                return None;
+            }
+            // ⚠ Unlike the original path, the fused one scopes under ANY orientation: the
+            // permutation is just another term of the map.
+            return Some(fused::render(src, &map, &self.weights, rect));
+        }
         // ⚠ Declines on a non-identity orientation: `orient` is a whole-buffer index permutation
         // feeding the rotation's gather, so region-scoping it needs the permutation folded into
         // the sample coordinates. Uncommon — a camera's portrait orientation is applied at decode
@@ -145,6 +213,14 @@ impl PipelineStage for GeometryStage {
     /// `self.weights` rather than a stored `Resampler` field — two facts that can disagree is the
     /// shape this project has paid for three times.
     fn input_rect_for(&self, out: crate::Rect, in_w: usize, in_h: usize) -> Option<crate::Rect> {
+        // ⚠⚠ The same predicate `apply_region` branches on — see [`Self::fused_map`].
+        if let Some(map) = self.fused_map(in_w, in_h) {
+            let (x0, y0, x1, y1) = self.oriented_crop(in_w, in_h);
+            if out.w == 0 || out.h == 0 || out.x + out.w > x1 - x0 || out.y + out.h > y1 - y0 {
+                return None;
+            }
+            return fused::input_rect(&map, out, in_w, in_h, self.weights.kernel().radius());
+        }
         if !self.orientation.is_identity() {
             return None;
         }
