@@ -31,7 +31,7 @@ still carries the reasoning that matters — read the entry, then build it under
 | Mask intersection and subtraction | ✅ **M7.1c, 2026-09-10** — confirmed by use; Add / Subtract / Intersect between masks, and **M7.1 is complete** |
 | Reorder a mask's components | ⬜ **wanted (user's call, 2026-09-10)** — order is observable, and the list is append-only today |
 | A better interpolator for the geometric stages | ✅ **M7.3a, 2026-09-01** — a `Settings` choice defaulting to Catmull-Rom, both samplers |
-| Fuse perspective into `GeometryStage` | **M7.3b** — ⬜ still open (2026-09-08) |
+| Fuse perspective into `GeometryStage` | ✅ **M7.3b, 2026-09-25** — one gather; acutance 0.00700 → 0.00823; prefix reordered (journal) |
 | Automatic vertical detection (Hough) | ✅ **M7.4, 2026-09-04** — reshaped into `Auto` / `Refine guides` |
 | Auto-mask brush · ~~dehaze bright subjects~~ · ~~negative Texture~~ · ~~Clarity halos~~ · ~~grading in masks~~ | **M7.6** — grading in masks ✅ 2026-09-05; negative Texture and Clarity halos ✅ 2026-09-02 (W3, struck late); dehaze bright subjects ✅ 2026-09-08; auto-mask ⬜ |
 | ~~Lens correction row batching~~ · sequential export · incremental splatting | **M8.1** — row batching ✅ 2026-09-01 (1178 → 309 ms); the other two ⬜ |
@@ -380,7 +380,13 @@ above. Only *anchoring* wants the forward map.
   would improve every geometric stage at once. Reproduce with
   `cargo run --release -p app --example persp_sharpness <raw>`.
 
-- **Fuse perspective into `GeometryStage`** (recorded 2026-08-31). One resample instead of two when
+- ✅ **Fuse perspective into `GeometryStage`** — **shipped as M7.3b, 2026-09-25**
+  (`grep -n 'M7.3b' docs/JOURNAL.md`). Straighten + keystone acutance 0.00700 → 0.00823, equal to a
+  single resample. ⚠ The anchoring danger below was real for **spots** (they moved to
+  pre-perspective space, and no sidecar had both) and **not** for brushes, whose anchor space survives
+  as coordinates inside the fused map. The "three passes to one" note at the end stays open: folding
+  lens in would lose `fill_row`'s per-row path. The original entry, kept for the record:
+  (recorded 2026-08-31). One resample instead of two when
   straighten and perspective are both active. ⚠ **Measured at ~20%** of acutance — real, but
   secondary to the interpolator question above, which is why that one came first. ⚠⚠ **And that one
   is DONE: M7.3a shipped 2026-09-01**, so the 48%-of-a-single-pass win is already taken and this

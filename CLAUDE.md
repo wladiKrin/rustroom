@@ -67,14 +67,18 @@ Pipeline order:
 ```
 decode → linearize/black-white → white balance → demosaic →
 input color profile → working space (linear f32) →
-geometry (crop/straighten) → noise reduction → exposure →
-tone (highlights/shadows/curve) → color (HSL/grading) →
-vignette → sharpen → output transform → encode
+PREFIX: lens → noise reduction → dehaze → spots → geometry (orient·keystone·straighten·crop, ONE resample) → masked NR/dehaze
+TAIL:   white balance → exposure → tone (contrast/regions/curve) → clarity/texture →
+        color (saturation/HSL/grading) → masks → vignette → sharpen → camera rendering/LUT → output transform → encode
 ```
 
-**Geometry runs first**, not last, so every adjustment acts on the final cropped pixels —
-which is also what makes the vignette post-crop for free, with no separate mode. (Lens
-corrections will join it there when `lensfun` lands.)
+**Geometry ends the prefix and precedes every adjustment**, so the tail acts on the final cropped
+pixels, which is also what makes the vignette post-crop for free. ⚠⚠ **Since M7.3b it is ONE
+resample** (the keystone fused in, +17.6% acutance) **and it comes AFTER lens, NR, dehaze and
+spots**, so a straighten, crop or keystone drag re-runs only that resample (137 → 35 ms at fit).
+⚠⚠ That order is a **measured speed trade, not an image-quality win**: "NR sees cleaner noise ahead
+of the resamplers" was measured and retracted. Spots live post-lens, **pre-perspective**
+(`SpotMap`); brushes still live post-perspective (`FrameMap`). `grep -n 'M7.3b' docs/JOURNAL.md`.
 
 **NR early, sharpening late** — the two halves of "detail" belong at opposite ends. Denoising
 the source is far easier than denoising after Exposure/Shadows/the tone curve have amplified
@@ -164,7 +168,10 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-25)
 
-**2897 tests**, **75 goldens** (unmoved). No branch, tree clean.
+**2907 tests**, **78 goldens**. ✅ **M7.3b (2026-09-25)** is on branch **`m7.3b-geometry-fusion`**,
+gated green and **not yet confirmed by use or merged**. It fuses perspective into `GeometryStage`,
+reorders the prefix, and moves spots before perspective. `grep -n 'M7.3b' docs/JOURNAL.md`.
+⚠ `Edits::version` is **never written** (always 0); do not trust any note giving it a value.
 
 ✅ **Stacks — same-stem files as one grid cell (2026-09-25, confirmed by use).** `Pictures/fuji` was
 **830 cells for 415 photographs**; both camera folders are **100% RAW+JPEG pairs**. A **view grouping
@@ -217,7 +224,7 @@ default. `grep -n 'M8.13\|M8.14' docs/JOURNAL.md`.
 ### ▶ Next action — the plan has a queue now; work it in order
 
 ⚠⚠ **RESTRUCTURED 2026-09-25 in `03-plan-of-action.md`** (Obsidian, `private/opensource_lightroom/`).
-Every planned phase closed except **M7.3b**, so the roadmap was re-cut:
+Every planned phase closed except **M7.3b** (since done, 2026-09-25), so the roadmap was re-cut:
 - **Phase 9 is NEW — the ten capability gaps**, as a one-at-a-time checklist ordered cheapest-useful
   first: **M5.1c** parametric curve · **M6.4c** rendering intents/gamut · **M9.6** defringe · **M9.7**
   persistent history · **M9.8** keyword re-parenting · **M9.9** folder tree + move tracking · **M9.10**
@@ -232,7 +239,11 @@ Every planned phase closed except **M7.3b**, so the roadmap was re-cut:
   `license = "GPL-3.0-or-later"` all along. ⚠⚠ **Do not re-open it from a list**; it exists in the plan
   only as the record of the broken-`ls` check in *Standing lessons* below.
 
-**▶ The order the user set: finish M7.3b, then Phase 9's checklist from the top.**
+**▶ The order the user set: finish M7.3b (✅ on its branch, awaiting use and merge), then Phase 9's
+checklist from the top.** ⚠ **Proposed and not yet scheduled:** masks' *scene* sliders (WB, exposure,
+contrast, tone regions) run after the global tone curve today, where Lightroom applies them as
+offsets at the global slider's position. It was raised in M7.3b's brainstorm and split off as its
+own milestone. It is the author's call.
 
 ⚠⚠ **The GPU port is finished** — done, declined with numbers, or blocked on a considered trade. Do
 not go looking for the next port; there isn't one.
@@ -293,7 +304,6 @@ filename — two stages are helpers and two twins renamed, so filenames undercou
   leftovers sit in **State**. Nothing is repeated here — a list in two places is how this file hit 1.2 MB.
 - The prefix-cache eviction fix's **picture** half.
 - Clarity's **coalescing** on the horizontal running-sum pass; **M8.1**'s leftovers.
-- ⚠ **M7.3b is DEFERRED, not done.**
 - ⚠⚠ **MEASURE A FILE BY ITS CODE, NOT ITS TOTAL** — this list was wrong in *both* directions until
   2026-09-24, because every figure was a total and this repo's files carry enormous test tails. Measure
   with `awk '/#\[cfg\(test\)\]/{exit} {n++}'` (code **plus** doc comments, which are heavy here).

@@ -1920,7 +1920,8 @@ mod tests {
 
     /// ⚠⚠ A sidecar written before these fields existed must load as **identity** — the container's
     /// `#[serde(default)]` doing its job, with no `version` bump involved. A test rather than a number
-    /// is the guard, which is why `version` is still 7.
+    /// is the guard. ⚠ (This used to end "which is why `version` is still 7". It never was: M7.3b
+    /// found `version` is never written, so every sidecar on disk carries 0.)
     #[test]
     fn a_sidecar_without_the_channel_curves_loads_as_identity() {
         let e: Edits = serde_json::from_str(r#"{"version":7,"exposure":0.5}"#).expect("must parse");
