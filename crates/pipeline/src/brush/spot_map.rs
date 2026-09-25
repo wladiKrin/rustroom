@@ -61,18 +61,19 @@ impl SpotMap {
     }
 
     /// `[0, 1]` normalised → the homography's space: centred, half-height = 1.
-    fn to_n(&self, q: [f32; 2]) -> (f32, f32) {
+    fn hom_of(&self, q: [f32; 2]) -> (f32, f32) {
         ((q[0] - 0.5) * 2.0 * self.aspect, (q[1] - 0.5) * 2.0)
     }
 
-    fn from_n(&self, n: (f32, f32)) -> [f32; 2] {
+    /// The inverse of [`Self::hom_of`].
+    fn unit_of(&self, n: (f32, f32)) -> [f32; 2] {
         [n.0 / (2.0 * self.aspect) + 0.5, n.1 / 2.0 + 0.5]
     }
 
     /// `(x, y)` in frame pixels. May fall outside the frame — the caller clips.
     pub fn point(&self, p: [f32; 2]) -> (f32, f32) {
         let q = match &self.hom {
-            Some(h) => self.from_n(h.output_of(self.to_n(p))),
+            Some(h) => self.unit_of(h.output_of(self.hom_of(p))),
             None => p,
         };
         self.frame.point(q)
@@ -82,7 +83,7 @@ impl SpotMap {
     pub fn inverse_point(&self, x: f32, y: f32) -> [f32; 2] {
         let q = self.frame.inverse_point(x, y);
         match &self.hom {
-            Some(h) => self.from_n(h.source_of(self.to_n(q))),
+            Some(h) => self.unit_of(h.source_of(self.hom_of(q))),
             None => q,
         }
     }
