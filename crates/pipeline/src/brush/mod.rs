@@ -2,8 +2,10 @@
 
 mod frame_map;
 mod raster;
+mod spot_map;
 
 pub use frame_map::FrameMap;
 pub use raster::{
     plan_dabs, rasterize, rasterize_in, BasePixels, BaseRef, CoverageMap, Dab, DabPlan, Stroke,
 };
+pub use spot_map::SpotMap;
