@@ -101,7 +101,7 @@ opensource_lightroom/
 │   ├── xmp/                  # ✅ stem.xmp read / merge-write: rating, label, keywords, title/caption/rights/creator (M6.3 + M6.2); zero GUI, zero catalog
 │   ├── immich/               # ✅ Immich client (zero GUI, `ureq`): search/buckets/album/stacks/**upload** (+ `multipart.rs`, hand-rolled — ureq has none), `Asset`/`AlbumSummary`/`Bucket`/`Upload`. ⚠ DTOs deliberately narrow; nullable-vs-required audited against a *captured* reply
 │   ├── rustroom/             # ✅ CLI crate; binary `rustroom` — `decode` (dump) + `render [--edits]` (RAW)
-│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache/immich_upload/stack; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
+│   ├── app/                  # ✅ GUI `Rustroom` (eframe/egui 0.35 + wgpu). ⚠ main.rs is **1,147 total but only 78 of code** (2026-09-24; it said 681, then 1,116 — **measure by code, do not quote either number**); RustroomApp's methods live in session_flow/sources/smart_sources/library_state/catalog_ops/copies/snapshots/transfer/undo/export_flow/settings_apply/interaction/decode. lib=photo_info/when/export_summary/spot_tool/spot_source/visualize/grade_view/history/action_log/edit_history/selection/crop_tool/histogram/render_engine/thumb_loader/thumb_cache/thumb_window/metadata_scanner/date_tree/rule/rule_form/library_filter{RatingSet,FlagSet,LabelSet}/decode_worker/buffer_cache/view_region/full_res/format_filter/presets/export_presets/safe_name/settings/edit_clipboard/sidecar/sync/batch_export/photo_id/entries/file_rename/thumb_store/immich_source/immich_worker/immich_list_cache/immich_upload/immich_stack_cache/stack; bin-only modules=theme/segmented/list_row/modals{shell,settings,export,info,rule_edit,presets,edits}/name_edit/develop{mod,panel,canvas}/library/filmstrip/thumb/shell/collections_panel/immich_flow/immich_panel (egui lives here, not in the lib). ⚠ This tree also omits `crates/immich`, `crates/gpu-pipeline` and `crates/lens-profile` entirely — it is behind the workspace; trust `ls crates/`.
 │   └── catalog/              # ✅ scan_folder → RAW+JPEG/PNG/TIFF entries (+ mtime); SortOrder/sort (name/modified/edited, case-insensitive, name tie-break); is_raw/is_supported (in-memory; SQLite DAM later) + Description per file (v7, M6.2)
 ├── docs/
 └── tests/                    # integration + golden reference images
@@ -166,7 +166,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 ### State (2026-09-24)
 
-**2887 tests**, **75 goldens** (unmoved). No branch, tree clean.
+**2897 tests**, **75 goldens** (unmoved). No branch, tree clean.
 
 ✅ **Stacks — same-stem files as one grid cell (2026-09-25, confirmed by use).** `Pictures/fuji` was
 **830 cells for 415 photographs**; both camera folders are **100% RAW+JPEG pairs**. A **view grouping
@@ -256,11 +256,15 @@ not go looking for the next port; there isn't one.
    ⚠ The Settings tab **stays** (it holds the toggle). The downloads stay visible as **"Downloaded
    photos"**, hover included — the path itself says "immich". `grep -n 'completely optional'
    docs/JOURNAL.md`.
-   ⬜ **The one Immich item left:** **honouring the server's stacks.** ⚠⚠ Local stacking (2026-09-25)
-   does **nothing** for Immich and cannot: `cache_path` names files by **asset UUID**, so no two ever
-   share a stem — measured, **0 pairs** against 2,913 assets. The wiring is already right (Immich goes
-   through `open_scan` → `browser_entries`), so this plugs in at the same place; what it needs is the
-   server's 2,379 stacks read via `GET /stacks` and mapped onto rows.
+   ✅ **Immich's server-side stacks are honoured (2026-09-25) — the Immich integration is COMPLETE.**
+   ⚠⚠ The whole feature is **one function**: `stack::key_of_with` returns `(cache_root, "stack:<id>")`
+   for a stacked asset and the stem key otherwise, so every piece of local stacking works unchanged and
+   an **empty map is byte-identical to before**. ⚠ `GET /stacks` is **6.3 MB / ~2.9 s** (it embeds the
+   full asset DTO per member), so `immich_stack_cache` keeps a **472 KB projection** — 13× — fetched as
+   `Job::Stacks` off the UI thread. ⚠⚠ **No validator exists** (`StackResponseDto` has no
+   `assetCount`/`lastModified`), so freshness rests on **Reindex** alone. ⚠ The **local** Show rule
+   picks the primary, so untouched pairs show the **RAW** where Immich's UI shows the JPEG.
+   `grep -n "server-side stacks" docs/JOURNAL.md`.
 
 1. **The u8 coverage wire** — priced: **0.56–0.70 ms against an actual 3.55–6.35** at rung 3200,
    **3.4 against 15.3** at export. ⚠⚠ Blocked on a shader restructure — the shader writes one `u32`
