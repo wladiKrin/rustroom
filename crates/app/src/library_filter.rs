@@ -254,6 +254,7 @@ mod tests {
             file_name: name.to_string(),
             label: copy_name.map(str::to_string),
             edits: Default::default(),
+            stack: None,
         }
     }
 

@@ -56,6 +56,7 @@ pub mod sidecar;
 pub mod slider_map;
 pub mod spot_source;
 pub mod spot_tool;
+pub mod stack;
 pub mod straighten_line;
 pub mod sync;
 pub mod thumb_cache;

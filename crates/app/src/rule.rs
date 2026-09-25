@@ -269,6 +269,7 @@ mod tests {
             file_name: name.to_string(),
             label: None,
             edits: Default::default(),
+            stack: None,
         }
     }
 

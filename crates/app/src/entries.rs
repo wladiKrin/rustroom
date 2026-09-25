@@ -31,6 +31,12 @@ pub struct PhotoEntry {
     /// writes only on a photo switch or on quit. The caller substitutes `Session::edits` for that
     /// one photo — see `RustroomApp::thumb_edits`.
     pub edits: Edits,
+    /// Which stack this row belongs to, if any. `None` for a file with no same-stem sibling.
+    ///
+    /// ⚠⚠ Set by [`crate::stack::group`] **after** `build`, never here: `build` expands a scan into
+    /// rows and knows nothing about grouping. Keeping them separate is what lets every consumer —
+    /// the grid, the filmstrip, `selection`, `view_region` — read one list and agree about it.
+    pub stack: Option<crate::stack::Stack>,
 }
 
 impl PhotoEntry {
@@ -95,6 +101,8 @@ pub fn build(scan: &[CatalogEntry], load: impl Fn(&Path) -> Sidecar) -> Vec<Phot
                 // ⚠ `Edits::default()` for a row the sidecar does not mention — the original of
                 // an unedited photo, which is neutral by definition.
                 edits: s.get(n).map(|c| c.edits.clone()).unwrap_or_default(),
+                // ⚠ Always `None` here — grouping is `stack::group`'s job, run over this output.
+                stack: None,
             });
         }
     }
