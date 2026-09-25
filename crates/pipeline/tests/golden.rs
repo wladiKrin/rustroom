@@ -2439,3 +2439,67 @@ fn a_masked_capture_correction_really_changes_the_chart() {
         );
     }
 }
+
+// ─────────────────────────── M7.3b: one geometric resample, a reordered prefix ───────────────────────────
+
+/// ⚠⚠ **The fused path proper**: keystone, angle and crop together, which before M7.3b was two
+/// resamples. `scale: 0` for the same reason as `perspective_vertical`: mostly image, not black.
+#[test]
+fn golden_perspective_straighten() {
+    check_golden_with(
+        "perspective_straighten",
+        &Edits {
+            perspective: edit_model::Perspective {
+                vertical: 45.0,
+                scale: 0.0,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 5.0,
+                crop: edit_model::CropRect {
+                    left: 0.1,
+                    top: 0.1,
+                    right: 0.9,
+                    bottom: 0.9,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        grid_chart(),
+    );
+}
+
+/// ⚠⚠ **The reorder**: noise reduction with a straighten. Since M7.3b NR runs on the source and
+/// the rotation resamples the result; before, NR was handed rotated (interpolated) noise.
+#[test]
+fn golden_nr_straighten() {
+    check_golden_with(
+        "nr_straighten",
+        &Edits {
+            noise_reduction: NoiseReduction {
+                luminance: 60.0,
+                ..Default::default()
+            },
+            geometry: edit_model::Geometry {
+                angle: 5.0,
+                ..Default::default()
+            },
+            ..Edits::default()
+        },
+        noise_chart(),
+    );
+}
+
+/// ⚠⚠ **The new anchor**: a spot under an active keystone. Since M7.3b the spot is placed in
+/// pre-perspective space, so the keystone carries the healed patch with the content around it.
+#[test]
+fn golden_spot_perspective() {
+    let mut e = spot_case("spot_heal");
+    e.perspective = edit_model::Perspective {
+        vertical: 40.0,
+        scale: 0.0,
+        ..Default::default()
+    };
+    check_golden_with("spot_perspective", &e, spot_chart());
+}
