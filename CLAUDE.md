@@ -227,9 +227,10 @@ Every planned phase closed except **M7.3b**, so the roadmap was re-cut:
   **M9.6** because M9.1–M9.5 are retired, not free.
 - **The old Phase 9 is Phase 10** (integration, cross-platform, release). ⚠ **M9.1 (Immich) KEEPS ITS
   NAME** inside it — it shipped, and ten references point at that string. M9.2–M9.5 → **M10.2–M10.5**.
-- **M10.1 is new: ship the GPL-3.0 text.** ⚠ The licence is already *declared* (`[workspace.package]`,
-  all 15 crates, and the README); only `LICENSE` is missing. One `curl`. ⚠ Never reproduce a licence
-  from memory.
+- ⛔ **M10.1 was WITHDRAWN the same day it was written — it was never real.** `LICENSE` (the full
+  674-line GPL-3.0 text) has been committed since `e71330d`, and `[workspace.package]` has carried
+  `license = "GPL-3.0-or-later"` all along. ⚠⚠ **Do not re-open it from a list**; it exists in the plan
+  only as the record of the broken-`ls` check in *Standing lessons* below.
 
 **▶ The order the user set: finish M7.3b, then Phase 9's checklist from the top.**
 
@@ -321,13 +322,12 @@ Kept and pinned; whether it still earns its keep is worth asking when something 
   `asset("one")` with `original_file_name: "one.jpg"` made a UUID path and a display name coincide, and
   four tests passed against a catalog that could never find its own rows. **(b)** A query that finds
   **nothing** passes silently, so assert the sample first — `labels.len() > 12` caught three separate ways
-  the Color guard opened nothing, and a substring filter matching no tests exits 0. ⚠⚠ **This applies to
-  shell checks, and it cost a whole invented milestone on 2026-09-25.** `ls | grep -i license` returned
-  nothing, so I reported there was no `LICENSE` file and a milestone (M10.1) was written around shipping
-  one — it had been committed since `e71330d`. **`ls` here is aliased to `eza --long`, which prints
-  NOTHING when piped unless given an explicit path argument**, and exits 0 with an empty stderr. Use
-  `/bin/ls` (or `git ls-files`) for anything whose answer you will act on, and **prove a negative with a
-  positive control**: the same command must find something you know is there. **(c)** Comparing two
+  the Color guard opened nothing, and a substring filter matching no tests exits 0. ⚠⚠ **It applies to shell
+  checks, and it cost an invented milestone (M10.1) on 2026-09-25:** `ls | grep -i license` returned
+  nothing, so I reported no `LICENSE` — it had been committed since `e71330d`. **`ls` here is aliased to
+  `eza --long`, which prints NOTHING to a pipe unless given a path argument**, exiting 0 with empty
+  stderr. Use `/bin/ls` or `git ls-files` for anything you will act on, and **prove a negative with a
+  positive control**: the same command must find something known to be there. **(c)** Comparing two
   things that are **the same** proves nothing, so prove they differ first: the curve-order test asserts the
   two orders differ by >0.05 *before* asserting which happened; the GPU whole-chain test asserts the render
   differs from `neutral` before comparing backends. **(d)** When a threshold you invented fails, **find the
