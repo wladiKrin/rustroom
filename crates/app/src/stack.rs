@@ -219,26 +219,21 @@ pub fn group(
     out
 }
 
-/// Every stack key in `entries`, for "Expand all".
+/// Every stack key present in **already-grouped** rows, for "Expand all".
 ///
-/// ⚠ Derived the same way [`group`] derives them, so the two cannot disagree about what a stack is.
-pub fn keys(entries: &[PhotoEntry], s: &Stacking) -> HashSet<StackKey> {
-    if !s.enabled {
-        return HashSet::new();
-    }
-    let mut counts: HashMap<StackKey, usize> = HashMap::new();
-    for e in entries {
-        if e.id.copy != 0 || !s.participates(&e.id.path) {
-            continue;
-        }
-        if let Some(k) = key_of(&e.id.path) {
-            *counts.entry(k).or_default() += 1;
-        }
-    }
-    counts
-        .into_iter()
-        .filter(|(_, n)| *n > 1)
-        .map(|(k, _)| k)
+/// ⚠⚠ **Reads `stack.is_some()` rather than counting members per key, and that distinction was a
+/// shipped bug.** The first version counted, which is correct on an *ungrouped* list — but it was
+/// called with the grouped one, where a collapsed stack contributes exactly **one** row. Every count
+/// was therefore 1, the `n > 1` filter dropped them all, and "Expand all" set the expanded set to
+/// **empty** and did nothing. Reported in use, 2026-09-25.
+///
+/// ⚠ Every member of a stack carries the same key, and a collapsed primary carries it too, so this
+/// is right whether the input is collapsed, expanded or mixed.
+pub fn stacked_keys(entries: &[PhotoEntry]) -> HashSet<StackKey> {
+    entries
+        .iter()
+        .filter(|e| e.stack.is_some())
+        .filter_map(|e| key_of(&e.id.path))
         .collect()
 }
 
@@ -338,7 +333,8 @@ mod tests {
         };
         let out = group(input.clone(), &off, &HashSet::new());
         assert_eq!(out, input);
-        assert!(keys(&input, &off).is_empty());
+        // ⚠ And with stacking off no row carries a stack, so there is nothing to expand.
+        assert!(stacked_keys(&out).is_empty());
     }
 
     /// ⚠ A format excluded from stacking is never a member — which is what makes the rule "more
@@ -455,15 +451,32 @@ mod tests {
         );
     }
 
+    /// ⚠⚠ **The regression guard for "Expand all did nothing".** The keys must come out of the
+    /// **grouped** list — the one the toolbar actually holds — where a collapsed stack is a single
+    /// row. A member count on that list is 1 for every stack, which is what silently produced an
+    /// empty expanded set.
     #[test]
-    fn keys_names_every_stack_and_nothing_else() {
+    fn stacked_keys_finds_a_collapsed_stack_in_the_grouped_list() {
         let input = vec![
             entry("/f/a.JPG", 0, false),
             entry("/f/a.RAF", 0, false),
             entry("/f/lonely.RAF", 0, false),
         ];
-        let k = keys(&input, &on());
-        assert_eq!(k.len(), 1, "one stack, not the lone file: {k:?}");
+        let grouped = group(input, &on(), &HashSet::new());
+        // ⚠ The sample assertion: the pair really did collapse, so what follows is about `keys`.
+        assert_eq!(grouped.len(), 2, "one stack row and one lone file");
+
+        let k = stacked_keys(&grouped);
+        assert_eq!(k.len(), 1, "the collapsed stack must still be found: {k:?}");
         assert!(k.contains(&key_of(Path::new("/f/a.RAF")).unwrap()));
+
+        // ⚠ And it is stable across the round trip: expanding then reading gives the same key.
+        let expanded = group(
+            vec![entry("/f/a.JPG", 0, false), entry("/f/a.RAF", 0, false)],
+            &on(),
+            &k,
+        );
+        assert_eq!(expanded.len(), 2, "the stack must now be expanded");
+        assert_eq!(stacked_keys(&expanded), k, "the key survives expansion");
     }
 }

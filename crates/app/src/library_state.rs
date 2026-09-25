@@ -38,7 +38,13 @@ impl Library {
         // `library`, `library_state`, `sources`, `multi::compare` and `test_app`, and the override
         // has to hold at every one. One choke point cannot be bypassed; twelve are twelve chances
         // to forget — the same argument the comment below makes for `visible` being one list.
-        let filter = filter.effective_for(&self.entries);
+        // ⚠⚠ The **folder's** formats, from the scan — not the grouped entries. With stacking on,
+        // an all-paired folder's rows are all RAW, so reading `entries` made the folder look
+        // single-format and the override fired: hiding a format then silently stopped working. The
+        // question "what does this folder hold" is about the folder, and stacking is about the view.
+        let formats =
+            rustroom_app::format_filter::formats_of(self.scan.iter().map(|e| e.path.as_path()));
+        let filter = filter.effective_for(&formats);
         // ⚠ One derived `visible` list, composed from one filter — **not** a second filtering
         // mechanism. Sparse-versus-dense index confusion is this project's third-most-repeated
         // bug, and `visible` staying the single derived list is the mitigation that has held.

@@ -220,9 +220,9 @@ impl LibraryFilter {
     ///
     /// ⚠ Every other half of the filter is left alone. A one-format folder can still be filtered
     /// to empty by rating or flag, and that is recoverable because those controls are always drawn.
-    pub fn effective_for(&self, entries: &[PhotoEntry]) -> Self {
+    pub fn effective_for(&self, formats: &[(String, usize)]) -> Self {
         let mut out = self.clone();
-        if crate::format_filter::folder_overrides_hidden(entries) {
+        if crate::format_filter::folder_overrides_hidden(formats) {
             out.format = FormatFilter::default();
         }
         out
@@ -272,7 +272,7 @@ mod tests {
         let mut f = LibraryFilter::default();
         f.format.toggle("jpg");
         let only_jpg = [entry("a.jpg", 0, None), entry("b.JPG", 0, None)];
-        let eff = f.effective_for(&only_jpg);
+        let eff = f.effective_for(&crate::format_filter::formats_present(&only_jpg));
         for e in &only_jpg {
             assert!(
                 eff.matches(e, Marks::default(), &Capture::default()),
@@ -291,7 +291,7 @@ mod tests {
         let mut f = LibraryFilter::default();
         f.format.toggle("jpg");
         let mixed = [entry("a.jpg", 0, None), entry("b.raf", 0, None)];
-        let eff = f.effective_for(&mixed);
+        let eff = f.effective_for(&crate::format_filter::formats_present(&mixed));
         assert!(!eff.matches(&mixed[0], Marks::default(), &Capture::default()));
         assert!(eff.matches(&mixed[1], Marks::default(), &Capture::default()));
     }
@@ -304,9 +304,16 @@ mod tests {
         let mut f = LibraryFilter::default();
         f.format.toggle("jpg");
         assert!(f.is_active(), "the stored filter is on");
-        assert!(!f.effective_for(&[entry("a.jpg", 0, None)]).is_active());
+        assert!(!f
+            .effective_for(&crate::format_filter::formats_present(&[entry(
+                "a.jpg", 0, None
+            )]))
+            .is_active());
         assert!(f
-            .effective_for(&[entry("a.jpg", 0, None), entry("b.raf", 0, None)])
+            .effective_for(&crate::format_filter::formats_present(&[
+                entry("a.jpg", 0, None),
+                entry("b.raf", 0, None)
+            ]))
             .is_active());
     }
 

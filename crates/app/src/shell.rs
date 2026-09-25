@@ -1032,7 +1032,7 @@ fn stack_buttons(app: &mut RustroomApp, ui: &mut egui::Ui) {
     if !lib.entries.iter().any(|e| e.stack.is_some()) {
         return;
     }
-    let all_keys = rustroom_app::stack::keys(&lib.entries, &app.settings.stacking);
+    let all_keys = rustroom_app::stack::stacked_keys(&lib.entries);
     // ⚠ Symmetrical, so each button is lit exactly when it has something to do — a button that greys
     // out says "already done", where a live one that changes nothing says nothing at all.
     let state = |want: bool| {
@@ -1073,7 +1073,10 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     let formats = app
         .library
         .as_ref()
-        .map(|lib| format_filter::formats_present(&lib.entries))
+        // ⚠⚠ From the **scan**, never the grouped entries: a collapsed pair leaves no JPEG row, so
+        // reading `entries` made the JPEG chip vanish and reappear as stacks were toggled. The
+        // folder still holds those JPEGs, so the control that hides them stays put.
+        .map(|lib| format_filter::formats_of(lib.scan.iter().map(|e| e.path.as_path())))
         .unwrap_or_default();
     // ⚠⚠ The SAME predicate the filtering uses, not a second copy of the rule. When these were
     // two independent conditions, hiding `jpg` and opening a JPEG-only folder drew no chips AND
@@ -1082,10 +1085,8 @@ fn format_chips(app: &mut RustroomApp, ui: &mut egui::Ui) {
     // ⚠ A single-format folder still draws its chip (user's call, 2026-09-20: the format and
     // its count should always be visible) — lit, since the override shows everything, and
     // **not clickable**, since a click could only hide the whole grid or do nothing.
-    let single = app
-        .library
-        .as_ref()
-        .is_some_and(|lib| format_filter::folder_overrides_hidden(&lib.entries));
+    // ⚠ The same scan-derived census as the chips, not the grouped entries — see `formats` above.
+    let single = format_filter::folder_overrides_hidden(&formats);
     // ⚠ Built rightmost-first, because the enclosing layout runs right to left; reversing here
     // is what keeps the on-screen order the same as `formats_present` returns.
     //
