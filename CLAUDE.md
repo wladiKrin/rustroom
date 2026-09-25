@@ -321,7 +321,13 @@ Kept and pinned; whether it still earns its keep is worth asking when something 
   `asset("one")` with `original_file_name: "one.jpg"` made a UUID path and a display name coincide, and
   four tests passed against a catalog that could never find its own rows. **(b)** A query that finds
   **nothing** passes silently, so assert the sample first — `labels.len() > 12` caught three separate ways
-  the Color guard opened nothing, and a substring filter matching no tests exits 0. **(c)** Comparing two
+  the Color guard opened nothing, and a substring filter matching no tests exits 0. ⚠⚠ **This applies to
+  shell checks, and it cost a whole invented milestone on 2026-09-25.** `ls | grep -i license` returned
+  nothing, so I reported there was no `LICENSE` file and a milestone (M10.1) was written around shipping
+  one — it had been committed since `e71330d`. **`ls` here is aliased to `eza --long`, which prints
+  NOTHING when piped unless given an explicit path argument**, and exits 0 with an empty stderr. Use
+  `/bin/ls` (or `git ls-files`) for anything whose answer you will act on, and **prove a negative with a
+  positive control**: the same command must find something you know is there. **(c)** Comparing two
   things that are **the same** proves nothing, so prove they differ first: the curve-order test asserts the
   two orders differ by >0.05 *before* asserting which happened; the GPU whole-chain test asserts the render
   differs from `neutral` before comparing backends. **(d)** When a threshold you invented fails, **find the
