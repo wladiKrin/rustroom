@@ -157,7 +157,14 @@ goldens unmoved.
 ### 2026-09-26 — GPU geometry, a resident input and a no-download handoff (branch `gpu-geometry`)
 
 Stacked on `drag-frame-overheads`. **2,920 tests**, 78 goldens unmoved, gate green (`FMT=0 CLIPPY=0
-TEST=0`, the suite run twice). Spec and plan `2026-09-26-gpu-geometry-*`. **Not yet confirmed by use.**
+TEST=0`, the suite run twice). Spec and plan `2026-09-26-gpu-geometry-*`. ✅ **Confirmed by use
+2026-09-26** ("feels much smoother"). The author's `RUSTROOM_DEBUG_RENDER` log: **78 of 78 drag frames
+handed off**, median **40.0 ms** (p10 34.5, p90 47.3) at rung 3123, against **~97 ms** in the same
+drag's log before the work (**~2.4×** in the app). After release, 3 warm-behind renders (92–108 ms)
+filled the cache, and the following tail edits ran with `prefix_ran 0` at ~34 ms. ⚠ **In-app is
+~11 ms slower than the headless probe (28.8)**: the tail's GPU run averages 36.7 ms in the app
+against ~27 in the probe. Unmeasured; the likeliest cause is the window sharing the GPU (texture
+upload and presentation).
 
 **The result**: a Straighten drag on DSCF6263 at rung 3200, median of 40 frames, the same probe on
 all three builds:
