@@ -14,13 +14,24 @@ impl ExposureStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for ExposureStage {
+    fn px(&self, _x: usize, _y: usize, p: [f32; 3]) -> [f32; 3] {
+        // ⚠ The same per-sample expression `map_samples` applied, to the three channels in order.
+        [p[0] * self.factor, p[1] * self.factor, p[2] * self.factor]
+    }
+}
+
 impl PipelineStage for ExposureStage {
     fn name(&self) -> &'static str {
         "exposure"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        image.map_samples(|s| s * self.factor)
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

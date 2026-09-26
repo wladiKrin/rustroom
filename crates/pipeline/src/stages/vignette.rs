@@ -30,6 +30,7 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// The two halves of the slider move different variables and never both at once: positive
 /// stretches an axis (ellipse → circle), negative raises the exponent (ellipse → rounded
 /// rectangle).
+#[derive(Clone, Copy)]
 struct Shape {
     wu: f32,
     wv: f32,
@@ -166,56 +167,92 @@ impl VignetteStage {
     }
 }
 
-impl PipelineStage for VignetteStage {
-    fn name(&self) -> &'static str {
-        "vignette"
-    }
+/// The vignette's per-pixel function, resolved against one frame.
+///
+/// ⚠ Built per walk by [`VignetteStage::per_pixel`] because the frame is the buffer's own size
+/// when there is no region, and the buffer is only known when the walk starts — the same reason
+/// `Shape` is built in `apply` rather than in `new`.
+struct VignettePx {
+    shape: Shape,
+    e0: f32,
+    e1: f32,
+    k: f32,
+    hw: f32,
+    hh: f32,
+    x0: usize,
+    y0: usize,
+}
 
-    fn apply(&self, image: ImageBuf) -> ImageBuf {
-        let (w, h) = (image.width(), image.height());
+impl VignetteStage {
+    /// The function for a `w` x `h` buffer, or `None` when the stage would change nothing.
+    fn prepare(&self, w: usize, h: usize) -> Option<VignettePx> {
         if w == 0 || h == 0 || !self.params.is_active() {
-            return image;
+            return None;
         }
-        let p = self.params;
-
         // The frame the falloff is measured against, and where this buffer sits in it.
         // Without a region the buffer *is* the frame — the existing behaviour, exactly.
         let (fw, fh, x0, y0) = match self.region {
             Some(r) => (r.full_w, r.full_h, r.x0, r.y0),
             None => (w, h, 0, 0),
         };
-
         // ⚠ Through `vignette_params` rather than inline, so this path IS the reference the GPU
         // stage reads rather than merely agreeing with it.
-        let vp = vignette_params(&p, fw, fh);
-        let shape = Shape {
-            wu: vp.wu,
-            wv: vp.wv,
-            expo: vp.expo,
-            elliptical: vp.elliptical,
-        };
-        let (e0, e1, k) = (vp.e0, vp.e1, vp.k);
-        let (hw, hh) = (fw as f32 * 0.5, fh as f32 * 0.5);
-
-        image.map_pixels_xy(|x, y, rgb| {
-            let u = ((x + x0) as f32 + 0.5) / hw - 1.0;
-            let v = ((y + y0) as f32 + 0.5) / hh - 1.0;
-            let f = k * smoothstep(e0, e1, shape.distance(u, v)); // -1 … 1
-            if f <= 0.0 {
-                // Squared: 1 at f = 0, still exactly 0 at f = -1, but about twice the stops
-                // at every point in between (f = -0.5 is -2 EV, not -1).
-                let gain = (1.0 + f) * (1.0 + f);
-                [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
-            } else {
-                // Toward white, squared about *its* endpoint so the two halves are mirror
-                // images: equal |amount| moves a pixel equally far toward black and toward
-                // white. `max(0.0)` leaves scene-referred samples already above 1.0 alone
-                // rather than dragging them back down.
-                let s = 1.0 - (1.0 - f) * (1.0 - f);
-                let lift = |v: f32| v + (1.0 - v).max(0.0) * s;
-                [lift(rgb[0]), lift(rgb[1]), lift(rgb[2])]
-            }
+        let vp = vignette_params(&self.params, fw, fh);
+        Some(VignettePx {
+            shape: Shape {
+                wu: vp.wu,
+                wv: vp.wv,
+                expo: vp.expo,
+                elliptical: vp.elliptical,
+            },
+            e0: vp.e0,
+            e1: vp.e1,
+            k: vp.k,
+            hw: fw as f32 * 0.5,
+            hh: fh as f32 * 0.5,
+            x0,
+            y0,
         })
+    }
+}
+
+impl crate::per_pixel::PerPixel for VignettePx {
+    fn px(&self, x: usize, y: usize, rgb: [f32; 3]) -> [f32; 3] {
+        let u = ((x + self.x0) as f32 + 0.5) / self.hw - 1.0;
+        let v = ((y + self.y0) as f32 + 0.5) / self.hh - 1.0;
+        let f = self.k * smoothstep(self.e0, self.e1, self.shape.distance(u, v)); // -1 … 1
+        if f <= 0.0 {
+            // Squared: 1 at f = 0, still exactly 0 at f = -1, but about twice the stops
+            // at every point in between (f = -0.5 is -2 EV, not -1).
+            let gain = (1.0 + f) * (1.0 + f);
+            [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain]
+        } else {
+            // Toward white, squared about *its* endpoint so the two halves are mirror
+            // images: equal |amount| moves a pixel equally far toward black and toward
+            // white. `max(0.0)` leaves scene-referred samples already above 1.0 alone
+            // rather than dragging them back down.
+            let s = 1.0 - (1.0 - f) * (1.0 - f);
+            let lift = |v: f32| v + (1.0 - v).max(0.0) * s;
+            [lift(rgb[0]), lift(rgb[1]), lift(rgb[2])]
+        }
+    }
+}
+
+impl PipelineStage for VignetteStage {
+    fn name(&self) -> &'static str {
+        "vignette"
+    }
+
+    fn apply(&self, image: ImageBuf) -> ImageBuf {
+        match self.prepare(image.width(), image.height()) {
+            Some(px) => crate::per_pixel::apply_one(&px, image),
+            None => image,
+        }
+    }
+
+    fn per_pixel(&self, w: usize, h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        self.prepare(w, h)
+            .map(|px| Box::new(px) as Box<dyn crate::per_pixel::PerPixel + '_>)
     }
 }
 

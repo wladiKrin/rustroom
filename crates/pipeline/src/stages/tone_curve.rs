@@ -171,18 +171,27 @@ impl ToneCurveStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for ToneCurveStage {
+    fn px(&self, _x: usize, _y: usize, p: [f32; 3]) -> [f32; 3] {
+        match &self.channels {
+            // ⚠ The common path: one table over every sample, exactly `map_samples`' expression.
+            None => [self.sample(p[0]), self.sample(p[1]), self.sample(p[2])],
+            Some(ch) => std::array::from_fn(|c| sample_table(&ch[c], self.sample(p[c]))),
+        }
+    }
+}
+
 impl PipelineStage for ToneCurveStage {
     fn name(&self) -> &'static str {
         "tone_curve"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        match &self.channels {
-            // ⚠ The common path, untouched: one table over every sample.
-            None => image.map_samples(|s| self.sample(s)),
-            Some(ch) => image
-                .map_pixels(|p| std::array::from_fn(|c| sample_table(&ch[c], self.sample(p[c])))),
-        }
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

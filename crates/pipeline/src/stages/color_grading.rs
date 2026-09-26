@@ -145,20 +145,28 @@ impl ColorGradingStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for ColorGradingStage {
+    fn px(&self, _x: usize, _y: usize, rgb: [f32; 3]) -> [f32; 3] {
+        let [l, a, b] = prophoto_to_oklab(rgb);
+        let [da, db, dl] = self.grade_at(l);
+        let out = oklab_to_prophoto([l + dl, a + da, b + db]);
+        // Clamped at 0 only, matching `SaturationStage` and `HslStage`. Never at 1: the
+        // output transform is the only place clipping belongs.
+        [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
+    }
+}
+
 impl PipelineStage for ColorGradingStage {
     fn name(&self) -> &'static str {
         "color_grading"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        image.map_pixels(|rgb| {
-            let [l, a, b] = prophoto_to_oklab(rgb);
-            let [da, db, dl] = self.grade_at(l);
-            let out = oklab_to_prophoto([l + dl, a + da, b + db]);
-            // Clamped at 0 only, matching `SaturationStage` and `HslStage`. Never at 1: the
-            // output transform is the only place clipping belongs.
-            [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
-        })
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

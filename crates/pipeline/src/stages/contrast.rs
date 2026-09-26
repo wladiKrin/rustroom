@@ -23,14 +23,25 @@ impl ContrastStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for ContrastStage {
+    fn px(&self, _x: usize, _y: usize, p: [f32; 3]) -> [f32; 3] {
+        let slope = self.slope;
+        let f = |s: f32| (PIVOT + (s - PIVOT) * slope).max(0.0);
+        [f(p[0]), f(p[1]), f(p[2])]
+    }
+}
+
 impl PipelineStage for ContrastStage {
     fn name(&self) -> &'static str {
         "contrast"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        let slope = self.slope;
-        image.map_samples(|s| (PIVOT + (s - PIVOT) * slope).max(0.0))
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 

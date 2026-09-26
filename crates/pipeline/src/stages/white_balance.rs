@@ -21,14 +21,24 @@ impl WhiteBalanceStage {
     }
 }
 
+impl crate::per_pixel::PerPixel for WhiteBalanceStage {
+    fn px(&self, _x: usize, _y: usize, [r, g, b]: [f32; 3]) -> [f32; 3] {
+        let [gr, gg, gb] = self.gains;
+        [r * gr, g * gg, b * gb]
+    }
+}
+
 impl PipelineStage for WhiteBalanceStage {
     fn name(&self) -> &'static str {
         "white_balance"
     }
 
     fn apply(&self, image: ImageBuf) -> ImageBuf {
-        let [gr, gg, gb] = self.gains;
-        image.map_pixels(|[r, g, b]| [r * gr, g * gg, b * gb])
+        crate::per_pixel::apply_one(self, image)
+    }
+
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn crate::per_pixel::PerPixel + '_>> {
+        Some(Box::new(self))
     }
 }
 
