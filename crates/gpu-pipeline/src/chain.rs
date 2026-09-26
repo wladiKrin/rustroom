@@ -1337,7 +1337,9 @@ mod tests {
         let mut chain = three_stages(&ctx);
         chain.set_timing(true);
         chain.run_rgba8(&ramp(64, 48)).expect("gpu");
-        let t = chain.last_timings().expect("a timed run keeps its readings");
+        let t = chain
+            .last_timings()
+            .expect("a timed run keeps its readings");
         let names: Vec<&str> = t.entries.iter().map(|(n, _)| n.as_str()).collect();
         // ⚠ Passes only: the copies cannot be marked on Metal (`timing.rs`).
         assert_eq!(names, ["exposure", "contrast", "exposure", "quantise"]);

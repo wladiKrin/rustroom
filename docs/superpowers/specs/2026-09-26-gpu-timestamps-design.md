@@ -43,18 +43,25 @@ once per process.
 
 A new module `crates/gpu-pipeline/src/timing.rs` owns a `Recorder`: a `QuerySet` of timestamps, a
 resolve buffer (`QUERY_RESOLVE | COPY_SRC`) and a mappable copy (`MAP_READ | COPY_DST`), plus the
-labels in the order the marks were made. `GpuChain::run_with`, in timing mode, marks:
+labels in the order the passes were opened. `GpuChain::run_with`, in timing mode, records:
 
-- before and after whatever moved the input in (encoder timestamps): the staging copy for a CPU
-  input, the GPU-side copy for a resident input, and nothing for a taken plane, where the line
-  says `(taken)`;
 - **one compute pass per stage**, each with `timestamp_writes` at its beginning and end, labelled
   with the stage's name;
-- the quantise pass, in bytes mode, with its own beginning and end;
-- before and after the readback copy.
+- the quantise pass, in bytes mode, with its own beginning and end.
 
-After the marks the encoder resolves the query set and copies the result beside the readback. The
-mapped values are converted through the timestamp period into milliseconds.
+After the last pass the encoder resolves the query set and copies the result beside the readback.
+The mapped values are converted through the timestamp period into milliseconds.
+
+**Amended after the first run (2026-09-26): the copies are NOT marked.** The design as approved
+bracketed the upload and readback copies with encoder timestamps, which `TIMESTAMP_QUERY_INSIDE_ENCODERS`
+promises and the M2 grants. In wgpu 29's Metal backend a `write_timestamp` outside a pass is
+deferred onto a dummy blit encoder (its own source says "here be dragons"), the command buffer then
+never reaches `Completed`, and `Device::wait` checks for nothing else, so `poll(Wait)` spins forever
+on the render worker. With the two marks in, the timed-bytes test hung; without them it passes in
+0.04 s. So a block lists the passes only, and the summary's `copies+latency` is the wall's remainder
+beyond the passes: the device-side copies and the queue latency together. The copies' host halves
+are already on the `RUSTROOM_DEBUG_XFER` line (`memcpy`, `tovec`); their device halves can be had
+by differencing a resident-input run against a staged one, which is a probe rather than a mark.
 
 ### 4. What is printed
 
@@ -62,18 +69,17 @@ One block per chain, on stderr beside the existing `RUSTROOM_DEBUG_XFER` line:
 
 ```
 GPUTIME display_rendering+output_transform 3200x2136
-  upload            (taken)
   display_rendering   3.41 ms
   output_transform    3.28 ms
   quantise            1.12 ms
-  readback            0.74 ms
-  gpu span            8.90 ms   wall submit+wait 24.10 ms   latency 15.20 ms
+  gpu span            7.81 ms   wall submit+wait 24.10 ms   copies+latency 16.29 ms
 ```
 
-`gpu span` is first mark to last mark on the GPU's clock; `wall` is the CPU stopwatch the chain
-already keeps; `latency` is their difference. That last number is what the app-versus-probe
-question needs. A `Timings` value with the same content is kept on the chain (`last_timings()`) for
-the tests and for a future probe that wants a table rather than text.
+`gpu span` is the first pass's begin to the last pass's end on the GPU's clock; `wall` is the CPU
+stopwatch the chain already keeps; `copies+latency` is their difference, the device-side copies and
+the queue latency together (see §3's amendment). A `Timings` value with the same content is kept on
+the chain (`last_timings()`) for the tests and for a future probe that wants a table rather than
+text.
 
 ### 5. The handoff
 
@@ -109,8 +115,8 @@ replays a real drag through the real engine and needs no other change. Nothing i
 - A timed run and an untimed run of the same chain produce identical bytes (the pass split is
   inert). The fixture must first be shown to move pixels.
 - With timing on, a three-stage chain's `last_timings()` holds three stage entries in stage order,
-  each positive and each below the chain's wall time, plus the readback entry; a sabotage that
-  keeps the single pass reports one entry and fails the count.
+  each positive and each below the chain's wall time, plus the quantise entry in bytes mode; a
+  sabotage that keeps the single pass reports one entry and fails the name list.
 - With timing off, `last_timings()` is `None` and the chain issues no query set.
 - The once-only "unsupported" line is a function taking `supported: bool`, tested with a counter.
 - GPU tests skip without an adapter, as every test in the crate does.
