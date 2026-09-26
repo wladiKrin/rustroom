@@ -558,6 +558,37 @@ fn golden_orient_mirror() {
     )
 }
 
+/// M6.4c: the PERCEPTUAL intent on the same saturated chart as `saturation_plus50`, which renders
+/// relative colorimetric (the default). Every other golden goes through the default intent, so
+/// without this one a regression in perceptual's knee would be invisible. ⚠ The test asserts the
+/// two references differ, so the pair cannot silently collapse into one intent.
+#[test]
+fn golden_gamut_perceptual() {
+    let edits = Edits {
+        saturation: 50.0,
+        ..Edits::default()
+    };
+    let render = |intent| {
+        pipeline::build_pipeline_spec(
+            &edits,
+            RenderScale::FULL,
+            pipeline::RenderSpec {
+                intent,
+                ..Default::default()
+            },
+            pipeline::ProfileRendering::colorimetric(),
+        )
+        .run(chart())
+    };
+    let per = render(color::RenderingIntent::Perceptual);
+    assert_ne!(
+        to_rgb8(&per),
+        to_rgb8(&render(color::RenderingIntent::RelativeColorimetric)),
+        "the fixture must tell the intents apart"
+    );
+    compare_or_update("gamut_perceptual", per);
+}
+
 #[test]
 fn golden_saturation_plus50() {
     check_golden(
