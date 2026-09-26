@@ -170,7 +170,7 @@ Key rule: **`pipeline`, `color`, `export` have zero GUI dependency** and are dri
 
 **2977 tests**, **79 goldens** (⚠ 79: M5.1c added one; "78" in older notes is stale).
 ✅ **The resident final checkpoint (2026-09-26, branch `resident-final`, stacked on
-`per-pixel-fusion`, not confirmed by use).** `PrefixCache` keeps the tail's input on the GPU under
+`per-pixel-fusion`; confirmed by use 2026-09-26, the whole stack together — "very smooth").** `PrefixCache` keeps the tail's input on the GPU under
 `(final key, Option<Rect>)`; a one-chain tail runs from it, a miss keeps its upload, the last GPU
 prefix step keeps its output, and **the settle after a handoff is a download (~101–122 → ~21–30
 ms), not a render**. The tail's input travels as an `Arc` — the 2.5 ms clone per tail frame is gone.
@@ -179,7 +179,7 @@ plane in place); the fix — the first fused unit reading from the resident, a f
 emitter — is priced in the journal and needs its own spec. Measured A/B against a worktree build of
 `0877bb2` because the sidecar changed under the day's figures. `grep -n 'resident final' docs/JOURNAL.md`.
 ✅ **Per-pixel fusion (2026-09-26, branch `per-pixel-fusion`,
-stacked on `gpu-timestamps`, neither confirmed by use yet).** A run of consecutive per-pixel
+stacked on `gpu-timestamps`; in use with the resident final since 2026-09-26, no regression felt).** A run of consecutive per-pixel
 stages is ONE walk on the CPU (`pipeline::per_pixel`, bit-identical) and ONE dispatch on the GPU
 (`gpu_pipeline::per_pixel`, three bindings); grouping is at **run time**, the stage list is
 untouched; `RUSTROOM_NO_FUSION=1` is the A/B. Measured: the GPU whole tail **35.6 → 21.2 ms** at

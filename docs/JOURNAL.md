@@ -163,7 +163,9 @@ goldens unmoved.
 Stacked on `per-pixel-fusion`. **2,977 tests** (10 added), 79 goldens unmoved (⚠ 79, not the 78
 earlier notes carried: M5.1c's `19a6219` added one), gate green (`FMT=0 CLIPPY=0 TEST=0`, each from
 its own command). Spec `2026-09-26-resident-final-checkpoint-design.md`, plan of the same date.
-**Not yet confirmed by use.** Row 1 of `docs/PIPELINE-REVIEW-2026-09-26.md`'s list (F2).
+✅ **Confirmed by use 2026-09-26** ("everything feels very smooth and responsive") — the whole stack
+`gpu-timestamps` → `per-pixel-fusion` → `resident-final` was used together, so the ~3 ms on the drag
+frame below was not felt. Row 1 of `docs/PIPELINE-REVIEW-2026-09-26.md`'s list (F2).
 
 **What shipped.** `PrefixCache` holds ONE tail input on the GPU under `TailKey = (final CacheKey,
 Option<Rect>)` — the cumulative prefix key, the rung, and the region rect when the frame is scoped.
