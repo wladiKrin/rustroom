@@ -1535,10 +1535,12 @@ fn render_cached(
             let (pipe, chain) = build_tail(color::OutputSpace::Srgb);
             if debug_steps {
                 eprintln!(
-                    "  TIMING build_tail {:6.1} ms  cpu stages {:?}  gpu chain {}",
+                    "  TIMING build_tail {:6.1} ms  cpu stages {:?}  gpu chain {}  takes {:?}  prefix_offered {}",
                     t_build.elapsed().as_secs_f64() * 1000.0,
                     pipe.stage_names(),
-                    chain.is_some()
+                    chain.is_some(),
+                    chain.as_ref().and_then(|c| c.takes_from()),
+                    prefix_offered
                 );
             }
             // ⚠⚠ **M8.3g: the tail's last chain quantizes on the GPU and downloads 27 MB instead

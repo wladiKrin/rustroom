@@ -601,7 +601,15 @@ fn walk(
         // ⚠ The name is **checked**, not assumed. `output_transform` ends every tail today, and
         // that is a fact about the current pipeline rather than a guarantee about the next one —
         // and it is the stage that clamps, so it is what makes the output display-referred.
-        Some(c) if c.last_name() == Some("output_transform") => (Pipeline::new(out), Some(c)),
+        //
+        // ⚠⚠ `mark_shared` here too (2026-09-26). This arm is the byte path, the ordinary preview
+        // frame, and it was the one arm that never offered the take — so every frame after an
+        // accelerated prefix step re-uploaded the plane the prefix had just left on the GPU.
+        // `the_handed_back_chain_takes_the_prefix_plane` pins it.
+        Some(mut c) if c.last_name() == Some("output_transform") => {
+            mark_shared(&mut c, share_input, out.is_empty());
+            (Pipeline::new(out), Some(c))
+        }
         Some(mut c) => {
             mark_shared(&mut c, share_input, out.is_empty());
             out.push(Box::new(c));
@@ -1675,6 +1683,29 @@ mod tests {
             },
             ctx,
         )
+    }
+
+    /// ⚠⚠ **The handed-back chain may take the prefix's plane — found missing 2026-09-26.** The
+    /// byte path's chain (the one ending in `output_transform`, returned rather than pushed) was
+    /// built WITHOUT `mark_shared`, so after an accelerated prefix step every ordinary preview
+    /// frame re-uploaded the 82 MB it had just left on the GPU (`took=false` in
+    /// `RUSTROOM_DEBUG_XFER`). The prefix→tail seam only ever worked for float tails.
+    #[test]
+    fn the_handed_back_chain_takes_the_prefix_plane() {
+        let Some(ctx) = ctx() else { return };
+        let e = with_hsl();
+        let facts = |prefix_offered| TailFacts {
+            region: None,
+            profile: ProfileRendering::default(),
+            spec: RenderSpec::default(),
+            prefix_offered,
+        };
+        let (_, chain) = accelerate(tail_of(&e), &e, SCALE, facts(true), &ctx);
+        let chain = chain.expect("fixture check: this tail ends in a chain");
+        assert_eq!(chain.takes_from(), Some(crate::Slot::Prefix));
+        // And not without an offer: a tail after a CPU prefix must upload.
+        let (_, chain) = accelerate(tail_of(&e), &e, SCALE, facts(false), &ctx);
+        assert_eq!(chain.expect("a chain").takes_from(), None);
     }
 
     /// ⚠⚠ The condition M8.3g's whole gate rests on, and it is answered **by construction** here
