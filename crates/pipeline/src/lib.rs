@@ -5,6 +5,9 @@ use core_image::ImageBuf;
 use edit_model::Edits;
 
 pub mod brush;
+/// A run of per-pixel stages as one pass. See the module.
+pub mod per_pixel;
+pub use per_pixel::{run_stages, PerPixel};
 
 /// The two pixel measurements a mask's coverage is taken on, for a caller that must agree with it.
 ///
@@ -336,6 +339,20 @@ pub trait PipelineStage: Send + Sync {
     /// ⚠ Implementations clip the result into `in_w` x `in_h` themselves: a margin larger than the
     /// image is ordinary at low render scales, and [`Rect::grown`] does it.
     fn input_rect_for(&self, _out: Rect, _in_w: usize, _in_h: usize) -> Option<Rect> {
+        None
+    }
+
+    /// This stage as a per-pixel function for a `w` x `h` buffer, or `None` when it is not one.
+    ///
+    /// ⚠⚠ **`None` is the default, so a stage that reads neighbours declines BY CONSTRUCTION** —
+    /// local contrast, sharpening, every prefix stage and a mask inherit it, and the runner then
+    /// applies them on their own. The twelve pixel-in/pixel-out stages return `Some(self)`; the
+    /// vignette builds a value for these dimensions, because its frame is the buffer's when there
+    /// is no region.
+    ///
+    /// ⚠ Boxed because the vignette's answer is built per call; the other eleven box a borrow,
+    /// which is one small allocation per stage per walk.
+    fn per_pixel(&self, _w: usize, _h: usize) -> Option<Box<dyn per_pixel::PerPixel + '_>> {
         None
     }
 }
