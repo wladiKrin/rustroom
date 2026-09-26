@@ -166,6 +166,18 @@ filled the cache, and the following tail edits ran with `prefix_ran 0` at ~34 ms
 against ~27 in the probe. Unmeasured; the likeliest cause is the window sharing the GPU (texture
 upload and presentation).
 
+**The gap, measured the same day.** With `RUSTROOM_DEBUG_XFER` in the app (70 drag frames, rung 3123)
+the tail's CPU copies match the probe exactly (memcpy 0.12, tovec 2.8 ms) and the chain is the same
+(`display_rendering+output_transform`), so **the gap is all GPU submit+wait**: median **33.9 ms**
+in the app against ~24–27 headless. No other GPU chain ran during the drag. The UI thread spends
+**5.5 ms** per frame converting the 6.5 Mpx RGBA into an egui texture (off the worker's path) and
+creates a NEW texture each frame. **Contention experiment** (`PROBE_UI_LOAD=1`: a second wgpu device
+writing a fresh frame-sized texture at 60 Hz): medians over five runs each, **29.9 quiet vs 33.7
+loaded (+3.8 ms)**, with p90 up to 54 ms loaded. One loaded run reproduced the app's distribution
+almost exactly (39.7 / 34.7 / 47.4 against 40.0 / 34.6 / 49.4), others did not. ⚠ So the window's
+GPU use explains **part** of the gap, not all of it. The synthetic load leaves out eframe's
+compositing, and that part is inferred, not measured.
+
 **The result**: a Straighten drag on DSCF6263 at rung 3200, median of 40 frames, the same probe on
 all three builds:
 
